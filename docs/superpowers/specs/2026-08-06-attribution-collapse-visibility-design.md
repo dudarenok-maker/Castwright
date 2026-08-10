@@ -73,6 +73,27 @@ the effect."_
 >    corroborates the declaration on the one path where being wrong is expensive.
 >
 > §Review findings round 5 records all eighteen items.
+>
+> **Revision 7 (2026-08-11).** The round-6 gate **confirmed revision 6's
+> empirical work** — every figure it kept was independently re-derived and held —
+> and found four Criticals in the *logic connecting* those figures, one in each
+> headline change. Folded in §Review findings round 6. Two are worth naming here:
+> the precedence rule and the corroboration step were **circularly ordered**, so
+> §Failure modes is now a single explicit sequence rather than a precedence over
+> predicates; and the corroboration step **exempted D11's own motivating book**
+> (an abandoned run leaves no text to corroborate against), found in self-review
+> and fixed before the gate reported.
+>
+> **The gate's headline finding was rejected on new evidence and then partly
+> upheld by the owner.** It argued D9's narrowing reports a 50%-orphaned book as
+> healthy; the book's segments files carry the **resolved** ids, so no rendered
+> audio is affected and the owner's "inaudible" premise held. But the cache is
+> what the *next* render reads, so the silence was real. **D13 adds a fifth
+> state, `drifted`** — it badges, it gates, and its notice sends the user to the
+> Cast orphan banner rather than to a re-analysis that cannot fix drift and would
+> discard the book's audio. Its one structural cost: a repair writes
+> `cast-id-history.json` and never touches the cache, so the dismissal identity
+> can no longer be `cache.updatedAt`.
 
 ## Problem
 
@@ -132,6 +153,7 @@ analyzer remains untouched.
 | D9 | **The collapse figure counts both members of `NARRATOR_CHARACTER_IDS`. Unresolvable ids are measured and reported alongside it, never summed into it.** Added in revision 2 (R-C2), narrowed in revision 6 (R-6C1). |
 | D10 | **The Cast-view re-run confirms first when rendered audio exists.** |
 | D11 | **"Cast built, nothing attributed" is its own alarm state**, not a quiet one. Added in revision 3 — see R-O1. |
+| D13 | **Id drift is its own state — `drifted` — which badges and gates, and whose notice points at the Cast orphan banner, not at re-analysis.** Added in revision 7 — see R-7C4. |
 
 ---
 
@@ -432,9 +454,28 @@ the state:**
 
 So `orphanSpoken` is a **sibling signal, reported on the same row and never
 inside the same fraction.** Wave 1 prints both columns; Wave 2's collapse badge
-reads the share only. Routing `orphanSpoken` to a user-facing surface of its own
-is out of scope here — #2238 already built that surface, and connecting the
-measurement to it is a follow-up, filed rather than folded.
+reads the share only.
+
+**It gets its own state rather than its own silence (D13, revision 7).** The
+round-6 gate argued that excluding orphans from the share lets a badly drifted
+book read as perfectly healthy, and it was right that the *silence* is
+unacceptable even though it was wrong about the damage being audible today:
+
+- **Rendered audio is unaffected.** _The Coalfall Commission_'s segments files
+  carry `master-oduvan`, `coalfall-dragon`, `brann-weir`, `berrin-weir` — the
+  **resolved** ids. Not one segment sits under an orphaned cache id, which is why
+  `repair-cast-id-drift.mjs` reports 0 rendered segments for them and declines to
+  act.
+- **The next render is a different matter.** Synthesis reads the *cache*, so a
+  Generate on that book today routes every orphaned line to the narrator
+  (`synthesise-chapter.ts:2315-2326`) while the collapse figure reports a healthy
+  share. The hazard is prospective, not historical — and "one click away" is not
+  a reason to stay quiet.
+
+So `drifted` badges and gates like `collapsed` does, and **its notice points at
+the Cast orphan banner's Link control, not at "Re-run analysis"** — re-analysis
+cannot reliably fix drift (it may re-mint the same ids), and on a generated book
+it wipes chapter-bearing history and invalidates the audio (D10).
 
 **Orphans leave the denominator too, and getting this wrong reopens the hole one
 level down.** Taking them out of the numerator alone would leave them diluting
@@ -778,27 +819,30 @@ pattern.
    have unresolvable ids**, resolved through `buildCastResolver` with each
    book's real `cast-id-history.json`. A run that reports 0 everywhere means the
    resolver was bypassed, not that the corpus is clean.
-5. The script runs against the live workspace and prints a row for every book,
+5. **The orphan share is printed per book**, since D13's `DRIFT_SHARE_THRESHOLD`
+   is set off this column exactly as the collapse threshold is set off the other.
+   Wave 1 ships no threshold for either.
+6. The script runs against the live workspace and prints a row for every book,
    reporting — never silently skipping — books with no cache.
-6. The script **flags a book with a cast and no attributed sentences
+7. The script **flags a book with a cast and no attributed sentences
    distinctly** from a never-analysed one (D11), and prints whether an
    `analysis-state.json` snapshot exists, since that is what separates an
    abandoned run from a resumable one.
-7. No threshold constant, no UI, no persisted state exists yet.
-8. **Every book's language resolves**, and the row records `declared` /
+8. No threshold constant, no UI, no persisted state exists yet.
+9. **Every book's language resolves**, and the row records `declared` /
    `detected` / `unknown`. A book that reaches `unknown` is reported distinctly
    from both a damaged book and a never-analysed one.
-9. **`isSpokenLine` recognises `「…」` and `『…』`**, with a paired regression
+10. **`isSpokenLine` recognises `「…」` and `『…』`**, with a paired regression
    asserting `applyNarratorDefault` no longer demotes a CJK dialogue line to
    `narrator`.
-10. **`blindSpoken` drops to 0 on both live CJK books** once criterion 9 lands,
+11. **`blindSpoken` drops to 0 on both live CJK books** once criterion 9 lands,
     **and no other book's value changes.** Not "0 across the corpus" — the
     German gap is a recorded limitation, not a regression.
-11. **`unmeasurable` is reachable from a real book shape**: a declared language
+12. **`unmeasurable` is reachable from a real book shape**: a declared language
     contradicted by detection over the book's own text resolves there rather
     than to `missing`, proven by the fixture rows and their mutation controls.
 
-**Criterion 10's control is an on-box acceptance item, not a CI test** (R-6M2).
+**Criterion 11's control is an on-box acceptance item, not a CI test** (R-6M2).
 It is a before/after replay of `isSpokenLine` over every sentence of every live
 book, and the corpus is gitignored, machine-local and absent from a fresh clone
 — a CI job asserting over it would pass vacuously wherever the books are not,
@@ -825,10 +869,21 @@ sentences crosses it.**
 
 ```
 COLLAPSE_SHARE_THRESHOLD        = <set by Wave 1>
+DRIFT_SHARE_THRESHOLD           = <set by Wave 1>   // D13
 MIN_SPOKEN_FOR_VERDICT          = 20   // book-level floor, on attributableSpoken
+MIN_ORPHAN_FOR_VERDICT          = 20   // floor for the drifted verdict (D13)
 MIN_SPOKEN_PER_CHAPTER_TRIGGER  = 20   // a chapter may only TRIGGER above this
 MIN_SPOKEN_PER_CHAPTER_DISPLAY  = 5    // a chapter shows a % above this
 ```
+
+**`drifted` has no per-chapter trigger, deliberately.** Drift is a property of
+the *cast*, not of a chapter: an id that fails to resolve fails everywhere it
+appears, so a chapter-level view would report the same defect once per chapter
+and add nothing. The book-level share plus `orphanIds` is the whole signal.
+
+`MIN_ORPHAN_FOR_VERDICT` exists for the same reason as its sibling: the corpus
+carries books with a **single** orphaned id covering a handful of lines, and
+badging those would train the warning into noise on books nothing is wrong with.
 
 The display floor and the trigger floor are deliberately different, and
 conflating them is the easy mistake: a 6-spoken-line chapter is worth showing a
@@ -879,12 +934,57 @@ re-arms a dismissal for the whole book. With a per-chapter trigger now in play
 that is the right behaviour — and if the retry fixed the chapter, the warning
 auto-clears without the user doing anything.
 
+### `drifted` breaks that identity, and the fix has to be in the same shape
+
+**`cache.updatedAt` is not a sufficient identity for D13**, and this is the one
+place the fifth state costs something structural rather than cosmetic. The
+`drifted` verdict is a function of three inputs — the cache's `characterId`s,
+`cast.json`, and `cast-id-history.json` — and **the user's remedy touches only
+the last two.** Recording an alias through the orphan banner calls
+`retireCharacterId`, which writes `cast-id-history.json`; the analysis cache is
+untouched and `cache.updatedAt` does not move.
+
+Keyed on `analysedAt` alone, the consequences are both wrong and in opposite
+directions:
+
+- **The badge would not clear.** A user links every orphan, fixes the book
+  completely, and the library still says `drifted` until the next re-analysis —
+  the "stamp catches up on the next read" circularity R-M4 already rejected once.
+- **A dismissal would not re-arm.** Dismiss a drifted book, then let a
+  re-analysis mint a *new* orphan class while the cache write happens to be the
+  same one already dismissed against, and the new damage is suppressed.
+
+Neither `cast.json` nor `cast-id-history.json` carries a timestamp of its own
+(both verified — `cast.json` has a single `characters` key), and file mtime was
+rejected in R-Mi4 for not surviving a restore or a workspace move. So the
+identity becomes a **pure function of the data**, exactly as `analysedAt` is:
+
+```
+attributionInputsKey = hash(
+  cache.updatedAt,
+  cast.json's character ids,
+  cast-id-history's supersededBy / rejected / rejectedPairs,
+)
+```
+
+`.audiobook/attribution-dismissal.json` stores `{ dismissedForInputsKey }`
+instead of `{ dismissedForAnalysedAt }`. **R-M2's property is preserved and this
+is the reason for the shape:** nothing mints a value, so no write ordering
+between the banner, the backfill, the refresh and the analysis routes can orphan
+a dismissal — there is still nothing to race over. `analysedAt` survives as a
+displayed field ("last analysed"), it just stops being the cache key.
+
+The in-session clearing path already exists: linking an orphan is a Cast-view
+action, and R-M4's rule is that a detail-surface fetch patches that book's state
+in `library-slice`. So the badge clears the moment the user fixes the book, with
+no refetch of the library.
+
 ### Two files
 
 | File | Written by | Contains |
 |---|---|---|
 | `.audiobook/attribution-health.json` | analysis completion, any detail-surface read, the backfill script | the counts + `analysedAt`. **Pure derived cache — no user intent.** |
-| `.audiobook/attribution-dismissal.json` | the dismiss endpoint only | `{ dismissedForAnalysedAt: string }` |
+| `.audiobook/attribution-dismissal.json` | the dismiss endpoint only | `{ dismissedForInputsKey: string }` — see the `drifted` note above |
 
 Path constants join `droppedQuotesJsonPath` in `server/src/workspace/paths.ts`.
 Neither touches `cast.json`, so no `withCastLock` involvement and no new lock
@@ -911,7 +1011,10 @@ corrected these three line numbers and then named `:5740` for
   ```ts
   type AttributionHealthResponse = AttributionMeasurement & {
     share: number | null;                             // null under the floor
-    state: 'ok' | 'collapsed' | 'missing' | 'unmeasurable';
+    state: 'ok' | 'collapsed' | 'drifted' | 'missing' | 'unmeasurable';
+    alsoDrifted: boolean;                             // true when `drifted` is
+                                                      // masked by a higher state
+    orphanShare: number | null;                       // null under the floor
     triggeredBy: 'book' | 'chapter' | null;
     worstChapterId: number | null;
     analysedAt: string;
@@ -924,7 +1027,7 @@ corrected these three line numbers and then named `:5740` for
   client-supplied timestamp (revision 1) could go stale between the client's GET
   and its POST, making the dismiss button do nothing, silently (R-M7).
 - `GET /api/library` — each book gains
-  `attributionState: 'ok' | 'collapsed' | 'missing' | 'unmeasurable'`. **Not a boolean:** a
+  `attributionState: 'ok' | 'collapsed' | 'drifted' | 'missing' | 'unmeasurable'`. **Not a boolean:** a
   boolean cannot distinguish `unmeasurable` from `ok`, which is how revision 1
   reproduced the silence it was written to fix (R-M5).
 
@@ -961,6 +1064,41 @@ One shared component, `src/components/attribution-collapse-notice.tsx`.
    [ Re-run analysis ]  [ Chapter breakdown ▾ ]
    [ Dropped quotes ▾ ] [ This book is fine — dismiss ]
 ```
+
+**The `drifted` notice is a second variant, and its whole job is to send the
+user somewhere else** (D13):
+
+```
+⚠  Some of this book's dialogue is assigned to characters that no longer exist.
+
+   63 of 127 quoted lines (50%) name 4 character ids your cast doesn't have:
+   oduvan, coalfall, brann, berrin.
+
+   If you generate now, those lines will be read by the narrator.
+   Linking each one to the right character below fixes it — re-analysing
+   won't, and would discard this book's existing audio.
+
+   [ Review character ids ↓ ]   [ This book is fine — dismiss ]
+```
+
+- **No "Re-run analysis" button, and the copy says why.** Re-analysis may re-mint
+  the same ids, and on a generated book `onReanalyse` wipes chapter-bearing
+  history and invalidates the audio (D10). Offering it here would be offering
+  the destructive non-fix as the primary action.
+- **"Review character ids" scrolls to the orphan banner** already rendered in the
+  Cast view — #2238's "N character ids need your decision" section, whose Link
+  control is the actual repair. It is a jump, not a duplicate: two controls doing
+  the same thing is what R-Mi1 removed from the confirm step.
+- **The ids are named, not just counted.** `orphanIds` exists for this: "4 ids"
+  is not actionable, `oduvan, coalfall, brann, berrin` is — the user recognises
+  the characters and can match them in seconds.
+- **The future tense is deliberate.** "will be read by the narrator", not "is" —
+  rendered audio already on disk carries the resolved ids and is unaffected. Any
+  copy claiming present damage would be false on every book in the corpus.
+- When a book is **both** drifted and collapsed, the Cast view renders both
+  sections, drift first. The library shows one badge (the higher-precedence
+  state) and the response's `alsoDrifted` flag is what lets a surface know the
+  other condition is masked.
 
 - **"almost nothing to say"** is defined or it cannot be computed: non-narrator
   cast members with **fewer than 2** spoken sentences.
@@ -1063,12 +1201,13 @@ book is actually collapsed now.
 ## Failure modes
 
 The computation **fails open**, but failing open is how a book goes silent, so
-there are **four** states and the library shows all four:
+there are **five** states and the library shows all five:
 
 | State | Rule | Library | Cast view | Gates generation |
 |---|---|---|---|---|
 | `ok` | — (including a book never analysed) | nothing | nothing | no |
 | `collapsed` | `narratorIdSpoken / attributableSpoken` ≥ threshold, book or chapter | warning badge | full notice | yes |
+| `drifted` | `orphanSpoken / spokenTotal` ≥ `DRIFT_SHARE_THRESHOLD`, with `orphanSpoken` ≥ `MIN_ORPHAN_FOR_VERDICT` (D13) | warning badge | full notice, pointing at the orphan banner | **yes** |
 | `missing` | `castCount > 0 && spokenTotal === 0 && (await readAnalysisState(dir)) === null && languageCorroborated` | warning badge | full notice | **yes** |
 | `unmeasurable` | the book **has been analysed** and the measurement still could not be made: cache corrupt, the declared language contradicted by detection over the book's own text, detection surrendered, **or** the resolved language has no conventions table | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
@@ -1103,8 +1242,9 @@ The sequence, written once and normatively:
      a. sentences.length === 0                 → missing   (nothing to corroborate)
      b. detection contradicts or surrenders    → unmeasurable
      c. otherwise                              → missing
-5. share ≥ threshold (book or chapter)         → collapsed
-6. otherwise                                   → ok
+5. orphan share ≥ DRIFT_SHARE_THRESHOLD        → drifted
+6. share ≥ threshold (book or chapter)         → collapsed
+7. otherwise                                   → ok
 ```
 
 Steps 2 and 3 are the only ones that are genuinely "`unmeasurable` first"; the
@@ -1112,6 +1252,20 @@ corroboration arm is **step 4b, inside the `missing` test**, which is what makes
 it cheap and what makes it unable to touch an `ok` or `collapsed` verdict.
 There is no separate precedence mechanism to delete, and revision 6's mutation
 table wrongly billed one — see the note under §Testing.
+
+**`drifted` is tested before `collapsed`, and the reason is not severity** — a
+book can be badly both. It is that **drift degrades the collapse figure's own
+coverage**: every orphaned line leaves `attributableSpoken`, so the further a
+book has drifted the smaller the slice its share speaks for. Repairing drift is
+also seconds of work through the banner, against minutes of re-analysis, and the
+share is worth re-reading afterwards. Fix the cheap, certain thing; re-measure.
+
+**Both can be true, and the surfaces differ in what they do about it.** The
+library badge is one pill, so it shows the higher-precedence state. The Cast
+notice renders **both sections** when both apply, because they have different
+remedies and showing only one sends the user to the wrong control. The
+generation gate is a single acknowledgement listing every condition that fired —
+one gate, not two, so §The generation gate's ordering argument is unchanged.
 
 **Revision 4 claimed this precedence is what stopped a healthy CJK book being
 badged. That was wrong** (R-5M1). `zh` and `ja` both have conventions tables
@@ -1259,8 +1413,9 @@ instead of reading as a clean bill of health.
 | Zero spoken sentences, **no non-narrator cast** (non-fiction, pure narration) | `share: null`, state `ok`. Nothing is missing — there were never any characters. |
 | Zero spoken sentences, **cast present**, no analysis snapshot, **language corroborated** | State `missing` (D11). The contradiction is the signal. |
 | Zero spoken sentences, **cast present**, no snapshot, but detection **contradicts** the declared language | State `unmeasurable`. The likelier explanation is that the book is not in the language it was imported as. |
-| **Unresolvable `characterId`s present** | Counted into `orphanSpoken`/`orphanIds` and reported; removed from **both** halves of the share, and never a state of their own (D9). Repaired through the Cast orphan banner, not through re-analysis. |
-| **Every dialogue line orphaned** (`attributableSpoken === 0`) | `share: null`, state `ok`, no badge, no gate — but `orphanSpoken` is the whole denominator and the row shows it. Not `0%`: a wholly-drifted book must not read as a healthy one. |
+| **Unresolvable `characterId`s present, below `MIN_ORPHAN_FOR_VERDICT` or the drift threshold** | Counted into `orphanSpoken`/`orphanIds` and reported; removed from **both** halves of the collapse share (D9). No badge, no gate — a book with one stray id is not worth an alarm. |
+| **Unresolvable ids above both floors** | State `drifted` (D13). Badges, gates, and points at the Cast orphan banner. |
+| **Every dialogue line orphaned** (`attributableSpoken === 0`) | Collapse `share: null` — never `0%`, which would read as healthy — and state `drifted`, since the orphan share is 100%. The one book shape where the collapse figure has nothing to say and the drift figure says everything. |
 | Book never analysed | State `ok`, no badge, no marker. Reported by the script as `not analysed`. |
 | Zero spoken sentences, **cast present**, snapshot `running`/`paused`/`halted` | State `ok`. An interrupted run is ordinary use; the AnalysisPill already says so, and badging it would train the warning into noise. |
 | Under 20 **attributable** spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. The floor reads `attributableSpoken`, not `spokenTotal`, so a book pushed under it by id drift is silent rather than confidently wrong. |
@@ -1485,13 +1640,37 @@ Row 5's fixture text must likewise contain **real `「」`-quoted dialogue attri
 to real cast members** — not merely CJK prose — or even the two-mutation control
 does not move it.
 
+**Wave 2 — the `drifted` state (D13).** Four fixtures and a mutation apiece:
+
+| Fixture | `orphanSpoken` | Expected |
+|---|---|---|
+| One stray id, under `MIN_ORPHAN_FOR_VERDICT` | 3 | `ok` — not every drift is an alarm |
+| Orphan share over both floors, attribution otherwise healthy | 63 of 127 | `drifted`, gated |
+| **Drifted *and* collapsed** | high, and the attributable share also over threshold | badge `drifted` (precedence), `alsoDrifted` irrelevant, **both notice sections rendered** |
+| Drifted book, then an alias recorded via `retireCharacterId` | 63 → 0 | `ok` **with no cache write** |
+
+| Mutation | Effect |
+|---|---|
+| `drifted` step (5) deleted | rows 2 and 3 flip to `ok` / `collapsed` — the R-7C4 silence returns |
+| `MIN_ORPHAN_FOR_VERDICT` deleted | row 1 flips to `drifted` — every book with one stray id alarms |
+| **Dismissal/stamp keyed on `cache.updatedAt` alone** | **row 4 fails** — the badge survives a complete repair |
+| `drifted` tested *after* `collapsed` | row 3 badges `collapsed` and sends the user to re-analysis, which cannot fix it |
+
+**Row 4 is the one that justifies the `attributionInputsKey` change**, and it is
+the only test in this document that asserts something about a *write that does
+not happen*: `retireCharacterId` touches `cast-id-history.json` and nothing else,
+so a suite that re-analyses between the two assertions passes with the identity
+left keyed on `cache.updatedAt` and proves nothing. The fixture must record the
+alias and re-read **without any cache write in between**.
+
 **Storage.** `analysedAt` reads from `cache.updatedAt`, falling back to mtime
-only when the field is absent; the dismiss endpoint resolves `analysedAt`
-server-side; a cache write between dismiss and read re-arms.
+only when the field is absent; the dismiss endpoint resolves the inputs key
+server-side; a cache write between dismiss and read re-arms; **and so does an
+alias recorded through the banner**, since both feed `attributionInputsKey`.
 
 **Routes.** GET computes and rewrites the stamp; a subset re-run recomputes the
 whole book; corrupt cache → `unmeasurable`, not 500; `GET /api/library` carries
-the four-state value, with a case for each of the four asserted.
+the five-state value, with a case for each of the five asserted.
 
 **Gate composition.** A book that is attribution-collapsed **and** voice-unready
 sees both gates in order; "Generate anyway" does not skip the later three.
@@ -1610,10 +1789,12 @@ live view all move in the shipping PR.
   wider blast radius this spec has consistently declined. Revision 5 named one
   form of three here, which understated a limitation the reader is being asked to
   accept.
-- **Connecting `orphanSpoken` to the Cast orphan banner.** The measurement
-  reports unresolvable ids (D9); routing them to the surface that can repair
-  them — #2238's accept-a-match affordance — is a follow-up, filed rather than
-  folded, so this spec stays a measurement plus a warning.
+- **Repairing id drift automatically.** D13 badges, gates and *points at* the
+  orphan banner; it does not link anything on the user's behalf. Auto-aliasing is
+  `repair-cast-id-drift.mjs`'s territory and it declines the ambiguous cases
+  deliberately. (Connecting the measurement to the banner was a filed follow-up
+  through revision 6; the owner's D13 decision pulls the surface into scope and
+  leaves the automation out.)
 - **Automatic re-analysis.** The button is the only trigger.
 - **Threshold configurability.** No registry knob.
 - **Live mid-run collapse warning** — the figure swings wildly over a novel's
@@ -1656,9 +1837,20 @@ live view all move in the shipping PR.
     The German baseline is non-zero for **three** of four `de.quotePairs` forms,
     not one (R-6C4) — a baseline recorded from today's single `„`-at-position-0
     German book would read 0 and alarm on the next German import.
-11. **An unresolvable `characterId` never badges a book on its own and never
-    moves the share** (D9). A book whose only anomaly is id drift shows no
-    collapse notice and no generation gate.
+11. **An unresolvable `characterId` never moves the collapse share** (D9) —
+    **and a book whose only anomaly is id drift badges as `drifted`, gates
+    generation, and is sent to the orphan banner rather than to re-analysis**
+    (D13). Revision 6 asserted the opposite here — that such a book shows
+    nothing — which made the acceptance criterion endorse the silence R-7C4 was
+    raised on.
+12. **Linking an orphan through the Cast banner clears the `drifted` badge
+    without a re-analysis**, in the same session, including in the library. This
+    is the criterion that fails if the dismissal/stamp identity is left keyed on
+    `cache.updatedAt` alone, since recording an alias does not move it.
+13. **A `drifted` book's notice offers no "Re-run analysis" control**, and its
+    copy states the consequence in the future tense. Asserted on the rendered
+    component, because a well-meaning edit re-adding the button is exactly the
+    regression D13 exists to prevent.
 
 ## Review findings
 
