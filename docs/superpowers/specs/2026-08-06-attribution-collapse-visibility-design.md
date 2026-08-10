@@ -91,9 +91,20 @@ the effect."_
 > what the *next* render reads, so the silence was real. **D13 adds a fifth
 > state, `drifted`** — it badges, it gates, and its notice sends the user to the
 > Cast orphan banner rather than to a re-analysis that cannot fix drift and would
-> discard the book's audio. Its one structural cost: a repair writes
-> `cast-id-history.json` and never touches the cache, so the dismissal identity
-> can no longer be `cache.updatedAt`.
+> discard the book's audio.
+>
+> **D13 then went through its own scoped gate and did not survive its first
+> draft** — three Criticals, folded here; §Review findings round 7. The sharpest
+> turns on the same fact that rebutted round 6: the segments carry the *resolved*
+> ids, which is why there is no present damage **and** why the Cast orphan
+> banner — fed from rendered segments — has **zero rows on every book D13 fires
+> on.** The notice pointed at an empty list. So the banner gains a cache-sourced
+> tier, and the generation gate moves to `enqueueQueueEntries`, the chokepoint
+> every re-synthesis path actually crosses — which closes the same bypass for
+> `collapsed`. Two smaller consequences worth reading before approving: the
+> dismissal key is over the measurement's **outputs**, not the resolver's inputs,
+> and "Not the same character" now counts as an acknowledgement, because
+> otherwise a book whose orphans name nobody is gated forever with no exit.
 
 ## Problem
 
@@ -476,6 +487,54 @@ So `drifted` badges and gates like `collapsed` does, and **its notice points at
 the Cast orphan banner's Link control, not at "Re-run analysis"** — re-analysis
 cannot reliably fix drift (it may re-mint the same ids), and on a generated book
 it wipes chapter-bearing history and invalidates the audio (D10).
+
+### The banner must be fed from the cache, and today it is not (R-8C1)
+
+**This is the single defect that D13's first draft turned on, and it is a
+consequence of the very fact used to justify D13's scope.** The Cast view's
+orphan banner is populated by `collectOrphanedCharacterFallbacks`
+(`server/src/audio/segments-io.ts:338`), whose first act is
+`await loadSegmentsFiles(bookDir, chapters)` — **it enumerates rendered segment
+files.** D13's `orphanSpoken` is measured from the **analysis cache**. Those are
+different populations, and on this corpus they are close to disjoint:
+
+- The books D13 fires on have **zero** unresolvable ids in their rendered
+  segments — that is exactly what "rendered audio is unaffected" means, and it is
+  the finding that rebutted the round-6 gate.
+- Therefore the banner has **no rows** on precisely the books whose notice tells
+  the user to go and use it. "Linking each one to the right character below fixes
+  it" would scroll to an empty section.
+- The books whose banner *does* have rows are ones D13 stays silent about,
+  because their orphan share is near zero.
+
+**The same fact has two consequences and revision 7 drew only one.** "The
+segments carry the resolved ids" is why there is no present damage *and* why the
+remedy points at nothing. Having used it to win one argument, the draft did not
+ask what else it implied — which is the reasoning failure, not merely the spec
+defect.
+
+**So the banner gains a cache-sourced tier, and this is in scope.** The owner's
+D13 decision is "the notice points at the orphan banner"; a banner that cannot
+show these ids does not satisfy that decision, so making it show them is *inside*
+the choice rather than beyond it. Concretely:
+
+- `collectOrphanedCharacterFallbacks` gains a second source — the analysis
+  cache's `characterId`s — resolved through the **same** `buildCastResolver` call
+  it already builds, so there is no second resolution path to drift apart.
+- Each banner row records **which source** it came from, because the two mean
+  different things: a segment-sourced orphan is audible damage in existing audio,
+  a cache-sourced one is damage the next render will produce. The copy differs
+  accordingly, and the Link action is identical for both —
+  `POST /:bookId/cast/:characterId/link-orphan-match` already validates only the
+  ids and the reserved-bucket rules (`server/src/routes/cast-link-orphan.ts`),
+  and never requires the orphan to appear in a segment file. **The route needs no
+  change; only its supply does.**
+- No second Link control is added anywhere. R-Mi1's rule stands: the notice
+  jumps to the banner, it does not duplicate it.
+
+**If the owner declines this scope, D13 must be dropped rather than shipped
+without it** — a warning whose only stated remedy leads to an empty list is worse
+than the silence it replaces, because it also spends the user's trust.
 
 **Orphans leave the denominator too, and getting this wrong reopens the hole one
 level down.** Taking them out of the numerator alone would leave them diluting
@@ -885,6 +944,41 @@ and add nothing. The book-level share plus `orphanIds` is the whole signal.
 carries books with a **single** orphaned id covering a handful of lines, and
 badging those would train the warning into noise on books nothing is wrong with.
 
+### "Not the same character" is the exit, and it has to count as one (R-8M1/M2)
+
+Two findings meet in one fix. **There are orphaned ids no user can ever link**,
+because they name no character: the corpus carries `unknown-male`,
+`unknown-female`, `voix-inconnue`, `unbekannte-stimme`, `the-jogger`, `driver`,
+`woman-in-taxi`. Link is impossible for these by construction. And **rejecting
+one changes nothing about the verdict**, because `buildCastResolver` only ever
+*blocks* on a rejection — an id that is already unresolvable stays unresolvable
+after "Not the same character". With `drifted` gating generation, a book whose
+residual orphans are all unlinkable would be **permanently badged and permanently
+blocked, with no action available that clears it.** A gate with no exit is not a
+gate, it is a wall.
+
+So the drift verdict counts **unacknowledged** orphans only:
+
+```
+unacknowledgedOrphanSpoken = orphaned lines whose id is NOT in
+                             cast-id-history's bare `rejected` set
+```
+
+- **Bare `rejected` counts as acknowledged; `rejectedPairs` does not.** The
+  semantics already differ exactly this way: `rejected` blocks an id "against
+  every candidate, forever" — a user saying *this is not any of my characters* —
+  whereas a `rejectedPair` only rules out one target and leaves the id open to
+  another. Reading the broad one as an acknowledgement is the meaning it already
+  has, not a new one bolted on.
+- **It makes rejection verdict-relevant**, which incidentally removes the
+  re-arming defect: revision 7 hashed `rejected`/`rejectedPairs` into the
+  dismissal key, so every "Not the same character" click re-armed a warning it
+  could not affect. Now the click can lower the share, so re-evaluating is
+  correct rather than noise.
+- **`orphanSpoken` still reports every orphan**, acknowledged or not. Only the
+  *verdict* narrows. A user who acknowledged an id has said "don't warn me", not
+  "pretend it isn't there", and the Wave 1 column must not lose it.
+
 **A separating threshold does exist — that was checked before committing to
 D13**, because a fifth state that cannot be calibrated is worse than the silence
 it replaces. Reconnaissance over the live corpus (2026-08-11, through the real
@@ -905,6 +999,15 @@ would hide:
   of 20.** A floor placed on a corpus value is a coin-flip that will land
   differently on the next re-analysis, so the constant is set from the gap, not
   from a book — and Wave 1's output is what shows where the gap is.
+
+**Known limitation, accepted: a share rule hides absolute damage on long books.**
+The corpus contains a long novel carrying several dozen orphaned lines at a
+fraction of a percent — more lines than some books that *do* badge — and D13 is
+deliberately silent about it. The alternative, an absolute-count trigger, badges
+every large book with a handful of stray ids, which is the noise `drifted` exists
+to avoid. The lines are still reported in Wave 1's `orphanSpoken` column and in
+the health response; they simply do not raise an alarm. Recorded here rather than
+discovered later, alongside the dash and first-person false positives.
 
 The display floor and the trigger floor are deliberately different, and
 conflating them is the easy mistake: a 6-spoken-line chapter is worth showing a
@@ -981,31 +1084,64 @@ rejected in R-Mi4 for not surviving a restore or a workspace move. So the
 identity becomes a **pure function of the data**, exactly as `analysedAt` is:
 
 ```
-attributionInputsKey = hash(
-  cache.updatedAt,
-  cast.json's character ids,
-  cast-id-history's supersededBy / rejected / rejectedPairs,
+attributionVerdictKey = hash(
+  narratorIdSpoken, attributableSpoken, spokenTotal,
+  sorted [orphanId, lineCount] pairs,
+  acknowledged orphan ids,
 )
 ```
 
-`.audiobook/attribution-dismissal.json` stores `{ dismissedForInputsKey }`
+**The key is over the measurement's *outputs*, not its inputs, and revision 7
+had it the other way round** (R-8M2). Input-keying was wrong in both directions:
+it re-armed on changes that cannot alter the verdict — every verdict-neutral
+rejection, and `saveAnalysisCache` unconditionally stamping `updatedAt` on
+routine writes that change no `characterId` — while requiring the spec to
+enumerate correctly which inputs matter, which it got wrong on its first attempt
+by hashing `rejected`.
+
+Output-keying is strictly better on all three counts: it changes **exactly**
+when the verdict can change; it needs no claim about which files feed the
+resolver; and it closes the torn-read hazard input-keying created. **Three files
+under three different locking regimes** — the cache unlocked, `cast.json` under
+`withCastLock`, `cast-id-history.json` under `withKeyLock` — cannot be hashed
+consistently by an independent reader, and a dismissal storing a torn key would
+never match again, leaving a book permanently un-dismissable *and*, under D13,
+permanently gated. Keyed on outputs, the key is computed from **the same
+measurement the response returns**, in one pass, so there is no second read to
+tear against.
+
+R-M2's property is preserved and is why the shape works at all: the key is still
+a pure function of the data with nothing minted, so no write ordering between the
+banner, the backfill, the refresh and the analysis routes can orphan a dismissal.
+
+`.audiobook/attribution-dismissal.json` stores `{ dismissedForVerdictKey }`
 instead of `{ dismissedForAnalysedAt }`. **R-M2's property is preserved and this
 is the reason for the shape:** nothing mints a value, so no write ordering
 between the banner, the backfill, the refresh and the analysis routes can orphan
 a dismissal — there is still nothing to race over. `analysedAt` survives as a
 displayed field ("last analysed"), it just stops being the cache key.
 
-The in-session clearing path already exists: linking an orphan is a Cast-view
-action, and R-M4's rule is that a detail-surface fetch patches that book's state
-in `library-slice`. So the badge clears the moment the user fixes the book, with
-no refetch of the library.
+**The in-session clearing path does not already exist, and revision 7 claimed it
+did** (R-8M4). The draft argued that "linking an orphan is a Cast-view action,
+and R-M4's rule is that a detail-surface fetch patches that book's state in
+`library-slice`", so clearing was free. It is not: `handleLinkOrphanMatch`
+(`src/views/cast.tsx:583`) calls `api.linkOrphanMatch`, dispatches
+`castActions.applyOrphanLink` and raises a toast — **there is no attribution
+refetch and no library patch.** Nothing recomputes the verdict after a link, so
+acceptance criterion 12 as written had no mechanism behind it.
+
+So the wiring is scoped explicitly: **a successful link (or reject) re-fetches
+`GET /api/books/:bookId/attribution-health` and patches `attributionState` in
+`library-slice`**, which is the same path R-M4 already defined for a
+detail-surface read — it simply has to be *called*. One request per repair, on an
+endpoint the user is already looking at the results of.
 
 ### Two files
 
 | File | Written by | Contains |
 |---|---|---|
 | `.audiobook/attribution-health.json` | analysis completion, any detail-surface read, the backfill script | the counts + `analysedAt`. **Pure derived cache — no user intent.** |
-| `.audiobook/attribution-dismissal.json` | the dismiss endpoint only | `{ dismissedForInputsKey: string }` — see the `drifted` note above |
+| `.audiobook/attribution-dismissal.json` | the dismiss endpoint only | `{ dismissedForVerdictKey: string }` — see the `drifted` note above |
 
 Path constants join `droppedQuotesJsonPath` in `server/src/workspace/paths.ts`.
 Neither touches `cast.json`, so no `withCastLock` involvement and no new lock
@@ -1033,8 +1169,9 @@ corrected these three line numbers and then named `:5740` for
   type AttributionHealthResponse = AttributionMeasurement & {
     share: number | null;                             // null under the floor
     state: 'ok' | 'collapsed' | 'drifted' | 'missing' | 'unmeasurable';
-    alsoDrifted: boolean;                             // true when `drifted` is
-                                                      // masked by a higher state
+    alsoCollapsed: boolean;                           // true when `drifted` won
+                                                      // and the collapse test
+                                                      // WOULD also have fired
     orphanShare: number | null;                       // null under the floor
     triggeredBy: 'book' | 'chapter' | null;
     worstChapterId: number | null;
@@ -1118,7 +1255,7 @@ user somewhere else** (D13):
   copy claiming present damage would be false on every book in the corpus.
 - When a book is **both** drifted and collapsed, the Cast view renders both
   sections, drift first. The library shows one badge (the higher-precedence
-  state) and the response's `alsoDrifted` flag is what lets a surface know the
+  state) and the response's `alsoCollapsed` flag is what lets a surface know the
   other condition is masked.
 
 - **"almost nothing to say"** is defined or it cannot be computed: non-narrator
@@ -1177,6 +1314,39 @@ Therefore:
 - A test asserts gate composition: a Qwen book that is both attribution-collapsed
   and voice-unready must see **both** gates, in order.
 
+**The thunk is the wrong chokepoint for a fully-rendered book, and this is a
+hole in the *collapsed* gate too, not only D13's** (R-8C2). `startGenerationFlow`
+has exactly two dispatch sites — `src/routes/index.tsx:775` ("Approve cast &
+start generating") and `src/views/generation.tsx:1072` ("Resume generation",
+shown only while work is queued and nothing is in flight). **Neither is reachable
+on a book that has already finished rendering.** Every re-synthesis affordance
+that *is* reachable on such a book — the Regenerate modal, per-character
+regenerate, the drift-report regenerate, the stuck-row escape hatch — dispatches
+`enqueueQueueEntries` (`src/store/queue-thunks.ts`) directly, and
+`ENQUEUE_TRIGGER_TYPES` is `new Set(['ui/requestStartGeneration'])`
+(`generation-stream-middleware.ts:72`), so none of them passes the gate.
+
+This matters most for D13, whose entire hazard is "the **next** render", i.e. a
+book that has already been rendered once. As specified, D13 would have delivered
+a badge and called it a gate. But the same bypass means a **collapsed** book can
+be wholly re-synthesised through the Regenerate modal without ever seeing its
+acknowledgement, which R-M3 did not catch because it enumerated dispatchers of
+`requestStartGeneration` rather than asking what else reaches the synthesiser.
+
+**So the attribution gate moves to `enqueueQueueEntries`**, the one chokepoint
+every synthesis path crosses, and the thunk keeps only its *ordering* role:
+
+- `startGenerationFlow` still runs the attribution gate **first**, before
+  voice-readiness, clone-readiness and the tier prompt, so the composition
+  argument above is unchanged for the first-run path.
+- `enqueueQueueEntries` gains the check as a backstop for every other path. It
+  fires once per book per acknowledgement, not once per queued entry, or
+  regenerating six characters would prompt six times.
+- Server-side re-synthesis routes (`chapter-qa-repair.ts`, `chapter-splice.ts`)
+  are **out of scope and explicitly so**: they are repair operations on existing
+  audio, not a user asking for a fresh render, and they do not read the
+  attribution the gate protects.
+
 ### The Cast-view re-run (D10, R-Mi1)
 
 `confirm-cast.tsx`'s `onReanalyse` (wired at `:240-244`, labelled "Re-analyse
@@ -1228,7 +1398,7 @@ there are **five** states and the library shows all five:
 |---|---|---|---|---|
 | `ok` | — (including a book never analysed) | nothing | nothing | no |
 | `collapsed` | `narratorIdSpoken / attributableSpoken` ≥ threshold, book or chapter | warning badge | full notice | yes |
-| `drifted` | `orphanSpoken / spokenTotal` ≥ `DRIFT_SHARE_THRESHOLD`, with `orphanSpoken` ≥ `MIN_ORPHAN_FOR_VERDICT` (D13) | warning badge | full notice, pointing at the orphan banner | **yes** |
+| `drifted` | `unacknowledgedOrphanSpoken / spokenTotal` ≥ `DRIFT_SHARE_THRESHOLD`, with `unacknowledgedOrphanSpoken` ≥ `MIN_ORPHAN_FOR_VERDICT` (D13) | warning badge | full notice, pointing at the orphan banner | **yes** |
 | `missing` | `castCount > 0 && spokenTotal === 0 && (await readAnalysisState(dir)) === null && languageCorroborated` | warning badge | full notice | **yes** |
 | `unmeasurable` | the book **has been analysed** and the measurement still could not be made: cache corrupt, the declared language contradicted by detection over the book's own text, detection surrendered, **or** the resolved language has no conventions table | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
@@ -1287,6 +1457,22 @@ notice renders **both sections** when both apply, because they have different
 remedies and showing only one sends the user to the wrong control. The
 generation gate is a single acknowledgement listing every condition that fired —
 one gate, not two, so §The generation gate's ordering argument is unchanged.
+
+**A sequence that returns cannot report what it skipped, and revision 7's flag
+pointed the wrong way** (R-8C3). The draft carried `alsoDrifted: boolean`,
+described as "true when `drifted` is masked by a higher state" — but `drifted` is
+step 5 and `collapsed` is step 6, so **`collapsed` is the one that gets masked;
+`drifted` is never masked by it.** (`missing` needs `spokenTotal === 0` and
+`drifted` needs `orphanSpoken` over its floor, so those two are mutually
+exclusive as well.) The flag as written could only ever have been set by
+`unmeasurable`, and meanwhile the fixture table required the Cast view to render
+both sections — which the sequence made impossible, because it returns at step 5
+and never evaluates the collapse test at all.
+
+So: the field is **`alsoCollapsed`**, and step 5 computes the collapse verdict
+before returning rather than short-circuiting past it. The cost is one extra
+comparison on a book already known to be drifted; the alternative is a UI
+contract the state machine cannot satisfy.
 
 **Revision 4 claimed this precedence is what stopped a healthy CJK book being
 badged. That was wrong** (R-5M1). `zh` and `ja` both have conventions tables
@@ -1436,7 +1622,8 @@ instead of reading as a clean bill of health.
 | Zero spoken sentences, **cast present**, no snapshot, but detection **contradicts** the declared language | State `unmeasurable`. The likelier explanation is that the book is not in the language it was imported as. |
 | **Unresolvable `characterId`s present, below `MIN_ORPHAN_FOR_VERDICT` or the drift threshold** | Counted into `orphanSpoken`/`orphanIds` and reported; removed from **both** halves of the collapse share (D9). No badge, no gate — a book with one stray id is not worth an alarm. |
 | **Unresolvable ids above both floors** | State `drifted` (D13). Badges, gates, and points at the Cast orphan banner. |
-| **Every dialogue line orphaned** (`attributableSpoken === 0`) | Collapse `share: null` — never `0%`, which would read as healthy — and state `drifted`, since the orphan share is 100%. The one book shape where the collapse figure has nothing to say and the drift figure says everything. |
+| **Every dialogue line orphaned** (`attributableSpoken === 0`), above the count floor | Collapse `share: null` — never `0%`, which would read as healthy — and state `drifted` at a 100% orphan share. The one book shape where the collapse figure has nothing to say and the drift figure says everything. |
+| **Every dialogue line orphaned, but *below* the count floor** (a 15-line novella) | `ok`, `share: null`, and the row shows the orphan count. **Accepted, and it is a genuine gap** — the same shape as the "novella with 19 spoken lines" gap above, for the same reason: below the floor the figure is noise. Revision 7's edge-case table claimed `drifted` here unconditionally, which contradicted its own rule (R-8m1). |
 | Book never analysed | State `ok`, no badge, no marker. Reported by the script as `not analysed`. |
 | Zero spoken sentences, **cast present**, snapshot `running`/`paused`/`halted` | State `ok`. An interrupted run is ordinary use; the AnalysisPill already says so, and badging it would train the warning into noise. |
 | Under 20 **attributable** spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. The floor reads `attributableSpoken`, not `spokenTotal`, so a book pushed under it by id drift is silent rather than confidently wrong. |
@@ -1663,21 +1850,43 @@ does not move it.
 
 **Wave 2 — the `drifted` state (D13).** Four fixtures and a mutation apiece:
 
-| Fixture | `orphanSpoken` | Expected |
-|---|---|---|
-| One stray id, under `MIN_ORPHAN_FOR_VERDICT` | 3 | `ok` — not every drift is an alarm |
-| Orphan share over both floors, attribution otherwise healthy | 63 of 127 | `drifted`, gated |
-| **Drifted *and* collapsed** | high, and the attributable share also over threshold | badge `drifted` (precedence), `alsoDrifted` irrelevant, **both notice sections rendered** |
-| Drifted book, then an alias recorded via `retireCharacterId` | 63 → 0 | `ok` **with no cache write** |
+| # | Fixture | Orphans / spoken | Expected |
+|---|---|---|---|
+| 1 | **Short** book, one stray id under the count floor | 3 / 12 — **share 25%, over the share threshold** | `ok`. Pins the *count* floor: the share test alone would badge this |
+| 2 | **Long** book, many stray ids under the share threshold | 40 / 4000 — **count over the count floor** | `ok`. Pins the *share* threshold: the count test alone would badge this |
+| 3 | Over both floors, attribution otherwise healthy | 63 / 127 | `drifted`, gated |
+| 4 | **Drifted *and* collapsed** | over both, and the attributable share also over threshold | badge `drifted`, **`alsoCollapsed: true`**, both notice sections rendered |
+| 5 | Drifted, then an alias recorded via `retireCharacterId` | 63 → 0 | `ok` **with no cache write between the two reads** |
+| 6 | Drifted, then every orphan **rejected** (bare, unlinkable ids) | 63 → 0 unacknowledged | `ok` — the exit exists |
+| 7 | Drifted, dismissed, then a **new** orphan class appears under the same `cache.updatedAt` | — | `drifted` again — the dismissal re-arms |
+
+**Rows 1 and 2 are a matched pair and neither works alone** (R-8M3, R-8M4).
+Revision 7 had a single "one stray id, `orphanSpoken` 3" row with no
+`spokenTotal` constraint — so if the fixture were built long, the share test
+already returns `ok` and deleting `MIN_ORPHAN_FOR_VERDICT` moves nothing; the
+mutation proved only that *some* rule fired. Worse, **no fixture in that table
+exercised the share threshold at all**, so an implementation reading
+`orphanSpoken >= MIN_ORPHAN_FOR_VERDICT` and ignoring `DRIFT_SHARE_THRESHOLD`
+entirely passed every row and every mutation — while badging, on the live corpus,
+a long book with a few dozen stray lines that the design intends to stay silent
+about. Each floor now has a fixture that **only that floor** can keep quiet.
+
+**Row 7 is the second direction of the key change** (R-8M2). Revision 7 motivated
+`attributionVerdictKey` with two failures — the badge not clearing, and a
+dismissal not re-arming — and tested only the first. An implementation that keys
+the *stamp* on the verdict but leaves the *dismissal* on `analysedAt` passes row
+5 and fails only here.
 
 | Mutation | Effect |
 |---|---|
 | `drifted` step (5) deleted | rows 2 and 3 flip to `ok` / `collapsed` — the R-7C4 silence returns |
 | `MIN_ORPHAN_FOR_VERDICT` deleted | row 1 flips to `drifted` — every book with one stray id alarms |
 | **Dismissal/stamp keyed on `cache.updatedAt` alone** | **row 4 fails** — the badge survives a complete repair |
+| **Key computed over resolver *inputs* rather than the verdict** | the reject-only fixture below fails — a verdict-neutral rejection re-arms the warning |
+| `DRIFT_SHARE_THRESHOLD` ignored, verdict on the count floor alone | the long-book fixture flips to `drifted` — a novel with a few dozen stray lines badges |
 | `drifted` tested *after* `collapsed` | row 3 badges `collapsed` and sends the user to re-analysis, which cannot fix it |
 
-**Row 4 is the one that justifies the `attributionInputsKey` change**, and it is
+**Row 5 is the one that justifies the `attributionVerdictKey` change**, and it is
 the only test in this document that asserts something about a *write that does
 not happen*: `retireCharacterId` touches `cast-id-history.json` and nothing else,
 so a suite that re-analyses between the two assertions passes with the identity
@@ -1685,9 +1894,9 @@ left keyed on `cache.updatedAt` and proves nothing. The fixture must record the
 alias and re-read **without any cache write in between**.
 
 **Storage.** `analysedAt` reads from `cache.updatedAt`, falling back to mtime
-only when the field is absent; the dismiss endpoint resolves the inputs key
-server-side; a cache write between dismiss and read re-arms; **and so does an
-alias recorded through the banner**, since both feed `attributionInputsKey`.
+only when the field is absent; the dismiss endpoint resolves the verdict key
+server-side, from the same measurement it returns; a cache write between dismiss and read re-arms; **and so does an
+alias recorded through the banner**, since both move the verdict.
 
 **Routes.** GET computes and rewrites the stamp; a subset re-run recomputes the
 whole book; corrupt cache → `unmeasurable`, not 500; `GET /api/library` carries
@@ -2007,6 +2216,35 @@ reads**, so a Generate on that book today would route those 63 lines to the
 narrator, while the collapse figure reports 0%. That is a decision for the repo
 owner, not a defect to fold silently, and it is recorded as an open question
 below rather than resolved here.
+
+**Round 7 — scoped adversarial gate on D13 alone, 2026-08-11. Verdict: not safe
+to approve as written.** D13 was new design added after the round-6 gate, so it
+got its own pass. The reviewer confirmed the notice copy's figures exactly, the
+"rendered audio is unaffected" claim on every book D13 can fire on, the omission
+of `displaced` from the hash, and — the one thing that could have been fatal and
+unfixable — that a **workable threshold pair exists**, separating the drifted
+books from the other sixteen with an order-of-magnitude gap, and surviving Wave
+1's own `isSpokenLine` change. Three Criticals, all structural.
+
+| ID | Severity | Finding | Disposition |
+|---|---|---|---|
+| R-8C1 | Critical | **D13's notice pointed at a control with zero rows on every book D13 fires on.** The orphan banner is fed by `collectOrphanedCharacterFallbacks` (`segments-io.ts:338`), which enumerates **rendered segment files**; `orphanSpoken` is measured from the **analysis cache**. On this corpus the two populations are near-disjoint — and *because* the firing books' segments carry only resolved ids, their banner is empty. The books whose banner does have rows are ones D13 stays silent about | The banner gains a **cache-sourced tier**, resolved through the same `buildCastResolver` instance, with each row recording its source. The Link route needs no change — only its supply. Scoped in, because a notice whose remedy leads nowhere is worse than silence; **if that scope is declined, D13 is dropped rather than shipped without it** |
+| R-8C2 | Critical | **The generation gate does not cover the hazard it was added for.** `startGenerationFlow` has two dispatch sites, neither reachable on a fully-rendered book — and D13's entire hazard is the *next* render. Every regenerate affordance goes through `enqueueQueueEntries`, which `ENQUEUE_TRIGGER_TYPES` does not include. **The same bypass lets a `collapsed` book be wholly re-synthesised without its acknowledgement**, which R-M3 missed by enumerating dispatchers rather than asking what else reaches the synthesiser | Gate moved to `enqueueQueueEntries`, the chokepoint every synthesis path crosses; the thunk keeps its ordering role so the composition argument stands. Server-side repair routes explicitly excluded |
+| R-8C3 | Critical | **`alsoDrifted` pointed the wrong way and the sequence could not produce it.** `drifted` is step 5 and `collapsed` step 6, so `collapsed` is what gets masked; the flag could only ever have been set by `unmeasurable`. Meanwhile the fixture table required both notice sections to render — impossible, since the sequence returns at step 5 and never evaluates the collapse test | Field is **`alsoCollapsed`**; step 5 computes the collapse verdict before returning |
+| R-8M1 | Major | **No exit from a gating state for an unlinkable orphan.** `unknown-male`, `voix-inconnue`, `driver`, `the-jogger` name no character, so Link is impossible — and rejecting changes nothing, because the resolver only ever *blocks* on a rejection. Badged and blocked forever. Revision 7 additionally hashed `rejected` into the dismissal key, so every "Not the same character" click re-armed a warning it could not affect | The verdict counts **unacknowledged** orphans: bare `rejected` reads as acknowledged (it already means "not any of my characters"), `rejectedPairs` does not. Rejection becomes the exit *and* becomes verdict-relevant, which removes the re-arming defect |
+| R-8M2 | Major | **The dismissal key was over the resolver's inputs**, so it re-armed on verdict-neutral changes (every rejection; `saveAnalysisCache` stamping `updatedAt` on writes that change no `characterId`) and required the spec to enumerate correctly which inputs matter — which it got wrong. It also spanned **three files under three locking regimes**, so a torn read at dismiss time stored a key that could never match again: a permanently un-dismissable and, under D13, permanently gated book | Key moved to the measurement's **outputs** (`attributionVerdictKey`), computed from the same measurement the response returns. Changes exactly when the verdict can change; no second read to tear against; R-M2's no-minted-value property preserved |
+| R-8M3 | Major | **No fixture exercised `DRIFT_SHARE_THRESHOLD`.** An implementation reading the count floor alone passed all four rows and all four mutations — and on the live corpus would badge a long book the design intends to stay silent about | Fixture rows 1 and 2 are now a matched pair, each kept quiet by **only one** of the two floors; two mutations added |
+| R-8M4 | Major | **Acceptance criterion 12's mechanism did not exist.** `handleLinkOrphanMatch` (`cast.tsx:583`) links, dispatches `applyOrphanLink` and toasts — no refetch, no library patch. Nothing recomputed the verdict after a repair | The refetch-and-patch is scoped explicitly onto a successful link or reject |
+| R-8m1 | Minor | The edge-case row "every dialogue line orphaned → `drifted`" contradicts the rule when the count is under the floor — a wholly-drifted novella resolves `ok`, the outcome that row rejects | Split into two rows; the sub-floor case is recorded as a genuine accepted gap, matching the existing novella gap |
+| R-8m2 | Minor | The key change was motivated by two failure directions and tested in one | Fixture row 7 added for the re-arming direction |
+| R-8m3 | Minor | A share rule hides absolute damage: a long book carries more orphaned lines than some books that badge, and stays silent | Accepted and recorded as a known limitation; the alternative badges every large book with a few stray ids |
+
+**The reasoning failure behind R-8C1 is worth naming, because it is mine and it
+is new in kind.** "The rendered segments carry the resolved ids" is the fact that
+rebutted the round-6 gate's damage claim. It is *also* the fact that makes the
+orphan banner empty on exactly those books. Having used the observation to win
+one argument, I did not ask what else followed from it — a single fact with two
+consequences, of which only the convenient one was drawn.
 
 **Two corrections to the round-5 reviewer, verified before folding.** The
 unresolvable-id count is **8 of 20 books**, not the six the report lists — it missed the `zh`
