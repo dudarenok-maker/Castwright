@@ -68,7 +68,7 @@ import { api } from '../lib/api';
 import type { MergeSuggestion } from '../lib/api';
 import type { CastDesignScope } from '../store/cast-design-slice';
 import { buildVariantTasks, variantWorkCounts } from '../lib/variant-tasks';
-import { compareCastRows } from '../lib/cast-sort';
+import { compareCastRows, UNKNOWN_BUCKET_IDS } from '../lib/cast-sort';
 
 interface Props {
   characters: Character[];
@@ -504,6 +504,71 @@ export function CastView({
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-undo-error-${orphanedId}`,
+          kind: 'error',
+          message: msg,
+        }),
+      );
+    } finally {
+      setOrphanRejectBusyId(null);
+    }
+  }
+
+  /* #2238 — the needs-decision row's positive action: link `orphanedId` to
+     the live candidate picked in the SAME <select> the reject button reads
+     (`orphanRejectCandidate`, despite the name — it's just "the currently
+     picked comparison target" for this row, shared by both actions). Server
+     call is api.linkOrphanMatch (POST .../link-orphan-match), which durably
+     aliases characterId as orphanedId's live target (retireCharacterId) and
+     returns the resolution recomputed after that write; mirrored via
+     castActions.applyOrphanLink alone — a link never writes a notLinkedTo
+     edge, so unlike handleRejectOrphanMatch there's no second dispatch.
+
+     Design decision (issue #2238, "must NOT guess" #1) — accepting a pair
+     this row previously rejected must clear BOTH halves of that rejection
+     (rejectedPairs + the one-sided notLinkedTo edge) before the alias can
+     take, or rejectedPairsGoverning (server/src/store/cast-resolve.ts)
+     blocks it right back. Reuses the EXISTING undo path —
+     handleUndoOrphanRejection, the same function the chip's own Undo button
+     calls — rather than a second removal: when `targetCharacterId` is
+     already in `info.rejectedAgainst`, undo runs to completion FIRST
+     (server-side DELETE .../reject-orphan-match) and only then does the
+     link POST fire, so the alias never has to fight a rejection still on
+     disk. */
+  async function handleLinkOrphanMatch(orphanedId: string, targetCharacterId: string) {
+    if (!bookId || !targetCharacterId) return;
+    setOrphanRejectBusyId(orphanedId);
+    try {
+      const info = orphanedCharacterFallbacks[orphanedId];
+      if (info?.rejectedAgainst?.includes(targetCharacterId)) {
+        await handleUndoOrphanRejection(orphanedId, targetCharacterId);
+      }
+      const res = await api.linkOrphanMatch({
+        bookId,
+        characterId: targetCharacterId,
+        orphanedId,
+      });
+      dispatch(
+        castActions.applyOrphanLink({
+          orphanedId,
+          characterId: targetCharacterId,
+          resolution: res.resolution,
+          resolvedCharacterId: res.resolvedCharacterId,
+        }),
+      );
+      setOrphanRejectCandidate((prev) => ({ ...prev, [orphanedId]: '' }));
+      const targetName = characters.find((c) => c.id === targetCharacterId)?.name ?? targetCharacterId;
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-link-${orphanedId}`,
+          kind: 'info',
+          message: `Linked "${orphanedId}" to ${targetName}.`,
+        }),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-link-error-${orphanedId}`,
           kind: 'error',
           message: msg,
         }),
@@ -1287,6 +1352,36 @@ export function CastView({
                         className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
                       >
                         Not the same character
+                      </button>
+                      {/* #2238 — the positive mirror of "Not the same
+                          character": link this orphaned id to the picked
+                          candidate. Disabled on the same "no candidate
+                          picked yet" / busy conditions as the reject button,
+                          plus decision 4 (issue #2238) — a reserved
+                          minor-cast fold bucket stands in for MULTIPLE
+                          background characters, so aliasing a real id onto
+                          it would be a lossy merge, not a reconciliation;
+                          refused here with a visible reason (title) rather
+                          than failing silently server-side. */}
+                      <button
+                        type="button"
+                        disabled={
+                          !orphanRejectCandidate[orphanedId] ||
+                          orphanRejectBusyId === orphanedId ||
+                          UNKNOWN_BUCKET_IDS.has(orphanRejectCandidate[orphanedId])
+                        }
+                        title={
+                          orphanRejectCandidate[orphanedId] &&
+                          UNKNOWN_BUCKET_IDS.has(orphanRejectCandidate[orphanedId])
+                            ? "Can't link to a shared fallback voice for minor characters — pick a specific cast member instead."
+                            : undefined
+                        }
+                        onClick={() =>
+                          handleLinkOrphanMatch(orphanedId, orphanRejectCandidate[orphanedId])
+                        }
+                        className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold"
+                      >
+                        Link to this character
                       </button>
                       <OrphanRejectedChips
                         orphanedId={orphanedId}

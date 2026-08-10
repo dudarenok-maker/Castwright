@@ -2443,6 +2443,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/{characterId}/link-orphan-match": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link an orphaned-id reconciliation ("this IS the same character") —
+         * @description The positive mirror of `reject-orphan-match`'s POST above: records
+         *     "orphanedId IS the same character as characterId" by durably
+         *     aliasing `orphanedId -> characterId` in `cast-id-history.json`'s
+         *     `supersededBy` (`retireCharacterId`), so `buildCastResolver` picks it
+         *     up at render/QA/splice time and the needs-your-decision row leaves
+         *     the banner's needs-decision section. Refuses a reserved minor-cast
+         *     fold-bucket target (`unknown-male`/`unknown-female`, 400) — a shared
+         *     bucket stands in for multiple unrelated background characters, so
+         *     aliasing a real id onto it is a lossy merge, not a reconciliation.
+         *     Does not itself clear a pre-existing pair-scoped rejection of this
+         *     exact pair — the client clears that first via the EXISTING
+         *     `reject-orphan-match` DELETE undo (no second removal
+         *     implementation); calling this route while a rejection is still in
+         *     place still durably writes the alias, but `resolution` in the
+         *     response stays blocked (`null`) until the rejection is actually
+         *     cleared. Has no DELETE of its own: once linked, the row moves into
+         *     the auto-reconciled section, which already renders
+         *     `reject-orphan-match`'s own "Not the same character" button/undo
+         *     chip as this action's full undo path.
+         */
+        post: operations["linkOrphanMatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/annotate-emotion": {
         parameters: {
             query?: never;
@@ -5552,6 +5590,23 @@ export interface components {
              *     succeeded.
              */
             supersededByOther?: string[];
+        };
+        LinkOrphanMatchResponse: {
+            /** @description The live character (path param, echoed back). */
+            characterId: string;
+            orphanedId: string;
+            /**
+             * @description How `orphanedId` resolves against the live cast + id history,
+             *     recomputed AFTER this call's write lands. `null` only when a
+             *     still-active pair-scoped rejection blocks it (#2238 decision 1) —
+             *     the alias was still durably written; clearing the rejection via
+             *     the existing DELETE /reject-orphan-match undo lets it take
+             *     immediately, with no further link call needed.
+             * @enum {string|null}
+             */
+            resolution: "exact" | "history" | "normalised-id" | "normalised-history" | null;
+            /** @description The live cast id `orphanedId` resolves onto, when `resolution` is non-null. */
+            resolvedCharacterId?: string;
         };
         /**
          * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
@@ -10044,6 +10099,61 @@ export interface operations {
                 content?: never;
             };
             /** @description Failed to restore the forgotten alias entry, or to durably remove the rejection — retry */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    linkOrphanMatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectOrphanMatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The linked pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkOrphanMatchResponse"];
+                };
+            };
+            /** @description Missing fields, characterId/orphanedId self-pair, or characterId is a reserved fold-bucket id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Failed to durably record the alias — retry, the write is idempotent */
             500: {
                 headers: {
                     [name: string]: unknown;

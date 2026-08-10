@@ -51,6 +51,14 @@ vi.mock('../lib/api', () => ({
          notLinkedTo redux mirror off, instead of `orphanedId` directly. */
       removedFrom: ['mayrin'],
     }),
+    /* #2238 — the positive mirror of rejectOrphanMatch: "Link to this
+       character". */
+    linkOrphanMatch: vi.fn().mockResolvedValue({
+      characterId: 'marrow',
+      orphanedId: 'coalfall',
+      resolution: 'history',
+      resolvedCharacterId: 'marrow',
+    }),
   },
 }));
 
@@ -1385,6 +1393,183 @@ describe('CastView Qwen status pill (plan 117)', () => {
 
       fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
       expect(rejectButton).not.toBeDisabled();
+    });
+
+    describe('#2238 — "Link to this character"', () => {
+      it('needs-your-decision: the link button is disabled until a candidate is picked, then links against it', async () => {
+        const store = makeSplitStore();
+        renderSplitBanner(store);
+        const section = screen.getByTestId('orphaned-needs-decision');
+        const row = within(section).getByText(/coalfall/).closest('li')!;
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+        expect(linkButton).toBeDisabled();
+
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).not.toBeDisabled();
+
+        fireEvent.click(linkButton);
+        await waitFor(() => {
+          expect(api.linkOrphanMatch).toHaveBeenCalledWith({
+            bookId: 'b_current',
+            characterId: 'marrow',
+            orphanedId: 'coalfall',
+          });
+        });
+        // The server-recomputed resolution moves the row out of
+        // needs-your-decision entirely (mirrors applyOrphanRejection's own
+        // resolution-driven move, applied here via applyOrphanLink).
+        await waitFor(() => {
+          expect(store.getState().cast.orphanedCharacterFallbacks?.coalfall).toMatchObject({
+            resolution: 'alias',
+            resolvedCharacterId: 'marrow',
+          });
+        });
+        expect(screen.queryByTestId('orphaned-needs-decision')).not.toBeInTheDocument();
+      });
+
+      it('decision 1 — linking a candidate already in rejectedAgainst reuses the EXISTING undo path first, then links', async () => {
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow],
+              orphanedCharacterFallbacks: {
+                coalfall: {
+                  resolution: 'unresolved' as const,
+                  segments: 67,
+                  rejectedAgainst: ['marrow'],
+                },
+              },
+            },
+          },
+        });
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        // Not blocked by the reject-button's own "already rejected" guard —
+        // that disables ONLY the reject button, never the link button.
+        expect(linkButton).not.toBeDisabled();
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(api.linkOrphanMatch).toHaveBeenCalledWith({
+            bookId: 'b_current',
+            characterId: 'marrow',
+            orphanedId: 'coalfall',
+          });
+        });
+        // The undo call landed too — and BEFORE the link call, not merely
+        // "at some point" — proving the existing undo path was reused
+        // rather than the link firing straight into a still-active
+        // rejection.
+        expect(api.undoRejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'marrow',
+          orphanedId: 'coalfall',
+        });
+        const undoOrder = vi.mocked(api.undoRejectOrphanMatch).mock.invocationCallOrder[0];
+        const linkOrder = vi.mocked(api.linkOrphanMatch).mock.invocationCallOrder[0];
+        expect(undoOrder).toBeLessThan(linkOrder);
+      });
+
+      it('decision 4 — the link button is disabled for a reserved fold-bucket candidate, with a visible reason', () => {
+        const unknownMale: Character = {
+          id: 'unknown-male',
+          name: 'Unknown (Male)',
+          role: 'character',
+          color: 'unset',
+        };
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow, unknownMale],
+              orphanedCharacterFallbacks: {
+                coalfall: { resolution: 'unresolved' as const, segments: 67 },
+              },
+            },
+          },
+        });
+        render(
+          <Provider store={store}>
+            <CastView
+              characters={[narrator, marrow, unknownMale]}
+              setCharacters={() => {}}
+              library={library}
+              title="The Northern Star"
+              onOpenProfile={() => {}}
+              onShowMatchDetail={() => {}}
+              driftEvents={[]}
+              onShowDrift={() => {}}
+              onContinueToManuscript={() => {}}
+            />
+          </Provider>,
+        );
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).not.toBeDisabled();
+
+        fireEvent.change(select, { target: { value: 'unknown-male' } });
+        expect(linkButton).toBeDisabled();
+        expect(linkButton).toHaveAttribute('title', expect.stringMatching(/shared fallback voice/i));
+      });
+
+      it('shows an error toast and resets the busy state when the link call fails', async () => {
+        vi.mocked(api.linkOrphanMatch).mockRejectedValueOnce(new Error('Link match failed (500).'));
+        const store = makeSplitStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(store.getState().notifications.toasts).toHaveLength(1);
+        });
+        expect(store.getState().notifications.toasts[0]).toMatchObject({
+          kind: 'error',
+          message: 'Link match failed (500).',
+        });
+        // The failed call never landed locally — the row stays put.
+        expect(store.getState().cast.orphanedCharacterFallbacks?.coalfall).toEqual({
+          resolution: 'unresolved',
+          segments: 67,
+        });
+        expect(linkButton).not.toBeDisabled();
+      });
     });
 
     it('#2040 Task 17 fix round 2 — shows an error toast and resets the busy state when the reject call fails', async () => {

@@ -4698,6 +4698,69 @@ export async function mockUndoRejectOrphanMatch(
   };
 }
 
+/* POST /api/books/:bookId/cast/:characterId/link-orphan-match  (#2238) — the
+   orphaned-character-fallback banner's "Link to this character" action, the
+   positive mirror of `rejectOrphanMatch` above. `characterId` is the live
+   cast member the user picked from the needs-decision row's own <select>
+   (the same candidate state the reject button reads); `orphanedId` is the
+   map key. Mirrored to redux via castActions.applyOrphanLink alone — unlike
+   a reject, a link never writes a notLinkedTo edge, so there is no second
+   dispatch to pair it with. When the row already carries this candidate in
+   `rejectedAgainst` (a prior "not the same character" for this exact pair),
+   the caller (`handleLinkOrphanMatch`, src/views/cast.tsx) reuses the
+   EXISTING undo path (`handleUndoOrphanRejection`) to clear it BEFORE
+   calling this — see the server route's own doc comment
+   (server/src/routes/cast-link-orphan.ts) for why a second removal
+   implementation does not belong here. */
+export interface LinkOrphanMatchArgs {
+  bookId: string;
+  characterId: string;
+  orphanedId: string;
+}
+export interface LinkOrphanMatchResponse {
+  characterId: string;
+  orphanedId: string;
+  resolution: RejectOrphanResolutionTier;
+  resolvedCharacterId?: string;
+}
+
+async function realLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrphanMatchResponse> {
+  const { bookId, characterId, orphanedId } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/link-orphan-match`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orphanedId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Link match failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+export async function mockLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrphanMatchResponse> {
+  await wait(80);
+  /* Linking a pair clears any mock-tracked rejection for it too — mirrors
+     the real server durably clearing the rejection (via the frontend's
+     reused undo call) before this write is ever reached in the normal
+     flow. */
+  mockRejectedOrphanPairs.delete(rejectedOrphanPairKey(args));
+  return {
+    characterId: args.characterId,
+    orphanedId: args.orphanedId,
+    resolution: 'history',
+    resolvedCharacterId: args.characterId,
+  };
+}
+
 async function realAddFromSeriesRoster(
   args: AddFromSeriesRosterArgs,
 ): Promise<AddFromSeriesRosterResponse> {
@@ -10854,6 +10917,7 @@ const real = {
   removeNotLinkedTo: realRemoveNotLinkedTo,
   rejectOrphanMatch: realRejectOrphanMatch,
   undoRejectOrphanMatch: realUndoRejectOrphanMatch,
+  linkOrphanMatch: realLinkOrphanMatch,
   addFromSeriesRoster: realAddFromSeriesRoster,
   createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
@@ -11162,6 +11226,7 @@ const mock = {
   removeNotLinkedTo: mockRemoveNotLinkedTo,
   rejectOrphanMatch: mockRejectOrphanMatch,
   undoRejectOrphanMatch: mockUndoRejectOrphanMatch,
+  linkOrphanMatch: mockLinkOrphanMatch,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,
