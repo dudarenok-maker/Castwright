@@ -228,7 +228,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 42 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -238,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**62 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2242,6 +2242,56 @@ delete-first/write-last ordering invariant in
 `docs/features/282-ort-pip-consistency-marker.md`, and the `pipInstall` anchors in
 the design doc's §Changed files; run sheet §9 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A43 · Linking an orphaned `characterId` through the Cast screen actually reconnects its segments ([#2238](https://github.com/dudarenok-maker/Castwright/issues/2238), plan [278](../features/278-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped for the script half**
+
+#2238's acceptance criterion 5 — *"`repair-cast-id-drift.mjs`'s 'reported for
+human decision' count drops by each id linked through the UI, verified by a dry
+run before and after on a real book"* — cannot be proven in the PR. Every test
+in the branch drives a fixture workspace; the claim is about the real one, where
+the script's report-only bucket currently stands at **107 ids / 93 segments**.
+
+*What to observe.* Pick a needs-decision row with rendered segments behind it —
+***Exile*** `silveny` (17 segments across ch50/ch51/ch56/ch65) or ***Everblaze***
+`lady-alina` (6 across ch55/ch61) are the clearest. Then, in order:
+
+1. With the server **stopped**, run
+   `WORKSPACE_DIR="C:/AudiobookWorkspace" CACHE_DIR="<the checkout that ran this
+   workspace's analysis>/server/handoff/cache" node
+   scripts/repair-cast-id-drift.mjs` and record `reported for human decision`.
+   **Both env vars matter.** `WORKSPACE_DIR` defaults to a path that does not
+   exist on this box — the run scans **0 books** and prints a full summary of
+   clean zeros, so check the `books scanned:` line before trusting anything.
+   `CACHE_DIR` defaults to the *current* checkout, and a worktree's cache
+   silently sees nothing for a book analysed elsewhere, which moves the counts
+   this row is comparing.
+2. Start the server, open `#/books/<id>/cast`, pick the right character in that
+   row's `Compare against…`, press **Link to this character**.
+3. Confirm the row leaves "needs your decision" and appears under
+   **auto-reconciled**, and that `.audiobook/cast-id-history.json` gained a
+   `supersededBy` entry for it.
+4. Stop the server, re-run the dry pass, and confirm the reported count dropped
+   by that id — and that `re-render candidates` dropped by its segment count.
+5. **The negative case, which is the Critical this PR's review gate caught:**
+   open ***Exile***, whose `unknown-male` row carries 21 segments across 3
+   chapters. The link action must be **disabled** on that row, with a visible
+   reason, and a direct `POST .../link-orphan-match` with `orphanedId:
+   "unknown-male"` must 400. *Exile* is the right book for this: the repair
+   script reports that its analysis cache **"actually names it 5 different
+   things (timkin, brant, dwarf, rex, lord cassius)"**, so linking that id
+   book-wide would route five speakers onto one voice — #2040's original damage
+   class. ***Unlocked*** (`unknown-male`, 34 segments across ch63/ch67) is worth
+   checking as a second row, but note its evidence is weaker, not stronger: its
+   backup names **one** occurrence ("Lord Cassius") and its analysis cache names
+   **zero** characters, so it is the cache-blind case rather than the
+   many-speaker one.
+
+*Hardware:* none. A real workspace with drifted books, and the server stopped for
+steps 1 and 4 (the script refuses `--apply` against a live server, and a dry run
+against one is unreliable). *Criteria:* plan
+[278](../features/278-cast-character-identity.md) §Amendment 2026-08-10; the four
+constraints listed there each have unit coverage, but only the corpus proves the
+count moves.
 
 ## Group B — local Ollama analyzer only
 

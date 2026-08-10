@@ -717,6 +717,36 @@ export const castSlice = createSlice({
       const next = entry.rejectedAgainst.filter((id) => id !== characterId);
       entry.rejectedAgainst = next.length ? next : undefined;
     },
+    /* From POST /api/books/:bookId/cast/:characterId/link-orphan-match
+       (#2238) — the orphaned-character-fallback banner's "Link to this
+       character" action, the positive mirror of applyOrphanRejection above.
+       The server has durably recorded characterId as orphanedId's live
+       target (cast-id-history.json's supersededBy, via retireCharacterId)
+       and returned orphanedId's resolution recomputed after that write —
+       this reducer applies the server's own answer, same as
+       applyOrphanRejection, rather than guessing. Unlike a reject, a link
+       never writes a notLinkedTo edge and never touches `rejectedAgainst`:
+       if this exact pair carried a prior rejection, the caller
+       (handleLinkOrphanMatch, cast.tsx) already cleared it by dispatching
+       undoOrphanRejection via the EXISTING undo path
+       (handleUndoOrphanRejection) before this action was even dispatched —
+       reusing that path rather than a second removal (#2238's own design
+       decision). No-op for an id no longer in the map. */
+    applyOrphanLink: (
+      s,
+      a: PayloadAction<{
+        orphanedId: string;
+        characterId: string;
+        resolution: RejectOrphanResolutionTier;
+        resolvedCharacterId?: string;
+      }>,
+    ) => {
+      const { orphanedId, resolution, resolvedCharacterId } = a.payload;
+      const entry = s.orphanedCharacterFallbacks?.[orphanedId];
+      if (!entry) return;
+      entry.resolution = toBannerResolution(resolution);
+      entry.resolvedCharacterId = resolvedCharacterId;
+    },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
        stable handle on the library record (POST /api/library-cast/override). */

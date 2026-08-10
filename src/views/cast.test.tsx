@@ -51,6 +51,14 @@ vi.mock('../lib/api', () => ({
          notLinkedTo redux mirror off, instead of `orphanedId` directly. */
       removedFrom: ['mayrin'],
     }),
+    /* #2238 — the positive mirror of rejectOrphanMatch: "Link to this
+       character". */
+    linkOrphanMatch: vi.fn().mockResolvedValue({
+      characterId: 'marrow',
+      orphanedId: 'coalfall',
+      resolution: 'history',
+      resolvedCharacterId: 'marrow',
+    }),
   },
 }));
 
@@ -1385,6 +1393,626 @@ describe('CastView Qwen status pill (plan 117)', () => {
 
       fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
       expect(rejectButton).not.toBeDisabled();
+    });
+
+    describe('#2238 — "Link to this character"', () => {
+      it('needs-your-decision: the link button is disabled until a candidate is picked, then links against it', async () => {
+        const store = makeSplitStore();
+        renderSplitBanner(store);
+        const section = screen.getByTestId('orphaned-needs-decision');
+        const row = within(section).getByText(/coalfall/).closest('li')!;
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+        expect(linkButton).toBeDisabled();
+
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).not.toBeDisabled();
+
+        fireEvent.click(linkButton);
+        await waitFor(() => {
+          expect(api.linkOrphanMatch).toHaveBeenCalledWith({
+            bookId: 'b_current',
+            characterId: 'marrow',
+            orphanedId: 'coalfall',
+          });
+        });
+        // The server-recomputed resolution moves the row out of
+        // needs-your-decision entirely (mirrors applyOrphanRejection's own
+        // resolution-driven move, applied here via applyOrphanLink).
+        await waitFor(() => {
+          expect(store.getState().cast.orphanedCharacterFallbacks?.coalfall).toMatchObject({
+            resolution: 'alias',
+            resolvedCharacterId: 'marrow',
+          });
+        });
+        expect(screen.queryByTestId('orphaned-needs-decision')).not.toBeInTheDocument();
+      });
+
+      /* Shared preloaded state for the decision-1 / F2 / F5 tests below — a
+         needs-decision row whose picked candidate ('marrow') is already in
+         rejectedAgainst, so the link action must reuse the existing undo
+         path first. */
+      function makeRejectedAgainstStore() {
+        return configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow],
+              orphanedCharacterFallbacks: {
+                coalfall: {
+                  resolution: 'unresolved' as const,
+                  segments: 67,
+                  rejectedAgainst: ['marrow'],
+                },
+              },
+            },
+          },
+        });
+      }
+
+      it('decision 1 — linking a candidate already in rejectedAgainst reuses the EXISTING undo path first, then links', async () => {
+        const store = makeRejectedAgainstStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        // Not blocked by the reject-button's own "already rejected" guard —
+        // that disables ONLY the reject button, never the link button.
+        expect(linkButton).not.toBeDisabled();
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(api.linkOrphanMatch).toHaveBeenCalledWith({
+            bookId: 'b_current',
+            characterId: 'marrow',
+            orphanedId: 'coalfall',
+          });
+        });
+        expect(api.undoRejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'marrow',
+          orphanedId: 'coalfall',
+        });
+      });
+
+      /* F7 — the prior version of this test asserted only
+         `invocationCallOrder`, which proves nothing about the undo's PROMISE
+         actually settling before the link fires: removing the `await` at the
+         reused-undo call site still calls the undo mock first (the async
+         function runs synchronously up to its own first `await`), so
+         `invocationCallOrder` stays green either way. This version defers
+         the undo's OWN resolution and asserts the link mock has NOT been
+         called until it settles — the actual design-1 guarantee.
+         Mutation-verified: deleting the `await` at the reused-undo call site
+         in handleLinkOrphanMatch turns this red (the link fires immediately,
+         before `resolveUndo()`), and restoring it turns it green again. */
+      it('F7 — the reused undo path genuinely blocks the link until the undo PROMISE settles, not merely until it is called', async () => {
+        // The shared module-level mock isn't reset between tests in this
+        // file (see the comment on the earlier "disables the reject button"
+        // test) — clear it so `.not.toHaveBeenCalled()` below reflects only
+        // this test's own action, not calls left over from earlier tests.
+        vi.mocked(api.linkOrphanMatch).mockClear();
+        let resolveUndo: (() => void) | undefined;
+        vi.mocked(api.undoRejectOrphanMatch).mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveUndo = () =>
+                resolve({
+                  characterId: 'marrow',
+                  orphanedId: 'coalfall',
+                  wasRejected: true,
+                  resolution: 'history',
+                  resolvedCharacterId: 'marrow',
+                  removedFrom: ['coalfall'],
+                });
+            }),
+        );
+        const store = makeRejectedAgainstStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(api.undoRejectOrphanMatch).toHaveBeenCalled();
+        });
+        // The undo hasn't resolved yet — the link must not have fired.
+        expect(api.linkOrphanMatch).not.toHaveBeenCalled();
+
+        resolveUndo?.();
+
+        await waitFor(() => {
+          expect(api.linkOrphanMatch).toHaveBeenCalledWith({
+            bookId: 'b_current',
+            characterId: 'marrow',
+            orphanedId: 'coalfall',
+          });
+        });
+      });
+
+      /* F2 — a failed reused undo must abort the link outright, not merely
+         `await` a promise that swallows its own error. Mutation-verified:
+         removing the `if (!undone) return;` guard in handleLinkOrphanMatch
+         turns this red (the link call fires anyway, and a second "Linked…"
+         toast appears alongside the undo's error toast). */
+      it('F2 — when the reused undo call fails, the link is aborted: only the undo error toast renders, and linkOrphanMatch is never called', async () => {
+        // See F7's comment above — the shared mock accumulates calls across
+        // tests in this file, so clear it before a `.not.toHaveBeenCalled()`
+        // assertion.
+        vi.mocked(api.linkOrphanMatch).mockClear();
+        vi.mocked(api.undoRejectOrphanMatch).mockRejectedValueOnce(new Error('Undo failed (500).'));
+        const store = makeRejectedAgainstStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(store.getState().notifications.toasts).toHaveLength(1);
+        });
+        expect(store.getState().notifications.toasts[0]).toMatchObject({
+          kind: 'error',
+          message: 'Undo failed (500).',
+        });
+        expect(api.linkOrphanMatch).not.toHaveBeenCalled();
+        // Busy state resets so the row isn't stuck disabled.
+        await waitFor(() => {
+          expect(linkButton).not.toBeDisabled();
+        });
+      });
+
+      /* F5 — the busy flag must stay set across the WHOLE reused-undo +
+         link span, not drop to null the moment the nested undo settles
+         (which used to re-enable "Not the same character" mid-flight,
+         letting a second click race a reject against the in-flight link).
+         Mutation-verified: reverting handleUndoOrphanRejection to own the
+         busy flag internally (its own setOrphanRejectBusyId/finally around
+         the undo call, called from handleLinkOrphanMatch instead of
+         performUndoOrphanRejection) turns this red — the reject button
+         becomes enabled right after `resolveUndo()`, before the link call
+         even starts. */
+      it('F5 — the busy flag stays set across the reused undo AND the link call, with no re-enabled window in between', async () => {
+        let resolveUndo: (() => void) | undefined;
+        vi.mocked(api.undoRejectOrphanMatch).mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveUndo = () =>
+                /* Deliberately resolution: null (unlike the other
+                   undoRejectOrphanMatch mocks in this describe block) — this
+                   row was never previously linked, so undoing ITS rejection
+                   alone restores nothing yet; only the link POST below
+                   actually resolves it. Keeping the row unresolved through
+                   the undo step is what keeps it (and its buttons) mounted
+                   in needs-your-decision for the whole test, so the
+                   mid-flight busy-flag check below observes the SAME live
+                   button rather than one already detached by an earlier,
+                   unrelated section move. */
+                resolve({
+                  characterId: 'marrow',
+                  orphanedId: 'coalfall',
+                  wasRejected: true,
+                  resolution: null,
+                  resolvedCharacterId: undefined,
+                  removedFrom: ['coalfall'],
+                });
+            }),
+        );
+        let resolveLink: (() => void) | undefined;
+        vi.mocked(api.linkOrphanMatch).mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveLink = () =>
+                resolve({
+                  characterId: 'marrow',
+                  orphanedId: 'coalfall',
+                  resolution: 'history',
+                  resolvedCharacterId: 'marrow',
+                });
+            }),
+        );
+        const store = makeRejectedAgainstStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => expect(api.undoRejectOrphanMatch).toHaveBeenCalled());
+        expect(rejectButton).toBeDisabled();
+
+        resolveUndo?.();
+        await waitFor(() => expect(api.linkOrphanMatch).toHaveBeenCalled());
+        // The undo has now resolved but the link hasn't finished — the row
+        // must STILL be busy, not re-enabled in the gap between the two.
+        expect(rejectButton).toBeDisabled();
+
+        resolveLink?.();
+        // The link's own success resolution ('history' -> 'alias') moves the
+        // row out of needs-your-decision entirely, so the settled state to
+        // assert is the section closing — not this now-detached button node
+        // becoming enabled, which it never will since it unmounts instead.
+        await waitFor(() => {
+          expect(screen.queryByTestId('orphaned-needs-decision')).not.toBeInTheDocument();
+        });
+      });
+
+      it('decision 4 — the link button is disabled for a reserved fold-bucket candidate, with a visible reason', () => {
+        const unknownMale: Character = {
+          id: 'unknown-male',
+          name: 'Unknown (Male)',
+          role: 'character',
+          color: 'unset',
+        };
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow, unknownMale],
+              orphanedCharacterFallbacks: {
+                coalfall: { resolution: 'unresolved' as const, segments: 67 },
+              },
+            },
+          },
+        });
+        render(
+          <Provider store={store}>
+            <CastView
+              characters={[narrator, marrow, unknownMale]}
+              setCharacters={() => {}}
+              library={library}
+              title="The Northern Star"
+              onOpenProfile={() => {}}
+              onShowMatchDetail={() => {}}
+              driftEvents={[]}
+              onShowDrift={() => {}}
+              onContinueToManuscript={() => {}}
+            />
+          </Provider>,
+        );
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).not.toBeDisabled();
+
+        fireEvent.change(select, { target: { value: 'unknown-male' } });
+        expect(linkButton).toBeDisabled();
+        expect(linkButton).toHaveAttribute('title', expect.stringMatching(/shared fallback voice/i));
+      });
+
+      /* F1 (CRITICAL) — the row's OWN id (the alias SOURCE) is the
+         actually-dangerous direction: linking a shared fold-bucket/narrator
+         id as SOURCE would route every speaker who ever fell back to it onto
+         one voice, book-wide. Disabled unconditionally for the row,
+         regardless of which (non-reserved) candidate is picked — unlike
+         decision 4 above, which only disables for a reserved TARGET.
+         Mutation-verified: removing `sourceIsReserved` from the button's
+         `disabled`/`title` expressions in cast.tsx turns this red (the
+         button becomes enabled once a normal candidate like 'marrow' is
+         picked). */
+      it('F1 (CRITICAL) — a needs-decision row whose OWN id is a reserved fold-bucket id keeps the link action disabled regardless of candidate', () => {
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow],
+              orphanedCharacterFallbacks: {
+                'unknown-male': { resolution: 'unresolved' as const, segments: 34 },
+              },
+            },
+          },
+        });
+        renderSplitBanner(store);
+        const row = screen.getByTestId('orphaned-row-unknown-male');
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+
+        // A perfectly ordinary, non-reserved candidate — the hazard is the
+        // row's own id, not the candidate.
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).toBeDisabled();
+        expect(linkButton).toHaveAttribute('title', expect.stringMatching(/shared fallback id/i));
+      });
+
+      /* F1/N2 decision — narrator carries the same source-side hazard as the
+         fold buckets when the candidate is an ORDINARY character (see
+         cast-link-orphan.ts's own doc comment for the reasoning), asserted
+         here purely at the disable-button layer. The narrator<->char-narrator
+         carve-out is covered by the enabled-case test below. */
+      it('F1/N2 decision — a needs-decision row named "narrator" keeps the link action disabled against an ordinary candidate', () => {
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow],
+              orphanedCharacterFallbacks: {
+                narrator: { resolution: 'unresolved' as const, segments: 12 },
+              },
+            },
+          },
+        });
+        renderSplitBanner(store);
+        const row = screen.getByTestId('orphaned-row-narrator');
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        expect(linkButton).toBeDisabled();
+      });
+
+      /* N2 (review round) — the carve-out: narrator IS allowed as the alias
+         SOURCE when the picked candidate is itself a narrator id
+         (char-narrator here) — narrator<->char-narrator name ONE character
+         (see cast-link-orphan.ts's `NORMALISED_NARRATOR_IDS` doc comment),
+         a legitimate one-to-one reconciliation, unlike the ordinary-candidate
+         case above which must stay disabled. Mutation check: this must fail
+         red if the `candidateIsNarrator` carve-out is removed from
+         cast.tsx's `sourceIsReserved` expression (i.e. narrator refused as
+         SOURCE unconditionally again) — the button would stay disabled here.
+         Confirmed red by temporarily reverting the carve-out and re-running
+         this file; see PR/report for the observed failure. */
+      it('N2 — a needs-decision row named "narrator" enables the link action once the candidate is itself a narrator id (char-narrator)', () => {
+        const charNarrator: Character = {
+          id: 'char-narrator',
+          name: 'The Narrator',
+          role: 'narrator',
+          color: 'unset',
+        };
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow, charNarrator],
+              orphanedCharacterFallbacks: {
+                narrator: { resolution: 'unresolved' as const, segments: 12 },
+              },
+            },
+          },
+        });
+        render(
+          <Provider store={store}>
+            <CastView
+              characters={[narrator, marrow, charNarrator]}
+              setCharacters={() => {}}
+              library={library}
+              title="The Northern Star"
+              onOpenProfile={() => {}}
+              onShowMatchDetail={() => {}}
+              driftEvents={[]}
+              onShowDrift={() => {}}
+              onContinueToManuscript={() => {}}
+            />
+          </Provider>,
+        );
+        const row = screen.getByTestId('orphaned-row-narrator');
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+
+        // The ordinary candidate still disables it (same case as the test above).
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).toBeDisabled();
+
+        // Switching to the narrator-id candidate enables it.
+        fireEvent.change(select, { target: { value: 'char-narrator' } });
+        expect(linkButton).not.toBeDisabled();
+      });
+
+      /* F4 — the client-side source check is normalisation-safe too: a
+         case/separator-drifted spelling of a reserved id (`Unknown_Male`)
+         must still disable the row, mirroring the server's own
+         `normaliseIdKey` check. Mutation-verified: swapping
+         NORMALISED_RESERVED_LINK_SOURCE_IDS.has(normaliseIdKey(orphanedId))
+         for a raw UNKNOWN_BUCKET_IDS.has(orphanedId) turns this red. */
+      it('F4 — the source-side reserved check is normalisation-safe: a case/separator-drifted id still disables the link action', () => {
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow],
+              orphanedCharacterFallbacks: {
+                Unknown_Male: { resolution: 'unresolved' as const, segments: 9 },
+              },
+            },
+          },
+        });
+        renderSplitBanner(store);
+        const row = screen.getByTestId('orphaned-row-Unknown_Male');
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        expect(linkButton).toBeDisabled();
+      });
+
+      /* F4 — the TARGET side is also normalisation-safe: a live cast row
+         whose own id drifted to a case/separator variant of a reserved
+         bucket id (the #2040 `the_torment`/`the-torment` shape, applied to a
+         bucket id) must still disable the link action when picked as the
+         candidate. Mutation-verified: swapping
+         UNKNOWN_BUCKET_IDS.has(normaliseIdKey(candidateId)) for a raw
+         UNKNOWN_BUCKET_IDS.has(candidateId) turns this red. */
+      it('F4 — the TARGET-side reserved check is normalisation-safe: a case/separator-drifted candidate id still disables the link action', () => {
+        const driftedBucket: Character = {
+          id: 'Unknown_Male',
+          name: 'Unknown (Male)',
+          role: 'character',
+          color: 'unset',
+        };
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow, driftedBucket],
+              orphanedCharacterFallbacks: {
+                coalfall: { resolution: 'unresolved' as const, segments: 67 },
+              },
+            },
+          },
+        });
+        render(
+          <Provider store={store}>
+            <CastView
+              characters={[narrator, marrow, driftedBucket]}
+              setCharacters={() => {}}
+              library={library}
+              title="The Northern Star"
+              onOpenProfile={() => {}}
+              onShowMatchDetail={() => {}}
+              driftEvents={[]}
+              onShowDrift={() => {}}
+              onContinueToManuscript={() => {}}
+            />
+          </Provider>,
+        );
+        const row = screen.getByTestId('orphaned-row-coalfall');
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+
+        fireEvent.change(select, { target: { value: 'Unknown_Male' } });
+        expect(linkButton).toBeDisabled();
+      });
+
+      /* F3 — `resolution: null` means the write landed but is still blocked
+         by a live rejection; the toast must say so instead of claiming a
+         clean success. Mutation-verified: reverting the toast message/kind
+         to the old unconditional "Linked…"/'info' turns this red (the
+         message no longer matches /still blocking/i). */
+      it('F3 — toasts a "still blocked" message (not a plain success) when the link response resolution is null', async () => {
+        vi.mocked(api.linkOrphanMatch).mockResolvedValueOnce({
+          characterId: 'marrow',
+          orphanedId: 'coalfall',
+          resolution: null,
+          resolvedCharacterId: undefined,
+        });
+        const store = makeSplitStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(store.getState().notifications.toasts).toHaveLength(1);
+        });
+        expect(store.getState().notifications.toasts[0]).toMatchObject({
+          kind: 'warn',
+          message: expect.stringMatching(/still blocking/i),
+        });
+      });
+
+      it('shows an error toast and resets the busy state when the link call fails', async () => {
+        vi.mocked(api.linkOrphanMatch).mockRejectedValueOnce(new Error('Link match failed (500).'));
+        const store = makeSplitStore();
+        renderSplitBanner(store);
+        const row = within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/coalfall/)
+          .closest('li')!;
+        fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+
+        fireEvent.click(linkButton);
+
+        await waitFor(() => {
+          expect(store.getState().notifications.toasts).toHaveLength(1);
+        });
+        expect(store.getState().notifications.toasts[0]).toMatchObject({
+          kind: 'error',
+          message: 'Link match failed (500).',
+        });
+        // The failed call never landed locally — the row stays put.
+        expect(store.getState().cast.orphanedCharacterFallbacks?.coalfall).toEqual({
+          resolution: 'unresolved',
+          segments: 67,
+        });
+        expect(linkButton).not.toBeDisabled();
+      });
     });
 
     it('#2040 Task 17 fix round 2 — shows an error toast and resets the busy state when the reject call fails', async () => {
