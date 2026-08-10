@@ -17,13 +17,21 @@
      actually cleared, at which point the SAME alias (already durably
      written) resolves. Proves the route is unconditional (D3-style) rather
      than silently no-op-ing under a stale rejection.
-   - Decision 3 (no withCastLock owed): the route never mutates cast.json —
-     asserted by leaving cast.json untouched (mtime/content) across a call.
+   - Decision 3 (no withCastLock of the route's OWN): the route does not
+     write cast.json directly — asserted by leaving cast.json untouched
+     (mtime/content) across an ordinary link call. Its only cast.json write
+     goes through `clearNotLinkedEdgesForDroppedRejections`, a helper that
+     takes its own lock (not reached on the ordinary path above; see the
+     dedicated self-loop-rejection test below for when it is).
+   - F1 (CRITICAL, fix round) / F4 / F11: a reserved id refused as the alias
+     SOURCE, not just the TARGET; both checks normalisation-safe against a
+     case/separator-drifted spelling; a reserved-bucket request 404s before
+     it 400s when the book itself doesn't exist.
 
    Same lazy-import-after-WORKSPACE_DIR pattern as cast-reject-orphan.test.ts
    so paths.ts binds BOOKS_ROOT against the temp workspace. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -182,6 +190,61 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
     expect(resFemale.body.error).toMatch(/shared fallback voice/i);
   });
 
+  it('F1 (CRITICAL) — refuses a reserved fold-bucket id as the alias SOURCE, the actually-dangerous direction, and writes nothing', async () => {
+    // Mutation check: this must fail red if NORMALISED_RESERVED_SOURCE_IDS's
+    // check is removed from the route — without it this call proceeds to
+    // retireCharacterId and writes supersededBy['unknown-male'] = 'mairin'
+    // book-wide, exactly the #2040 damage class this guard exists to block.
+    const res = await callLink(bookId, 'mairin', { orphanedId: 'unknown-male' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/shared fallback/i);
+    const history = readHistory();
+    expect(history).toBeNull();
+
+    const resFemale = await callLink(bookId, 'mairin', { orphanedId: 'unknown-female' });
+    expect(resFemale.status).toBe(400);
+    expect(resFemale.body.error).toMatch(/shared fallback/i);
+    expect(readHistory()).toBeNull();
+  });
+
+  it('F1 decision — "narrator" is also refused as the alias SOURCE (same many-to-one catch-all hazard as the fold buckets), but NOT as the alias TARGET', async () => {
+    const res = await callLink(bookId, 'mairin', { orphanedId: 'narrator' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/shared fallback/i);
+    expect(readHistory()).toBeNull();
+
+    // The reverse direction — linking a real orphan ONTO the live narrator
+    // character — is a normal, addressable decision and must succeed.
+    const targetRes = await callLink(bookId, 'narrator', { orphanedId: 'some-random-orphan' });
+    expect(targetRes.status).toBe(200);
+    expect(targetRes.body.resolvedCharacterId).toBe('narrator');
+  });
+
+  it('F4 — the reserved-id checks are normalisation-safe on BOTH sides, not raw string equality', async () => {
+    // Source side: a case/separator-drifted spelling of a reserved bucket id.
+    const sourceRes = await callLink(bookId, 'mairin', { orphanedId: 'Unknown_Male' });
+    expect(sourceRes.status).toBe(400);
+    expect(sourceRes.body.error).toMatch(/shared fallback/i);
+    expect(readHistory()).toBeNull();
+
+    // Target side: a live cast row whose id itself drifted to a
+    // case/separator variant of a reserved bucket id (the #2040
+    // `the_torment`/`the-torment` shape, applied to a bucket id instead).
+    writeBookOnDisk([
+      ...initialCast,
+      { id: 'Unknown_Male', name: 'Unknown (Male)', role: 'character', color: 'unset' },
+    ]);
+    const targetRes = await callLink(bookId, 'Unknown_Male', { orphanedId: 'the-jogger' });
+    expect(targetRes.status).toBe(400);
+    expect(targetRes.body.error).toMatch(/shared fallback voice/i);
+    expect(readHistory()).toBeNull();
+  });
+
+  it('F11 — a reserved-bucket target 404s (book not found) rather than 400ing, matching every sibling check', async () => {
+    const res = await callLink('nonexistent-book', 'unknown-male', { orphanedId: 'the-jogger' });
+    expect(res.status).toBe(404);
+  });
+
   it('records the alias in cast-id-history.json and echoes the resolution recomputed after the write', async () => {
     const res = await callLink(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
@@ -200,7 +263,7 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
     expect(resolved?.via).toBe('history');
   });
 
-  it('decision 3 — never writes cast.json (only cast-id-history.json)', async () => {
+  it('decision 3 — does not write cast.json directly; its only cast.json write goes through a helper (clearNotLinkedEdgesForDroppedRejections) that takes its own lock, not reached on this ordinary path', async () => {
     const before = readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8');
     const res = await callLink(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
@@ -247,6 +310,29 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
 
     const resolved = await resolveOrphanedId('mayrin');
     expect(resolved?.character.id).toBe('mairin');
+  });
+
+  /* F3 — the server log line used to say "linked" unconditionally, even when
+     the write landed but resolution stayed blocked by a live rejection (the
+     same decision-1 scenario as the test above). Mutation-verified: reverting
+     the console.log call to its old unconditional template-string form turns
+     this red (the blocked-call's log line no longer mentions "blocked"). */
+  it('F3 — the server log line names the still-blocked case rather than claiming an unqualified "linked"', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+      const blockedRes = await callLink(bookId, 'mairin', { orphanedId: 'mayrin' });
+      expect(blockedRes.body.resolution).toBeNull();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/blocked/i));
+      logSpy.mockClear();
+
+      await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+      const cleanRes = await callLink(bookId, 'mairin', { orphanedId: 'mayrin' });
+      expect(cleanRes.body.resolution).toBe('history');
+      expect(logSpy).toHaveBeenCalledWith(expect.not.stringMatching(/blocked/i));
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('cleans up notLinkedTo edges when retireCharacterId drops a self-loop rejection', async () => {

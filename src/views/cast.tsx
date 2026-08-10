@@ -68,7 +68,8 @@ import { api } from '../lib/api';
 import type { MergeSuggestion } from '../lib/api';
 import type { CastDesignScope } from '../store/cast-design-slice';
 import { buildVariantTasks, variantWorkCounts } from '../lib/variant-tasks';
-import { compareCastRows, UNKNOWN_BUCKET_IDS } from '../lib/cast-sort';
+import { compareCastRows, UNKNOWN_BUCKET_IDS, normaliseIdKey } from '../lib/cast-sort';
+import { NARRATOR_CHARACTER_IDS } from '../lib/narrator-ids';
 
 interface Props {
   characters: Character[];
@@ -193,6 +194,19 @@ function OrphanRejectedChips({
     </>
   );
 }
+
+/* F1 (fix round, CRITICAL) — mirrors the server's own reserved alias-SOURCE
+   set (`NORMALISED_RESERVED_SOURCE_IDS`,
+   `server/src/routes/cast-link-orphan.ts`) for the client-side disable: a
+   needs-decision row's own id (`orphanedId`) is a shared minor-cast fold
+   bucket or the narrator's own many-to-one catch-all, never one addressable
+   character, so "Link to this character" is disabled outright for that ROW
+   — see the server route's doc comment for the full hazard writeup. F4 —
+   compared through `normaliseIdKey`, not raw `Set.has()`, so a
+   case/separator-drifted spelling (`Unknown_Male`) is still caught. */
+const NORMALISED_RESERVED_LINK_SOURCE_IDS = new Set(
+  [...UNKNOWN_BUCKET_IDS, ...NARRATOR_CHARACTER_IDS].map(normaliseIdKey),
+);
 
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
@@ -406,27 +420,27 @@ export function CastView({
     }
   }
 
-  /* #2092/#2089 D5 — undo a prior reject via the chip's Undo control. Same
-     shape as handleRejectOrphanMatch above: writes the undo to the server
-     (removes the rejectedPairs entry + the same-book notLinkedTo edge,
-     restores a forgotten supersededBy alias when present — lossless), then
-     mirrors it via dispatches: undoOrphanRejection (applies the server's
-     own post-undo resolution and drops targetCharacterId out of
-     rejectedAgainst) and one removeNotLinked (the notLinkedTo mirror, same
-     fs-11 reducer the sibling "unmark variant" flow uses) PER entry in
-     `res.removedFrom` — review round 3 (I-B) — rather than one dispatch
-     keyed on `orphanedId`. A governing pair's `from` can differ from this
-     row's own raw `orphanedId` (the resolver's normalised-tier collision
-     shape — see `rejectedPairsGoverning`'s doc comment,
-     server/src/store/cast-resolve.ts); the server writes and removes the
-     notLinkedTo edge under the PAIR's own `from`, so mirroring off
-     `orphanedId` could silently miss it, leaving a stale edge that a later
-     hydrate could never self-correct (cast-slice.ts's merge prefers a
-     truthy EXISTING notLinkedTo over the server's own value). `removedFrom`
-     is the server's own record of exactly what it removed. */
-  async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
-    if (!bookId) return;
-    setOrphanRejectBusyId(orphanedId);
+  /* F2/F5 (fix round) — split out of handleUndoOrphanRejection below. The
+     busy-flag set/clear used to live INSIDE that function, so the nested
+     reuse from handleLinkOrphanMatch (decision 1, below) cleared
+     `orphanRejectBusyId` the moment the undo settled — re-enabling every
+     control on the row (F5: including "Not the same character", whose own
+     disable condition the undo had just cleared) for the whole window
+     before the link POST even started, letting a second click race a
+     reject against the in-flight link. This core function owns none of
+     that state — only the wrapper below (the chip's own standalone caller)
+     does — and its OWN error handling is unchanged from before the split:
+     still caught and toasted here, never rethrown. What's new is the
+     return value (F2): true on success, false on failure, so a caller that
+     needs to know whether it's safe to proceed (handleLinkOrphanMatch) can
+     ask, instead of the old `await`-that-proves-nothing shape where the
+     error was swallowed internally and the caller's `await` completed
+     either way. */
+  async function performUndoOrphanRejection(
+    orphanedId: string,
+    targetCharacterId: string,
+  ): Promise<boolean> {
+    if (!bookId) return false;
     try {
       const res = await api.undoRejectOrphanMatch({
         bookId,
@@ -499,6 +513,7 @@ export function CastView({
           message,
         }),
       );
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
@@ -508,6 +523,26 @@ export function CastView({
           message: msg,
         }),
       );
+      return false;
+    }
+  }
+
+  /* #2092/#2089 D5 — undo a prior reject via the chip's Undo control. Same
+     shape as handleRejectOrphanMatch above: writes the undo to the server
+     (removes the rejectedPairs entry + the same-book notLinkedTo edge,
+     restores a forgotten supersededBy alias when present — lossless), then
+     mirrors it via dispatches — see performUndoOrphanRejection above for
+     the write/dispatch detail. This wrapper owns the busy flag for its OWN,
+     standalone call (the chip's Undo button); the nested reuse from
+     handleLinkOrphanMatch (decision 1, below) calls
+     performUndoOrphanRejection directly instead, so THAT caller's own
+     busy-flag span covers the whole undo+link sequence (F5) rather than
+     dropping to `null` in between. */
+  async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
+    if (!bookId) return;
+    setOrphanRejectBusyId(orphanedId);
+    try {
+      await performUndoOrphanRejection(orphanedId, targetCharacterId);
     } finally {
       setOrphanRejectBusyId(null);
     }
@@ -528,19 +563,27 @@ export function CastView({
      (rejectedPairs + the one-sided notLinkedTo edge) before the alias can
      take, or rejectedPairsGoverning (server/src/store/cast-resolve.ts)
      blocks it right back. Reuses the EXISTING undo path —
-     handleUndoOrphanRejection, the same function the chip's own Undo button
-     calls — rather than a second removal: when `targetCharacterId` is
-     already in `info.rejectedAgainst`, undo runs to completion FIRST
-     (server-side DELETE .../reject-orphan-match) and only then does the
-     link POST fire, so the alias never has to fight a rejection still on
-     disk. */
+     performUndoOrphanRejection, the same core the chip's own Undo button
+     calls via its handleUndoOrphanRejection wrapper — rather than a second
+     removal: when `targetCharacterId` is already in `info.rejectedAgainst`,
+     undo runs to completion FIRST (server-side DELETE
+     .../reject-orphan-match) and only then does the link POST fire, so the
+     alias never has to fight a rejection still on disk. F2/F5 (fix round)
+     — called directly (not via the wrapper) so this function owns the busy
+     flag for the WHOLE undo+link span itself, and aborts outright if the
+     undo failed (see performUndoOrphanRejection's own doc comment). */
   async function handleLinkOrphanMatch(orphanedId: string, targetCharacterId: string) {
     if (!bookId || !targetCharacterId) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       const info = orphanedCharacterFallbacks[orphanedId];
       if (info?.rejectedAgainst?.includes(targetCharacterId)) {
-        await handleUndoOrphanRejection(orphanedId, targetCharacterId);
+        /* F2 — abort the link outright when the reused undo fails, instead
+           of proceeding into a link POST that would fight a rejection still
+           on disk. performUndoOrphanRejection has already toasted its own
+           error on failure, so no second toast is needed here. */
+        const undone = await performUndoOrphanRejection(orphanedId, targetCharacterId);
+        if (!undone) return;
       }
       const res = await api.linkOrphanMatch({
         bookId,
@@ -557,11 +600,20 @@ export function CastView({
       );
       setOrphanRejectCandidate((prev) => ({ ...prev, [orphanedId]: '' }));
       const targetName = characters.find((c) => c.id === targetCharacterId)?.name ?? targetCharacterId;
+      /* F3 — `resolution: null` means the alias write landed but is still
+         blocked by a live rejection (cast-link-orphan.ts's own doc comment,
+         decision 1) — a genuinely different outcome from a clean link, not
+         just cosmetic. The toast used to claim success either way; branch
+         on it instead. */
+      const message =
+        res.resolution === null
+          ? `Linked "${orphanedId}" to ${targetName} — but a rejection is still blocking it from resolving. Undo the rejection to finish linking.`
+          : `Linked "${orphanedId}" to ${targetName}.`;
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-link-${orphanedId}`,
-          kind: 'info',
-          message: `Linked "${orphanedId}" to ${targetName}.`,
+          kind: res.resolution === null ? 'warn' : 'info',
+          message,
         }),
       );
     } catch (err) {
@@ -1311,87 +1363,101 @@ export function CastView({
                   </div>
                 </div>
                 <ul className="flex flex-col gap-2 mt-3">
-                  {needsDecisionOrphans.map(([orphanedId, info]) => (
-                    <li
-                      key={orphanedId}
-                      data-testid={`orphaned-row-${orphanedId}`}
-                      className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/60 px-3 py-2"
-                    >
-                      <span className="font-mono text-xs text-ink/80">&quot;{orphanedId}&quot;</span>
-                      <span className="text-xs text-ink/60">
-                        {info.segments} segment{info.segments === 1 ? '' : 's'}
-                      </span>
-                      <select
-                        aria-label={`Compare "${orphanedId}" against`}
-                        className="min-h-[44px] fine-pointer:min-h-0 text-xs rounded-full border border-amber-200 bg-white px-2 py-1"
-                        value={orphanRejectCandidate[orphanedId] ?? ''}
-                        onChange={(e) =>
-                          setOrphanRejectCandidate((prev) => ({
-                            ...prev,
-                            [orphanedId]: e.target.value,
-                          }))
-                        }
+                  {needsDecisionOrphans.map(([orphanedId, info]) => {
+                    const candidateId = orphanRejectCandidate[orphanedId] ?? '';
+                    /* F1 (CRITICAL) — the row's OWN id is the alias SOURCE;
+                       see NORMALISED_RESERVED_LINK_SOURCE_IDS's doc comment
+                       above for the hazard this refuses. Unconditional on
+                       this row, regardless of which candidate is picked. */
+                    const sourceIsReserved = NORMALISED_RESERVED_LINK_SOURCE_IDS.has(
+                      normaliseIdKey(orphanedId),
+                    );
+                    /* Decision 4 (issue #2238) — the picked candidate is the
+                       alias TARGET; a reserved minor-cast fold bucket stands
+                       in for MULTIPLE background characters, so aliasing a
+                       real id onto it would be a lossy merge, not a
+                       reconciliation. F4 — normalisation-safe, matching the
+                       server's own check. */
+                    const targetIsReservedBucket =
+                      Boolean(candidateId) && UNKNOWN_BUCKET_IDS.has(normaliseIdKey(candidateId));
+                    const linkDisabledReason = sourceIsReserved
+                      ? "Can't link this — it's a shared fallback id (a minor-cast fold bucket, or the narrator's own catch-all), not one addressable character."
+                      : targetIsReservedBucket
+                        ? "Can't link to a shared fallback voice for minor characters — pick a specific cast member instead."
+                        : undefined;
+                    return (
+                      <li
+                        key={orphanedId}
+                        data-testid={`orphaned-row-${orphanedId}`}
+                        className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/60 px-3 py-2"
                       >
-                        <option value="">Compare against…</option>
-                        {characters.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        disabled={
-                          !orphanRejectCandidate[orphanedId] ||
-                          orphanRejectBusyId === orphanedId ||
-                          (info.rejectedAgainst?.includes(orphanRejectCandidate[orphanedId]) ?? false)
-                        }
-                        onClick={() =>
-                          handleRejectOrphanMatch(orphanedId, orphanRejectCandidate[orphanedId])
-                        }
-                        className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
-                      >
-                        Not the same character
-                      </button>
-                      {/* #2238 — the positive mirror of "Not the same
-                          character": link this orphaned id to the picked
-                          candidate. Disabled on the same "no candidate
-                          picked yet" / busy conditions as the reject button,
-                          plus decision 4 (issue #2238) — a reserved
-                          minor-cast fold bucket stands in for MULTIPLE
-                          background characters, so aliasing a real id onto
-                          it would be a lossy merge, not a reconciliation;
-                          refused here with a visible reason (title) rather
-                          than failing silently server-side. */}
-                      <button
-                        type="button"
-                        disabled={
-                          !orphanRejectCandidate[orphanedId] ||
-                          orphanRejectBusyId === orphanedId ||
-                          UNKNOWN_BUCKET_IDS.has(orphanRejectCandidate[orphanedId])
-                        }
-                        title={
-                          orphanRejectCandidate[orphanedId] &&
-                          UNKNOWN_BUCKET_IDS.has(orphanRejectCandidate[orphanedId])
-                            ? "Can't link to a shared fallback voice for minor characters — pick a specific cast member instead."
-                            : undefined
-                        }
-                        onClick={() =>
-                          handleLinkOrphanMatch(orphanedId, orphanRejectCandidate[orphanedId])
-                        }
-                        className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold"
-                      >
-                        Link to this character
-                      </button>
-                      <OrphanRejectedChips
-                        orphanedId={orphanedId}
-                        targets={info.rejectedAgainst}
-                        characters={characters}
-                        busyId={orphanRejectBusyId}
-                        onUndo={handleUndoOrphanRejection}
-                      />
-                    </li>
-                  ))}
+                        <span className="font-mono text-xs text-ink/80">&quot;{orphanedId}&quot;</span>
+                        <span className="text-xs text-ink/60">
+                          {info.segments} segment{info.segments === 1 ? '' : 's'}
+                        </span>
+                        <select
+                          aria-label={`Compare "${orphanedId}" against`}
+                          className="min-h-[44px] fine-pointer:min-h-0 text-xs rounded-full border border-amber-200 bg-white px-2 py-1"
+                          value={candidateId}
+                          onChange={(e) =>
+                            setOrphanRejectCandidate((prev) => ({
+                              ...prev,
+                              [orphanedId]: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Compare against…</option>
+                          {characters.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={
+                            !candidateId ||
+                            orphanRejectBusyId === orphanedId ||
+                            (info.rejectedAgainst?.includes(candidateId) ?? false)
+                          }
+                          onClick={() => handleRejectOrphanMatch(orphanedId, candidateId)}
+                          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                        >
+                          Not the same character
+                        </button>
+                        {/* #2238 — the positive mirror of "Not the same
+                            character": link this orphaned id to the picked
+                            candidate. Disabled on the same "no candidate
+                            picked yet" / busy conditions as the reject
+                            button, plus decision 4 (target-side reserved
+                            bucket) and F1 (source-side reserved id — the
+                            row's own id, unconditional on candidate choice).
+                            Refused here with a visible reason (title) rather
+                            than failing silently server-side. */}
+                        <button
+                          type="button"
+                          disabled={
+                            !candidateId ||
+                            orphanRejectBusyId === orphanedId ||
+                            targetIsReservedBucket ||
+                            sourceIsReserved
+                          }
+                          title={linkDisabledReason}
+                          onClick={() => handleLinkOrphanMatch(orphanedId, candidateId)}
+                          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold"
+                        >
+                          Link to this character
+                        </button>
+                        <OrphanRejectedChips
+                          orphanedId={orphanedId}
+                          targets={info.rejectedAgainst}
+                          characters={characters}
+                          busyId={orphanRejectBusyId}
+                          onUndo={handleUndoOrphanRejection}
+                        />
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}

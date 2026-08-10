@@ -11,6 +11,18 @@ import type { Character } from './types';
    lazy-loaded cast view. Stays free of React/store imports. */
 export const UNKNOWN_BUCKET_IDS = new Set(['unknown-male', 'unknown-female']);
 
+/** Collapse the separator/case differences that distinguish two ids minted
+    for the SAME slot by different code paths (#2040's `the_torment`/
+    `the-torment` drift class). Twin of the server's `normaliseIdKey`
+    (`server/src/util/character-id.ts`) — keep both in sync. Unicode-
+    preserving: a Cyrillic or CJK id must survive. */
+export function normaliseIdKey(id: string): string {
+  return id
+    .toLowerCase()
+    .replace(/[-_\s]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function compareCastRows(a: Character, b: Character): number {
   const aBucket = UNKNOWN_BUCKET_IDS.has(a.id);
   const bBucket = UNKNOWN_BUCKET_IDS.has(b.id);
