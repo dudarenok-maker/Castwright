@@ -19,6 +19,7 @@ import { readJson } from '../workspace/state-io.js';
 import type { TtsModelKey } from '../tts/index.js';
 import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
 import type { CastIdHistory } from '../store/cast-id-history.js';
+import { isAudioCurrent, aggregateAudioCurrency, type AudioCurrency } from '../store/cast-audio-currency.js';
 
 export interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -129,6 +130,23 @@ export interface OrphanedCharacterFallback {
   /** How many rendered segments (summed across every rendered chapter) carry
       this orphaned id. */
   segments: number;
+  /** #2129 / #2128 — whether this orphaned id's RENDERED AUDIO is still
+      current, as opposed to whether the id currently RESOLVES (`resolution`,
+      above). The two are different questions and #2129 is what it looks like
+      when they are answered by two different pieces of code: the banner said
+      "auto-reconciled, nothing to do" for `the-torment` while the repair pass
+      listed 67 of its segments as damage.
+
+      Computed by `isAudioCurrent` (store/cast-audio-currency.ts) — the SAME
+      function `repair-cast-id-drift.mjs` calls, per plan 278's invariant 7 —
+      and aggregated across every rendered chapter by `aggregateAudioCurrency`:
+      `false` if any chapter is `false`, else `'unknown'` if any is
+      `'unknown'`, else `true`.
+
+      `'unknown'` means the comparison could not be made (the render predates
+      the stamp, or the history file predates the one-shot stamp) and is
+      presented as needing a re-render, not as fine. Only `true` clears a row. */
+  audioCurrent: AudioCurrency;
   /** #2092/#2089 D4 — every live cast id this orphaned id has been rejected
       AGAINST (`cast-id-history.json`'s `rejectedPairs`, keyed on this
       record's own orphaned id as the pair's `from`). Absent when the id has
@@ -338,12 +356,23 @@ export async function collectRenderedFallbackEngines(
    defect shape #2040 Task 17 fix round 1 already closed for
    `buildCastResolver` itself, and the SAME hazard this task exists to close
    here structurally: a caller that forgets to thread `rejectedPairs` no
-   longer CAN, because there's only one parameter to pass. */
+   longer CAN, because there's only one parameter to pass.
+
+   #2128 — widened again from `Pick<CastIdHistory, 'supersededBy' | 'rejected'
+   | 'rejectedPairs'>` to the WHOLE `CastIdHistory`, for the same reason one
+   level further: `isAudioCurrent` (below) reads `recordedAtSeq`/`seq`, and
+   every field this lane added is optional, so a narrowed parameter type would
+   keep compiling while dropping the markers and reading every alias as
+   `'unknown'` forever. `book-state.ts` already loads and passes the whole
+   object, so no caller changes. Guard 3 (`store/cast-history-threading.guard
+   .test.ts`) enforces the call-site half — a literal object passed at either
+   this collector's `buildCastResolver(` call or an `isAudioCurrent(` call
+   fails the build. */
 export async function collectOrphanedCharacterFallbacks(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
   cast: ReadonlyArray<{ id: string }>,
-  castIdHistory: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>,
+  castIdHistory: CastIdHistory,
 ): Promise<Record<string, OrphanedCharacterFallback>> {
   const out: Record<string, OrphanedCharacterFallback> = {};
   const segs = await loadSegmentsFiles(bookDir, chapters);
@@ -395,6 +424,14 @@ export async function collectOrphanedCharacterFallbacks(
           ? 'normalised'
           : 'alias';
 
+      /* #2129 — the SAME predicate the repair pass calls (Task 9), fed the
+         raw resolver `resolution` (not `resolutionTag`: `isAudioCurrent`
+         reads `.via`/`.matchedHistoryKeys` off it directly) and this
+         segment's OWN per-chapter `seg`, which carries the render-time
+         `castHistorySeq` stamp `isAudioCurrent` compares against the
+         history markers. */
+      const currency = isAudioCurrent(resolution, seg, castIdHistory);
+
       const governingPairs = rejectedPairsGoverning(s.characterId, cast, castIdHistory);
 
       const existing = out[s.characterId];
@@ -412,6 +449,28 @@ export async function collectOrphanedCharacterFallbacks(
         resolution: resolutionTag,
         resolvedCharacterId: resolution?.character.id,
         segments: (existing?.segments ?? 0) + 1,
+        /* #2129 — folded pairwise rather than collected into an array first:
+           the aggregation rule is associative, and an id can span every
+           chapter in a 60-chapter book. `aggregateAudioCurrency` is still the
+           ONE place the rule lives.
+
+           Zero-evidence decision (owner ruling, `aggregateAudioCurrency([])`
+           returns `'unknown'`): this fold NEVER calls it with an empty list.
+           `existing` is only set once this same loop has already produced an
+           entry for this orphaned id from a REAL segment, so the base case
+           (`existing` absent) always seeds `audioCurrent` directly off THIS
+           segment's own `currency` — a single-element "aggregation", never a
+           zero-element one. An orphaned id with no rendered segment at all
+           never reaches this line in the first place (the outer loop only
+           visits ids that appear in `seg.segments`), so this collector
+           structurally cannot produce a row with no evidence behind it; the
+           question `aggregateAudioCurrency([])` answers does not arise here.
+           Task 9's repair pass builds its list differently (can legitimately
+           filter down to zero rendered chapters) and owns that branch
+           itself. */
+        audioCurrent: existing
+          ? aggregateAudioCurrency([existing.audioCurrent, currency])
+          : currency,
         /* #2092/#2089 D4 — trap: never filtered out of this map even when
            `resolutionTag` is 'unresolved' (which it always is for a
            rejected id, per D2's no-fall-through). Doing so would delete the

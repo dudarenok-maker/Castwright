@@ -665,6 +665,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
               voiceName: 'qwen-oduvan',
               resolution: 'unresolved' as const,
               segments: 1,
+              // #2129 — not exercised by this test (Task 8 renders it); any
+              // valid value satisfies the required field.
+              audioCurrent: 'true' as const,
             },
           },
         },
@@ -740,10 +743,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'alias' as const,
                 resolvedCharacterId: 'marrow',
                 segments: 6,
+                // #2129 — not exercised by this describe block (Task 8 wires
+                // this into the split); any valid value satisfies the field.
+                audioCurrent: 'true' as const,
               },
               coalfall: {
                 resolution: 'unresolved' as const,
                 segments: 67,
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -818,7 +825,15 @@ describe('CastView Qwen status pill (plan 117)', () => {
             orphanedCharacterFallbacks: {
               // 'alias' — resolved through the id-history side-table
               // (`'history'`/`'normalised-history'` server-side).
-              mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'marrow', segments: 6 },
+              // #2129 — `audioCurrent` is not yet consumed by this static
+              // advisory note (Task 8 wires the real value in); any valid
+              // value satisfies the now-required field.
+              mayrin: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+                audioCurrent: 'unknown' as const,
+              },
               // 'normalised' — a live id-shape match with no history entry
               // (`'normalised-id'` server-side). The repair pass can list
               // THIS exact shape as damage needing a re-render — register
@@ -828,7 +843,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
               // split) — so per #2107's ruling ("only 'exact' means the
               // rendered bytes are fine") this must ALSO carry the note,
               // not be excluded from it.
-              Mayrin_: { resolution: 'normalised' as const, resolvedCharacterId: 'marrow', segments: 2 },
+              Mayrin_: {
+                resolution: 'normalised' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 2,
+                audioCurrent: 'unknown' as const,
+              },
             },
           },
         },
@@ -877,6 +897,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'exact' as unknown as 'alias' | 'normalised' | 'unresolved',
                 resolvedCharacterId: 'marrow',
                 segments: 6,
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'unknown' as const,
               },
             },
           },
@@ -908,6 +931,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
           resolution: 'unresolved',
           resolvedCharacterId: undefined,
           segments: 6,
+          // #2129 — applyOrphanRejection always sets 'unknown' (it has no
+          // history/segments to compute a real verdict).
+          audioCurrent: 'unknown',
           rejectedAgainst: ['marrow'],
         });
       });
@@ -954,6 +980,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
           resolution: 'alias',
           resolvedCharacterId: 'marrow',
           segments: 6,
+          // #2129 — undoOrphanRejection always sets 'unknown' too (same
+          // reasoning as applyOrphanRejection above).
+          audioCurrent: 'unknown',
           rejectedAgainst: undefined,
         });
       });
@@ -1049,6 +1078,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 6,
                 rejectedAgainst: ['marrow'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1136,6 +1168,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 6,
                 rejectedAgainst: ['marrow'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1216,11 +1251,15 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 4,
                 rejectedAgainst: ['marrow'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
               'The-Torment': {
                 resolution: 'unresolved' as const,
                 segments: 2,
                 rejectedAgainst: ['marrow'],
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1286,6 +1325,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 67,
                 rejectedAgainst: ['marrow', 'ghost-target'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1369,6 +1411,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 67,
                 rejectedAgainst: ['narrator'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1404,11 +1449,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
         kind: 'error',
         message: 'Reject match failed (500).',
       });
-      // The failed call never landed locally — the entry is untouched.
+      // The failed call never landed locally — the entry is untouched,
+      // including 'audioCurrent' (makeSplitStore's initial 'true' — the
+      // reducer never ran, so it did not get forced to 'unknown').
       expect(store.getState().cast.orphanedCharacterFallbacks?.mayrin).toEqual({
         resolution: 'alias',
         resolvedCharacterId: 'marrow',
         segments: 6,
+        audioCurrent: 'true',
       });
       // Busy state resets after the failure — the button isn't stuck disabled.
       await waitFor(() => {

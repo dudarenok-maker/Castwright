@@ -1084,6 +1084,10 @@ describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
           voiceName: 'qwen-oduvan',
           resolution: 'unresolved',
           segments: 1,
+          // #2129 — a plain pass-through field on this action; any valid
+          // value round-trips unchanged, so the value itself carries no
+          // meaning for this test.
+          audioCurrent: 'true',
         },
       }),
     );
@@ -1093,6 +1097,7 @@ describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
         voiceName: 'qwen-oduvan',
         resolution: 'unresolved',
         segments: 1,
+        audioCurrent: 'true',
       },
     });
   });
@@ -1101,7 +1106,12 @@ describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
     const start = {
       characters: [makeChar('narrator')],
       orphanedCharacterFallbacks: {
-        mayrin: { characterId: 'narrator', resolution: 'unresolved' as const, segments: 1 },
+        mayrin: {
+          characterId: 'narrator',
+          resolution: 'unresolved' as const,
+          segments: 1,
+          audioCurrent: 'true' as const,
+        },
       },
     };
     const next = castSlice.reducer(start, castActions.setOrphanedCharacterFallbacks({}));
@@ -1118,6 +1128,7 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
           resolution: 'alias' as const,
           resolvedCharacterId: 'mairin',
           segments: 6,
+          audioCurrent: 'true' as const,
         },
       },
     };
@@ -1135,6 +1146,9 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 6,
+        // #2129 — the reducer cannot compute currency (no history/segments
+        // here), so it always sets 'unknown' regardless of the prior value.
+        audioCurrent: 'unknown',
         rejectedAgainst: ['mairin'],
       },
     });
@@ -1147,7 +1161,12 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
     const start = {
       characters: [makeChar('mairin'), makeChar('other')],
       orphanedCharacterFallbacks: {
-        mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'mairin', segments: 6 },
+        mayrin: {
+          resolution: 'alias' as const,
+          resolvedCharacterId: 'mairin',
+          segments: 6,
+          audioCurrent: 'true' as const,
+        },
       },
     };
     const next = castSlice.reducer(
@@ -1163,6 +1182,7 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
       resolution: 'alias',
       resolvedCharacterId: 'other',
       segments: 6,
+      audioCurrent: 'unknown',
       rejectedAgainst: ['mairin'],
     });
   });
@@ -1171,7 +1191,7 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
     const start = {
       characters: [makeChar('mairin')],
       orphanedCharacterFallbacks: {
-        mayrin: { resolution: 'unresolved' as const, segments: 6 },
+        mayrin: { resolution: 'unresolved' as const, segments: 6, audioCurrent: 'true' as const },
       },
     };
     const next = castSlice.reducer(
@@ -1196,6 +1216,7 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
           resolution: 'normalised' as const,
           resolvedCharacterId: 'mairin',
           segments: 3,
+          audioCurrent: 'true' as const,
         },
       },
     };
@@ -1214,6 +1235,7 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
       resolution: 'unresolved',
       resolvedCharacterId: undefined,
       segments: 3,
+      audioCurrent: 'unknown',
       rejectedAgainst: ['mairin'],
     });
   });
@@ -1222,7 +1244,12 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
     const start = {
       characters: [makeChar('mairin')],
       orphanedCharacterFallbacks: {
-        mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'mairin', segments: 6 },
+        mayrin: {
+          resolution: 'alias' as const,
+          resolvedCharacterId: 'mairin',
+          segments: 6,
+          audioCurrent: 'true' as const,
+        },
       },
     };
     const payload = {
@@ -1240,7 +1267,12 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
     const start = {
       characters: [makeChar('mairin'), makeChar('other')],
       orphanedCharacterFallbacks: {
-        mayrin: { resolution: 'unresolved' as const, segments: 6, rejectedAgainst: ['mairin'] },
+        mayrin: {
+          resolution: 'unresolved' as const,
+          segments: 6,
+          rejectedAgainst: ['mairin'],
+          audioCurrent: 'true' as const,
+        },
       },
     };
     const next = castSlice.reducer(
@@ -1259,8 +1291,17 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
     const start = {
       characters: [],
       orphanedCharacterFallbacks: {
-        mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'mairin', segments: 1 },
-        'the-torment': { resolution: 'unresolved' as const, segments: 67 },
+        mayrin: {
+          resolution: 'alias' as const,
+          resolvedCharacterId: 'mairin',
+          segments: 1,
+          audioCurrent: 'true' as const,
+        },
+        'the-torment': {
+          resolution: 'unresolved' as const,
+          segments: 67,
+          audioCurrent: 'false' as const,
+        },
       },
     };
     const next = castSlice.reducer(
@@ -1272,10 +1313,37 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + respo
         resolvedCharacterId: undefined,
       }),
     );
+    // 'the-torment' was never the target of this reject — every field,
+    // including 'audioCurrent', is untouched.
     expect(next.orphanedCharacterFallbacks?.['the-torment']).toEqual({
       resolution: 'unresolved',
       segments: 67,
+      audioCurrent: 'false',
     });
+  });
+
+  it("#2129 — always moves audioCurrent to 'unknown', even starting from 'true' (the reducer has no history/segments to compute a real verdict)", () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: {
+          resolution: 'alias' as const,
+          resolvedCharacterId: 'mairin',
+          segments: 6,
+          audioCurrent: 'true' as const,
+        },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin.audioCurrent).toBe('unknown');
   });
 
   it('is a no-op for an orphaned id no longer in the map', () => {
@@ -1302,6 +1370,7 @@ describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
           resolution: 'unresolved' as const,
           segments: 6,
           rejectedAgainst: ['mairin'],
+          audioCurrent: 'unknown' as const,
         },
       },
     };
@@ -1318,6 +1387,11 @@ describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
       resolution: 'alias',
       resolvedCharacterId: 'mairin',
       segments: 6,
+      // #2129 — the reducer cannot compute currency here either; per known
+      // limit 2, `restoreSupersededId` stamps the CURRENT seq on an undo, so
+      // the server's next real verdict is `false` — 'unknown' is the honest
+      // fail-closed placeholder, never a stale 'true'.
+      audioCurrent: 'unknown',
       rejectedAgainst: undefined,
     });
   });
@@ -1330,6 +1404,7 @@ describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
           resolution: 'unresolved' as const,
           segments: 6,
           rejectedAgainst: ['mairin', 'other'],
+          audioCurrent: 'unknown' as const,
         },
       },
     };
@@ -1349,7 +1424,12 @@ describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
     const start = {
       characters: [],
       orphanedCharacterFallbacks: {
-        mayrin: { resolution: 'unresolved' as const, segments: 6, rejectedAgainst: ['mairin'] },
+        mayrin: {
+          resolution: 'unresolved' as const,
+          segments: 6,
+          rejectedAgainst: ['mairin'],
+          audioCurrent: 'unknown' as const,
+        },
       },
     };
     const next = castSlice.reducer(
@@ -1365,8 +1445,33 @@ describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
       resolution: 'unresolved',
       resolvedCharacterId: undefined,
       segments: 6,
+      audioCurrent: 'unknown',
       rejectedAgainst: undefined,
     });
+  });
+
+  it("#2129 — always moves audioCurrent to 'unknown', even starting from 'true' (restoreSupersededId stamps the CURRENT seq, so the server's next verdict is 'false' — this reducer must not keep claiming 'true')", () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: {
+          resolution: 'unresolved' as const,
+          segments: 6,
+          rejectedAgainst: ['mairin'],
+          audioCurrent: 'true' as const,
+        },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.undoOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: 'history',
+        resolvedCharacterId: 'mairin',
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin.audioCurrent).toBe('unknown');
   });
 
   it('is a no-op for an orphaned id no longer in the map', () => {
