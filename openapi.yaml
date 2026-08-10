@@ -3489,6 +3489,53 @@ paths:
         '409':
           description: Book has no cast on disk yet
 
+  /api/books/{bookId}/cast/{characterId}/link-orphan-match:
+    post:
+      summary: Link an orphaned-id reconciliation ("this IS the same character") — #2238
+      operationId: linkOrphanMatch
+      description: |
+        The positive mirror of `reject-orphan-match`'s POST above: records
+        "orphanedId IS the same character as characterId" by durably
+        aliasing `orphanedId -> characterId` in `cast-id-history.json`'s
+        `supersededBy` (`retireCharacterId`), so `buildCastResolver` picks it
+        up at render/QA/splice time and the needs-your-decision row leaves
+        the banner's needs-decision section. Refuses a reserved minor-cast
+        fold-bucket target (`unknown-male`/`unknown-female`, 400) — a shared
+        bucket stands in for multiple unrelated background characters, so
+        aliasing a real id onto it is a lossy merge, not a reconciliation.
+        Does not itself clear a pre-existing pair-scoped rejection of this
+        exact pair — the client clears that first via the EXISTING
+        `reject-orphan-match` DELETE undo (no second removal
+        implementation); calling this route while a rejection is still in
+        place still durably writes the alias, but `resolution` in the
+        response stays blocked (`null`) until the rejection is actually
+        cleared. Has no DELETE of its own: once linked, the row moves into
+        the auto-reconciled section, which already renders
+        `reject-orphan-match`'s own "Not the same character" button/undo
+        chip as this action's full undo path.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectOrphanMatchRequest' }
+      responses:
+        '200':
+          description: The linked pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkOrphanMatchResponse' }
+        '400':
+          description: Missing fields, characterId/orphanedId self-pair, or characterId is a reserved fold-bucket id
+        '404':
+          description: Book or character not found
+        '500':
+          description: Failed to durably record the alias — retry, the write is idempotent
+        '409':
+          description: Book has no cast on disk yet
+
   /api/books/{bookId}/annotate-emotion:
     post:
       summary: Emotion-only backfill pass (fs-33)
@@ -7479,6 +7526,26 @@ components:
             skip but the last one. Absent (never an empty array) in the
             ordinary case: nothing to restore, or every restore attempted
             succeeded.
+    LinkOrphanMatchResponse:
+      type: object
+      required: [characterId, orphanedId, resolution]
+      properties:
+        characterId: { type: string, description: 'The live character (path param, echoed back).' }
+        orphanedId: { type: string }
+        resolution:
+          type: string
+          nullable: true
+          enum: [exact, history, normalised-id, normalised-history]
+          description: |
+            How `orphanedId` resolves against the live cast + id history,
+            recomputed AFTER this call's write lands. `null` only when a
+            still-active pair-scoped rejection blocks it (#2238 decision 1) —
+            the alias was still durably written; clearing the rejection via
+            the existing DELETE /reject-orphan-match undo lets it take
+            immediately, with no further link call needed.
+        resolvedCharacterId:
+          type: string
+          description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
 
     # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
     BookStateResponse:

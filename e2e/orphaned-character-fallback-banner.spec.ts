@@ -275,6 +275,47 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     await expect(autoReconciled.getByText('Not Narrator')).toHaveCount(0);
   });
 
+  /* #2238 — the needs-your-decision row's positive action. Mock mode's
+     `linkOrphanMatch` (`mockLinkOrphanMatch` in src/lib/api.ts) always
+     resolves the pair (`resolution: 'history'`, `resolvedCharacterId` =
+     whatever candidate was picked) — the canned success case, mirroring how
+     the sibling reject spec above treats mock mode's canned response as the
+     boundary and leaves server-side persistence to
+     server/src/routes/cast-link-orphan.test.ts. */
+  test('linking a needs-your-decision row to a picked candidate moves it into auto-reconciled (stale — a link resets audio currency)', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallback(page);
+
+    const row = page.getByTestId('orphaned-row-coalfall');
+    const linkButton = row.getByRole('button', { name: /link to this character/i });
+    await expect(linkButton).toBeDisabled();
+
+    await row.getByRole('combobox').selectOption({ label: 'Narrator' });
+    await expect(linkButton).toBeEnabled();
+    await linkButton.click();
+
+    /* The row leaves needs-your-decision entirely (a link resolves it,
+       unlike a reject on this section, which leaves it in place) — the
+       section itself is conditionally mounted (see the "no substitution
+       yet" case above), so the whole section disappears rather than
+       shrinking to an empty list. */
+    await expect(page.getByTestId('orphaned-needs-decision')).toHaveCount(0, { timeout: 5_000 });
+
+    /* #2128/#2129 x #2238 (merge-reconciliation fix) — applyOrphanLink
+       (src/store/cast-slice.ts) always resets audioCurrent to 'unknown' on
+       a link, same fail-closed discipline as applyOrphanRejection/
+       undoOrphanRejection: a link changes what the id resolves onto, so
+       whatever currency verdict applied to its PRIOR ('unresolved') state is
+       stale evidence. 'unknown' buckets with 'false' (#2129's Global
+       Constraint 4), so the row lands in the STALE auto-reconciled section,
+       not the current one — never the pre-#2129 single, unsplit section. */
+    await page.getByRole('button', { name: /character id.*auto-reconciled.*re-render/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-stale');
+    await expect(autoReconciled).toContainText('coalfall');
+  });
+
   /* #2129, widened by I2 (fix round, #2163) — the banner must distinguish
      "resolves today" (auto-reconciled) from "the already-rendered audio is
      definitely fine". EVERY non-exact resolution shown in this section

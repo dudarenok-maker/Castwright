@@ -1489,6 +1489,73 @@ describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
   });
 });
 
+describe('castSlice — applyOrphanLink (#2238, currency reset added at the #2128/#2129 merge)', () => {
+  it('applies the server-returned resolution and resolvedCharacterId', () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        coalfall: {
+          resolution: 'unresolved' as const,
+          segments: 13,
+          audioCurrent: 'false' as const,
+        },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanLink({
+        orphanedId: 'coalfall',
+        characterId: 'mairin',
+        resolution: 'history',
+        resolvedCharacterId: 'mairin',
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.coalfall).toEqual({
+      resolution: 'alias',
+      resolvedCharacterId: 'mairin',
+      segments: 13,
+      audioCurrent: 'unknown',
+    });
+  });
+
+  it("moves audioCurrent to 'unknown', even starting from 'true' — a link changes what the id resolves onto, so a prior currency verdict is stale evidence, not current evidence (merge-reconciliation fix: this reducer used to leave audioCurrent untouched, unlike its applyOrphanRejection/undoOrphanRejection siblings)", () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        coalfall: {
+          resolution: 'unresolved' as const,
+          segments: 13,
+          audioCurrent: 'true' as const,
+        },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanLink({
+        orphanedId: 'coalfall',
+        characterId: 'mairin',
+        resolution: 'history',
+        resolvedCharacterId: 'mairin',
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.coalfall.audioCurrent).toBe('unknown');
+  });
+
+  it('is a no-op for an orphaned id no longer in the map', () => {
+    const start = { characters: [], orphanedCharacterFallbacks: {} };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanLink({
+        orphanedId: 'ghost',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
+    expect(next).toEqual(start);
+  });
+});
+
 describe('castSlice — applyNotLinked / removeNotLinked (cross-book variant, plan 101 + fs-11)', () => {
   it('applyNotLinked appends the symmetric entry; dedups on repeat', () => {
     const start = baseState([makeChar('eliza')]);
