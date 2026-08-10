@@ -108,13 +108,27 @@ for subagent dispatch above.
   `high`). `ultra` is never auto-selected here — it is billed and requires
   explicit user opt-in (`/code-review ultra`, or the user asking for it by
   name), per the Workflow tool's own rule.
-- **Mechanism**: the `code-review` skill at the effort level determined
-  above, run once fully staged, **without** `--fix` — produces a findings
-  report only. (`--fix` applies whatever the pass surfaced wholesale;
-  there's no per-finding confidence filter to gate it on, so triage happens
-  by hand instead — see Findings handling.) This is the `code-review`
-  *skill* — a working/branch-diff tool — not the separate `/review`
-  PR-comment slash command.
+- **Mechanism**: invoke the `pr-review-gate` skill, which dispatches a
+  **non-fork** subagent at this table's **Premium** tier carrying the
+  adversarial gate brief, at the effort level determined above, once fully
+  staged, **without** `--fix` — a findings report only, triaged by hand.
+  (`--fix` applies whatever the pass surfaced wholesale; there's no
+  per-finding confidence filter to gate it on, so triage happens by hand
+  instead — see Findings handling.) This is a working/branch-diff review —
+  not the separate `/review` PR-comment slash command, and not the
+  `code-review@claude-plugins-official` plugin command either: that plugin
+  reviews a GitHub PR, discards every finding below 80% confidence, and
+  posts a public comment on the PR instead of returning a report to triage.
+  - **Why not invoke the built-in `code-review` skill directly**: it is
+    user-invocable only — `Skill(skill: "code-review")` fails with "cannot
+    be used with Skill tool due to disable-model-invocation", and a
+    dispatched subagent hits the same wall, so "dispatch an agent and have
+    it invoke the skill" is not a workaround. It remains available and is
+    the *better* reviewer: the user may type `/code-review <level>` at any
+    point, and when they do it supersedes the agent pass for that round.
+  - **Never report the gate as having run when it did not.** If the agent
+    pass was substituted, or skipped, say so plainly in the user-facing
+    summary.
 - **Findings handling**: triage the report by hand. Clear-cut findings
   (unambiguous bug, obvious dead code, a straightforward CLAUDE.md
   violation) get fixed directly, committed, and pushed. Findings that turn
