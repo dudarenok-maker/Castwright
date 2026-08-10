@@ -1,0 +1,195 @@
+import { describe, expect, it, beforeEach } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { aggregateAudioCurrency, isAudioCurrent } from './cast-audio-currency.js';
+import {
+  forgetSupersededId,
+  loadCastIdHistory,
+  restoreSupersededId,
+  retireCharacterId,
+} from './cast-id-history.js';
+import type { CastIdHistory } from './cast-id-history.js';
+import type { CastResolution } from './cast-resolve.js';
+
+const CHAR = { id: 'mairin' };
+const res = (
+  via: CastResolution['via'],
+  matchedHistoryKeys?: string[],
+): CastResolution<{ id: string }> => ({ character: CHAR, via, matchedHistoryKeys });
+
+const history = (over: Partial<CastIdHistory> = {}): CastIdHistory => ({
+  schema: 1,
+  supersededBy: { mayrin: 'mairin' },
+  seq: 5,
+  recordedAtSeq: { mayrin: 3 },
+  recordedAtIso: { mayrin: '2026-08-06T00:00:00.000Z' },
+  ...over,
+});
+
+describe('isAudioCurrent (#2128 / #2129)', () => {
+  it('exact is always current, stamp or no stamp', () => {
+    expect(isAudioCurrent(res('exact'), { castHistorySeq: 0 }, history())).toBe(true);
+    expect(isAudioCurrent(res('exact'), {}, history())).toBe(true);
+    expect(isAudioCurrent(res('exact'), undefined, history())).toBe(true);
+  });
+
+  it('a genuine miss is damage', () => {
+    expect(isAudioCurrent(undefined, { castHistorySeq: 9 }, history())).toBe(false);
+  });
+
+  describe('normalised-id — the tier with no history entry', () => {
+    it('is current once the render proves the resolver existed', () => {
+      expect(isAudioCurrent(res('normalised-id'), { castHistorySeq: 0 }, history())).toBe(true);
+    });
+    it('is UNKNOWN on a render that predates the stamp', () => {
+      expect(isAudioCurrent(res('normalised-id'), {}, history())).toBe('unknown');
+    });
+  });
+
+  describe('the alias tiers', () => {
+    it('is current when the render is at or above the marker', () => {
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 3 }, history())).toBe(
+        true,
+      );
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 4 }, history())).toBe(
+        true,
+      );
+    });
+    it('is STALE when the render predates the marker', () => {
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 2 }, history())).toBe(
+        false,
+      );
+    });
+    it('takes the MAX over every matched key (fail-closed)', () => {
+      /* `seq: 9` is NOT decoration — the helper defaults to 5, and a
+         `castHistorySeq` of 7 against a file seq of 5 trips the counter-reset
+         guard and returns 'unknown' before the max is ever computed. Review
+         round 1 (I7) caught the second assertion passing for that reason. */
+      const h = history({
+        seq: 9,
+        recordedAtSeq: { a: 2, b: 7 },
+        supersededBy: { a: 'mairin', b: 'mairin' },
+      });
+      expect(isAudioCurrent(res('normalised-history', ['a', 'b']), { castHistorySeq: 4 }, h)).toBe(
+        false,
+      );
+      expect(isAudioCurrent(res('normalised-history', ['a', 'b']), { castHistorySeq: 7 }, h)).toBe(
+        true,
+      );
+    });
+    it('treats a key absent from a PRESENT field as 0', () => {
+      const h = history({ recordedAtSeq: {} });
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 0 }, h)).toBe(true);
+    });
+  });
+
+  describe('every unknown source LISTS — getting this backwards re-opens #2107', () => {
+    it('no castHistorySeq', () => {
+      expect(isAudioCurrent(res('history', ['mayrin']), {}, history())).toBe('unknown');
+      expect(isAudioCurrent(res('history', ['mayrin']), undefined, history())).toBe('unknown');
+    });
+    it('no recordedAtSeq FIELD — never been through the lane', () => {
+      expect(
+        isAudioCurrent(
+          res('history', ['mayrin']),
+          { castHistorySeq: 4 },
+          history({ recordedAtSeq: undefined }),
+        ),
+      ).toBe('unknown');
+    });
+    it('counter reset — the file counter is below a render stamp', () => {
+      // helper default seq is 5; the render claims 9, which it cannot have read.
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, history())).toBe(
+        'unknown',
+      );
+    });
+    it('NO seq at all — the conjunctive form of the guard fails open (round 1, C1)', () => {
+      /* `recordedAtSeq` present, `seq` dropped in transit. Under
+         `finite(history.seq) && …` this returned `true` and cleared the row. */
+      const h = history({ seq: undefined, recordedAtSeq: { mayrin: 3 } });
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, h)).toBe('unknown');
+    });
+    it('a non-finite marker', () => {
+      /* `castHistorySeq: 4` (not 9) so this reaches the marker loop instead of
+         being short-circuited by the counter-reset guard — round 1 (I8) caught
+         it passing for the wrong reason, which made its Step 5 mutant inert. */
+      const h = history({ recordedAtSeq: { mayrin: Number.NaN } });
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 4 }, h)).toBe('unknown');
+    });
+    it('a non-finite castHistorySeq', () => {
+      expect(
+        isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: Number.NaN }, history()),
+      ).toBe('unknown');
+    });
+  });
+
+  it('treats castHistorySeq === 0 as PRESENT, never as absent', () => {
+    // An `if (!castHistorySeq)` check ships #2128 dead: every legacy case
+    // routes to 'unknown' and no row ever clears.
+    const h = history({ recordedAtSeq: { mayrin: 0 } });
+    expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 0 }, h)).toBe(true);
+  });
+});
+
+/* The two regressions revisions 2 and 3 of the spec were written to close. They
+   are stated as END-TO-END scenarios, not unit cases, because both are about a
+   SEQUENCE of writes producing a marker the predicate then reads — a unit test
+   of either half alone passes while the pair is broken. */
+describe('#2128 — the two hazard scenarios', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cac-'));
+  });
+
+  it('forget -> re-render -> restore: the Undo must NOT clear a narrator render', async () => {
+    /* Revision 3's Critical. seq 3: supersededBy['mayrin']='mairin'. The
+       operator rejects the pairing, so `forgetSupersededId` removes it (seq 4).
+       The chapter is re-rendered with NO alias, so those segments render as the
+       NARRATOR, stamped castHistorySeq 4. The operator clicks Undo.
+
+       Revision 3 had `restoreSupersededId` REPLAY the stashed marker (3),
+       making 4 >= 3 true and clearing a row whose audio is the narrator's. It
+       stamps the CURRENT seq instead, so the row correctly stays listed. */
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin'); // seq 1, mayrin@1
+    await forgetSupersededId(dir, 'mayrin'); // seq 2
+    const renderedWithNoAlias = { castHistorySeq: 2 }; // narrator bytes
+    await restoreSupersededId(dir, 'mayrin', 'mairin'); // seq 3, mayrin@3
+    const h = await loadCastIdHistory(dir);
+
+    expect(isAudioCurrent(res('history', ['mayrin']), renderedWithNoAlias, h)).toBe(false);
+  });
+
+  it('merge-repoint: an alias moved onto a different cast row re-lists', async () => {
+    /* `routes/cast-merge.ts:230` retires `sourceId` into `targetId` after
+       merging, and the repoint loop rewrites every entry whose VALUE was
+       `sourceId`. Same person, different cast ROW — `targetId`'s voice is
+       whichever row won. A render made while the alias pointed at `sourceId`
+       used `sourceId`'s voice, so its bytes are stale even though the KEY never
+       changed. This is what "recordedAtSeq tracks the CURRENT target" buys. */
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin'); // seq 1, mayrin@1
+    const renderedAgainstMairin = { castHistorySeq: 1 };
+    await retireCharacterId(dir, 'mairin', 'dame-alina'); // seq 2, mayrin repointed@2
+    const h = await loadCastIdHistory(dir);
+
+    expect(isAudioCurrent(res('history', ['mayrin']), renderedAgainstMairin, h)).toBe(false);
+  });
+});
+
+describe('aggregateAudioCurrency — one verdict per orphaned id across chapters', () => {
+  it('any false wins', () => {
+    expect(aggregateAudioCurrency([true, 'unknown', false])).toBe(false);
+  });
+  it('else any unknown wins', () => {
+    expect(aggregateAudioCurrency([true, 'unknown', true])).toBe('unknown');
+  });
+  it('all true is true', () => {
+    expect(aggregateAudioCurrency([true, true])).toBe(true);
+  });
+  it('an id current in ch2 and stale in ch5 is NOT current', () => {
+    // The "any-current => true" direction re-opens #2107 on the banner side.
+    expect(aggregateAudioCurrency([true, false])).toBe(false);
+  });
+});
