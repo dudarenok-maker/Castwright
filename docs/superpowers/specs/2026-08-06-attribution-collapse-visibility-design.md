@@ -308,8 +308,35 @@ declaration rather than only its absence:
 > language is corroborated** by running `detectManuscriptLanguage` over the same
 > cached text. If detection **disagrees** with the declaration, or **surrenders**,
 > the result is `unmeasurable`, not `missing`.
+>
+> **Corroboration is skipped outright when the cache holds no sentences at all**,
+> and that carve-out is not an edge case — it is D11's own motivating book.
 
-Three properties make this the right shape rather than a wider one:
+**The carve-out exists because without it this guard disarms the state it sits
+in front of.** _Ночной дозор_ in its 2026-08-06 shape had `stage1` present and
+`chapters: {}` — a full cast and **literally zero sentences.** Corroboration over
+that book samples the empty string, `detect-language.ts:44` sees `letters === 0`,
+surrenders, and by the rule above the book resolves `unmeasurable`: not badged,
+not gated, a neutral "couldn't measure this" marker. **The canonical `missing`
+case — the one R-O1 was raised on, the one the repo owner produced by cancelling
+a re-run — would have been silently exempted by the guard added in the same
+revision.**
+
+That is this document's recurring failure shape, and it is worth naming rather
+than quietly patching: a new guard whose detection envelope excludes its own
+motivating case. Revision 4 shipped it (`unmeasurable`-first precedence over an
+empty set), revision 5 shipped it (`fallback` on a branch no book reaches), and
+revision 6 nearly shipped it a third time in the fix for the second.
+
+The distinction the carve-out draws is real, not a patch:
+
+| Cache | What it means | Verdict |
+|---|---|---|
+| **no sentences at all** | Phase 1 never ran. There is nothing to detect *from*, and the absence of text is itself the evidence of the abandoned run | `missing` — corroboration does not run |
+| sentences present, detection **contradicts** the declaration | the book is probably not in the language it was imported as | `unmeasurable` |
+| sentences present, detection **surrenders** (`letters === 0` over real sentences, or `franc` returns `und`) | there is text and it is unidentifiable | `unmeasurable` |
+
+Three further properties make this the right shape rather than a wider one:
 
 - **It runs on one path, and that path is already the expensive one.** A healthy
   book never reaches it, so the corroboration costs nothing on the hot path and
@@ -1241,7 +1268,7 @@ firing while the book-level share is far below it; a chapter at 100% with 19
 spoken lines **not** triggering and the same chapter with 20 triggering;
 `triggeredBy` and `worstChapterId` correct in both directions.
 
-**Wave 2 — the `missing` state (D11).** Eight fixtures that must resolve to
+**Wave 2 — the `missing` state (D11).** Nine fixtures that must resolve to
 three different states, because the whole point of D11 is that revision 2
 collapsed them into one:
 
@@ -1254,7 +1281,8 @@ collapsed them into one:
 | 5 | **Healthy `ja` book, dialogue in `「」`** (R-4C1) | > 0 | **> 0** | absent (run completed) | `ok` |
 | 6 | **Healthy `de` book, dialogue in bare `»…«`** (R-5C2) | > 0 | **> 0** | absent | `ok` |
 | 7 | **`en`-declared book whose text is not English** (R-6C2) | > 0 | 0 | absent | `unmeasurable` |
-| 8 | **Book of pure punctuation/numerals** (`letters === 0`) | > 0 | 0 | absent | `unmeasurable` |
+| 8 | **Sentences present but unidentifiable** — pure punctuation/numerals, `letters === 0` | > 0 | 0 | absent | `unmeasurable` |
+| 9 | **Cast built, cache holds ZERO sentences** — the real Night Watch shape | > 0 | 0 | absent **or 0 bytes** | `missing` — corroboration skipped |
 
 Each row disproves a different way of writing the rule too loosely, and a test
 that omits any of them lets that looseness ship:
@@ -1278,6 +1306,13 @@ that omits any of them lets that looseness ship:
   and blocked from generating.
 - Omit row 8 → `fallback` is implemented on one surrender branch only, and a
   book with no letters at all is answered `en` with full confidence.
+- **Omit row 9 → the corroboration step disarms `missing` entirely.** An
+  empty-cache book has no text to detect from, so detection surrenders and the
+  guard downgrades the verdict — exempting the exact book D11 was raised on.
+  Rows 2 and 9 look alike and are not: row 2 fixes `spokenTotal === 0` with
+  narration sentences present, row 9 fixes it with **no sentences at all**, and
+  only row 9 exercises the carve-out. A suite carrying row 2 alone passes with
+  the carve-out deleted.
 
 **Mutation controls. Revision 4's version of this table was itself a placebo**
 (R-5C2), and the way it failed is worth keeping visible: it specified row 5's
@@ -1286,13 +1321,19 @@ revision teaches `isSpokenLine` to read `「…」`, so after both changes land 
 reverted denominator still returns `spokenTotal > 0` and **row 5 does not move.**
 One change in the revision disarmed the control of another.
 
-| Mutation | Row 5 (`ja`) | Row 6 (`de`) | Row 7 (wrong lang) | Row 8 (no letters) |
-|---|---|---|---|---|
-| Denominator reverted to `isSpokenLine` | **unchanged** — part 2 covers `「」` | **flips to `missing`** | unchanged | unchanged |
-| Denominator reverted **and** part 2 reverted | flips to `missing` | flips to `missing` | unchanged | unchanged |
-| `unmeasurable`-first precedence deleted | unchanged | unchanged | **flips to `missing`** | **flips to `missing`** |
-| Corroboration step deleted (step 3) | unchanged | unchanged | **flips to `missing`** | **flips to `missing`** |
-| `fallback` set on `:60` only, not `:44` | unchanged | unchanged | unchanged | **flips to `missing`** |
+| Mutation | Row 5 (`ja`) | Row 6 (`de`) | Row 7 (wrong lang) | Row 8 (no letters) | Row 9 (empty cache) |
+|---|---|---|---|---|---|
+| Denominator reverted to `isSpokenLine` | **unchanged** — part 2 covers `「」` | **flips to `missing`** | unchanged | unchanged | unchanged |
+| Denominator reverted **and** part 2 reverted | flips to `missing` | flips to `missing` | unchanged | unchanged | unchanged |
+| `unmeasurable`-first precedence deleted | unchanged | unchanged | **flips to `missing`** | **flips to `missing`** | unchanged |
+| Corroboration step deleted (step 3) | unchanged | unchanged | **flips to `missing`** | **flips to `missing`** | unchanged |
+| `fallback` set on `:60` only, not `:44` | unchanged | unchanged | unchanged | **flips to `missing`** | unchanged |
+| **Empty-cache carve-out deleted** | unchanged | unchanged | unchanged | unchanged | **flips to `unmeasurable`** |
+
+Row 9's mutation is the one that matters most and is the easiest to leave out,
+because deleting the carve-out breaks **no other row in the table** — every other
+fixture has text. That is precisely why it needs its own row: a control nothing
+else can move is the only thing standing between D11 and a guard that exempts it.
 
 **Row 6 is why the German fixture exists, and its text is now constrained**
 (R-6C5). `»…«` is dialogue under `de.quotePairs` and invisible to `isSpokenLine`
