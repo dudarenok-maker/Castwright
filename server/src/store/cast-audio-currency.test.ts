@@ -151,6 +151,18 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
     const h = history({ recordedAtSeq: { mayrin: 0 } });
     expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 0 }, h)).toBe(true);
   });
+
+  it('treats history.seq === 0 as a REAL file counter, never as absent (trap 2)', () => {
+    // An `if (!history.seq)` counter-reset guard is the truthiness twin of the
+    // castHistorySeq bug above: seq 0 is a genuine (if minimal) file counter —
+    // e.g. a well-formed but never-written-through-the-lane file with no marks
+    // at all, per `repairSeq`'s own `Math.max(..., 0)` floor — and must not be
+    // conflated with `seq` being absent, which is a DIFFERENT, already-covered
+    // 'unknown' source ("NO seq at all", above). `Number.isFinite(0)` is
+    // `true`; `!0` is also `true` — only `finite()` tells them apart.
+    const h = history({ seq: 0, recordedAtSeq: { mayrin: 0 } });
+    expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 0 }, h)).toBe(true);
+  });
 });
 
 /* The two regressions revisions 2 and 3 of the spec were written to close. They
