@@ -1261,6 +1261,13 @@ describe('#2128 — seq and recordedAt markers', () => {
       () => retireCharacterId(dir, 'a', 'b'),
       () => retireCharacterId(dir, 'b', 'c'),
       () => rejectOrphanedPair(dir, 'x', 'c'),
+      // Review round 1 (I1) — a cheap second net for the tenth write site
+      // (undoRejectedPairs) inside the same bidirectional-invariant script
+      // every other write site already runs through. Removes the pair just
+      // above (no forgotSupersededTo, so this contributes no supersededBy
+      // touch) — still a real write (the pair leaves rejectedPairs), so the
+      // loop's `toBeGreaterThan(seq)` still holds.
+      () => undoRejectedPairs(dir, [{ from: 'x', to: 'c' }]),
       () => forgetSupersededId(dir, 'a'),
       () => restoreSupersededId(dir, 'a', 'c'),
       () => dropSupersededIdsReclaimedByLiveCast(dir, ['b']),
@@ -1325,6 +1332,45 @@ describe('#2128 — seq and recordedAt markers', () => {
     const h = await loadCastIdHistory(dir);
     expect(h.supersededBy).toEqual({ a: 'd', c: 'd', b: 'd' });
   });
+
+  // Review round 1 (I1) — the tenth write site (#2198's undoRejectedPairs,
+  // added after the plan's write-site table was written) had NO test that
+  // read `seq`/`recordedAtSeq` at all; the pre-existing `undoRejectedPairs`
+  // describe block only asserts `results`/`supersededBy`/`rejectedPairs`.
+  // This test (plus the second net added to the bidirectional-invariant
+  // script above) catches two mutants that used to ship green: dropping the
+  // `bumpSeqAndStamp` call entirely (site 10 writes without moving `seq` —
+  // the same two-states-share-one-counter hole the 2026-08-06 amendment
+  // closed for site 9), and moving it INSIDE the per-pair loop (N bumps per
+  // batch — the exact failure #2198's batch-atomicity contract forbids).
+  // A third candidate mutant — dropping the `touchedKeys.push(...)`
+  // accumulation at the call site above — was ALSO tried and is confirmed
+  // UNOBSERVABLE by any test in this file or in
+  // cast-reject-orphan.failure-modes.test.ts: `applyRestoreSupersededId`
+  // only ever reports a touched key when it just added that key to
+  // `supersededBy` for the first time, which means the key had no marker
+  // before the call, which means `bumpSeqAndStamp`'s own "key with no
+  // marker" back-fill loop stamps it at the identical final `seq` regardless
+  // — see the call site's own comment. This is the same self-heal masking
+  // M4 found for the single-pair `restoreSupersededId` path, and the
+  // whole-branch review is already tracking it as a deferred gap; it is not
+  // a hole specific to this batch primitive.
+  it('undoRejectedPairs bumps seq ONCE for the whole batch, not once per pair — the tenth write site (#2128)', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await rejectOrphanedPair(dir, 'a', 'target', 'alias-a'); // seq 1
+    await rejectOrphanedPair(dir, 'b', 'target', 'alias-b'); // seq 2
+    const before = (await loadCastIdHistory(dir)).seq!;
+    await undoRejectedPairs(dir, [
+      { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
+      { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
+    ]);
+    const h = await loadCastIdHistory(dir);
+    // ONE call, ONE bump — per-pair bumping would land seq at before + 2.
+    expect(h.seq).toBe(before + 1);
+    // BOTH restored keys stamped at the SAME final seq — per-pair bumping
+    // would instead produce { a: before + 1, b: before + 2 }.
+    expect(h.recordedAtSeq).toEqual({ a: h.seq, b: h.seq });
+  });
 });
 
 describe('#2128 — the one-shot stamp', () => {
@@ -1360,5 +1406,27 @@ describe('#2128 — the one-shot stamp', () => {
     // The operator's broken file is still there to fix, not silently replaced
     // with an empty history that discards whatever supersededBy it held.
     expect(JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8')).schema).toBe(2);
+  });
+
+  // Review round 1 (M3) — an unreadable file (bad JSON, not merely a bad
+  // SHAPE) used to be swallowed silently, identically to "no file" — this is
+  // the `--apply` repair entry point, so an operator sweeping books would get
+  // NO output at all for a corrupt one. Now warned, matching the shape-check
+  // branch's existing behaviour.
+  it('warns and refuses to overwrite an UNREADABLE (bad JSON) file', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    writeTestHistoryFile('{invalid json');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = String(warnSpy.mock.calls[0][0]);
+      expect(message).toContain('unreadable');
+    } finally {
+      warnSpy.mockRestore();
+    }
+    // The operator's broken file is still there to fix, not silently
+    // replaced with an empty history.
+    expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe('{invalid json');
   });
 });

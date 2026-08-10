@@ -106,10 +106,18 @@ export interface CastIdHistory {
    *  though the KEY never changed. Restamping on repoint is what closes that.
    *
    *  The authoritative value `isAudioCurrent` compares. FIELD ABSENT means
-   *  "this file has never been through the lane" and reads `'unknown'`; a KEY
-   *  missing from a PRESENT field means "predates the one-shot stamp" and
-   *  contributes 0. The two are not the same, and conflating them is fail-open
-   *  on the one axis this codebase actually fails. */
+   *  "this file has never been through the lane" and reads `'unknown'`. A KEY
+   *  missing from a PRESENT field is NOT evidence of age and must read
+   *  `'unknown'` too, never contribute 0: `bumpSeqAndStamp`'s reconcile loops
+   *  guarantee `keys(recordedAtSeq) === keys(supersededBy)` after every write
+   *  (Global Constraint 6), so there is no write path that can leave a
+   *  `supersededBy` key with no marker — a key missing here despite the field
+   *  being present means the file itself is suspect, not merely old. Treating
+   *  that as `0` would CLEAR the row against any render stamp >= 0, which is
+   *  fail-open and silently reopens #2107 — the one axis this codebase must
+   *  not fail on (Global Constraint 4: only an affirmative comparison clears
+   *  a row; everything else, including this case, is damage and stays
+   *  listed). */
   recordedAtSeq?: Record<string, number>;
   /** #2128 — human-readable companion for operator diagnostics (an operator
    *  hand-inspecting this file mid-repair-run can tell WHEN, not merely in what
@@ -899,7 +907,18 @@ export async function restoreSupersededId(
  *  (`restoreSupersededId` alone, or `undoRejectedPairs` accumulating across a
  *  whole batch) folds this into the single `bumpSeqAndStamp` call it makes
  *  immediately before its one write — derived from what the code actually
- *  touched, not hand-transcribed into a table a future PR can outgrow. */
+ *  touched, not hand-transcribed into a table a future PR can outgrow.
+ *
+ *  Review round 1 (M4) — on THIS applier specifically, `touchedKeys` is
+ *  defence-in-depth, not load-bearing: the only branch that sets it
+ *  (`changed: true`, below) writes `history.supersededBy[id]` for the first
+ *  time, which means `id` had no marker before this call either —
+ *  `bumpSeqAndStamp`'s own back-fill loop would stamp it at the same `next`
+ *  seq with or without `id` in `stampedKeys`. Kept anyway because the
+ *  behaviour is correct BY the explicit list, not by relying on the
+ *  self-heal loop as the only mechanism — a future refactor that trims or
+ *  reorders `bumpSeqAndStamp`'s reconcile loops must not assume nothing here
+ *  depends on the back-fill still running. */
 function applyRestoreSupersededId(
   history: CastIdHistory,
   id: string,
@@ -1120,6 +1139,19 @@ export async function undoRejectedPairs(
         restored = applied.result.restored;
         supersededByOther = applied.result.supersededByOther;
         if (applied.changed) changed = true;
+        /* Review round 1 (I1 follow-up) — confirmed by mutation testing that
+           dropping this accumulation is UNOBSERVABLE by any test today: the
+           same reason `applyRestoreSupersededId`'s `touchedKeys` is
+           defence-in-depth on the single-pair path (see its own doc comment,
+           M4) applies here too — `applied.changed` is only ever true when
+           `id` was just added to `supersededBy` for the first time, which
+           means it had no marker before this call, which means
+           `bumpSeqAndStamp`'s own back-fill loop (the "key with no marker"
+           reconcile) stamps it at the same final `seq` regardless of whether
+           it is also in `stampedKeys`. Kept for the same reason as M4: an
+           explicit list, not reliance on the self-heal loop as the only
+           mechanism. This is the SAME deferred self-heal gap the whole-branch
+           review is tracking, not a new one. */
         touchedKeys.push(...applied.touchedKeys);
       }
       const { changed: unrejectChanged } = applyUnrejectOrphanedPair(history, pair.from, pair.to);
@@ -1145,18 +1177,32 @@ export async function undoRejectedPairs(
  *  workflow already visits, and absence of the field reads `'unknown'` until
  *  it lands.
  *
- *  Returns whether it wrote. Three no-write cases, all deliberate: no file
- *  (nothing to stamp), the field already exists (idempotent), and — the one
- *  that matters — a file that fails the shape check. Loading a malformed file
- *  returns the EMPTY default, so stamping that would persist an empty history
- *  over whatever `supersededBy` the operator still has on disk to repair. */
+ *  Returns whether it wrote. Four no-write cases, all deliberate: no file
+ *  (nothing to stamp), the file exists but is unreadable — bad JSON, an I/O
+ *  error (review round 1, M3: this used to be swallowed identically to "no
+ *  file", so an operator sweeping books via `--apply` got no output at all
+ *  for a corrupt one — now warned, matching the shape-check branch below),
+ *  the field already exists (idempotent), and — the one that matters — a
+ *  file that fails the shape check. Loading a malformed file returns the
+ *  EMPTY default, so stamping that would persist an empty history over
+ *  whatever `supersededBy` the operator still has on disk to repair. */
 export async function stampRecordedAtSeqIfAbsent(bookDir: string): Promise<boolean> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir)).catch(() => undefined);
-    if (raw === null || raw === undefined) return false;
+    const path = castIdHistoryPath(bookDir);
+    let raw: CastIdHistory | null;
+    try {
+      raw = await readJson<CastIdHistory>(path);
+    } catch (err) {
+      console.warn(
+        `[cast-id-history] ${path} is unreadable (${(err as Error)?.message ?? err}) — skipping the #2128 ` +
+          `one-shot stamp rather than overwriting it with an empty history.`,
+      );
+      return false;
+    }
+    if (raw === null) return false;
     if (!isWellFormedHistory(raw)) {
       console.warn(
-        `[cast-id-history] ${castIdHistoryPath(bookDir)} has an unexpected shape — skipping the #2128 ` +
+        `[cast-id-history] ${path} has an unexpected shape — skipping the #2128 ` +
           `one-shot stamp rather than overwriting it with an empty history.`,
       );
       return false;
