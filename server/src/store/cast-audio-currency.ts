@@ -90,12 +90,28 @@ export function isAudioCurrent(
      correctly-threaded object nothing. */
   if (!finite(history.seq) || history.seq < stamp) return 'unknown';
 
+  /* An EMPTY `matchedHistoryKeys` must not fall through to the loop below and
+     leave `highest` at its seed value — a seed-0 reduce over zero elements is
+     the fail-open shape trap 1 warns about: `stamp >= 0` is true for any
+     non-negative render stamp, vacuously clearing a row that was never
+     actually verified against a marker. Neither current producer of this tier
+     (`buildCastResolver`'s tier 2 and tier 4) emits an empty array today, but
+     the type permits it and this predicate must not depend on that holding. */
+  if (!resolution.matchedHistoryKeys?.length) return 'unknown';
+
   let highest = 0;
-  for (const key of resolution.matchedHistoryKeys ?? []) {
+  for (const key of resolution.matchedHistoryKeys) {
     const marker = markers[key];
-    /* A key absent from a PRESENT field predates the one-shot stamp and
-       contributes 0 — distinct from the field itself being absent, above. */
-    if (marker === undefined) continue;
+    /* #2128 review round 1 (I2, owner-ruled) — `cast-id-history.ts`'s
+       `recordedAtSeq` doc comment was corrected from "contributes 0" to
+       "must read 'unknown', never contribute 0": `bumpSeqAndStamp`'s
+       reconcile loops guarantee every `supersededBy` key has a marker after
+       every write, so a key missing here despite the FIELD being present
+       means the file itself is suspect, not merely old. Treating it as 0
+       would satisfy `stamp >= highest` for any finite render stamp and
+       silently reopen #2107 — distinct from the field itself being absent,
+       handled above. */
+    if (marker === undefined) return 'unknown';
     if (!finite(marker)) return 'unknown';
     if (marker > highest) highest = marker;
   }

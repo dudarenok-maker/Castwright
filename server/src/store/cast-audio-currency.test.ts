@@ -78,9 +78,30 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
         true,
       );
     });
-    it('treats a key absent from a PRESENT field as 0', () => {
+    it('treats a key absent from a PRESENT field as UNKNOWN, never as 0 (I2, owner-ruled)', () => {
+      /* `cast-id-history.ts`'s `recordedAtSeq` doc comment was corrected
+         (#2128 review round 1, I2) from "contributes 0" to "must read
+         'unknown', never contribute 0" — `bumpSeqAndStamp`'s reconcile loops
+         guarantee every `supersededBy` key has a marker after every write, so
+         a key missing here despite the field being present means the file
+         itself is suspect, not merely old. Treating it as 0 would satisfy
+         `stamp >= 0` for ANY finite render stamp and silently reopen #2107 —
+         this is trap 3 from the task brief, corrected in the predicate to
+         match the corrected doc comment it consumes. */
       const h = history({ recordedAtSeq: {} });
-      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 0 }, h)).toBe(true);
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 0 }, h)).toBe('unknown');
+    });
+    it('an EMPTY matchedHistoryKeys is UNKNOWN, never vacuously current (trap 1)', () => {
+      /* The type permits `matchedHistoryKeys: []` even though the sole
+         producer (`buildCastResolver`) never emits it for the 'history' /
+         'normalised-history' tiers today (tier 2 always carries exactly one
+         key, tier 4's `normHistoryKeys` and `byNormHistory` are populated in
+         lockstep so a resolved tier-4 hit always has >= 1). A seed-0 reduce
+         over an empty list is the exact fail-open shape the task brief's
+         trap 1 warns about: `stamp >= 0` is true for any non-negative render
+         stamp, vacuously clearing a row that was never actually verified
+         against a marker. */
+      expect(isAudioCurrent(res('history', []), { castHistorySeq: 0 }, history())).toBe('unknown');
     });
   });
 
