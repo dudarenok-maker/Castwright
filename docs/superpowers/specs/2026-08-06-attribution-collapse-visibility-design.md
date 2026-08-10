@@ -409,6 +409,26 @@ reads the share only. Routing `orphanSpoken` to a user-facing surface of its own
 is out of scope here — #2238 already built that surface, and connecting the
 measurement to it is a follow-up, filed rather than folded.
 
+**Orphans leave the denominator too, and getting this wrong reopens the hole one
+level down.** Taking them out of the numerator alone would leave them diluting
+the fraction: a book whose dialogue is *entirely* orphaned would score
+`0 / spokenTotal` = **0%, perfectly healthy**, which is #1984's own failure shape
+for the third time in this document. The share is therefore over the lines the
+metric could attribute at all:
+
+```
+attributableSpoken = spokenTotal - orphanSpoken
+share              = narratorIdSpoken / attributableSpoken
+```
+
+`spokenTotal` stays as it is — it is a property of the *text*, it is what
+`missing` turns on, and it is what the gap columns compare against.
+`attributableSpoken` is a separate reported field, so a reader can see how much
+of the book the share actually speaks for. When `attributableSpoken` falls under
+`MIN_SPOKEN_FOR_VERDICT` the share is `null` and no verdict is given — the
+honest answer for a book whose ids have drifted wholesale, and the orphan banner
+is the surface that can act on it.
+
 **This is the one place the spec knowingly under-reports.** A book can be both
 drifted and collapsed, and a reader of the share alone will not see the drift.
 That is why the column is mandatory in Wave 1's output rather than optional, and
@@ -426,15 +446,18 @@ interface AttributionMeasurement {
   blindSpoken: number;           // conventions say dialogue, isSpokenLine does not
   overcountSpoken: number;       // isSpokenLine says dialogue, conventions do not
   narratorIdSpoken: number;      // resolved to a NARRATOR_CHARACTER_IDS member
-                                 // — THE numerator; share = this / spokenTotal
+                                 // — THE numerator
   orphanSpoken: number;          // unresolvable id; reported, NEVER summed in (D9)
   orphanIds: string[];           // the distinct unresolvable ids, for the drift surface
+  attributableSpoken: number;    // spokenTotal - orphanSpoken — the DENOMINATOR
+                                 // of the share; see D9. Not the same as spokenTotal.
   dashOnlySpoken: number;        // diagnostic — see below
   quietCastCount: number;        // non-narrator cast members with < 2 spoken lines
   castCount: number;             // non-narrator cast members, from cast.json
   chapters: {
     chapterId: number;
     spokenTotal: number;
+    attributableSpoken: number;
     narratorIdSpoken: number;
     orphanSpoken: number;
   }[];
@@ -665,10 +688,13 @@ pattern.
    requires to be pure (R-6M1). The split is the same one §Failure modes draws
    for `readAnalysisState`: one impure resolver does the file reads, the pure
    metric receives `{ language, languageSource }` and a sentence list.
-3. **The share is `narratorIdSpoken / spokenTotal`, and `orphanSpoken` is
-   nowhere in it** (D9). Asserted by a fixture whose orphan count is large
-   enough to move the share if it were summed — a fixture with zero orphans
-   proves nothing here.
+3. **The share is `narratorIdSpoken / attributableSpoken`** (D9) — orphans are
+   out of the numerator *and* out of the denominator. Asserted by a fixture
+   whose orphan count is large enough to move the share under either mistake — a
+   fixture with zero orphans proves nothing here. **A book whose dialogue is
+   entirely orphaned reports `share: null`, never `0%`**, which is the assertion
+   that catches the denominator half; without it, taking orphans out of the
+   numerator alone reads a wholly-drifted book as perfectly healthy.
 4. **`orphanSpoken` and `orphanIds` are non-zero and correct on the books that
    have unresolvable ids**, resolved through `buildCastResolver` with each
    book's real `cast-id-history.json`. A run that reports 0 everywhere means the
@@ -720,7 +746,7 @@ sentences crosses it.**
 
 ```
 COLLAPSE_SHARE_THRESHOLD        = <set by Wave 1>
-MIN_SPOKEN_FOR_VERDICT          = 20   // book-level floor
+MIN_SPOKEN_FOR_VERDICT          = 20   // book-level floor, on attributableSpoken
 MIN_SPOKEN_PER_CHAPTER_TRIGGER  = 20   // a chapter may only TRIGGER above this
 MIN_SPOKEN_PER_CHAPTER_DISPLAY  = 5    // a chapter shows a % above this
 ```
@@ -952,7 +978,7 @@ there are **four** states and the library shows all four:
 | State | Rule | Library | Cast view | Gates generation |
 |---|---|---|---|---|
 | `ok` | — (including a book never analysed) | nothing | nothing | no |
-| `collapsed` | `narratorIdSpoken / spokenTotal` ≥ threshold, book or chapter | warning badge | full notice | yes |
+| `collapsed` | `narratorIdSpoken / attributableSpoken` ≥ threshold, book or chapter | warning badge | full notice | yes |
 | `missing` | `castCount > 0 && spokenTotal === 0 && (await readAnalysisState(dir)) === null && languageCorroborated` | warning badge | full notice | **yes** |
 | `unmeasurable` | the book **has been analysed** and the measurement still could not be made: cache corrupt, the declared language contradicted by detection over the book's own text, detection surrendered, **or** the resolved language has no conventions table | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
@@ -1110,10 +1136,11 @@ instead of reading as a clean bill of health.
 | Zero spoken sentences, **no non-narrator cast** (non-fiction, pure narration) | `share: null`, state `ok`. Nothing is missing — there were never any characters. |
 | Zero spoken sentences, **cast present**, no analysis snapshot, **language corroborated** | State `missing` (D11). The contradiction is the signal. |
 | Zero spoken sentences, **cast present**, no snapshot, but detection **contradicts** the declared language | State `unmeasurable`. The likelier explanation is that the book is not in the language it was imported as. |
-| **Unresolvable `characterId`s present** | Counted into `orphanSpoken`/`orphanIds` and reported; **never** into the share, and never a state of their own (D9). Repaired through the Cast orphan banner, not through re-analysis. |
+| **Unresolvable `characterId`s present** | Counted into `orphanSpoken`/`orphanIds` and reported; removed from **both** halves of the share, and never a state of their own (D9). Repaired through the Cast orphan banner, not through re-analysis. |
+| **Every dialogue line orphaned** (`attributableSpoken === 0`) | `share: null`, state `ok`, no badge, no gate — but `orphanSpoken` is the whole denominator and the row shows it. Not `0%`: a wholly-drifted book must not read as a healthy one. |
 | Book never analysed | State `ok`, no badge, no marker. Reported by the script as `not analysed`. |
 | Zero spoken sentences, **cast present**, snapshot `running`/`paused`/`halted` | State `ok`. An interrupted run is ordinary use; the AnalysisPill already says so, and badging it would train the warning into noise. |
-| Under 20 spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. |
+| Under 20 **attributable** spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. The floor reads `attributableSpoken`, not `spokenTotal`, so a book pushed under it by id drift is silent rather than confidently wrong. |
 | Chapter with 6 spoken lines, all narrator | Shows `100%` in the breakdown; does **not** trigger (under the 20-line trigger floor). |
 | User excludes back-matter after analysis | Live compute picks it up; the library badge is patched in the same session. |
 | First-person book | See below. |
