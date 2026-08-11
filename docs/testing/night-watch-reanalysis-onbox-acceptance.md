@@ -341,6 +341,33 @@ not re-propose it.
 Only `escalated` / `escalationAccepted` (proof escalation *executes*, not merely
 that it would) and the wall-clock target 5. Both need §2 as written.
 
+### 2A.5 What #2253 adds to the observation (2026-08-11)
+
+The dialogue-convention invariant (#2253, `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`)
+shipped after 2A.1-2A.4 were written and is corpus-verified only by two offline
+replays over the 2026-08-06 cache (`server/handoff/cache/replay-experiment.mts`,
+gitignored, throwaway) — `HARM TOTAL victims=0` at both the production 80% floor
+and forced to 100%, all 17 workspace-book structure hashes unchanged. What
+offline replay over a cache **cannot** show, and what this row now also owes on
+top of §2A.4:
+
+- `[analysis:structure]` log lines show `unresolved=` populated, and `flagged=`
+  at conflict scale (order 10²/chapter, matching 2A.2's `flagged` column) rather
+  than the old 10³ narrator-collapse scale — proof the bucket split (Tasks 5-6)
+  and the invariant (Tasks 2-3) both reach a *live* stage-2 model output, not
+  just the frozen Aug-6 one.
+- Ch5's dash-opening sentences are no longer silently rewritten to `narrator` —
+  spot-check a handful against the 30-item hand-labelled sample in
+  `docs/superpowers/plans/2026-08-11-dialogue-convention-invariant.md`'s
+  "Measured Baselines" appendix.
+- `state.json`'s `analysisProvenance.report` carries a populated `unresolved`
+  key (not absent — absent means "predates the split" per the plan's Global
+  Constraints, and nothing may default it to 0).
+
+Hardware: same as §2 above — local Ollama with `qwen36-cw-iq4-32k`, ~14 GB VRAM
+free, sidecar suppressed (`DISABLE_AUTOSTART_SIDECAR=1`). Batches naturally with
+the rest of this run sheet's Session A rather than needing a session of its own.
+
 ---
 
 ## 3 · Session B — C1 (cloud pass, then local calibration)
