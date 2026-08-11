@@ -254,11 +254,11 @@ Two chains land together. The first stops a refusal being issued against a pessi
   speech spans it reasons from and used to rewrite every affected dialogue line
   to `narrator` as an unflagged correction — 879 lines on the reference book.
   A line that opens with the language's own dialogue marker now keeps its
-  speaker and is surfaced as low-confidence instead. (#2253, PR #NNNN)
+  speaker and is surfaced as low-confidence instead. (#2253, PR #2266)
 - **`structureReport` splits `flagged` into `flagged` and `unresolved`** so a
   genuine model-vs-structure conflict is countable separately from "no evidence
   either way", which was 99.9% of the old bucket. Additive optional field on
-  `analysisProvenance.report`; no schema bump. (#2253, PR #NNNN)
+  `analysisProvenance.report`; no schema bump. (#2253, PR #2266)
 - **`POST /api/books` now rejects an unsupported book language at the import boundary** (#1955). The confirm-screen language dropdown only constrained the browser — `normaliseBookLanguage` lower-cased whatever BCP-47 tag it was handed with no support check, so a direct API call could persist e.g. `'pt'` onto `state.json` even though the language registry has exactly seven entries (en/ru/es/fr/de/zh/ja). Pre-fix, an unsupported language surfaced only at render time as an opaque `chapter_failed` (`sidecarLanguageName`'s existing throw in `generation.ts`), several expensive steps — analysis, casting — after the user chose it. The route now checks `isSupportedLanguage()` before any disk write and returns 400 `unsupported_language` naming the supported set; nothing is persisted and the staging entry survives for a corrected retry. The render-time throw is unchanged and still the backstop for any other write path.
 
 ---
