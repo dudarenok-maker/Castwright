@@ -1574,8 +1574,13 @@ then remove the worktree.
 
 ## Measured Baselines
 
-*Filled in by Task 1. Until then this section is the plan's only open
-dependency — Task 7 cannot set its thresholds without it.*
+*Baseline half filled in by Task 1 (2026-08-11). Post-fix columns, the worst-
+structurally-intact-chapter line, and the target 1a threshold line are left for
+Task 7 step 0 — this is the pre-fix distribution the post-fix run is read
+against, never the threshold source itself. Measured on the committed cache
+`mns_oyK7Po6BiT.json` (3,704,853 bytes, 2026-08-06 20:49:57) against
+`Ночной дозор/manuscript.epub`, via `server/handoff/cache/replay-legibility.mts`
+(baseline mode, `FLOOR=80` default).*
 
 ### Legibility — `confidence < 0.75` share per chapter
 
@@ -1585,9 +1590,17 @@ than assumed.
 
 | ch | sentences | baseline conf<0.75 | baseline share | post-fix conf<0.75 | post-fix share | delta |
 |---|---|---|---|---|---|---|
-| _(Task 1 step 4 / Task 7 step 0)_ | | | | | | |
+| 1 | 2777 | 729 | 26.3% | | | |
+| 2 | 2111 | 822 | 38.9% | | | |
+| 3 | 850 | 315 | 37.1% | | | |
+| 4 | 892 | 199 | 22.3% | | | |
+| 5 | 1736 | 355 | 20.4% | | | |
+| 6 | 1682 | 407 | 24.2% | | | |
+| 7 | 1867 | 416 | 22.3% | | | |
+| 8 | 1543 | 532 | 34.5% | | | |
+| 9 | 1611 | 483 | 30.0% | | | |
 
-Book baseline: _n_ / _low_ / _share_ —
+Book baseline: 15069 / 4258 / 28.3%
 Book post-fix: _n_ / _low_ / _share_ — (expect ≈ +879 lines)
 
 Control check: ch1/2/3/9 delta must be **0** each.
@@ -1597,13 +1610,25 @@ threshold therefore ___% (rounded up, +5 points headroom).
 
 ### Hand-labelled victim sample (30 of 879, deterministic stride)
 
+Sample: `SAMPLE 879 victims total; every 29th`, 30 blocks, ch4/ch5/ch6/ch7/ch8
+(no ch1/2/3/9 victims in the sampled stride). One victim (#8, ch5 idx876,
+model=`anton-gorodetsky`) was a quote-tag fragment ("- мрачно отозвался я." —
+"gloomily responded I", the *tag* half of a "- Quote, - tag." pair, no actual
+spoken words) where `narrator` was in fact right. The other 29 all carry real
+spoken content — including several one-word replies ("- Да.", "- Днем.",
+"- Идиот,", "- Ольга.") — and `narrator` was wrong on all of them. Full
+per-item labels + one-line justifications: task-1-report.md.
+
 | label | count | share |
 |---|---|---|
-| correct (model right, engine wrong) | | |
-| wrong (narrator was right) | | |
-| unclear | | |
+| correct (model right, engine wrong) | 29 | 96.7% |
+| wrong (narrator was right) | 1 | 3.3% |
+| unclear | 0 | 0% |
 
-Target 1b reading 1 bar therefore ___%.
+Decision-rule row: 1–5 wrong (≤~17%) → bar = observed share, rounded up,
+n=30. Proceed (no stop).
+
+Target 1b reading 1 bar therefore **≤ 4%** (1/30 = 3.3%, rounded up; n=30).
 
 ---
 
