@@ -12,9 +12,10 @@ Implementation ran on `fix/server-cast-identity-followups` (PR #2163, merged
 `7add81c0ce4fde75657ca2e64f5bd0131eb87d16`) rather than through the "Handover"
 chain below, and did not follow this design for three of the four issues. Full
 reconciliation lives in the plan's "What actually shipped" section
-(`docs/features/280-cast-identity-followups.md`); two points are recorded here
-because they directly contradict specific claims this document makes, not merely
-"this wasn't built yet":
+(`docs/features/archive/280-cast-identity-followups.md`, moved there 2026-08-11
+once #2128 — the fourth issue — also shipped, via PR #2244); two points are
+recorded here because they directly contradict specific claims this document
+makes, not merely "this wasn't built yet":
 
 - **§7 explicitly rejects pruning**: "Pruning dangling entries (the issue's option
   2) was rejected: a dangling entry is inert only while its target is dead, and

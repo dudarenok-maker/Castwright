@@ -195,6 +195,144 @@ function OrphanRejectedChips({
   );
 }
 
+/* #2129 — ONE component, rendered twice (auto-reconciled/current and
+   auto-reconciled/stale). The body (per-row markup, the reject chips, the
+   resolved-name lookup) is identical between the two sections; only the
+   entry list, the headline and the disclosure ids differ. A hand-copied
+   second block is what lets the two drift, which is the same defect shape
+   one level up from the one this whole lane closes.
+
+   Declared at MODULE scope (like `OrphanRejectedChips` above), not nested
+   inside `CastView`'s render body — a component function re-declared on
+   every parent render gets a NEW identity each time, and React remounts
+   (not reconciles) a subtree whose element `type` changed between renders.
+   A nested version breaks the very interaction this component exists for:
+   clicking the disclosure toggle (or the reject/undo buttons inside it)
+   triggers a `CastView` re-render, which would swap in a fresh
+   `AutoReconciledSection` identity and force-unmount the old DOM node
+   out from under the click — observed directly as a toggle whose
+   `aria-expanded` never flips and a reject button whose disabled state
+   never sticks. Takes `characters`/`busyId`/the two handlers as props
+   instead of closing over them. */
+function AutoReconciledSection({
+  entries,
+  open,
+  onToggle,
+  headline,
+  slug,
+  showTopBorder,
+  characters,
+  busyId,
+  onReject,
+  onUndo,
+}: {
+  entries: Array<[string, OrphanedCharacterFallback]>;
+  open: boolean;
+  onToggle: () => void;
+  headline: string;
+  slug: string; // 'current' | 'stale' — makes every id unique
+  showTopBorder: boolean;
+  characters: Character[];
+  busyId: string | null;
+  onReject: (orphanedId: string, targetCharacterId: string) => void;
+  onUndo: (orphanedId: string, characterId: string) => void;
+}) {
+  if (!entries.length) return null;
+  const listId = `orphaned-auto-reconciled-${slug}-list`;
+  return (
+    <div className={showTopBorder ? 'border-t border-amber-200/60' : ''}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        /* Only set while expanded: the <ul> doesn't exist in the DOM at
+           all while collapsed (conditionally mounted, not just hidden), so
+           an unconditional aria-controls would reference a
+           currently-absent id in the common (collapsed) state. */
+        aria-controls={open ? listId : undefined}
+        className="w-full min-h-[44px] fine-pointer:min-h-0 flex items-center justify-between gap-2 p-4 text-left"
+      >
+        {/* NOT role="status" — fix round 3: a live-region role on the
+            button's only text leaves the button with no accessible name at
+            all. Carried over verbatim from the block being replaced.
+
+            The COUNT lives in the collapsed header: an operator must be
+            able to read how much work is outstanding without expanding
+            anything. */}
+        <span className="text-sm font-semibold text-ink/80">
+          {entries.length} character id{entries.length === 1 ? '' : 's'} {headline}
+        </span>
+        <IconChevR
+          className={`w-3.5 h-3.5 text-ink/50 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
+        />
+      </button>
+      {open && (
+        <ul id={listId} data-testid={`orphaned-auto-reconciled-${slug}`} className="flex flex-col gap-2 px-4 pb-4">
+          {entries.map(([orphanedId, info]) => {
+            const resolvedName =
+              characters.find((c) => c.id === info.resolvedCharacterId)?.name ?? info.resolvedCharacterId;
+            return (
+              <li
+                key={orphanedId}
+                data-testid={`orphaned-row-${orphanedId}`}
+                className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/60 px-3 py-2"
+              >
+                <span className="font-mono text-xs text-ink/80">&quot;{orphanedId}&quot;</span>
+                <IconChevR className="w-3 h-3 text-ink/40" />
+                <span className="text-xs text-ink/80">{resolvedName}</span>
+                <span className="text-xs text-ink/60">
+                  {info.segments} segment{info.segments === 1 ? '' : 's'}
+                </span>
+                {/* #2129, widened by I2 (fix round, #2163) — any non-exact
+                    resolution answers "does this id resolve today?", not
+                    "was the rendered audio ever produced under the resolved
+                    voice?" — `repair-cast-id-drift.mjs` can (and does) list
+                    these same rows as damage needing a re-render. Gated on
+                    the STALE_AUDIO_RESOLUTIONS allowlist AND `audioCurrent`
+                    (F2, PR #2244 review gate) — the allowlist alone is
+                    unconditionally true for every row in BOTH sections
+                    (`autoReconciledCurrent`/`autoReconciledStale` both
+                    already filter to `resolution !== 'unresolved'`, and
+                    `'unresolved'` is the only tier STALE_AUDIO_RESOLUTIONS
+                    excludes), so the note used to render under the "audio is
+                    current" headline too, contradicting it outright. A row
+                    only reaches the "current" section when its OWN
+                    `audioCurrent` is `'true'`, so gating on that directly —
+                    rather than on which section/slug rendered it — keeps
+                    this one component correct regardless of which caller
+                    passes it entries. */}
+                {STALE_AUDIO_RESOLUTIONS.has(info.resolution) && info.audioCurrent !== 'true' && (
+                  <span
+                    data-testid={`orphaned-alias-audio-note-${orphanedId}`}
+                    className="text-xs text-amber-700"
+                  >
+                    resolves now — existing audio may still need a re-render
+                  </span>
+                )}
+                <button
+                  type="button"
+                  disabled={busyId === orphanedId || !info.resolvedCharacterId}
+                  onClick={() => info.resolvedCharacterId && onReject(orphanedId, info.resolvedCharacterId)}
+                  className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                >
+                  Not the same character
+                </button>
+                <OrphanRejectedChips
+                  orphanedId={orphanedId}
+                  targets={info.rejectedAgainst}
+                  characters={characters}
+                  busyId={busyId}
+                  onUndo={onUndo}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /* F1 (fix round, CRITICAL) — mirrors the server's own reserved-bucket
    alias-SOURCE set (`NORMALISED_RESERVED_SOURCE_BUCKET_IDS`,
    `server/src/routes/cast-link-orphan.ts`) for the client-side disable: a
@@ -351,15 +489,33 @@ export function CastView({
       Object.entries(orphanedCharacterFallbacks).sort(([a], [b]) => a.localeCompare(b)),
     [orphanedCharacterFallbacks],
   );
-  const autoReconciledOrphans = useMemo(
-    () => orphanedEntries.filter(([, v]) => v.resolution !== 'unresolved'),
+  /* #2129 — the auto-reconciled bucket splits by AUDIO CURRENCY, a different
+     question from `resolution`. Before this split, an id that resolves through
+     the id-history side-table was filed as "auto-reconciled, nothing to do"
+     while `repair-cast-id-drift.mjs` listed every one of its rendered segments
+     as damage — two surfaces, two answers, same id. Both now read
+     `audioCurrent`, which the server computes with the SAME predicate the
+     repair pass calls (plan 278 invariant 7, extended from ranking to
+     currency).
+
+     `'unknown'` buckets with `'false'`: the operator's action is identical
+     (re-render the chapter), so a third top-level section would encode a
+     distinction they cannot act on differently. The per-row detail still says
+     which it is. */
+  const autoReconciledCurrent = useMemo(
+    () => orphanedEntries.filter(([, v]) => v.resolution !== 'unresolved' && v.audioCurrent === 'true'),
+    [orphanedEntries],
+  );
+  const autoReconciledStale = useMemo(
+    () => orphanedEntries.filter(([, v]) => v.resolution !== 'unresolved' && v.audioCurrent !== 'true'),
     [orphanedEntries],
   );
   const needsDecisionOrphans = useMemo(
     () => orphanedEntries.filter(([, v]) => v.resolution === 'unresolved'),
     [orphanedEntries],
   );
-  const [autoReconciledOpen, setAutoReconciledOpen] = useState(false);
+  const [autoReconciledCurrentOpen, setAutoReconciledCurrentOpen] = useState(false);
+  const [autoReconciledStaleOpen, setAutoReconciledStaleOpen] = useState(false);
   /* Per-row candidate picked from the live cast, for a needs-decision row's
      "Not the same character" action — keyed by orphaned id. Controlled
      useState toggle for the auto-reconciled disclosure rather than native
@@ -1484,123 +1640,30 @@ export function CastView({
                 </ul>
               </div>
             )}
-            {autoReconciledOrphans.length > 0 && (
-              <div className={needsDecisionOrphans.length > 0 ? 'border-t border-amber-200/60' : ''}>
-                <button
-                  type="button"
-                  onClick={() => setAutoReconciledOpen((o) => !o)}
-                  aria-expanded={autoReconciledOpen}
-                  /* Fix round 2 review finding 8 — points at the disclosure's
-                     own <ul> (below) by id. Only set while expanded: the <ul>
-                     doesn't exist in the DOM at all while collapsed (it's
-                     conditionally mounted, not just hidden), so an
-                     unconditional aria-controls would reference a
-                     currently-absent id in the common (collapsed) state. */
-                  aria-controls={autoReconciledOpen ? 'orphaned-auto-reconciled-list' : undefined}
-                  className="w-full min-h-[44px] fine-pointer:min-h-0 flex items-center justify-between gap-2 p-4 text-left"
-                >
-                  {/* Fix round 3 — NOT role="status". This span is the
-                      button's only text; a live-region role on it excludes
-                      the content from the button's accessible-name-from-
-                      content computation, leaving the button with NO
-                      accessible name at all (verified: it broke
-                      getByRole('button', {name: ...}) in both Playwright and
-                      real screen readers alike — a worse defect than the
-                      over-announcement finding 8 was fixing). role="status"
-                      belongs on a non-interactive element only; the
-                      needs-your-decision advisory text above still carries
-                      it. This toggle relies on its own aria-expanded state
-                      change (announced on activation) instead of a nested
-                      live region. */}
-                  <span className="text-sm font-semibold text-ink/80">
-                    {autoReconciledOrphans.length} character id
-                    {autoReconciledOrphans.length === 1 ? '' : 's'} auto-reconciled
-                  </span>
-                  <IconChevR
-                    className={`w-3.5 h-3.5 text-ink/50 shrink-0 transition-transform ${autoReconciledOpen ? 'rotate-90' : ''}`}
-                  />
-                </button>
-                {autoReconciledOpen && (
-                  <ul
-                    id="orphaned-auto-reconciled-list"
-                    data-testid="orphaned-auto-reconciled"
-                    className="flex flex-col gap-2 px-4 pb-4"
-                  >
-                    {autoReconciledOrphans.map(([orphanedId, info]) => {
-                      const resolvedName =
-                        characters.find((c) => c.id === info.resolvedCharacterId)?.name ??
-                        info.resolvedCharacterId;
-                      return (
-                        <li
-                          key={orphanedId}
-                          data-testid={`orphaned-row-${orphanedId}`}
-                          className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/60 px-3 py-2"
-                        >
-                          <span className="font-mono text-xs text-ink/80">
-                            &quot;{orphanedId}&quot;
-                          </span>
-                          <IconChevR className="w-3 h-3 text-ink/40" />
-                          <span className="text-xs text-ink/80">{resolvedName}</span>
-                          <span className="text-xs text-ink/60">
-                            {info.segments} segment{info.segments === 1 ? '' : 's'}
-                          </span>
-                          {/* #2129, widened by I2 (fix round, #2163) — any
-                              non-exact resolution answers "does this id
-                              resolve today?", not "was the rendered audio
-                              ever produced under the resolved voice?" —
-                              `scripts/repair-cast-id-drift.mjs` can (and
-                              does) list these same rows as damage needing a
-                              re-render (register row A32:
-                              `docs/testing/onbox-acceptance-register.md`
-                              — *Playing with Fire*'s `the-torment`, 67
-                              segments, resolves via the **normalised-id**
-                              tier, not history, and was still
-                              narrator-rendered). #2107's ruling (same
-                              register, ~line 1508) is that only the
-                              `'exact'` tier means the rendered bytes are
-                              fine — `'alias'` (the `'history'`/
-                              `'normalised-history'` tiers) AND `'normalised'`
-                              (the `'normalised-id'` tier) both need this
-                              note. Gated on the STALE_AUDIO_RESOLUTIONS
-                              allowlist (F5, #2163), not "not unresolved" —
-                              the two coincide today (this map's own union has
-                              no fourth value), which is exactly why the old
-                              denylist read as covering every row without
-                              actually pinning that the note is conditional
-                              at all. */}
-                          {STALE_AUDIO_RESOLUTIONS.has(info.resolution) && (
-                            <span
-                              data-testid={`orphaned-alias-audio-note-${orphanedId}`}
-                              className="text-xs text-amber-700"
-                            >
-                              resolves now — existing audio may still need a re-render
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            disabled={orphanRejectBusyId === orphanedId || !info.resolvedCharacterId}
-                            onClick={() =>
-                              info.resolvedCharacterId &&
-                              handleRejectOrphanMatch(orphanedId, info.resolvedCharacterId)
-                            }
-                            className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
-                          >
-                            Not the same character
-                          </button>
-                          <OrphanRejectedChips
-                            orphanedId={orphanedId}
-                            targets={info.rejectedAgainst}
-                            characters={characters}
-                            busyId={orphanRejectBusyId}
-                            onUndo={handleUndoOrphanRejection}
-                          />
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-            )}
+            <AutoReconciledSection
+              entries={autoReconciledCurrent}
+              open={autoReconciledCurrentOpen}
+              onToggle={() => setAutoReconciledCurrentOpen((o) => !o)}
+              headline="auto-reconciled — audio is current"
+              slug="current"
+              showTopBorder={needsDecisionOrphans.length > 0}
+              characters={characters}
+              busyId={orphanRejectBusyId}
+              onReject={handleRejectOrphanMatch}
+              onUndo={handleUndoOrphanRejection}
+            />
+            <AutoReconciledSection
+              entries={autoReconciledStale}
+              open={autoReconciledStaleOpen}
+              onToggle={() => setAutoReconciledStaleOpen((o) => !o)}
+              headline="auto-reconciled — audio needs a re-render"
+              slug="stale"
+              showTopBorder={needsDecisionOrphans.length > 0 || autoReconciledCurrent.length > 0}
+              characters={characters}
+              busyId={orphanRejectBusyId}
+              onReject={handleRejectOrphanMatch}
+              onUndo={handleUndoOrphanRejection}
+            />
           </div>
         )}
 

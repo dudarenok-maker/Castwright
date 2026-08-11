@@ -26,6 +26,23 @@ export interface CastResolution<T extends CastRecord = CastRecord> {
       history entry (tier 4), since a normalised KEY match alone doesn't say
       which tier actually won. */
   via: 'exact' | 'history' | 'normalised-id' | 'normalised-history';
+  /** #2128 — every RAW `supersededBy` key that matched, for the two history
+      tiers. `viaAlias` is deliberately NOT this: it carries the QUERIED id in
+      all three non-exact branches, which for a `'normalised-history'` hit is a
+      different spelling from the key that actually matched, and it is the key
+      that carries the `recordedAtSeq` marker.
+
+      Tier 2 matches exactly one raw key (the queried id itself). Tier 4 can
+      match SEVERAL: `byNormHistory` collapses every raw spelling that
+      normalises the same onto the same live target into one entry (`put` only
+      nulls a slot on DIFFERING targets), so the entry is backed by two or more
+      markers with no basis in the map for choosing between them. The resolver
+      reports every one of them as fact and `cast-audio-currency.ts` applies the
+      fail-closed policy (`max`) — keeping the marker out of the resolver
+      entirely, which is why this module needs no widening to read
+      `recordedAtSeq`. Absent for `'exact'` and `'normalised-id'`, which have no
+      history entry at all. */
+  matchedHistoryKeys?: string[];
 }
 
 /** Resolve a `characterId` coming from manuscript attribution or a frozen
@@ -98,11 +115,20 @@ export function buildCastResolver<T extends CastRecord>(
      resurrect it. */
   const byHistory = new Map<string, T>();
   const byNormHistory = new Map<string, T | null>();
+  /* #2128 — the raw `from` keys behind each normalised history slot, which
+     `byNormHistory` itself discards. Collected below the liveness `continue`
+     in the same loop, so a key whose target is dead never contributes a
+     marker, matching exactly what the tier itself will resolve. */
+  const normHistoryKeys = new Map<string, string[]>();
   for (const [from, to] of Object.entries(history.supersededBy)) {
     const target = byId.get(to);
     if (!target) continue;
     if (!byHistory.has(from)) byHistory.set(from, target);
-    put(byNormHistory, normaliseIdKey(from), target);
+    const normKey = normaliseIdKey(from);
+    put(byNormHistory, normKey, target);
+    const existing = normHistoryKeys.get(normKey);
+    if (existing) existing.push(from);
+    else normHistoryKeys.set(normKey, [from]);
   }
 
   const rejectedSet = new Set(history.rejected ?? []);
@@ -170,7 +196,7 @@ export function buildCastResolver<T extends CastRecord>(
            for a different match. Falling through would resolve `characterId`
            onto a character the user never approved for it. */
         if (rejectedTargetsByRawFrom.get(characterId)?.has(hist.id)) return undefined;
-        return { character: hist, viaAlias: characterId, via: 'history' };
+        return { character: hist, viaAlias: characterId, via: 'history', matchedHistoryKeys: [characterId] };
       }
 
       /* `null` in either map means "ambiguous — stop": a tier-3 or tier-4 tie
@@ -189,7 +215,12 @@ export function buildCastResolver<T extends CastRecord>(
         const normHist = byNormHistory.get(key);
         if (!normHist) return undefined;
         if (rejectedTargetsByNormFrom.get(key)?.has(normHist.id)) return undefined;
-        return { character: normHist, viaAlias: characterId, via: 'normalised-history' };
+        return {
+          character: normHist,
+          viaAlias: characterId,
+          via: 'normalised-history',
+          matchedHistoryKeys: [...(normHistoryKeys.get(key) ?? [])],
+        };
       }
 
       return undefined;

@@ -463,6 +463,10 @@ export interface BookStateResponse {
       resolution: 'alias' | 'normalised' | 'unresolved';
       resolvedCharacterId?: string;
       segments: number;
+      /** #2129 — whether this orphaned id's rendered AUDIO is still current, as
+          opposed to whether the id resolves (`resolution`). `'unknown'` means the
+          comparison could not be made and is presented as needing a re-render. */
+      audioCurrent: 'true' | 'false' | 'unknown';
       rejectedAgainst?: string[];
     }
   >;

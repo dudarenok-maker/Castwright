@@ -1885,6 +1885,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         expectedSec: expectedSec ?? undefined,
         onEncoded: bumpProgress,
         embeddings: result.embeddings,
+        /* #2128 — the seq this chapter actually RESOLVED against: the same
+           `castIdHistory` object loaded at the top of this render and threaded
+           into `synthesiseChapter`, whose `buildCastResolver` call is the only
+           one in that file. Stamping the state the render read (rather than
+           re-reading the file here) is what closes the mid-render window: a
+           long chapter whose alias is recorded while it renders still records
+           the state its own bytes were produced from.
+
+           `?? 0` fires only when `loadCastIdHistory` returned its `absent`/
+           `degraded` empty default (no `seq` field at all) — a book that has
+           never been through the retirement lane, or whose history file is
+           unreadable this run. `0` compares as OLDER than every real marker
+           (the first `bumpSeqAndStamp` stamps `seq = 1`), so that reads as
+           damage until a later render resolves against a real history —
+           fail-closed, the same direction `isAudioCurrent` takes everywhere
+           else. */
+        castHistorySeq: castIdHistory.seq ?? 0,
       });
       if (audioQa.status === 'suspect') {
         console.warn(
