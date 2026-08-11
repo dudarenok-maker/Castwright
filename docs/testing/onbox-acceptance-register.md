@@ -230,7 +230,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 2 |
+| **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -238,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**63 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2415,7 +2415,7 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**Two rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Three rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2503,6 +2503,43 @@ history above, and the chapters 1–4 caveat in plan 247).
 **Run it against a throwaway re-import, not the library book** — same reason as
 C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
 entry would overwrite the qwen36 cast the owner is keeping.
+
+### C3 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
+
+**What is already proven, and does NOT need re-running:** the fix itself, at
+corpus scale. Two offline replays over the 2026-08-06 cache
+(`server/handoff/cache/replay-experiment.mts`, gitignored, throwaway) measured
+`HARM TOTAL victims=41` — down from the pre-fix baseline's 879, not to 0,
+because the rescue guard now also requires roster membership and 41 lines
+(`борис-игнатьевич` ×17, `егор` ×24) carry off-roster ids that
+`reconcileSentenceCharacterIds` demotes to `narrator` downstream regardless,
+so they were never actually recoverable — at both the production 80%
+alignment floor and forced to 100%, and all 17 workspace-book
+structure hashes unchanged (parser untouched, confirmed by construction and by
+diff). Unit and regression coverage for the invariant, the bucket split and
+every `EngineReport` consumer ships in the same PR.
+
+**What is still owed:** this PR ships engine behaviour proven only by replay
+over one book's *cached* analysis. What replay cannot prove is that a real
+end-to-end analysis run produces the same buckets, and that `escalated`/
+`escalationAccepted` behave with the new bucket split. Re-run Ночной дозор
+analysis and confirm: `[analysis:structure]` log lines show `unresolved=`
+populated and `flagged=` at conflict scale (order 10²/chapter, not 10³); ch5's
+dash-opening sentences are no longer rewritten to `narrator`; `state.json`'s
+`analysisProvenance.report` carries a populated `unresolved`. Full criteria:
+`docs/testing/night-watch-reanalysis-onbox-acceptance.md` §2A.5, and plan 247's
+re-specified target 1.
+
+**Residual risk not covered by this row:** the invariant activates for
+Russian, Spanish and French (`lang/es.ts`, `lang/fr.ts` both carry a non-null
+`dialogueOpen`), but Ночной дозор is Russian-only. Spanish and French ship on
+unit coverage plus the identical-convention argument, not corpus measurement —
+no Spanish or French book exists in the workspace to measure against. This row
+does not change that; it is not blocked on acquiring one.
+
+Same setup as C2: local Ollama, `qwen36-cw-iq4-32k`, ~14 GB VRAM free, sidecar
+suppressed (`DISABLE_AUTOSTART_SIDECAR=1`), no TTS. Batches naturally with C2's
+session rather than needing its own.
 
 ---
 

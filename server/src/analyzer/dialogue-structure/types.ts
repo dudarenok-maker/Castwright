@@ -44,14 +44,23 @@ export interface LanguageConventions {
   tagClauseConjunctions?: string[];
 }
 
-export type DecisionBucket = 'confirmed' | 'corrected' | 'flagged' | 'lumped';
+export type DecisionBucket = 'confirmed' | 'corrected' | 'flagged' | 'unresolved' | 'lumped';
 
 export interface EngineReport {
   language: string | null;
   alignedPct: number;
   confirmed: number;
   corrected: number;
+  /** #2253 — a genuine CONFLICT: the model contradicts structural evidence
+      (pronoun / weak tag / alternation), or the language's dialogue convention
+      contradicts the structure. Was 99.9% diluted by `unresolved` below, which
+      is why it could not carry an acceptance bar. */
   flagged: number;
+  /** #2253 — NO VERDICT: aligned but with no evidence either way (unanchored
+      speech), never aligned at all, or a chapter below the alignment floor
+      where correction was disabled wholesale. `flagged + unresolved` equals
+      the pre-#2253 `flagged`. */
+  unresolved: number;
   lumped: number;
   escalated: number;
   escalationAccepted: number;

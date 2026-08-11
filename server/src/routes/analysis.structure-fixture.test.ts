@@ -220,18 +220,72 @@ describe('attributeChapterStage2 — dash-dialogue ru fixture (srv-59 Task 12)',
     expect(line14!.confidence).toBeLessThan(0.75);
   });
 
-  it('structureReport: corrected > 0 and flagged > 0, with the exact bucket tally the fixture is designed to produce', async () => {
+  it('structureReport: corrected > 0 and unresolved > 0, with the exact bucket tally the fixture is designed to produce', async () => {
     const result = await attributeChapterStage2(baseOpts(mockSentences()));
 
     expect(result.structureReport?.corrected).toBeGreaterThan(0);
-    expect(result.structureReport?.flagged).toBeGreaterThan(0);
+    // #2253 — the fixture's two flags are both `unanchored-narrator`, i.e. "no
+    // evidence either way", which is now `unresolved` rather than `flagged`.
+    expect(result.structureReport?.unresolved).toBeGreaterThan(0);
     expect(result.structureReport).toMatchObject({
       language: 'ru',
       alignedPct: 100,
       confirmed: 5,
       corrected: 7,
-      flagged: 2,
+      flagged: 0,
+      unresolved: 2,
       lumped: 0,
     });
   });
+});
+
+/* #2253/#2254 — the SAME scene with its paragraph breaks destroyed, which is
+   what Calibre's txt->html EPUB conversion did to Ночной дозор ch4-8. The
+   engine loses every speech span and, before this fix, rewrote each dash line
+   to `narrator` as a silent, unflagged `corrected` success.
+
+   Two variants because "no speech span => narrator" has TWO producers:
+   without a quote run the whole paragraph is one `narration` span
+   (decideNarrationOnly); with one it becomes a single 2,393-char `tag` span
+   (decideTagSpanOnly) — the real ch5 shape. */
+const MERGED_NARRATION_BODY = CHAPTER_BODY.split('\n').join(' ');
+const MERGED_TAG_BODY = MERGED_NARRATION_BODY.replace('Ветер с залива', 'Ветер "с залива"');
+
+/* The model's output over a merged paragraph: it still copies the leading dash
+   into each sentence, which is the signal the invariant reads. */
+function mergedMockSentences(): SentenceOutput[] {
+  return [
+    { id: 1, chapterId: 1, characterId: 'mairin', confidence: 0.6, text: '— Здесь холодно' },
+    { id: 2, chapterId: 1, characterId: 'tobias', confidence: 0.6, text: '— Тьма — это ещё не конец' },
+    { id: 3, chapterId: 1, characterId: 'mairin', confidence: 0.6, text: '— Идём' },
+  ];
+}
+
+describe('#2253 — a merged (paragraph-degraded) chapter keeps its speakers', () => {
+  for (const [label, body] of [
+    ['narration route (no quote run)', MERGED_NARRATION_BODY],
+    ['tag route (one incidental quote run)', MERGED_TAG_BODY],
+  ] as Array<[string, string]>) {
+    it(`${label}: dash lines keep the model speaker and surface as low-confidence`, async () => {
+      const opts = baseOpts(mergedMockSentences());
+      opts.chapter = { ...opts.chapter, body };
+      const result = await attributeChapterStage2(opts);
+
+      // GUARD: an UNALIGNED sentence also keeps the model id (reason
+      // 'unaligned'), so without this the test could pass vacuously on an
+      // alignment failure rather than on the fix.
+      expect(result.structureReport?.alignedPct).toBe(100);
+
+      expect(result.sentences.map((s) => s.characterId)).toEqual(['mairin', 'tobias', 'mairin']);
+      for (const s of result.sentences) {
+        expect(s.confidence).toBeLessThan(0.75); // the UI highlights every one
+      }
+      // Before the fix all three were bucketed `corrected` (silently narratored).
+      expect(result.structureReport?.corrected).toBe(0);
+      // Pin the PRODUCER, not just an id/confidence outcome a `lumped` (0.65)
+      // or `unresolved` bucket would equally satisfy: all three must land in
+      // `flagged` via the dash-convention rescue, not some other route.
+      expect(result.structureReport?.flagged).toBe(3);
+    });
+  }
 });
