@@ -6,7 +6,54 @@
 
    The supersededBy map is transitive: if a→b then b→c, both a and b
    map to c for O(1) resolution without chasing — regardless of which of
-   the two retirements is recorded first. */
+   the two retirements is recorded first.
+
+   #2161/#2268 — LAST-SURVIVING EVIDENCE vs. A DERIVED STASH, and why a
+   dropped record sometimes moves to `displaced` and sometimes is simply
+   discarded. This is the second time this exact question has come up (the
+   first was why `forgotSupersededTo` exists on `RejectedPair` at all — see
+   its own doc comment), so it is answered here, once, for a future reader
+   about to add a THIRD variant.
+
+   The rule: a record moves to `displaced` when it is the ONLY remaining
+   copy of information something else still needs — reserving an id against
+   re-mint, in `displaced`'s case (#2040 Task 14 / #2110). A record is
+   simply discarded when it was never anything more than a working stash
+   scoped to ONE pending operation, and that operation has become
+   permanently impossible — nothing else in the system reads it, so there
+   is nothing left to lose.
+
+   `forgotSupersededTo` (on `RejectedPair`, below) is the second kind.
+   D6 created it for exactly one purpose: making ONE specific Undo
+   (`unrejectOrphanedPair`/`undoRejectedPairs`) reversible, by stashing the
+   `supersededBy[from]` value `forgetSupersededId` was about to remove.
+   #2161 (`applyRestoreSupersededId`) refuses to write that stash back once
+   its own target has quietly stopped being live — restoring it would
+   reintroduce the exact dangling `supersededBy` entry #2110 exists to
+   prevent. At that point the stash has no remaining consumer: the ONE undo
+   it existed to make reversible is no longer performable, by construction,
+   and nothing else in this module or its callers ever reads
+   `forgotSupersededTo` for any other purpose. So — unlike `displaced` —
+   the refused record is discarded, not preserved. Routing it into
+   `displaced` instead was considered (#2268) and rejected: `displaced`'s
+   stated meaning is "a supersededBy association that lost its target";
+   a refused `forgotSupersededTo` is a different thing wearing the same
+   shape ("a rejection whose stashed restore target lost liveness"), and
+   filing it there would permanently reserve the dead id against re-mint —
+   wrong when the id died because the character was genuinely cut from the
+   book, which is the ordinary case this refusal is guarding, not the
+   exceptional one.
+
+   The residual risk, stated plainly rather than left implicit: discarding
+   the stash frees the dead id to be re-minted. If a LATER analysis mints a
+   fresh, unrelated character under that same id, any segment still stamped
+   with the old `characterId` resolves — via `buildCastResolver`'s ordinary
+   exact-id tier — onto the NEW, unrelated character. That is the same
+   misattribution class #2040 exists to prevent, reached here by re-mint
+   rather than by a dangling `supersededBy` key. It is ACCEPTED, by owner
+   decision on 2026-08-11, not overlooked: #2110's `displaced` reservation
+   is precisely the mechanism that would have blocked this if it applied
+   here, and it was judged not to apply — see the paragraph above for why. */
 
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -963,6 +1010,14 @@ function applyRestoreSupersededId(
   touchedKeys: string[];
 } {
   const existing = history.supersededBy[id];
+  /* [H2] — deliberately no `liveIds` check on THIS branch: it is idempotent
+     (the desired end state — `supersededBy[id] === target` — already holds),
+     so it writes nothing and there is nothing for the #2161 liveness guard
+     below to protect against. A caller cannot reach this branch with a
+     `target` that is genuinely dangling without that same dangling entry
+     already having been written by some EARLIER call — this function
+     reports the existing state honestly rather than re-litigating a write
+     that already happened. */
   if (existing === target) {
     return { result: { restored: true }, changed: false, touchedKeys: [] };
   }

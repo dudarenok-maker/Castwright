@@ -46,6 +46,15 @@
 import { test, expect, type Page } from '@playwright/test';
 import { goToConfirm, waitForRouteReady } from './helpers';
 
+/* #2161 — mirrors `MOCK_TARGET_NOT_LIVE_ORPHANED_ID` (src/lib/api.ts)
+   exactly. Not imported: `src/lib/api.ts` resolves as a CommonJS module
+   under Playwright's own (separate from Vite's) module loader, and a named
+   import of it there throws `SyntaxError: Named export ... not found` at
+   collection time (confirmed) — unlike the browser-side app code, which
+   loads it through Vite's ESM pipeline and sees the real named export. Keep
+   this literal in sync with the source if it ever changes. */
+const MOCK_TARGET_NOT_LIVE_ORPHANED_ID = 'orphan-with-dead-alias-target';
+
 /* Confirm the cast (fe-46: confirm lands on Cast first) without continuing
    on to the manuscript route, so the spec stays on `#/books/:id/cast` where
    the advisory banner lives. */
@@ -148,6 +157,29 @@ async function seedOrphanedFallbackMixedCurrency(page: Page): Promise<void> {
       },
     });
   });
+}
+
+/* #2161 — one auto-reconciled row keyed on the mock's dedicated e2e sentinel
+   (`MOCK_TARGET_NOT_LIVE_ORPHANED_ID`), which makes `mockUndoRejectOrphanMatch`
+   (src/lib/api.ts) report a refused alias restore (`targetNotLive`) on Undo,
+   instead of the ordinary canned-success shape every other orphaned id gets.
+   Mock mode has no real cast-id-history.json to seed a genuinely dead alias
+   target into, so the sentinel is the only way to drive this path here. */
+async function seedOrphanedFallbackWithDeadAliasTarget(page: Page): Promise<void> {
+  await page.evaluate((orphanedId) => {
+    const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
+    store.dispatch({
+      type: 'cast/setOrphanedCharacterFallbacks',
+      payload: {
+        [orphanedId]: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 4,
+          audioCurrent: 'true',
+        },
+      },
+    });
+  }, MOCK_TARGET_NOT_LIVE_ORPHANED_ID);
 }
 
 test.describe('cast view — orphaned-characterId advisory banner (#2023, split #2040 Task 17)', () => {
@@ -276,6 +308,40 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     const autoReconciled = page.getByTestId('orphaned-auto-reconciled-stale');
     await expect(autoReconciled).toContainText('mayrin');
     await expect(autoReconciled.getByText('Not Narrator')).toHaveCount(0);
+  });
+
+  /* #2161 — the server refuses to restore a forgotten `supersededBy` alias
+     whose own target has quietly stopped being live, rather than silently
+     reintroducing a dangling entry (#2110's hazard, reopened through a stale
+     Undo stash). Before this fix the Undo toast read identically to a fully
+     successful undo either way — this is the browser-level proof that it no
+     longer does: only a real page, real toast, real timing can show the
+     wording a user actually sees, which is the point CLAUDE.md's testing
+     discipline names for UI-visible behaviour crossing this exact seam. */
+  test('undoing a reject whose forgotten alias target is no longer live shows a toast that says so, not a plain success message', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallbackWithDeadAliasTarget(page);
+
+    await page.getByRole('button', { name: /character id.*auto-reconciled/i }).click();
+    const autoRow = page.getByTestId(`orphaned-row-${MOCK_TARGET_NOT_LIVE_ORPHANED_ID}`);
+    await autoRow.getByRole('button', { name: /not the same character/i }).click();
+
+    const movedRow = page
+      .getByTestId('orphaned-needs-decision')
+      .getByTestId(`orphaned-row-${MOCK_TARGET_NOT_LIVE_ORPHANED_ID}`);
+    await expect(movedRow).toBeVisible({ timeout: 5_000 });
+    await movedRow.getByRole('button', { name: /undo/i }).click();
+
+    /* THE ASSERTION THIS TEST EXISTS FOR: the toast names the dead target
+       and says it was not restored, rather than the unqualified "Undid …"
+       message every other Undo produces (see the two other Undo specs in
+       this file). A regression that dropped the wiring anywhere between the
+       server response and this toast would leave the plain success message
+       here instead. */
+    const toast = page.getByRole('status').getByText(/no longer exists.*not restored/i);
+    await expect(toast).toBeVisible({ timeout: 5_000 });
   });
 
   /* #2238 — the needs-your-decision row's positive action. Mock mode's
