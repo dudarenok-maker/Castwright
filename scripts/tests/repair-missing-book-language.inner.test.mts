@@ -12,16 +12,19 @@
    detect-language.ts still 404s under plain node.)
 
    Covers planBookLanguage (the pure decision function — no I/O, calls the REAL
-   detectManuscriptLanguage), cacheSampleText (the analysis-cache sample
-   builder), and main() (the I/O shell) against a temp workspace.
+   detectManuscriptLanguageFromChapters), cacheChaptersFor (the analysis-cache
+   sample builder), and main() (the I/O shell) against a temp workspace.
 
-   #2246 round 2: the cross-source-agreement gate (round 1) is gone — single
-   sample only, gated on `fallback === false` AND a prose-signal floor
-   (PROSE_UNIT_FLOOR in the script). Fixtures below are sized accordingly:
-   anything meant to actually backfill needs >= 20 sentence-terminal-
-   punctuated units (post front-matter-strip, matching the script's own
-   detectionSample() pipeline); anything meant to probe the floor from below
-   deliberately stays short. */
+   #2263 round: the script's sampling went from ONE flat string (front-matter
+   stripped, sliced to 20k chars) to CHAPTER-AWARE — one ChapterSample per
+   non-excluded chapter, voted the same way POST /api/import now votes.
+   Fixtures below are sized to exercise BOTH selection layers
+   (detectManuscriptLanguageFromChapters's own front-matter-title/word-count
+   filter, and the script's own `excluded`-flag skip) and the vote/floor
+   thresholds: anything meant to actually backfill via the multi-chapter vote
+   needs >= 2 non-front-matter, >= FRONT_MATTER_WORD_THRESHOLD-word chapters
+   that agree; anything meant to exercise the single-chapter floor is
+   deliberately reduced to exactly one candidate chapter. */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +33,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { planBookLanguage, cacheSampleText, main } from '../repair-missing-book-language.mts';
+import { planBookLanguage, cacheChaptersFor, main } from '../repair-missing-book-language.mts';
 import { cachePath } from '../../server/src/store/analysis-cache.js';
 import { detectManuscriptLanguage } from '../../server/src/tts/detect-language.js';
 
@@ -39,8 +42,9 @@ import { detectManuscriptLanguage } from '../../server/src/tts/detect-language.j
 // ---------------------------------------------------------------------------
 
 // Real, continuous English prose — 24 sentence-terminal-punctuated units,
-// comfortably above the 20-unit floor. Used wherever a test needs a sample
-// that genuinely backfills.
+// comfortably above the 20-unit floor, and ~380 words (above the 150-word
+// front-matter floor). Used wherever a test needs a chapter that genuinely
+// backfills.
 const REAL_ENGLISH_PROSE = [
   'The lighthouse keeper climbed the spiral staircase every evening before dusk.',
   'He counted each worn stone step the way his father had taught him decades ago.',
@@ -66,6 +70,37 @@ const REAL_ENGLISH_PROSE = [
   'Outside, the harbor had gone quiet again, the boats tied fast against their moorings.',
   'A thin line of grey showed along the horizon, the first hint of a calmer morning to come.',
   'The keeper closed the lighthouse door behind him and let the sound of the sea carry him to sleep.',
+].join(' ');
+
+// A second, distinct English passage — same shape (24 units, well above both
+// floors) but different content, for tests that need TWO agreeing-but-not-
+// identical English chapters (a vote needs independent-looking samples, not
+// the same string copy-pasted).
+const REAL_ENGLISH_PROSE_2 = [
+  'The clockmaker set down his tools the instant the church bells began to toll.',
+  'Every evening at the same hour he stopped, no matter how close the work sat to finished.',
+  'His apprentice never understood why, and he had long since stopped trying to explain it.',
+  'Outside, the square filled with the usual after-work crowd drifting toward the tavern.',
+  'A cart wheel caught in the gutter and its owner swore at it in three different languages.',
+  'The clockmaker latched his shutters and lit the single lamp that hung above his bench.',
+  'By its light he could just make out the gears still waiting to be reassembled.',
+  'He had promised the mayor the tower clock by the end of the month.',
+  'Privately he doubted he would keep that promise, though he never said so aloud.',
+  'His apprentice swept the metal shavings into a tin and carried it out back.',
+  'The two of them ate a plain supper without much conversation, as was their habit.',
+  'Afterward the boy asked, as he always did, whether he might see the tower mechanism.',
+  'The clockmaker said what he always said — when the gears were ready, not before.',
+  'Rain began against the shutters, light at first, then heavier as the night wore on.',
+  'He thought about the broken escapement in the tower clock and how little time remained to fix it.',
+  'The apprentice fell asleep at the bench, his cheek resting against a folded apron.',
+  'The clockmaker covered him with his own coat and went back to the gears alone.',
+  'Hours passed before he found the flaw — a single tooth worn smooth by decades of turning.',
+  'He filed a new one by hand, checking it against the others a dozen times.',
+  'When dawn came he had not slept, but the mechanism finally turned true.',
+  'He woke the boy gently and told him the clock would be ready after all.',
+  'Together they carried the finished piece up the tower stairs before the town had risen.',
+  'The bells rang true that noon, and no one in the square knew how close it had come.',
+  'The clockmaker never did explain why he stopped every evening when the bells tolled.',
 ].join(' ');
 
 // A short, single real English sentence — genuine prose, franc detects it
@@ -106,11 +141,34 @@ const REAL_RUSSIAN_PROSE = [
   'Снаружи в гавани снова стало тихо — лодки были надёжно привязаны у причала.',
 ].join(' ');
 
+// A second, distinct Russian passage — same shape, for the 2-vs-2 split test.
+const REAL_RUSSIAN_PROSE_2 = [
+  'Часовщик отложил инструменты, как только на башне зазвонили колокола.',
+  'Каждый вечер в один и тот же час он останавливался, сколько бы работы ни оставалось.',
+  'Его подмастерье так и не понял почему, и он давно перестал объяснять.',
+  'На площади собиралась обычная толпа, спешащая после работы в трактир.',
+  'Колесо телеги застряло в канаве, и хозяин ругал его на трёх языках сразу.',
+  'Часовщик запер ставни и зажёг единственную лампу над своим верстаком.',
+  'В её свете едва можно было различить шестерёнки, ещё не собранные заново.',
+  'Он обещал мэру, что башенные часы будут готовы к концу месяца.',
+  'Про себя он сомневался, что сдержит это обещание, но вслух не говорил.',
+  'Подмастерье смёл металлическую стружку в жестяную банку и вынес её во двор.',
+  'Они поужинали скромно и почти без разговоров, как обычно.',
+  'Потом мальчик спросил, как всегда, можно ли ему увидеть башенный механизм.',
+  'Часовщик ответил, как всегда: когда шестерёнки будут готовы, не раньше.',
+  'В ставни забарабанил дождь — сначала тихо, потом всё сильнее к ночи.',
+  'Он думал о сломанном спуске башенных часов и о том, как мало времени осталось.',
+  'Подмастерье уснул за верстаком, прижавшись щекой к сложенному фартуку.',
+  'Часовщик укрыл его собственным пальто и вернулся к шестерёнкам один.',
+  'Прошли часы, прежде чем он нашёл изъян — один зуб, стёртый десятилетиями вращения.',
+  'Он вручную выточил новый, сверяя его с остальными десятки раз.',
+  'К рассвету он так и не поспал, но механизм наконец заработал верно.',
+  'Он мягко разбудил мальчика и сказал, что часы всё-таки будут готовы.',
+  'Вместе они внесли готовый механизм на башню ещё до того, как проснулся город.',
+].join(' ');
+
 // Real, continuous Chinese prose — 24 units (。 terminated), above the
-// floor. Proves the floor does NOT exclude a real-shaped CJK book (the
-// residual this gate does NOT close is about a much narrower secondary
-// signal — median prose-unit LENGTH — never added here; see the script's
-// own header).
+// floor. Proves the floor does NOT exclude a real-shaped CJK book.
 const REAL_CJK_PROSE = [
   '灯塔看守人每天傍晚都会爬上那座螺旋楼梯。',
   '他仔细数着每一级被磨损的石阶，就像多年前父亲教他的那样。',
@@ -138,6 +196,32 @@ const REAL_CJK_PROSE = [
   '看守人关上灯塔的门，让海浪的声音伴他入睡。',
 ].join('');
 
+// A second, distinct Chinese passage — for tests that need two agreeing zh chapters.
+const REAL_CJK_PROSE_2 = [
+  '钟表匠放下工具，教堂的钟声正好响起。',
+  '每天傍晚他都会在同一时刻停下，无论手上的活计离完成还有多远。',
+  '他的学徒始终不明白为什么，也早已不再追问。',
+  '广场上挤满了下班后照例涌向酒馆的人群。',
+  '一只车轮卡在水沟里，车主用三种语言咒骂着它。',
+  '钟表匠关上百叶窗，点亮了工作台上方唯一的那盏灯。',
+  '借着灯光，他勉强能看清还未装回的齿轮。',
+  '他向市长保证，月底之前塔钟一定修好。',
+  '他心里其实并不确定能兑现这个承诺，却从未说出口。',
+  '学徒把金属碎屑扫进铁罐，端到后院倒掉。',
+  '两人照例简单地吃了顿晚饭，没什么交谈。',
+  '之后男孩又照例问起，能不能去看看塔钟的机芯。',
+  '钟表匠照例回答：齿轮修好了再说，现在不行。',
+  '雨点开始打在百叶窗上，起初很轻，入夜后渐渐变大。',
+  '他想着塔钟那损坏的擒纵机构，还有所剩无几的时间。',
+  '学徒趴在工作台上睡着了，脸颊贴着叠好的围裙。',
+  '钟表匠用自己的外套盖住他，独自回去继续修齿轮。',
+  '过了好几个钟头，他才找到毛病——一颗被几十年转动磨平的齿。',
+  '他手工锉出一颗新的，反复和其他齿轮比对了十几次。',
+  '天亮时他还没合眼，但机芯终于转得准了。',
+  '他轻轻叫醒男孩，告诉他钟终究还是能按时修好。',
+  '两人趁全城还没醒来，一起把修好的机芯抬上了钟楼。',
+].join('');
+
 // Zero \p{L} letters — trips the detect-language.ts `letters === 0` surrender
 // branch deterministically (no dependency on franc's fuzzy behaviour).
 const NO_LETTERS_TEXT = '12345 000 --- !!! ??? 000000 111 222 333 444 555 666 777 888';
@@ -145,32 +229,44 @@ const NO_LETTERS_TEXT = '12345 000 --- !!! ??? 000000 111 222 333 444 555 666 77
 // #2246 C1 (confirmed review finding): a genuinely English table of contents
 // that franc mis-disambiguates to 'es' with `fallback: false` — a fluent,
 // WRONG, non-fallback result. Real repro, reproduced against the real
-// detectManuscriptLanguage before writing this fixture:
-//   detectManuscriptLanguage(TOC_MISDETECTED_AS_SPANISH) →
-//     { language: 'es', supported: true, fallback: false }
-// It also has ZERO sentence-terminal punctuation → 0 prose units. Round 1
-// caught this with a second, disagreeing source; round 2 catches it with
-// the prose floor instead — same fixture, different mechanism.
+// detectManuscriptLanguage before writing this fixture. It also has ZERO
+// sentence-terminal punctuation → 0 prose units — below the single-chapter
+// floor.
 const TOC_MISDETECTED_AS_SPANISH =
   'Prologue 1 Kaz 2 Inej 3 Kaz 4 Jesper 5 Nina 6 Matthias 7 Inej 8 Wylan 9 Kaz 10 Nina';
+
+// #2263 — the 煤落的委托 shape: a real repro against the live book. Chapter 1
+// is titled plainly ("Chapter 1", not a front-matter title match) but its
+// body is just publisher-watermark boilerplate — a handful of words, well
+// under FRONT_MATTER_WORD_THRESHOLD. Fed the whole document as ONE blob
+// (the pre-#2263 behaviour), this chapter's `[emphatic] Castwright 原创作品。`
+// text is long enough for franc to confidently (fallback:false) call it
+// English, competing with — and, pre-fix, sometimes beating — the real
+// Chinese body. The word-count selection filter drops it from the vote
+// entirely; the two real Chinese chapters then agree unanimously.
+const FRONT_MATTER_LOOKALIKE_CHAPTER = { id: 1, title: 'Chapter 1', body: '[emphatic] Castwright 原创作品。\n\n---' };
+
+function makeCacheChapter(id: number, title: string, body: string) {
+  return { id, title, body };
+}
 
 test('planBookLanguage: book already has a language key → untouched, reported as-is', () => {
   const plan = planBookLanguage({
     bookId: 'book-a',
     hasLanguageKey: true,
     existingLanguage: 'ru',
-    cacheText: null,
-    manuscriptText: null,
+    cacheChapters: null,
+    manuscriptChapters: null,
   });
   assert.deepEqual(plan, { bookId: 'book-a', action: 'has-language', existingLanguage: 'ru' });
 });
 
-test('planBookLanguage: no cache and no manuscript text → skipped, reported', () => {
+test('planBookLanguage: no cache and no manuscript chapters → skipped, reported', () => {
   const plan = planBookLanguage({
     bookId: 'book-j',
     hasLanguageKey: false,
-    cacheText: null,
-    manuscriptText: null,
+    cacheChapters: null,
+    manuscriptChapters: null,
   });
   assert.deepEqual(plan, {
     bookId: 'book-j',
@@ -179,108 +275,209 @@ test('planBookLanguage: no cache and no manuscript text → skipped, reported', 
   });
 });
 
-test('planBookLanguage: whitespace-only cache/manuscript text counts as no text', () => {
+test('planBookLanguage: empty cache/manuscript chapter arrays count as no text', () => {
   const plan = planBookLanguage({
     bookId: 'book-k',
     hasLanguageKey: false,
-    cacheText: '   \n  ',
-    manuscriptText: '  ',
+    cacheChapters: [],
+    manuscriptChapters: [],
   });
   assert.equal(plan.action, 'skip-no-text');
 });
 
-test('planBookLanguage: only cache text available, confident + above the floor → backfill from analysis-cache (#2246 round 2 revert)', () => {
-  // Before round 1 this backfilled. Round 1 made it a skip
-  // (skip-single-source). Round 2 reverts to a single sample, so this is a
-  // backfill again — the exact behaviour the round-1 gate had removed.
+test('planBookLanguage: only cache chapters available, multi-chapter unanimous English → backfill from analysis-cache', () => {
   const plan = planBookLanguage({
     bookId: 'book-b',
     hasLanguageKey: false,
-    cacheText: REAL_ENGLISH_PROSE,
-    manuscriptText: null,
+    cacheChapters: [
+      makeCacheChapter(1, 'Chapter One', REAL_ENGLISH_PROSE),
+      makeCacheChapter(2, 'Chapter Two', REAL_ENGLISH_PROSE_2),
+    ],
+    manuscriptChapters: null,
   });
   assert.equal(plan.action, 'backfill');
   assert.equal(plan.language, 'en');
   assert.equal(plan.sampleSource, 'analysis-cache');
 });
 
-test('planBookLanguage: only manuscript text available (no cache), confident + above the floor → backfill from manuscript (#2246 round 2 revert)', () => {
+test('planBookLanguage: only manuscript chapters available (no cache), multi-chapter unanimous English → backfill from manuscript', () => {
   const plan = planBookLanguage({
     bookId: 'book-d',
     hasLanguageKey: false,
-    cacheText: null,
-    manuscriptText: REAL_ENGLISH_PROSE,
+    cacheChapters: null,
+    manuscriptChapters: [
+      makeCacheChapter(1, 'Chapter One', REAL_ENGLISH_PROSE),
+      makeCacheChapter(2, 'Chapter Two', REAL_ENGLISH_PROSE_2),
+    ],
   });
   assert.equal(plan.action, 'backfill');
   assert.equal(plan.language, 'en');
   assert.equal(plan.sampleSource, 'manuscript');
 });
 
-test('planBookLanguage: both cache and manuscript text present → analysis-cache is preferred, manuscript is never even inspected', () => {
+test('planBookLanguage: both cache and manuscript chapters present → analysis-cache is preferred, manuscript is never even inspected', () => {
   const plan = planBookLanguage({
     bookId: 'book-pref',
     hasLanguageKey: false,
-    cacheText: REAL_ENGLISH_PROSE,
-    // A short, below-floor sample. If the manuscript sample were ever
-    // detected on its own, this would still be 'en' (it's English), but a
-    // real single-source design must not even reach it — the point of this
-    // test is the SOURCE, not the language.
-    manuscriptText: SHORT_ENGLISH_SENTENCE,
+    cacheChapters: [
+      makeCacheChapter(1, 'Chapter One', REAL_ENGLISH_PROSE),
+      makeCacheChapter(2, 'Chapter Two', REAL_ENGLISH_PROSE_2),
+    ],
+    // A single below-floor sample. If the manuscript sample were ever
+    // inspected on its own, this would push it to a different plan (a
+    // single below-floor chapter surrenders) — the point of this test is
+    // the SOURCE, not the language.
+    manuscriptChapters: [makeCacheChapter(1, 'Chapter One', SHORT_ENGLISH_SENTENCE)],
   });
   assert.equal(plan.action, 'backfill');
   assert.equal(plan.sampleSource, 'analysis-cache');
 });
 
-test('planBookLanguage: non-English sample (Russian), confident + above the floor → backfill (round 2, single-source, non-English fixture)', () => {
+test('planBookLanguage: non-English sample (Russian), multi-chapter unanimous → backfill', () => {
   const plan = planBookLanguage({
     bookId: 'book-ru',
     hasLanguageKey: false,
-    cacheText: REAL_RUSSIAN_PROSE,
-    manuscriptText: null,
+    cacheChapters: [
+      makeCacheChapter(1, 'Глава первая', REAL_RUSSIAN_PROSE),
+      makeCacheChapter(2, 'Глава вторая', REAL_RUSSIAN_PROSE_2),
+    ],
+    manuscriptChapters: null,
   });
   assert.equal(plan.action, 'backfill');
   assert.equal(plan.language, 'ru');
 });
 
-test('planBookLanguage: real-shaped CJK sample, confident + above the floor → backfill (the floor must not exclude zh/ja)', () => {
+test('planBookLanguage: real-shaped CJK sample, multi-chapter unanimous → backfill (the floor/vote must not exclude zh/ja)', () => {
   const plan = planBookLanguage({
     bookId: 'book-zh',
     hasLanguageKey: false,
-    cacheText: REAL_CJK_PROSE,
-    manuscriptText: null,
+    cacheChapters: [
+      makeCacheChapter(1, '第一章', REAL_CJK_PROSE),
+      makeCacheChapter(2, '第二章', REAL_CJK_PROSE_2),
+    ],
+    manuscriptChapters: null,
   });
   assert.equal(plan.action, 'backfill');
   assert.equal(plan.language, 'zh');
 });
 
-test('planBookLanguage: the only available sample surrenders (letter-less) → skip-fallback (a guess is never written)', () => {
+test('planBookLanguage: the only available sample surrenders (letter-less single chapter) → skip-fallback (a guess is never written)', () => {
   const plan = planBookLanguage({
     bookId: 'book-g',
     hasLanguageKey: false,
-    cacheText: NO_LETTERS_TEXT,
-    manuscriptText: null,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', NO_LETTERS_TEXT)],
+    manuscriptChapters: null,
   });
   assert.equal(plan.action, 'skip-fallback');
   assert.match(plan.reason, /surrendered/);
 });
 
-test('planBookLanguage: sample below the prose floor (0 units) but franc did not surrender → skip-thin-sample, not backfill (#2246 C1, round 2 mechanism)', () => {
+test('planBookLanguage: single chapter, franc confidently wrong but 0 prose units → skip-fallback via the floor (#2246 C1 shape, folded into detectManuscriptLanguageFromChapters)', () => {
   // The exact C1 repro: an English TOC-shaped sample franc mis-disambiguates
-  // to 'es' with fallback:false — a fluent, WRONG, non-fallback result. Round
-  // 1 caught this via a disagreeing second source; round 2 catches it
-  // because the sample has 0 prose units, far under the floor.
+  // to 'es' with fallback:false. It cannot corroborate itself (one
+  // chapter), so the single-chapter prose-unit floor catches it.
   const plan = planBookLanguage({
     bookId: 'book-f',
     hasLanguageKey: false,
-    cacheText: TOC_MISDETECTED_AS_SPANISH,
-    manuscriptText: null,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', TOC_MISDETECTED_AS_SPANISH)],
+    manuscriptChapters: null,
   });
-  assert.equal(plan.action, 'skip-thin-sample');
-  assert.equal(plan.proseUnits, 0);
-  assert.match(plan.reason, /below the 20-unit floor/);
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /surrendered/);
 });
 
-test('planBookLanguage: genuine, confident single-sentence sample (1 unit) is still below the floor → skip-thin-sample', () => {
+// ---------------------------------------------------------------------------
+// #2263 — the required fixture classes from the task's Verification section.
+// ---------------------------------------------------------------------------
+
+test('planBookLanguage: a front-matter-titled chapter is excluded from the vote, not just outvoted', () => {
+  // Without the front-matter TITLE filter, this would be a 1-en/1-ru split
+  // (no majority) — WITH it, the Copyright chapter never enters the vote at
+  // all, leaving a single English candidate that clears the floor on its
+  // own. The two outcomes (surrender vs. backfill) make this test sensitive
+  // to the filter actually running, not just present.
+  const plan = planBookLanguage({
+    bookId: 'book-fm',
+    hasLanguageKey: false,
+    cacheChapters: [
+      makeCacheChapter(1, 'Copyright', REAL_RUSSIAN_PROSE),
+      makeCacheChapter(2, 'Chapter One', REAL_ENGLISH_PROSE),
+    ],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'backfill');
+  assert.equal(plan.language, 'en');
+});
+
+test('planBookLanguage: word-count filter alone, 1-vs-1 head-to-head — only resolves once the short chapter is dropped', () => {
+  // Isolates the word-count half of the selection filter from vote-majority
+  // robustness: with only one other chapter, an unfiltered short chapter is
+  // a 1-vs-1 split (no majority) — dropping it by word count is the only
+  // way this resolves to a backfill.
+  const plan = planBookLanguage({
+    bookId: 'book-word-count-head-to-head',
+    hasLanguageKey: false,
+    cacheChapters: [FRONT_MATTER_LOOKALIKE_CHAPTER, makeCacheChapter(2, '第一章', REAL_CJK_PROSE)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'backfill');
+  assert.equal(plan.language, 'zh');
+});
+
+test('planBookLanguage: 煤落的委托 shape — a short, non-front-matter-titled first chapter is dropped by the WORD-COUNT filter, body resolves the language', () => {
+  // Chapter 1's title ("Chapter 1") does NOT match the front-matter title
+  // regex — only its short body (well under FRONT_MATTER_WORD_THRESHOLD)
+  // gets it dropped from the vote. Real repro against the live corpus book:
+  // detectManuscriptLanguage on this exact chapter body alone returns
+  // { language: 'en', fallback: false } — a confident, WRONG vote that
+  // must never reach the tally.
+  const wrongVote = detectManuscriptLanguage(FRONT_MATTER_LOOKALIKE_CHAPTER.body);
+  assert.equal(wrongVote.fallback, false, 'fixture sanity: the lookalike chapter must be a confident (wrong) en vote on its own');
+  assert.equal(wrongVote.language, 'en', 'fixture sanity: must reproduce the real 煤落的委托 chapter-1 mis-detection');
+
+  const plan = planBookLanguage({
+    bookId: 'book-first-ch-mismatch',
+    hasLanguageKey: false,
+    cacheChapters: [
+      FRONT_MATTER_LOOKALIKE_CHAPTER,
+      makeCacheChapter(2, '第一章', REAL_CJK_PROSE),
+      makeCacheChapter(3, '第二章', REAL_CJK_PROSE_2),
+    ],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'backfill');
+  assert.equal(plan.language, 'zh', 'must resolve to the BODY language, not chapter 1\'s mis-detected en');
+});
+
+test('planBookLanguage: 2-vs-2 split (en/ru, no strict majority) → surrenders, reason names the split', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-split',
+    hasLanguageKey: false,
+    cacheChapters: [
+      makeCacheChapter(1, 'Chapter One', REAL_ENGLISH_PROSE),
+      makeCacheChapter(2, 'Chapter Two', REAL_ENGLISH_PROSE_2),
+      makeCacheChapter(3, 'Глава первая', REAL_RUSSIAN_PROSE),
+      makeCacheChapter(4, 'Глава вторая', REAL_RUSSIAN_PROSE_2),
+    ],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /no clear majority/);
+  assert.match(plan.reason, /en 2 \/ ru 2/);
+});
+
+test('planBookLanguage: single body chapter ABOVE the floor → backfills (the floor is not a blanket single-chapter refusal)', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-single-ok',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', REAL_ENGLISH_PROSE)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'backfill');
+  assert.equal(plan.language, 'en');
+});
+
+test('planBookLanguage: single body chapter BELOW the floor → skip-fallback (genuine, confidently-detected prose is still refused alone)', () => {
   // Unlike the TOC fixture above, this is real, grammatical, confidently-
   // detected English prose — proof the floor rejects on UNIT COUNT alone,
   // not just on obviously junk-shaped text.
@@ -290,17 +487,15 @@ test('planBookLanguage: genuine, confident single-sentence sample (1 unit) is st
   const plan = planBookLanguage({
     bookId: 'book-thin',
     hasLanguageKey: false,
-    cacheText: SHORT_ENGLISH_SENTENCE,
-    manuscriptText: null,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', SHORT_ENGLISH_SENTENCE)],
+    manuscriptChapters: null,
   });
-  assert.equal(plan.action, 'skip-thin-sample');
-  assert.equal(plan.proseUnits, 1);
+  assert.equal(plan.action, 'skip-fallback');
 });
 
 // ---------------------------------------------------------------------------
-// cacheSampleText — #2246 C2. Previously ZERO test coverage (every main()
-// fixture used a random manuscriptId, so cacheText was always null). Writes
-// directly to the REAL cache path (cachePath is deterministic on
+// cacheChaptersFor — #2263 (was cacheSampleText, a single flattened string).
+// Writes directly to the REAL cache path (cachePath is deterministic on
 // manuscriptId, same trick main()'s own tests below use), cleaned up after.
 // ---------------------------------------------------------------------------
 
@@ -308,7 +503,7 @@ test('planBookLanguage: genuine, confident single-sentence sample (1 unit) is st
 // unanchored `одобрен к распространению` global pattern.
 const BOILERPLATE_LINE_RU = 'Настоящая книга одобрен к распространению.';
 
-test('cacheSampleText: joins sentences with a newline, not a space (#2246 C2 fix)', async () => {
+test('cacheChaptersFor: joins one chapter\'s sentences with a newline, not a space (#2246 C2 fix, preserved)', async () => {
   const manuscriptId = `mns_${randomUUID()}`;
   const path = cachePath(manuscriptId);
   mkdirSync(dirname(path), { recursive: true });
@@ -324,17 +519,15 @@ test('cacheSampleText: joins sentences with a newline, not a space (#2246 C2 fix
     }),
   );
   try {
-    const sample = await cacheSampleText(manuscriptId);
-    assert.ok(sample, 'cacheSampleText must return the joined text');
-    assert.ok(sample.includes('\n'), 'sentences must be newline-joined, not collapsed onto one line');
+    const chapters = await cacheChaptersFor(manuscriptId, []);
+    assert.ok(chapters, 'cacheChaptersFor must return the chapter list');
+    assert.equal(chapters.length, 1);
+    assert.ok(chapters[0].body.includes('\n'), 'sentences must be newline-joined, not collapsed onto one line');
 
     // The actual regression this join fixes: stripFrontMatterBoilerplate is
     // LINE-based. Joined with '\n', only the boilerplate LINE is dropped —
-    // the Russian prose line survives and still detects confidently. Before
-    // the fix (join(' ')), the whole sample collapses onto one line, that
-    // one line matches the boilerplate pattern, and the ENTIRE sample —
-    // prose included — is dropped, leaving nothing to detect from.
-    const detection = detectManuscriptLanguage(sample);
+    // the Russian prose line survives and still detects confidently.
+    const detection = detectManuscriptLanguage(chapters[0].body);
     assert.equal(detection.fallback, false, 'boilerplate + prose must still detect confidently, not surrender');
     assert.equal(detection.language, 'ru');
   } finally {
@@ -342,10 +535,38 @@ test('cacheSampleText: joins sentences with a newline, not a space (#2246 C2 fix
   }
 });
 
-test('cacheSampleText: returns null when the book has no cache at all', async () => {
+test('cacheChaptersFor: returns null when the book has no cache at all', async () => {
   const manuscriptId = `mns_${randomUUID()}`; // never written — no cache file exists
-  const sample = await cacheSampleText(manuscriptId);
-  assert.equal(sample, null);
+  const chapters = await cacheChaptersFor(manuscriptId, []);
+  assert.equal(chapters, null);
+});
+
+test('cacheChaptersFor: skips chapters marked `excluded` in state.chapters[], matched by id (#2263)', async () => {
+  const manuscriptId = `mns_${randomUUID()}`;
+  const path = cachePath(manuscriptId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    JSON.stringify({
+      chapters: {
+        1: [{ text: 'Настоящая книга одобрен к распространению.', speakerId: 'narrator' }],
+        2: [{ text: REAL_RUSSIAN_PROSE, speakerId: 'narrator' }],
+      },
+    }),
+  );
+  try {
+    const stateChapters = [
+      { id: 1, title: 'Copyright', slug: '01-copyright', excluded: true },
+      { id: 2, title: 'Глава первая', slug: '02-chapter-one' },
+    ];
+    const chapters = await cacheChaptersFor(manuscriptId, stateChapters);
+    assert.ok(chapters);
+    assert.equal(chapters.length, 1, 'the excluded chapter id must never appear in the result');
+    assert.equal(chapters[0].id, 2);
+    assert.equal(chapters[0].title, 'Глава первая', 'title comes from the matching state.chapters[] entry by id');
+  } finally {
+    rmSync(path, { force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -407,11 +628,7 @@ test('main: book with an explicit language is left untouched', async () => {
   }
 });
 
-test('main: manuscript-only sample (no cache), confident + above the floor → --apply backfills from the manuscript (#2246 round 2 revert)', async () => {
-  // Before round 1 this backfilled. Round 1 made it a skip
-  // (skip-single-source, per the #2246 C1 gate that has since been removed).
-  // Round 2 reverts to a single sample: this is the manuscript-only branch
-  // of main() actually reaching a write again.
+test('main: manuscript-only sample (no cache), single chapter above the floor → --apply backfills from the manuscript', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-manuscript-only-'));
   try {
     const booksRoot = join(tmp, 'books');
@@ -469,16 +686,49 @@ test('main: cache present → --apply backfills using the analysis-cache sample 
   }
 });
 
-test('main: single sample surrenders (letter-less manuscript, no cache) → --apply does NOT write, summary reports it as "skipped (detection surrendered)" (#2246 C1, re-fixtured for round 2 — single source is now reachable)', async () => {
-  // Before round 1's cross-source gate this fixture (a random, cache-less
-  // manuscriptId) would have exercised skip-fallback directly. Round 1
-  // widened the test's title to "on both sources" without changing the
-  // fixture, so it silently stopped reaching the fallback branch at all (it
-  // returned at the single-source check first) — reported by round 2 review.
-  // With the single-source design restored, this fixture reaches
-  // skip-fallback again; retitled to say what it actually now exercises, and
-  // the summary-line assertion below is genuinely new coverage (the "N
-  // skipped (detection surrendered)" segment had none before this).
+test('main: excluded cache chapter is skipped end-to-end — a wrong-language excluded chapter never spoils the vote (#2263)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-excluded-'));
+  const manuscriptId = `mns_${randomUUID()}`;
+  const cacheFilePath = cachePath(manuscriptId);
+  try {
+    const booksRoot = join(tmp, 'books');
+    const { statePath } = makeBook(booksRoot, join('Author', 'Series', 'Excluded Chapter Book'), {
+      bookId: 'author__series__excluded-chapter-book',
+      manuscriptId,
+      title: 'Excluded Chapter Book',
+      author: 'Author',
+      chapters: [
+        { id: 1, title: 'Front Matter', slug: '01-front-matter', excluded: true },
+        { id: 2, title: 'Chapter One', slug: '02-chapter-one' },
+      ],
+    });
+    mkdirSync(dirname(cacheFilePath), { recursive: true });
+    writeFileSync(
+      cacheFilePath,
+      JSON.stringify({
+        chapters: {
+          // Excluded chapter's text is Russian — if it were NOT skipped, a
+          // single English chapter would still win the vote in most vote
+          // shapes, so make it a real single-vs-single competitor: only one
+          // OTHER chapter exists, so an unskipped exclusion would produce a
+          // 1-en/1-ru split (no majority) instead of a clean backfill.
+          1: [{ text: REAL_RUSSIAN_PROSE, speakerId: 'narrator' }],
+          2: [{ text: REAL_ENGLISH_PROSE, speakerId: 'narrator' }],
+        },
+      }),
+    );
+
+    await main(['--apply'], booksRoot);
+
+    const written = readState(statePath);
+    assert.equal(written.language, 'en', 'the excluded Russian chapter must never enter the vote');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
+  }
+});
+
+test('main: single sample surrenders (letter-less manuscript, no cache) → --apply does NOT write, summary reports it as "skipped (detection surrendered)"', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-surrender-'));
   try {
     const booksRoot = join(tmp, 'books');
@@ -506,10 +756,10 @@ test('main: single sample surrenders (letter-less manuscript, no cache) → --ap
   }
 });
 
-test('main: single cache sample below the prose floor → --apply does NOT write, summary reports it as "skipped (thin sample)"', async () => {
+test('main: single-chapter cache sample below the prose floor → --apply does NOT write, folded into "skipped (detection surrendered)" (#2263 — skip-thin-sample retired)', async () => {
   // The C1 TOC regression fixture, exercised through main() end to end —
-  // proof the thin-sample summary segment (brand-new action, zero coverage
-  // before this change) is wired all the way through.
+  // proof the single-chapter floor path is wired all the way through, even
+  // though it no longer has its own distinct action/summary bucket.
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-thin-'));
   const manuscriptId = `mns_${randomUUID()}`;
   const cacheFilePath = cachePath(manuscriptId);
@@ -534,9 +784,48 @@ test('main: single cache sample below the prose floor → --apply does NOT write
       !Object.prototype.hasOwnProperty.call(written, 'language'),
       'a below-floor sample must never be written, even when franc looked confident',
     );
-    const summary = lines.find((l) => /skipped \(thin sample\)/.test(l));
-    assert.ok(summary, 'summary line must report the thin-sample skip');
-    assert.match(summary, /1 skipped \(thin sample\)/);
+    const summary = lines.find((l) => /skipped \(detection surrendered\)/.test(l));
+    assert.ok(summary, 'summary line must report the surrendered skip');
+    assert.match(summary, /1 skipped \(detection surrendered\)/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
+  }
+});
+
+test('main: 2-vs-2 split (no majority) → --apply does NOT write, reason names the split', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-split-'));
+  const manuscriptId = `mns_${randomUUID()}`;
+  const cacheFilePath = cachePath(manuscriptId);
+  try {
+    const booksRoot = join(tmp, 'books');
+    const { statePath } = makeBook(booksRoot, join('Author', 'Series', 'Split Vote'), {
+      bookId: 'author__series__split-vote',
+      manuscriptId,
+      title: 'Split Vote',
+      author: 'Author',
+    });
+    mkdirSync(dirname(cacheFilePath), { recursive: true });
+    writeFileSync(
+      cacheFilePath,
+      JSON.stringify({
+        chapters: {
+          1: [{ text: REAL_ENGLISH_PROSE, speakerId: 'narrator' }],
+          2: [{ text: REAL_ENGLISH_PROSE_2, speakerId: 'narrator' }],
+          3: [{ text: REAL_RUSSIAN_PROSE, speakerId: 'narrator' }],
+          4: [{ text: REAL_RUSSIAN_PROSE_2, speakerId: 'narrator' }],
+        },
+      }),
+    );
+
+    const lines = await captureLog(() => main(['--apply'], booksRoot));
+
+    const written = readState(statePath);
+    assert.ok(!Object.prototype.hasOwnProperty.call(written, 'language'), 'a no-majority split must never be written');
+    const bookLine = lines.find((l) => l.includes('Split Vote'));
+    assert.ok(bookLine);
+    assert.match(bookLine, /no clear majority/);
+    assert.match(bookLine, /en 2 \/ ru 2/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
     if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });

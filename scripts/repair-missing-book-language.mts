@@ -14,15 +14,25 @@
  * nothing in the product can tell the two states apart or correct either
  * one.
  *
- * This script finds every book with a missing `language` key, builds a text
- * sample, and calls the REAL `detectManuscriptLanguage` (server/src/tts/
- * detect-language.ts) — no re-implementation, so the backfilled value is
- * exactly what live detection would decide today.
+ * This script finds every book with a missing `language` key, builds a
+ * PER-CHAPTER sample, and calls the REAL `detectManuscriptLanguageFromChapters`
+ * (server/src/tts/detect-language.ts, #2263) — no re-implementation, so the
+ * backfilled value is exactly what live per-chapter detection would decide
+ * today (the same function POST /api/import now calls).
  *
- * The load-bearing rule (do not soften this): it writes ONLY when detection
- * genuinely decided AND the sample carried enough prose to trust that
- * decision. `fallback: false` alone is NOT proof of confidence — franc has
- * no confidence floor above its own `minLength: 30`, so a short,
+ * #2263 round — rewritten from a single flat-text sample to chapter-aware
+ * sampling, mirroring the fix that landed for live import: a flat sample
+ * (whole book, or the front-matter-stripped prefix used before this round)
+ * lets front matter or a partial/resumed analysis cache outvote the real
+ * body; voting per chapter — with front-matter chapters and chapters
+ * already marked `excluded` in state.json dropped from the vote — doesn't
+ * have that failure mode. See detect-language.ts's own header for the full
+ * mechanism and the corpus numbers behind the majority threshold.
+ *
+ * The load-bearing rule (unchanged by this round, do not soften it): it
+ * writes ONLY when detection genuinely decided AND had enough to decide
+ * from. `fallback: false` alone is NOT proof of confidence — franc has no
+ * confidence floor above its own `minLength: 30`, so a short,
  * unrepresentative sample (a table of contents, a run of OCR noise) can
  * return a fluent, WRONG, non-fallback language (#2246 C1: a genuinely
  * English table of contents mis-detects as 'es' with `fallback: false`).
@@ -33,39 +43,41 @@
  * but the primary one reports zero cache hits and the two-source gate
  * silently no-ops (`0 written, N skipped (single source only)`, exit 0) —
  * on exactly the box this project's own branching workflow mandates running
- * scripts from. This version reverts to a SINGLE sample (the preference
- * order below, same as the original pre-#2246-C1 design) and instead gates
- * the write on a PROSE-SIGNAL FLOOR: a non-fallback detection is trusted
- * only when the sample clears `PROSE_UNIT_FLOOR` sentence-terminal-
- * punctuated units (see that constant's own comment for the measured
- * numbers behind the threshold). Per server/src/workspace/scan.ts, a
- * non-`'en'` language forces every character onto a designed Qwen voice and
- * blocks the Kokoro fallback, so a wrong write is materially worse than the
- * absent key it replaces — worth the false-negative cost of skipping a book
- * whose sample happens to be thin. Any of: no readable text, a surrendered
- * (fallback) detection, or a sample below the prose floor is a skip,
+ * scripts from. Round 2 reverted to a single sample gated on a PROSE-SIGNAL
+ * FLOOR instead (a non-fallback detection trusted only once the sample
+ * clears `PROSE_UNIT_FLOOR` sentence-terminal-punctuated units); this round
+ * keeps that floor, but it now only fires for the one case a chapter vote
+ * can't corroborate itself — a book with exactly one usable body chapter
+ * (see `detectManuscriptLanguageFromChapters`'s own single-chapter path, and
+ * `server/src/tts/prose-units.ts` for the shared constant/helper it and this
+ * script both import). Any of: no readable text, a surrendered (fallback)
+ * detection, or (for a single-chapter book) a too-thin sample is a skip,
  * reported with a reason naming which. Skipping is fully recoverable;
  * writing a wrong language is what this script exists to prevent.
  *
- * Text sample preference, per book:
- *   1. The book's analysis cache sentence text (server/handoff/cache/
- *      <manuscriptId>.json) — the same text real analysis already produced.
+ * Text sample preference, per book (unchanged by this round — now a set of
+ * chapters rather than one flat string):
+ *   1. The book's analysis cache, one sample per non-excluded chapter id
+ *      (server/handoff/cache/<manuscriptId>.json) — the same text real
+ *      analysis already produced.
  *   2. No cache → the book's own manuscript file, re-parsed the same way
- *      POST /:bookId/reparse does (server/src/parsers, real parseManuscript).
+ *      POST /:bookId/reparse does (server/src/parsers, real parseManuscript),
+ *      chapters the user already excluded dropped the same way.
  *   3. Neither readable → skip and name the book in the report. Never guess
  *      with no material to look at.
  *
- * KNOWN RESIDUAL (#2256) — the prose-unit floor rejects the three evidenced
- * junk classes (a TOC-only sample, a nav-only EPUB stub, an OCR-noise
- * sample — all measured at 1 prose unit, 20x under the floor) and removes
- * the per-checkout cache dependency above, so the tool now works from any
- * checkout. It does NOT separate *punctuated* junk from a genuine CJK book:
- * a repeated numbered TOC ("1. Prologue. 2. Kaz.") and repeated "Chapter
- * One." headings score a median of 6 and 11 letters per prose unit — and the
- * Chinese book 煤落的委托 scores 11, identical. A median-prose-unit-length
- * secondary test would exclude real CJK books along with the junk it's
- * meant to catch, so it isn't added here. That residual stays open on
- * #2256.
+ * KNOWN RESIDUAL (#2256) — the prose-unit floor (now reachable only via the
+ * single-chapter path) rejects the three evidenced junk classes (a
+ * TOC-only sample, a nav-only EPUB stub, an OCR-noise sample — all measured
+ * at 1 prose unit, 20x under the floor). It does NOT separate *punctuated*
+ * junk from a genuine CJK book on a single-chapter book — a repeated
+ * numbered TOC ("1. Prologue. 2. Kaz.") and repeated "Chapter One."
+ * headings score a median of 6 and 11 letters per prose unit, same as a
+ * real CJK book. A median-prose-unit-length secondary test would exclude
+ * real CJK books along with the junk it's meant to catch, so it isn't added
+ * here. That residual stays open on #2256 for the single-chapter case; for
+ * every multi-chapter book the #2263 vote is a stronger signal than a
+ * length floor ever was, since a junk chapter simply loses the vote.
  *
  * Write path: `writeStateJsonAtomic` (server/src/workspace/state-migrate.ts)
  * — the same schema-stamp + rotating-backup helper every other state.json
@@ -86,8 +98,15 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { detectManuscriptLanguage } from '../server/src/tts/detect-language.js';
-import { stripFrontMatterBoilerplate } from '../server/src/analyzer/strip-front-matter.js';
+import {
+  detectManuscriptLanguage,
+  detectManuscriptLanguageFromChapters,
+} from '../server/src/tts/detect-language.js';
+import {
+  isLikelyFrontMatterTitle,
+  FRONT_MATTER_WORD_THRESHOLD,
+  countWords,
+} from '../server/src/parsers/front-matter.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
 import { parseManuscript } from '../server/src/parsers/index.js';
@@ -98,92 +117,87 @@ const REPO_ROOT = join(__dirname, '..');
 const SERVER_ROOT = join(REPO_ROOT, 'server');
 
 // ---------------------------------------------------------------------------
-// Prose-signal floor (#2246 round 2). See the file header for why this
-// replaced round 1's cross-source-agreement gate.
-// ---------------------------------------------------------------------------
-
-/* Mirrors detect-language.ts's own text-preparation pipeline (front-matter
-   strip, then a leading-character slice) so the prose-unit count below is
-   measured against EXACTLY the text the script pre-pass / franc actually
-   see — not the raw sample, which can carry boilerplate or trailing
-   material detection never looks at. detect-language.ts's own
-   `SAMPLE_CHARS` isn't exported, so the value is duplicated here
-   (server/src/tts/detect-language.ts is off-limits to this change, per
-   #2246 round 2 scope) — keep the two in sync if that one ever changes. */
-const DETECTION_SAMPLE_CHARS = 20_000;
-
-function detectionSample(text: string, meta: { author?: string | null; title?: string | null }): string {
-  const cleaned = stripFrontMatterBoilerplate(text, {
-    author: meta.author ?? undefined,
-    title: meta.title ?? undefined,
-  });
-  return cleaned.length > DETECTION_SAMPLE_CHARS ? cleaned.slice(0, DETECTION_SAMPLE_CHARS) : cleaned;
-}
-
-// A "prose unit" is a run of text closed by sentence-terminal punctuation —
-// the CJK fullwidth forms are included so zh/ja prose isn't penalised for
-// using different terminal marks than Latin scripts. One or more consecutive
-// terminal marks ("...", "?!") close ONE unit, not one per mark.
-const SENTENCE_TERMINAL_RE = /[.!?…。！？]+/g;
-
-function countProseUnits(sample: string): number {
-  return (sample.match(SENTENCE_TERMINAL_RE) ?? []).length;
-}
-
-/* Measured 2026-08-11 over all 20 live (cache-backed) books vs. the junk
-   classes #2246 round 2 review evidenced — counted on the SAME post-strip,
-   post-slice sample detectionSample() above produces:
-
-     thinnest real book (Unlocked)          130 prose units
-     next thinnest (Юный дрессировщик)      213
-     every other real book                242-394
-     TOC-only sample                          1
-     nav-only EPUB stub                       1
-     OCR-noise sample                         1
-
-   Floor = 20: 6.5x below the thinnest real book, 20x above every evidenced
-   junk class. Do not re-derive or move this number — see the file header
-   for the corpus it came from. */
-const PROSE_UNIT_FLOOR = 20;
-
-// ---------------------------------------------------------------------------
 // Pure decision logic — exported for unit tests. No I/O in here at all: the
-// real detectManuscriptLanguage is pure (text in, DetectionResult out), so
-// this whole decision can be unit-tested with plain strings.
+// real detectManuscriptLanguageFromChapters is pure (chapters in,
+// DetectionResult out), so this whole decision can be unit-tested with
+// plain chapter fixtures.
 // ---------------------------------------------------------------------------
 
 export type SampleSource = 'analysis-cache' | 'manuscript';
+
+/** One chapter's worth of sample text for detection — the shape
+ *  `detectManuscriptLanguageFromChapters` takes, plus the chapter `id` for
+ *  callers that need to trace a sample back to its cache/state entry
+ *  (detection itself never reads `id`). */
+export interface ChapterSample {
+  id: number;
+  title: string;
+  body: string;
+}
 
 export type BookLanguagePlan =
   | { bookId: string; action: 'has-language'; existingLanguage?: string }
   | { bookId: string; action: 'skip-no-text'; reason: string }
   | { bookId: string; action: 'skip-fallback'; language: string; sampleSource: SampleSource; reason: string }
-  | { bookId: string; action: 'skip-thin-sample'; sampleSource: SampleSource; proseUnits: number; reason: string }
   | { bookId: string; action: 'backfill'; language: string; sampleSource: SampleSource };
 
-/* Single-sample gate (#2246 round 2 — replaces round 1's cross-source
-   agreement gate; see the file header for why). One sample only (analysis
-   cache preferred, else a manuscript re-parse), gated on TWO independent
-   checks that must both hold before a write happens: `fallback === false`
-   (detection genuinely decided, not a confidence-floor guess) AND the
-   sample clears `PROSE_UNIT_FLOOR` — `fallback: false` alone is not proof
-   of confidence, see the header. */
+/* Diagnostic-only: replays the SAME front-matter selection
+   detectManuscriptLanguageFromChapters applies internally — reusing its own
+   exported building blocks (isLikelyFrontMatterTitle, countWords,
+   FRONT_MATTER_WORD_THRESHOLD), never a second classifier — purely to name
+   the vote split in a 'skip-fallback' reason (e.g. "en 2 / ru 2"). The
+   accept/reject DECISION always comes from
+   detectManuscriptLanguageFromChapters itself; this only explains a
+   surrender after the fact, so it can never disagree with the real
+   decision — at worst it returns null (no split to report) and the reason
+   falls back to a generic surrender message. */
+function describeVoteSplit(
+  chapters: ChapterSample[],
+  meta: { author?: string | null; title?: string | null },
+): string | null {
+  const bodyChapters = chapters.filter(
+    (c) => !isLikelyFrontMatterTitle(c.title) && countWords(c.body) >= FRONT_MATTER_WORD_THRESHOLD,
+  );
+  const candidates = bodyChapters.length > 0 ? bodyChapters : chapters;
+  if (candidates.length <= 1) return null; // no split possible — single-chapter/floor path, not a vote
+
+  const counts = new Map<string, number>();
+  for (const c of candidates) {
+    const d = detectManuscriptLanguage(c.body, meta);
+    if (!d.fallback) counts.set(d.language, (counts.get(d.language) ?? 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([language, count]) => `${language} ${count}`)
+    .join(' / ');
+}
+
+/* Chapter-aware (#2263): one sample source only (analysis cache preferred,
+   else a manuscript re-parse — same preference order as before), but the
+   sample is now that source's CHAPTERS, not one flattened string. Both
+   sources have already dropped chapters marked `excluded` in state.json —
+   see cacheChaptersFor / manuscriptChaptersFor below.
+   detectManuscriptLanguageFromChapters applies its OWN front-matter/
+   word-count selection and majority vote on top of that; a surrender (no
+   majority, or too little to corroborate) is never written — `fallback:
+   false` is not proof of confidence on its own, see the file header. */
 export function planBookLanguage(input: {
   bookId: string;
   hasLanguageKey: boolean;
   existingLanguage?: string;
-  cacheText: string | null;
-  manuscriptText: string | null;
+  cacheChapters: ChapterSample[] | null;
+  manuscriptChapters: ChapterSample[] | null;
   meta?: { author?: string | null; title?: string | null };
 }): BookLanguagePlan {
-  const { bookId, hasLanguageKey, existingLanguage, cacheText, manuscriptText, meta = {} } = input;
+  const { bookId, hasLanguageKey, existingLanguage, cacheChapters, manuscriptChapters, meta = {} } = input;
 
   if (hasLanguageKey) {
     return { bookId, action: 'has-language', existingLanguage };
   }
 
-  const hasCache = !!(cacheText && cacheText.trim());
-  const hasManuscript = !!(manuscriptText && manuscriptText.trim());
+  const hasCache = !!(cacheChapters && cacheChapters.length > 0);
+  const hasManuscript = !!(manuscriptChapters && manuscriptChapters.length > 0);
 
   if (!hasCache && !hasManuscript) {
     return {
@@ -193,36 +207,23 @@ export function planBookLanguage(input: {
     };
   }
 
-  const sample: { text: string; source: SampleSource } = hasCache
-    ? { text: cacheText as string, source: 'analysis-cache' }
-    : { text: manuscriptText as string, source: 'manuscript' };
+  const sample: { chapters: ChapterSample[]; source: SampleSource } = hasCache
+    ? { chapters: cacheChapters as ChapterSample[], source: 'analysis-cache' }
+    : { chapters: manuscriptChapters as ChapterSample[], source: 'manuscript' };
 
-  const detection = detectManuscriptLanguage(sample.text, meta);
+  const detection = detectManuscriptLanguageFromChapters(sample.chapters, meta);
 
   if (detection.fallback) {
+    const split = describeVoteSplit(sample.chapters, meta);
     return {
       bookId,
       action: 'skip-fallback',
       language: detection.language,
       sampleSource: sample.source,
-      reason:
-        `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
-        'text — a guess is never written',
-    };
-  }
-
-  const proseUnits = countProseUnits(detectionSample(sample.text, meta));
-  if (proseUnits < PROSE_UNIT_FLOOR) {
-    return {
-      bookId,
-      action: 'skip-thin-sample',
-      sampleSource: sample.source,
-      proseUnits,
-      reason:
-        `${sample.source} sample has only ${proseUnits} prose unit(s) (post front-matter-strip, ` +
-        `post-${DETECTION_SAMPLE_CHARS}-char slice), below the ${PROSE_UNIT_FLOOR}-unit floor — a ` +
-        'non-fallback result on a sample this thin is not trustworthy (franc has no confidence floor ' +
-        'of its own), so it is never written',
+      reason: split
+        ? `no clear majority across ${sample.source} body chapters (${split}) — a guess is never written`
+        : `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
+          'chapters — a guess is never written',
     };
   }
 
@@ -285,36 +286,56 @@ function findAudiobookDirs(root: string): string[] {
   return found;
 }
 
-/** Join every sentence's text out of the book's analysis cache. Returns null
- *  when there's no cache (the common case for these seven — the analysis
- *  cache is install-relative scratch space, see server/src/export/
- *  manuscript-sentences.ts) or the cache is empty/corrupt — either way this
- *  never throws, it's just the preferred sample when it exists. */
-export async function cacheSampleText(manuscriptId: string): Promise<string | null> {
+/** One ChapterSample per non-excluded analysis-cache chapter (#2263 — was
+ *  cacheSampleText, a single flattened string across every chapter). The
+ *  cache is keyed by chapter id, and per server/src/store/manuscripts.ts
+ *  that id IS the same `state.chapters[].id` — so a chapter's title (for
+ *  the front-matter selection) and its `excluded` flag both come from the
+ *  matching `state.chapters[]` entry, matched by id. Returns null when
+ *  there's no cache (the common case for a language-less book — the
+ *  analysis cache is install-relative scratch space, see
+ *  server/src/export/manuscript-sentences.ts), the cache is empty/corrupt,
+ *  or every chapter is excluded/empty — either way this never throws, it's
+ *  just the preferred sample when it exists. */
+export async function cacheChaptersFor(
+  manuscriptId: string,
+  stateChapters: BookStateJson['chapters'],
+): Promise<ChapterSample[] | null> {
   try {
     const cache = await loadAnalysisCache(manuscriptId);
-    // '\n', not ' ' — detectManuscriptLanguage runs stripFrontMatterBoilerplate
-    // first, which is LINE-based and drops any line matching an unanchored
-    // global-boilerplate pattern. Joining every sentence onto one line means a
-    // single boilerplate match (a stray copyright/e-library notice sentence
-    // mid-cache) wipes the ENTIRE sample, not just that one sentence.
-    const text = Object.values(cache.chapters ?? {})
-      .flat()
-      .map((s) => s.text)
-      .join('\n')
-      .trim();
-    return text.length > 0 ? text : null;
+    const excludedIds = new Set<number>(stateChapters.filter((c) => c.excluded).map((c) => c.id));
+    const titleById = new Map<number, string>(stateChapters.map((c) => [c.id, c.title]));
+
+    const chapters: ChapterSample[] = [];
+    for (const [idStr, sentences] of Object.entries(cache.chapters ?? {})) {
+      const id = Number(idStr);
+      if (excludedIds.has(id)) continue;
+      // '\n', not ' ' — detectManuscriptLanguage runs stripFrontMatterBoilerplate
+      // first, which is LINE-based and drops any line matching an unanchored
+      // global-boilerplate pattern. Joining a chapter's sentences onto one
+      // line means a single boilerplate match (a stray copyright/e-library
+      // notice sentence mid-chapter) wipes that WHOLE chapter's sample, not
+      // just the one sentence.
+      const body = (sentences ?? [])
+        .map((s) => s.text)
+        .join('\n')
+        .trim();
+      if (!body) continue;
+      chapters.push({ id, title: titleById.get(id) ?? '', body });
+    }
+    return chapters.length > 0 ? chapters : null;
   } catch {
     return null;
   }
 }
 
 /** Re-parse the book's own manuscript file on disk (same parseManuscript the
- *  reparse route uses) and return its sourceText. Null when the book has no
- *  manuscript file, it's missing on disk, or it fails to parse — never
- *  throws, so a bad file just falls through to "no text" rather than
- *  aborting the whole run. */
-async function manuscriptSampleText(bookDir: string, state: BookStateJson): Promise<string | null> {
+ *  reparse route uses) into ChapterSamples, dropping chapters already marked
+ *  `excluded` in state.json (same id match as cacheChaptersFor). Null when
+ *  the book has no manuscript file, it's missing on disk, it fails to
+ *  parse, or every chapter is excluded/empty — never throws, so a bad file
+ *  just falls through to "no text" rather than aborting the whole run. */
+async function manuscriptChaptersFor(bookDir: string, state: BookStateJson): Promise<ChapterSample[] | null> {
   if (!state.manuscriptFile) return null;
   const manuscriptPath = join(bookDir, state.manuscriptFile);
   if (!existsSync(manuscriptPath)) return null;
@@ -325,7 +346,11 @@ async function manuscriptSampleText(bookDir: string, state: BookStateJson): Prom
       fileName: state.manuscriptFile,
       sourcePath: manuscriptPath,
     });
-    return parsed.sourceText && parsed.sourceText.trim().length > 0 ? parsed.sourceText : null;
+    const excludedIds = new Set<number>((state.chapters ?? []).filter((c) => c.excluded).map((c) => c.id));
+    const chapters: ChapterSample[] = parsed.chapters
+      .filter((c) => !excludedIds.has(c.id) && c.body && c.body.trim().length > 0)
+      .map((c) => ({ id: c.id, title: c.title, body: c.body }));
+    return chapters.length > 0 ? chapters : null;
   } catch {
     return null;
   }
@@ -357,7 +382,6 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
   let backfillWritten = 0;
   let skippedNoText = 0;
   let skippedFallback = 0;
-  let skippedThinSample = 0;
   let unreadable = 0;
 
   for (const audiobookDir of audiobookDirs) {
@@ -397,22 +421,25 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
     const hasLanguageKey = Object.prototype.hasOwnProperty.call(state, 'language');
     const existingLanguage = (state as BookStateJson & { language?: string }).language;
 
-    // Single sample only (#2246 round 2): analysis-cache text preferred, a
-    // manuscript re-parse only when there's no cache — never both, so a
-    // book with a usable cache never pays for an unnecessary re-parse.
-    let cacheText: string | null = null;
-    let manuscriptText: string | null = null;
+    // Single sample source only (#2246 round 2, preserved by #2263):
+    // analysis-cache chapters preferred, a manuscript re-parse only when
+    // there's no cache — never both, so a book with a usable cache never
+    // pays for an unnecessary re-parse.
+    let cacheChapters: ChapterSample[] | null = null;
+    let manuscriptChapters: ChapterSample[] | null = null;
     if (!hasLanguageKey) {
-      cacheText = state.manuscriptId ? await cacheSampleText(state.manuscriptId) : null;
-      if (!cacheText) manuscriptText = await manuscriptSampleText(bookDir, state);
+      cacheChapters = state.manuscriptId
+        ? await cacheChaptersFor(state.manuscriptId, state.chapters ?? [])
+        : null;
+      if (!cacheChapters) manuscriptChapters = await manuscriptChaptersFor(bookDir, state);
     }
 
     const plan = planBookLanguage({
       bookId: state.bookId ?? bookLabel,
       hasLanguageKey,
       existingLanguage,
-      cacheText,
-      manuscriptText,
+      cacheChapters,
+      manuscriptChapters,
       meta: { author: state.author, title: state.title },
     });
 
@@ -427,10 +454,6 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
         break;
       case 'skip-fallback':
         skippedFallback += 1;
-        console.log(`  [${bookLabel}] SKIP — ${plan.reason}`);
-        break;
-      case 'skip-thin-sample':
-        skippedThinSample += 1;
         console.log(`  [${bookLabel}] SKIP — ${plan.reason}`);
         break;
       case 'backfill':
@@ -450,8 +473,7 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
   console.log(
     `\n${audiobookDirs.length} book(s) scanned — ${alreadyHad} already had a language, ` +
       `${APPLY ? backfillWritten : backfillPlanned} ${APPLY ? 'written' : 'would be written'}, ` +
-      `${skippedNoText} skipped (no text), ${skippedFallback} skipped (detection surrendered), ` +
-      `${skippedThinSample} skipped (thin sample)` +
+      `${skippedNoText} skipped (no text), ${skippedFallback} skipped (detection surrendered)` +
       `${unreadable > 0 ? `, ${unreadable} skipped (state.json unreadable)` : ''}.`,
   );
   if (!APPLY && backfillPlanned > 0) console.log('Re-run with --apply to write.');
