@@ -1,8 +1,10 @@
 # Flaky-test register
 
 Tests quarantined out of the gating suites into the non-gating lane
-(`npm run test:quarantine`). A row here is a debt: the test does not gate
-releases until it is rewritten deterministically and graduated back.
+(`npm run test:quarantine`), or still gating and tracked here as known-flaky
+pending that move. A row here is a debt: the test does not gate releases
+once quarantined, until it is rewritten deterministically and graduated
+back.
 Empty register = done. See the rewrite playbook in
 `docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md`.
 
@@ -23,8 +25,10 @@ it never gates a merge.
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
 | #1981 — a stale cast PUT does not erase a concurrently /assign-planted voice | `server/src/routes/book-state-preserve-voices.test.ts` | intermittent under full-suite box contention | Fails intermittently in a full `test:server` run under box contention; passes 7/7 in isolation. Observed 2026-08-07: `1 failed / 6741 passed`, `[fail] test:server (exit 1, took 746.6s)`. | #2226 | Not quarantined — still gates |
+| #2235 — revokes the older same-format manifest when a re-export of the same format finishes | `server/src/routes/export.test.ts` | intermittent under full-suite box contention | Fails on its first attempt and passes on retry inside a full `npm run test:server` run; surfaced only as a `[retry-hazard]` warning because vitest's `retry:1` absorbs it. Observed 2026-08-11 in the `dbcf36c5` pre-commit run (506 files / 7079 tests passed). | #2235 | Not quarantined — still gates |
+| #2262 — cancel immediately removes the job from the registry, so a same-scope retry starts fresh instead of joining the doomed job | `server/src/routes/script-review.test.ts` | UNDETERMINED — not yet distinguished from ordinary box contention (same class as #2226/#2235) vs. a real cancel-then-retry ordering bug masked by `retry:1` | Two independent sightings on 2026-08-11, both absorbed by vitest's `retry:1`, both stopping at "passes in isolation" — inconclusive, since the test asserts on the job **registry** (module-level mutable state), the exact shape #2028 (ops-46, the retry-hazard reporter) warns `retry:1` can turn from a genuine red-phase failure into a green. Resolving requires a `--retry=0` run under deliberate contention to establish a failure rate. | #2262 | Not quarantined — still gates |
 
-_Otherwise empty — no other tests are currently quarantined._
+_Otherwise empty — no other tests are currently quarantined or tracked here._
 
 <!-- Graduated 2026-07-27: the two sleep-prevention wake-lock tests in
 `server/src/routes/generation.test.ts` (#1854). They were never flaky. They
