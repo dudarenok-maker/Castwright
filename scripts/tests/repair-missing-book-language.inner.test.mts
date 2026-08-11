@@ -19,10 +19,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { planBookLanguage, main } from '../repair-missing-book-language.mts';
+import { planBookLanguage, cacheSampleText, main } from '../repair-missing-book-language.mts';
+import { cachePath } from '../../server/src/store/analysis-cache.js';
+import { detectManuscriptLanguage } from '../../server/src/tts/detect-language.js';
 
 // ---------------------------------------------------------------------------
 // planBookLanguage — pure function tests. Real prose so the REAL
@@ -35,6 +37,17 @@ const REAL_ENGLISH_PROSE =
   'Below, the harbor lights flickered awake one by one as fishing boats returned ' +
   'home ahead of the coming storm, their captains calling out familiar greetings ' +
   'across the darkening water while gulls wheeled overhead in search of scraps.';
+
+// Real Russian prose. Deterministic via detect-language.ts's Cyrillic-ratio
+// SCRIPT PRE-PASS (not franc), same determinism rationale as NO_LETTERS_TEXT
+// below — no dependency on franc's fuzzy Latin disambiguation.
+const REAL_RUSSIAN_PROSE =
+  'Смотритель маяка поднимался по винтовой лестнице каждый вечер перед закатом, ' +
+  'пересчитывая каждую истёртую каменную ступень так же, как учил его отец много ' +
+  'лет назад. Внизу постепенно загорались огни гавани, а рыбацкие лодки одна за ' +
+  'другой возвращались домой перед надвигающимся штормом, и капитаны перекликались ' +
+  'знакомыми приветствиями над потемневшей водой, пока чайки кружили в поисках ' +
+  'объедков.';
 
 // Zero \p{L} letters — trips the detect-language.ts `letters === 0` surrender
 // branch deterministically (no dependency on franc's fuzzy behaviour).
@@ -119,6 +132,57 @@ test('planBookLanguage: whitespace-only cache/manuscript text counts as no text'
     manuscriptText: '  ',
   });
   assert.equal(plan.action, 'skip-no-text');
+});
+
+// ---------------------------------------------------------------------------
+// cacheSampleText — #2246 C2. Previously ZERO test coverage (every main()
+// fixture used a random manuscriptId, so cacheText was always null). Writes
+// directly to the REAL cache path (cachePath is deterministic on
+// manuscriptId, same trick main()'s own tests below use), cleaned up after.
+// ---------------------------------------------------------------------------
+
+// A real e-library boilerplate line matching strip-front-matter.ts's
+// unanchored `одобрен к распространению` global pattern.
+const BOILERPLATE_LINE_RU = 'Настоящая книга одобрен к распространению.';
+
+test('cacheSampleText: joins sentences with a newline, not a space (#2246 C2 fix)', async () => {
+  const manuscriptId = `mns_${randomUUID()}`;
+  const path = cachePath(manuscriptId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    JSON.stringify({
+      chapters: {
+        0: [
+          { text: BOILERPLATE_LINE_RU, speakerId: 'narrator' },
+          { text: REAL_RUSSIAN_PROSE, speakerId: 'narrator' },
+        ],
+      },
+    }),
+  );
+  try {
+    const sample = await cacheSampleText(manuscriptId);
+    assert.ok(sample, 'cacheSampleText must return the joined text');
+    assert.ok(sample.includes('\n'), 'sentences must be newline-joined, not collapsed onto one line');
+
+    // The actual regression this join fixes: stripFrontMatterBoilerplate is
+    // LINE-based. Joined with '\n', only the boilerplate LINE is dropped —
+    // the Russian prose line survives and still detects confidently. Before
+    // the fix (join(' ')), the whole sample collapses onto one line, that
+    // one line matches the boilerplate pattern, and the ENTIRE sample —
+    // prose included — is dropped, leaving nothing to detect from.
+    const detection = detectManuscriptLanguage(sample);
+    assert.equal(detection.fallback, false, 'boilerplate + prose must still detect confidently, not surrender');
+    assert.equal(detection.language, 'ru');
+  } finally {
+    rmSync(path, { force: true });
+  }
+});
+
+test('cacheSampleText: returns null when the book has no cache at all', async () => {
+  const manuscriptId = `mns_${randomUUID()}`; // never written — no cache file exists
+  const sample = await cacheSampleText(manuscriptId);
+  assert.equal(sample, null);
 });
 
 // ---------------------------------------------------------------------------

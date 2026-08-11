@@ -178,13 +178,18 @@ function findAudiobookDirs(root: string): string[] {
  *  cache is install-relative scratch space, see server/src/export/
  *  manuscript-sentences.ts) or the cache is empty/corrupt — either way the
  *  caller falls through to the manuscript-file sample, never throws. */
-async function cacheSampleText(manuscriptId: string): Promise<string | null> {
+export async function cacheSampleText(manuscriptId: string): Promise<string | null> {
   try {
     const cache = await loadAnalysisCache(manuscriptId);
+    // '\n', not ' ' — detectManuscriptLanguage runs stripFrontMatterBoilerplate
+    // first, which is LINE-based and drops any line matching an unanchored
+    // global-boilerplate pattern. Joining every sentence onto one line means a
+    // single boilerplate match (a stray copyright/e-library notice sentence
+    // mid-cache) wipes the ENTIRE sample, not just that one sentence.
     const text = Object.values(cache.chapters ?? {})
       .flat()
       .map((s) => s.text)
-      .join(' ')
+      .join('\n')
       .trim();
     return text.length > 0 ? text : null;
   } catch {
