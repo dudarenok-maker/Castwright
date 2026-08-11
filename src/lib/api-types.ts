@@ -9783,7 +9783,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
             /** @description Unknown device */
             404: {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
-import { isLoopbackHost } from '../lib/lan-recovery-hint';
+import { isLoopbackHost, recoveryHint } from '../lib/lan-recovery-hint';
 import type { PublicDevice } from '../lib/types';
 import { PairingQr } from './pairing/pairing-qr';
 import { PrimaryButton } from './primitives';
@@ -64,7 +64,18 @@ export function LanAccessCard() {
     try {
       await api.revokeDevice(id);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      // Revoke is loopback-only with no castwright.local fallback (#2269) —
+      // narrower than Authorize, which does admit the friendly hostname. A
+      // caller viewing this page at `localhost` but reached through the :443
+      // forwarder or castwright.local (peer 127.0.0.2, never loopback) still
+      // sees the button (isLoopbackHost() is a hostname-only, client-side
+      // heuristic that can't see the forwarder) and gets refused here — name
+      // the one address that does work rather than echoing the raw code.
+      if (e instanceof ApiError && e.status === 403) {
+        setErr("Revoking only works from https://localhost:8443 on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.");
+      } else {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
     }
     refresh(); // re-read: a revoked device drops out of the list below
   };
@@ -122,11 +133,15 @@ export function LanAccessCard() {
                   <span className="font-medium">{d.label}</span>
                   <span className="text-ink/55"> · added {fmt(d.createdAt)} · last seen {fmt(d.lastSeenAt)} · expires {fmt(d.expiresAt)}</span>
                 </span>
-                {isLoopbackHost() && (
+                {isLoopbackHost() ? (
                   <button
                     type="button" onClick={() => revoke(d.id)}
                     className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0"
                   >Revoke</button>
+                ) : (
+                  // Revoke removed rather than left disabled-and-failing (#2269) —
+                  // don't leave the row's action cell empty with no explanation.
+                  <span className="text-xs text-ink/45 text-right">{recoveryHint()}</span>
                 )}
               </li>
             ))}

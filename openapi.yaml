@@ -3223,7 +3223,15 @@ paths:
               schema:
                 type: object
                 properties: { ok: { type: boolean } }
-        '403': { description: Devices can only be revoked from the host UI }
+        '403':
+          description: Devices can only be revoked from the host UI
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
         '404': { description: Unknown device }
 
   /api/lan/cert/regenerate:

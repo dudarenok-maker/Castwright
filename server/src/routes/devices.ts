@@ -5,8 +5,8 @@
    a loopback caller (the local admin UI), can mint/list/revoke devices.
 
      GET    /api/devices        — list paired devices (no secrets)
-     POST   /api/devices        — mint a new per-device token (returned ONCE)
-     DELETE /api/devices/:id     — revoke a device
+     POST   /api/devices        — mint a new per-device token (returned ONCE) (loopback-only)
+     DELETE /api/devices/:id     — revoke a device (loopback-only)
      POST   /api/devices/pair-session — create a QR pairing session (loopback-only)
 
    Reconcile, not absorb: the srv-20 shared secret keeps working; this is the
