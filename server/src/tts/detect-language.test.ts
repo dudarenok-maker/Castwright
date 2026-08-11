@@ -334,12 +334,14 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count-dependenc
 
 /* #2276 — the mandatory invariant: detection must not depend on how a book
    happens to be split into chapters. Re-chapters the SAME underlying text
-   (a small English front-matter snippet + a large German body) five
-   different ways — all-in-one, split in two, split in five, front matter as
-   its own excluded chapter, and front matter merged into chapter 1 (both
-   with the body further split) — and asserts every shape agrees on both
+   (an English front-matter passage + a large German body) six different
+   ways — all-in-one, split in two, split in five, front matter as its own
+   excluded chapter, front matter merged into chapter 1 (both with the body
+   further split), and front matter split across several surviving chapters
+   against a single body chapter — and asserts every shape agrees on both
    `language` and `fallback`. This is the test that would have caught all
-   three #2276 symptoms above. */
+   three #2276 symptoms above — see the last shape's own comment for why the
+   first five alone are insufficient to lock mass-weighting itself. */
 describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invariance (property test)', () => {
   const EN_SENTENCE =
     'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
@@ -349,6 +351,19 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
   const FRONT_MATTER_TEXT = Array(2).fill(EN_SENTENCE).join(' '); // ~50 words — small, real front matter
   const bodySentences = Array(200).fill(DE_SENTENCE); // ~5,000 words — a stand-in book body
   const wholeBody = bodySentences.join(' ');
+
+  // #2276-followup — deliberately a SEPARATE, larger fixture from FRONT_MATTER_TEXT
+  // above, used only by the discriminating shape below. FRONT_MATTER_TEXT can't
+  // simply be enlarged in place: configs 1-3 merge it INTO the same chapter/sample
+  // as the German body, and franc's own confidence margin over that mixed sample
+  // flips from 'deu' to 'eng' once the English share climbs past ~10 sentences
+  // (verified empirically by probing franc directly — the flip point sits between
+  // 10 and 12 of these ~25-word sentences mixed into the body sample) — well below
+  // the >=2x150-word split this shape needs to survive selectBodyChapters. This
+  // fixture avoids that entirely by never mixing: each chapter below is either
+  // pure English or pure German, so franc sees a clean, un-mixed sample every
+  // time and only the MASS-vs-COUNT arithmetic in voteLanguage is under test.
+  const noteSentences = Array(16).fill(EN_SENTENCE); // ~400 words, split 2 ways below (~200/chunk)
 
   function chunk(sentences: string[], n: number): string[] {
     const size = Math.ceil(sentences.length / n);
@@ -391,6 +406,33 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
       chapters: [
         { title: 'Copyright', body: FRONT_MATTER_TEXT },
         ...chunk(bodySentences, 5).map((body, i) => ({ title: `Chapter ${i + 1}`, body })),
+      ],
+    },
+    {
+      // The five shapes above all split the BODY, which can never flip a
+      // count-vote: many German body chapters (or one) against zero-or-one
+      // excluded/merged front-matter chapters always leaves German on top by
+      // chapter count too, so counting and weighing by mass agree by
+      // construction — this is why the five shapes above stay green even
+      // under a `voteLanguage` mutated back to one-ballot-per-chapter
+      // (`const mass = 1`, i.e. the pre-#2276 counting bug this whole
+      // property test exists to lock out). The shape that actually
+      // separates the two: split the FRONT MATTER (a
+      // pure-English chapter of its own, never mixed with the body — see
+      // `noteSentences` above) across several chapters, each retitled so it
+      // survives selectBodyChapters ('A Note on the Translation' doesn't
+      // match isLikelyFrontMatterTitle, and each ~200-word chunk clears
+      // FRONT_MATTER_WORD_THRESHOLD), while the body stays a single chapter.
+      // That's 2 English ballots vs. 1 German ballot — a count-vote gives
+      // English a 2/3 "majority" a mass-vote can't, because the body's
+      // ~5,000 words outweigh the front matter's ~400 by more than 12:1.
+      label: 'front matter split into two surviving chapters, body in one chapter',
+      chapters: [
+        ...chunk(noteSentences, 2).map((body, i) => ({
+          title: `A Note on the Translation, part ${i + 1}`,
+          body,
+        })),
+        { title: 'Chapter One', body: wholeBody },
       ],
     },
   ];
