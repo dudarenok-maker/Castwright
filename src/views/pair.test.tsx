@@ -29,6 +29,7 @@ function renderPair(search = '/pair?c=ABC') {
 
 describe('PairShell', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(api.redeemBrowserPair).mockResolvedValue({ label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z' });
   });
 
@@ -72,5 +73,53 @@ describe('PairShell', () => {
   it('disables the button when no code is present', () => {
     renderPair('/pair');
     expect(screen.getByRole('button', { name: /Authorize/i })).toBeDisabled();
+  });
+
+  it('redeems on mount when self=1, scrubbing the code before the call', async () => {
+    const order: string[] = [];
+    const spy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => { order.push('scrub'); });
+    vi.mocked(api.redeemBrowserPair).mockImplementation(async () => {
+      order.push('redeem');
+      return { label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z' };
+    });
+    renderPair('/pair?c=ABC&self=1');
+    await waitFor(() => expect(api.redeemBrowserPair).toHaveBeenCalledWith({ code: 'ABC' }));
+    expect(order).toEqual(['scrub', 'redeem']);
+    spy.mockRestore();
+  });
+
+  // REGRESSION GUARD, not a red-phase test — see Step 2.
+  it('does not auto-redeem without self=1', async () => {
+    renderPair('/pair?c=ABC');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.redeemBrowserPair).not.toHaveBeenCalled();
+  });
+
+  it('auto-redeems exactly once', async () => {
+    vi.mocked(api.redeemBrowserPair).mockResolvedValue({
+      label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    const { rerender } = renderPair('/pair?c=ABC&self=1');
+    await waitFor(() => expect(api.redeemBrowserPair).toHaveBeenCalledTimes(1));
+    rerender(<div />);
+    expect(api.redeemBrowserPair).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Retry after a 503 and reuses the captured code', async () => {
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.redeemBrowserPair)
+      .mockRejectedValueOnce(new ApiError('degraded', 503))
+      .mockResolvedValueOnce({ label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z' });
+    renderPair('/pair?c=ABC&self=1');
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+    await waitFor(() => expect(api.redeemBrowserPair).toHaveBeenNthCalledWith(2, { code: 'ABC' }));
+  });
+
+  it('does not offer Retry after a 429', async () => {
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.redeemBrowserPair).mockRejectedValueOnce(new ApiError('rate', 429));
+    renderPair('/pair?c=ABC&self=1');
+    expect(await screen.findByText(/wait a minute/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
   });
 });

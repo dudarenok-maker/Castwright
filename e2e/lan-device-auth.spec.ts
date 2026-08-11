@@ -52,4 +52,22 @@ test.describe('LAN device-auth', () => {
     // Confirm we landed on the root hash (books library stage).
     await expect(page).toHaveURL(/#\/?$/);
   });
+
+  test('#/pair?c=MOCKCODEMOCKCODE&self=1 → auto-redeems without a click', async ({ page }) => {
+    // Navigate directly to the pair route with the self-bind flag set — this
+    // is the desktop "Authorize this browser" hop (Task 4), which should not
+    // wait for a click. (The button half of that flow is not e2e-testable
+    // here: it navigates to an absolute castwright.local URL the mock server
+    // on :5174 cannot resolve.)
+    await page.goto('/#/pair?c=MOCKCODEMOCKCODE&self=1');
+
+    // mockRedeemBrowserPair resolves immediately; PairShell auto-redeems on
+    // mount and lands on the library without any interaction.
+    await expect(page.getByRole('button', { name: /Start a new book/i })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Confirm we landed on the root hash (books library stage).
+    await expect(page).toHaveURL(/#\/?$/);
+  });
 });
