@@ -2018,7 +2018,14 @@ live view all move in the shipping PR.
   quote rules the analyzer acts on for a language with a live book, which is the
   wider blast radius this spec has consistently declined. Revision 5 named one
   form of three here, which understated a limitation the reader is being asked to
-  accept.
+  accept. **Filed as
+  [#2245](https://github.com/dudarenok-maker/Castwright/issues/2245)** — the
+  deciding factor is that `isSpokenLine` takes no language, so the repair is a
+  choice between global patterns with an unmeasured cross-language blast radius
+  and a signature change that overlaps `conventionsFor`; two defensible options
+  with an interface decision between them is design work, not an incidental fix.
+  A limitation recorded only here is a limitation being lost, which is why it now
+  has a ticket rather than a paragraph.
 - **Repairing id drift automatically.** D13 badges, gates and *points at* the
   orphan banner; it does not link anything on the user's behalf. Auto-aliasing is
   `repair-cast-id-drift.mjs`'s territory and it declines the ambiguous cases
