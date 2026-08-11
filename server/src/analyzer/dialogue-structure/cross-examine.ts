@@ -56,6 +56,12 @@ export interface CrossExamineOpts {
   unknownBucketIds: Set<string>;
   /** default 80: below → flagOnly (no corrections) */
   alignmentFloorPct: number;
+  /** #2253 — the language's paragraph-start dialogue marker, threaded from the
+      `LanguageConventions` the caller already resolved. `null`/absent for
+      quote-only languages (en/de/ja/zh) and disables the convention invariant
+      entirely. MUST NOT carry the `g` flag: `.test()` on a global regex is
+      stateful via `lastIndex` and would alternate true/false across calls. */
+  dialogueOpen?: RegExp | null;
 }
 
 type Bucket = 'confirmed' | 'corrected' | 'flagged' | 'lumped';
@@ -201,6 +207,37 @@ function decideAnchoredSpeech(modelId: string, span: SpanEvidence, opts: CrossEx
   }
 }
 
+/** #2253 — the dialogue-convention invariant.
+
+    A sentence that OPENS with the language's dialogue marker is speech by that
+    language's own convention. Structural evidence to the contrary means the
+    parser failed to segment a merged paragraph (#2254) — not that the line is
+    narration. The engine must not assert a speaker it cannot support, but it
+    must also not assert `narrator`, which is exactly as strong a claim.
+
+    Deliberately NOT a length heuristic: tag-span size predicts nothing (three
+    chapters of the reference book carry 4,767-6,968-char tag spans and produce
+    ZERO mis-voiced lines). This asks whether the text declares its own type.
+
+    Limit worth knowing: this reads the MODEL's sentence text. A victim whose
+    model output dropped the leading dash is not recovered. */
+function isConventionDialogue(as: AlignedSentence, opts: CrossExamineOpts): boolean {
+  return opts.dialogueOpen != null && opts.dialogueOpen.test(as.sentence.text ?? '');
+}
+
+/** Keep the model's speaker and flag it below the review UI's 0.75 highlight
+    threshold. This FLAGS, it does not ATTRIBUTE — the kept speaker may still be
+    wrong, and is surfaced as uncertain rather than asserted. */
+function decideConventionDialogue(modelId: string): Decision {
+  return {
+    characterId: modelId,
+    confidence: CONFIDENCE.TAG_WEAK_KEEP_FLAG,
+    reason: `dash-line-keep-flag:${modelId}`,
+    bucket: 'flagged',
+    flagged: true,
+  };
+}
+
 /** A sentence whose only aligned spans are `tag` (a beat/tag clause itself,
     e.g. "сказал Антон") — never `speech`. The tag/beat text is narrator
     voice, not the character's: demote (Wave A rule, kept), no block-clamp
@@ -266,6 +303,15 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
   if (speechSpan) {
     block.active = false;
     return speechSpan.speaker ? decideAnchoredSpeech(modelId, speechSpan, opts) : decideUnanchoredSpeech(modelId, opts);
+  }
+
+  /* #2253 — before EITHER demote route. Placed above the tag branch (not
+     inside decideTagSpanOnly) so it also covers decideNarrationOnly below:
+     "no speech span => narrator" has two producers, and guarding only one
+     reroutes traffic instead of fixing the outcome. */
+  if (isConventionDialogue(as, opts) && !isNarratorOrUnknown(modelId, opts)) {
+    block.active = false;
+    return decideConventionDialogue(modelId);
   }
 
   if (as.spans.some((s) => s.kind === 'tag')) {
