@@ -1197,9 +1197,10 @@ function applyUnrejectOrphanedPair(
  *  A pair with `forgotSupersededTo === undefined` contributes no alias
  *  restore (mirrors the pre-#2198 loop's `continue`) — only its
  *  `rejectedPairs` removal happens. `restored` on that pair's result is
- *  `true` (nothing blocked it): the field's only `false` case is a NEWER
- *  alias occupying `supersededBy[from]`, which cannot happen when no restore
- *  was attempted at all.
+ *  `true` (nothing blocked it): the field's `false` cases — a NEWER alias
+ *  occupying `supersededBy[from]`, or (#2161) the stashed target quietly no
+ *  longer being live — can only arise from an ATTEMPTED restore, so neither
+ *  applies when no restore was attempted at all.
  *
  *  If nothing in the batch changes anything (every pair already absent, no
  *  alias needed restoring), no write happens at all — same idempotent-write
