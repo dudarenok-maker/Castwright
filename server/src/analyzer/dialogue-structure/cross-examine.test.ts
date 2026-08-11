@@ -466,3 +466,59 @@ describe('#2253 — the invariant also holds BELOW the alignment floor', () => {
     expect(res.sentences[0].characterId).toBe('narrator');
   });
 });
+
+describe('#2253 — flagged splits into flagged (conflict) and unresolved (no verdict)', () => {
+  const RU_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  const mkText = (characterId: string, text: string): SentenceOutput => ({
+    id: nextId++, chapterId: 1, characterId, text,
+  });
+
+  it('unanchored speech is unresolved, not flagged', () => {
+    const res = run([aligned(mkSentence('anton'), [speechSpan()])]);
+    expect(res.report.unresolved).toBe(1);
+    expect(res.report.flagged).toBe(0);
+  });
+
+  it('an unaligned sentence is unresolved', () => {
+    const res = run([aligned(mkSentence('anton'), [])]);
+    expect(res.report.unresolved).toBe(1);
+    expect(res.report.flagged).toBe(0);
+  });
+
+  it('below the floor, flag-only pass-through is unresolved', () => {
+    const res = run([aligned(mkSentence('anton'), [speechSpan()])], 10);
+    expect(res.report.flagOnly).toBe(true);
+    expect(res.report.unresolved).toBe(1);
+    expect(res.report.flagged).toBe(0);
+  });
+
+  it('a genuine conflict stays flagged', () => {
+    const res = run([
+      aligned(mkSentence('olga'), [speechSpan({ characterId: 'anton', source: 'tag-pronoun' })]),
+    ]);
+    expect(res.report.flagged).toBe(1);
+    expect(res.report.unresolved).toBe(0);
+  });
+
+  it('the convention invariant lands in flagged, not unresolved', () => {
+    const res = run([aligned(mkText('anton', '— Не стоит'), [tagSpan()])], 100, {
+      ...BASE_OPTS,
+      dialogueOpen: RU_DASH,
+    });
+    expect(res.report.flagged).toBe(1);
+    expect(res.report.unresolved).toBe(0);
+  });
+
+  it('the flags array — escalation input — is unchanged by the split', () => {
+    // isFillEligible keys on the REASON string, so escalation must see exactly
+    // the same entries it saw before the buckets moved.
+    const res = run([
+      aligned(mkSentence('narrator'), [speechSpan()]),
+      aligned(mkSentence('anton'), []),
+    ]);
+    expect(res.flags).toEqual([
+      { index: 0, reason: 'unanchored-narrator' },
+      { index: 1, reason: 'unaligned' },
+    ]);
+  });
+});

@@ -64,7 +64,7 @@ export interface CrossExamineOpts {
   dialogueOpen?: RegExp | null;
 }
 
-type Bucket = 'confirmed' | 'corrected' | 'flagged' | 'lumped';
+type Bucket = 'confirmed' | 'corrected' | 'flagged' | 'unresolved' | 'lumped';
 
 interface Decision {
   characterId: string;
@@ -90,7 +90,7 @@ function flagOnlyDecision(as: AlignedSentence): Decision {
     characterId: as.sentence.characterId,
     confidence: Math.min(modelConfidence(as.sentence), CONFIDENCE.UNALIGNED_CAP),
     reason: 'flag-only-floor',
-    bucket: 'flagged',
+    bucket: 'unresolved',
     flagged: true,
   };
 }
@@ -104,14 +104,14 @@ function decideUnanchoredSpeech(modelId: string, opts: CrossExamineOpts): Decisi
         characterId: modelId,
         confidence: CONFIDENCE.UNANCH_NAMED_FLAG,
         reason: `unanchored-named:${modelId}`,
-        bucket: 'flagged',
+        bucket: 'unresolved',
         flagged: true,
       }
     : {
         characterId: modelId,
         confidence: CONFIDENCE.UNANCH_NARR_FLAG,
         reason: 'unanchored-narrator',
-        bucket: 'flagged',
+        bucket: 'unresolved',
         flagged: true,
       };
 }
@@ -287,7 +287,7 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
       characterId: modelId,
       confidence: Math.min(modelConfidence(as.sentence), CONFIDENCE.UNALIGNED_CAP),
       reason: 'unaligned',
-      bucket: 'flagged',
+      bucket: 'unresolved',
       flagged: true,
     };
   }
@@ -341,6 +341,7 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
     confirmed: 0,
     corrected: 0,
     flagged: 0,
+    unresolved: 0,
     lumped: 0,
     escalated: 0,
     escalationAccepted: 0,

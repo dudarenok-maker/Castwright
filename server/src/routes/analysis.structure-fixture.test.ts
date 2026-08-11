@@ -220,17 +220,20 @@ describe('attributeChapterStage2 — dash-dialogue ru fixture (srv-59 Task 12)',
     expect(line14!.confidence).toBeLessThan(0.75);
   });
 
-  it('structureReport: corrected > 0 and flagged > 0, with the exact bucket tally the fixture is designed to produce', async () => {
+  it('structureReport: corrected > 0 and unresolved > 0, with the exact bucket tally the fixture is designed to produce', async () => {
     const result = await attributeChapterStage2(baseOpts(mockSentences()));
 
     expect(result.structureReport?.corrected).toBeGreaterThan(0);
-    expect(result.structureReport?.flagged).toBeGreaterThan(0);
+    // #2253 — the fixture's two flags are both `unanchored-narrator`, i.e. "no
+    // evidence either way", which is now `unresolved` rather than `flagged`.
+    expect(result.structureReport?.unresolved).toBeGreaterThan(0);
     expect(result.structureReport).toMatchObject({
       language: 'ru',
       alignedPct: 100,
       confirmed: 5,
       corrected: 7,
-      flagged: 2,
+      flagged: 0,
+      unresolved: 2,
       lumped: 0,
     });
   });
