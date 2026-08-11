@@ -9,36 +9,52 @@ describe('detectManuscriptLanguage', () => {
   it('detects Russian via the Cyrillic pre-pass (supported)', () => {
     const ru =
       'Горн остыл до цвета подёрнутого пеплом заката, и Рен выскребала последнюю окалину, когда раздался стук в дверь её мастерской.';
-    expect(detectManuscriptLanguage(ru)).toEqual({ language: 'ru', supported: true });
+    expect(detectManuscriptLanguage(ru)).toEqual({ language: 'ru', supported: true, fallback: false });
   });
 
   it('detects Spanish (present in the registry, supported — canary-validated)', () => {
     const es =
       'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller.';
-    expect(detectManuscriptLanguage(es)).toEqual({ language: 'es', supported: true });
+    expect(detectManuscriptLanguage(es)).toEqual({ language: 'es', supported: true, fallback: false });
   });
 
   it('detects French (supported, plan 229)', () => {
     const fr =
       "Le four avait refroidi jusqu'à la couleur d'un coucher de soleil couvert de cendre, et Wren raclait la dernière scorie lorsque l'on frappa à la porte de son atelier.";
-    expect(detectManuscriptLanguage(fr)).toEqual({ language: 'fr', supported: true });
+    expect(detectManuscriptLanguage(fr)).toEqual({ language: 'fr', supported: true, fallback: false });
   });
 
   it('detects German (supported, plan 229)', () => {
     const de =
       'Der Ofen war bis zur Farbe eines aschbedeckten Sonnenuntergangs abgekühlt, und Wren kratzte die letzte Schlacke ab, als es an der Tür ihrer Werkstatt klopfte.';
-    expect(detectManuscriptLanguage(de)).toEqual({ language: 'de', supported: true });
+    expect(detectManuscriptLanguage(de)).toEqual({ language: 'de', supported: true, fallback: false });
   });
 
   it('keeps an English manuscript English even when dense with French proper nouns', () => {
     const en =
       'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
-    expect(detectManuscriptLanguage(en)).toEqual({ language: 'en', supported: true });
+    // A real franc match on 'en' is a decision, not a surrender: fallback must be false
+    // even though the language happens to be the same value the surrender paths guess.
+    expect(detectManuscriptLanguage(en)).toEqual({ language: 'en', supported: true, fallback: false });
   });
 
-  it('returns English for empty / letter-less input', () => {
-    expect(detectManuscriptLanguage('')).toEqual({ language: 'en', supported: true });
-    expect(detectManuscriptLanguage('1234 — ... !!!')).toEqual({ language: 'en', supported: true });
+  it('returns English for empty / letter-less input, flagged as a fallback guess', () => {
+    // Surrender branch 1 (detect-language.ts): letters === 0. `language`/`supported`
+    // are identical to a genuine English decision — only `fallback` distinguishes them.
+    expect(detectManuscriptLanguage('')).toEqual({ language: 'en', supported: true, fallback: true });
+    expect(detectManuscriptLanguage('1234 — ... !!!')).toEqual({
+      language: 'en',
+      supported: true,
+      fallback: true,
+    });
+  });
+
+  it('flags English as a fallback guess when franc finds no Latin match', () => {
+    // Surrender branch 2 (detect-language.ts): the terminal `match ? … : result('en')`
+    // when franc returns 'und' or a code outside the registry's Latin set. Short,
+    // ambiguous, punctuation-heavy text starves franc below its confidence floor.
+    const r = detectManuscriptLanguage('. . . ? ! -- ok yes no');
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
   });
 
   it('strips an English front-matter page before detecting the Spanish body', () => {
@@ -47,7 +63,7 @@ describe('detectManuscriptLanguage', () => {
       'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller, una y otra vez, hasta que abrió.';
     // stripFrontMatterBoilerplate drops the bare-URL + copyright lines; the Spanish
     // body dominates the sample, so franc must return Spanish, not English.
-    expect(detectManuscriptLanguage(text)).toEqual({ language: 'es', supported: true });
+    expect(detectManuscriptLanguage(text)).toEqual({ language: 'es', supported: true, fallback: false });
   });
 
   it('flags a CJK manuscript with `supported` read THROUGH the registry (fs-59 W2 mechanism; W5 flips zh to supported:true) rather than hardcoded', () => {
@@ -57,6 +73,7 @@ describe('detectManuscriptLanguage', () => {
     // (true since fs-59 W5 flipped zh.supported = true).
     expect(r.supported).toBe(getLanguageEntry('zh')?.supported ?? false);
     expect(['zh', 'ja']).toContain(r.language);
+    expect(r.fallback).toBe(false); // script pre-pass match — a decision, not a guess
   });
 
   it('detects Japanese via the CJK pre-pass, supported reads through the registry (true since fs-59 W5)', () => {
@@ -64,6 +81,7 @@ describe('detectManuscriptLanguage', () => {
     const r = detectManuscriptLanguage(ja);
     expect(r.language).toBe('ja');
     expect(r.supported).toBe(getLanguageEntry('ja')?.supported ?? false);
+    expect(r.fallback).toBe(false); // script pre-pass match — a decision, not a guess
   });
 });
 
@@ -97,5 +115,6 @@ describe('detectManuscriptLanguage — CJK read-through proof (fs-59 W2, indepen
     const r = detectWithStub(zh);
     expect(r.language).toBe('zh');
     expect(r.supported).toBe(true); // only true if the CJK branch reads THROUGH the registry
+    expect(r.fallback).toBe(false); // script pre-pass match — a decision, not a guess
   });
 });

@@ -20,6 +20,16 @@ export interface DetectionResult {
   language: string;
   /** Whether that language has passed its validation gate (registry `supported`). */
   supported: boolean;
+  /**
+   * True on a surrender path (no letters to sample, or franc found no Latin
+   * match) where `language: 'en'` is a confidence-floor guess, not a decision.
+   * False whenever the language was genuinely decided (script pre-pass match,
+   * or a real franc match) — including the `en` case where franc/pre-pass
+   * actually decided English. `supported` cannot distinguish these cases
+   * because 'en' is itself `supported: true`; callers that must "never write
+   * a language they only guessed" (#2246) need this field, not `supported`.
+   */
+  fallback: boolean;
 }
 
 export function detectManuscriptLanguage(
@@ -27,9 +37,9 @@ export function detectManuscriptLanguage(
   meta: { author?: string | null; title?: string | null } = {},
 ): DetectionResult {
   const entries = allLanguageEntries();
-  const result = (code: string): DetectionResult => {
+  const result = (code: string, fallback: boolean): DetectionResult => {
     const e = entries.find((x) => x.code === code);
-    return { language: code, supported: e?.supported ?? false };
+    return { language: code, supported: e?.supported ?? false, fallback };
   };
 
   /* 1. Front-matter strip, then sample a prefix. */
@@ -41,15 +51,15 @@ export function detectManuscriptLanguage(
 
   /* 2. Script pre-pass (authoritative, deterministic). */
   const letters = sample.match(LETTER_RE)?.length ?? 0;
-  if (letters === 0) return result('en');
+  if (letters === 0) return result('en', true);
   const cyrillic = sample.match(CYRILLIC_RE)?.length ?? 0;
-  if (cyrillic / letters >= SCRIPT_THRESHOLD) return result('ru');
+  if (cyrillic / letters >= SCRIPT_THRESHOLD) return result('ru', false);
   const han = sample.match(HAN_RE)?.length ?? 0;
   const kana = sample.match(KANA_RE)?.length ?? 0;
   if ((han + kana) / letters >= SCRIPT_THRESHOLD) {
     // zh/ja are supported:true since fs-59 W5 — read THROUGH the registry
     // (not a literal) so any future registry change propagates here too.
-    return result(kana > han ? 'ja' : 'zh');
+    return result(kana > han ? 'ja' : 'zh', false);
   }
 
   /* 3. franc disambiguates Latin, restricted to the registry's Latin codes. */
@@ -57,5 +67,5 @@ export function detectManuscriptLanguage(
   const iso = franc(sample, { only: latin.map((e) => e.detect.iso6393), minLength: 30 });
   const match = latin.find((e) => e.detect.iso6393 === iso);
   // 'und' or no match → fall back to English (the confidence floor).
-  return match ? result(match.code) : result('en');
+  return match ? result(match.code, false) : result('en', true);
 }
