@@ -18,7 +18,10 @@
    THE RULE THAT MATTERS: damage is anything other than `true`. Every one of
    the seven sources below reads `'unknown'`, and `'unknown'` is listed exactly
    like `false` — only an affirmative comparison clears a row:
-     1. a missing/non-finite render stamp (`segmentsFile.castHistorySeq`);
+     1. a missing/non-finite render stamp (`segmentsFile.castHistorySeq`) —
+        UNLESS the segment recorded `renderedFallbackCharacterId`, in which
+        case source 1 reads `false`, not `'unknown'` (the eighth guard below
+        sits above this one and short-circuits it);
      2. a missing `recordedAtSeq` FIELD (the file has never been through the
         #2128 lane);
      3. a missing/non-finite `history.seq` (the file's own write counter);
@@ -116,14 +119,19 @@ export function isAudioCurrent(
      truthiness — the field is `string | null | undefined` and an empty
      string would BE a substitution record, not an absence of one.
 
-     Both consumers actually reach every tier here, including `'exact'`:
-     the banner (`segments-io.ts`'s `collectOrphanedCharacterFallbacks`)
-     `continue`s past `'exact'` before ever calling in, but the repair pass
+     The two consumers do not reach every tier alike: the repair pass
      (`repair-cast-id-drift.mjs`) resolves every string `characterId` and
-     calls `isAudioCurrent` with no exact-tier filter ahead of it — an
-     unguarded `'exact'` branch above this check silently cleared 67
-     narrator-voiced segments there. Do not move this below `'exact'` or
-     below the stamp guard without re-deriving that consumer fact. */
+     calls `isAudioCurrent` with no exact-tier filter ahead of it, so it
+     reaches every tier here, including `'exact'` — an unguarded `'exact'`
+     branch above this check would have silently cleared every re-minted-id
+     substitution case it reaches (unnumbered: no measured population of
+     such cases exists, see the doc comment on
+     `buildOrphansFromSegments` in `repair-cast-id-drift.mjs` for the same
+     framing). The banner (`segments-io.ts`'s
+     `collectOrphanedCharacterFallbacks`) `continue`s past `'exact'` before
+     ever calling in, so this function never sees that tier from the banner
+     side. Do not move this below `'exact'` or below the stamp guard
+     without re-deriving that consumer fact. */
   if (renderedFallbackCharacterId != null) return false;
 
   /* The substitution check above has already run, so any segment reaching

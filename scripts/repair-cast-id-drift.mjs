@@ -2720,7 +2720,12 @@ async function main() {
   } = planApplyRefusal(apply, bookWithholds);
 
   if (allRerenderRows.length) {
-    console.log('--- Re-render list (book / chapter / orphaned id / segments / ~duration) ---');
+    // #2244 review gate N4: this list is no longer only orphaned ids — an
+    // `'exact'`-tier id with a recorded `renderedFallbackCharacterId` now
+    // enters `orphans` too (it genuinely needs a re-render, with no alias to
+    // record), and that id IS live in `liveIds`. "character id" stays
+    // accurate for both cases; "orphaned id" no longer does.
+    console.log('--- Re-render list (book / chapter / character id / segments / ~duration) ---');
     for (const row of allRerenderRows) {
       console.log(
         `  ${row.book} | ch${row.chapterId} "${row.chapterTitle}" | ${row.id} | ${row.segments} seg | ~${formatDuration(row.durationSec)}`,
