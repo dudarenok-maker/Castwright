@@ -2796,8 +2796,10 @@ Observe, on a fresh elevated `npm run build && npm run start:lan`:
    `__Host-cw_lan` cookie confirms the same figure via DevTools' Application
    tab.
 2. **The recovery path, starting from an actually-lapsed cookie** (clear
-   `__Host-cw_lan` in DevTools, or set `LAN_DEVICE_TTL_DAYS=0` — clamps to 1 —
-   for a fast repro, then wait it out): reload `https://castwright.local`.
+   `__Host-cw_lan` in DevTools — the actual fast path; `LAN_DEVICE_TTL_DAYS=1`
+   is the lowest value the config accepts, `0` is rejected and falls through
+   to the 365-day default, and even `=1` still means waiting out a full day):
+   reload `https://castwright.local`.
    The library panel must read "This browser is no longer authorized for
    Castwright on your network," with a recovery pointer naming the fix for
    the host you're actually on — never the raw

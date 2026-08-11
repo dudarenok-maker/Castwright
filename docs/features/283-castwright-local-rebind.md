@@ -97,10 +97,12 @@ whose device-token / pairing / cookie machinery this plan reuses unchanged.
 2. **`self=1` is never treated as a trust signal.** The gate on `/redeem-browser` is
    always the one-time pairing code; `self=1` only controls whether `pair.tsx`
    auto-fires the redeem instead of waiting for a click (`src/views/pair.tsx`).
-3. **The self-bind label is exactly `'This computer'` and the flag is exactly
-   `self=1`**, identical in both `lan-access-card.tsx` (mint + navigate) and
-   `pair.tsx` (read + branch). A mismatch on either string silently breaks the
-   one-click path without failing any type check.
+3. **The self-bind label is exactly `'This computer'`, minted only by
+   `lan-access-card.tsx`; the flag is exactly `self=1`, minted by
+   `lan-access-card.tsx` and read (not written) by `pair.tsx`.** `pair.tsx` never
+   reads or checks the label — only the `self` query param. A mismatch on the
+   `self=1` string silently breaks the one-click path without failing any type
+   check.
 4. **Both `hydrateError` dispatch sites stay in sync.** There are exactly two —
    `src/components/layout.tsx` (first load) and `src/views/book-library.tsx` (the
    Retry handler on the panel this feature adds) — and both must dispatch the same
@@ -157,9 +159,11 @@ never render a working "Authorize this browser" button. The local production rou
    → the browser navigates to `https://castwright.local/#/pair?c=…&self=1` → lands on
    the library with no click. `GET /api/devices` shows a `'This computer'` record whose
    `expires` is roughly a year out, not a month.
-2. **A lapsed cookie recovers in one click.** Clear the `__Host-cw_lan` cookie (or wait
-   out a short TTL set via `LAN_DEVICE_TTL_DAYS=0` — clamps to 1 day — for a fast
-   repro) and reload `https://castwright.local`. The library panel reads "This browser
+2. **A lapsed cookie recovers in one click.** Clear the `__Host-cw_lan` cookie in
+   DevTools — the actual fast path. `LAN_DEVICE_TTL_DAYS=1` is the lowest value the
+   config accepts (`0` is rejected and falls through to the 365-day default), and
+   even that means waiting out a full day, so it is not a fast repro. Reload
+   `https://castwright.local`. The library panel reads "This browser
    is no longer authorized for Castwright on your network," not the raw
    `Library scan failed (401): …` string, and names the recovery step for the hostname
    you're actually on. Following that step re-authorizes without a restart.
