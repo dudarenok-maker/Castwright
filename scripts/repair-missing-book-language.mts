@@ -49,7 +49,19 @@
  *     /:bookId/reparse does (server/src/parsers, real parseManuscript).
  *   - Neither readable → skip and name the book in the report. Only one
  *     readable → also a skip (nothing to corroborate it against). Never
- *     guess from less than two independent, agreeing reads.
+ *     guess from less than two agreeing reads.
+ *
+ * KNOWN RESIDUAL (#2256) — the two reads are independent in DERIVATION, not
+ * in CONTENT. The cache is built from the manuscript, so a book whose OWN
+ * text is unrepresentative carries the same junk into both samples, and they
+ * agree. Verified against this gate: a TOC-only book backfills `'es'`, a
+ * nav-only EPUB and an OCR-noise PDF both backfill `'en'`. What the gate
+ * does close is the reachable case that motivated it — a resumable,
+ * per-chapter cache holding only front matter while the manuscript holds
+ * real prose — where the two diverge and the book is refused. Closing the
+ * rest needs a prose-signal floor (a minimum of terminal-punctuated
+ * sentences, say), which is a threshold decision, so it is ticketed rather
+ * than guessed at here.
  *
  * Write path: `writeStateJsonAtomic` (server/src/workspace/state-migrate.ts)
  * — the same schema-stamp + rotating-backup helper every other state.json
