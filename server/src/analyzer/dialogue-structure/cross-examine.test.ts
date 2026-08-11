@@ -432,3 +432,37 @@ describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
     expect(as.spans.some((s) => s.kind === 'speech')).toBe(false);
   });
 });
+
+describe('#2253 — the invariant also holds BELOW the alignment floor', () => {
+  const RU_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  const DASH_OPTS = { ...BASE_OPTS, dialogueOpen: RU_DASH };
+  const mkText = (characterId: string, text: string): SentenceOutput => ({
+    id: nextId++, chapterId: 1, characterId, text,
+  });
+
+  it('flagOnly: a dash-opening narration-aligned line is NOT demoted', () => {
+    const s = mkText('anton', '— Не стоит');
+    // alignedPct 10 < floor 80 -> flagOnly, which bypasses decideSentence.
+    const res = run([aligned(s, [narrationSpan()])], 10, DASH_OPTS);
+    expect(res.report.flagOnly).toBe(true); // the branch under test really ran
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.sentences[0].confidence).toBeLessThan(0.75);
+    // Below the floor the line falls through to the flag-only pass-through, NOT
+    // to `dash-line-keep-flag`. Assert the REASON, which is stable; the bucket
+    // is not (Task 5 moves `flag-only-floor` to `unresolved`).
+    expect(res.flags).toEqual([{ index: 0, reason: 'flag-only-floor' }]);
+  });
+
+  it('flagOnly: a NON-dash narration-aligned line still demotes (unchanged)', () => {
+    const s = mkText('anton', 'он молча поднялся по лестнице');
+    const res = run([aligned(s, [narrationSpan()])], 10, DASH_OPTS);
+    expect(res.report.flagOnly).toBe(true);
+    expect(res.sentences[0].characterId).toBe('narrator');
+  });
+
+  it('flagOnly: with no dialogueOpen the floor behaviour is unchanged', () => {
+    const s = mkText('anton', '— Не стоит');
+    const res = run([aligned(s, [narrationSpan()])], 10, BASE_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+  });
+});

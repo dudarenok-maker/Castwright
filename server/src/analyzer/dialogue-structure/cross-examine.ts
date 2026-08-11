@@ -358,7 +358,14 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
       // Suppress corrections below the floor EXCEPT the high-precision
       // pure-narration demote, which doesn't depend on the (unreliable)
       // window/alternation picture.
-      if (isPureNarrationAligned(as) && as.sentence.characterId !== NARRATOR_ID) {
+      /* #2253 — the third conjunct. Without it the defect survives intact
+         below the floor, and no chapter of the reference corpus is below the
+         floor, so no corpus measurement would ever show it. */
+      if (
+        isPureNarrationAligned(as) &&
+        as.sentence.characterId !== NARRATOR_ID &&
+        !isConventionDialogue(as, opts)
+      ) {
         decision = decideNarrationOnly(as.sentence.characterId, block);
       } else {
         block.active = false;
