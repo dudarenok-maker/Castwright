@@ -52,6 +52,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('LanAccessCard', () => {
   it('renders device label, added date, expires date, and Revoke calls revokeDevice', async () => {
+    // Revoke is loopback-only (#2269) — stub a loopback host explicitly so
+    // this assertion doesn't ride jsdom's default location incidentally.
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
     vi.mocked(api.revokeDevice).mockResolvedValue({ ok: true });
 
@@ -81,7 +84,22 @@ describe('LanAccessCard', () => {
     expect(screen.queryByText('Mike phone')).not.toBeInTheDocument();
   });
 
+  // #2269 — revoke is loopback-only server-side now; the control must not be
+  // presented to a caller who would only get a 403 for pressing it.
+  it('hides the Revoke control for a non-loopback caller (castwright.local)', async () => {
+    vi.stubGlobal('location', { hostname: 'castwright.local', port: '' });
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
+
+    render(<LanAccessCard />);
+
+    await waitFor(() => screen.getByText('Mike phone'));
+    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+  });
+
   it('Revoke removes the row (the re-fetch returns it revoked)', async () => {
+    // Revoke is loopback-only (#2269) — stub a loopback host explicitly so
+    // this assertion doesn't ride jsdom's default location incidentally.
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
     vi.mocked(api.listDevices)
       .mockResolvedValueOnce({ devices: [DEVICE] })
       .mockResolvedValueOnce({ devices: [{ ...DEVICE, revoked: true }] });

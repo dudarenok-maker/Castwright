@@ -122,10 +122,12 @@ export function LanAccessCard() {
                   <span className="font-medium">{d.label}</span>
                   <span className="text-ink/55"> · added {fmt(d.createdAt)} · last seen {fmt(d.lastSeenAt)} · expires {fmt(d.expiresAt)}</span>
                 </span>
-                <button
-                  type="button" onClick={() => revoke(d.id)}
-                  className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0"
-                >Revoke</button>
+                {isLoopbackHost() && (
+                  <button
+                    type="button" onClick={() => revoke(d.id)}
+                    className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0"
+                  >Revoke</button>
+                )}
               </li>
             ))}
           </ul>

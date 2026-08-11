@@ -406,6 +406,37 @@ describe('devices route (srv-33)', () => {
     expect(res.status).toBe(403);
   });
 
+  // #2269 — revoke is loopback-only, symmetric with mint: a non-loopback
+  // caller must be refused, and the record must survive the attempt (a 403
+  // with the write already done would pass a status-only assertion).
+  it('DELETE /api/devices/:id is loopback-only (403 from a non-loopback request, record stays live)', async () => {
+    const mk = await request(app).post('/api/devices').send({ label: 'Phone' });
+    const id = mk.body.id as string;
+
+    vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);
+    const res = await request(app).delete(`/api/devices/${id}`);
+    expect(res.status).toBe(403);
+
+    const list = await request(app).get('/api/devices');
+    const device = list.body.devices.find((d: { id: string }) => d.id === id);
+    expect(device).toBeTruthy();
+    expect(device.revoked).toBe(false);
+  });
+
+  // Sanity counterpart — a genuinely loopback caller can still revoke.
+  // isLoopbackRequest's mock forwards to the real implementation by default,
+  // and supertest requests are loopback.
+  it('DELETE /api/devices/:id still succeeds from a loopback caller', async () => {
+    const mk = await request(app).post('/api/devices').send({ label: 'Phone' });
+    const id = mk.body.id as string;
+
+    const res = await request(app).delete(`/api/devices/${id}`);
+    expect(res.status).toBe(200);
+
+    const list = await request(app).get('/api/devices');
+    expect(list.body.devices.find((d: { id: string }) => d.id === id).revoked).toBe(true);
+  });
+
   it('caps an over-long device label at 64 chars', async () => {
     const { device } = await deviceTokens.createDevice('x'.repeat(200), 30);
     expect(device.label.length).toBe(64);

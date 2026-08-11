@@ -2275,7 +2275,12 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Revoke a paired device (srv-33) */
+        /**
+         * Revoke a paired device (srv-33)
+         * @description LOOPBACK-ONLY (#2269), symmetric with `POST /api/devices`: a stolen
+         *     browser cookie that cannot mint a fresh token must equally not be
+         *     able to revoke the legitimate owner's.
+         */
         delete: operations["revokeDevice"];
         options?: never;
         head?: never;
@@ -9772,6 +9777,13 @@ export interface operations {
                         ok?: boolean;
                     };
                 };
+            };
+            /** @description Devices can only be revoked from the host UI */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Unknown device */
             404: {

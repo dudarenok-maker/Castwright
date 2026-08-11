@@ -125,7 +125,15 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt, friendlyUrl });
 });
 
+// revoke — LOOPBACK-ONLY, symmetric with the mint route above (#2269): a
+// stolen browser cookie that cannot mint a fresh token must equally not be
+// able to revoke the legitimate owner's, which is the denial-of-service half
+// of the same threat model the mint comment names.
 devicesRouter.delete('/devices/:id', async (req: Request, res: Response) => {
+  if (!isLoopbackRequest(req)) {
+    res.status(403).json({ error: 'Devices can only be revoked from the host UI.' });
+    return;
+  }
   try {
     const ok = await revokeDevice(req.params.id);
     if (!ok) {
