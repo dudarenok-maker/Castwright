@@ -2,7 +2,7 @@
    Script pre-pass is authoritative; franc disambiguates Latin; front-matter
    stripped before detecting; es/fr/de detected but not yet `supported`. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { detectManuscriptLanguage } from './detect-language.js';
+import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
 
 describe('detectManuscriptLanguage', () => {
@@ -116,5 +116,105 @@ describe('detectManuscriptLanguage — CJK read-through proof (fs-59 W2, indepen
     expect(r.language).toBe('zh');
     expect(r.supported).toBe(true); // only true if the CJK branch reads THROUGH the registry
     expect(r.fallback).toBe(false); // script pre-pass match — a decision, not a guess
+  });
+});
+
+/* #2263 — chapter-aware entry point (POST /api/import calls this instead of
+   detectManuscriptLanguage). Fixtures repeat a single real sentence enough
+   times to clear BOTH thresholds a body chapter needs to enter the vote:
+   FRONT_MATTER_WORD_THRESHOLD (150 words) and, for the single-chapter path,
+   PROSE_UNIT_FLOOR (20 sentence-terminal units) — each repeat is one unit. */
+describe('detectManuscriptLanguageFromChapters (#2263)', () => {
+  const EN_SENTENCE =
+    'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
+  const RU_SENTENCE =
+    'Горн остыл до цвета подёрнутого пеплом заката, и Рен выскребала последнюю окалину, когда раздался стук в дверь её мастерской.';
+  const ZH_SENTENCE =
+    '熔炉已经冷却到被灰烬覆盖的落日的颜色，当有人敲响她作坊的门时，雷恩正在刮掉最后的炉渣。';
+  const repeat = (sentence: string, times = 25) => Array(times).fill(sentence).join(' ');
+
+  it('votes over multiple body chapters and returns the unanimous language', () => {
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: repeat(EN_SENTENCE) },
+      { title: 'Chapter Two', body: repeat(EN_SENTENCE) },
+    ]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: false });
+  });
+
+  it('drops a front-matter-titled chapter from the vote, not just outvotes it', () => {
+    // Without the title filter this would be a 1-en/1-ru split (no strict
+    // majority) and surrender. With it, "Copyright" never enters the vote,
+    // leaving a single English candidate that clears the floor on its own.
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Copyright', body: repeat(RU_SENTENCE) },
+      { title: 'Chapter One', body: repeat(EN_SENTENCE) },
+    ]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: false });
+  });
+
+  it('drops a short, non-front-matter-titled chapter by WORD COUNT alone — a 1-vs-1 head-to-head that only resolves once it is dropped', () => {
+    // Isolates the word-count half of selectBodyChapters from the title
+    // half and from vote-majority robustness: with only ONE other chapter,
+    // an unfiltered short chapter is a 1-vs-1 split (no majority) — dropping
+    // it by word count alone is the only way this resolves to a decision.
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter 1', body: '[emphatic] Castwright 原创作品。\n\n---' }, // not front-matter-titled, but far under FRONT_MATTER_WORD_THRESHOLD
+      { title: '第一章', body: repeat(ZH_SENTENCE) },
+    ]);
+    expect(r).toEqual({ language: 'zh', supported: true, fallback: false });
+  });
+
+  it('drops a short, non-front-matter-titled first chapter by WORD COUNT alone — resolves to the body language (the 煤落的委托 shape)', () => {
+    // Real repro against the live corpus book: this exact chapter body,
+    // detected alone, is a confident (fallback:false) WRONG 'en' vote —
+    // proof the selection filter, not the vote, is what excludes it.
+    const lookalike = detectManuscriptLanguage('[emphatic] Castwright 原创作品。\n\n---');
+    expect(lookalike).toEqual({ language: 'en', supported: true, fallback: false });
+
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter 1', body: '[emphatic] Castwright 原创作品。\n\n---' }, // not a front-matter TITLE, but far under FRONT_MATTER_WORD_THRESHOLD
+      { title: '第一章', body: repeat(ZH_SENTENCE) },
+      { title: '第二章', body: repeat(ZH_SENTENCE) },
+    ]);
+    expect(r.language).toBe('zh');
+    expect(r.fallback).toBe(false);
+  });
+
+  it('2-vs-2 split (en/ru), no strict majority → surrenders', () => {
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: repeat(EN_SENTENCE) },
+      { title: 'Chapter Two', body: repeat(EN_SENTENCE) },
+      { title: 'Глава первая', body: repeat(RU_SENTENCE) },
+      { title: 'Глава вторая', body: repeat(RU_SENTENCE) },
+    ]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('a single body chapter ABOVE the prose-unit floor backfills (the floor is not a blanket single-chapter refusal)', () => {
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: repeat(EN_SENTENCE) }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: false });
+  });
+
+  it('a single body chapter BELOW the prose-unit floor surrenders — it cannot corroborate itself', () => {
+    // Genuine, confidently-detected English prose on its own (fallback would
+    // be false via detectManuscriptLanguage directly) — but only one
+    // sentence, far under PROSE_UNIT_FLOOR.
+    const solo = detectManuscriptLanguage(EN_SENTENCE);
+    expect(solo.fallback).toBe(false);
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: EN_SENTENCE }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('falls back to considering ALL chapters when every one is front-matter-titled, rather than refusing outright', () => {
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Dedication', body: repeat(EN_SENTENCE) },
+      { title: 'Copyright', body: repeat(EN_SENTENCE) },
+    ]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: false });
+  });
+
+  it('an empty chapter list surrenders rather than throwing', () => {
+    expect(detectManuscriptLanguageFromChapters([])).toEqual({ language: 'en', supported: true, fallback: true });
   });
 });
