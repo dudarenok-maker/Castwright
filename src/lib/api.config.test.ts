@@ -308,10 +308,10 @@ describe('mock config parity with the server registry', () => {
      gpu.vramBudget / gpu.weight.* / gpu.safeCoexistMb) from the server
      registry.ts, but the hand-copied MOCK_CONFIG_DESCRIPTORS kept them and
      never gained gpu.reserveMb — so mock mode (and the §9 wiki screenshots
-     captured from it) rendered retired knobs. The mock is deliberately a
-     SUBSET of the registry, so we don't assert full-catalog parity; but the
-     gpu-lifecycle group must mirror the registry exactly, or this class of
-     drift silently returns. */
+     captured from it) rendered retired knobs. Since #2259 the mock catalogue
+     is projected straight from the registry (full parity, not a subset), but
+     this group-level check is kept as a cheap, readable canary alongside the
+     catalogue-wide guards below. */
   it('gpu-lifecycle descriptor keys mirror the registry group', async () => {
     const { descriptors } = await mockGetConfig();
     const mockKeys = descriptors
@@ -359,31 +359,27 @@ describe('mock config parity with the server registry', () => {
     expect(mockGroup?.help).toBe(registryGroup?.help);
   });
 
-  it('mock descriptors match the server registry on default/min/max for every shared knob', async () => {
+  /* #2259 — the mock catalogue is now PROJECTED from the registry (see
+     api.ts's MOCK_CONFIG_DESCRIPTORS: UI_ONLY_MOCK_DESCRIPTORS +
+     allKnobDescriptors()), so a per-field parity check against KNOBS on the
+     shared key set is tautological — both sides are the same projection of
+     the same data by construction. What can still break: (1) a registry
+     knob silently missing a mock descriptor (the #2259 gap-1 failure mode),
+     and (2) a descriptor's `group` not resolving to any group the mock
+     returns (the failure mode the group-list rewrite below introduces). */
+  it('every registry knob has a mock descriptor', async () => {
     const { descriptors } = await mockGetConfig();
-    const real = new Map(KNOBS.map((k) => [k.key, k]));
-    const project = (d: { key: string; default?: unknown; min?: number; max?: number }) => ({
-      key: d.key, default: d.default, min: d.min, max: d.max,
-    });
+    const mockKeys = new Set(descriptors.map((d) => d.key));
+    for (const k of KNOBS) {
+      expect(mockKeys.has(k.key)).toBe(true);
+    }
+  });
 
-    // Intersection only: the mock is a documented subset (see :311-313), and it
-    // carries two UI-only entries that are not registry keys.
-    const UI_ONLY_MOCK_DESCRIPTORS = 2;
-    const shared = descriptors.filter((d) => real.has(d.key));
-    // Derived from the catalogue itself rather than a hardcoded snapshot count
-    // (a prior `> 90` floor sat against an actual count of 96 — six knobs
-    // could silently vanish from either side before it ever tripped). Every
-    // mock descriptor is expected to be a shared registry key except the two
-    // documented UI-only ones, so this scales automatically as knobs are
-    // added instead of drifting toward its own threshold.
-    expect(shared.length).toBe(descriptors.length - UI_ONLY_MOCK_DESCRIPTORS);
-    // Coarse floor kept alongside the equality above: that check alone is
-    // vacuous if the mock catalogue itself shrank to just its two UI-only
-    // descriptors (0 === 2 - 2), which would also collapse the `toEqual`
-    // below to two empty arrays — silently "passing" the exact
-    // filter-emptying failure this floor exists to catch.
-    expect(shared.length).toBeGreaterThan(90);
-
-    expect(shared.map(project)).toEqual(shared.map((d) => project(real.get(d.key)!)));
+  it("every mock descriptor's group resolves to a group mockGetConfig() returns", async () => {
+    const { descriptors, groups } = await mockGetConfig();
+    const groupIds = new Set(groups.map((g) => g.id));
+    for (const d of descriptors) {
+      expect(groupIds.has(d.group)).toBe(true);
+    }
   });
 });
