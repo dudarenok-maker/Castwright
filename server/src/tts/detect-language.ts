@@ -104,44 +104,83 @@ function selectBodyChapters<T extends { title: string; body: string }>(chapters:
   );
 }
 
-/* Modal language over the chapters whose detection didn't surrender, gated on
-   a STRICT majority (> 0.5, not >=) — see detectManuscriptLanguageFromChapters's
-   own comment for why that margin is safe across the live corpus. No majority,
-   or zero non-surrendered detections, is a surrender. */
-function voteLanguage(detections: DetectionResult[]): DetectionResult {
-  const nonSurrendered = detections.filter((d) => !d.fallback);
+/* Mass-weighted vote over the candidate chapters (#2276 — was per-CHAPTER
+   voting, which made the answer depend on how the book happens to be split
+   into chapters rather than on the text itself: two short chapters could
+   outvote a whole novel in one). Each chapter's ballot is weighted by its own
+   word count (countWords — the CJK-aware one, shared with selectBodyChapters
+   so a chapter can't be counted one way for selection and another for the
+   vote), and the winner needs a STRICT majority (> 0.5, not >=) of the
+   non-surrendered MASS — see detectManuscriptLanguageFromChapters's own
+   comment for why that margin is safe across the live corpus. No majority,
+   or zero non-surrendered detections, is a surrender.
+
+   The prose-unit floor is applied here too, to the WINNING language's own
+   mass only (not to candidates.length — see detectManuscriptLanguageFromChapters's
+   comment for why keying it on chapter count made it unreachable in
+   practice). A single candidate is just the n=1 case of this same vote: its
+   whole mass "wins" unanimously, and its own prose units are checked against
+   the floor exactly as any other winner's are. */
+function voteLanguage(
+  candidates: Array<{ title: string; body: string }>,
+  meta: { author?: string | null; title?: string | null },
+): DetectionResult {
+  const ballots = candidates.map((c) => ({ chapter: c, detection: detectManuscriptLanguage(c.body, meta) }));
+  const nonSurrendered = ballots.filter((b) => !b.detection.fallback);
   if (nonSurrendered.length === 0) return resultFor('en', true);
 
-  const counts = new Map<string, number>();
-  for (const d of nonSurrendered) counts.set(d.language, (counts.get(d.language) ?? 0) + 1);
-  let modalLanguage: string | null = null;
-  let modalCount = 0;
-  for (const [language, count] of counts) {
-    if (count > modalCount) {
-      modalLanguage = language;
-      modalCount = count;
-    }
+  const massByLanguage = new Map<string, number>();
+  let totalMass = 0;
+  for (const { chapter, detection } of nonSurrendered) {
+    const mass = countWords(chapter.body);
+    massByLanguage.set(detection.language, (massByLanguage.get(detection.language) ?? 0) + mass);
+    totalMass += mass;
   }
 
-  return modalLanguage && modalCount / nonSurrendered.length > 0.5
-    ? resultFor(modalLanguage, false)
-    : resultFor('en', true);
+  let winner: string | null = null;
+  let winnerMass = 0;
+  for (const [language, mass] of massByLanguage) {
+    if (mass > winnerMass) {
+      winner = language;
+      winnerMass = mass;
+    }
+  }
+  if (!winner || totalMass === 0 || winnerMass / totalMass <= 0.5) return resultFor('en', true);
+
+  const winningProseUnits = nonSurrendered
+    .filter((b) => b.detection.language === winner)
+    .reduce((sum, b) => sum + countProseUnits(prepareSample(b.chapter.body, meta)), 0);
+
+  return winningProseUnits < PROSE_UNIT_FLOOR ? resultFor('en', true) : resultFor(winner, false);
 }
 
-/* #2263 — chapter-aware entry point, called by POST /api/import instead of
-   detectManuscriptLanguage. Detects each body chapter independently (dropping
-   likely front/back matter first, see selectBodyChapters) and votes, so a
-   front-matter chapter in a different language than the body can't decide the
-   whole book. A single surviving body chapter can't corroborate itself, so it
-   goes through the same PROSE_UNIT_FLOOR gate the language-repair script uses
-   for its own single-sample case (server/src/tts/prose-units.ts) instead of
-   voting.
+/* #2263/#2276 — chapter-aware entry point, called by POST /api/import instead
+   of detectManuscriptLanguage. Detects each body chapter independently
+   (dropping likely front/back matter first, see selectBodyChapters) and
+   votes, so a front-matter chapter in a different language than the body
+   can't decide the whole book.
 
-   Strict majority (> 0.5) is safe: measured against the live 20-book corpus,
-   voting every chapter with NO front-matter selection at all (the worst case —
-   as if that filter failed completely) still gives every book's correct
-   language, with the lowest modal share still 67% (well clear of the 50%
-   line). Do not lower this margin without re-measuring against that corpus. */
+   #2276 — the vote (and the PROSE_UNIT_FLOOR gate) must be chapter-count
+   INVARIANT: splitting or merging chapters must never change the detected
+   language, because a chapter is an arbitrary container. The old
+   implementation voted one ballot per CHAPTER and only applied the floor when
+   there was exactly one candidate — both are chapter-count-shaped, not
+   text-shaped, so re-chaptering the same text (which any real analysis cache
+   does, being keyed by chapter) could flip the answer. voteLanguage above
+   fixes both: every chapter's ballot is weighted by its own word mass, and
+   the floor sums the WINNING language's mass regardless of how many chapters
+   it came from — so a single surviving body chapter is just the n=1 case of
+   the same vote, not a separate code path.
+
+   Strict majority (> 0.5) is safe: measured 2026-08-11 against the live
+   20-book corpus (server/handoff/cache), voting every non-excluded chapter
+   with NO front-matter/word-count SELECTION at all (as if selectBodyChapters
+   failed completely) still resolves every book to its correct language, with
+   the lowest winning-language mass share measured at 100% — this corpus's
+   cached chapters already exclude non-body material, so selectBodyChapters
+   is a defense against contamination this corpus hasn't needed yet, not
+   evidence the margin is thin. Do not lower this margin without
+   re-measuring. */
 export function detectManuscriptLanguageFromChapters(
   chapters: Array<{ title: string; body: string }>,
   meta: { author?: string | null; title?: string | null } = {},
@@ -150,12 +189,5 @@ export function detectManuscriptLanguageFromChapters(
   const candidates = bodyChapters.length > 0 ? bodyChapters : chapters;
   if (candidates.length === 0) return resultFor('en', true);
 
-  if (candidates.length === 1) {
-    const detection = detectManuscriptLanguage(candidates[0].body, meta);
-    if (detection.fallback) return detection;
-    const units = countProseUnits(prepareSample(candidates[0].body, meta));
-    return units < PROSE_UNIT_FLOOR ? resultFor('en', true) : detection;
-  }
-
-  return voteLanguage(candidates.map((c) => detectManuscriptLanguage(c.body, meta)));
+  return voteLanguage(candidates, meta);
 }

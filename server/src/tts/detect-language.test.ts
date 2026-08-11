@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
+import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
 
 describe('detectManuscriptLanguage', () => {
   it('detects Russian via the Cyrillic pre-pass (supported)', () => {
@@ -152,22 +153,45 @@ describe('detectManuscriptLanguageFromChapters (#2263)', () => {
     expect(r).toEqual({ language: 'en', supported: true, fallback: false });
   });
 
-  it('drops a short, non-front-matter-titled chapter by WORD COUNT alone — a 1-vs-1 head-to-head that only resolves once it is dropped', () => {
-    // Isolates the word-count half of selectBodyChapters from the title
-    // half and from vote-majority robustness: with only ONE other chapter,
-    // an unfiltered short chapter is a 1-vs-1 split (no majority) — dropping
-    // it by word count alone is the only way this resolves to a decision.
-    const r = detectManuscriptLanguageFromChapters([
-      { title: 'Chapter 1', body: '[emphatic] Castwright 原创作品。\n\n---' }, // not front-matter-titled, but far under FRONT_MATTER_WORD_THRESHOLD
-      { title: '第一章', body: repeat(ZH_SENTENCE) },
-    ]);
-    expect(r).toEqual({ language: 'zh', supported: true, fallback: false });
+  it('drops SEVERAL short, non-front-matter-titled chapters by WORD COUNT — their COMBINED mass would otherwise outvote the real body (#2276 mass-vote isolation)', () => {
+    // Under mass-weighted voting, a literal 1-vs-1 (one short lookalike vs
+    // one real body chapter) can NEVER isolate the word-count filter: a
+    // chapter that clears FRONT_MATTER_WORD_THRESHOLD to remain a candidate
+    // always has >= as much mass as one that was dropped for falling short
+    // of it, so removing the filter can't flip a clean two-way contest — see
+    // the retitled 煤落的委托 test below, which this test's comment explains.
+    // FIVE short lookalike chapters, each individually under the threshold,
+    // combine to out-mass the real body if the word-count filter doesn't
+    // drop them — that's what actually exercises the mechanism.
+    const shortWrongChapters = Array.from({ length: 5 }, (_, i) => ({
+      title: `Aside ${i + 1}`, // not a front-matter title
+      body: repeat(RU_SENTENCE, 7), // 133 words — under the 150-word threshold
+    }));
+    const realBody = { title: 'Chapter One', body: repeat(EN_SENTENCE) }; // 625 words
+
+    // Fixture sanity: each short chapter is confidently 'ru' alone, and five
+    // of them together outweigh the real body's word count — the premise
+    // this test needs to be a genuine (not vacuous) mass-flip.
+    const shortDetection = detectManuscriptLanguage(shortWrongChapters[0].body);
+    expect(shortDetection).toEqual({ language: 'ru', supported: true, fallback: false });
+    const shortTotalMass = shortWrongChapters.reduce((sum, c) => sum + countWords(c.body), 0);
+    expect(shortTotalMass).toBeGreaterThan(countWords(realBody.body));
+    expect(countWords(shortWrongChapters[0].body)).toBeLessThan(FRONT_MATTER_WORD_THRESHOLD);
+
+    const r = detectManuscriptLanguageFromChapters([...shortWrongChapters, realBody]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: false });
   });
 
-  it('drops a short, non-front-matter-titled first chapter by WORD COUNT alone — resolves to the body language (the 煤落的委托 shape)', () => {
+  it('drops a short, non-front-matter-titled first chapter by WORD COUNT alone (the 煤落的委托 shape) — real-world repro; this fixture alone is too mass-lopsided to prove the filter is NECESSARY under mass-weighted voting (see the mass-flip test above for that proof)', () => {
     // Real repro against the live corpus book: this exact chapter body,
-    // detected alone, is a confident (fallback:false) WRONG 'en' vote —
-    // proof the selection filter, not the vote, is what excludes it.
+    // detected alone, is a confident (fallback:false) WRONG 'en' vote.
+    // #2276 — under mass-weighted voting, this fixture's single 6-word
+    // lookalike chapter is too tiny to ever outweigh two real ~660-word zh
+    // chapters, filtered or not — deleting the word-count clause of
+    // selectBodyChapters does NOT redden this test (verified). It still
+    // documents the real-world shape and confirms the filter doesn't
+    // (harmlessly) mis-fire on it; the test above is the one that locks the
+    // filter's necessity.
     const lookalike = detectManuscriptLanguage('[emphatic] Castwright 原创作品。\n\n---');
     expect(lookalike).toEqual({ language: 'en', supported: true, fallback: false });
 
@@ -181,11 +205,21 @@ describe('detectManuscriptLanguageFromChapters (#2263)', () => {
   });
 
   it('2-vs-2 split (en/ru), no strict majority → surrenders', () => {
+    // #2276 — mass-weighted, so a genuine tie needs equal MASS, not equal
+    // chapter count: EN_SENTENCE (25 words) and RU_SENTENCE (19 words) are
+    // different lengths, so repeat() at the same count no longer balances.
+    // repeat(EN, 19) x repeat(RU, 25) both land on 475 words/chapter — a
+    // real 950-vs-950 tie — verified via the sanity assertion below rather
+    // than trusted by eye.
+    const enChapterBody = repeat(EN_SENTENCE, 19);
+    const ruChapterBody = repeat(RU_SENTENCE, 25);
+    expect(countWords(enChapterBody)).toBe(countWords(ruChapterBody));
+
     const r = detectManuscriptLanguageFromChapters([
-      { title: 'Chapter One', body: repeat(EN_SENTENCE) },
-      { title: 'Chapter Two', body: repeat(EN_SENTENCE) },
-      { title: 'Глава первая', body: repeat(RU_SENTENCE) },
-      { title: 'Глава вторая', body: repeat(RU_SENTENCE) },
+      { title: 'Chapter One', body: enChapterBody },
+      { title: 'Chapter Two', body: enChapterBody },
+      { title: 'Глава первая', body: ruChapterBody },
+      { title: 'Глава вторая', body: ruChapterBody },
     ]);
     expect(r).toEqual({ language: 'en', supported: true, fallback: true });
   });
@@ -216,5 +250,159 @@ describe('detectManuscriptLanguageFromChapters (#2263)', () => {
 
   it('an empty chapter list surrenders rather than throwing', () => {
     expect(detectManuscriptLanguageFromChapters([])).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+});
+
+/* #2276 — regressions for the three symptoms of the ONE root cause: the old
+   per-CHAPTER vote (and its candidates.length === 1 floor keying) made the
+   answer depend on how the book happens to be split into chapters. Each
+   test below reproduces the exact shape from the bug report and proves the
+   fixed (mass-weighted, uniformly-floored) vote no longer depends on the
+   split. */
+describe('detectManuscriptLanguageFromChapters — #2276 chapter-count-dependence regressions', () => {
+  const EN_SENTENCE =
+    'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
+  const DE_SENTENCE =
+    'Der Ofen war bis zur Farbe eines aschbedeckten Sonnenuntergangs abgekühlt, und Wren kratzte die letzte Schlacke ab, als es an der Tür ihrer Werkstatt klopfte.';
+  const repeat = (sentence: string, times: number) => Array(times).fill(sentence).join(' ');
+
+  it('symptom 1 — a handful of short English chapters no longer outvotes a much larger German body (was: 2 short EN chapters beat 1 long DE chapter on CHAPTER COUNT)', () => {
+    // Two English "translator's note"-shaped chapters (titled generically, so
+    // neither the front-matter-title filter nor the word-count filter drops
+    // them — real books ship notes under a plain chapter heading) against one
+    // much larger German body chapter. Under the old per-chapter vote this
+    // was 2 EN vs 1 DE — a 66.7% EN "majority" that had nothing to do with
+    // how much of the book was actually German.
+    const enNoteA = { title: 'Chapter 1', body: repeat(EN_SENTENCE, 8) }; // 200 words
+    const enNoteB = { title: 'Chapter 2', body: repeat(EN_SENTENCE, 8) }; // 200 words
+    const deBody = { title: 'Chapter 3', body: repeat(DE_SENTENCE, 300) }; // 7,500 words
+
+    const enMass = countWords(enNoteA.body) + countWords(enNoteB.body);
+    const deMass = countWords(deBody.body);
+    expect(deMass).toBeGreaterThan(enMass * 10); // fixture sanity: body dwarfs the notes by mass
+
+    const r = detectManuscriptLanguageFromChapters([enNoteA, enNoteB, deBody]);
+    expect(r).toEqual({ language: 'de', supported: true, fallback: false });
+  });
+
+  it('symptom 2 — the SAME junk sample refuses identically whether it is 1 chapter or split into 3', () => {
+    // #2246 C1's exact repro: a genuinely-English table of contents that
+    // franc mis-disambiguates to a fluent, WRONG, non-fallback language.
+    // Pre-fix, splitting this into 3 chapters defeated the single-chapter
+    // PROSE_UNIT_FLOOR entirely (it only applied when candidates.length===1)
+    // and let franc's per-fragment noise win a spurious "majority". The
+    // floor is now keyed to the WINNING mass regardless of split count, so
+    // both shapes must refuse.
+    const junk = 'Prologue 1 Kaz 2 Inej 3 Kaz 4 Jesper 5 Nina 6 Matthias 7 Inej 8 Wylan 9 Kaz 10 Nina';
+    const words = junk.split(' ');
+    const asOneChapter = [{ title: 'Chapter 1', body: junk }];
+    const asThreeChapters = [
+      { title: 'Chapter 1', body: words.slice(0, 7).join(' ') },
+      { title: 'Chapter 2', body: words.slice(7, 14).join(' ') },
+      { title: 'Chapter 3', body: words.slice(14).join(' ') },
+    ];
+
+    const oneResult = detectManuscriptLanguageFromChapters(asOneChapter);
+    const threeResult = detectManuscriptLanguageFromChapters(asThreeChapters);
+    expect(oneResult.fallback).toBe(true);
+    expect(threeResult).toEqual(oneResult);
+  });
+
+  it('symptom 3 — the SAME thin German sample refuses identically whether it is 1 chapter or split into 2 (was: split defeated the floor and backfilled a confident WRONG-shaped guess)', () => {
+    // ~216 words of real German prose — genuine, confidently-detected German
+    // (script isn't the issue), but only ~9 sentence-terminal units, well
+    // under PROSE_UNIT_FLOOR (20). Pre-fix, a single chapter correctly
+    // surrendered (the candidates.length===1 floor caught it) but splitting
+    // it into 2 chapters bypassed the floor altogether (no single-chapter
+    // path anymore) and backfilled on an unweighted 2-chapter "unanimous"
+    // vote. The floor now sums the winning mass regardless of chapter count,
+    // so both shapes must surrender identically.
+    const deText = repeat(DE_SENTENCE, 9); // ~225 words, 9 prose units — under the 20-unit floor
+    const asOneChapter = [{ title: 'Chapter 1', body: deText }];
+    const sentences = Array(9).fill(DE_SENTENCE);
+    const asTwoChapters = [
+      { title: 'Chapter 1', body: sentences.slice(0, 5).join(' ') },
+      { title: 'Chapter 2', body: sentences.slice(5).join(' ') },
+    ];
+
+    const oneResult = detectManuscriptLanguageFromChapters(asOneChapter);
+    const twoResult = detectManuscriptLanguageFromChapters(asTwoChapters);
+    expect(oneResult).toEqual({ language: 'en', supported: true, fallback: true });
+    expect(twoResult).toEqual(oneResult);
+  });
+});
+
+/* #2276 — the mandatory invariant: detection must not depend on how a book
+   happens to be split into chapters. Re-chapters the SAME underlying text
+   (a small English front-matter snippet + a large German body) five
+   different ways — all-in-one, split in two, split in five, front matter as
+   its own excluded chapter, and front matter merged into chapter 1 (both
+   with the body further split) — and asserts every shape agrees on both
+   `language` and `fallback`. This is the test that would have caught all
+   three #2276 symptoms above. */
+describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invariance (property test)', () => {
+  const EN_SENTENCE =
+    'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
+  const DE_SENTENCE =
+    'Der Ofen war bis zur Farbe eines aschbedeckten Sonnenuntergangs abgekühlt, und Wren kratzte die letzte Schlacke ab, als es an der Tür ihrer Werkstatt klopfte.';
+
+  const FRONT_MATTER_TEXT = Array(2).fill(EN_SENTENCE).join(' '); // ~50 words — small, real front matter
+  const bodySentences = Array(200).fill(DE_SENTENCE); // ~5,000 words — a stand-in book body
+  const wholeBody = bodySentences.join(' ');
+
+  function chunk(sentences: string[], n: number): string[] {
+    const size = Math.ceil(sentences.length / n);
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const part = sentences.slice(i * size, (i + 1) * size).join(' ');
+      if (part.length > 0) out.push(part);
+    }
+    return out;
+  }
+
+  const configs: Array<{ label: string; chapters: Array<{ title: string; body: string }> }> = [
+    {
+      label: 'all in one chapter, front matter merged in',
+      chapters: [{ title: 'Chapter 1', body: `${FRONT_MATTER_TEXT} ${wholeBody}` }],
+    },
+    {
+      label: 'split in two, front matter merged into chapter 1',
+      chapters: chunk(bodySentences, 2).map((body, i) => ({
+        title: `Chapter ${i + 1}`,
+        body: i === 0 ? `${FRONT_MATTER_TEXT} ${body}` : body,
+      })),
+    },
+    {
+      label: 'split in five, front matter merged into chapter 1',
+      chapters: chunk(bodySentences, 5).map((body, i) => ({
+        title: `Chapter ${i + 1}`,
+        body: i === 0 ? `${FRONT_MATTER_TEXT} ${body}` : body,
+      })),
+    },
+    {
+      label: 'front matter as its own excluded chapter, body in one chapter',
+      chapters: [
+        { title: 'Copyright', body: FRONT_MATTER_TEXT },
+        { title: 'Chapter One', body: wholeBody },
+      ],
+    },
+    {
+      label: 'front matter as its own excluded chapter, body split in five',
+      chapters: [
+        { title: 'Copyright', body: FRONT_MATTER_TEXT },
+        ...chunk(bodySentences, 5).map((body, i) => ({ title: `Chapter ${i + 1}`, body })),
+      ],
+    },
+  ];
+
+  it.each(configs)('resolves to the same language and fallback — $label', ({ chapters }) => {
+    const result = detectManuscriptLanguageFromChapters(chapters);
+    expect(result).toEqual({ language: 'de', supported: true, fallback: false });
+  });
+
+  it('every re-chaptering shape agrees with every other (not just with a fixed expectation)', () => {
+    const results = configs.map((c) => detectManuscriptLanguageFromChapters(c.chapters));
+    const [first, ...rest] = results;
+    for (const r of rest) expect(r).toEqual(first);
   });
 });
