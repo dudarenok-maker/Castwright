@@ -34,7 +34,7 @@ existing regression suite. The real scaffolding, verified on disk:
 | `src/views/pair.test.tsx` | `renderPair(search = '/pair?c=ABC')` | Feeds **MemoryRouter `initialEntries`** — a router path, **no `#` prefix**. Its `vi.mock` factory exports `api.redeemBrowserPair` **and** a hand-rolled `ApiError` class. Uses `fireEvent`. |
 | `src/views/book-library.test.tsx` | `renderView({ loaded, authors })` | Hardcodes `error: null`, so it **cannot** inject an error. The pattern to copy is the inline `configureStore` at `:823-845`. Its `vi.mock` factory exports only `getWorkspaceInfo`, `getContinueListening`, `setShelfStatus` — **no `getLibrary`, no `ApiError`**. |
 | `src/components/lan-access-card.test.tsx` | — | Uses `vi.mock(..., importOriginal)` and spreads the real module, so `ApiError` **is** importable (already imported at `:4`). Uses `fireEvent`, not `userEvent`. `beforeEach` is `vi.clearAllMocks()`, which clears calls but **not** implementations. |
-| `server/src/workspace/device-tokens.pure.test.ts` | — | **EXISTS: 160 lines, 15 tests** covering `hashToken`, `findValidDevice` (incl. the #2144 malformed-`expiresAt` arms) and `redactDevice`. **APPEND** a `describe` block. Authoring this file from a snippet erases the #2144/#2149 coverage silently — the remaining tests still pass, so nothing goes red. |
+| `server/src/workspace/device-tokens.pure.test.ts` | — | **EXISTS: 160 lines, 14 tests** covering `hashToken`, `findValidDevice` (incl. the #2144 malformed-`expiresAt` arms) and `redactDevice`. **APPEND** a `describe` block. Authoring this file from a snippet erases the #2144/#2149 coverage silently — the remaining tests still pass, so nothing goes red. |
 
 There are **no** helpers named `renderAt` or `renderWithState`. Do not call them.
 
@@ -140,7 +140,7 @@ Run: `cd server && npx vitest run src/workspace/device-tokens.pure.test.ts src/c
 
 Expected: FAIL. Specifically — `clampTtlDays(0)` returns `30`, `clampTtlDays(401)`
 returns `401`, the knob has `default: 30` and no `max`, and `coerceAndValidate(k, '401')`
-returns `ok: true` because no ceiling exists yet. The 15 pre-existing tests in
+returns `ok: true` because no ceiling exists yet. The 14 pre-existing tests in
 `device-tokens.pure.test.ts` must stay **green** throughout — if any of them
 turns red, the file was overwritten instead of appended to. Stop and restore.
 
@@ -191,7 +191,7 @@ fact reaches the user. Current text is
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd server && npx vitest run src/workspace/device-tokens.pure.test.ts src/config/registry.test.ts`
-Expected: PASS, with the 15 pre-existing pure tests still green.
+Expected: PASS, with the 14 pre-existing pure tests still green.
 
 - [ ] **Step 5: Regenerate the env example**
 
@@ -952,7 +952,7 @@ carries a non-emptiness floor so it cannot degrade into `[] === []`.
 the files on disk. 6 rated `Critical` + `Contradicted`, 6 `Significant` +
 `Contradicted`. All folded into revision 2. The load-bearing ones:
 
-- `device-tokens.pure.test.ts` **exists** (160 lines, 15 tests incl. the #2144
+- `device-tokens.pure.test.ts` **exists** (160 lines, 14 tests incl. the #2144
   malformed-`expiresAt` arms); the plan's full-file snippet would have erased it
   **silently** — the surviving tests still pass, so nothing goes red.
 - `MOCK_CONFIG_DESCRIPTORS` is not exported, and the mock is a **documented
