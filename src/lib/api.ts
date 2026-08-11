@@ -1942,7 +1942,7 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
 async function realGetLibrary(): Promise<LibraryResponse> {
   const res = await fetch('/api/library');
   if (!res.ok)
-    throw new Error(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new ApiError(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`, res.status);
   return res.json();
 }
 

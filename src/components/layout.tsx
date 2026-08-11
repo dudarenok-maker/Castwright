@@ -38,7 +38,7 @@ import {
   buildVoiceLockEvent,
   buildNameChangeEvent,
 } from '../lib/change-log';
-import { api, type SeriesRosterEntry } from '../lib/api';
+import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
 import type { Character, BookExportJob } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
@@ -578,7 +578,10 @@ export function Layout() {
       })
       .catch((err) => {
         console.error('[library] hydrate failed', err);
-        dispatch(libraryActions.hydrateError(err instanceof Error ? err.message : String(err)));
+        dispatch(libraryActions.hydrateError({
+          message: err instanceof Error ? err.message : String(err),
+          status: err instanceof ApiError ? err.status : undefined,
+        }));
       });
     return () => {
       cancelled = true;

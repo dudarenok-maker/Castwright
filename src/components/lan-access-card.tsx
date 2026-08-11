@@ -9,6 +9,21 @@ import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
 
+/** Recovery pointer for a 401 while trying to manage LAN devices — this
+ *  browser's own authorization lapsed. `castwright.local` is the mDNS name
+ *  every device on the LAN resolves, so it is NOT evidence the user is
+ *  sitting at the host; only true loopback counts. Mirrors the same-named
+ *  helper in book-library.tsx. */
+function recoveryHint(): string {
+  const h = window.location.hostname;
+  const onHost = h === 'localhost' || h === '127.0.0.1';
+  if (!onHost) return 'Open Castwright on the computer running it and use “Authorize this browser”, then reload here.';
+  // location.port is '' on the :443 forwarder path — never promise a port we don't know.
+  return window.location.port
+    ? `Open https://localhost:${window.location.port} on this computer and use “Authorize this browser”.`
+    : 'Open Castwright on this computer and use “Authorize this browser” under Account → LAN access.';
+}
+
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   const [manageHint, setManageHint] = useState(false); // true on 401 (viewing from a phone)
@@ -69,7 +84,7 @@ export function LanAccessCard() {
         <WikiLink page={ADMIN_WIKI.lanAccess} label="Wiki" className="text-xs" />
       </div>
       {manageHint ? (
-        <p className="mt-2 text-sm text-ink/60">Manage devices from the desktop app.</p>
+        <p className="mt-2 text-sm text-ink/60">{recoveryHint()}</p>
       ) : (
         <>
           <div className="mt-4 flex flex-wrap items-center gap-2">

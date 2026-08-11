@@ -66,7 +66,7 @@ const putBookStateMock = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     /* Library + base infra */
-    getLibrary: vi.fn(async () => ({ books: [] })),
+    getLibrary: vi.fn(async () => ({ authors: [] })),
     getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
     getBaseVoices: vi.fn(async () => ({ voices: [] })),
     getUserSettings: vi.fn(async () => ({})),

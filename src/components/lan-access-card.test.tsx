@@ -209,13 +209,15 @@ describe('LanAccessCard', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
-  it('shows "manage from desktop" note on 401 from listDevices (no crash)', async () => {
+  it('shows a recovery pointer on 401 from listDevices (no crash)', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
 
     render(<LanAccessCard />);
 
     await waitFor(() =>
-      expect(screen.getByText(/manage devices from the desktop/i)).toBeInTheDocument(),
+      // jsdom's default test URL is http://localhost:3000, so the on-host
+      // branch of recoveryHint() fires here with a port present.
+      expect(screen.getByText(/open https:\/\/localhost/i)).toBeInTheDocument(),
     );
   });
 
@@ -252,7 +254,9 @@ describe('LanAccessCard', () => {
 
     render(<LanAccessCard />);
     await waitFor(() =>
-      expect(screen.getByText(/manage devices from the desktop/i)).toBeInTheDocument(),
+      // jsdom's default test URL is http://localhost:3000, so the on-host
+      // branch of recoveryHint() fires here with a port present.
+      expect(screen.getByText(/open https:\/\/localhost/i)).toBeInTheDocument(),
     );
     expect(screen.queryByRole('button', { name: /regenerate certificate/i })).not.toBeInTheDocument();
   });

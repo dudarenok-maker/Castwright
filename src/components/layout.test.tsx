@@ -47,7 +47,7 @@ vi.mock('../lib/api', () => ({
   api: {
     /* Library + voice library + base-voice catalogue hydrate on mount —
        resolve to empty so they no-op without throwing. */
-    getLibrary: vi.fn(async () => ({ books: [] })),
+    getLibrary: vi.fn(async () => ({ authors: [] })),
     getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
     getBaseVoices: vi.fn(async () => ({ voices: [] })),
     /* Account fetch (createAsyncThunk wraps this) — resolve to minimal
