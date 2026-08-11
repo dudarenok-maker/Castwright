@@ -114,6 +114,15 @@ Run: `cd server && npx vitest run src/analyzer/dialogue-structure/legibility.tes
 
 - [x] **Step 3: Implement.**
 
+> **The code block below is the AS-SPECIFIED version and is now STALE — do not
+> copy it.** Its `dialogueOpen.test(paragraph)` skip was removed by #2275 C1
+> (see Global Constraints above): under a maximum, skipping dash-opening
+> paragraphs hid five real breaching paragraphs across the calibration corpus
+> while suppressing zero false positives. The shipped module counts every
+> non-blank paragraph. Kept unedited as the record of what was originally
+> specified; `server/src/analyzer/dialogue-structure/legibility.ts` is the
+> truth.
+
 ```ts
 import type { LanguageConventions } from './types.js';
 
