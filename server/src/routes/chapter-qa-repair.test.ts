@@ -499,7 +499,6 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (#2128 castHistorySe
   let makeBookId: (author: string, series: string, title: string) => string;
   let audioDirFn: (bookDir: string) => string;
   let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let synthesiseChapterMock: any;
 
   beforeAll(async () => {
