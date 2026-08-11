@@ -102,7 +102,16 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   }
   const label = typeof (req.body as { label?: unknown })?.label === 'string'
     ? (req.body as { label: string }).label : 'Device';
-  const { code, expiresAt } = createPairingSession(label, undefined, 10);
+  // Server-derived, never client-asserted alone: both loopback (the security
+  // gate — mayStartPairingSession above also admits an already-paired device
+  // on castwright.local, so without this conjunct any LAN phone could set
+  // selfBind and later revoke the host's own credential) AND the client's
+  // explicit ask (this route serves both the "Authorize this browser" self-bind
+  // and the QR panel's cross-device pairing, which must NOT self-bind) are
+  // required. A loopback caller is already exempt from the LAN guard, so
+  // letting it set this flag grants nothing it didn't already have.
+  const selfBind = isLoopbackRequest(req) && (req.body as { selfBind?: unknown })?.selfBind === true;
+  const { code, expiresAt } = createPairingSession(label, undefined, 10, selfBind);
   const liveness = req.app.get('friendlyHostnameLiveness') as
     (() => { mdns: boolean; forwarder: boolean }) | undefined;
   const live = liveness?.();

@@ -72,13 +72,14 @@ vi.mock('../workspace/device-tokens.js', () => {
     }
   }
   return {
-    createDevice: vi.fn(async (label: string, ttlDays: number) => ({
+    createDevice: vi.fn(async (label: string, ttlDays: number, opts?: { selfBind?: boolean }) => ({
       device: {
         id: 'd1',
         label,
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + ttlDays * 86_400_000).toISOString(),
         revoked: false,
+        ...(opts?.selfBind ? { selfBind: true } : {}),
       },
       token: 'tok_test',
     })),
@@ -238,6 +239,30 @@ describe('pairing routes', () => {
     expect(setCookie).toMatch(/SameSite=Strict/i);
     expect(setCookie).toMatch(/Secure/i);
     expect(setCookie).toMatch(/Max-Age=31536000/); // 365 days — must track ttl()
+  });
+
+  // #2257 — the real revoke-prior-self-bind logic lives in device-tokens.ts
+  // (createDevice, covered by its own unit tests); createDevice is mocked
+  // module-wide in this file, so the route-level contract to pin here is
+  // that /redeem-browser threads the session's server-derived selfBind flag
+  // through to createDevice's opts — which is what actually triggers the
+  // revoke downstream. A self-bind session's redeem calls createDevice with
+  // { selfBind: true } ...
+  it('redeem-browser of a self-bind session calls createDevice with selfBind:true (which is what revokes the prior self-bind)', async () => {
+    const { code } = createPairingSession('This computer', undefined, 10, true);
+    const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toEqual({ selfBind: true });
+  });
+
+  // ... a non-self-bind session's redeem (the QR cross-device pairing flow)
+  // must NOT — marking it as one would let a phone's pairing revoke the
+  // desktop's own credential.
+  it('redeem-browser of a non-self-bind session calls createDevice with selfBind:false (does not revoke anything)', async () => {
+    const { code } = createPairingSession('Pixel', undefined, 10); // selfBind defaults false
+    const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toEqual({ selfBind: false });
   });
 
   it('redeem-browser 409s when LAN auth not enforced', async () => {

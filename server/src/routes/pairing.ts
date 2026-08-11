@@ -162,7 +162,9 @@ pairRedeemRouter.post(
     }
     const ttlDays = ttl();
     try {
-      const { device, token } = await createDevice(result.label ?? 'Device', ttlDays);
+      const { device, token } = await createDevice(result.label ?? 'Device', ttlDays, {
+        selfBind: result.selfBind,
+      });
       res.cookie('__Host-cw_lan', token, {
         httpOnly: true,
         secure: true,

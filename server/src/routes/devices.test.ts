@@ -47,6 +47,7 @@ let workspaceRoot: string;
 let app: Express;
 let deviceTokens: typeof import('../workspace/device-tokens.js');
 let lanAuth: typeof import('../lan-auth.js');
+let pairingSessions: typeof import('../workspace/pairing-sessions.js');
 
 function mkReq(opts: { ip?: string; headers?: Record<string, string> } = {}) {
   const ip = opts.ip ?? '203.0.113.5'; // non-loopback documentation range
@@ -85,6 +86,7 @@ beforeEach(async () => {
   const realLanAuth = await vi.importActual<typeof import('../lan-auth.js')>('../lan-auth.js');
   _requireLanToken = realLanAuth.requireLanToken;
   const { devicesRouter } = await import('./devices.js');
+  pairingSessions = await import('../workspace/pairing-sessions.js');
   app = express();
   app.use(express.json());
   app.use('/api', devicesRouter);
@@ -298,6 +300,45 @@ describe('devices route (srv-33)', () => {
     vi.mocked(lanAuth.isLanTokenEnforced).mockReturnValueOnce(false);
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'x' });
     expect(res.status).toBe(409);
+  });
+
+  // #2257 (security case) — the marker is server-derived from BOTH true
+  // loopback AND the client's ask, never the client flag alone: a caller
+  // that reaches pair-session without true loopback (isLoopbackRequest
+  // mocked false here, mirroring the "admin mint" test below) but is
+  // otherwise pairing-eligible (mayStartPairingSession still passes) must
+  // NOT get a self-binding session just by sending `selfBind: true` — this
+  // is what stops any LAN phone from revoking the host's own credential.
+  it('pair-session from a non-loopback but pairing-eligible caller with selfBind:true in the body produces a session that does not self-bind on redeem (#2257 security case)', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);
+    const res = await request(app)
+      .post('/api/devices/pair-session')
+      .send({ label: 'This computer', selfBind: true });
+    expect(res.status).toBe(200);
+
+    const result = pairingSessions.redeemPairingSession(res.body.code);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.selfBind).toBe(false);
+  });
+
+  // Sanity counterpart — a genuinely loopback caller sending selfBind:true
+  // DOES get a self-binding session (the isLoopbackRequest mock forwards to
+  // the real implementation by default, and supertest requests are loopback).
+  it('pair-session from a loopback caller with selfBind:true DOES produce a self-binding session', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    const res = await request(app)
+      .post('/api/devices/pair-session')
+      .send({ label: 'This computer', selfBind: true });
+    expect(res.status).toBe(200);
+
+    const result = pairingSessions.redeemPairingSession(res.body.code);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.selfBind).toBe(true);
   });
 
   it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {

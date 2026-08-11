@@ -176,7 +176,10 @@ describe('LanAccessCard', () => {
     render(<LanAccessCard />);
     fireEvent.click(await screen.findByRole('button', { name: /authorize this browser/i }));
     await waitFor(() =>
-      expect(api.createDevicePairSession).toHaveBeenCalledWith({ label: 'This computer' }),
+      expect(api.createDevicePairSession).toHaveBeenCalledWith({
+        label: 'This computer',
+        selfBind: true,
+      }),
     );
     expect(assign).toHaveBeenCalledWith('https://castwright.local/#/pair?c=ABC&self=1');
   });

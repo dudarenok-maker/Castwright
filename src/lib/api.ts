@@ -7291,7 +7291,7 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
 }
 
-async function realCreateDevicePairSession(body: { label: string }) {
+async function realCreateDevicePairSession(body: { label: string; selfBind?: boolean }) {
   const res = await fetch('/api/devices/pair-session', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -7338,7 +7338,7 @@ async function realRedeemBrowserPair(body: { code: string }) {
   return res.json() as Promise<{ label: string; expiresAt: string }>;
 }
 
-const mockCreateDevicePairSession = async (_b: { label: string }) =>
+const mockCreateDevicePairSession = async (_b: { label: string; selfBind?: boolean }) =>
   ({
     url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`,
     code: 'MOCKCODEMOCKCODE',
