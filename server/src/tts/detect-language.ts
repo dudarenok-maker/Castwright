@@ -98,7 +98,7 @@ export function detectManuscriptLanguage(
    them from the voting pool. Falls back to the full chapter list if that
    leaves nothing (a book that's entirely front-matter-titled is better
    judged than refused outright). */
-function selectBodyChapters<T extends { title: string; body: string }>(chapters: T[]): T[] {
+export function selectBodyChapters<T extends { title: string; body: string }>(chapters: T[]): T[] {
   return chapters.filter(
     (c) => !isLikelyFrontMatterTitle(c.title) && countWords(c.body) >= FRONT_MATTER_WORD_THRESHOLD,
   );

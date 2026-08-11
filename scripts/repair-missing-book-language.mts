@@ -101,12 +101,9 @@ import { fileURLToPath } from 'node:url';
 import {
   detectManuscriptLanguage,
   detectManuscriptLanguageFromChapters,
+  selectBodyChapters,
 } from '../server/src/tts/detect-language.js';
-import {
-  isLikelyFrontMatterTitle,
-  FRONT_MATTER_WORD_THRESHOLD,
-  countWords,
-} from '../server/src/parsers/front-matter.js';
+import { countWords } from '../server/src/parsers/front-matter.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
 import { parseManuscript } from '../server/src/parsers/index.js';
@@ -141,35 +138,41 @@ export type BookLanguagePlan =
   | { bookId: string; action: 'skip-fallback'; language: string; sampleSource: SampleSource; reason: string }
   | { bookId: string; action: 'backfill'; language: string; sampleSource: SampleSource };
 
-/* Diagnostic-only: replays the SAME front-matter selection
+/* Diagnostic-only: replays the SAME body-chapter selection
    detectManuscriptLanguageFromChapters applies internally — reusing its own
-   exported building blocks (isLikelyFrontMatterTitle, countWords,
-   FRONT_MATTER_WORD_THRESHOLD), never a second classifier — purely to name
-   the vote split in a 'skip-fallback' reason (e.g. "en 2 / ru 2"). The
-   accept/reject DECISION always comes from
-   detectManuscriptLanguageFromChapters itself; this only explains a
-   surrender after the fact, so it can never disagree with the real
-   decision — at worst it returns null (no split to report) and the reason
-   falls back to a generic surrender message. */
+   exported selectBodyChapters, never a second classifier — purely to name
+   the vote split in a 'skip-fallback' reason. The real vote is MASS-weighted
+   (#2276 — a chapter is an arbitrary container, so counting chapters would
+   make the answer depend on how the text happens to be divided), so this
+   reports each language's word MASS (via the same countWords the vote
+   itself weighs by), not a chapter count — a chapter-count tally here would
+   describe a mass-driven surrender in units the decision never used (e.g. an
+   uneven 3-vs-1 CHAPTER split could be a near-tie in words). The accept/
+   reject DECISION always comes from detectManuscriptLanguageFromChapters
+   itself; this only explains a surrender after the fact, so it can never
+   disagree with the real decision — at worst it returns null (no split to
+   report) and the reason falls back to a generic surrender message. */
 function describeVoteSplit(
   chapters: ChapterSample[],
   meta: { author?: string | null; title?: string | null },
 ): string | null {
-  const bodyChapters = chapters.filter(
-    (c) => !isLikelyFrontMatterTitle(c.title) && countWords(c.body) >= FRONT_MATTER_WORD_THRESHOLD,
-  );
+  const bodyChapters = selectBodyChapters(chapters);
   const candidates = bodyChapters.length > 0 ? bodyChapters : chapters;
   if (candidates.length <= 1) return null; // no split possible — single-chapter/floor path, not a vote
 
-  const counts = new Map<string, number>();
+  const massByLanguage = new Map<string, number>();
+  let totalMass = 0;
   for (const c of candidates) {
     const d = detectManuscriptLanguage(c.body, meta);
-    if (!d.fallback) counts.set(d.language, (counts.get(d.language) ?? 0) + 1);
+    if (d.fallback) continue;
+    const mass = countWords(c.body);
+    massByLanguage.set(d.language, (massByLanguage.get(d.language) ?? 0) + mass);
+    totalMass += mass;
   }
-  if (counts.size === 0) return null;
-  return [...counts.entries()]
+  if (massByLanguage.size === 0 || totalMass === 0) return null;
+  return [...massByLanguage.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([language, count]) => `${language} ${count}`)
+    .map(([language, mass]) => `${language} ${mass.toLocaleString('en-US')} words (${Math.round((mass / totalMass) * 100)}%)`)
     .join(' / ');
 }
 

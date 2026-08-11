@@ -487,20 +487,18 @@ test('planBookLanguage: 煤落的委托 shape — a short, non-front-matter-titl
   assert.equal(plan.language, 'zh', 'must resolve to the BODY language, not chapter 1\'s mis-detected en');
 });
 
-test('planBookLanguage: 2-vs-2 split (en/ru, no strict majority) → surrenders, reason names the split', () => {
+test('planBookLanguage: 2-vs-2 split (en/ru, no strict majority) → surrenders, reason names the MASS split, not the chapter count', () => {
   // #2276 — mass-weighted, so a genuine tie needs equal MASS, not equal
   // chapter count. REAL_ENGLISH_PROSE(+_2) and REAL_RUSSIAN_PROSE(+_2) are
   // NOT equal mass (768 vs 544 words) — under mass-weighted voting that's a
   // 58.5% English majority, not a tie, so this test is rebuilt on
   // SHORT_ENGLISH_SENTENCE (19 words) x SHORT_RUSSIAN_SENTENCE (10 words)
   // repeated to the same total (190 words/chapter, LCM of 19 and 10) — a
-  // real 380-vs-380 tie, verified below rather than trusted by eye. Chapter
-  // COUNT stays 2-vs-2 so describeVoteSplit's diagnostic reason text
-  // ("en 2 / ru 2") is unaffected — that tally is chapter-count based by
-  // design (a report of the split, not the decision).
+  // real 380-vs-380 tie, verified below rather than trusted by eye.
   const enChapterBody = Array(10).fill(SHORT_ENGLISH_SENTENCE).join(' ');
   const ruChapterBody = Array(19).fill(SHORT_RUSSIAN_SENTENCE).join(' ');
   assert.equal(countWords(enChapterBody), countWords(ruChapterBody));
+  assert.equal(countWords(enChapterBody), 190, 'fixture sanity: 190 words per chapter');
 
   const plan = planBookLanguage({
     bookId: 'book-split',
@@ -515,7 +513,46 @@ test('planBookLanguage: 2-vs-2 split (en/ru, no strict majority) → surrenders,
   });
   assert.equal(plan.action, 'skip-fallback');
   assert.match(plan.reason, /no clear majority/);
-  assert.match(plan.reason, /en 2 \/ ru 2/);
+  // Mass, not chapter count: 2 chapters x 190 words = 380 words per side, a
+  // genuine 50/50 tie by mass. A chapter-count tally would have said "en 2 /
+  // ru 2" here too (this fixture is 2-vs-2 both ways) — the uneven-split
+  // fixture below is what actually proves mass over count.
+  assert.match(plan.reason, /en 380 words \(50%\) \/ ru 380 words \(50%\)/);
+});
+
+test('planBookLanguage: uneven CHAPTER split (3-vs-1) that is an exact tie by MASS → reason reports the mass tie, not a lopsided chapter count (#2278)', () => {
+  // The exact defect this fix closes: describeVoteSplit used to tally
+  // CHAPTERS, so a 3-en-vs-1-ru chapter split read as lopsided even when the
+  // underlying word mass was even. Three short English chapters (190 words
+  // each = 570 total) against one long Russian chapter (570 words) is a
+  // dead-even 50/50 tie by mass but a 3-vs-1 split by chapter count — the two
+  // descriptions disagree, which is the point (and the reason
+  // detectManuscriptLanguageFromChapters itself surrenders here: it votes by
+  // mass too, so a 3-vs-1 chapter count alone would never have been a tie
+  // there either).
+  const enShortChapterBody = Array(10).fill(SHORT_ENGLISH_SENTENCE).join(' '); // 10*19 = 190 words
+  const ruLongChapterBody = Array(57).fill(SHORT_RUSSIAN_SENTENCE).join(' '); // 57*10 = 570 words
+  const enTotal = countWords(enShortChapterBody) * 3;
+  const ruTotal = countWords(ruLongChapterBody);
+  assert.equal(enTotal, ruTotal, 'fixture sanity: must be an exact tie by mass despite the uneven 3-vs-1 chapter count');
+
+  const plan = planBookLanguage({
+    bookId: 'book-uneven-chapters-tied-mass',
+    hasLanguageKey: false,
+    cacheChapters: [
+      makeCacheChapter(1, 'Chapter One', enShortChapterBody),
+      makeCacheChapter(2, 'Chapter Two', enShortChapterBody),
+      makeCacheChapter(3, 'Chapter Three', enShortChapterBody),
+      makeCacheChapter(4, 'Глава первая', ruLongChapterBody),
+    ],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /no clear majority/);
+  // Must report the tied MASS split (570 words / 50% each), never the 3-vs-1
+  // chapter-count split a naive tally would have printed.
+  assert.match(plan.reason, /en 570 words \(50%\) \/ ru 570 words \(50%\)/);
+  assert.doesNotMatch(plan.reason, /en 3 \/ ru 1/);
 });
 
 test('planBookLanguage: single body chapter ABOVE the floor → backfills (the floor is not a blanket single-chapter refusal)', () => {
@@ -884,7 +921,9 @@ test('main: 2-vs-2 split (no majority) → --apply does NOT write, reason names 
     const bookLine = lines.find((l) => l.includes('Split Vote'));
     assert.ok(bookLine);
     assert.match(bookLine, /no clear majority/);
-    assert.match(bookLine, /en 2 \/ ru 2/);
+    // Mass (#2276/#2278), not chapter count: 2 chapters x 190 words = 380
+    // words per side, a genuine 50/50 tie by mass.
+    assert.match(bookLine, /en 380 words \(50%\) \/ ru 380 words \(50%\)/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
     if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
