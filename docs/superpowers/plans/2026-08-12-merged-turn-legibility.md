@@ -199,6 +199,19 @@ export function measureChapterLegibility(
 
 - [x] **Step 3: Run them and confirm they fail.**
 
+> **Step 4 below is the AS-SPECIFIED version and is now STALE — do not
+> follow it.** Three things changed post-ship (see Global Constraints above):
+> (1) #2275 C3 moved the field to a **sibling** of `analysisProvenance.report`,
+> not nested inside `AnalysisProvenanceReport` — so the "constructing a report
+> carrying only this field" instruction below is dead, and so is this task's
+> **Interfaces → Produces** line above
+> (`AnalysisProvenanceReport.maxMergedTurnsInParagraph?: number`); (2) #2275 C4
+> moved the `merged=` operator-log line out of this engine-gated call site and
+> into the up-front per-chapter loop at the top of each analyzer job, not
+> beside `unresolved=` here; (3) the `~:2224` location hint below is stale —
+> the call site has moved. Kept unedited as the record of what was originally
+> specified; `server/src/routes/analysis.ts` is the truth.
+
 - [x] **Step 4: Implement.** Where `analysis.ts` already has each chapter's
   `body` and resolved `conventions` (the same place `parseChapterStructure` is
   called, near the `crossExamine` call at ~`:2224`), call
@@ -230,5 +243,10 @@ export function measureChapterLegibility(
   criterion. C2 must grade on 1c, not on `≤ 44%`.
 - [x] **Step 3:** In the 2026-08-11 plan, annotate the 38.9%→44% derivation as
   superseded with a dated pointer. Do **not** rewrite history — annotate.
-- [x] **Step 4:** Append the release-notes entries (technical + brand-voice).
+- [x] **Step 4:** The technical entry landed in `docs/release-notes-next.md`.
+  The user-facing, brand-voice line in `RELEASE_NOTES.md` is **deliberately
+  skipped** — this change has no user-visible surface (design of record §5:
+  no UI, no enforcement; it reaches the operator log and provenance report
+  only). Recorded here per CLAUDE.md's before-shipping step 5, which requires
+  a skip be stated rather than silent.
 - [x] **Step 5: Commit** — `docs(docs): re-specify plan 247 target 1 around merged-turn legibility (#2267)`

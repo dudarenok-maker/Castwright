@@ -331,9 +331,13 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
 
    **1c — Legibility** (new 2026-08-12 via #2267; replaces 1a's structural
    role). **`maxMergedTurnsInParagraph < 10`** per chapter — the largest number
-   of dialogue turns found inside any single paragraph that is not itself a
-   properly-formed dialogue paragraph. Reported by the analyzer in
-   `AnalysisProvenanceReport`. Applies to **ru / es / fr only** — languages
+   of dialogue turns found inside any single paragraph. **Every** paragraph
+   counts, including one that itself opens with a dialogue dash: under a
+   maximum, skipping those hid real merges for free (#2275 C1). Reported by the
+   analyzer at **`analysisProvenance.maxMergedTurnsInParagraph` — a sibling of
+   `analysisProvenance.report`, not a field inside it** (#2275 C3), so a
+   fully-cached re-run still carries it even though `report` is absent. Applies
+   to **ru / es / fr only** — languages
    whose typography gives every dialogue turn its own paragraph, so a turn
    found *inside* another paragraph is conversion damage **by construction**,
    not a correlate of it. English has no such invariant to violate and is

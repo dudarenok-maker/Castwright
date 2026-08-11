@@ -2277,7 +2277,8 @@ export async function attributeChapterStage2(opts: {
        chapter served from the stage-2 cache) never reaches at all — exactly
        the case design of record §4 exists to protect. It is now logged
        up front at the `runMainAnalyzerJob`/`runSubsetAnalyzerJob` call sites
-       instead, unconditionally, so this line no longer repeats it. */
+       instead (skipped there when the reading is undefined), so this line
+       no longer repeats it. */
     console.log(
       `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
         `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} ` +
@@ -4452,18 +4453,29 @@ export async function runMainAnalyzerJob(
        persisted report separately from `aggregateStructureReports` at the
        persist site below. */
     const legibilityConventions = conventionsFor(bookLanguage);
-    /* #2275 C4 — one `merged=` line per chapter, emitted HERE (up front,
-       regardless of engine state or caching) rather than only inside the
-       engine-gated branch of attributeChapterStage2 — target 1c grades per
-       chapter, and a fully-cached run (the case this metric exists to score)
-       never reaches that branch at all. */
+    /* #2275 C4 — one `merged=` line per chapter with a defined reading,
+       emitted HERE (up front, regardless of engine state or caching) rather
+       than only inside the engine-gated branch of attributeChapterStage2 —
+       target 1c grades per chapter, and a fully-cached run (the case this
+       metric exists to score) never reaches that branch at all.
+       `scope=book` marks the line as a book-wide reading, not per-chapter
+       pass progress — the subset route (below) measures the whole book here
+       while `chaptersCovered` reports only the re-run subset, so without this
+       marker a "re-analyse one chapter" run would print one `merged=` line
+       per book chapter against a one-chapter progress line and read as false
+       progress. Skipped entirely for a language with no dash convention
+       (`n === undefined`) — an operator grepping this prefix for "did the
+       structure pass run?" should never see a false-yes line for e.g. an
+       English book. */
     const perChapterMaxMergedTurns: Array<number | undefined> = recordRef.chapterHints
       .filter((c) => !c.excluded)
       .map((c) => {
         const n = legibilityConventions
           ? measureChapterLegibility(c.body, legibilityConventions)
           : undefined;
-        console.log(`[analysis:structure] ch=${c.id} merged=${n ?? 'n/a'}`);
+        if (n !== undefined) {
+          console.log(`[analysis:structure] ch=${c.id} scope=book merged=${n}`);
+        }
         return n;
       });
     const completedSet = new Set<number>();
@@ -6339,10 +6351,17 @@ export async function runSubsetAnalyzerJob(
        clean chapter silently overwrite a high reading left by every OTHER
        chapter with that chapter's own low one (#2275 C2). Computing it this
        way also keeps it decoupled from the `analyzer.structure.enabled` knob,
-       the same as the main route. #2275 C4 — one `merged=` line per chapter,
-       emitted HERE (mirrors the main route) so a subset re-run — including a
-       clean chapter never re-attributed by the engine this pass — still
-       names a breaching chapter in the operator log. */
+       the same as the main route. #2275 C4 — one `merged=` line per chapter
+       with a defined reading, emitted HERE (mirrors the main route) so a
+       subset re-run — including a clean chapter never re-attributed by the
+       engine this pass — still names a breaching chapter in the operator
+       log. `scope=book` marks the line as a book-wide reading, not
+       per-chapter pass progress — this loop runs over every chapter in the
+       book while `chaptersCovered` (below) reports only `toRun.length`, so
+       without the marker a "re-analyse one chapter" run prints one
+       `merged=` line per book chapter against a one-chapter progress line
+       and reads as false progress. Skipped entirely for a language with no
+       dash convention (`n === undefined`), same as the main route. */
     const subsetLegibilityConventions = conventionsFor(bookLanguage);
     const subsetPerChapterMaxMergedTurns: Array<number | undefined> = record.chapterHints
       .filter((c) => !c.excluded)
@@ -6350,7 +6369,9 @@ export async function runSubsetAnalyzerJob(
         const n = subsetLegibilityConventions
           ? measureChapterLegibility(c.body, subsetLegibilityConventions)
           : undefined;
-        console.log(`[analysis:structure] ch=${c.id} merged=${n ?? 'n/a'}`);
+        if (n !== undefined) {
+          console.log(`[analysis:structure] ch=${c.id} scope=book merged=${n}`);
+        }
         return n;
       });
     for (let idx = 0; idx < toRun.length; idx++) {

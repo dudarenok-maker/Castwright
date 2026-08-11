@@ -45,18 +45,21 @@ describe('measureChapterLegibility', () => {
     expect(measureChapterLegibility(body, ru)).toBe(1);
   });
 
-  it('C1 — a fully-merged mega-paragraph reads its true count whether or not it ' +
-    'opens with a dash (the skip used to zero this out)', () => {
-    // 21 turns joined by dash-transitions = 20 matches, regardless of what
-    // (if anything) precedes the first turn — the transition count between
-    // turns is unaffected by whether the paragraph itself opens with a dash.
-    // Under the pre-fix code, the dash-opening variant matched
-    // `conventions.dialogueOpen` and was skipped entirely, reading 0.
-    const turns = Array.from({ length: 21 }, (_, i) => `Реплика ${i}`);
-    const body = turns.join('. - ') + '.';
-    expect(measureChapterLegibility(body, ru)).toBe(20);
-    expect(measureChapterLegibility(`- ${body}`, ru)).toBe(20);
-  });
+  it(
+    'C1 — a fully-merged mega-paragraph reads its true count whether or not it ' +
+      'opens with a dash (the skip used to zero this out)',
+    () => {
+      // 21 turns joined by dash-transitions = 20 matches, regardless of what
+      // (if anything) precedes the first turn — the transition count between
+      // turns is unaffected by whether the paragraph itself opens with a dash.
+      // Under the pre-fix code, the dash-opening variant matched
+      // `conventions.dialogueOpen` and was skipped entirely, reading 0.
+      const turns = Array.from({ length: 21 }, (_, i) => `Реплика ${i}`);
+      const body = turns.join('. - ') + '.';
+      expect(measureChapterLegibility(body, ru)).toBe(20);
+      expect(measureChapterLegibility(`- ${body}`, ru)).toBe(20);
+    },
+  );
 
   it('finds the worst paragraph in a mixed chapter', () => {
     const body = ['Тихо было.', 'Он кивнул. - Раз. - Два. - Три.', '- Обычный диалог.'].join('\n');
