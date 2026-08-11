@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-08-12
 owner: null
 ---
 
@@ -227,8 +227,49 @@ until run.
 
 ## Ship notes
 
-_(fill in when status flips to `stable` — on-box acceptance row E10 discharging is the
-remaining gate)_
+**Shipped.** Feature merged 2026-08-11 as **`1e7e99ee`** (PR #2261); the three
+deferred follow-ups merged 2026-08-11 as **`f4a55ad4`** (PR #2271). On-box
+acceptance row **E10 discharged 2026-08-12** and removed from the register.
+
+### On-box acceptance — E10, 2026-08-12, SHA `f4a55ad4`
+
+Run against a real `npm run build && npm run start:lan` on the dev box, live
+workspace, no mock mode.
+
+- **Step 1 — one-click re-bind ✅ (observed).** **Authorize this browser**
+  navigated to `https://castwright.local/#/` with `?c=…&self=1` **already
+  scrubbed from the URL**, landing on the library with no second click. The
+  library rendered real content over the port-less friendly hostname
+  (*Keeper of the Lost Cities*, 49 chapters, 36 voices) — the 401 dead-end that
+  motivated #2247 is gone. Minted record: `'This computer'`, `revoked: false`,
+  `expiresAt 2027-08-11` — **365 days out, not 30** — shown in the card as
+  `expires 8/12/2027`.
+- **Step 4 — one live self-bind record ✅ (observed, #2257).** Authorizing a
+  second and third time left **exactly one live `'This computer'` record each
+  time** (3 records, 1 live, 2 revoked). The prior record is **revoked, not
+  deleted**, matching `revokeDevice`. This is the half no unit test reaches:
+  the marker survived the real session→redeem→persist round trip against the
+  live `device-tokens.json`.
+- **Step 5 — port-carrying `friendlyUrl` ✅ (observed, #2258).** With `:443`
+  held by a foreign listener so the in-process forwarder could not bind, while
+  the mDNS responder stayed alive, `pair-session` returned
+  `friendlyUrl: https://castwright.local:8443/#/pair?c=…` and the button still
+  worked end to end. Before #2258 this state returned `undefined` and the
+  friendly flow vanished entirely. Restored afterwards — forwarder rebound,
+  `friendlyUrl` port-less again.
+- **Steps 2 (lapsed-cookie recovery) and 3 (QR path unaffected) — accepted by
+  the repo owner**, 2026-08-12, rather than executed in this session. Recorded
+  as an owner acceptance, not as an observation: nobody watched these two run
+  on this date. Both are covered by automated tests (the 401 recovery panel has
+  a Vitest case asserting the state transition, mutation-verified; the QR path
+  has route-level coverage that `/redeem` never self-binds).
+
+**Correction carried out of this run:** the register asserted E10 needed an
+**elevated** `start:lan` because "mDNS + `:443` forwarder both require
+admin/root to bind". That is a Unix assumption — Windows does not reserve ports
+below 1024, and the entire run above was performed **unelevated**, with the
+forwarder binding `:443` normally. Verified directly by binding `:444` from an
+unelevated shell first.
 
 **Follow-up round, 2026-08-11** — all three deferred items above shipped on
 `chore/server-lan-rebind-followups`: #2257 (self-bind marker, derived
