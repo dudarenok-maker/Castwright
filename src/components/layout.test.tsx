@@ -43,105 +43,109 @@ import { scriptReviewSlice } from '../store/script-review-slice';
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
 
-vi.mock('../lib/api', () => ({
-  api: {
-    /* Library + voice library + base-voice catalogue hydrate on mount —
-       resolve to empty so they no-op without throwing. */
-    getLibrary: vi.fn(async () => ({ books: [] })),
-    getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
-    getBaseVoices: vi.fn(async () => ({ voices: [] })),
-    /* Account fetch (createAsyncThunk wraps this) — resolve to minimal
-       UserSettings so the slice's hydrate doesn't reject. */
-    getUserSettings: vi.fn(async () => ({})),
-    /* The line this test is actually about. Configured per-test via
-       getBookStateMock.mockResolvedValue. */
-    getBookState: (...args: unknown[]) => getBookStateMock(...args),
-    /* Cold-boot analysis state probe — return null so the analysing-pill
-       rehydration short-circuits. */
-    getAnalysisState: vi.fn(async () => null),
-    /* Workspace-wide cold-boot scan. Layout's mount
-       effect calls this; return empty so no pill seeds. */
-    getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
-    /* The 30 s pollRevisions interval. Resolve to empty so it doesn't
-       overwrite the slice between hydrate and the test's assertions. */
-    pollRevisions: (...args: unknown[]) => pollRevisionsMock(...args),
-    /* Background bulk-poll fan-out across all known books — stub to
-       empty so the per-render fetch doesn't crash the test harness. */
-    pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
-    /* useTtsLifecycle polls /health on mount; resolve to unreachable so
-       no pending pill state lands. */
-    getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
-    /* useTtsLifecycle also polls /api/gpu/queue on the same cadence (the
-       GPU semaphore depth that drives the "GPU busy · N waiting ·" pill
-       prefix). Stub to an empty queue so the pill renders without the
-       prefix in these tests. */
-    getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
-    /* Task 10 (#1839) — the resident-model Stop control in the global TTS
-       notice banner calls ttsLifecycle.kokoro/coqui.onStop(), which hits
-       these. Not exercised by most tests in this file, but useTtsLifecycle
-       needs both defined on the mocked api module or a real Stop click
-       throws "api.unloadSidecar is not a function". */
-    loadSidecar: vi.fn(async () => ({ status: 'ready' })),
-    unloadSidecar: vi.fn(async () => ({ status: 'idle' })),
-    /* Voice matching fires on the confirm stage only; we render at
-       'ready' here so it shouldn't trigger, but keep a stub so any
-       drift in that guard doesn't crash the test. */
-    matchVoices: vi.fn(async () => ({ matches: [] })),
-    /* Plan 90 — Layout fetches the series roster on bookId change so
-       the manuscript-view reassign picker has roster entries to surface.
-       Return empty so the effect's catch path doesn't fire and these
-       tests stay focused on per-book hydration. */
-    getSeriesRoster: vi.fn(async () => ({ characters: [] })),
-    /* fs-21 — boot-splash readiness gate fetches this once on mount; resolve
-       ready so the splash clears and the normal app renders. A vi.fn() (not
-       a plain arrow) so individual tests can override the resolved value
-       per-test (see the Retry-suppression describe block below), same
-       pattern as getSidecarHealth/setShelfStatus elsewhere in this file. */
-    getSetupReadiness: vi.fn(async () => ({
-      ready: true,
-      completedAt: '2026-06-12T00:00:00.000Z',
-      blockers: {
-        sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-        ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-        tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-        analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-      },
-      info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
-    })),
-    /* Guided-tour boot fetch — resolve to not-completed so the tour slice
-       stays inactive (overlay renders null) and the test harness is unaffected. */
-    getTourStatus: vi.fn(async () => ({ completedAt: null })),
-    /* MiniPlayer stubs — needed when Layout renders a MiniPlayer (ready stage
-       with a current track). Defaults to no-ops so the player mounts cleanly. */
-    getChapterAudio: vi.fn(async () => ({
-      url: '/api/books/b1/chapters/1/audio.mp3',
-      durationSec: 600,
-      peaks: [],
-      sampleRate: 44100,
-      segments: [],
-    })),
-    getListenProgress: vi.fn(async () => null),
-    putListenProgress: vi.fn(async () => ({
-      chapterId: 1,
-      currentSec: 0,
-      updatedAt: new Date().toISOString(),
-    })),
-    putListenStats: vi.fn(async () => ({})),
-    /* fs-15 shelf-status — the auto-finish call. Mocked as a vi.fn so tests
-       can assert it was called with {finished:true}. */
-    setShelfStatus: vi.fn(async () => ({
-      chapterId: 1,
-      currentSec: 0,
-      updatedAt: new Date().toISOString(),
-    })),
-    /* fe-47 tier-modal test — the "apply tier to cast" sink. */
-    setCastTier: vi.fn(async () => ({ updated: 0 })),
-  },
-  AnalysisError: class extends Error {},
-  ExportIncompleteError: class extends Error {
-    missing: string[] = [];
-  },
-}));
+vi.mock('../lib/api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/api')>();
+  return {
+    ...mod,
+    api: {
+      /* Library + voice library + base-voice catalogue hydrate on mount —
+         resolve to empty so they no-op without throwing. */
+      getLibrary: vi.fn(async () => ({ authors: [] })),
+      getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
+      getBaseVoices: vi.fn(async () => ({ voices: [] })),
+      /* Account fetch (createAsyncThunk wraps this) — resolve to minimal
+         UserSettings so the slice's hydrate doesn't reject. */
+      getUserSettings: vi.fn(async () => ({})),
+      /* The line this test is actually about. Configured per-test via
+         getBookStateMock.mockResolvedValue. */
+      getBookState: (...args: unknown[]) => getBookStateMock(...args),
+      /* Cold-boot analysis state probe — return null so the analysing-pill
+         rehydration short-circuits. */
+      getAnalysisState: vi.fn(async () => null),
+      /* Workspace-wide cold-boot scan. Layout's mount
+         effect calls this; return empty so no pill seeds. */
+      getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
+      /* The 30 s pollRevisions interval. Resolve to empty so it doesn't
+         overwrite the slice between hydrate and the test's assertions. */
+      pollRevisions: (...args: unknown[]) => pollRevisionsMock(...args),
+      /* Background bulk-poll fan-out across all known books — stub to
+         empty so the per-render fetch doesn't crash the test harness. */
+      pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
+      /* useTtsLifecycle polls /health on mount; resolve to unreachable so
+         no pending pill state lands. */
+      getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
+      /* useTtsLifecycle also polls /api/gpu/queue on the same cadence (the
+         GPU semaphore depth that drives the "GPU busy · N waiting ·" pill
+         prefix). Stub to an empty queue so the pill renders without the
+         prefix in these tests. */
+      getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
+      /* Task 10 (#1839) — the resident-model Stop control in the global TTS
+         notice banner calls ttsLifecycle.kokoro/coqui.onStop(), which hits
+         these. Not exercised by most tests in this file, but useTtsLifecycle
+         needs both defined on the mocked api module or a real Stop click
+         throws "api.unloadSidecar is not a function". */
+      loadSidecar: vi.fn(async () => ({ status: 'ready' })),
+      unloadSidecar: vi.fn(async () => ({ status: 'idle' })),
+      /* Voice matching fires on the confirm stage only; we render at
+         'ready' here so it shouldn't trigger, but keep a stub so any
+         drift in that guard doesn't crash the test. */
+      matchVoices: vi.fn(async () => ({ matches: [] })),
+      /* Plan 90 — Layout fetches the series roster on bookId change so
+         the manuscript-view reassign picker has roster entries to surface.
+         Return empty so the effect's catch path doesn't fire and these
+         tests stay focused on per-book hydration. */
+      getSeriesRoster: vi.fn(async () => ({ characters: [] })),
+      /* fs-21 — boot-splash readiness gate fetches this once on mount; resolve
+         ready so the splash clears and the normal app renders. A vi.fn() (not
+         a plain arrow) so individual tests can override the resolved value
+         per-test (see the Retry-suppression describe block below), same
+         pattern as getSidecarHealth/setShelfStatus elsewhere in this file. */
+      getSetupReadiness: vi.fn(async () => ({
+        ready: true,
+        completedAt: '2026-06-12T00:00:00.000Z',
+        blockers: {
+          sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        },
+        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+      })),
+      /* Guided-tour boot fetch — resolve to not-completed so the tour slice
+         stays inactive (overlay renders null) and the test harness is unaffected. */
+      getTourStatus: vi.fn(async () => ({ completedAt: null })),
+      /* MiniPlayer stubs — needed when Layout renders a MiniPlayer (ready stage
+         with a current track). Defaults to no-ops so the player mounts cleanly. */
+      getChapterAudio: vi.fn(async () => ({
+        url: '/api/books/b1/chapters/1/audio.mp3',
+        durationSec: 600,
+        peaks: [],
+        sampleRate: 44100,
+        segments: [],
+      })),
+      getListenProgress: vi.fn(async () => null),
+      putListenProgress: vi.fn(async () => ({
+        chapterId: 1,
+        currentSec: 0,
+        updatedAt: new Date().toISOString(),
+      })),
+      putListenStats: vi.fn(async () => ({})),
+      /* fs-15 shelf-status — the auto-finish call. Mocked as a vi.fn so tests
+         can assert it was called with {finished:true}. */
+      setShelfStatus: vi.fn(async () => ({
+        chapterId: 1,
+        currentSec: 0,
+        updatedAt: new Date().toISOString(),
+      })),
+      /* fe-47 tier-modal test — the "apply tier to cast" sink. */
+      setCastTier: vi.fn(async () => ({ updated: 0 })),
+    },
+    AnalysisError: class extends Error {},
+    ExportIncompleteError: class extends Error {
+      missing: string[] = [];
+    },
+  };
+});
 
 /* Stub the route-prefetch thunks. Layout fires importUploadView() /
    importGenerationView() from stage-keyed effects to warm lazy chunks; those
@@ -159,7 +163,7 @@ vi.mock('../store/prosody-thunk', () => ({
 }));
 
 import { Layout } from './layout';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
@@ -424,6 +428,39 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       expect(s.revisions.loaded).toBe(true);
       expect(s.revisions.pending).toEqual([]);
       expect(s.revisions.drift).toEqual([]);
+    });
+  });
+});
+
+/* Task 6 (fix round 1, finding 2) — the first-load library-hydrate dispatcher
+   (the .catch() on api.getLibrary() in Layout's own mount effect) had zero
+   coverage. Typecheck can't substitute: `status` is optional on the
+   hydrateError payload, so `{ message }` alone compiles fine even if the
+   `status: e instanceof ApiError ? e.status : undefined` line were deleted
+   outright. Only a runtime assertion on the dispatched payload closes that
+   gap. */
+describe('Layout — first-load library hydrate carries the ApiError status (task-6)', () => {
+  it('dispatches hydrateError with status: 401 when getLibrary rejects with an ApiError', async () => {
+    vi.mocked(api.getLibrary).mockRejectedValueOnce(new ApiError('nope', 401));
+
+    const store = makeStore();
+    /* The 'books' stage, no :bookId — sidesteps the separate per-book
+       getBookState hydration path (unrelated to this test, and
+       getBookStateMock is .mockReset() in the top-level beforeEach so it has
+       no implementation here) and keeps this test scoped to Layout's own
+       first-load library-hydrate effect. */
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(store.getState().library.error).toEqual({ message: 'nope', status: 401 });
     });
   });
 });

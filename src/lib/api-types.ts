@@ -5715,6 +5715,19 @@ export interface components {
                     /** @description How many rendered segments (across every rendered chapter) carry this orphaned id. */
                     segments: number;
                     /**
+                     * @description #2129/#2128 — whether this orphaned id's RENDERED AUDIO is
+                     *     still current, as opposed to whether the id currently
+                     *     RESOLVES (`resolution`). `true` only when every rendered
+                     *     chapter carrying this id was rendered against the
+                     *     cast-id-history state that established its current target;
+                     *     `unknown` when the comparison cannot be made (a render
+                     *     predating the stamp, or a history file predating the
+                     *     one-shot back-fill). `unknown` is presented as needing a
+                     *     re-render, not as fine — only `true` clears a row.
+                     * @enum {string}
+                     */
+                    audioCurrent: "true" | "false" | "unknown";
+                    /**
                      * @description #2092/#2089 D4 — every live cast id this orphaned id has
                      *     been rejected AGAINST (`cast-id-history.json`'s
                      *     `rejectedPairs`, keyed on this orphaned id as the pair's

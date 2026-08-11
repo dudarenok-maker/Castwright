@@ -455,6 +455,54 @@ it('two concurrent createDevice calls do not lose a write (unsynchronised read-m
   expect(labels).toEqual(['A', 'B']);
 });
 
+// #2257 — "Authorize this browser" clicked twice must leave exactly one live
+// self-bind record, not two. The first record is revoked (not deleted —
+// matching revokeDevice's own semantics), so it's still present in the roster.
+it('two consecutive createDevice(..., { selfBind: true }) calls leave exactly one non-revoked selfBind record (#2257)', async () => {
+  const first = await dt.createDevice('This computer', 365, { selfBind: true });
+  const second = await dt.createDevice('This computer', 365, { selfBind: true });
+
+  const list = dt.listDevices();
+  expect(list.find((d) => d.id === first.device.id)?.revoked).toBe(true);
+  expect(list.find((d) => d.id === second.device.id)?.revoked).toBe(false);
+  // Still present, not erased.
+  expect(list.map((d) => d.id).sort()).toEqual([first.device.id, second.device.id].sort());
+});
+
+// #2257 — the marker decides, not the label. A record renamed away from
+// "This computer" but still carrying selfBind:true IS revoked by the next
+// self-bind; a record labelled "This computer" WITHOUT the marker is NOT.
+it('a self-bind is revoked by label rename; a same-labelled non-self-bind record is left alone (#2257)', async () => {
+  const renamed = await dt.createDevice('This computer', 365, { selfBind: true });
+  // Simulate an operator rename: label changes, selfBind marker persists.
+  const devicesRaw = JSON.parse(
+    readFileSync(join(dir, 'device-tokens.json'), 'utf8'),
+  ) as { devices: Record<string, unknown>[] };
+  const idx = devicesRaw.devices.findIndex((d) => d.id === renamed.device.id);
+  devicesRaw.devices[idx] = { ...devicesRaw.devices[idx], label: 'Mike (renamed)' };
+  writeFileSync(join(dir, 'device-tokens.json'), JSON.stringify(devicesRaw), 'utf8');
+  dt._resetDeviceTokenCacheForTests();
+
+  const decoy = await dt.createDevice('This computer', 365); // no selfBind option at all
+  const third = await dt.createDevice('This computer', 365, { selfBind: true });
+
+  const list = dt.listDevices();
+  // The renamed-but-still-marked record IS revoked.
+  expect(list.find((d) => d.id === renamed.device.id)?.revoked).toBe(true);
+  // The unmarked "This computer" decoy is NOT revoked — the label never decided.
+  expect(list.find((d) => d.id === decoy.device.id)?.revoked).toBe(false);
+  expect(list.find((d) => d.id === third.device.id)?.revoked).toBe(false);
+});
+
+it('createDevice without the selfBind option revokes nothing', async () => {
+  const first = await dt.createDevice('This computer', 365, { selfBind: true });
+  const second = await dt.createDevice('Some other device', 365);
+
+  const list = dt.listDevices();
+  expect(list.find((d) => d.id === first.device.id)?.revoked).toBe(false);
+  expect(list.find((d) => d.id === second.device.id)?.revoked).toBe(false);
+});
+
 // #2182 (coordinator follow-up) — a shared serialisation mechanism is not
 // evidence every entry point actually uses it; each write path gets its own
 // deterministic lost-update regression test, mirroring createDevice's.

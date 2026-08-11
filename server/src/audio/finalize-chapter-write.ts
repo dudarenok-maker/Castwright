@@ -46,7 +46,7 @@ import {
 } from './render-integrity/embeddings-io.js';
 
 /** Strict on-disk shape of `<slug>.segments.json` (the write view; the loose
-    read view lives in segments-io.ts). Mirrors generation.ts's local copy. */
+    read view lives in segments-io.ts). */
 export interface ChapterSegmentsFile {
   bookId: string;
   chapterId: number;
@@ -55,6 +55,20 @@ export interface ChapterSegmentsFile {
   sampleRate: number;
   modelKey: TtsModelKey;
   synthesizedAt: string;
+  /** #2128 — the `seq` of the `cast-id-history.json` state THIS render
+      resolved against. Written ONLY by the full-render path
+      (`generation.ts`); `chapter-qa-repair.ts` and `chapter-splice.ts` carry
+      the prior file's value forward verbatim, because they rewrite the whole
+      file while leaving most segments byte-identical, and refreshing this
+      would launder a stale row into looking current.
+
+      `0` is a VALID value, not an absent one. Absent means the render predates
+      this stamp, which `isAudioCurrent` reads as 'unknown' — and 'unknown'
+      lists. Deliberately NOT `synthesizedAt`, which the two partial writers
+      DO refresh and which cannot speak to the `'normalised-id'` tier at all
+      (that tier has no history entry; its hazard is a render predating the
+      resolver, which this field's mere presence proves). */
+  castHistorySeq?: number;
   segments: ChapterSegment[];
   characterSnapshots?: Record<string, CharacterSnapshot>;
   qa?: ChapterQaVerdict;
@@ -78,6 +92,10 @@ export interface FinalizeChapterAudioInput {
       chapter duration; absent → uses the new duration (QA duration check
       becomes a no-op). */
   expectedSec?: number;
+  /** #2128 — see `ChapterSegmentsFile.castHistorySeq`. Supplied by the
+      full-render path from the history it actually built its resolver from;
+      carried forward verbatim by the two partial writers. */
+  castHistorySeq?: number;
   /** Invoked once, immediately AFTER the encode (2-pass loudnorm) returns and
       BEFORE QA / snapshots / write. The generation route passes its
       `bumpProgress` here so the per-chapter no-progress watchdog sees the long
@@ -329,6 +347,7 @@ export async function finalizeChapterAudioWrite(
     sampleRate,
     modelKey,
     synthesizedAt: new Date().toISOString(),
+    ...(input.castHistorySeq === undefined ? {} : { castHistorySeq: input.castHistorySeq }),
     segments,
     characterSnapshots,
     qa: audioQa,

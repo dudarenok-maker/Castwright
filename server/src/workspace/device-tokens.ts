@@ -26,6 +26,14 @@ export interface DeviceTokenRecord {
   expiresAt?: string;        // ISO; absent (legacy schema-1) OR unparseable → rejected (#2144)
   lastSeenAt?: string;
   revoked?: boolean;
+  /** True iff this record was minted by "Authorize this browser" (a
+   *  self-bind of the host's own credential), never by client assertion at
+   *  redeem time — see createDevice's `opts.selfBind` doc comment. Not
+   *  validated by `invalidDeviceField`: that function's failures quarantine
+   *  the whole record, and a hand-edited/malformed value here should only
+   *  degrade to "not a self-bind" (every read site compares `=== true`), not
+   *  cost an operator a working credential over a bookkeeping field. */
+  selfBind?: boolean;
 }
 
 /** Device record minus the secret hash — safe to return from the API. */
@@ -81,9 +89,21 @@ export function redactDevice(d: DeviceTokenRecord): PublicDevice {
   };
 }
 
-/** Clamp a configured TTL to a sane positive integer; fall back to the 30-day default. */
+/** Clamp a configured TTL to an integer in [1, 400]; fall back to the 365-day
+ *  default only when the value is not an integer at all. Out-of-range integers
+ *  clamp to the NEAREST bound — an operator who hand-edits a stored override to
+ *  `0` is shortening the lifetime, and returning the default would hand them
+ *  the longest one instead.
+ *
+ *  The 400 ceiling mirrors Chrome's cookie Max-Age cap (M104): above it the
+ *  server record would outlive the cookie, which is the divergence this bound
+ *  exists to prevent. `max` in the registry already rejects out-of-range env
+ *  and Settings writes (config/resolver.ts:168); this clamp guards the one
+ *  unvalidated path — a stored override, returned raw by resolveKnobInner
+ *  (config/resolver.ts:32-55). */
 export function clampTtlDays(raw: unknown): number {
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : 30;
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) return 365;
+  return Math.min(Math.max(raw, 1), 400);
 }
 
 /* --- IO + in-memory cache ------------------------------------------------- */
@@ -561,13 +581,26 @@ export function isValidDeviceToken(rawToken: string): boolean {
 }
 
 /** Mint a new per-device token. Returns the raw token ONCE (only its hash is
- *  stored); callers must surface it to the user immediately. */
+ *  stored); callers must surface it to the user immediately.
+ *
+ *  `opts.selfBind` marks the new record as the host's self-bind AND, in the
+ *  same critical section, revokes any prior non-revoked `selfBind` record —
+ *  the marker decides, not the label, so a record renamed away from "This
+ *  computer" is still revoked and a record labelled "This computer" without
+ *  the marker is not. This is a single read-modify-write inside the existing
+ *  `enqueueWrite` call, not a nested one: `enqueueWrite` is explicitly
+ *  non-nesting (see its own doc comment above) and calling `revokeDevice`
+ *  from in here would deadlock permanently. */
 export async function createDevice(
   label: string,
   ttlDays: number,
+  opts?: { selfBind?: boolean },
 ): Promise<{ device: PublicDevice; token: string }> {
   return enqueueWrite(async () => {
-    const devices = [...loadSync()];
+    const prior = loadSync();
+    const devices = opts?.selfBind
+      ? prior.map((d) => (d.selfBind === true && d.revoked !== true ? { ...d, revoked: true } : d))
+      : [...prior];
     const token = randomBytes(32).toString('hex');
     const now = Date.now();
     const record: DeviceTokenRecord = {
@@ -576,6 +609,7 @@ export async function createDevice(
       tokenHash: hashToken(token),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + ttlDays * 86_400_000).toISOString(),
+      ...(opts?.selfBind ? { selfBind: true } : {}),
     };
     devices.push(record);
     await persist(devices);

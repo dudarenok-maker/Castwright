@@ -13,7 +13,7 @@ import {
   mockRestartSidecar,
   _resetMockConfig,
 } from './api';
-import { knobsInGroup, GROUPS } from '../../server/src/config/registry';
+import { knobsInGroup, KNOBS } from '../../server/src/config/registry';
 import { PAIR_RULES } from '../../server/src/config/pair-rules';
 
 beforeEach(() => {
@@ -308,10 +308,13 @@ describe('mock config parity with the server registry', () => {
      gpu.vramBudget / gpu.weight.* / gpu.safeCoexistMb) from the server
      registry.ts, but the hand-copied MOCK_CONFIG_DESCRIPTORS kept them and
      never gained gpu.reserveMb — so mock mode (and the §9 wiki screenshots
-     captured from it) rendered retired knobs. The mock is deliberately a
-     SUBSET of the registry, so we don't assert full-catalog parity; but the
-     gpu-lifecycle group must mirror the registry exactly, or this class of
-     drift silently returns. */
+     captured from it) rendered retired knobs. Since #2259 the mock catalogue
+     is projected straight from the registry (full parity, not a subset), so
+     `groups` in the assertions below IS `REGISTRY_GROUPS` (same object
+     references, not an independently-authored copy) — a "group blurb
+     matches the registry" check would compare a string to itself and could
+     never fail, so it was deleted; the key-mirror checks below still bite,
+     because a mis-filtered/renamed group can still drop or add a key. */
   it('gpu-lifecycle descriptor keys mirror the registry group', async () => {
     const { descriptors } = await mockGetConfig();
     const mockKeys = descriptors
@@ -327,13 +330,6 @@ describe('mock config parity with the server registry', () => {
       expect(mockKeys).not.toContain(dead);
     }
     expect(mockKeys).toContain('gpu.reserveMb');
-  });
-
-  it('gpu-lifecycle group blurb matches the registry', async () => {
-    const { groups } = await mockGetConfig();
-    const mockGroup = groups.find((g) => g.id === 'gpu-lifecycle');
-    const registryGroup = GROUPS.find((g) => g.id === 'gpu-lifecycle');
-    expect(mockGroup?.help).toBe(registryGroup?.help);
   });
 
   /* #1786: the §12 dialogue-structure attribution group was absent from the
@@ -352,10 +348,51 @@ describe('mock config parity with the server registry', () => {
     expect(mockKeys.length).toBeGreaterThan(0);
   });
 
-  it('analyzer-structure group blurb matches the registry', async () => {
-    const { groups } = await mockGetConfig();
-    const mockGroup = groups.find((g) => g.id === 'analyzer-structure');
-    const registryGroup = GROUPS.find((g) => g.id === 'analyzer-structure');
-    expect(mockGroup?.help).toBe(registryGroup?.help);
+  /* #2259 — the mock catalogue is now PROJECTED from the registry (see
+     api.ts's MOCK_CONFIG_DESCRIPTORS: UI_ONLY_MOCK_DESCRIPTORS +
+     allKnobDescriptors()), so a per-field parity check against KNOBS on the
+     shared key set is tautological — both sides are the same projection of
+     the same data by construction. What this guards instead is the mock's
+     *construction*: (1) a registry knob silently dropped by a `.filter`/
+     `.slice` in api.ts (the #2259 gap-1 failure mode), (2) a descriptor's
+     `group` not resolving to any group the mock returns (the failure mode
+     the group-list rewrite below introduces), and (3) a reversion to a
+     hand-copied descriptor list that duplicates a registry key — the exact
+     `tts.qwen.device` shape #2259 removed, plus the non-vacuity floor so an
+     accidentally-empty KNOBS/descriptors projection can't pass this whole
+     block by asserting nothing. */
+  it('every registry knob has a mock descriptor', async () => {
+    const { descriptors } = await mockGetConfig();
+    const mockKeys = new Set(descriptors.map((d) => d.key));
+    for (const k of KNOBS) {
+      expect(mockKeys.has(k.key)).toBe(true);
+    }
+    expect(descriptors.length).toBeGreaterThan(100);
+    expect(new Set(descriptors.map((d) => d.key)).size).toBe(descriptors.length);
+  });
+
+  /* #2271 review — registry⊆mock and key-uniqueness above both still pass
+     if a THIRD hand-authored descriptor is appended to api.ts's mock
+     catalogue (MOCK_CONFIG_DESCRIPTORS = UI_ONLY_MOCK_DESCRIPTORS +
+     allKnobDescriptors()) — neither check bounds the mock's total size.
+     Pin the count exactly: KNOBS.length (the registry projection) plus the
+     two declared UI-only legacy descriptors (KOKORO_SAMPLE_RATE,
+     ANALYZER_STAGE1_PROMPT — see api.ts's UI_ONLY_MOCK_DESCRIPTORS comment).
+     UI_ONLY_MOCK_DESCRIPTORS itself isn't exported, so its length is pinned
+     as the literal `2` rather than imported. */
+  it('the mock catalogue has no descriptors beyond the registry plus the two declared UI-only ones', async () => {
+    const { descriptors } = await mockGetConfig();
+    const registryKeys = new Set(KNOBS.map((k) => k.key));
+    const mockOnlyKeys = descriptors.filter((d) => !registryKeys.has(d.key)).map((d) => d.key);
+    expect(mockOnlyKeys.sort()).toEqual(['ANALYZER_STAGE1_PROMPT', 'KOKORO_SAMPLE_RATE']);
+    expect(descriptors.length).toBe(KNOBS.length + 2);
+  });
+
+  it("every mock descriptor's group resolves to a group mockGetConfig() returns", async () => {
+    const { descriptors, groups } = await mockGetConfig();
+    const groupIds = new Set(groups.map((g) => g.id));
+    for (const d of descriptors) {
+      expect(groupIds.has(d.group)).toBe(true);
+    }
   });
 });

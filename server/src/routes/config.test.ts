@@ -78,6 +78,48 @@ describe('GET /api/config', () => {
     expect(res.body.restartPending).toBe(false);
   });
 
+  /* toKnobDescriptor (server/src/config/descriptors.ts) deliberately drops
+     `env` and `pattern` from a ConfigKnob before it reaches a client — its
+     own header comment says so, but nothing mechanically enforced it. That
+     matters more now: this projection also feeds the frontend's mock
+     catalogue (src/lib/api.ts), so a future edit motivated by mock needs
+     (e.g. exposing `pattern` so mockPutConfig can validate qa.speaker.device
+     the same way it already hardcodes for qa.asr.device) could silently
+     ship `env`/`pattern` to every real client too. Pin the exact key set of
+     one descriptor to close that door.
+
+     analyzer.stage2.minCoverage is numeric with min/max/step all set, so it
+     exercises three of the projection's optional fields at once; `options`
+     doesn't appear here because it's the alternate branch for enum-typed
+     knobs (min/max/step and options are never both present on one
+     descriptor) — see toKnobDescriptor for the full field list. The closed
+     set below is exactly what JSON.stringify keeps once undefined-valued
+     fields (min/max/step on an enum, options here) drop out; `env` and
+     `pattern` are never in that set for ANY knob shape. */
+  it('descriptor fields are exactly the client-safe set — env and pattern never leak', async () => {
+    const res = await request(app).get('/api/config');
+    const d = res.body.descriptors.find(
+      (x: { key: string }) => x.key === 'analyzer.stage2.minCoverage',
+    );
+    expect(d).toBeDefined();
+    expect(Object.keys(d).sort()).toEqual(
+      [
+        'apply',
+        'default',
+        'group',
+        'help',
+        'isPrompt',
+        'key',
+        'label',
+        'max',
+        'min',
+        'risk',
+        'step',
+        'type',
+      ].sort(),
+    );
+  });
+
   /* Backward compat for a removed knob. `voices.library.enabled` was deleted
      from the registry, but anyone who had flipped it still carries the key in
      their persisted `configOverrides`. `resolveAll()` walks `allKnobs()`, so

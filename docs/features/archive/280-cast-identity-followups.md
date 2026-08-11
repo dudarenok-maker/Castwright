@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-08-11
 owner: null
 ---
 
@@ -10,10 +10,12 @@ owner: null
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: active — #2110, #2129, #2133 shipped 2026-08-06 (PR #2163), each **except
-> #2133** via a mechanism this plan's own tasks do not specify; #2128 (Tasks 2-9,
-> most of this document) was never started and remains open. See "What actually
-> shipped" immediately below for the full reconciliation.
+> Status: stable — #2110, #2129, #2133 shipped 2026-08-06 (PR #2163), each **except
+> #2133** via a mechanism this plan's own tasks do not specify. **#2128 shipped
+> 2026-08-11 (PR #2244)**, closing the last of the four issues — see "What #2128
+> actually shipped" below for how that diverged from Tasks 2-9's own numbering (the
+> architecture landed, not the task-by-task sequence). See "What actually shipped"
+> immediately below for the #2110/#2129/#2133 reconciliation.
 > Design of record: [`docs/superpowers/specs/2026-08-06-cast-identity-followups-design.md`](../superpowers/specs/2026-08-06-cast-identity-followups-design.md)
 > Parent plan: [`278-cast-character-identity.md`](278-cast-character-identity.md)
 > Key files: `server/src/store/cast-id-history.ts`, `server/src/store/cast-resolve.ts`,
@@ -94,16 +96,14 @@ a residual, **#2166** ("an abandoned half-written reject leaves an invisible
 `notLinkedTo` edge with no UI path to remove it"), recorded in plan 278's
 invariant 10 rather than here.
 
-**#2128 (Tasks 2-9 in full) did not ship and remains open.** The open issue's text
-(filed 2026-08-05, unedited since) still describes the *timestamp*-based approach
-("per-entry `recordedAt` on `cast-id-history.json` compared against
-`SegmentsFile.synthesizedAt`") that the linked spec explicitly considered and moved
-away from, in favour of a `seq` counter, one day later (see the spec's "Why a
-counter and not a timestamp" section) — a design decision the issue itself has
-never been updated to reflect. A future implementer picking up #2128 needs to know
-this spec exists and represents a considered, reviewed (three adversarial passes)
-alternative to the issue's own framing, not simply re-derive a timestamp scheme
-from the stale issue text.
+**#2128 (Tasks 2-9 in full) did not ship in PR #2163 and stayed open at the time this
+section was written.** The open issue's text (filed 2026-08-05, unedited since) still
+described the *timestamp*-based approach ("per-entry `recordedAt` on
+`cast-id-history.json` compared against `SegmentsFile.synthesizedAt`") that the linked
+spec explicitly considered and moved away from, in favour of a `seq` counter, one day
+later (see the spec's "Why a counter and not a timestamp" section) — a design decision
+the issue itself was never updated to reflect. It shipped later; see "What #2128
+actually shipped" below.
 
 **Also shipped in PR #2163, outside this plan's scope entirely** (declared in the
 PR body as incidental fixes, not silently folded in): a per-run `cast.json`
@@ -114,9 +114,43 @@ pattern #2083 had already swept from ten siblings); and a
 `record.bookId ?? bookIdFromTitle(...)` fail-open fallback fix, four sites rather
 than the two originally reported.
 
-**Net position:** 3 of 4 issues closed, only #2133 via the mechanism this plan
-specifies for it. #2128 — the reason the `seq`/predicate architecture (the bulk of
-this document, Tasks 2-9) exists at all — is untouched.
+**Net position as of PR #2163:** 3 of 4 issues closed, only #2133 via the mechanism
+this plan specifies for it. #2128 — the reason the `seq`/predicate architecture (the
+bulk of this document, Tasks 2-9) exists at all — was still untouched. **All four are
+now closed** — see immediately below.
+
+## What #2128 actually shipped (2026-08-11)
+
+Implementation ran on `fix/server-2128-audio-currency` (**PR #2244**, commit range
+`a6e8454e..HEAD` at merge), following the architecture Tasks 2-9 below specify
+substantially as written: the per-book monotonic `seq` counter and per-key
+`recordedAtSeq`/`recordedAtIso` markers on `cast-id-history.json` (Task 2), the
+resolver's `matchedHistoryKeys` (Task 3), the shared `isAudioCurrent` predicate (Task
+4), `castHistorySeq` threaded through `finalize-chapter-write.ts`/`segments-io.ts` and
+stamped by `generation.ts`'s full-render path while `chapter-qa-repair.ts` and
+`chapter-splice.ts` carry the prior stamp forward (Tasks 5-8), and the repair script
+consulting the predicate so a re-rendered chapter's row actually clears (Task 9). The
+Cast banner's auto-reconciled disclosure splits into **"audio is current"** / **"audio
+needs a re-render"**, replacing #2129's static `STALE_AUDIO_RESOLUTIONS` allowlist
+described in "What actually shipped" above.
+
+Implementation diverged from the task text in the usual SDD way — several review
+rounds found and closed real gaps not anticipated by the task breakdown (a partial
+marker map, guard-3/guard-5 write-site coverage, whole-history-threading, the
+stamp-pairing invariant, and the audio-currency predicate's own edge cases) — but the
+shape of what shipped is the shape Tasks 2-9 describe, unlike the #2110/#2129/#2133
+divergence recorded above.
+
+**One additional fix, found only because this branch also had to reconcile against
+`origin/main`'s PR #2240 ("Link to this character", #2238), merged into this branch
+via `4c9d8dd8`:** #2238's `applyOrphanLink` optimistic reducer predates `audioCurrent`
+existing at all, so it never set the field — leaving whatever stale `true`/`false`
+value the row had *before* the link sitting on screen, now describing the wrong
+target, until the next hydrate. All three of `cast-slice.ts`'s optimistic reducers
+(reject, undo, link) now reset `audioCurrent` to `'unknown'` the moment they touch a
+row, matching the fail-closed rule the predicate itself follows everywhere else. Not a
+Tasks 2-9 item — a merge-induced gap between two branches that never shipped broken to
+`main`, closed before this PR opened.
 
 **Tech Stack:** TypeScript (Node 20 + Express server, Vite/React 18/RTK frontend),
 Vitest (server + frontend), Playwright (e2e), plain-JS `.mjs` for the repair script.
@@ -3264,12 +3298,15 @@ Per CLAUDE.md's Before-shipping checklist:
 
 ## Ship notes
 
-**Partial.** #2110, #2129, #2133 shipped **2026-08-06** via **PR #2163**
+**Complete.** #2110, #2129, #2133 shipped **2026-08-06** via **PR #2163**
 (`fix/server-cast-identity-followups` → `main`, merge commit
 `7add81c0ce4fde75657ca2e64f5bd0131eb87d16`) — see "What actually shipped" above for
-how each diverged from the tasks below (all but Task 10/#2133). **#2128 (Tasks
-2-9) did not ship** and is not archived here: this plan stays `status: active` and
-out of `docs/features/archive/` until #2128 either lands or is formally deferred.
-There is no single merge SHA for "this plan shipping" — only the three-issue
-subset above landed, and not via this plan's own task breakdown for two of the
-three.
+how each diverged from the tasks below (all but Task 10/#2133).
+
+**#2128 shipped 2026-08-11** via **PR #2244** (`fix/server-2128-audio-currency` →
+`main`, commit range `a6e8454e..HEAD`) — see "What #2128 actually shipped" above.
+All four issues this plan covers (#2110, #2129, #2133, #2128) are now closed.
+There is no single merge SHA that closes the whole plan — it shipped as two
+separate PRs five days apart, neither of which followed this document's task
+breakdown byte-for-byte (see both "What actually shipped" sections above for the
+reconciliation).

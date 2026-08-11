@@ -12,6 +12,7 @@ import { uiSlice } from '../store/ui-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { BookLibraryView, applyLibraryFilters } from './book-library';
+import { api } from '../lib/api';
 import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
 
 import type { ContinueItem } from '../store/continue-listening-slice';
@@ -21,15 +22,20 @@ const mockGetContinueListening = vi.fn<() => Promise<ContinueItem[]>>(
 );
 const mockSetShelfStatus = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
-vi.mock('../lib/api', () => ({
-  api: {
-    /* WorkspacePathRow fires this on mount. Never resolve — the row just
-       stays hidden, which is fine for these assertions. */
-    getWorkspaceInfo: () => new Promise(() => {}),
-    getContinueListening: () => mockGetContinueListening(),
-    setShelfStatus: () => mockSetShelfStatus(),
-  },
-}));
+vi.mock('../lib/api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/api')>();
+  return {
+    ...mod,
+    api: {
+      /* WorkspacePathRow fires this on mount. Never resolve — the row just
+         stays hidden, which is fine for these assertions. */
+      getWorkspaceInfo: () => new Promise(() => {}),
+      getContinueListening: () => mockGetContinueListening(),
+      setShelfStatus: () => mockSetShelfStatus(),
+      getLibrary: vi.fn(),
+    },
+  };
+});
 
 const oneBook: LibraryBook = {
   bookId: 'b1',
@@ -88,6 +94,34 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
       </Provider>,
     ),
   };
+}
+
+function renderWithLibraryError(error: { message: string; status?: number } | null) {
+  const store = configureStore({
+    reducer: {
+      account: accountSlice.reducer,
+      library: librarySlice.reducer,
+      tour: tourSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
+    },
+    preloadedState: {
+      library: { loaded: true, error, authors: [], books: [], pausedSnapshots: {} },
+    },
+  });
+  return render(
+    <Provider store={store}>
+      <BookLibraryView
+        authors={[]}
+        activeBookId={null}
+        onOpenBook={vi.fn()}
+        onDeleteBook={vi.fn()}
+        onReparseBook={vi.fn()}
+        onReplaceManuscript={vi.fn()}
+        onEditBook={vi.fn()}
+        onStartNew={vi.fn()}
+      />
+    </Provider>,
+  );
 }
 
 describe('BookLibraryView — loading affordance', () => {
@@ -829,7 +863,7 @@ describe('BookLibraryView — loading affordance', () => {
         continueListening: continueListeningSlice.reducer,
       },
       preloadedState: {
-        library: { loaded: true, error: 'Network', authors: [], books: [], pausedSnapshots: {} },
+        library: { loaded: true, error: { message: 'Network' }, authors: [], books: [], pausedSnapshots: {} },
       },
     });
     render(
@@ -886,6 +920,49 @@ describe('BookLibraryView — loading affordance', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('renders a recovery pointer on a 401 library error', () => {
+    renderWithLibraryError({ message: 'Library scan failed (401): Missing or invalid LAN access token.', status: 401 });
+    expect(screen.getByText(/authorize this browser/i)).toBeInTheDocument();
+    // The raw server text must not reach the user.
+    expect(screen.queryByText(/Missing or invalid LAN access token/)).not.toBeInTheDocument();
+  });
+
+  it('still shows the raw message for a non-401 error', () => {
+    renderWithLibraryError({ message: 'Library scan failed (500): boom', status: 500 });
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the recovery pointer after Retry fails with 401 (a real state transition, not a preload)', async () => {
+    /* Preload a NON-401 error so the recovery pointer is provably absent
+       before the click — a 401 preload here would make this test pass even
+       if book-library.tsx dropped `status:` from the Retry dispatch entirely,
+       since findByText's first (synchronous) check would already see the
+       pointer from the preloaded state. */
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.getLibrary).mockRejectedValue(new ApiError('nope', 401));
+    renderWithLibraryError({ message: 'boom', status: 500 });
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    expect(await screen.findByText(/authorize this browser/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['localhost', '8443', /https:\/\/localhost:8443/],
+    ['localhost', '', /Open Castwright on this computer/],
+    ['castwright.local', '', /Open Castwright on the computer running it/],
+    ['192.168.1.9', '8443', /Open Castwright on the computer running it/],
+  ])('addresses the %s (port=%s) case', (hostname, port, expected) => {
+    vi.stubGlobal('location', { hostname, port });
+    renderWithLibraryError({ message: 'x', status: 401 });
+    expect(screen.getByText(expected)).toBeInTheDocument();
   });
 });
 

@@ -240,18 +240,18 @@ describe('attributeChapterStage2 — escalation wiring (srv-59 Task 9b)', () => 
     delete process.env.ATTRIBUTION_ESCALATION;
   });
 
-  it('sanity: the fixture produces >=1 flagged window before crossExamine\'s output ever reaches escalation', async () => {
+  it('sanity: the fixture produces >=1 unresolved window before crossExamine\'s output ever reaches escalation', async () => {
     // Run with escalation forced OFF so we observe crossExamine's raw output
-    // (still flagged, untouched by any re-query) and confirm the fixture is
-    // actually exercising the code path this suite depends on.
+    // (still unresolved, untouched by any re-query) and confirm the fixture
+    // is actually exercising the code path this suite depends on.
     process.env.ATTRIBUTION_ESCALATION = 'off';
     const result = await attributeChapterStage2(
       escalationBaseOpts(fakeEscalationAnalyzer(() => Promise.resolve(null))),
     );
 
-    expect(result.structureReport?.flagged).toBeGreaterThanOrEqual(1);
+    expect(result.structureReport?.unresolved).toBeGreaterThanOrEqual(1);
     // both unanchored turns kept the model's 'narrator' guess and its
-    // reduced (flagged) confidence — proves they never got corrected.
+    // reduced (unresolved) confidence — proves they never got corrected.
     expect(result.sentences.find((s) => s.id === 4)).toMatchObject({
       characterId: 'narrator',
       confidence: CONFIDENCE.UNANCH_NARR_FLAG,

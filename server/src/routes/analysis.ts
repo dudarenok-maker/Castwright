@@ -2225,6 +2225,9 @@ export async function attributeChapterStage2(opts: {
       rosterIds,
       unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
       alignmentFloorPct: 80,
+      /* #2253 — the language's own turn marker, so a merged paragraph (#2254)
+         costs the engine its structural evidence but not the speaker. */
+      dialogueOpen: conventions.dialogueOpen,
     });
     result.sentences = examined.sentences;
     if (opts.onStages) { detSnapshot = structuredClone(examined.sentences); detReasons = examined.reasons; }
@@ -2270,7 +2273,8 @@ export async function attributeChapterStage2(opts: {
     result.structureReport = { ...examined.report, language: conventions.language };
     console.log(
       `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
-        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged} ` +
+        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} ` +
+        `flagged=${examined.report.flagged} unresolved=${examined.report.unresolved} ` +
         `escalated=${examined.report.escalated} escalationAccepted=${examined.report.escalationAccepted}`,
     );
   } else {
@@ -2325,12 +2329,12 @@ export function attributeChapterStage2WithEval(
     the stage-2 cache, which doesn't carry a stored EngineReport) — so the
     caller omits `report` entirely rather than persisting a zeroed-out one.
 
-    `confirmed`/`corrected`/`flagged`/`escalated`/`escalationAccepted` are
-    plain sums. `alignedPct` is a per-chapter-sentence-count-weighted mean
-    (weight = confirmed+corrected+flagged+lumped, i.e. every sentence
-    crossExamine classified for that chapter) rather than a flat average of
-    percentages, so one huge chapter doesn't get diluted to the same weight
-    as a two-sentence one. */
+    `confirmed`/`corrected`/`flagged`/`unresolved`/`escalated`/`escalationAccepted`
+    are plain sums. `alignedPct` is a per-chapter-sentence-count-weighted mean
+    (weight = confirmed+corrected+flagged+unresolved+lumped, i.e. every
+    sentence crossExamine classified for that chapter) rather than a flat
+    average of percentages, so one huge chapter doesn't get diluted to the
+    same weight as a two-sentence one. */
 export function aggregateStructureReports(
   reports: EngineReport[],
 ): AnalysisProvenanceReport | undefined {
@@ -2338,6 +2342,7 @@ export function aggregateStructureReports(
   let confirmed = 0;
   let corrected = 0;
   let flagged = 0;
+  let unresolved = 0;
   let escalated = 0;
   let escalationAccepted = 0;
   let weightedAlignedSum = 0;
@@ -2346,9 +2351,12 @@ export function aggregateStructureReports(
     confirmed += r.confirmed;
     corrected += r.corrected;
     flagged += r.flagged;
+    unresolved += r.unresolved;
     escalated += r.escalated;
     escalationAccepted += r.escalationAccepted;
-    const weight = r.confirmed + r.corrected + r.flagged + r.lumped;
+    /* #2253 — `unresolved` was carved out of `flagged`; omitting it here would
+       silently shrink each chapter's weight and skew the book alignedPct. */
+    const weight = r.confirmed + r.corrected + r.flagged + r.unresolved + r.lumped;
     weightedAlignedSum += r.alignedPct * weight;
     totalWeight += weight;
   }
@@ -2360,6 +2368,7 @@ export function aggregateStructureReports(
     confirmed,
     corrected,
     flagged,
+    unresolved,
     escalated,
     escalationAccepted,
   };

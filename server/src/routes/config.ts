@@ -10,6 +10,7 @@
 
 import { Router } from 'express';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
+import { allKnobDescriptors } from '../config/descriptors.js';
 import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate } from '../config/resolver.js';
 import { PAIR_RULES } from '../config/pair-rules.js';
 import {
@@ -45,21 +46,7 @@ async function ensureGpuDeviceListWarm(): Promise<void> {
 
 configRouter.get('/', async (_req, res) => {
   await ensureGpuDeviceListWarm();
-  const descriptors = allKnobs().map((k) => ({
-    key: k.key,
-    group: k.group,
-    label: k.label,
-    help: k.help,
-    type: k.type,
-    min: k.min,
-    max: k.max,
-    step: k.step,
-    options: k.options,
-    apply: k.apply,
-    risk: k.risk,
-    isPrompt: k.isPrompt ?? false,
-    default: k.default,
-  }));
+  const descriptors = allKnobDescriptors();
   res.json({
     groups: GROUPS,
     descriptors,

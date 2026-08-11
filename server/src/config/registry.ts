@@ -1256,9 +1256,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'LAN_DEVICE_TTL_DAYS',
     group: 'lan-access',
     label: 'Device authorization lifetime (days)',
-    help: 'How long a browser/device authorization stays valid before it must be re-paired.',
-    type: 'integer', min: 1,
-    default: 30,
+    help: 'How long a NEWLY authorized browser or device stays valid. Changing this does not extend authorizations that already exist — re-authorize a device to give it the new lifetime.',
+    type: 'integer', min: 1, max: 400,
+    default: 365,
     apply: 'live', risk: 'low',
   },
 

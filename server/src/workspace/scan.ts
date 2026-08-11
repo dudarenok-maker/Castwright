@@ -293,6 +293,12 @@ export interface AnalysisProvenanceReport {
   confirmed: number;
   corrected: number;
   flagged: number;
+  /* #2253 — "no verdict" sentences, split out of `flagged`. Additive OPTIONAL
+     field: `CURRENT_STATE_SCHEMA` does NOT bump (see the rename-vs-add policy
+     above), state.json files written before this landed simply lack the key,
+     and no reader may require it. Always written by
+     `aggregateStructureReports` going forward. */
+  unresolved?: number;
   escalated: number;
   escalationAccepted: number;
 }

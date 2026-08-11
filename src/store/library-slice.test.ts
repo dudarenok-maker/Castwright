@@ -185,9 +185,9 @@ describe('librarySlice — hydrateError (task-11)', () => {
   const initialState = librarySlice.getInitialState();
 
   it('hydrateError sets loaded + error; hydrate clears error', () => {
-    let s = reducer(initialState, libraryActions.hydrateError('boom'));
+    let s = reducer(initialState, libraryActions.hydrateError({ message: 'boom', status: 500 }));
     expect(s.loaded).toBe(true);
-    expect(s.error).toBe('boom');
+    expect(s.error).toEqual({ message: 'boom', status: 500 });
     s = reducer(s, libraryActions.hydrate({ authors: [] }));
     expect(s.error).toBeNull();
   });

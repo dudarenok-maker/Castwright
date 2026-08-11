@@ -47,6 +47,8 @@ let workspaceRoot: string;
 let app: Express;
 let deviceTokens: typeof import('../workspace/device-tokens.js');
 let lanAuth: typeof import('../lan-auth.js');
+let pairingSessions: typeof import('../workspace/pairing-sessions.js');
+let devicesRouter: import('express').Router;
 
 function mkReq(opts: { ip?: string; headers?: Record<string, string> } = {}) {
   const ip = opts.ip ?? '203.0.113.5'; // non-loopback documentation range
@@ -84,7 +86,8 @@ beforeEach(async () => {
   // device-tokens instance as deviceTokens, keeping isValidDeviceToken in sync.
   const realLanAuth = await vi.importActual<typeof import('../lan-auth.js')>('../lan-auth.js');
   _requireLanToken = realLanAuth.requireLanToken;
-  const { devicesRouter } = await import('./devices.js');
+  ({ devicesRouter } = await import('./devices.js'));
+  pairingSessions = await import('../workspace/pairing-sessions.js');
   app = express();
   app.use(express.json());
   app.use('/api', devicesRouter);
@@ -238,21 +241,36 @@ describe('devices route (srv-33)', () => {
     expect(typeof res.body.expiresAt).toBe('number');
   });
 
-  it('pair-session includes a friendlyUrl when isFriendlyHostnameReachable is set true', async () => {
+  it('pair-session includes a friendlyUrl when mdns and forwarder are both live', async () => {
     process.env.LAN_HTTPS = '1';
     process.env.LAN_AUTH_TOKEN = 'secret';
     process.env.LAN_HTTPS_PORT = '8443';
-    app.set('isFriendlyHostnameReachable', () => true);
+    app.set('friendlyHostnameLiveness', () => ({ mdns: true, forwarder: true }));
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
     expect(res.status).toBe(200);
     expect(res.body.friendlyUrl).toMatch(/^https:\/\/castwright\.local\/#\/pair\?c=[0-9A-HJKMNP-TV-Z]{16}$/);
   });
 
-  it('pair-session omits friendlyUrl when isFriendlyHostnameReachable is set false', async () => {
+  // #2258 — mDNS alive but the :443 forwarder down still yields a usable
+  // friendly URL, carrying the actual bound port rather than disappearing.
+  it('pair-session carries the bound port when mdns is live but the forwarder is down', async () => {
     process.env.LAN_HTTPS = '1';
     process.env.LAN_AUTH_TOKEN = 'secret';
     process.env.LAN_HTTPS_PORT = '8443';
-    app.set('isFriendlyHostnameReachable', () => false);
+    app.set('friendlyHostnameLiveness', () => ({ mdns: true, forwarder: false }));
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
+    expect(res.status).toBe(200);
+    const { port } = vi.mocked(await import('../lan-runtime.js')).getLanRuntime();
+    expect(res.body.friendlyUrl).toMatch(
+      new RegExp(`^https://castwright\\.local:${port}/#/pair\\?c=[0-9A-HJKMNP-TV-Z]{16}$`),
+    );
+  });
+
+  it('pair-session omits friendlyUrl when mdns is down, regardless of forwarder state', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    app.set('friendlyHostnameLiveness', () => ({ mdns: false, forwarder: true }));
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
     expect(res.status).toBe(200);
     expect(res.body.friendlyUrl).toBeUndefined();
@@ -283,6 +301,102 @@ describe('devices route (srv-33)', () => {
     vi.mocked(lanAuth.isLanTokenEnforced).mockReturnValueOnce(false);
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'x' });
     expect(res.status).toBe(409);
+  });
+
+  // #2257 — NOT a friendly-hostname-arm case: `mayStartPairingSession` comes
+  // through the mock factory's `...real` spread (only isLoopbackRequest and
+  // isLanTokenEnforced are individually wrapped), so its own internal call to
+  // isLoopbackRequest resolves lexically inside lan-auth.ts and never sees
+  // this mock. supertest's connection is genuinely loopback, so
+  // mayStartPairingSession admits this request via its TRUE loopback arm
+  // regardless of the mock below. What this test actually pins:
+  // `mockReturnValueOnce(false)` is consumed only by devices.ts:113's own
+  // selfBind computation, which re-derives isLoopbackRequest independently
+  // rather than trusting mayStartPairingSession's verdict — so faking that
+  // one call to false must still suppress selfBind even though the request
+  // both passed the gate and, in reality, is loopback. See the dedicated
+  // friendly-hostname-arm test below for the actual :443-forwarder attack
+  // this conjunct exists to stop.
+  it('pair-session with isLoopbackRequest faked false at the selfBind check produces a session that does not self-bind on redeem (#2257)', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);
+    const res = await request(app)
+      .post('/api/devices/pair-session')
+      .send({ label: 'This computer', selfBind: true });
+    expect(res.status).toBe(200);
+
+    const result = pairingSessions.redeemPairingSession(res.body.code);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.selfBind).toBe(false);
+  });
+
+  // Sanity counterpart — a genuinely loopback caller sending selfBind:true
+  // DOES get a self-binding session (the isLoopbackRequest mock forwards to
+  // the real implementation by default, and supertest requests are loopback).
+  it('pair-session from a loopback caller with selfBind:true DOES produce a self-binding session', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    const res = await request(app)
+      .post('/api/devices/pair-session')
+      .send({ label: 'This computer', selfBind: true });
+    expect(res.status).toBe(200);
+
+    const result = pairingSessions.redeemPairingSession(res.body.code);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.selfBind).toBe(true);
+  });
+
+  // #2257 (security case, real attack) — the actual :443-forwarder scenario the
+  // loopback conjunct exists to stop: an already-paired device reaching the
+  // server through the forwarder lands with peer IP 127.0.0.2 (never loopback)
+  // and Host castwright.local, which is exactly what admits it through
+  // mayStartPairingSession's friendly-hostname arm (isLanTokenEnforced() &&
+  // isFriendlyHostnameRequest(req)) rather than the loopback arm. supertest's
+  // real TCP connection can't be made to present that peer IP, so this drives
+  // devicesRouter directly with a fabricated request/response instead of going
+  // through HTTP — the same `mkReq({ ip, host })` shape
+  // lan-auth.pairing.test.ts:44 already uses for this exact case.
+  it('pair-session reached via the friendly hostname (peer 127.0.0.2, Host castwright.local) with selfBind:true does not self-bind on redeem (#2257 security case)', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+
+    const req = {
+      method: 'POST',
+      url: '/devices/pair-session',
+      ip: '127.0.0.2',
+      socket: { remoteAddress: '127.0.0.2' },
+      headers: { host: 'castwright.local' },
+      body: { label: 'This computer', selfBind: true },
+      app: { get: () => undefined },
+      query: {},
+    } as never;
+    let status = 200;
+    let body: { code?: string } = {};
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload as { code?: string };
+        return this;
+      },
+    } as never;
+    let nextErr: unknown;
+    devicesRouter(req, res, (err?: unknown) => {
+      nextErr = err;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (nextErr) throw nextErr;
+
+    expect(status).toBe(200);
+    const result = pairingSessions.redeemPairingSession(body.code as string);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.selfBind).toBe(false);
   });
 
   it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {

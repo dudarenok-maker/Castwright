@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
+import { isLoopbackHost } from '../lib/lan-recovery-hint';
 import type { PublicDevice } from '../lib/types';
 import { PairingQr } from './pairing/pairing-qr';
 import { PrimaryButton } from './primitives';
@@ -17,6 +18,7 @@ export function LanAccessCard() {
     { url: string; friendlyUrl?: string; expiresAt: number } | null
   >(null);
   const [err, setErr] = useState<string | null>(null);
+  const [selfErr, setSelfErr] = useState<string | null>(null);
 
   const refresh = () => {
     api.listDevices()
@@ -36,6 +38,27 @@ export function LanAccessCard() {
       else setErr(e instanceof Error ? e.message : String(e));
     }
   };
+  const authorizeThisBrowser = async () => {
+    setSelfErr(null);
+    try {
+      const s = await api.createDevicePairSession({ label: 'This computer', selfBind: true });
+      if (!s.friendlyUrl) {
+        setSelfErr("castwright.local isn't reachable right now — use the QR flow above, or check the app is running in production LAN mode.");
+        return;
+      }
+      window.location.assign(`${s.friendlyUrl}&self=1`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setSelfErr('LAN mode is not active on this server, so there is nothing to authorize against.');
+      } else if (e instanceof ApiError && e.status === 403) {
+        // Same cause + copy as the 403 branch in authorize() above — reached
+        // from a bare LAN IP (not loopback or the friendly hostname).
+        setSelfErr('Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.');
+      } else {
+        setSelfErr(e instanceof Error ? e.message : String(e));
+      }
+    }
+  };
   const revoke = async (id: string) => {
     setErr(null);
     try {
@@ -53,7 +76,9 @@ export function LanAccessCard() {
         <WikiLink page={ADMIN_WIKI.lanAccess} label="Wiki" className="text-xs" />
       </div>
       {manageHint ? (
-        <p className="mt-2 text-sm text-ink/60">Manage devices from the desktop app.</p>
+        <p className="mt-2 text-sm text-ink/60">
+          Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.
+        </p>
       ) : (
         <>
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -64,6 +89,17 @@ export function LanAccessCard() {
             <PrimaryButton variant="dark" onClick={authorize} icon={false}>Authorize a device</PrimaryButton>
           </div>
           {err && <p className="mt-2 text-sm text-rose-700">{err}</p>}
+          {isLoopbackHost() && (
+            <div className="mt-3">
+              <PrimaryButton variant="dark" onClick={authorizeThisBrowser} icon={false}>
+                Authorize this browser
+              </PrimaryButton>
+              <p className="mt-1 text-xs text-ink/55">
+                Re-links this computer to https://castwright.local. No QR needed.
+              </p>
+              {selfErr && <p className="mt-2 text-sm text-rose-700">{selfErr}</p>}
+            </div>
+          )}
           {session && (
             <div className="mt-4">
               <PairingQr payload={session.url} expiresAt={session.expiresAt} onRegenerate={authorize} />

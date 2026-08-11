@@ -4,6 +4,7 @@ import { buildNameIndex } from './name-matcher.js';
 import { parseChapterStructure } from './parser.js';
 import { alignSentences } from './aligner.js';
 import { crossExamine, CONFIDENCE } from './cross-examine.js';
+import type { CrossExamineOpts } from './cross-examine.js';
 import type { AlignedSentence, AlignmentResult } from './aligner.js';
 import type { EvidenceSource, SpanEvidence } from './types.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
@@ -42,9 +43,9 @@ const aligned = (sentence: SentenceOutput, spans: SpanEvidence[], lumped = false
 
 const ROSTER = new Set(['anton', 'olga', 'narrator']);
 const UNKNOWN = new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]);
-const BASE_OPTS = { rosterIds: ROSTER, unknownBucketIds: UNKNOWN, alignmentFloorPct: 80 };
+const BASE_OPTS: CrossExamineOpts = { rosterIds: ROSTER, unknownBucketIds: UNKNOWN, alignmentFloorPct: 80 };
 
-function run(list: AlignedSentence[], alignedPct = 100, opts = BASE_OPTS) {
+function run(list: AlignedSentence[], alignedPct = 100, opts: CrossExamineOpts = BASE_OPTS) {
   const alignment: AlignmentResult = { aligned: list, alignedPct };
   return crossExamine(alignment, opts);
 }
@@ -328,5 +329,226 @@ describe('A2 — weak tag-name is contestable', () => {
     const res = crossExamine({ alignedPct: 100, aligned: [aligned] } as any, opts);
     expect(res.sentences[0].characterId).toBe('anton'); // strong tag wins
     expect(res.flags).toEqual([]);
+  });
+});
+
+/* #2253 — the dialogue-convention invariant. A sentence that OPENS with the
+   language's dialogue marker is speech by that language's own convention;
+   tag-only or narration-only structural evidence means the parser failed to
+   segment a merged paragraph (#2254), NOT that the line is narration.
+
+   These cases drive the sentence TEXT (not just spans), because the invariant
+   is the one rule in this file that reads the text at all. */
+describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
+  const RU_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  const DASH_OPTS = { ...BASE_OPTS, dialogueOpen: RU_DASH };
+
+  const mkText = (characterId: string, text: string): SentenceOutput => ({
+    id: nextId++,
+    chapterId: 1,
+    characterId,
+    text,
+  });
+
+  it('tag-only spans: a dash-opening line keeps the model speaker and flags', () => {
+    const s = mkText('anton', '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.sentences[0].confidence).toBe(CONFIDENCE.TAG_WEAK_KEEP_FLAG);
+    expect(res.sentences[0].confidence).toBeLessThan(0.75); // the UI must highlight it
+    expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
+  });
+
+  it('narration-only spans: the SECOND demote route is closed too', () => {
+    // decideNarrationOnly reaches `narrator` without any tag span at all —
+    // fixing only the tag route would reroute, not fix (this is why a
+    // tag-span length bound measured 879 -> 879).
+    const s = mkText('anton', '— Не стоит');
+    const res = run([aligned(s, [narrationSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
+  });
+
+  it('a dash-opening line the model already calls narrator is untouched', () => {
+    const s = mkText('narrator', '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.sentences[0].confidence).toBe(CONFIDENCE.TAG_SPAN);
+    expect(res.flags).toEqual([]);
+  });
+
+  it('a dash-opening line attributed to an unknown-gender bucket is untouched', () => {
+    const s = mkText(MALE_BUCKET_ID, '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.flags).toEqual([]);
+  });
+
+  // #2253 review findings 1+2 — the two call sites (above/below the alignment
+  // floor) must ask the SAME rescue question. Below the floor, an
+  // unknown-gender-bucket id is not a speaker to keep: it must demote to
+  // narrator exactly like the above-floor case just above, not survive as
+  // `flag-only-floor`.
+  it('below the floor, a dash-opening line attributed to an unknown-gender bucket demotes to narrator (not kept)', () => {
+    const s = mkText(MALE_BUCKET_ID, '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 50, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'narration-demote:first' });
+  });
+
+  // Roster membership: an id absent from stage1.characters is one
+  // `reconcileSentenceCharacterIds` demotes downstream anyway — keeping it
+  // here rescues nothing and only inflates `demotedCount`.
+  it('below the floor, a dash-opening line with an off-roster id demotes to narrator (not kept)', () => {
+    const s = mkText('борис-игнатьевич', '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 50, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'narration-demote:first' });
+  });
+
+  it('above the floor, a dash-opening line with an off-roster id demotes to narrator (not kept)', () => {
+    const s = mkText('борис-игнатьевич', '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.sentences[0].confidence).toBe(CONFIDENCE.TAG_SPAN);
+    expect(res.flags).toEqual([]);
+  });
+
+  it('a NON-dash sentence with tag-only spans still demotes (unchanged)', () => {
+    const s = mkText('anton', 'сказал Антон, не поднимая головы');
+    const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.sentences[0].confidence).toBe(CONFIDENCE.TAG_SPAN);
+  });
+
+  it('a quote-only language (dialogueOpen null) is byte-identical to today', () => {
+    // en/de/ja/zh all carry `dialogueOpen: null`, so the invariant is inert.
+    const NULL_OPTS = { ...BASE_OPTS, dialogueOpen: null };
+    const withOpt = run([aligned(mkText('anton', '— Не стоит'), [tagSpan()])], 100, NULL_OPTS);
+    const without = run([aligned(mkText('anton', '— Не стоит'), [tagSpan()])], 100, BASE_OPTS);
+    expect(withOpt.sentences[0].characterId).toBe('narrator');
+    expect(without.sentences[0].characterId).toBe('narrator');
+  });
+
+  it('es/fr get the same behaviour from their own marker', () => {
+    // The invariant activates for THREE languages. es/fr have no book in the
+    // workspace corpus and no fixture, so this unit case is their ONLY
+    // coverage — see Global Constraints.
+    const ES_DASH = /^\s*(?:&mdash;|[-–—])\s*/iu; // lang/es.ts:5, identical in lang/fr.ts:5
+    const ES_OPTS = { ...BASE_OPTS, dialogueOpen: ES_DASH };
+    const res = run([aligned(mkText('anton', '—No vale la pena'), [tagSpan()])], 100, ES_OPTS);
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
+  });
+
+  it('a speech span still wins — the invariant never overrides real evidence', () => {
+    const s = mkText('olga', '— Не стоит');
+    const res = run([aligned(s, [speechSpan({ characterId: 'anton', source: 'tag-name' })])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('anton'); // strong tag-name still force-corrects
+  });
+
+  it('a rescued line has no speech span, so escalation drops it at grouping', () => {
+    // This adds ~879 entries to `flags` on the reference book, and `flags` is
+    // escalation's input. escalateFlaggedWindows groups via
+    //   const span = as?.spans.find((s) => s.kind === 'speech');
+    //   if (!span || span.windowId === undefined) continue;
+    // so a flag whose sentence has NO speech span never becomes a window and
+    // consumes ZERO budget. The absence of a speech span is precisely WHY the
+    // line was being demoted, so this is structural, not incidental — pin it
+    // here rather than relying on `isFillEligible` one layer further down.
+    const as = aligned(mkText('anton', '— Не стоит'), [tagSpan()]);
+    const res = run([as], 100, DASH_OPTS);
+    expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
+    expect(as.spans.some((s) => s.kind === 'speech')).toBe(false);
+  });
+});
+
+describe('#2253 — the invariant also holds BELOW the alignment floor', () => {
+  const RU_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  const DASH_OPTS = { ...BASE_OPTS, dialogueOpen: RU_DASH };
+  const mkText = (characterId: string, text: string): SentenceOutput => ({
+    id: nextId++, chapterId: 1, characterId, text,
+  });
+
+  it('flagOnly: a dash-opening narration-aligned line is NOT demoted', () => {
+    const s = mkText('anton', '— Не стоит');
+    // alignedPct 10 < floor 80 -> flagOnly, which bypasses decideSentence.
+    const res = run([aligned(s, [narrationSpan()])], 10, DASH_OPTS);
+    expect(res.report.flagOnly).toBe(true); // the branch under test really ran
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.sentences[0].confidence).toBeLessThan(0.75);
+    // Below the floor the line falls through to the flag-only pass-through, NOT
+    // to `dash-line-keep-flag`. Assert the REASON, which is stable; the bucket
+    // is not (Task 5 moves `flag-only-floor` to `unresolved`).
+    expect(res.flags).toEqual([{ index: 0, reason: 'flag-only-floor' }]);
+  });
+
+  it('flagOnly: a NON-dash narration-aligned line still demotes (unchanged)', () => {
+    const s = mkText('anton', 'он молча поднялся по лестнице');
+    const res = run([aligned(s, [narrationSpan()])], 10, DASH_OPTS);
+    expect(res.report.flagOnly).toBe(true);
+    expect(res.sentences[0].characterId).toBe('narrator');
+  });
+
+  it('flagOnly: with no dialogueOpen the floor behaviour is unchanged', () => {
+    const s = mkText('anton', '— Не стоит');
+    const res = run([aligned(s, [narrationSpan()])], 10, BASE_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+  });
+});
+
+describe('#2253 — flagged splits into flagged (conflict) and unresolved (no verdict)', () => {
+  const RU_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  const mkText = (characterId: string, text: string): SentenceOutput => ({
+    id: nextId++, chapterId: 1, characterId, text,
+  });
+
+  it('unanchored speech is unresolved, not flagged', () => {
+    const res = run([aligned(mkSentence('anton'), [speechSpan()])]);
+    expect(res.report.unresolved).toBe(1);
+    expect(res.report.flagged).toBe(0);
+  });
+
+  it('an unaligned sentence is unresolved', () => {
+    const res = run([aligned(mkSentence('anton'), [])]);
+    expect(res.report.unresolved).toBe(1);
+    expect(res.report.flagged).toBe(0);
+  });
+
+  it('below the floor, flag-only pass-through is unresolved', () => {
+    const res = run([aligned(mkSentence('anton'), [speechSpan()])], 10);
+    expect(res.report.flagOnly).toBe(true);
+    expect(res.report.unresolved).toBe(1);
+    expect(res.report.flagged).toBe(0);
+  });
+
+  it('a genuine conflict stays flagged', () => {
+    const res = run([
+      aligned(mkSentence('olga'), [speechSpan({ characterId: 'anton', source: 'tag-pronoun' })]),
+    ]);
+    expect(res.report.flagged).toBe(1);
+    expect(res.report.unresolved).toBe(0);
+  });
+
+  it('the convention invariant lands in flagged, not unresolved', () => {
+    const res = run([aligned(mkText('anton', '— Не стоит'), [tagSpan()])], 100, {
+      ...BASE_OPTS,
+      dialogueOpen: RU_DASH,
+    });
+    expect(res.report.flagged).toBe(1);
+    expect(res.report.unresolved).toBe(0);
+  });
+
+  it('the flags array — escalation input — is unchanged by the split', () => {
+    // isFillEligible keys on the REASON string, so escalation must see exactly
+    // the same entries it saw before the buckets moved.
+    const res = run([
+      aligned(mkSentence('narrator'), [speechSpan()]),
+      aligned(mkSentence('anton'), []),
+    ]);
+    expect(res.flags).toEqual([
+      { index: 0, reason: 'unanchored-narrator' },
+      { index: 1, reason: 'unaligned' },
+    ]);
   });
 });

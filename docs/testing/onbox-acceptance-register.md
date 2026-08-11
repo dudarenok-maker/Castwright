@@ -228,17 +228,17 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 2 |
+| **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -257,7 +257,8 @@ mock mode. **16 tests executed: 15 pass, 1 blocked.** Results are recorded in
 the run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` (§2 preconditions
 filled, per-test `Result:` lines and §7.1 completed for the tests run). PR #1837
 shipped the template (3a/3b1/3b2, 51 tests); Wave 3c added **Section E** (9
-tests) — Section E remains entirely unrun, see the blockers below.
+tests) — 6 of 9 now run across runs 2 and 3, E-03/E-06/E-07 still owed; see
+below.
 
 **The run found one Critical defect, now fixed.** Every freshly cloned Qwen
 voice returned HTTP 500 on its first synthesis until the sidecar restarted —
@@ -366,8 +367,29 @@ asserts which voice reached the provider.
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E — 4 of 9 now run (2026-07-31); E-03…E-07 still owed, but no
-  longer blocked.** The #1944 blocker below is genuinely
+- **Section E — 6 of 9 now run (2026-07-31/08-01, across runs 2 and 3);
+  E-03, E-06 and E-07 still owed, but no longer blocked.**
+  **Run 3 (2026-08-01)** added E-01's first genuine exercise — **P**
+  (mechanism), **by-ear NEGATIVE**. Owner: *"2 does not sound like 4 much,
+  cross language is not working well."* Mechanism passes, perceptual
+  identity does not: a controlled experiment isolated the cause to the
+  **source clip's language**, not XTTS cloning — a clone built from a
+  Russian clip scored **0.7824** against its own source in the same chapter
+  where the English-sourced clone scored **0.2321** (caveat: the RU floor is
+  contaminated, narrator vs RU source already 0.577, because Qwen Russian
+  voices cluster). It also passed **E-05** (audition vs render **0.5515**
+  against floors of 0.105 / 0.051), and reproduced **E-04** (**F**)
+  deliberately: same cloned voice/engine/`language: ru`, only length
+  differs — a 46-char line returned 200, a 245-char line 500. Cause: `spacy`
+  absent from the sidecar venv and undeclared in every `requirements/*.txt`,
+  while `main.py` hardcodes `enable_text_splitting=True`. Filed
+  [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017), fixed
+  in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039).
+  Run 3 also produced [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
+  (an orphaned `characterId` renders silently in the narrator's voice) and
+  [#2026](https://github.com/dudarenok-maker/Castwright/issues/2026)
+  (Russian XTTS quality — register row A44). The #1944 blocker below is
+  genuinely
   gone — Coqui loaded cleanly in a post-`/embed` process during run 2, logging
   `Coqui ready — 58 speakers in manifest`. A *second*, separate blocker sat
   behind it — the clone **derive** failed without shared FFmpeg libraries
@@ -2293,6 +2315,60 @@ against one is unreliable). *Criteria:* plan
 constraints listed there each have unit coverage, but only the corpus proves the
 count moves.
 
+### A44 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
+
+PR #2050 fixed one of #2026's three defects (the leading dialogue em-dash) and
+deliberately shipped no register row here, because concurrent PR #2039 was
+actively editing this same file (annotating the E-04 row above). #2039 merged
+2026-08-01; this row is that deferred debt, tracked on
+[#2057](https://github.com/dudarenok-maker/Castwright/issues/2057).
+
+The complete criteria already exist in
+`docs/testing/fs38-wave3-onbox-acceptance.md`'s `#2026 — additional acceptance
+criteria: Russian XTTS quality` section and are **not** restated here —
+summarised below.
+
+- **Leading em-dash pause, by ear.** `softenDashes`
+  (`server/src/tts/text-normalize.ts`) rewrites a leading `—` to `... ` on the
+  theory a leading ellipsis pauses where a leading comma didn't. Pinned only
+  as a wire-text transform (`text-normalize.test.ts`); never confirmed on real
+  audio. Compare a line opening with `—` against the same line with no
+  leading punctuation, and against an interior-dash sentence — the original
+  issue's own reference points: **+0.14 s** for the leading dash (i.e. no
+  audible pause) versus **+1.53 s** for an interior one.
+- **`tts.coqui.degenGuard` live** (`_coqui_synth_is_degenerate`,
+  `server/tts-sidecar/main.py`; registry key `server/src/config/registry.ts:736`).
+  Pinned only by a scripted-fake pytest, never run against the real XTTS
+  model. Observe (a) it does **not** false-positive on ordinary 2–3 word
+  Russian lines at normal speaking pace — its 20 ms/speakable-char floor was
+  reused verbatim from Qwen's own calibration and never independently
+  measured for Coqui's actual healthy short-utterance duration; (b) if a live
+  repro of the original collapse can be captured, whether the retry actually
+  recovers it. **A negative on (b) may be correct behaviour, not a
+  failure** — the guard's own docstring is explicit that it can only catch an
+  implausibly SHORT render, and both historical collapses (`Хорошее олово.` →
+  Finnish, `Тёплое море.` → English) were fluent, plausible-duration
+  utterances outside its detection envelope.
+- **Neuter `-ее` standing invariant.** No local fix was attempted — the
+  mispronunciation is baked into the trained XTTS v2 checkpoint's own Russian
+  G2P, not a text-preprocessing bug. Confirm it **still reproduces** on
+  `main`, so a future `coqui-tts` upgrade has a baseline to check against.
+  Not a sign-off. Pairs with #2056.
+
+**Different mechanism from A37 (#2055) — do not merge with item 2 above.** A37
+covers the server-side ASR/WER override `qa.asr.catastrophicWer` in
+`classifyTranscript`; this row's item 2 is the sidecar-side duration heuristic
+`tts.coqui.degenGuard`. Same symptom (a Russian line collapsing into another
+language), different guard, different layer of the stack. These were
+conflated once already during triage.
+
+*Needs:* a Coqui-capable sidecar with XTTS resident, a Russian book or line
+(no clone needed — every #2026 defect reproduces on the stock catalogue voice
+`Damien Black`). *Criteria:* `docs/testing/fs38-wave3-onbox-acceptance.md`'s
+`#2026 — additional acceptance criteria: Russian XTTS quality` section.
+*Cost:* short — a handful of `/synthesize` probes plus one attempt at
+reproducing the degenerate collapse.
+
 ## Group B — local Ollama analyzer only
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 and B2 each have a **CPU-only sub-case** — the only checks here that want the analyzer *off* the GPU. Run those two together, and consider folding in E4. B3 uses its own real book fixture instead of the generic chapter and has no CPU-only case.
@@ -2339,7 +2415,7 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**Two rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Three rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2427,6 +2503,43 @@ history above, and the chapters 1–4 caveat in plan 247).
 **Run it against a throwaway re-import, not the library book** — same reason as
 C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
 entry would overwrite the qwen36 cast the owner is keeping.
+
+### C3 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
+
+**What is already proven, and does NOT need re-running:** the fix itself, at
+corpus scale. Two offline replays over the 2026-08-06 cache
+(`server/handoff/cache/replay-experiment.mts`, gitignored, throwaway) measured
+`HARM TOTAL victims=41` — down from the pre-fix baseline's 879, not to 0,
+because the rescue guard now also requires roster membership and 41 lines
+(`борис-игнатьевич` ×17, `егор` ×24) carry off-roster ids that
+`reconcileSentenceCharacterIds` demotes to `narrator` downstream regardless,
+so they were never actually recoverable — at both the production 80%
+alignment floor and forced to 100%, and all 17 workspace-book
+structure hashes unchanged (parser untouched, confirmed by construction and by
+diff). Unit and regression coverage for the invariant, the bucket split and
+every `EngineReport` consumer ships in the same PR.
+
+**What is still owed:** this PR ships engine behaviour proven only by replay
+over one book's *cached* analysis. What replay cannot prove is that a real
+end-to-end analysis run produces the same buckets, and that `escalated`/
+`escalationAccepted` behave with the new bucket split. Re-run Ночной дозор
+analysis and confirm: `[analysis:structure]` log lines show `unresolved=`
+populated and `flagged=` at conflict scale (order 10²/chapter, not 10³); ch5's
+dash-opening sentences are no longer rewritten to `narrator`; `state.json`'s
+`analysisProvenance.report` carries a populated `unresolved`. Full criteria:
+`docs/testing/night-watch-reanalysis-onbox-acceptance.md` §2A.5, and plan 247's
+re-specified target 1.
+
+**Residual risk not covered by this row:** the invariant activates for
+Russian, Spanish and French (`lang/es.ts`, `lang/fr.ts` both carry a non-null
+`dialogueOpen`), but Ночной дозор is Russian-only. Spanish and French ship on
+unit coverage plus the identical-convention argument, not corpus measurement —
+no Spanish or French book exists in the workspace to measure against. This row
+does not change that; it is not blocked on acquiring one.
+
+Same setup as C2: local Ollama, `qwen36-cw-iq4-32k`, ~14 GB VRAM free, sidecar
+suppressed (`DISABLE_AUTOSTART_SIDECAR=1`), no TTS. Batches naturally with C2's
+session rather than needing its own.
 
 ---
 
@@ -2699,6 +2812,66 @@ profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
 §On-box acceptance item 4; run sheet §6 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
+### E10 · One-click `castwright.local` re-bind (plan [283](../features/283-castwright-local-rebind.md), [#2247](https://github.com/dudarenok-maker/Castwright/issues/2247)) · **needs an elevated `npm run start:lan`, not `dev:lan`**
+
+`friendlyUrl` — the value both the new "Authorize this browser" button and the
+existing pairing-link both depend on — requires **both** the mDNS responder
+and the `:443` forwarder alive, and both are gated to
+`NODE_ENV === 'production'` (`server/src/index.ts`). `npm run dev:lan` can
+never render a working button; the local production route is
+`npm run build && npm run start:lan`, which needs elevation to bind `:443`.
+Nothing here has been exercised against that real path — every automated test
+either mocks `friendlyUrl` outright or drives the redeem endpoint directly.
+
+Observe, on a fresh elevated `npm run build && npm run start:lan`:
+
+1. From a loopback tab, Account → LAN access → **Authorize this browser** →
+   the browser navigates to `https://castwright.local/#/pair?c=…&self=1` and
+   lands on the library with **no further click** (the auto-redeem effect).
+   `GET /api/devices` shows the resulting `'This computer'` record with
+   `expires` roughly **a year out**, not a month — the actual `Max-Age` on the
+   `__Host-cw_lan` cookie confirms the same figure via DevTools' Application
+   tab.
+2. **The recovery path, starting from an actually-lapsed cookie** (clear
+   `__Host-cw_lan` in DevTools — the actual fast path; `LAN_DEVICE_TTL_DAYS=1`
+   is the lowest value the config accepts, `0` is rejected and falls through
+   to the 365-day default, and even `=1` still means waiting out a full day):
+   reload `https://castwright.local`.
+   The library panel must read "This browser is no longer authorized for
+   Castwright on your network," with a recovery pointer naming the fix for
+   the host you're actually on — never the raw
+   `Library scan failed (401): Missing or invalid LAN access token.` string
+   this replaces. Follow the pointer back to `localhost`, click **Authorize
+   this browser**, and confirm it lands you back on the library in one click
+   — the full round trip end to end, not just the mint half covered by step 1.
+3. **The QR path is unaffected**: a second device (a phone, or a second
+   desktop browser profile) still authorizes via the pre-existing "Authorize a
+   device" + QR flow, unchanged by this plan.
+4. **Re-authorizing twice leaves ONE live `'This computer'` record** (#2257).
+   Press **Authorize this browser**, complete the hop, then do it again.
+   `GET /api/devices` must show the first record `revoked: true` and exactly
+   one non-revoked `'This computer'` — not two live ones. Unit tests cover the
+   revoke logic; what only the real path proves is that the self-bind marker
+   actually survives the full session→redeem→persist round trip against a real
+   `device-tokens.json`, rather than only against the test store.
+5. **A dead `:443` forwarder degrades to a port-carrying URL, not to nothing**
+   (#2258). With the responder alive, kill the forwarder (or boot with `:443`
+   already held by something else) and start a pairing session: `friendlyUrl`
+   must come back as `https://castwright.local:8443/#/pair?c=…` and the button
+   must still work, rather than the friendly flow disappearing. This is the
+   half no unit test can reach — the route logic is covered, but that
+   `portForwarderHandle.isBound()` actually reports false while
+   `mdnsResponderHandle.isAlive()` stays true is a property of the real
+   processes.
+
+*Needs:* a real elevated `npm run start:lan` boot (mDNS + `:443` forwarder
+both require admin/root to bind), a loopback browser tab, and — for step 3
+only — a second device or browser profile on the same LAN. Step 5 additionally
+needs the forwarder killed or its port pre-occupied while the responder stays
+up. *Cost:* short, ~20 minutes once elevated. *Criteria:*
+[`docs/features/283-castwright-local-rebind.md`](../features/283-castwright-local-rebind.md)'s
+own manual acceptance walkthrough.
+
 ## Group F — a real Android device
 
 ### F1 · Android companion app — v1 live-device acceptance (plan 188) · **an entire untested axis**
@@ -2745,19 +2918,33 @@ on the real GitHub Actions runner, which local execution cannot substitute for
 PR #1873's own body discloses both under "Known gaps — stated rather than
 glossed" rather than leaving them to be rediscovered later.
 
-**The workflow has never executed on Actions.** `.github/workflows/quarantine-health.yml`
-parses as valid YAML and `scripts/quarantine-health.mjs` is verified standalone
-(46 unit tests, mutation-checked), but the live runner environment — `gh
-issue view` actually authenticating via the injected `GH_TOKEN`, the `apt-get
-install ffmpeg` step succeeding, the job actually posting to
-`$GITHUB_STEP_SUMMARY` — is unverified until the first dispatch (manual, via
-the Actions tab, or the Monday 03:00 UTC cron). `continue-on-error: true` and
-exclusion from every required check mean a failure here cannot block
-anything, but "the job doesn't crash" is still unconfirmed. **What to
-observe:** a manual dispatch (`gh workflow run quarantine-health.yml`)
-completes and its job summary renders a well-formed report — either the
-clean "nothing to run" no-op (today's empty register) or an actual bucketed
-table if the register is non-empty by then.
+**Partially discharged — the trigger-side dispatch question is answered; the
+`gh issue view` half is not.** The Monday 03:00 UTC cron has now dispatched
+the workflow for real, twice (`event: schedule`, 2026-08-03 and 2026-08-10;
+latest run id `31355401008`), both `conclusion: success`. Its `Install
+ffmpeg` step succeeded on the real runner, and the job summary rendered
+exactly the clean no-op this row anticipated:
+
+> \# Quarantine lane health report
+>
+> No quarantined tests are currently registered in
+> `docs/testing/flaky-register.md` — nothing to run. Clean no-op.
+
+`.github/workflows/quarantine-health.yml` parses as valid YAML and
+`scripts/quarantine-health.mjs` is verified standalone (46 unit tests,
+mutation-checked); the live dispatch now additionally confirms the job
+doesn't crash on the real runner, which was the open half of this question.
+
+**Still unverified: `gh issue view` actually authenticating via the injected
+`GH_TOKEN`.** Both real runs took the empty-register early-return path
+(`rows.length === 0` → `scripts/quarantine-health.mjs:776`, before the
+post-loop `gh issue view` calls) — `docs/testing/flaky-register.md` carries
+one row today (#1981, tracking #2226) but it's marked "Not quarantined —
+still gates," so it never reaches the quarantine-lane report. The run log
+does show `GITHUB_TOKEN Permissions: Issues: read`, so the wiring is
+plausible — but that is not proof the call actually works.
+`continue-on-error: true` and exclusion from every required check still mean
+a failure here cannot block anything.
 
 **Genuine `intermittent` classification is exercised only by unit tests over
 synthetic run sequences** — no real cross-run nondeterminism has been forced
@@ -2770,6 +2957,13 @@ bucket (a real mix of passed/failed across the 5 runs), not `always-passes`
 or `never-passes` — confirming the bucket that is this tool's entire reason
 to exist actually fires on real data, not just the synthetic sequences in
 `scripts/tests/quarantine-health.test.mjs`.
+
+**Net: this row shrinks but does not come out.** The trigger-side dispatch
+question above is answered — the workflow runs clean on the real runner —
+but its residual (`gh issue view` under real auth) now shares a single
+precondition with the second debt below: a real quarantined row in
+`docs/testing/flaky-register.md`. Neither remaining half can move until one
+exists.
 
 *Why this sits here and not as a plain automated-test-gap issue* (per this
 file's own closing rule below): this is NOT closable by writing more unit
@@ -2787,9 +2981,9 @@ shares G1's dispatch-triggered, opportunistic-timing framing and "what to
 observe" shape, not because Group G's runner criterion technically applies
 to it.
 
-*Needs:* nothing beyond repo access for the first half; a real quarantined
-flaky test (naturally occurring, not manufactured) for the second.
-*Cost:* minutes for the first dispatch; opportunistic for the second — piggy-back
+*Needs:* a real quarantined flaky test (naturally occurring, not
+manufactured) — the shared precondition left for both remaining halves.
+*Cost:* opportunistic — piggy-back
 on the next real quarantine event rather than manufacturing one.
 
 ### G2 · The published release body now comes from the committed file, not the tag annotation ([#2137](https://github.com/dudarenok-maker/Castwright/issues/2137), PR #2168)
