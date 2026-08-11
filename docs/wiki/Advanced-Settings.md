@@ -360,7 +360,7 @@ won't place on a card it should fit, or the eGPU drops off the bus.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Device authorization lifetime (days) | How long a browser/device authorization stays valid before re-pairing | 30 | integer, min 1 | live | low |
+| Device authorization lifetime (days) | How long a newly authorized browser or device stays valid — changing this does not extend authorizations that already exist | 365 | integer, min 1, max 400 | live | low |
 
 ## 12. Dialogue-structure attribution
 

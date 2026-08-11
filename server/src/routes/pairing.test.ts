@@ -56,7 +56,7 @@ vi.mock('../lan-runtime.js', () => ({
   setLanRuntime: () => {},
 }));
 vi.mock('./cert-root.js', () => ({ resolveRootCaPath: () => ({ path: 'FAKE', source: 'default' as const }) }));
-vi.mock('../config/resolver.js', () => ({ configValue: (_key: string) => 30 }));
+vi.mock('../config/resolver.js', () => ({ configValue: (_key: string) => 365 }));
 vi.mock('node:fs', async (orig) => {
   const real = await orig<typeof import('node:fs')>();
   return { ...real, readFileSync: (p: unknown, ...rest: unknown[]) =>
@@ -82,7 +82,8 @@ vi.mock('../workspace/device-tokens.js', () => {
       },
       token: 'tok_test',
     })),
-    clampTtlDays: (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : 30),
+    clampTtlDays: (v: unknown) =>
+      typeof v === 'number' && Number.isInteger(v) ? Math.min(Math.max(v, 1), 400) : 365,
     DeviceStoreDegradedError,
   };
 });
@@ -236,6 +237,7 @@ describe('pairing routes', () => {
     expect(setCookie).toMatch(/HttpOnly/i);
     expect(setCookie).toMatch(/SameSite=Strict/i);
     expect(setCookie).toMatch(/Secure/i);
+    expect(setCookie).toMatch(/Max-Age=31536000/); // 365 days — must track ttl()
   });
 
   it('redeem-browser 409s when LAN auth not enforced', async () => {

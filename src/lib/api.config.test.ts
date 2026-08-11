@@ -13,7 +13,7 @@ import {
   mockRestartSidecar,
   _resetMockConfig,
 } from './api';
-import { knobsInGroup, GROUPS } from '../../server/src/config/registry';
+import { knobsInGroup, GROUPS, KNOBS } from '../../server/src/config/registry';
 import { PAIR_RULES } from '../../server/src/config/pair-rules';
 
 beforeEach(() => {
@@ -357,5 +357,33 @@ describe('mock config parity with the server registry', () => {
     const mockGroup = groups.find((g) => g.id === 'analyzer-structure');
     const registryGroup = GROUPS.find((g) => g.id === 'analyzer-structure');
     expect(mockGroup?.help).toBe(registryGroup?.help);
+  });
+
+  it('mock descriptors match the server registry on default/min/max for every shared knob', async () => {
+    const { descriptors } = await mockGetConfig();
+    const real = new Map(KNOBS.map((k) => [k.key, k]));
+    const project = (d: { key: string; default?: unknown; min?: number; max?: number }) => ({
+      key: d.key, default: d.default, min: d.min, max: d.max,
+    });
+
+    // Intersection only: the mock is a documented subset (see :311-313), and it
+    // carries two UI-only entries that are not registry keys.
+    const UI_ONLY_MOCK_DESCRIPTORS = 2;
+    const shared = descriptors.filter((d) => real.has(d.key));
+    // Derived from the catalogue itself rather than a hardcoded snapshot count
+    // (a prior `> 90` floor sat against an actual count of 96 — six knobs
+    // could silently vanish from either side before it ever tripped). Every
+    // mock descriptor is expected to be a shared registry key except the two
+    // documented UI-only ones, so this scales automatically as knobs are
+    // added instead of drifting toward its own threshold.
+    expect(shared.length).toBe(descriptors.length - UI_ONLY_MOCK_DESCRIPTORS);
+    // Coarse floor kept alongside the equality above: that check alone is
+    // vacuous if the mock catalogue itself shrank to just its two UI-only
+    // descriptors (0 === 2 - 2), which would also collapse the `toEqual`
+    // below to two empty arrays — silently "passing" the exact
+    // filter-emptying failure this floor exists to catch.
+    expect(shared.length).toBeGreaterThan(90);
+
+    expect(shared.map(project)).toEqual(shared.map((d) => project(real.get(d.key)!)));
   });
 });

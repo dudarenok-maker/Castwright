@@ -43,14 +43,14 @@ Design of record: [`../superpowers/specs/2026-06-18-lan-browser-device-auth-desi
 
 ### Automated coverage
 
-- `server/src/workspace/device-tokens.pure.test.ts` / `device-tokens.test.ts` — expiry (expired / undefined / **malformed: `null`, `""`, unparseable — #2144** / injected-now), `clampTtlDays`, throttled `lastSeenAt` touch, label cap, schema-2 persist.
+- `server/src/workspace/device-tokens.pure.test.ts` / `device-tokens.test.ts` — expiry (expired / undefined / **malformed: `null`, `""`, unparseable — #2144** / injected-now), `clampTtlDays` (added by plan 283/#2247 — this file carried no `clampTtlDays` coverage until then), throttled `lastSeenAt` touch, label cap, schema-2 persist.
 - `server/src/lan-auth.test.ts` — cookie-auth pass/reject through the guard; header/Bearer/query paths intact; loopback bypass.
 - `server/src/csrf-origin.test.ts` — allowed/loopback origin pass, foreign origin 403, no-Origin+no-Referer 403, header-token bypass, parser-agreement (a cookie `cookie.parse` accepts still gates).
 - `server/src/routes/devices.test.ts` — `pair-session` loopback-only URL payload + 409; admin mint 403 from non-loopback; label cap.
 - `server/src/routes/pairing.test.ts` — `/redeem-browser` cookie-set + no-raw-token + 409 + 5/min 429 + **403 off-network** + **410 (already-consumed code)**; `/redeem` **403 off-network** + **5/min 429** (shared `redeemLimiter`); body-size 413 caps on both routes (parser-order regression anchor).
 - `server/src/routes/lan-cookie-integration.test.ts` — **the real chain**: redeem-browser → capture `Set-Cookie` → replay on a guarded `GET /api/library` (not 401) + foreign-Origin write → 403. No mocks, temp workspace, real `app`.
 - `server/src/lan-safety.test.ts` + `server/src/lan-auth.invariants.test.ts` — `assertNoTrustProxy` throws when set; `lanExposureWarning` fires only when bound-LAN + token-unset; `app.ts` mount order (`requireSameOrigin` after `requireLanToken`) + no `trust proxy` in source.
-- `server/src/config/registry.test.ts` — `lan.deviceTokenTtlDays` knob (default 30, integer, `apply: live`) + the `lan-access` group.
+- `server/src/config/registry.test.ts` — `lan.deviceTokenTtlDays` knob (default **365**, ceiling **400** as of plan 283/#2247 — was default 30, no ceiling, at this plan's original ship — integer, `apply: live`) + the `lan-access` group.
 - Frontend: `src/lib/api.devices.test.ts` (`ApiError` + 4 fns on real+mock), `src/store/library-slice.test.ts` + `src/views/book-library.test.tsx` (error/Retry), `src/components/pairing/pairing-qr.test.tsx`, `src/views/pair.test.tsx`, `src/components/lan-access-card.test.tsx`.
 - E2E: `e2e/lan-device-auth.spec.ts` (mock-mode UI flow — Admin authorize → QR; `#/pair?c=…` → Authorize → `#/`). Explicitly NOT an auth test (mock mode has no real cookie); the cookie chain is the supertest integration test above.
 

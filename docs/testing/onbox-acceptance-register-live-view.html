@@ -197,7 +197,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>3</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>3</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>9</td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>10</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
     </tbody>
@@ -1027,7 +1027,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">9 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1126,6 +1126,18 @@
           <li><b>In the same session, also run a fresh Install</b> and confirm the same outcome — a second shape of this criterion, not a separate row.</li>
         </ul>
         <p class="src">A machine with Pinokio, an existing pre-fix install, nvidia profile · 20–40 min, sharing setup with E1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 4</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E10</span><span class="iname">One-click castwright.local re-bind (plan 283)</span><span class="risk">Needs elevated start:lan, not dev:lan</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>friendlyUrl</code> — the value both the new &ldquo;Authorize this browser&rdquo; button and the existing pairing-link depend on — requires <b>both</b> the mDNS responder and the <code>:443</code> forwarder alive, and both are gated to <code>NODE_ENV === 'production'</code>. <code>npm run dev:lan</code> can never render a working button; the local production route is <code>npm run build &amp;&amp; npm run start:lan</code>, which needs elevation to bind <code>:443</code>. Nothing here has been exercised against that real path — every automated test either mocks <code>friendlyUrl</code> outright or drives the redeem endpoint directly.</p>
+        <ul>
+          <li>From a loopback tab, Account → LAN access → <b>Authorize this browser</b> → the browser navigates to <code>https://castwright.local/#/pair?c=…&amp;self=1</code> and lands on the library with <b>no further click</b>. <code>GET /api/devices</code> shows the resulting <code>&#39;This computer&#39;</code> record with <code>expires</code> roughly <b>a year out</b>, not a month — the actual <code>Max-Age</code> on the <code>__Host-cw_lan</code> cookie confirms the same figure via DevTools&#39; Application tab.</li>
+          <li><b>The recovery path, starting from an actually-lapsed cookie</b> (clear <code>__Host-cw_lan</code> in DevTools — the actual fast path; <code>LAN_DEVICE_TTL_DAYS=1</code> is the lowest value the config accepts, <code>0</code> is rejected and falls through to the 365-day default, and even <code>=1</code> still means waiting out a full day): reload <code>https://castwright.local</code>. The library panel must read &ldquo;This browser is no longer authorized for Castwright on your network,&rdquo; with a recovery pointer naming the fix for the host you&#39;re on — never the raw <code>Library scan failed (401): Missing or invalid LAN access token.</code> string this replaces. Follow the pointer back to <code>localhost</code>, click <b>Authorize this browser</b>, and confirm it lands you back on the library in one click.</li>
+          <li><b>The QR path is unaffected</b>: a second device (a phone, or a second desktop browser profile) still authorizes via the pre-existing &ldquo;Authorize a device&rdquo; + QR flow, unchanged.</li>
+        </ul>
+        <p class="src">An elevated <code>npm run start:lan</code> boot (mDNS + <code>:443</code> forwarder both need admin/root to bind), a loopback tab, and — step 3 only — a second device/browser profile on the same LAN · short, ~15 min once elevated · <a href="https://github.com/dudarenok-maker/Castwright/issues/2247">#2247</a> · <code>docs/features/283-castwright-local-rebind.md</code></p>
       </div>
     </details>
   </section>

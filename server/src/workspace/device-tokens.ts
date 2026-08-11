@@ -81,9 +81,21 @@ export function redactDevice(d: DeviceTokenRecord): PublicDevice {
   };
 }
 
-/** Clamp a configured TTL to a sane positive integer; fall back to the 30-day default. */
+/** Clamp a configured TTL to an integer in [1, 400]; fall back to the 365-day
+ *  default only when the value is not an integer at all. Out-of-range integers
+ *  clamp to the NEAREST bound — an operator who hand-edits a stored override to
+ *  `0` is shortening the lifetime, and returning the default would hand them
+ *  the longest one instead.
+ *
+ *  The 400 ceiling mirrors Chrome's cookie Max-Age cap (M104): above it the
+ *  server record would outlive the cookie, which is the divergence this bound
+ *  exists to prevent. `max` in the registry already rejects out-of-range env
+ *  and Settings writes (config/resolver.ts:168); this clamp guards the one
+ *  unvalidated path — a stored override, returned raw by resolveKnobInner
+ *  (config/resolver.ts:32-55). */
 export function clampTtlDays(raw: unknown): number {
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : 30;
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) return 365;
+  return Math.min(Math.max(raw, 1), 400);
 }
 
 /* --- IO + in-memory cache ------------------------------------------------- */
