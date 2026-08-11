@@ -3770,6 +3770,15 @@ export interface components {
              */
             languageSupported?: boolean;
             /**
+             * @description #2276 — True when `language` is a confidence-floor guess (no
+             *     majority across body chapters, or too little text to corroborate
+             *     itself) rather than a genuine decision. Mirrors
+             *     `DetectionResult.fallback` (server/src/tts/detect-language.ts) —
+             *     `languageSupported` can't stand in for it, since a guess and a
+             *     real decision can both land on the same (supported) language.
+             */
+            languageFallback?: boolean;
+            /**
              * @description fs-41/fs-50 — Languages available in the confirm-view selector
              *     (registry-supplied, supported:true entries only).
              */

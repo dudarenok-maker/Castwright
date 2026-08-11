@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseManuscript, UnsupportedFormatError, DrmProtectedError } from '../parsers/index.js';
-import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
+import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD, countWords } from '../parsers/front-matter.js';
 import { putManuscript, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
@@ -37,7 +37,7 @@ import {
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { normaliseBookLanguage } from '../tts/language.js';
-import { detectManuscriptLanguage } from '../tts/detect-language.js';
+import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/store.js';
@@ -68,32 +68,6 @@ function deterministicGradient(seed: string): [string, string] {
     ['#7A2E3C', '#2A0F14'],
   ];
   return palette[Math.abs(h) % palette.length];
-}
-
-/* CJK (Han/Kana) scripts don't use inter-word whitespace, so a whitespace
-   split yields ~1 "word" per paragraph — a full CJK chapter then reads as
-   ~30-60 "words" and trips the front-matter word-count floor (fs-59 W2
-   task 2.7). Self-detects on Han/Kana presence: absent CJK chars, this is
-   byte-identical to the original whitespace-split behaviour. When present,
-   CJK chars are stripped to whitespace first (so they aren't ALSO counted
-   as a Latin token) and re-added as char-equivalents at ~1.7 chars/word —
-   the same ratio used elsewhere for CJK reading-time estimates. */
-const HAN_RE = /\p{Script=Han}/gu;
-const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/gu;
-const CJK_CHARS_PER_WORD = 1.7;
-
-function countWords(s: string): number {
-  const cjkCharCount = (s.match(HAN_RE)?.length ?? 0) + (s.match(KANA_RE)?.length ?? 0);
-  if (cjkCharCount === 0) {
-    return s.trim().split(/\s+/).filter(Boolean).length;
-  }
-  const latinWordCount = s
-    .replace(HAN_RE, ' ')
-    .replace(KANA_RE, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean).length;
-  return latinWordCount + Math.round(cjkCharCount / CJK_CHARS_PER_WORD);
 }
 
 /* ── POST /api/import — parse-only, no disk write ─────────────────────── */
@@ -147,7 +121,13 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
     };
     putStaging(entry);
 
-    const detected = detectManuscriptLanguage(entry.sourceText, {
+    /* #2263 — the whole-document sample (byte 0 onward) is dominated by
+       front matter (title page, copyright, dedication, TOC, epigraph,
+       foreword) on a book whose front matter isn't in the book's own
+       language, and was silently deciding the wrong language whenever that
+       front matter outweighed the body within the sample window. Detect
+       per chapter and vote instead — see detectManuscriptLanguageFromChapters. */
+    const detected = detectManuscriptLanguageFromChapters(entry.chapters, {
       author: entry.author,
       title: entry.title,
     });
@@ -166,6 +146,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         byteSize: entry.byteSize,
         language: detected.language,
         languageSupported: detected.supported,
+        languageFallback: detected.fallback,
         supportedLanguages: supportedLanguages(),
         chapters: entry.chapters.map((c) => {
           const wordCount = countWords(c.body);

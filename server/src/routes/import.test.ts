@@ -16,6 +16,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { detectManuscriptLanguage } from '../tts/detect-language.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_EPUB = resolve(__dirname, '..', 'parsers', '__fixtures__', 'sample.epub');
@@ -527,11 +528,20 @@ describe('POST /api/import — per-chapter isLikelyFrontMatter flag (seam 3b)', 
 /* fs-41/fs-50 seam 2 — server-side language detection wired into POST /api/import. */
 describe('POST /api/import — language detection (fs-41/fs-50)', () => {
   it('detects the manuscript language and stamps the supported-list on the candidate', async () => {
-    const es =
+    const sentence =
       'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller.';
+    // #2263 — POST /api/import now detects per BODY CHAPTER (detectManuscriptLanguageFromChapters),
+    // and a single-chapter manuscript (no chapter markers here, so the whole
+    // text is one chapter) goes through the same PROSE_UNIT_FLOOR the
+    // repair script uses — it can't corroborate itself, so it needs enough
+    // sentence-terminal-punctuated units to be trusted. One sentence isn't
+    // enough on its own; repeated well past the floor, still Spanish.
+    const es = Array(25).fill(sentence).join(' ');
     const res = await request(app).post('/api/import').send({ text: es }).expect(200);
     expect(res.body.candidate.language).toBe('es');
     expect(res.body.candidate.languageSupported).toBe(true);
+    // #2276 — a genuine decision, not a surrender guess.
+    expect(res.body.candidate.languageFallback).toBe(false);
     expect(res.body.candidate.supportedLanguages).toEqual([
       { code: 'en', label: 'English' },
       { code: 'ru', label: 'Russian' },
@@ -541,6 +551,59 @@ describe('POST /api/import — language detection (fs-41/fs-50)', () => {
       { code: 'zh', label: 'Chinese' },
       { code: 'ja', label: 'Japanese' },
     ]);
+  });
+
+  it('#2263 — resolves to the BODY language when the first chapter is a different (mis-detected) language, proving the call site passes chapters, not sourceText', async () => {
+    // A real regression repro, not just a shape: `detectManuscriptLanguage`
+    // on the WHOLE document (the pre-#2263 call) genuinely returns 'en' here
+    // — the English front-matter chapter is long enough that it, not the
+    // Chinese body, sets the CJK/Latin ratio for the flat 20k-char sample.
+    // The per-chapter vote isn't fooled: the front-matter chapter votes
+    // 'en' on its own, but the two real Chinese chapters vote 'zh' and win
+    // the majority (2 of 3). This is the 煤落的委托 defect shape generalised
+    // past a single tiny front-matter snippet — a longer English foreword
+    // is exactly the case the live issue warned wouldn't be "so lucky".
+    const enSentence =
+      'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
+    const zhSentence = '熔炉已经冷却到被灰烬覆盖的落日的颜色，当有人敲响她作坊的门时，雷恩正在刮掉最后的炉渣。';
+    const frontMatterEn = Array(15).fill(enSentence).join(' ');
+    const zhBody = Array(10).fill(zhSentence).join('');
+    const text = [
+      '# 煤落的委托',
+      '',
+      '## Chapter 1',
+      '',
+      frontMatterEn,
+      '',
+      '## 第一章',
+      '',
+      zhBody,
+      '',
+      '## 第二章',
+      '',
+      zhBody,
+    ].join('\n');
+
+    // Fixture sanity: prove the OLD whole-blob call site would genuinely get
+    // this wrong (not just theoretically) before asserting the NEW behaviour.
+    const wholeBlob = detectManuscriptLanguage(text);
+    expect(wholeBlob).toEqual({ language: 'en', supported: true, fallback: false });
+
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    expect(res.body.candidate.language).toBe('zh');
+    expect(res.body.candidate.chapters.length).toBe(3);
+  });
+
+  it('#2276 — stamps languageFallback:true on the candidate when detection surrenders (a guess, not a decision)', async () => {
+    // Too little text to clear PROSE_UNIT_FLOOR — detectManuscriptLanguageFromChapters
+    // surrenders (language:'en', fallback:true). languageSupported alone
+    // can't distinguish this from a genuine English decision (both are
+    // supported:true) — languageFallback is the field that can, and it must
+    // actually reach the wire for the confirm screen to tell a guess from a
+    // decision.
+    const res = await request(app).post('/api/import').send({ text: 'Too short to corroborate itself.' }).expect(200);
+    expect(res.body.candidate.language).toBe('en');
+    expect(res.body.candidate.languageFallback).toBe(true);
   });
 });
 

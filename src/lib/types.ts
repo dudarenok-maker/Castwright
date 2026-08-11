@@ -194,6 +194,12 @@ export interface ImportCandidate {
   language?: string;
   /** Whether the detected language is supported (false ⇒ detected-but-unsupported). */
   languageSupported?: boolean;
+  /* #2276 — true when `language` is a confidence-floor guess (no majority
+     across body chapters, or too little text to corroborate itself) rather
+     than a genuine decision. `languageSupported` can't distinguish these —
+     a guess and a real decision can both land on the same supported
+     language. Optional because older server builds don't emit it. */
+  languageFallback?: boolean;
   /** Languages offered in the confirm selector (registry-supplied). */
   supportedLanguages?: Array<{ code: string; label: string }>;
   /* Per-chapter wordCount is what powers the confirm view's auto-suggest

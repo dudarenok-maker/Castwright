@@ -20,6 +20,37 @@ import { nonEnglishFrontMatterKeywords } from '../tts/language-registry.js';
    src/lib/chapter-heuristics.ts for the client-side reparse-dialog fallback. */
 export const FRONT_MATTER_WORD_THRESHOLD = 150;
 
+/* CJK (Han/Kana) scripts don't use inter-word whitespace, so a whitespace
+   split yields ~1 "word" per paragraph — a full CJK chapter then reads as
+   ~30-60 "words" and trips the front-matter word-count floor (fs-59 W2
+   task 2.7). Self-detects on Han/Kana presence: absent CJK chars, this is
+   byte-identical to the original whitespace-split behaviour. When present,
+   CJK chars are stripped to whitespace first (so they aren't ALSO counted
+   as a Latin token) and re-added as char-equivalents at ~1.7 chars/word —
+   the same ratio used elsewhere for CJK reading-time estimates. Exported
+   (moved from routes/import.ts, #2263) so the chapter-aware language
+   detector's own front-matter selection counts words the same way the
+   confirm screen's `isLikelyFrontMatter` flag does — a chapter can't be
+   selected as a detection body chapter by one measure and flagged
+   front-matter by the other. */
+const HAN_RE = /\p{Script=Han}/gu;
+const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+const CJK_CHARS_PER_WORD = 1.7;
+
+export function countWords(s: string): number {
+  const cjkCharCount = (s.match(HAN_RE)?.length ?? 0) + (s.match(KANA_RE)?.length ?? 0);
+  if (cjkCharCount === 0) {
+    return s.trim().split(/\s+/).filter(Boolean).length;
+  }
+  const latinWordCount = s
+    .replace(HAN_RE, ' ')
+    .replace(KANA_RE, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return latinWordCount + Math.round(cjkCharCount / CJK_CHARS_PER_WORD);
+}
+
 /* English alternation -- kept as a literal string so it reads exactly as
    it did in the original literal regex. The character class ['’]
    matches both straight and curly apostrophes in publisher/author/translator

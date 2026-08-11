@@ -879,6 +879,7 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
     chapters: [{ id: 1, title: 'Chapter 1' }],
     language: mockLanguage,
     languageSupported: true,
+    languageFallback: false,
     supportedLanguages: mockSupportedLanguages,
   };
   return { tempId: 'imp_' + Math.random().toString(36).slice(2, 10), candidate };
