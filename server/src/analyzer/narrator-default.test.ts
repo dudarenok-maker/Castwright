@@ -86,23 +86,54 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine("She said 'go away' angrily.", EN)).toBe(false); // was embedded, boundary-anchored
     expect(isSpokenLine("'Aye, Captain,'", EN)).toBe(false); // was leading-only spoken split
   });
-  it('#2279: a quote style ABSENT from the language table is not spoken — declared narrowing, not an accident', () => {
-    /* The tables are now the only definition of dialogue, so a convention a
-       table does not carry is narration — including several the old
-       language-blind bundle caught. This is the SAME gap the structure engine
-       has today (it reads the same `quotePairs`), so the default path is
-       unchanged; with `analyzer.structure.enabled` OFF these lines now go to
-       the narrator instead. Zero occurrences in the live 20-book corpus —
-       which holds one book each of de/es/fr and therefore cannot produce a
-       counter-example either way, so that zero is not evidence of safety.
-       The fix belongs in the tables, measured against findQuoteRuns: #2279. */
-    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false); // fully-ASCII German; de carries „…" but not "…"
-    expect(isSpokenLine('«Lass das.»', DE)).toBe(false); // Swiss-German order; de carries »…« only
+  /* #2279 — THE DECLARED NARROWING. The condition, not a list of examples:
+     `isSpokenLine` is now exactly the language's own table, so any convention
+     the table does not carry reads as narration — including several the old
+     language-blind bundle caught. Two structural consequences are broad enough
+     to name, and the two `it()` blocks below are one per consequence:
+
+       (a) `dialogueOpen: null` in en, de, zh AND ja — a leading dash is not
+           dialogue in any of the four. The old bundle treated a leading dash
+           as dialogue in EVERY language.
+       (b) A quote pair absent from `quotePairs` is not dialogue — including
+           the zh/ja asymmetry, where `zh` carries `“”` and `ja` does not, so
+           the same line splits by language.
+
+     This is the SAME gap the structure engine has (it reads the same tables),
+     so the default path is unchanged and the gap is pre-existing there. With
+     `analyzer.structure.enabled` OFF these lines now go to the narrator. Zero
+     occurrences in the live 20-book corpus — which holds ONE book each of
+     de/es/fr/zh/ja and therefore cannot produce a counter-example either way,
+     so that zero is not evidence of safety. #2279 carries the same table and
+     the measurement it needs; these two blocks are its executable copy — keep
+     the three in step. */
+  it('#2279 (a): a leading dash is not dialogue where dialogueOpen is null — en, de, zh, ja', () => {
+    expect(EN.dialogueOpen).toBeNull(); // the four below are a consequence of the tables,
+    expect(DE.dialogueOpen).toBeNull(); // not four independent facts — if a table ever
+    expect(ZH.dialogueOpen).toBeNull(); // gains a dialogueOpen, the matching row must go.
+    expect(JA.dialogueOpen).toBeNull();
+    expect(isSpokenLine('—Dame Alina', EN)).toBe(false); // the corpus -83, all of them narration
+    expect(isSpokenLine('— Komm her, sagte er.', DE)).toBe(false);
+    expect(isSpokenLine('&mdash; Komm her', DE)).toBe(false); // entity form too — de has no dialogueOpen at all
+    expect(isSpokenLine('——你好', ZH)).toBe(false);
+    expect(isSpokenLine('— こんにちは', JA)).toBe(false);
+  });
+  it('#2279 (b): a quote pair absent from the language table is not dialogue', () => {
+    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false); // fully-ASCII; de carries „…" but not "…"
+    expect(isSpokenLine('«Lass das.»', DE)).toBe(false); // Swiss order; de carries »…« only
     expect(isSpokenLine('"Hola", dijo.', ES)).toBe(false); // es carries «» and “” only
-    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false); // es.dialogueOpen carries &mdash; but not &ndash;
-    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(false); // fr.quotePairs is «» only
+    expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(false); // fr.quotePairs is «» only
+    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(false);
     expect(isSpokenLine('‘Привет’', RU)).toBe(false); // ru carries «», „“, “”, "" — not ‘’
     expect(isSpokenLine('«Bonjour»', EN)).toBe(false); // en carries no guillemets
+    // The zh/ja asymmetry: same line, opposite answers, because zh.quotePairs
+    // carries ['“','”'] and ja.quotePairs does not.
+    expect(isSpokenLine('“你好”', ZH)).toBe(true);
+    expect(isSpokenLine('“おはよう”', JA)).toBe(false);
+    // es/fr dialogueOpen carry &mdash; but not &ndash; (ru carries both).
+    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false);
+    expect(isSpokenLine('&ndash; Un instant', FR)).toBe(false);
+    expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that IS carried, as the control
   });
   it('a single quote used as an apostrophe does NOT make narration spoken', () => {
     expect(isSpokenLine('She didn’t know where she was.', EN)).toBe(false); // smart apostrophe (lone U+2019)

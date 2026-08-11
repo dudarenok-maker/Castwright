@@ -65,8 +65,11 @@ owner: null
   has no `analysisProvenance` block; the book-state GET route already tolerates that (pinned by
   a dedicated back-compat test, see Test plan).
 - **Reversibility:** one registry kill-switch, `analyzer.structure.enabled` (env `STRUCTURE_ENGINE`,
-  default `true`). Flipping it off restores exactly the pre-engine `applyNarratorDefault`-only
-  behaviour. Escalation has its own independent off-switch
+  default `true`). Flipping it off returns to the `applyNarratorDefault`-only path — no longer
+  *byte-identical* to pre-engine behaviour since #2245, which made that path read the book's own
+  conventions table instead of one language-blind regex bundle (so e.g. an English leading dash is
+  narration there now, and a no-table language is left alone rather than demoted wholesale).
+  Escalation has its own independent off-switch
   (`analyzer.structure.escalation` = `'off'`).
 
 ## Invariants to preserve
