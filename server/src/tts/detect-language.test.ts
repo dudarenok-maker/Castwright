@@ -5,6 +5,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
 import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
+import { countProseUnits, PROSE_UNIT_FLOOR } from './prose-units.js';
 
 describe('detectManuscriptLanguage', () => {
   it('detects Russian via the Cyrillic pre-pass (supported)', () => {
@@ -349,8 +350,6 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
     'Der Ofen war bis zur Farbe eines aschbedeckten Sonnenuntergangs abgekühlt, und Wren kratzte die letzte Schlacke ab, als es an der Tür ihrer Werkstatt klopfte.';
 
   const FRONT_MATTER_TEXT = Array(2).fill(EN_SENTENCE).join(' '); // ~50 words — small, real front matter
-  const bodySentences = Array(200).fill(DE_SENTENCE); // ~5,000 words — a stand-in book body
-  const wholeBody = bodySentences.join(' ');
 
   // #2276-followup — deliberately a SEPARATE, larger fixture from FRONT_MATTER_TEXT
   // above, used only by the discriminating shape below. FRONT_MATTER_TEXT can't
@@ -375,67 +374,76 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
     return out;
   }
 
-  const configs: Array<{ label: string; chapters: Array<{ title: string; body: string }> }> = [
-    {
-      label: 'all in one chapter, front matter merged in',
-      chapters: [{ title: 'Chapter 1', body: `${FRONT_MATTER_TEXT} ${wholeBody}` }],
-    },
-    {
-      label: 'split in two, front matter merged into chapter 1',
-      chapters: chunk(bodySentences, 2).map((body, i) => ({
-        title: `Chapter ${i + 1}`,
-        body: i === 0 ? `${FRONT_MATTER_TEXT} ${body}` : body,
-      })),
-    },
-    {
-      label: 'split in five, front matter merged into chapter 1',
-      chapters: chunk(bodySentences, 5).map((body, i) => ({
-        title: `Chapter ${i + 1}`,
-        body: i === 0 ? `${FRONT_MATTER_TEXT} ${body}` : body,
-      })),
-    },
-    {
-      label: 'front matter as its own excluded chapter, body in one chapter',
-      chapters: [
-        { title: 'Copyright', body: FRONT_MATTER_TEXT },
-        { title: 'Chapter One', body: wholeBody },
-      ],
-    },
-    {
-      label: 'front matter as its own excluded chapter, body split in five',
-      chapters: [
-        { title: 'Copyright', body: FRONT_MATTER_TEXT },
-        ...chunk(bodySentences, 5).map((body, i) => ({ title: `Chapter ${i + 1}`, body })),
-      ],
-    },
-    {
-      // The five shapes above all split the BODY, which can never flip a
-      // count-vote: many German body chapters (or one) against zero-or-one
-      // excluded/merged front-matter chapters always leaves German on top by
-      // chapter count too, so counting and weighing by mass agree by
-      // construction — this is why the five shapes above stay green even
-      // under a `voteLanguage` mutated back to one-ballot-per-chapter
-      // (`const mass = 1`, i.e. the pre-#2276 counting bug this whole
-      // property test exists to lock out). The shape that actually
-      // separates the two: split the FRONT MATTER (a
-      // pure-English chapter of its own, never mixed with the body — see
-      // `noteSentences` above) across several chapters, each retitled so it
-      // survives selectBodyChapters ('A Note on the Translation' doesn't
-      // match isLikelyFrontMatterTitle, and each ~200-word chunk clears
-      // FRONT_MATTER_WORD_THRESHOLD), while the body stays a single chapter.
-      // That's 2 English ballots vs. 1 German ballot — a count-vote gives
-      // English a 2/3 "majority" a mass-vote can't, because the body's
-      // ~5,000 words outweigh the front matter's ~400 by more than 12:1.
-      label: 'front matter split into two surviving chapters, body in one chapter',
-      chapters: [
-        ...chunk(noteSentences, 2).map((body, i) => ({
-          title: `A Note on the Translation, part ${i + 1}`,
-          body,
+  /* Builds the same six re-chaptering shapes over any body — reused below for
+     both the thick corpus-stand-in body and the thin below-PROSE_UNIT_FLOOR
+     body, so the two fixtures run through IDENTICAL shape-construction logic
+     rather than two hand-copies that could quietly drift apart. */
+  function buildConfigs(
+    bodySentences: string[],
+  ): Array<{ label: string; chapters: Array<{ title: string; body: string }> }> {
+    const wholeBody = bodySentences.join(' ');
+    return [
+      {
+        label: 'all in one chapter, front matter merged in',
+        chapters: [{ title: 'Chapter 1', body: `${FRONT_MATTER_TEXT} ${wholeBody}` }],
+      },
+      {
+        label: 'split in two, front matter merged into chapter 1',
+        chapters: chunk(bodySentences, 2).map((body, i) => ({
+          title: `Chapter ${i + 1}`,
+          body: i === 0 ? `${FRONT_MATTER_TEXT} ${body}` : body,
         })),
-        { title: 'Chapter One', body: wholeBody },
-      ],
-    },
-  ];
+      },
+      {
+        label: 'split in five, front matter merged into chapter 1',
+        chapters: chunk(bodySentences, 5).map((body, i) => ({
+          title: `Chapter ${i + 1}`,
+          body: i === 0 ? `${FRONT_MATTER_TEXT} ${body}` : body,
+        })),
+      },
+      {
+        label: 'front matter as its own excluded chapter, body in one chapter',
+        chapters: [
+          { title: 'Copyright', body: FRONT_MATTER_TEXT },
+          { title: 'Chapter One', body: wholeBody },
+        ],
+      },
+      {
+        label: 'front matter as its own excluded chapter, body split in five',
+        chapters: [
+          { title: 'Copyright', body: FRONT_MATTER_TEXT },
+          ...chunk(bodySentences, 5).map((body, i) => ({ title: `Chapter ${i + 1}`, body })),
+        ],
+      },
+      {
+        // The five shapes above all split the BODY, which can never flip a
+        // count-vote: many German body chapters (or one) against zero-or-one
+        // excluded/merged front-matter chapters always leaves German on top by
+        // chapter count too, so counting and weighing by mass agree by
+        // construction — this is why the five shapes above stay green even
+        // under a `voteLanguage` mutated back to one-ballot-per-chapter
+        // (`const mass = 1`, i.e. the pre-#2276 counting bug this whole
+        // property test exists to lock out). The shape that actually
+        // separates the two: split the FRONT MATTER (a
+        // pure-English chapter of its own, never mixed with the body — see
+        // `noteSentences` above) across several chapters, each retitled so it
+        // survives selectBodyChapters ('A Note on the Translation' doesn't
+        // match isLikelyFrontMatterTitle, and each ~200-word chunk clears
+        // FRONT_MATTER_WORD_THRESHOLD), while the body stays a single chapter.
+        label: 'front matter split into two surviving chapters, body in one chapter',
+        chapters: [
+          ...chunk(noteSentences, 2).map((body, i) => ({
+            title: `A Note on the Translation, part ${i + 1}`,
+            body,
+          })),
+          { title: 'Chapter One', body: wholeBody },
+        ],
+      },
+    ];
+  }
+
+  const bodySentences = Array(200).fill(DE_SENTENCE); // ~5,000 words — a stand-in book body
+  const configs = buildConfigs(bodySentences);
 
   it.each(configs)('resolves to the same language and fallback — $label', ({ chapters }) => {
     const result = detectManuscriptLanguageFromChapters(chapters);
@@ -446,5 +454,59 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
     const results = configs.map((c) => detectManuscriptLanguageFromChapters(c.chapters));
     const [first, ...rest] = results;
     for (const r of rest) expect(r).toEqual(first);
+  });
+
+  /* #2276-followup — the property above is vacuous against mechanism (B), the
+     prose-unit floor's KEYING (winning mass vs. `candidates.length === 1`):
+     the thick body's ~5,000 words sit far above PROSE_UNIT_FLOOR in every
+     partitioning, so the floor never fires and how it's keyed can't change
+     the outcome. This second property case reruns the SAME six shapes (via
+     buildConfigs) over a body sized, from the real PROSE_UNIT_FLOOR
+     constant, to land just BELOW the floor — so the floor fires in every
+     shape, and a thin book must surrender IDENTICALLY across all of them.
+     Under mutation B, the single-candidate shapes still surrender (floor
+     applies at candidates.length === 1) but a multi-candidate split shape
+     bypasses the floor and backfills a confident wrong answer instead — the
+     exact bug #2276 fixed, now caught by this fixture where it wasn't by
+     the thick one. */
+  describe('thin body below PROSE_UNIT_FLOOR', () => {
+    // One long German "sentence" (three clauses joined, single terminal
+    // period) so a handful of repeats stays under PROSE_UNIT_FLOOR by prose
+    // UNIT count while still clearing FRONT_MATTER_WORD_THRESHOLD per chunk
+    // once split five ways (the tightest shape below) — a body built from
+    // plain ~25-word DE_SENTENCE repeats can't do both at once.
+    const DE_CLAUSE = DE_SENTENCE.slice(0, -1); // drop the trailing '.'
+    const deClauseLower = DE_CLAUSE.charAt(0).toLowerCase() + DE_CLAUSE.slice(1);
+    const DE_LONG_SENTENCE = `${DE_CLAUSE}, während ${deClauseLower}, und während ${deClauseLower}.`; // one prose unit, ~78 words
+
+    // Shapes 1-3 merge FRONT_MATTER_TEXT into the same chapter as the body,
+    // so its own prose units land in the winning language's total too —
+    // read the real count rather than assuming it, so this fixture keeps
+    // working if FRONT_MATTER_TEXT above ever changes shape.
+    const frontMatterUnits = countProseUnits(FRONT_MATTER_TEXT);
+
+    // One sentence = one prose unit. 15 repeats divides evenly into the
+    // five-way split below (3 sentences/chunk, ~234 words — well over
+    // FRONT_MATTER_WORD_THRESHOLD), and stays under PROSE_UNIT_FLOOR even in
+    // the shapes that fold `frontMatterUnits` on top (15 + 2 = 17 < 20).
+    const thinRepeats = 15;
+    const thinBodySentences = Array(thinRepeats).fill(DE_LONG_SENTENCE);
+    const thinConfigs = buildConfigs(thinBodySentences);
+
+    it('fixture sanity: every shape’s winning mass stays under PROSE_UNIT_FLOOR, even merged with the front matter’s own units', () => {
+      expect(thinRepeats).toBeLessThan(PROSE_UNIT_FLOOR);
+      expect(thinRepeats + frontMatterUnits).toBeLessThan(PROSE_UNIT_FLOOR);
+    });
+
+    it.each(thinConfigs)('surrenders identically — $label', ({ chapters }) => {
+      const result = detectManuscriptLanguageFromChapters(chapters);
+      expect(result).toEqual({ language: 'en', supported: true, fallback: true });
+    });
+
+    it('every re-chaptering shape agrees with every other (not just with a fixed expectation)', () => {
+      const results = thinConfigs.map((c) => detectManuscriptLanguageFromChapters(c.chapters));
+      const [first, ...rest] = results;
+      for (const r of rest) expect(r).toEqual(first);
+    });
   });
 });
