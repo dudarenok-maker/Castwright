@@ -371,6 +371,23 @@ describe('mock config parity with the server registry', () => {
     expect(new Set(descriptors.map((d) => d.key)).size).toBe(descriptors.length);
   });
 
+  /* #2271 review — registry⊆mock and key-uniqueness above both still pass
+     if a THIRD hand-authored descriptor is appended to api.ts's mock
+     catalogue (MOCK_CONFIG_DESCRIPTORS = UI_ONLY_MOCK_DESCRIPTORS +
+     allKnobDescriptors()) — neither check bounds the mock's total size.
+     Pin the count exactly: KNOBS.length (the registry projection) plus the
+     two declared UI-only legacy descriptors (KOKORO_SAMPLE_RATE,
+     ANALYZER_STAGE1_PROMPT — see api.ts's UI_ONLY_MOCK_DESCRIPTORS comment).
+     UI_ONLY_MOCK_DESCRIPTORS itself isn't exported, so its length is pinned
+     as the literal `2` rather than imported. */
+  it('the mock catalogue has no descriptors beyond the registry plus the two declared UI-only ones', async () => {
+    const { descriptors } = await mockGetConfig();
+    const registryKeys = new Set(KNOBS.map((k) => k.key));
+    const mockOnlyKeys = descriptors.filter((d) => !registryKeys.has(d.key)).map((d) => d.key);
+    expect(mockOnlyKeys.sort()).toEqual(['ANALYZER_STAGE1_PROMPT', 'KOKORO_SAMPLE_RATE']);
+    expect(descriptors.length).toBe(KNOBS.length + 2);
+  });
+
   it("every mock descriptor's group resolves to a group mockGetConfig() returns", async () => {
     const { descriptors, groups } = await mockGetConfig();
     const groupIds = new Set(groups.map((g) => g.id));

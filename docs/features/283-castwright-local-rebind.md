@@ -237,7 +237,7 @@ revoke and the mint in one `enqueueWrite` critical section), #2258
 (`isFriendlyHostnameReachable` split into `friendlyHostnameLiveness`, emitting
 a port-carrying URL when only the responder is up), and #2259 (the mock
 catalogue projected from `KNOBS` through the same `toKnobDescriptor` the real
-route uses — 98 hand-copied descriptors + 2 legacy entries become 115 + the
+route uses — 96 hand-copied registry descriptors + 2 legacy entries become 115 + the
 same 2, and ~1300 lines of hand-copy are deleted).
 
 That round also extended **E10** with two observations rather than adding
