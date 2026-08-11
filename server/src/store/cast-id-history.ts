@@ -65,7 +65,9 @@ export interface CastIdHistory {
   /** #2040 Task 14 review item 2b — ids dropped from `supersededBy` because a
    *  fresh roster reclaimed the KEY as a live cast id
    *  (`dropSupersededIdsReclaimedByLiveCast`), OR because the entry's TARGET
-   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110)
+   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110),
+   *  OR because a refused `forgotSupersededTo` restore put an orphaned
+   *  association at risk of hijack (`applyRestoreSupersededId`, #2161)
    *  — keyed the same way `supersededBy` was before the drop (id -> what it
    *  used to resolve to). This is the only surviving record of that pair
    *  once the drop runs — losing it would mean every book that re-analyses
@@ -1044,7 +1046,7 @@ function applyRestoreSupersededId(
        `dropSupersededTargetsNoLongerLive` already use for a dropped
        `supersededBy` entry. `touchedKeys` stays empty — this write never
        touches `supersededBy`, so it must not be stamped as though it did
-       (`bumpSeqAndStamp`'s reconcile loop keys off `supersededBy` alone; a
+       (`bumpSeqAndStamp`'s reconcile loop keys off `supersededBy` alone); a
        phantom `recordedAtSeq` entry for a key absent from `supersededBy`
        would be stamped then immediately deleted by that same loop — wasted,
        not harmful, but `changed: true` is what actually matters here so the
@@ -1235,7 +1237,8 @@ export interface UndoRejectedPairResult {
   /** #2161 — true when the restore was refused because `forgotSupersededTo`
    *  no longer names a live cast id (the #2110 hazard, reopened through a
    *  stale stash — see `applyRestoreSupersededId`'s own doc comment). The
-   *  pair is still removed regardless; only the alias restore was skipped. */
+   *  pair is still removed regardless; only the alias restore was skipped.
+   *  A `displaced` entry is filed to reserve the orphaned id. */
   targetNotLive?: boolean;
 }
 
