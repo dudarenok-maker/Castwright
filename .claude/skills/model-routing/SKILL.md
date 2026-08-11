@@ -134,17 +134,25 @@ for subagent dispatch above.
   Every finding gets a dispatched fix agent — one finding, one fix, one paired
   test — committed and pushed before merge. Clear-cut findings (unambiguous
   bug, obvious dead code, a straightforward CLAUDE.md violation) are the
-  ordinary case, not the only case. **The single finding allowed to leave the
-  round unfixed is one needing a design pass** — more than one defensible
-  outcome, a decision the user has a stake in — which routes through the
-  judgment-call carve-out below and gets an issue naming that decision as its
-  deliverable. Everything else is fixed now: "it expands the PR's scope",
-  "it's pre-existing", "it needs its own test", and "we can batch these" are
-  **not** deferral grounds — see [CLAUDE.md → Incidental
+  ordinary case, not the only case. **Cleanup-only findings are in scope too** —
+  a reuse/simplification/efficiency nit, a staled derived artifact, a missing
+  index or register row, an unwired knob. They are cheaper to dispatch than a
+  bug, not a lesser class of work, and "it's only a chore" / "it's not
+  user-visible" is not a deferral. (This is a *fixing* rule, not a re-review
+  rule: cleanup-only findings still do not re-trigger a pass — see below.) The
+  one exception stays taste: a reviewer preferring a different shape for code
+  that is correct and consistent with its neighbours is declined, not filed.
+  **The single finding allowed to leave the round unfixed is one needing a
+  design pass** — more than one defensible outcome, a decision the user has a
+  stake in — which routes through the judgment-call carve-out below and gets an
+  issue naming that decision as its deliverable. Everything else is fixed now:
+  "it expands the PR's scope", "it's pre-existing", "it needs its own test",
+  and "we can batch these" are **not** deferral grounds — see [CLAUDE.md →
+  Incidental
   findings](../../../CLAUDE.md#incidental-findings-report-fix-record) for the
-  full void-reasons list. A ten-finding report ends as ten fix commits, not a
-  follow-up epic. None of this licenses `--fix`: the fixes are dispatched and
-  reviewed per finding, never applied wholesale.
+  full void-reasons list and the defect/chore/taste seam. A ten-finding report
+  ends as ten fix commits, not a follow-up epic. None of this licenses `--fix`:
+  the fixes are dispatched and reviewed per finding, never applied wholesale.
 - **Re-review trigger**: only when the initial pass surfaced ≥1 finding
   that is an actual correctness bug (wrong behavior, crash, security issue —
   not a reuse/simplification/efficiency-only cleanup nit). Fixing and
