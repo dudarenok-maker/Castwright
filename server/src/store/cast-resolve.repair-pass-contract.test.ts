@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildCastResolver } from './cast-resolve.js';
-import { isAudioCurrent } from './cast-audio-currency.js';
+import { isAudioCurrent, aggregateAudioCurrency } from './cast-audio-currency.js';
 // @ts-expect-error — scripts/repair-cast-id-drift.mjs is a plain, untyped
 // ESM script (no server/dist build, no .d.ts) — see this file's own header
 // comment for why importing it from here, rather than from the script's own
@@ -148,4 +148,97 @@ describe("resolveTierBId against the REAL buildCastResolver (round 4 review, #21
     const resolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
     expect(resolveTierBId('a-completely-different-id', resolver)).toBeUndefined();
   });
+});
+
+/** Fold-in fix (F4) — `buildOrphansFromSegments`'s `orphans`-membership
+ *  subtraction (`scripts/repair-cast-id-drift.mjs`, the "orphans membership
+ *  wins" loop at the end of the function) computes cross-chapter currency
+ *  for a non-'exact' id by a bespoke mechanism: accumulate a `currentNonExact`
+ *  Set alongside `orphans` as the per-file loop runs, then subtract any id
+ *  that ALSO landed in `orphans` at the end. `cast-audio-currency.ts`'s
+ *  `aggregateAudioCurrency` states the identical rule directly — "`false` if
+ *  any chapter is `false`; else `'unknown'` if any is `'unknown'`; else
+ *  `true`" — for exactly this "one `isAudioCurrent` value per rendered
+ *  chapter, one verdict per id" shape.
+ *
+ *  The two are behaviourally identical today, but nothing enforces that: the
+ *  script re-expresses the module's rule instead of calling
+ *  `aggregateAudioCurrency` itself. A clean delegation was tried and set
+ *  aside — `buildOrphansFromSegments`'s single per-segments-file loop
+ *  interleaves the currency decision with unrelated per-chapter bookkeeping
+ *  (segment counts, duration, `characterSnapshots`) that only accumulates on
+ *  the non-current branch; making it call `aggregateAudioCurrency` instead
+ *  would mean collecting a `currency[]` array per id across every file BEFORE
+ *  deciding whether to accumulate that metadata, which reorders the function
+ *  enough to risk the fail-closed invariants its own doc comment enumerates
+ *  (#2128 review round 1's seven-source list) for no behavioural gain. Per
+ *  the brief: pin the equivalence with a test instead, so a future change to
+ *  `aggregateAudioCurrency`'s rule reddens HERE if the script's hand-rolled
+ *  copy drifts from it.
+ *
+ *  Lives in this file, not the script's own `scripts/tests/
+ *  repair-cast-id-drift.test.mjs`, for the same two reasons the whole file
+ *  exists (see the module doc comment above): that file never imports
+ *  `server/dist`/`server/src`, so it cannot reach the real
+ *  `aggregateAudioCurrency` to pin against. */
+describe('#2128/#2129 fold-in fix — buildOrphansFromSegments’s orphans-membership subtraction PINNED against aggregateAudioCurrency', () => {
+  // One resolution ('mayrin' -> 'mairin' via the 'history' tier, matching key
+  // 'mayrin', marker seq 3) reused across every scenario below, so the only
+  // thing that varies per scenario is the per-file castHistorySeq stamp —
+  // and therefore the per-file isAudioCurrent value fed to both the real
+  // function under test and the independent aggregateAudioCurrency check.
+  const liveCast = [{ id: 'mairin', name: 'Мэйрин' }];
+  const history = {
+    schema: 1 as const,
+    supersededBy: { mayrin: 'mairin' },
+    seq: 5,
+    recordedAtSeq: { mayrin: 3 },
+  };
+  const resolver = buildCastResolver(liveCast, history);
+  const resolution = resolver.resolve('mayrin')!;
+
+  /** Builds one segments-file fixture carrying a single 'mayrin' segment,
+   *  stamped with the given `castHistorySeq` (`undefined` omits the stamp
+   *  entirely, reproducing a pre-#2128 legacy render). */
+  function fileWithStamp(chapterId: number, castHistorySeq: number | undefined) {
+    return {
+      chapterId,
+      chapterTitle: `Chapter ${chapterId}`,
+      ...(castHistorySeq === undefined ? {} : { castHistorySeq }),
+      segments: [{ characterId: 'mayrin' }],
+    };
+  }
+
+  const scenarios: Array<{
+    name: string;
+    stamps: ReadonlyArray<number | undefined>;
+  }> = [
+    { name: 'single file, stamp >= marker -> every value true', stamps: [5] },
+    { name: 'two files, both stamp >= marker -> every value true', stamps: [5, 4] },
+    { name: 'one current file, one stale (stamp < marker) -> a false in the mix', stamps: [5, 1] },
+    { name: 'one current file, one legacy (no stamp) -> an unknown in the mix', stamps: [5, undefined] },
+    { name: 'stale and legacy together, no current file at all', stamps: [1, undefined] },
+  ];
+
+  for (const { name, stamps } of scenarios) {
+    it(`${name} — buildOrphansFromSegments agrees with aggregateAudioCurrency`, () => {
+      const segs = stamps.map((stamp, i) => fileWithStamp(i + 1, stamp));
+
+      // The independent check: compute isAudioCurrent PER FILE exactly as
+      // buildOrphansFromSegments does internally, then hand the whole list to
+      // aggregateAudioCurrency directly — the module's own stated rule.
+      const perFileCurrency = segs.map((seg) => isAudioCurrent(resolution, seg, history));
+      const expectedAggregate = aggregateAudioCurrency(perFileCurrency);
+
+      const { orphans, currentNonExact } = buildOrphansFromSegments(segs, resolver, history, isAudioCurrent);
+
+      if (expectedAggregate === true) {
+        expect(orphans.has('mayrin')).toBe(false);
+        expect(currentNonExact.has('mayrin')).toBe(true);
+      } else {
+        expect(orphans.has('mayrin')).toBe(true);
+        expect(currentNonExact.has('mayrin')).toBe(false);
+      }
+    });
+  }
 });
