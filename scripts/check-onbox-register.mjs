@@ -614,12 +614,13 @@ export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 //     actually named, and it has no effect outside `direction: 'extraOnly'`.
 //     Naming an ID that never accounts for any live-only row is an error,
 //     not a silent no-op — see the check at the end of this function — so a
-//     typo can't degenerate the flag into a blanket mute. Renumbering wrinkle: rows renumber
-//     contiguously within a group, so discharging a MIDDLE row (say E5)
-//     does not make E5 the live-only one — every row after it shifts down
-//     to fill the gap, so the group's HIGHEST id (e.g. E10) is the one that
-//     vanishes. Name the ID that actually disappeared, not the row you
-//     conceptually discharged.
+//     typo can't degenerate the flag into a blanket mute.
+//
+//     Renumbering wrinkle: rows renumber contiguously within a group, so
+//     discharging a MIDDLE row (say E5) does not make E5 the live-only
+//     one — every row after it shifts down to fill the gap, so the group's
+//     HIGHEST id (e.g. E10) is the one that vanishes. Name the ID that
+//     actually disappeared, not the row you conceptually discharged.
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,

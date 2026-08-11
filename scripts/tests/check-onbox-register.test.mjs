@@ -2535,6 +2535,87 @@ test('#2272 review finding 2: naming an ID that is not live-only is reported und
   });
 });
 
+// #2272 review (mixed-case regression): the branch interaction between
+// `dischargeNameErrors` and `behindErrors` in the CLI layer — one invocation
+// producing BOTH an unconsumed --discharging name AND a genuine
+// competing-lane BEHIND row. This must never blend into one report: each
+// class gets its own banner and its own remedy, in its own block, and
+// neither remedy leaks onto the other's list. Combines the A6-style
+// genuinely-BEHIND fixture (a real, hermetic-baseline BEHIND row, not named)
+// with a bad --discharging name (the register's own first row heading — it's
+// present everywhere, so it can never be live-only) in the SAME run.
+test('#2272 review: an unconsumed --discharging name AND a genuine BEHIND row in one run both surface, each under its own banner and remedy', () => {
+  const existingIdMatch = REAL_REGISTER_TEXT.match(/^### ([A-Z]\d+)\b/m);
+  assert.ok(
+    existingIdMatch,
+    'fixture setup: the real register must have at least one row heading',
+  );
+  const badDischargeName = existingIdMatch[1];
+
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  assert.notEqual(
+    badDischargeName,
+    newId,
+    'fixture setup: the bad name and the genuinely-BEHIND row must be distinct IDs',
+  );
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, #2272 mixed-case regression)',
+  );
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath, '--discharging', badDischargeName], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      1,
+      `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    // Both banners, and both remedies, must be present.
+    assert.match(r.stderr, /does not account for any live-only row/);
+    assert.match(r.stderr, /shows the register is BEHIND what is already live/);
+    assert.match(r.stderr, /Fix the --discharging value\(s\) named above/);
+    assert.match(r.stderr, /Do not publish\. Merge the rows named above/);
+    // Ordering pins that each remedy sits with its OWN list, never blended:
+    // the discharge-name block (label + remedy) prints entirely before the
+    // BEHIND block (label + remedy) starts.
+    const dischargeLabelIdx = r.stderr.indexOf('does not account for any live-only row');
+    const dischargeRemedyIdx = r.stderr.indexOf('Fix the --discharging value(s) named above');
+    const behindLabelIdx = r.stderr.indexOf('shows the register is BEHIND what is already live');
+    const behindRemedyIdx = r.stderr.indexOf('Do not publish. Merge the rows named above');
+    assert.ok(
+      [dischargeLabelIdx, dischargeRemedyIdx, behindLabelIdx, behindRemedyIdx].every(
+        (i) => i !== -1,
+      ),
+      `expected all four markers present, got stderr: ${r.stderr}`,
+    );
+    assert.ok(
+      dischargeLabelIdx < dischargeRemedyIdx &&
+        dischargeRemedyIdx < behindLabelIdx &&
+        behindLabelIdx < behindRemedyIdx,
+      `expected the discharge-name block (label+remedy) entirely before the BEHIND block ` +
+        `(label+remedy), got stderr: ${r.stderr}`,
+    );
+    // Each ID is named only inside its OWN block — the bad name never leaks
+    // into the BEHIND list, and the genuinely-BEHIND row never leaks into
+    // the discharge-name list.
+    assert.ok(
+      r.stderr.indexOf(badDischargeName) < behindLabelIdx,
+      `the bad --discharging name (${badDischargeName}) must be named before the BEHIND ` +
+        `banner starts, got stderr: ${r.stderr}`,
+    );
+    assert.ok(
+      r.stderr.indexOf(newId) > dischargeRemedyIdx,
+      `the genuinely-BEHIND row (${newId}) must be named after the discharge-name remedy, ` +
+        `got stderr: ${r.stderr}`,
+    );
+  });
+});
+
 // #2272 review (nit 2): a repeated --discharging flag used to silently keep
 // only the FIRST occurrence (process.argv.indexOf finds only one match) —
 // `--discharging A1 --discharging A2` parsed as just A1, with A2 dropped

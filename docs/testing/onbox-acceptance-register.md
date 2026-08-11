@@ -147,15 +147,29 @@ comparison, see the edge list above). The merge step that closes this, run
        `--discharging <ID>[,<ID>...]` naming the row(s) you deliberately
        removed, e.g. `npm run check:onbox-register -- --against-published
        <saved-file> --discharging E10` or `--discharging E10,E11` for more
-       than one. **Renumbering wrinkle:** rows renumber contiguously within a
-       group, so discharging a MIDDLE row does NOT make that row the one
-       reported — every row after it shifts down to fill the gap, so it's
-       the group's HIGHEST id that vanishes from the live page instead. Name
-       the ID the error message actually names, not the row you conceptually
-       discharged. Naming an ID that turns out not to be live-only (a typo,
-       or copied from the wrong discharge) is itself a refusal, not a silent
-       no-op — the point is to keep a genuinely competing-lane row from
-       slipping through unreported, not to mute the check wholesale.
+       than one. **Which ID(s) to name depends on which of these two shapes
+       applies — check before you act, they need opposite reasoning:**
+       - **A middle row of a group that still has survivors (the
+         renumbering wrinkle).** Rows renumber contiguously within a group,
+         so discharging a MIDDLE row does NOT make that row the one
+         reported — every row after it shifts down to fill the gap, so it's
+         the group's HIGHEST id that vanishes from the live page instead.
+         Name the ID the error message actually names, not the row you
+         conceptually discharged.
+       - **A whole group with NO survivors left** — e.g. discharging a
+         single-row group's only row (Group F's sole row, F1, is a real,
+         live example of exactly this shape). There is nothing left to
+         renumber, so every row the group's live-page section still lists
+         is still live-only — name **all** of them, comma-separated, in
+         one `--discharging` value. Naming only SOME of a wholly-vanished
+         group's rows still fails: the error names exactly which leftover
+         ID(s) remain unaccounted for, so add those and re-run rather than
+         guessing at the rest.
+
+       Either way, naming an ID that turns out not to be live-only at all (a
+       typo, or copied from the wrong discharge) is itself a refusal, not a
+       silent no-op — the point is to keep a genuinely competing-lane row
+       from slipping through unreported, not to mute the check wholesale.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine
