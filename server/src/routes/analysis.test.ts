@@ -2554,7 +2554,8 @@ describe('bookIdForRetirementCleanup wired into every real call site (F8, #2163)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -2674,7 +2675,8 @@ describe('bookIdForRetirementCleanup wired into every real call site (F8, #2163)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -3073,7 +3075,8 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
     clearPhase1Selection();
     detectOllamaDeviceMock.mockClear();
     setLastKnownAnalyzerDeviceMock.mockClear();
-    process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+    if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
   });
 
   async function runJobWith(engine0: 'local' | 'gemini', engine1: 'local' | 'gemini'): Promise<void> {
@@ -3477,7 +3480,8 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -3684,7 +3688,8 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4000,7 +4005,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4110,7 +4116,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4216,7 +4223,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4467,7 +4475,8 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
         if (originalConcurrency === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
         else process.env.ANALYZER_OLLAMA_CONCURRENCY = originalConcurrency;
       }
@@ -4713,7 +4722,8 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4907,7 +4917,8 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5192,7 +5203,8 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5439,7 +5451,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5625,7 +5638,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5803,7 +5817,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -6058,7 +6073,8 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -6300,7 +6316,8 @@ describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pru
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -6521,7 +6538,8 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -6622,7 +6640,8 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -7012,7 +7031,8 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,

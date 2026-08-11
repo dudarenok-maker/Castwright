@@ -318,7 +318,8 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
         releasePhase0();
         if (jobPromise) await jobPromise.catch(() => {});
         removeManuscript(manuscriptId);
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
 
       expect(resAlias!.status).toBe(200);

@@ -345,8 +345,10 @@ describe('interim-write prune prohibition — a not-yet-reached target must not 
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         clearPhase1Selection();
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
-        process.env.ANALYZER_OLLAMA_CONCURRENCY = originalConcurrency;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalConcurrency === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+        else process.env.ANALYZER_OLLAMA_CONCURRENCY = originalConcurrency;
       }
     },
     60_000,

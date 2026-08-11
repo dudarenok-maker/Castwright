@@ -7,8 +7,8 @@
    `{ characters: cast.characters }` shape did) would have produced
    byte-identical output there and passed silently. */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { castJsonPath } from '../workspace/paths.js';
@@ -19,6 +19,10 @@ const BOOK_ID = 'book-hollow-tide';
 
 beforeEach(() => {
   bookDir = mkdtempSync(join(tmpdir(), 'not-linked-edges-'));
+});
+
+afterEach(() => {
+  rmSync(bookDir, { recursive: true, force: true });
 });
 
 /* No writer in this repo emits a sibling top-level key on cast.json today
