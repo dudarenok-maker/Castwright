@@ -232,13 +232,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2811,66 +2811,6 @@ than taking some code path only the server-mediated call exercises.
 profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
 §On-box acceptance item 4; run sheet §6 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
-
-### E10 · One-click `castwright.local` re-bind (plan [283](../features/283-castwright-local-rebind.md), [#2247](https://github.com/dudarenok-maker/Castwright/issues/2247)) · **needs an elevated `npm run start:lan`, not `dev:lan`**
-
-`friendlyUrl` — the value both the new "Authorize this browser" button and the
-existing pairing-link both depend on — requires **both** the mDNS responder
-and the `:443` forwarder alive, and both are gated to
-`NODE_ENV === 'production'` (`server/src/index.ts`). `npm run dev:lan` can
-never render a working button; the local production route is
-`npm run build && npm run start:lan`, which needs elevation to bind `:443`.
-Nothing here has been exercised against that real path — every automated test
-either mocks `friendlyUrl` outright or drives the redeem endpoint directly.
-
-Observe, on a fresh elevated `npm run build && npm run start:lan`:
-
-1. From a loopback tab, Account → LAN access → **Authorize this browser** →
-   the browser navigates to `https://castwright.local/#/pair?c=…&self=1` and
-   lands on the library with **no further click** (the auto-redeem effect).
-   `GET /api/devices` shows the resulting `'This computer'` record with
-   `expires` roughly **a year out**, not a month — the actual `Max-Age` on the
-   `__Host-cw_lan` cookie confirms the same figure via DevTools' Application
-   tab.
-2. **The recovery path, starting from an actually-lapsed cookie** (clear
-   `__Host-cw_lan` in DevTools — the actual fast path; `LAN_DEVICE_TTL_DAYS=1`
-   is the lowest value the config accepts, `0` is rejected and falls through
-   to the 365-day default, and even `=1` still means waiting out a full day):
-   reload `https://castwright.local`.
-   The library panel must read "This browser is no longer authorized for
-   Castwright on your network," with a recovery pointer naming the fix for
-   the host you're actually on — never the raw
-   `Library scan failed (401): Missing or invalid LAN access token.` string
-   this replaces. Follow the pointer back to `localhost`, click **Authorize
-   this browser**, and confirm it lands you back on the library in one click
-   — the full round trip end to end, not just the mint half covered by step 1.
-3. **The QR path is unaffected**: a second device (a phone, or a second
-   desktop browser profile) still authorizes via the pre-existing "Authorize a
-   device" + QR flow, unchanged by this plan.
-4. **Re-authorizing twice leaves ONE live `'This computer'` record** (#2257).
-   Press **Authorize this browser**, complete the hop, then do it again.
-   `GET /api/devices` must show the first record `revoked: true` and exactly
-   one non-revoked `'This computer'` — not two live ones. Unit tests cover the
-   revoke logic; what only the real path proves is that the self-bind marker
-   actually survives the full session→redeem→persist round trip against a real
-   `device-tokens.json`, rather than only against the test store.
-5. **A dead `:443` forwarder degrades to a port-carrying URL, not to nothing**
-   (#2258). With the responder alive, kill the forwarder (or boot with `:443`
-   already held by something else) and start a pairing session: `friendlyUrl`
-   must come back as `https://castwright.local:8443/#/pair?c=…` and the button
-   must still work, rather than the friendly flow disappearing. This is the
-   half no unit test can reach — the route logic is covered, but that
-   `portForwarderHandle.isBound()` actually reports false while
-   `mdnsResponderHandle.isAlive()` stays true is a property of the real
-   processes.
-
-*Needs:* a real elevated `npm run start:lan` boot (mDNS + `:443` forwarder
-both require admin/root to bind), a loopback browser tab, and — for step 3
-only — a second device or browser profile on the same LAN. Step 5 additionally
-needs the forwarder killed or its port pre-occupied while the responder stays
-up. *Cost:* short, ~20 minutes once elevated. *Criteria:*
-[`docs/features/283-castwright-local-rebind.md`](../features/283-castwright-local-rebind.md)'s
-own manual acceptance walkthrough.
 
 ## Group F — a real Android device
 
