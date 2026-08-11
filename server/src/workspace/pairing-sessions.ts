@@ -14,6 +14,7 @@ interface Session {
   expiresAt: number;
   consumed: boolean;
   label?: string;
+  selfBind?: boolean;
 }
 
 const sessions = new Map<string, Session>();
@@ -34,16 +35,17 @@ export function createPairingSession(
   label?: string,
   now: number = Date.now(),
   bytes = 5,
+  selfBind = false,
 ): NewPairingSession {
   sweep(now);
   const code = crockfordBase32(randomBytes(bytes)); // 5→8 chars (companion), 10→16 chars (browser)
   const expiresAt = now + TTL_MS;
-  sessions.set(code, { expiresAt, consumed: false, label });
+  sessions.set(code, { expiresAt, consumed: false, label, selfBind });
   return { code, expiresAt, label };
 }
 
 export type RedeemResult =
-  | { ok: true; label?: string }
+  | { ok: true; label?: string; selfBind: boolean }
   | { ok: false; reason: 'unknown' | 'expired' | 'consumed' };
 
 export function redeemPairingSession(code: string, now: number = Date.now()): RedeemResult {
@@ -55,7 +57,7 @@ export function redeemPairingSession(code: string, now: number = Date.now()): Re
     return { ok: false, reason: 'expired' };
   }
   s.consumed = true;
-  return { ok: true, label: s.label };
+  return { ok: true, label: s.label, selfBind: s.selfBind === true };
 }
 
 /** Un-consume a just-redeemed session so a failed downstream mint (e.g. the

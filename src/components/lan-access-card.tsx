@@ -41,7 +41,7 @@ export function LanAccessCard() {
   const authorizeThisBrowser = async () => {
     setSelfErr(null);
     try {
-      const s = await api.createDevicePairSession({ label: 'This computer' });
+      const s = await api.createDevicePairSession({ label: 'This computer', selfBind: true });
       if (!s.friendlyUrl) {
         setSelfErr("castwright.local isn't reachable right now — use the QR flow above, or check the app is running in production LAN mode.");
         return;

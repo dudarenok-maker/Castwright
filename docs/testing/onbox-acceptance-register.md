@@ -238,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2847,11 +2847,28 @@ Observe, on a fresh elevated `npm run build && npm run start:lan`:
 3. **The QR path is unaffected**: a second device (a phone, or a second
    desktop browser profile) still authorizes via the pre-existing "Authorize a
    device" + QR flow, unchanged by this plan.
+4. **Re-authorizing twice leaves ONE live `'This computer'` record** (#2257).
+   Press **Authorize this browser**, complete the hop, then do it again.
+   `GET /api/devices` must show the first record `revoked: true` and exactly
+   one non-revoked `'This computer'` — not two live ones. Unit tests cover the
+   revoke logic; what only the real path proves is that the self-bind marker
+   actually survives the full session→redeem→persist round trip against a real
+   `device-tokens.json`, rather than only against the test store.
+5. **A dead `:443` forwarder degrades to a port-carrying URL, not to nothing**
+   (#2258). With the responder alive, kill the forwarder (or boot with `:443`
+   already held by something else) and start a pairing session: `friendlyUrl`
+   must come back as `https://castwright.local:8443/#/pair?c=…` and the button
+   must still work, rather than the friendly flow disappearing. This is the
+   half no unit test can reach — the route logic is covered, but that
+   `portForwarderHandle.isBound()` actually reports false while
+   `mdnsResponderHandle.isAlive()` stays true is a property of the real
+   processes.
 
 *Needs:* a real elevated `npm run start:lan` boot (mDNS + `:443` forwarder
 both require admin/root to bind), a loopback browser tab, and — for step 3
-only — a second device or browser profile on the same LAN. *Cost:* short,
-~15 minutes once elevated. *Criteria:*
+only — a second device or browser profile on the same LAN. Step 5 additionally
+needs the forwarder killed or its port pre-occupied while the responder stays
+up. *Cost:* short, ~20 minutes once elevated. *Criteria:*
 [`docs/features/283-castwright-local-rebind.md`](../features/283-castwright-local-rebind.md)'s
 own manual acceptance walkthrough.
 

@@ -18,7 +18,7 @@ describe('pairing-sessions', () => {
   it('redeems a valid code exactly once', () => {
     const now = 1_000_000;
     const { code } = createPairingSession(undefined, now);
-    expect(redeemPairingSession(code, now + 1)).toEqual({ ok: true });
+    expect(redeemPairingSession(code, now + 1)).toEqual({ ok: true, selfBind: false });
     expect(redeemPairingSession(code, now + 2)).toEqual({ ok: false, reason: 'consumed' });
   });
 
@@ -34,7 +34,7 @@ describe('pairing-sessions', () => {
 
   it('stashes a label and returns it on redeem', () => {
     const { code } = createPairingSession('Mike phone');
-    expect(redeemPairingSession(code)).toEqual({ ok: true, label: 'Mike phone' });
+    expect(redeemPairingSession(code)).toEqual({ ok: true, label: 'Mike phone', selfBind: false });
   });
 
   it('mints a 16-char (80-bit) code at bytes=10', () => {
@@ -49,11 +49,22 @@ describe('pairing-sessions', () => {
 
   it('is single-use: a second redeem of the same code is consumed', () => {
     const { code } = createPairingSession('x');
-    expect(redeemPairingSession(code)).toEqual({ ok: true, label: 'x' });
+    expect(redeemPairingSession(code)).toEqual({ ok: true, label: 'x', selfBind: false });
     expect(redeemPairingSession(code)).toEqual({ ok: false, reason: 'consumed' });
   });
 
   it('reports unknown for a code never minted', () => {
     expect(redeemPairingSession('NEVERMINTED12345')).toEqual({ ok: false, reason: 'unknown' });
+  });
+
+  // #2257 — the 4th positional selfBind param travels through to redeem.
+  it('carries the selfBind marker from createPairingSession through to redeem', () => {
+    const { code } = createPairingSession('This computer', undefined, 10, true);
+    expect(redeemPairingSession(code)).toEqual({ ok: true, label: 'This computer', selfBind: true });
+  });
+
+  it('defaults selfBind to false when omitted', () => {
+    const { code } = createPairingSession('x', undefined, 10);
+    expect(redeemPairingSession(code)).toEqual({ ok: true, label: 'x', selfBind: false });
   });
 });

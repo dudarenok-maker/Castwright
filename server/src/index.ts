@@ -348,7 +348,7 @@ async function main(): Promise<void> {
       portForwarderHandle = startPortForwarder(listenPort);
     }
 
-    /* castwright-local-pairing-link — expose a single combined liveness check
+    /* castwright-local-pairing-link — expose the friendly-hostname liveness
        for the friendly-hostname pairing link (server/src/routes/devices.ts),
        via app.set()/app.get() — the same idiom this file already uses for
        'lanHttpsServer' just above (see that comment), avoiding a circular
@@ -357,9 +357,10 @@ async function main(): Promise<void> {
        EVERY boot (LAN-HTTPS or not) since listenerCallback is shared by both
        app.listen() branches — in non-LAN-HTTPS mode both handles are null,
        so the getter is still set, just permanently false, not unset. */
-    app.set('isFriendlyHostnameReachable', () =>
-      mdnsResponderHandle?.isAlive() === true && portForwarderHandle?.isBound() === true,
-    );
+    app.set('friendlyHostnameLiveness', () => ({
+      mdns: mdnsResponderHandle?.isAlive() === true,
+      forwarder: portForwarderHandle?.isBound() === true,
+    }));
   };
 
   /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart

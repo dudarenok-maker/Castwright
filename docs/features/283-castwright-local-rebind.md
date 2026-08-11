@@ -196,6 +196,14 @@ until run.
 
 ## Out of scope
 
+> **All three were delivered as a follow-up round on
+> `chore/server-lan-rebind-followups`** (see this plan's Ship notes). They are
+> kept here as written, because what each one says about *why it was deferred*
+> is the record of how this plan drew its boundary — not because any is still
+> outstanding. #2259 was resolved toward full parity rather than a tracked
+> subset: the mock catalogue is now projected from `KNOBS` through the same
+> function the real route uses, which dissolved the field-coverage half of it.
+
 - **Revoking the prior self-bind record on re-authorize.** Repeated use of "Authorize
   this browser" mints a fresh device-token record each time rather than replacing the
   previous one — harmless (an extra valid token, not a security hole) but it clutters
@@ -221,3 +229,23 @@ until run.
 
 _(fill in when status flips to `stable` — on-box acceptance row E10 discharging is the
 remaining gate)_
+
+**Follow-up round, 2026-08-11** — all three deferred items above shipped on
+`chore/server-lan-rebind-followups`: #2257 (self-bind marker, derived
+server-side from `isLoopbackRequest(req) && body.selfBind === true`, with the
+revoke and the mint in one `enqueueWrite` critical section), #2258
+(`isFriendlyHostnameReachable` split into `friendlyHostnameLiveness`, emitting
+a port-carrying URL when only the responder is up), and #2259 (the mock
+catalogue projected from `KNOBS` through the same `toKnobDescriptor` the real
+route uses — 96 hand-copied registry descriptors + 2 legacy entries become 115 + the
+same 2, and ~1300 lines of hand-copy are deleted).
+
+That round also extended **E10** with two observations rather than adding
+rows: the double-authorize leaving one live record (#2257), and the
+forwarder-down URL (#2258). Both are things unit tests provably cannot reach.
+Two new follow-ups came out of it —
+[#2269](https://github.com/dudarenok-maker/Castwright/issues/2269)
+(`DELETE /api/devices/:id` has no loopback gate, pre-existing, found by the
+review attacking the self-bind trust boundary) and
+[#2270](https://github.com/dudarenok-maker/Castwright/issues/2270) (retire the
+last two mock-only descriptor fictions).
