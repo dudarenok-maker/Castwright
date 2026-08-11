@@ -135,7 +135,13 @@ export interface RejectedPair {
   /** The `supersededBy[from]` target `forgetSupersededId` removed at reject
    *  time, if any. Absent when there was nothing to forget (e.g. `from` only
    *  ever matched through a normalised tier, which has no `supersededBy`
-   *  entry to begin with). */
+   *  entry to begin with).
+   *
+   *  Historical record, not necessarily still true: the character this names
+   *  can itself quietly stop being live before Undo is ever clicked (#2161,
+   *  the same unvoiced-drop mechanism #2110 closed for `supersededBy`
+   *  itself). `applyRestoreSupersededId` is what checks liveness before
+   *  writing this value back — see its own doc comment. */
   forgotSupersededTo?: string;
 }
 
@@ -876,16 +882,26 @@ export async function forgetSupersededId(
  *  write, so a mid-loop failure leaves a half-completed state that blinds the
  *  retry. Batch callers use `undoRejectedPairs`.
  */
+/** `liveIds` (#2161) — the caller's current live cast roster. Required, not
+ *  optional: a caller that forgets to pass its roster would otherwise
+ *  silently reopen the hazard this parameter exists to close (see
+ *  `applyRestoreSupersededId`'s own doc comment for the mechanism). */
 export async function restoreSupersededId(
   bookDir: string,
   id: string,
   target: string,
-): Promise<{ restored: boolean; supersededByOther?: string }> {
+  liveIds: ReadonlyArray<string>,
+): Promise<{ restored: boolean; supersededByOther?: string; targetNotLive?: boolean }> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
-    const { result, changed, touchedKeys } = applyRestoreSupersededId(history, id, target);
+    const { result, changed, touchedKeys } = applyRestoreSupersededId(
+      history,
+      id,
+      target,
+      new Set(liveIds),
+    );
     if (changed) {
       bumpSeqAndStamp(history, touchedKeys);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
@@ -918,13 +934,31 @@ export async function restoreSupersededId(
  *  behaviour is correct BY the explicit list, not by relying on the
  *  self-heal loop as the only mechanism — a future refactor that trims or
  *  reorders `bumpSeqAndStamp`'s reconcile loops must not assume nothing here
- *  depends on the back-fill still running. */
+ *  depends on the back-fill still running.
+ *
+ *  `liveIds` (#2161) — the caller's current live cast roster, the SAME
+ *  determination `dropSupersededTargetsNoLongerLive` already makes for
+ *  `supersededBy` itself (`live.has(target)`), reused here rather than
+ *  invented a second way for `restoreSupersededId`/`undoRejectedPairs` to
+ *  answer "is this id still live". Closes #2161: `target` is only ever
+ *  about to be WRITTEN into `supersededBy[id]` in the branch below (the
+ *  other two branches above already return without touching disk), so this
+ *  is the one place a stale `forgotSupersededTo` could reintroduce the
+ *  dangling-target shape #2110 closed for `supersededBy` — a character
+ *  retired and referenced from a `rejectedPairs` stash, then quietly
+ *  dropped from the live roster by a later re-analysis with no retirement
+ *  ever recorded for the drop. SURFACED, not thrown: the pair removal is
+ *  Undo's primary consequence and still happens regardless (see this
+ *  function's two callers) — mirrors the existing `supersededByOther`
+ *  branch just above, which already skips-and-reports rather than failing
+ *  the whole undo over a value it declines to write. */
 function applyRestoreSupersededId(
   history: CastIdHistory,
   id: string,
   target: string,
+  liveIds: ReadonlySet<string>,
 ): {
-  result: { restored: boolean; supersededByOther?: string };
+  result: { restored: boolean; supersededByOther?: string; targetNotLive?: boolean };
   changed: boolean;
   touchedKeys: string[];
 } {
@@ -934,6 +968,15 @@ function applyRestoreSupersededId(
   }
   if (existing !== undefined) {
     return { result: { restored: false, supersededByOther: existing }, changed: false, touchedKeys: [] };
+  }
+  if (!liveIds.has(target)) {
+    console.warn(
+      `[cast-id-history] restoreSupersededId("${id}" -> "${target}") skipped — "${target}" is no ` +
+        `longer a live cast id; writing it back would reintroduce a dangling supersededBy target (#2110's ` +
+        `hazard, reopened through a stale forgotSupersededTo stash). The rejection is still undone; only ` +
+        `this alias restore was refused.`,
+    );
+    return { result: { restored: false, targetNotLive: true }, changed: false, touchedKeys: [] };
   }
   history.supersededBy[id] = target;
   return { result: { restored: true }, changed: true, touchedKeys: [id] };
@@ -1109,19 +1152,32 @@ function applyUnrejectOrphanedPair(
 export interface UndoRejectedPairResult {
   from: string;
   to: string;
-  /** false only when a NEWER alias already occupies supersededBy[from]. */
+  /** false when a NEWER alias already occupies supersededBy[from] (see
+   *  `supersededByOther`), OR when the stashed target has quietly stopped
+   *  being live (#2161, see `targetNotLive`). */
   restored: boolean;
   supersededByOther?: string;
+  /** #2161 — true when the restore was refused because `forgotSupersededTo`
+   *  no longer names a live cast id (the #2110 hazard, reopened through a
+   *  stale stash — see `applyRestoreSupersededId`'s own doc comment). The
+   *  pair is still removed regardless; only the alias restore was skipped. */
+  targetNotLive?: boolean;
 }
 
+/** `liveIds` (#2161) — the caller's current live cast roster, threaded into
+ *  every pair's restore via `applyRestoreSupersededId`. Required for the
+ *  same reason `restoreSupersededId` requires it: see that function's own
+ *  doc comment. */
 export async function undoRejectedPairs(
   bookDir: string,
   pairs: ReadonlyArray<{ from: string; to: string; forgotSupersededTo?: string }>,
+  liveIds: ReadonlyArray<string>,
 ): Promise<UndoRejectedPairResult[]> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
+    const live = new Set(liveIds);
     const results: UndoRejectedPairResult[] = [];
     /* #2128 — the tenth write site (P1). Each pair's `applyRestoreSupersededId`
        reports the `supersededBy` keys IT touched; accumulated here and stamped
@@ -1134,10 +1190,12 @@ export async function undoRejectedPairs(
     for (const pair of pairs) {
       let restored = true;
       let supersededByOther: string | undefined;
+      let targetNotLive: boolean | undefined;
       if (pair.forgotSupersededTo !== undefined) {
-        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo);
+        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo, live);
         restored = applied.result.restored;
         supersededByOther = applied.result.supersededByOther;
+        targetNotLive = applied.result.targetNotLive;
         if (applied.changed) changed = true;
         /* Review round 1 (I1 follow-up) — confirmed by mutation testing that
            dropping this accumulation is UNOBSERVABLE by any test today: the
@@ -1156,11 +1214,13 @@ export async function undoRejectedPairs(
       }
       const { changed: unrejectChanged } = applyUnrejectOrphanedPair(history, pair.from, pair.to);
       if (unrejectChanged) changed = true;
-      results.push(
-        supersededByOther === undefined
-          ? { from: pair.from, to: pair.to, restored }
-          : { from: pair.from, to: pair.to, restored, supersededByOther },
-      );
+      results.push({
+        from: pair.from,
+        to: pair.to,
+        restored,
+        ...(supersededByOther === undefined ? {} : { supersededByOther }),
+        ...(targetNotLive === undefined ? {} : { targetNotLive }),
+      });
     }
     if (changed) {
       bumpSeqAndStamp(history, touchedKeys);

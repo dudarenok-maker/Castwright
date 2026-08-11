@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(bookDir, { recursive: true, force: true });
+  if (bookDir) rmSync(bookDir, { recursive: true, force: true });
 });
 
 /* No writer in this repo emits a sibling top-level key on cast.json today

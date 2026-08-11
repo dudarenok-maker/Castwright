@@ -375,7 +375,7 @@ describe('cast id history', () => {
             // 'mayrin' -> 'mairin' would be idempotent (`existing === target`)
             // if the real supersededBy already held it — a degraded read can't
             // tell that from a needed write, so it must throw regardless.
-            await expect(restoreSupersededId(dir, 'mayrin', 'mairin')).rejects.toThrow(
+            await expect(restoreSupersededId(dir, 'mayrin', 'mairin', ['mairin'])).rejects.toThrow(
               CastIdHistoryUnreadableError,
             );
             expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
@@ -428,7 +428,7 @@ describe('cast id history', () => {
           const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
           try {
             await expect(
-              undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }]),
+              undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }], ['wren']),
             ).rejects.toThrow(CastIdHistoryUnreadableError);
             expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
           } finally {
@@ -909,9 +909,11 @@ describe('cast id history', () => {
   describe('undoRejectedPairs (#2198 — batched multi-pair undo)', () => {
     it('restores the alias and removes the pair in one call', async () => {
       await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
-      const results = await undoRejectedPairs(dir, [
-        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
-      ]);
+      const results = await undoRejectedPairs(
+        dir,
+        [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }],
+        ['wren'],
+      );
       expect(results).toEqual([{ from: 'mayrin', to: 'mairin', restored: true }]);
       const history = await loadCastIdHistory(dir);
       expect(history.supersededBy).toEqual({ mayrin: 'wren' });
@@ -930,9 +932,11 @@ describe('cast id history', () => {
         }),
       );
 
-      const results = await undoRejectedPairs(dir, [
-        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
-      ]);
+      const results = await undoRejectedPairs(
+        dir,
+        [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }],
+        [],
+      );
       expect(results).toEqual([
         { from: 'mayrin', to: 'mairin', restored: false, supersededByOther: 'newer-target' },
       ]);
@@ -945,7 +949,7 @@ describe('cast id history', () => {
 
     it('a pair with no forgotSupersededTo contributes no alias restore, only pair removal', async () => {
       await rejectOrphanedPair(dir, 'mayrin', 'mairin');
-      const results = await undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin' }]);
+      const results = await undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin' }], []);
       expect(results).toEqual([{ from: 'mayrin', to: 'mairin', restored: true }]);
       const history = await loadCastIdHistory(dir);
       expect(history.supersededBy).toEqual({});
@@ -954,7 +958,7 @@ describe('cast id history', () => {
 
     it('an absent pair is a no-op for that entry, and a batch that changes nothing writes no file at all', async () => {
       expect(existsSync(castIdHistoryPath(dir))).toBe(false);
-      const results = await undoRejectedPairs(dir, [{ from: 'ghost', to: 'nobody' }]);
+      const results = await undoRejectedPairs(dir, [{ from: 'ghost', to: 'nobody' }], []);
       expect(results).toEqual([{ from: 'ghost', to: 'nobody', restored: true }]);
       expect(existsSync(castIdHistoryPath(dir))).toBe(false);
     });
@@ -971,17 +975,25 @@ describe('cast id history', () => {
       const before = readFileSync(castIdHistoryPath(dir), 'utf8');
       // Neither pair below matches anything present, and neither carries a
       // forgotSupersededTo — nothing for the batch to change.
-      await undoRejectedPairs(dir, [{ from: 'ghost-1', to: 'nobody-1' }, { from: 'ghost-2', to: 'nobody-2' }]);
+      await undoRejectedPairs(
+        dir,
+        [{ from: 'ghost-1', to: 'nobody-1' }, { from: 'ghost-2', to: 'nobody-2' }],
+        [],
+      );
       expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(before);
     });
 
     it('two pairs in one batch: both restored and both removed, independent of each other', async () => {
       await rejectOrphanedPair(dir, 'a', 'target', 'alias-a');
       await rejectOrphanedPair(dir, 'b', 'target', 'alias-b');
-      const results = await undoRejectedPairs(dir, [
-        { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
-        { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
-      ]);
+      const results = await undoRejectedPairs(
+        dir,
+        [
+          { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
+          { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
+        ],
+        ['alias-a', 'alias-b'],
+      );
       expect(results).toEqual([
         { from: 'a', to: 'target', restored: true },
         { from: 'b', to: 'target', restored: true },
@@ -989,6 +1001,78 @@ describe('cast id history', () => {
       const history = await loadCastIdHistory(dir);
       expect(history.supersededBy).toEqual({ a: 'alias-a', b: 'alias-b' });
       expect(history.rejectedPairs).toEqual([]);
+    });
+  });
+
+  /* #2161 — a stale `forgotSupersededTo` must not be written back once its
+     target has quietly stopped being live (the #2110 hazard, reopened
+     through a stale Undo stash). Mechanism-targeted: these pin the liveness
+     check itself, independent of the route-level regression test in
+     cast-reject-orphan.test.ts. */
+  describe('restoreSupersededId / undoRejectedPairs — liveness guard (#2161)', () => {
+    it('restoreSupersededId refuses to write when the target is not in liveIds, and reports targetNotLive', async () => {
+      const result = await restoreSupersededId(dir, 'mayrin', 'wren', []);
+      expect(result).toEqual({ restored: false, targetNotLive: true });
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+      // No write at all — an absent file stays absent (idempotent-write
+      // discipline this module applies everywhere else).
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+    });
+
+    it('restoreSupersededId writes normally when the target IS in liveIds', async () => {
+      const result = await restoreSupersededId(dir, 'mayrin', 'wren', ['wren']);
+      expect(result).toEqual({ restored: true });
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'wren' });
+    });
+
+    it('the occupied-by-a-newer-alias branch (supersededByOther) takes priority over the liveness check — an existing entry is never touched, live or not', async () => {
+      await retireCharacterId(dir, 'mayrin', 'newer-target');
+      // 'wren' (the value being restored) is NOT live, but that must never
+      // even be consulted: 'mayrin' already resolves to 'newer-target', so
+      // the write is refused for THAT reason, not (also, coincidentally)
+      // because 'wren' is dead.
+      const result = await restoreSupersededId(dir, 'mayrin', 'wren', []);
+      expect(result).toEqual({ restored: false, supersededByOther: 'newer-target' });
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'newer-target' });
+    });
+
+    it('undoRejectedPairs: in a batch of two, the LIVE target restores and the DEAD one is refused, independently', async () => {
+      await rejectOrphanedPair(dir, 'a', 'target', 'alive-alias');
+      await rejectOrphanedPair(dir, 'b', 'target', 'dead-alias');
+      const results = await undoRejectedPairs(
+        dir,
+        [
+          { from: 'a', to: 'target', forgotSupersededTo: 'alive-alias' },
+          { from: 'b', to: 'target', forgotSupersededTo: 'dead-alias' },
+        ],
+        ['alive-alias'], // only 'alive-alias' is live
+      );
+      expect(results).toEqual([
+        { from: 'a', to: 'target', restored: true },
+        { from: 'b', to: 'target', restored: false, targetNotLive: true },
+      ]);
+      const history = await loadCastIdHistory(dir);
+      // The live alias restored; the dead one did NOT reintroduce a
+      // dangling entry.
+      expect(history.supersededBy).toEqual({ a: 'alive-alias' });
+      // Both pairs are still removed regardless — Undo's primary
+      // consequence succeeds even when the alias restore is refused.
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('undoRejectedPairs logs an operator-visible warning naming the refused id (surfaced, not silently dropped)', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
+        await undoRejectedPairs(
+          dir,
+          [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }],
+          [],
+        );
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/"wren".*no longer a live cast id/));
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 
@@ -1227,7 +1311,7 @@ describe('#2128 — seq and recordedAt markers', () => {
     await retireCharacterId(dir, 'mayrin', 'mairin');  // seq 1
     await forgetSupersededId(dir, 'mayrin');           // seq 2
     await rejectOrphanedPair(dir, 'mayrin', 'mairin'); // seq 3
-    await restoreSupersededId(dir, 'mayrin', 'mairin');
+    await restoreSupersededId(dir, 'mayrin', 'mairin', ['mairin']);
     const h = await loadCastIdHistory(dir);
     expect(h.seq).toBe(4);
     expect(h.recordedAtSeq).toEqual({ mayrin: 4 }); // NOT 1 — see the forget->render->restore hazard
@@ -1237,8 +1321,8 @@ describe('#2128 — seq and recordedAt markers', () => {
     // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');
     const before = await loadCastIdHistory(dir);
-    await restoreSupersededId(dir, 'mayrin', 'mairin'); // already equal — idempotent, no write
-    await restoreSupersededId(dir, 'mayrin', 'someone-else'); // occupied — refuses, no write
+    await restoreSupersededId(dir, 'mayrin', 'mairin', ['mairin']); // already equal — idempotent, no write
+    await restoreSupersededId(dir, 'mayrin', 'someone-else', []); // occupied — refuses, no write
     const after = await loadCastIdHistory(dir);
     expect(after.seq).toBe(before.seq);
     expect(after.recordedAtSeq).toEqual(before.recordedAtSeq);
@@ -1267,9 +1351,9 @@ describe('#2128 — seq and recordedAt markers', () => {
       // above (no forgotSupersededTo, so this contributes no supersededBy
       // touch) — still a real write (the pair leaves rejectedPairs), so the
       // loop's `toBeGreaterThan(seq)` still holds.
-      () => undoRejectedPairs(dir, [{ from: 'x', to: 'c' }]),
+      () => undoRejectedPairs(dir, [{ from: 'x', to: 'c' }], ['c']),
       () => forgetSupersededId(dir, 'a'),
-      () => restoreSupersededId(dir, 'a', 'c'),
+      () => restoreSupersededId(dir, 'a', 'c', ['c']),
       () => dropSupersededIdsReclaimedByLiveCast(dir, ['b']),
       () => retireCharacterId(dir, 'd', 'c'),
       // Amended 2026-08-06 — the ninth write site. Both arms, because they fail
@@ -1360,10 +1444,14 @@ describe('#2128 — seq and recordedAt markers', () => {
     await rejectOrphanedPair(dir, 'a', 'target', 'alias-a'); // seq 1
     await rejectOrphanedPair(dir, 'b', 'target', 'alias-b'); // seq 2
     const before = (await loadCastIdHistory(dir)).seq!;
-    await undoRejectedPairs(dir, [
-      { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
-      { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
-    ]);
+    await undoRejectedPairs(
+      dir,
+      [
+        { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
+        { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
+      ],
+      ['alias-a', 'alias-b'],
+    );
     const h = await loadCastIdHistory(dir);
     // ONE call, ONE bump — per-pair bumping would land seq at before + 2.
     expect(h.seq).toBe(before + 1);
