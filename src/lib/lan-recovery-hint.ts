@@ -6,12 +6,15 @@ export function isLoopbackHost(): boolean {
 }
 
 /** Recovery pointer for a 401 caused by this browser's LAN authorization
- *  lapsing. Shared by the library-panel error state (book-library.tsx) and
- *  the LAN-access card's own 401-on-listDevices state (lan-access-card.tsx)
- *  so the same underlying condition always gives the user the same
- *  instructions. `castwright.local` is the mDNS name every device on the
- *  LAN resolves, so it is NOT evidence the user is sitting at the host;
- *  only true loopback counts. */
+ *  lapsing. The library panel's error state (book-library.tsx) is the only
+ *  caller — the LAN-access card's own 401-on-listDevices state
+ *  (lan-access-card.tsx) carries its own hardcoded copy instead, because
+ *  that branch never renders the "Authorize this browser" button this
+ *  hint's non-loopback wording points at. If the recovery wording changes
+ *  here, check whether lan-access-card.tsx's hardcoded string needs the
+ *  same update — they are not wired together. `castwright.local` is the
+ *  mDNS name every device on the LAN resolves, so it is NOT evidence the
+ *  user is sitting at the host; only true loopback counts. */
 export function recoveryHint(): string {
   const onHost = isLoopbackHost();
   if (!onHost) return 'Open Castwright on the computer running it and use “Authorize this browser”, then reload here.';

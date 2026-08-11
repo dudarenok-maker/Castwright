@@ -60,11 +60,16 @@ whose device-token / pairing / cookie machinery this plan reuses unchanged.
     on that flag only, the pairing code is captured into a ref, the URL is scrubbed via
     `replaceState` *before* the redeem call fires (not after, and not on the manual QR
     path), and a `didRun` ref guards against a double-fire.
-  - `src/lib/lan-recovery-hint.ts` — `recoveryHint()`, a new shared module exporting the
-    three-branch "how do I get back in" copy (loopback, friendly-hostname, bare LAN IP),
-    consumed by both `book-library.tsx`'s 401 panel and `lan-access-card.tsx`'s
-    `manageHint` branch (the latter existed before this plan and is now on the same
-    codepath as the former, rather than a separate hand-written string).
+  - `src/lib/lan-recovery-hint.ts` — `recoveryHint()`, a new module exporting the
+    three-branch "how do I get back in" copy (loopback, friendly-hostname, bare LAN
+    IP), consumed by `book-library.tsx`'s 401 panel. `lan-access-card.tsx`'s own
+    `manageHint` branch (pre-existing) keeps its own hardcoded string — that branch
+    never renders the "Authorize this browser" button, so the non-loopback wording
+    this module gives does not apply there.
+  - `isLoopbackHost()`, also exported from `src/lib/lan-recovery-hint.ts` — the same
+    true-loopback check `recoveryHint()` uses internally, re-exported so
+    `lan-access-card.tsx` can gate the "Authorize this browser" button on it directly
+    (see invariant 6 below).
   - `LibraryState.error` widens from `string | null` to `{ message: string; status?:
     number } | null`; `hydrateError` takes that same shape.
   - The mock-registry parity guard in `src/lib/api.config.test.ts`.
@@ -113,6 +118,16 @@ whose device-token / pairing / cookie machinery this plan reuses unchanged.
    would strand a phone user who refreshes after a failed redeem with no code in the
    URL — reintroducing the dead-end this feature exists to remove, on the one flow
    the design spec says stays untouched.
+6. **"Authorize this browser" only renders behind `isLoopbackHost()`.** A phone or
+   any other device reaching the card over the LAN (including via
+   `castwright.local`, which every device on the LAN resolves and which is
+   therefore not evidence of loopback) must never see the button — it mints a
+   pairing session labelled exactly `'This computer'`, and a non-host device
+   minting that label would produce two identically-labelled `'This computer'`
+   entries in the device list with no way for Revoke to disambiguate them by
+   label. A later refactor that lifts the button out of this guard — e.g. to
+   render it disabled with an explanation instead of hiding it outright — must
+   keep the mint itself gated, not just the enabled state.
 
 ## Test plan
 
@@ -133,7 +148,11 @@ whose device-token / pairing / cookie machinery this plan reuses unchanged.
   non-emptiness floor so the comparison can't silently degrade to `[] === []`.
 - `src/components/lan-access-card.test.tsx` — "Authorize this browser" navigates to
   `friendlyUrl + '&self=1'` when the server reports the friendly hostname reachable;
-  explains rather than navigates when `friendlyUrl` is absent.
+  explains rather than navigates when `friendlyUrl` is absent. Two more pin invariant
+  6's gate directly: the button is absent when `location.hostname` is
+  `castwright.local` (a phone-mintable, non-loopback origin), and present when it is
+  `localhost` — including the bare `:443`-forwarder shape (`hostname: 'localhost',
+  port: ''`), the motivating scenario for the loopback check existing at all.
 - `src/views/pair.test.tsx` — auto-redeems on mount when `self=1`, scrubbing the URL
   before the call; does **not** auto-redeem without `self=1` (regression guard); fires
   exactly once even across a re-render; offers Retry after a `503` and reuses the
