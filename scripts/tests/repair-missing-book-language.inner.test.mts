@@ -647,15 +647,18 @@ test('main: skips .upgrade-backups entirely, even if it holds a bare state.json'
 });
 
 // ---------------------------------------------------------------------------
-// #2246 C3 — one corrupt state.json must not abort the whole run.
+// #2246 C3 — one unreadable state.json must not abort the whole run, AND
+// the printed diagnostic must distinguish genuine corruption (SyntaxError)
+// from every other read-failure class (round 2 review finding).
 // ---------------------------------------------------------------------------
 
-test('main: a corrupt state.json (unparsable, no valid backup) is skipped as unreadable — the run continues past it (#2246 C3)', async () => {
+test('main: a corrupt state.json (unparsable, no valid backup) is skipped as unreadable, labelled "corrupt JSON" — the run continues past it (#2246 C3)', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-corrupt-'));
   try {
     const booksRoot = join(tmp, 'books');
     // The corrupt book: state.json is not valid JSON, and there's no
-    // .bak.N to recover from, so readStateJsonWithRecovery re-throws.
+    // .bak.N to recover from, so readStateJsonWithRecovery re-throws a
+    // SyntaxError.
     const corruptBookDir = join(booksRoot, 'Author', 'Series', 'Corrupt Book');
     const corruptAudiobookDir = join(corruptBookDir, '.audiobook');
     mkdirSync(corruptAudiobookDir, { recursive: true });
@@ -673,13 +676,59 @@ test('main: a corrupt state.json (unparsable, no valid backup) is skipped as unr
       language: 'ru', // already has a language — simplest possible "did the run reach it" probe
     });
 
-    await main(['--apply'], booksRoot);
+    const lines = await captureLog(() => main(['--apply'], booksRoot));
 
     // The corrupt book's file is untouched (never even attempted) and the
     // run reached the healthy book after it.
     assert.equal(readFileSync(corruptStatePath, 'utf8'), '{ this is not valid json');
     const healthyWritten = readState(healthyStatePath);
     assert.equal(healthyWritten.language, 'ru');
+
+    // The diagnostic names the failure class AND carries the original
+    // message — not a bare "unreadable" with nothing to act on.
+    const corruptLine = lines.find((l) => l.includes('Corrupt Book'));
+    assert.ok(corruptLine, 'must print a line for the corrupt book');
+    assert.match(corruptLine, /corrupt JSON/);
+    assert.doesNotMatch(corruptLine, /read error/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('main: a state.json that fails to read for a non-parse reason (EISDIR) is labelled "read error", distinct from corrupt JSON — the run continues past it (#2246 round 2 C3 fix)', async () => {
+  // Simulates the class of failure the round-2 review named (a locked file —
+  // Windows AV/OneDrive/the running server holding a read handle): the read
+  // itself fails with something other than SyntaxError. Making the
+  // state.json PATH a directory instead of a file reproduces that
+  // deterministically — readFile() on a directory throws EISDIR, not
+  // SyntaxError — without needing real OS-level file locking.
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-readerror-'));
+  try {
+    const booksRoot = join(tmp, 'books');
+    const lockedBookDir = join(booksRoot, 'Author', 'Series', 'Locked Book');
+    const lockedAudiobookDir = join(lockedBookDir, '.audiobook');
+    const lockedStatePath = join(lockedAudiobookDir, 'state.json');
+    // state.json is a DIRECTORY, not a file.
+    mkdirSync(lockedStatePath, { recursive: true });
+
+    const { statePath: healthyStatePath } = makeBook(booksRoot, join('Author', 'Series', 'Zebra Book'), {
+      bookId: 'author__series__zebra-book',
+      manuscriptId: `mns_${randomUUID()}`,
+      title: 'Zebra Book',
+      author: 'Author',
+      language: 'ru',
+    });
+
+    const lines = await captureLog(() => main(['--apply'], booksRoot));
+
+    // The run reached the healthy book after the unreadable one.
+    const healthyWritten = readState(healthyStatePath);
+    assert.equal(healthyWritten.language, 'ru');
+
+    const lockedLine = lines.find((l) => l.includes('Locked Book'));
+    assert.ok(lockedLine, 'must print a line for the unreadable book');
+    assert.match(lockedLine, /read error/);
+    assert.doesNotMatch(lockedLine, /corrupt JSON/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

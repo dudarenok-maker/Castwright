@@ -364,22 +364,33 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
     const bookDir = dirname(audiobookDir);
     const bookLabel = relative(booksRoot, bookDir);
     const statePath = stateJsonPath(bookDir);
-    // readStateJsonWithRecovery re-throws the original parse error when the
-    // main state.json is corrupt AND every rotated backup is also corrupt or
-    // missing (state-io.ts) — that's a real, reachable case (one bad book
-    // in a workspace of many), not a reason to abort the entire run. Caught
-    // here so `state` lands `null` the same as the missing-file case below,
-    // rather than letting the parse error propagate and kill every book
-    // after this one.
     let state: BookStateJson | null;
     try {
       state = await readStateJsonWithRecovery(statePath);
-    } catch {
-      state = null;
+    } catch (err) {
+      // readJsonWithRecovery (server/src/workspace/state-io.ts) re-throws the
+      // ORIGINAL error for ANY failure class once every rotated backup is
+      // also unusable — not just a parse failure. A locked file (Windows AV
+      // or OneDrive holding a read handle, or the app server itself holding
+      // state.json open) throws EBUSY/EPERM, not SyntaxError, and unlike
+      // genuine corruption it's often transient — printing a bare
+      // "unreadable" with nothing else looks identical to real corruption
+      // and gives the operator nothing to act on. Distinguish the two here:
+      // a SyntaxError is the corrupt-JSON case this recovery path exists
+      // for; anything else is an I/O failure and is reported as such, with
+      // the underlying message, so a locked file is diagnosable on sight
+      // instead of silently skipped and never retried. Exit-code behaviour
+      // for this path is unchanged — a caught error here still just skips
+      // the book, same as before.
+      unreadable += 1;
+      const message = err instanceof Error ? err.message : String(err);
+      const kind = err instanceof SyntaxError ? 'corrupt JSON' : 'read error';
+      console.log(`  [${bookLabel}] SKIP — state.json unreadable (${kind}: ${message})`);
+      continue;
     }
     if (!state) {
       unreadable += 1;
-      console.log(`  [${bookLabel}] SKIP — state.json unreadable`);
+      console.log(`  [${bookLabel}] SKIP — state.json unreadable (no file)`);
       continue;
     }
 
