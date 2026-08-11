@@ -23,10 +23,17 @@
    which folds this cleanup into the SAME lock span as its cast.json write —
    see #2239's "Why" item 3) uses the lock-free
    `clearNotLinkedEdgesForDroppedRejectionsLocked` instead. Deliberately PURE
-   — no fs, no locking, same spirit as `reject-edge-reconcile.ts`'s split —
-   so it mutates the caller's already-in-memory roster in place rather than
-   issuing a second, redundant read inside a lock span whose whole point is
-   one atomic read-through-write. This departs from the `applyToBook` /
+   — no fs, no locking — so it mutates the caller's already-in-memory roster
+   in place rather than issuing a second, redundant read inside a lock span
+   whose whole point is one atomic read-through-write. NOT the same motive as
+   `reject-edge-reconcile.ts`'s purity, despite the surface similarity: that
+   module is pure AND immutable (`{ ...c, notLinkedTo: kept }`, returns
+   `next`) specifically because a `writeJsonAtomic(castJsonPath(` living in
+   that file would scan as unlocked under `cast-lock.guard.test.ts`'s
+   per-file textual scan — it has no locked/lock-free pair and no fs at all.
+   This module's own write IS textually locked, in this same file, so that
+   motive doesn't transfer here; the purity above is only about avoiding a
+   redundant read. This departs from the `applyToBook` /
    `applyToBookLocked` precedent's implementation shape (there, the `Locked`
    half does its own read AND write, just without taking the lock itself);
    the `Foo` / `FooLocked` naming is kept because it makes the "caller must
@@ -50,7 +57,7 @@ import { withCastLock } from '../workspace/cast-lock.js';
  *  caller decides whether a write is owed. No fs, no locking — see the file
  *  header's MODULE CONTRACT. */
 export function clearNotLinkedEdgesForDroppedRejectionsLocked(
-  characters: ReadonlyArray<CharacterOutput>,
+  characters: CharacterOutput[],
   bookId: string,
   dropped: ReadonlyArray<{ from: string; to: string }>,
 ): boolean {
@@ -82,7 +89,7 @@ export async function clearNotLinkedEdgesForDroppedRejections(
       if (!cast?.characters?.length) return;
       const changed = clearNotLinkedEdgesForDroppedRejectionsLocked(cast.characters, bookId, dropped);
       if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: cast.characters });
       }
     });
   } catch (err) {

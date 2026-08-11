@@ -48,9 +48,11 @@ Four constraints, all of which have tests:
 No `withCastLock` is owed on this route: it reads `cast.json` to validate the
 target and otherwise writes only history, and the one path that does touch
 `cast.json` (`clearNotLinkedEdgesForDroppedRejections`, cleaning up
-`droppedSelfLoopRejections`) takes its own lock. That helper's home is a filed
-follow-up — it currently lives in `analysis.ts` and now has a cross-module
-caller ([#2239](https://github.com/dudarenok-maker/Castwright/issues/2239)).
+`droppedSelfLoopRejections`) takes its own lock. That helper now lives in
+`server/src/store/not-linked-edges.ts` as a locked/lock-free pair
+(`clearNotLinkedEdgesForDroppedRejections` / `…Locked`), moved out of
+`analysis.ts` so its cross-module caller here no longer pulls in a whole
+route module ([#2239](https://github.com/dudarenok-maker/Castwright/issues/2239)).
 
 **Undo is a round trip, not a mirror** — a linked row moves into the
 auto-reconciled section, whose existing "Not the same character" forgets the
