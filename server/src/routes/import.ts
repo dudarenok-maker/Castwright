@@ -146,6 +146,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         byteSize: entry.byteSize,
         language: detected.language,
         languageSupported: detected.supported,
+        languageFallback: detected.fallback,
         supportedLanguages: supportedLanguages(),
         chapters: entry.chapters.map((c) => {
           const wordCount = countWords(c.body);

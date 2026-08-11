@@ -540,6 +540,8 @@ describe('POST /api/import — language detection (fs-41/fs-50)', () => {
     const res = await request(app).post('/api/import').send({ text: es }).expect(200);
     expect(res.body.candidate.language).toBe('es');
     expect(res.body.candidate.languageSupported).toBe(true);
+    // #2276 — a genuine decision, not a surrender guess.
+    expect(res.body.candidate.languageFallback).toBe(false);
     expect(res.body.candidate.supportedLanguages).toEqual([
       { code: 'en', label: 'English' },
       { code: 'ru', label: 'Russian' },
@@ -590,6 +592,18 @@ describe('POST /api/import — language detection (fs-41/fs-50)', () => {
     const res = await request(app).post('/api/import').send({ text }).expect(200);
     expect(res.body.candidate.language).toBe('zh');
     expect(res.body.candidate.chapters.length).toBe(3);
+  });
+
+  it('#2276 — stamps languageFallback:true on the candidate when detection surrenders (a guess, not a decision)', async () => {
+    // Too little text to clear PROSE_UNIT_FLOOR — detectManuscriptLanguageFromChapters
+    // surrenders (language:'en', fallback:true). languageSupported alone
+    // can't distinguish this from a genuine English decision (both are
+    // supported:true) — languageFallback is the field that can, and it must
+    // actually reach the wire for the confirm screen to tell a guess from a
+    // decision.
+    const res = await request(app).post('/api/import').send({ text: 'Too short to corroborate itself.' }).expect(200);
+    expect(res.body.candidate.language).toBe('en');
+    expect(res.body.candidate.languageFallback).toBe(true);
   });
 });
 
