@@ -1643,6 +1643,23 @@ passed, not BLOCKED.
 Worst structurally-intact chapter post-fix (ch1/2/3/9): 38.9% (ch2). Target 1a
 threshold therefore 44% (38.9% rounded up to 39%, +5 points headroom).
 
+> **Superseded 2026-08-12 (#2267) — do not reuse this derivation.** The 44%
+> threshold it produces was withdrawn. Two things above are now known to be
+> false. (1) **ch1/2/3/9 are not structurally intact.** That label came from
+> those chapters having zero *dash-invariant victims*, which is a fact about
+> victims and was silently reused as a claim about paragraph structure.
+> Measured directly on the source, ch2 holds **64** merged dialogue turns
+> inside one 8,604-char paragraph and ch1 holds **87** inside a 10,651-char
+> one; ch3 is the only chapter of the nine that reads clean. So the threshold
+> was calibrated from a degraded chapter. (2) **The confidence share does not
+> track paragraph structure at all** — it misses every degraded chapter of this
+> book and flags three structurally-healthy chapters of an English one
+> (#2264). Target 1a is now "review burden" and carries no bar; the structural
+> criterion is target **1c**. See
+> [`docs/superpowers/specs/2026-08-12-merged-turn-legibility-design.md`](../specs/2026-08-12-merged-turn-legibility-design.md).
+> The rest of this appendix — the victim numbers, the 879→41 renumber, the
+> hand-labelled sample — is unaffected and still stands.
+
 ### Hand-labelled victim sample (30 of 879, deterministic stride)
 
 Sample: `SAMPLE 879 victims total; every 29th`, 30 blocks, ch4/ch5/ch6/ch7/ch8
