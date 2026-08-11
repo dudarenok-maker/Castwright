@@ -100,10 +100,15 @@ Tag-span length across all 17 workspace EPUBs, roster-free: **12 of 17 never exc
 chars**; four reach 503–723; *Юный дрессировщик* 704; **KotLC *Unlocked* (English)
 2,765** with 49.6% of tag text oversized; **Ночной дозор 12,389** with 92.9%.
 
-Two things follow. The exposure is **cross-language** — the second affected book is
-English. And, from the same run, **oversized tag spans are not sufficient for harm**:
-ch1 (0 victims) has a 6,968-char tag span, ch2 (0 victims) 4,767, ch9 (0 victims) 5,631.
-Span size predicts nothing on its own.
+This measures **exposure** — how much tag text sits in oversized spans. It does **not**
+measure harm, and the same run proves the two come apart: ch1 (0 victims) has a 6,968-char
+tag span, ch2 (0 victims) 4,767, ch9 (0 victims) 5,631. **Span size predicts nothing on
+its own.**
+
+**Correction.** An earlier revision read this table as "the defect is cross-language, and
+the second affected book is English." That overstates it. What is established for
+*Unlocked* is oversized tag spans; whether any of its lines are mis-voiced is
+**unmeasured**, and by this table's own logic exposure does not imply harm. See §3.
 
 ### 1.5 Corrections to the record
 
@@ -197,20 +202,45 @@ quality fix — it is not recovery of the lost structure.
 
 ---
 
-## 3. Open item — English gets nothing from this
+## 3. Why this does not fix *Unlocked*
+
+**Two independent reasons**, which need separating because only one is a gap in the fix.
+
+### 3.1 We never established *Unlocked* is harmed at all
+
+Every harm number here comes from comparing two columns — what the model assigned, and
+what the engine output. That needs a committed analysis cache. ***Unlocked* has never
+been analysed**, so there is no model column, and its victim count is not merely unknown,
+it is **unmeasurable from what is on disk**.
+
+What *is* measured is exposure: 49.6% of its tag text in spans over 500 chars, max 2,765.
+§1.4 shows exposure does not imply harm — three chapters of *Ночной дозор* carry tag spans
+of 4,767–6,968 chars and produce **zero** victims. *Unlocked* is a **candidate, not a
+casualty**.
+
+### 3.2 English marks its turns differently, and the marker is weaker
 
 `dialogueOpen` is `null` for **en, de, ja, zh** (`lang/en.ts:5`, `de.ts:5`, `ja.ts:9`,
-`zh.ts:9`); non-null only for ru, es, fr. So §2 does not fire on *Unlocked* — the very
-book §1.4 cites as proof the exposure is cross-language.
+`zh.ts:9`); non-null only for ru, es, fr. So §2's trigger does not exist for English.
 
-The analogue is direct: a sentence whose trimmed text begins with a `quotePairs` opener
-is speech by the quote convention, exactly as a leading dash is under the dash
-convention. That is the same invariant, read off the same per-language table.
+The obvious analogue — a sentence beginning with a `quotePairs` opener is speech — is the
+same idea but a **weaker signal**, for a reason worth stating:
 
-**It is unmeasured.** *Unlocked* has no committed analysis cache, so there is no model
-column to compare against and the victim count for English is unknown. The plan must
-either obtain that measurement or ship the English arm explicitly unverified. **Do not
-report the fix as cross-language until one of those happens.**
+- In Russian dash convention the marker sits at the **head of the turn**. `— Не стоит.`
+  identifies itself as speech even after the paragraph around it is destroyed. **The
+  signal survives the damage that causes the bug.**
+- In English, quotes **wrap** the speech. A leading `"` catches `"Not worth it," he said.`
+  but misses `He said, "Not worth it."`, where the sentence opens with narration and the
+  speech is embedded. Sentence-initial position is a less reliable turn marker.
+- So a long inter-quote gap in English is frequently *genuine* narration, whereas a
+  mid-paragraph dash line in Russian is almost always a lost turn. Same rule shape, much
+  less confidence.
+
+**What the plan must do:** analyse *Unlocked* and run the two-column comparison **before**
+designing an English arm. Zero victims → the arm is unnecessary and must not be built on
+an exposure statistic. Victims → their shape decides whether a leading-quote test suffices.
+**Until then, do not describe this fix as cross-language.** It is verified for one Russian
+book.
 
 ## 4. Retained — the metric re-spec
 
@@ -340,25 +370,43 @@ too (§1.2). The bound relabels the mechanism. This also refutes the consumer-si
 
 ### 7.2 Intra-paragraph turn segmentation in the parser
 
-Dropped as unnecessary — §2 fixes the harm without it — and as substantially riskier than
-the previous revision credited:
+This was the previous revision's central proposal, so dropping it needs an argument, not
+a risk list. Five reasons, in order of weight.
 
-- The boundary rule it proposed (`[.!?…]` + dash + uppercase) **already exists** as
-  `SPEECH_RESUME` (`parser.ts:14`).
-- It cannot distinguish a new turn from a *continuation*; `anchorSpansFromTags` phase 2
-  (`:73-77`) exists to hand post-tag speech to the same speaker, and the spec's own
-  example `— Не стоит, — сказал я. — Света, не стоит.` is that continuation shape.
-- Turn boundaries **do** decide who speaks: `windows.ts:92-101` assigns by index parity,
-  so inserting or dropping one boundary flips every downstream turn.
-- More, smaller spans means more sentences straddling a boundary → `lumped`
-  (`aligner.ts:326-331`), converting today's clean corrections into keep-and-flag.
-- `parser.ts:148-152` collapses an entire text to one unanchored speech span if any tag
-  span lacks a verb stem; on a multi-turn paragraph that span is then eligible for
-  alternation fill — a fabricated speaker over thousands of characters.
+**i. The parser is not wrong.** It behaves correctly under an assumption it states
+explicitly (`parser.ts:7-8`): one line is one paragraph is one turn. That holds for 16 of
+17 books on disk. What violates it is a single malformed input. Changing a component
+correct for the whole corpus to accommodate one damaged file is the wrong trade before
+anything else is weighed.
 
-Segmenting merged paragraphs remains the only route to *recovering* the lost attribution
-rather than flagging it. It is a separate, larger piece of work and should be designed
-against its own evidence, not folded in here.
+**ii. The blast radius is every book; §2's is one condition.** §2 fires only where a
+sentence opens with a dialogue marker — false for narration everywhere, which is why all
+17 structure hashes are untouched. Segmentation alters span boundaries in *every paragraph
+of every ru/es/fr book*. Measured, not feared: candidate A was a far narrower parser change
+— one length condition — and still moved 2 of 17 hashes.
+
+**iii. A segmentation mistake produces a wrong voice, not a flag.** The decisive one.
+`windows.ts:92-101` assigns speakers across a window by **index parity** (A/B/A/B). Insert
+or drop one boundary and every subsequent speaker in that window flips. A parser error
+therefore does not surface as reviewable uncertainty — it silently mis-voices a run of
+dialogue, which is exactly the defect class this spec exists to remove.
+
+**iv. The information is not recoverable from the text.** The proposed rule already exists
+as `SPEECH_RESUME` (`parser.ts:14`). The reason it does not open turns is that the sequence
+is genuinely ambiguous: it introduces both a new speaker and a continuation by the same
+one. `anchorSpansFromTags` phase 2 (`:73-77`) exists specifically for continuation, and the
+previous revision's own worked example — `— Не стоит, — сказал я. — Света, не стоит.` — *is*
+that shape. No positional rule separates them; it needs meaning.
+
+**v. The existing safety valve amplifies rather than contains.** `parser.ts:148-152`
+collapses an *entire* text to one unanchored speech span if any tag span lacks a verb stem.
+On a 13,000-char multi-turn paragraph that is one span over thousands of characters, then
+eligible for alternation fill — a single fabricated speaker across the passage.
+
+**Deferred, not forbidden.** Segmentation is the *only* route to **recovering** the correct
+speaker for those 879 lines; §2 flags them, it does not repair them. So the work has real
+value — it is a different goal (recovery vs. not asserting a wrong answer), it carries
+corpus-wide risk, and it needs its own evidence and its own regression gate.
 
 ### 7.3 Reusing `strength: 'weak'` for alternation-assigned speakers
 
@@ -393,6 +441,8 @@ previous revision's safety argument rested on it.
 
 1. **Baseline `confidence < 0.75` share per chapter** — 1a's threshold cannot be set
    without it. Plan step 1; the replay already computes it.
-2. **The English arm** (§3) — measure on *Unlocked*, or ship it explicitly unverified.
+2. **Is *Unlocked* actually harmed?** (§3) — analyse it and run the two-column
+   comparison. This decides whether an English arm is needed at all; today only its
+   *exposure* is known, and exposure does not imply harm.
 3. **The hand-labelled sample** (§5) — 30 victims, to convert a disagreement count into
    an error rate and settle 1b reading 1's target.
