@@ -1182,10 +1182,26 @@ export async function undoRejectedPairs(
  *  error (review round 1, M3: this used to be swallowed identically to "no
  *  file", so an operator sweeping books via `--apply` got no output at all
  *  for a corrupt one — now warned, matching the shape-check branch below),
- *  the field already exists (idempotent), and — the one that matters — a
- *  file that fails the shape check. Loading a malformed file returns the
- *  EMPTY default, so stamping that would persist an empty history over
- *  whatever `supersededBy` the operator still has on disk to repair. */
+ *  the marker map already agrees with `supersededBy` key-for-key
+ *  (idempotent — see below), and — the one that matters — a file that fails
+ *  the shape check. Loading a malformed file returns the EMPTY default, so
+ *  stamping that would persist an empty history over whatever `supersededBy`
+ *  the operator still has on disk to repair.
+ *
+ *  The idempotent check tests the KEY SETS, not merely whether `recordedAtSeq`
+ *  is present (fold-in fix, follow-up to the original #2128 landing): a file
+ *  whose `recordedAtSeq` field exists but is missing entries for some
+ *  `supersededBy` keys — reachable by hand-edit or merge damage — used to
+ *  read as "already stamped" and stop here forever, with no route back to
+ *  Global Constraint 6's bidirectional invariant short of an unrelated write
+ *  that happens to touch every missing key. Comparing the key sets gives a
+ *  partially-damaged marker map a way to self-heal through this same
+ *  `--apply` entry point: `bumpSeqAndStamp`'s own reconcile loops (called
+ *  below with an empty `stampedKeys`) already backfill any `supersededBy` key
+ *  with no marker and prune any marker with no `supersededBy` key, so once
+ *  the write proceeds the repair is automatic — this function only needed to
+ *  stop refusing to make the call. Still conservative: a file whose sets
+ *  already agree makes no write, exactly as before. */
 export async function stampRecordedAtSeqIfAbsent(bookDir: string): Promise<boolean> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     const path = castIdHistoryPath(bookDir);
@@ -1207,7 +1223,14 @@ export async function stampRecordedAtSeqIfAbsent(bookDir: string): Promise<boole
       );
       return false;
     }
-    if (raw.recordedAtSeq !== undefined) return false;
+    if (raw.recordedAtSeq !== undefined) {
+      const markerKeys = Object.keys(raw.recordedAtSeq);
+      const supersededKeys = Object.keys(raw.supersededBy);
+      const inSync =
+        markerKeys.length === supersededKeys.length &&
+        supersededKeys.every((k) => k in raw.recordedAtSeq!);
+      if (inSync) return false;
+    }
     const history: CastIdHistory = { ...raw, seq: repairSeq(raw) };
     bumpSeqAndStamp(history, []);
     /* Written as `writeJsonAtomic(castIdHistoryPath(bookDir), …)`, NOT via a

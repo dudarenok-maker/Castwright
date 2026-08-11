@@ -46,20 +46,30 @@
    dedicated test (round-1 review, M3), each independently confirmed to
    stamp.
 
-   A THIRD blind spot (round-1 review, M4): "pairs every writing function
-   with a stamp" compares the FIRST `bumpSeqAndStamp(` match against the
-   FIRST `await writeJsonAtomic(castIdHistoryPath` match in a function's
-   body — it is a first-write-only check, not a per-write one.
-   `retireCharacterId` genuinely has two writes (its early-reversal branch
-   and its main branch, each preceded by its own stamp), and this test
-   would not notice a SECOND write added to an already-stamping function
-   that itself skipped its own stamp — it only ever looks at the first
-   occurrence of each. The exact `toBe(11)` write-count assertion above
-   mitigates this by forcing a human to re-justify the new number whenever
-   a write site is added or removed, but that is a floor on the COUNT, not
-   detection of a specific unpaired write — a function moving from one
-   write to two, with the new one unstamped, changes no count this suite
-   checks. */
+   A THIRD blind spot existed here (round-1 review, M4) and is now CLOSED
+   (fold-in fix): "pairs every writing function with a stamp" used to compare
+   only the FIRST `bumpSeqAndStamp(` match against the FIRST `await
+   writeJsonAtomic(castIdHistoryPath` match in a function's body — a
+   first-write-only check, not a per-write one. `retireCharacterId` genuinely
+   has two writes (its early-reversal branch and its main branch, each
+   preceded by its own stamp), and the old test would not have noticed a
+   SECOND write added to an already-stamping function that itself skipped its
+   own stamp — it only ever looked at the first occurrence of each. The exact
+   `toBe(11)` write-count assertion above helped (it forces a human to
+   re-justify the new number whenever a write site is added or removed) but
+   was only a floor on the COUNT, never detection of a specific unpaired
+   write.
+
+   The fix (`hasUnpairedWrite`, below): walk every `bumpSeqAndStamp(` and
+   `writeJsonAtomic(castIdHistoryPath` occurrence in a function body IN
+   SOURCE ORDER as one merged event stream, and require that every write
+   consumes its own not-yet-spent preceding stamp (a running counter,
+   incremented on each stamp and decremented on each write; a write seen with
+   the counter at 0 has no stamp left to pair with and fails the function). A
+   function with N writes now needs N stamps positioned so each write has one
+   available — one stamp covering two writes no longer passes. See the
+   synthetic-fixture test below ("catches a SECOND write…") for the case this
+   closes, proven directly against the old first-occurrence algorithm. */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -93,6 +103,36 @@ export function topLevelFunctions(src: string): Array<{ name: string; body: stri
    above. Keyed on function name (there is exactly one top-level function of
    that name), with the reason recorded inline per Guard 3's own convention
    for allowlist entries. */
+/** Per-write pairing (fold-in fix, closes the file header's documented THIRD
+ *  blind spot, M4). Walks a function body's `bumpSeqAndStamp(` and
+ *  `writeJsonAtomic(castIdHistoryPath` occurrences as one merged event stream
+ *  in SOURCE ORDER, keeping a running count of stamps seen but not yet
+ *  "spent" by a write. A write encountered with nothing pending has no stamp
+ *  of its own — the exact shape a bare first-occurrence comparison cannot
+ *  see once a function has more than one write. Returns `true` (unpaired)
+ *  the moment that happens; unused trailing stamps are fine. */
+export function hasUnpairedWrite(body: string): boolean {
+  const events: Array<{ at: number; kind: 'stamp' | 'write' }> = [];
+  for (const m of body.matchAll(new RegExp(STAMP_RE.source, 'g'))) {
+    events.push({ at: m.index, kind: 'stamp' });
+  }
+  for (const m of body.matchAll(new RegExp(WRITE_RE.source, 'g'))) {
+    events.push({ at: m.index, kind: 'write' });
+  }
+  events.sort((a, b) => a.at - b.at);
+  let pendingStamps = 0;
+  for (const e of events) {
+    if (e.kind === 'stamp') {
+      pendingStamps++;
+    } else if (pendingStamps > 0) {
+      pendingStamps--;
+    } else {
+      return true;
+    }
+  }
+  return false;
+}
+
 const ASSIGN_WITHOUT_STAMP_ALLOWLIST: ReadonlyArray<{ name: string; reason: string }> = [
   {
     name: 'applyRestoreSupersededId',
@@ -142,16 +182,40 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
     expect(SRC.match(ASSIGN_RE)?.length ?? 0).toBe(9);
   });
 
-  it('pairs every writing function with a bumpSeqAndStamp before its write', () => {
+  it('pairs every writing function with a bumpSeqAndStamp before its write — per write, not merely per first occurrence', () => {
     const unpaired = fns
       .filter((f) => new RegExp(WRITE_RE.source).test(f.body))
-      .filter((f) => {
-        const writeAt = f.body.search(new RegExp(WRITE_RE.source));
-        const stampAt = f.body.search(new RegExp(STAMP_RE.source));
-        return stampAt < 0 || stampAt > writeAt;
-      })
+      .filter((f) => hasUnpairedWrite(f.body))
       .map((f) => f.name);
     expect(unpaired).toEqual([]);
+  });
+
+  // Fold-in fix, closes the file header's documented THIRD blind spot (M4).
+  // Proves the strengthened, per-write check catches a bug the OLD
+  // first-occurrence check would have missed — a synthetic function shaped
+  // exactly like the blind spot: one stamp, then TWO writes, the second with
+  // no stamp of its own.
+  it('catches a SECOND write in an already-stamping function that skips its own stamp', () => {
+    const synthetic = `function fakeWriter() {
+  bumpSeqAndStamp(history, []);
+  await writeJsonAtomic(castIdHistoryPath, history);
+  await writeJsonAtomic(castIdHistoryPath, history);
+}`;
+    const body = topLevelFunctions(synthetic)[0].body;
+
+    // The OLD algorithm — first occurrence of each, exactly what the
+    // "pairs every writing function" test used to run before this fold-in
+    // fix — finds a stamp before the FIRST write and calls the function
+    // paired without ever looking at the second write. This is the blind
+    // spot: the old check finds nothing wrong here.
+    const oldWriteAt = body.search(new RegExp(WRITE_RE.source));
+    const oldStampAt = body.search(new RegExp(STAMP_RE.source));
+    const oldWouldFlagAsUnpaired = oldStampAt < 0 || oldStampAt > oldWriteAt;
+    expect(oldWouldFlagAsUnpaired).toBe(false);
+
+    // The strengthened, per-write algorithm this suite now uses DOES catch
+    // it — the second write has no stamp of its own left to pair with.
+    expect(hasUnpairedWrite(body)).toBe(true);
   });
 
   it('leaves no supersededBy ASSIGNMENT in a function that never stamps, except the documented split-applier allowlist', () => {

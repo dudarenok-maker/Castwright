@@ -1393,6 +1393,33 @@ describe('#2128 — the one-shot stamp', () => {
     expect((await loadCastIdHistory(dir)).seq).toBe(before.seq);
   });
 
+  // Fold-in fix, follow-up to the original #2128 landing — the field-presence
+  // check (`raw.recordedAtSeq !== undefined`) used to treat this file as
+  // "already stamped" forever, with no route back to Global Constraint 6's
+  // bidirectional invariant (`keys(recordedAtSeq) === keys(supersededBy)`)
+  // short of an unrelated write that happens to touch 'anton'. This shape is
+  // reachable by hand-edit or merge damage, not by any write path in this
+  // module — every writer here goes through `bumpSeqAndStamp`, which already
+  // holds the invariant on its own writes.
+  it('self-heals a partially-damaged marker map — key sets disagree, not merely field-absent', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    writeTestHistoryFile(
+      JSON.stringify({
+        schema: 1,
+        supersededBy: { mayrin: 'mairin', anton: 'антон' },
+        seq: 3,
+        recordedAtSeq: { mayrin: 2 }, // 'anton' has no marker — the damage.
+      }),
+    );
+    expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(true);
+    const h = await loadCastIdHistory(dir);
+    // The undamaged key's existing marker is left exactly as it was...
+    expect(h.recordedAtSeq!.mayrin).toBe(2);
+    // ...and the missing key is backfilled at the new seq, closing the gap.
+    expect(h.seq).toBe(4);
+    expect(h.recordedAtSeq).toEqual({ mayrin: 2, anton: 4 });
+  });
+
   it('never writes when there is no file', async () => {
     // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);

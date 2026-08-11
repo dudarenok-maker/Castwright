@@ -124,8 +124,8 @@ export function buildCastResolver<T extends CastRecord>(
     const target = byId.get(to);
     if (!target) continue;
     if (!byHistory.has(from)) byHistory.set(from, target);
-    put(byNormHistory, normaliseIdKey(from), target);
     const normKey = normaliseIdKey(from);
+    put(byNormHistory, normKey, target);
     const existing = normHistoryKeys.get(normKey);
     if (existing) existing.push(from);
     else normHistoryKeys.set(normKey, [from]);
