@@ -14,54 +14,58 @@
  * nothing in the product can tell the two states apart or correct either
  * one.
  *
- * This script finds every book with a missing `language` key, builds text
- * samples, and calls the REAL `detectManuscriptLanguage` (server/src/tts/
+ * This script finds every book with a missing `language` key, builds a text
+ * sample, and calls the REAL `detectManuscriptLanguage` (server/src/tts/
  * detect-language.ts) — no re-implementation, so the backfilled value is
  * exactly what live detection would decide today.
  *
- * The load-bearing rule (do not soften this): it writes ONLY on
- * cross-source agreement. The analysis-cache sample and a fresh manuscript
- * re-parse are detected INDEPENDENTLY, and a write happens only when BOTH
- * come back `fallback: false` (a genuine decision, not a confidence-floor
- * guess) AND land on the SAME language. `fallback: false` alone is not
- * proof of confidence — franc has no confidence floor above its own
- * `minLength: 30`, so a short, unrepresentative sample (a table of
- * contents, a run of OCR noise) can return a fluent, WRONG, non-fallback
- * language. Per server/src/workspace/scan.ts, a non-`'en'` language forces
- * every character onto a designed Qwen voice and blocks the Kokoro
- * fallback, so a wrong write is materially worse than the absent key it
- * replaces — worth the false-negative cost of skipping a book that a
- * single source alone would have (maybe-correctly) called. Any other
- * combination — one source missing, either side surrendering, or the two
- * disagreeing — is a skip, reported with a reason naming which. Skipping
- * is fully recoverable; writing a wrong language is what this script
- * exists to prevent. No magic threshold here, and this gate is
- * corpus-validated, not theoretical: all 7 books actually written in the
- * live 2026-08-11 run resolved to the same confident `en` from both
- * sources independently — this gate would have written the same 7 — while
- * the junk cases that motivated it (a table-of-contents cache sample vs.
- * genuine prose, OCR noise) diverge between sources and are refused.
+ * The load-bearing rule (do not soften this): it writes ONLY when detection
+ * genuinely decided AND the sample carried enough prose to trust that
+ * decision. `fallback: false` alone is NOT proof of confidence — franc has
+ * no confidence floor above its own `minLength: 30`, so a short,
+ * unrepresentative sample (a table of contents, a run of OCR noise) can
+ * return a fluent, WRONG, non-fallback language (#2246 C1: a genuinely
+ * English table of contents mis-detects as 'es' with `fallback: false`).
+ * Round 1's fix required a SECOND independent sample to agree before
+ * writing; round 2 proved that fix unusable in practice — `loadAnalysisCache`
+ * resolves `CACHE_DIR` from its own module `__dirname`
+ * (server/src/store/analysis-cache.ts), i.e. PER CHECKOUT, so every worktree
+ * but the primary one reports zero cache hits and the two-source gate
+ * silently no-ops (`0 written, N skipped (single source only)`, exit 0) —
+ * on exactly the box this project's own branching workflow mandates running
+ * scripts from. This version reverts to a SINGLE sample (the preference
+ * order below, same as the original pre-#2246-C1 design) and instead gates
+ * the write on a PROSE-SIGNAL FLOOR: a non-fallback detection is trusted
+ * only when the sample clears `PROSE_UNIT_FLOOR` sentence-terminal-
+ * punctuated units (see that constant's own comment for the measured
+ * numbers behind the threshold). Per server/src/workspace/scan.ts, a
+ * non-`'en'` language forces every character onto a designed Qwen voice and
+ * blocks the Kokoro fallback, so a wrong write is materially worse than the
+ * absent key it replaces — worth the false-negative cost of skipping a book
+ * whose sample happens to be thin. Any of: no readable text, a surrendered
+ * (fallback) detection, or a sample below the prose floor is a skip,
+ * reported with a reason naming which. Skipping is fully recoverable;
+ * writing a wrong language is what this script exists to prevent.
  *
- * Text samples, per book:
- *   - The book's analysis cache sentence text (server/handoff/cache/
- *     <manuscriptId>.json) — the same text real analysis already produced.
- *   - The book's own manuscript file, re-parsed the same way POST
- *     /:bookId/reparse does (server/src/parsers, real parseManuscript).
- *   - Neither readable → skip and name the book in the report. Only one
- *     readable → also a skip (nothing to corroborate it against). Never
- *     guess from less than two agreeing reads.
+ * Text sample preference, per book:
+ *   1. The book's analysis cache sentence text (server/handoff/cache/
+ *      <manuscriptId>.json) — the same text real analysis already produced.
+ *   2. No cache → the book's own manuscript file, re-parsed the same way
+ *      POST /:bookId/reparse does (server/src/parsers, real parseManuscript).
+ *   3. Neither readable → skip and name the book in the report. Never guess
+ *      with no material to look at.
  *
- * KNOWN RESIDUAL (#2256) — the two reads are independent in DERIVATION, not
- * in CONTENT. The cache is built from the manuscript, so a book whose OWN
- * text is unrepresentative carries the same junk into both samples, and they
- * agree. Verified against this gate: a TOC-only book backfills `'es'`, a
- * nav-only EPUB and an OCR-noise PDF both backfill `'en'`. What the gate
- * does close is the reachable case that motivated it — a resumable,
- * per-chapter cache holding only front matter while the manuscript holds
- * real prose — where the two diverge and the book is refused. Closing the
- * rest needs a prose-signal floor (a minimum of terminal-punctuated
- * sentences, say), which is a threshold decision, so it is ticketed rather
- * than guessed at here.
+ * KNOWN RESIDUAL (#2256) — the prose-unit floor rejects the three evidenced
+ * junk classes (a TOC-only sample, a nav-only EPUB stub, an OCR-noise
+ * sample — all measured at 1 prose unit, 20x under the floor) and removes
+ * the per-checkout cache dependency above, so the tool now works from any
+ * checkout. It does NOT separate *punctuated* junk from a genuine CJK book:
+ * a repeated numbered TOC ("1. Prologue. 2. Kaz.") and repeated "Chapter
+ * One." headings score a median of 6 and 11 letters per prose unit — and the
+ * Chinese book 煤落的委托 scores 11, identical. A median-prose-unit-length
+ * secondary test would exclude real CJK books along with the junk it's
+ * meant to catch, so it isn't added here. That residual stays open on
+ * #2256.
  *
  * Write path: `writeStateJsonAtomic` (server/src/workspace/state-migrate.ts)
  * — the same schema-stamp + rotating-backup helper every other state.json
@@ -83,6 +87,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { detectManuscriptLanguage } from '../server/src/tts/detect-language.js';
+import { stripFrontMatterBoilerplate } from '../server/src/analyzer/strip-front-matter.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
 import { parseManuscript } from '../server/src/parsers/index.js';
@@ -91,6 +96,55 @@ import type { BookStateJson } from '../server/src/workspace/scan.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
 const SERVER_ROOT = join(REPO_ROOT, 'server');
+
+// ---------------------------------------------------------------------------
+// Prose-signal floor (#2246 round 2). See the file header for why this
+// replaced round 1's cross-source-agreement gate.
+// ---------------------------------------------------------------------------
+
+/* Mirrors detect-language.ts's own text-preparation pipeline (front-matter
+   strip, then a leading-character slice) so the prose-unit count below is
+   measured against EXACTLY the text the script pre-pass / franc actually
+   see — not the raw sample, which can carry boilerplate or trailing
+   material detection never looks at. detect-language.ts's own
+   `SAMPLE_CHARS` isn't exported, so the value is duplicated here
+   (server/src/tts/detect-language.ts is off-limits to this change, per
+   #2246 round 2 scope) — keep the two in sync if that one ever changes. */
+const DETECTION_SAMPLE_CHARS = 20_000;
+
+function detectionSample(text: string, meta: { author?: string | null; title?: string | null }): string {
+  const cleaned = stripFrontMatterBoilerplate(text, {
+    author: meta.author ?? undefined,
+    title: meta.title ?? undefined,
+  });
+  return cleaned.length > DETECTION_SAMPLE_CHARS ? cleaned.slice(0, DETECTION_SAMPLE_CHARS) : cleaned;
+}
+
+// A "prose unit" is a run of text closed by sentence-terminal punctuation —
+// the CJK fullwidth forms are included so zh/ja prose isn't penalised for
+// using different terminal marks than Latin scripts. One or more consecutive
+// terminal marks ("...", "?!") close ONE unit, not one per mark.
+const SENTENCE_TERMINAL_RE = /[.!?…。！？]+/g;
+
+function countProseUnits(sample: string): number {
+  return (sample.match(SENTENCE_TERMINAL_RE) ?? []).length;
+}
+
+/* Measured 2026-08-11 over all 20 live (cache-backed) books vs. the junk
+   classes #2246 round 2 review evidenced — counted on the SAME post-strip,
+   post-slice sample detectionSample() above produces:
+
+     thinnest real book (Unlocked)          130 prose units
+     next thinnest (Юный дрессировщик)      213
+     every other real book                242-394
+     TOC-only sample                          1
+     nav-only EPUB stub                       1
+     OCR-noise sample                         1
+
+   Floor = 20: 6.5x below the thinnest real book, 20x above every evidenced
+   junk class. Do not re-derive or move this number — see the file header
+   for the corpus it came from. */
+const PROSE_UNIT_FLOOR = 20;
 
 // ---------------------------------------------------------------------------
 // Pure decision logic — exported for unit tests. No I/O in here at all: the
@@ -103,25 +157,17 @@ export type SampleSource = 'analysis-cache' | 'manuscript';
 export type BookLanguagePlan =
   | { bookId: string; action: 'has-language'; existingLanguage?: string }
   | { bookId: string; action: 'skip-no-text'; reason: string }
-  | { bookId: string; action: 'skip-single-source'; sampleSource: SampleSource; reason: string }
-  | { bookId: string; action: 'skip-fallback'; reason: string }
-  | {
-      bookId: string;
-      action: 'skip-disagreement';
-      cacheLanguage: string;
-      manuscriptLanguage: string;
-      reason: string;
-    }
-  | { bookId: string; action: 'backfill'; language: string };
+  | { bookId: string; action: 'skip-fallback'; language: string; sampleSource: SampleSource; reason: string }
+  | { bookId: string; action: 'skip-thin-sample'; sampleSource: SampleSource; proseUnits: number; reason: string }
+  | { bookId: string; action: 'backfill'; language: string; sampleSource: SampleSource };
 
-/* Cross-source agreement gate (#2246 C1 fix). `fallback === false` alone is
-   NOT proof of confidence: franc has no confidence floor above its own
-   `minLength: 30`, so a short, unrepresentative sample (a table of contents,
-   a run of OCR noise) can return a fluent, wrong, non-fallback language. The
-   only corroboration available here is a SECOND independent sample, so this
-   detects the analysis-cache text and a fresh manuscript re-parse
-   SEPARATELY and backfills only when both agree — never a single source,
-   however confident it looks in isolation. */
+/* Single-sample gate (#2246 round 2 — replaces round 1's cross-source
+   agreement gate; see the file header for why). One sample only (analysis
+   cache preferred, else a manuscript re-parse), gated on TWO independent
+   checks that must both hold before a write happens: `fallback === false`
+   (detection genuinely decided, not a confidence-floor guess) AND the
+   sample clears `PROSE_UNIT_FLOOR` — `fallback: false` alone is not proof
+   of confidence, see the header. */
 export function planBookLanguage(input: {
   bookId: string;
   hasLanguageKey: boolean;
@@ -147,53 +193,40 @@ export function planBookLanguage(input: {
     };
   }
 
-  if (!hasCache || !hasManuscript) {
-    // Conservative by design: one source cannot corroborate itself, so a
-    // book with only a cache or only a manuscript sample is a skip, not a
-    // single-source backfill — even though the OLD behaviour backfilled
-    // from whichever one source it had.
-    const sampleSource: SampleSource = hasCache ? 'analysis-cache' : 'manuscript';
-    const missing: SampleSource = hasCache ? 'manuscript' : 'analysis-cache';
-    return {
-      bookId,
-      action: 'skip-single-source',
-      sampleSource,
-      reason:
-        `only ${sampleSource} text is available (no ${missing} text to corroborate) — a single ` +
-        'source can never confirm itself, so it is never enough to write',
-    };
-  }
+  const sample: { text: string; source: SampleSource } = hasCache
+    ? { text: cacheText as string, source: 'analysis-cache' }
+    : { text: manuscriptText as string, source: 'manuscript' };
 
-  const cacheDetection = detectManuscriptLanguage(cacheText as string, meta);
-  const manuscriptDetection = detectManuscriptLanguage(manuscriptText as string, meta);
+  const detection = detectManuscriptLanguage(sample.text, meta);
 
-  if (cacheDetection.fallback || manuscriptDetection.fallback) {
-    const surrendered =
-      cacheDetection.fallback && manuscriptDetection.fallback
-        ? 'both the analysis-cache and manuscript samples'
-        : cacheDetection.fallback
-          ? 'the analysis-cache sample'
-          : 'the manuscript sample';
+  if (detection.fallback) {
     return {
       bookId,
       action: 'skip-fallback',
-      reason: `detection surrendered on ${surrendered} (confidence-floor guess) — a guess is never written`,
+      language: detection.language,
+      sampleSource: sample.source,
+      reason:
+        `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
+        'text — a guess is never written',
     };
   }
 
-  if (cacheDetection.language !== manuscriptDetection.language) {
+  const proseUnits = countProseUnits(detectionSample(sample.text, meta));
+  if (proseUnits < PROSE_UNIT_FLOOR) {
     return {
       bookId,
-      action: 'skip-disagreement',
-      cacheLanguage: cacheDetection.language,
-      manuscriptLanguage: manuscriptDetection.language,
+      action: 'skip-thin-sample',
+      sampleSource: sample.source,
+      proseUnits,
       reason:
-        `analysis-cache text detected '${cacheDetection.language}' but manuscript text detected ` +
-        `'${manuscriptDetection.language}' — sources disagree, never write an unconfirmed guess`,
+        `${sample.source} sample has only ${proseUnits} prose unit(s) (post front-matter-strip, ` +
+        `post-${DETECTION_SAMPLE_CHARS}-char slice), below the ${PROSE_UNIT_FLOOR}-unit floor — a ` +
+        'non-fallback result on a sample this thin is not trustworthy (franc has no confidence floor ' +
+        'of its own), so it is never written',
     };
   }
 
-  return { bookId, action: 'backfill', language: cacheDetection.language };
+  return { bookId, action: 'backfill', language: detection.language, sampleSource: sample.source };
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +289,7 @@ function findAudiobookDirs(root: string): string[] {
  *  when there's no cache (the common case for these seven — the analysis
  *  cache is install-relative scratch space, see server/src/export/
  *  manuscript-sentences.ts) or the cache is empty/corrupt — either way this
- *  never throws, it's just one of the two samples the caller cross-checks. */
+ *  never throws, it's just the preferred sample when it exists. */
 export async function cacheSampleText(manuscriptId: string): Promise<string | null> {
   try {
     const cache = await loadAnalysisCache(manuscriptId);
@@ -323,9 +356,8 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
   let backfillPlanned = 0;
   let backfillWritten = 0;
   let skippedNoText = 0;
-  let skippedSingleSource = 0;
   let skippedFallback = 0;
-  let skippedDisagreement = 0;
+  let skippedThinSample = 0;
   let unreadable = 0;
 
   for (const audiobookDir of audiobookDirs) {
@@ -354,15 +386,14 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
     const hasLanguageKey = Object.prototype.hasOwnProperty.call(state, 'language');
     const existingLanguage = (state as BookStateJson & { language?: string }).language;
 
-    // Both samples are built whenever there's no language key — not cache-
-    // preferred-with-manuscript-as-fallback — because the gate below needs
-    // two INDEPENDENT reads to corroborate against each other (#2246 C1: a
-    // single confident-looking detection is not proof of confidence).
+    // Single sample only (#2246 round 2): analysis-cache text preferred, a
+    // manuscript re-parse only when there's no cache — never both, so a
+    // book with a usable cache never pays for an unnecessary re-parse.
     let cacheText: string | null = null;
     let manuscriptText: string | null = null;
     if (!hasLanguageKey) {
       cacheText = state.manuscriptId ? await cacheSampleText(state.manuscriptId) : null;
-      manuscriptText = await manuscriptSampleText(bookDir, state);
+      if (!cacheText) manuscriptText = await manuscriptSampleText(bookDir, state);
     }
 
     const plan = planBookLanguage({
@@ -383,23 +414,19 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
         skippedNoText += 1;
         console.log(`  [${bookLabel}] SKIP — ${plan.reason}`);
         break;
-      case 'skip-single-source':
-        skippedSingleSource += 1;
-        console.log(`  [${bookLabel}] SKIP — ${plan.reason}`);
-        break;
       case 'skip-fallback':
         skippedFallback += 1;
         console.log(`  [${bookLabel}] SKIP — ${plan.reason}`);
         break;
-      case 'skip-disagreement':
-        skippedDisagreement += 1;
+      case 'skip-thin-sample':
+        skippedThinSample += 1;
         console.log(`  [${bookLabel}] SKIP — ${plan.reason}`);
         break;
       case 'backfill':
         backfillPlanned += 1;
         console.log(
           `  [${bookLabel}] ${APPLY ? 'Writing' : 'Would write'} language → '${plan.language}'  ` +
-            '(analysis-cache and manuscript samples agree)',
+            `(source: ${plan.sampleSource})`,
         );
         if (APPLY) {
           await writeStateJsonAtomic(statePath, { ...state, language: plan.language });
@@ -412,8 +439,8 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
   console.log(
     `\n${audiobookDirs.length} book(s) scanned — ${alreadyHad} already had a language, ` +
       `${APPLY ? backfillWritten : backfillPlanned} ${APPLY ? 'written' : 'would be written'}, ` +
-      `${skippedNoText} skipped (no text), ${skippedSingleSource} skipped (single source only), ` +
-      `${skippedFallback} skipped (detection surrendered), ${skippedDisagreement} skipped (sources disagree)` +
+      `${skippedNoText} skipped (no text), ${skippedFallback} skipped (detection surrendered), ` +
+      `${skippedThinSample} skipped (thin sample)` +
       `${unreadable > 0 ? `, ${unreadable} skipped (state.json unreadable)` : ''}.`,
   );
   if (!APPLY && backfillPlanned > 0) console.log('Re-run with --apply to write.');
