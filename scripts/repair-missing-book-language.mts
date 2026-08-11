@@ -208,7 +208,11 @@ function describeSurrenderReason(
 ): SurrenderDiagnostic | null {
   const bodyChapters = selectBodyChapters(chapters);
   const candidates = bodyChapters.length > 0 ? bodyChapters : chapters;
-  if (candidates.length <= 1) return null; // no split possible — single-chapter/floor path, not a vote
+  if (candidates.length === 0) return null;
+  // A single candidate is just the n=1 case of the same vote (see
+  // detectManuscriptLanguageFromChapters's own comment in detect-language.ts):
+  // its whole mass "wins" unanimously below, so the too-thin branch applies
+  // to it exactly as it does to any other winner.
 
   const ballots = candidates.map((c) => ({ chapter: c, detection: detectManuscriptLanguage(c.body, meta) }));
   const nonSurrendered = ballots.filter((b) => !b.detection.fallback);

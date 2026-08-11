@@ -373,10 +373,13 @@ test('planBookLanguage: the only available sample surrenders (letter-less single
   assert.match(plan.reason, /surrendered/);
 });
 
-test('planBookLanguage: single chapter, franc confidently wrong but 0 prose units → skip-fallback via the floor (#2246 C1 shape, folded into detectManuscriptLanguageFromChapters)', () => {
+test('planBookLanguage: single chapter, franc confidently wrong but 0 prose units → skip-fallback via the floor, reason names the too-thin winner (#2246 C1 shape, folded into detectManuscriptLanguageFromChapters; #2251 F3 — n=1 gets the same explanation n>=2 does)', () => {
   // The exact C1 repro: an English TOC-shaped sample franc mis-disambiguates
   // to 'es' with fallback:false. It cannot corroborate itself (one
-  // chapter), so the single-chapter prose-unit floor catches it.
+  // chapter), so the single-chapter prose-unit floor catches it — and,
+  // since n=1 is just the n=1 case of the same vote, the reason names the
+  // winner and the floor rather than falling through to the generic
+  // "detection surrendered" message.
   const plan = planBookLanguage({
     bookId: 'book-f',
     hasLanguageKey: false,
@@ -384,7 +387,8 @@ test('planBookLanguage: single chapter, franc confidently wrong but 0 prose unit
     manuscriptChapters: null,
   });
   assert.equal(plan.action, 'skip-fallback');
-  assert.match(plan.reason, /surrendered/);
+  assert.match(plan.reason, /es won a clear majority across analysis-cache body chapters/);
+  assert.match(plan.reason, /under the 20-unit floor/);
 });
 
 // ---------------------------------------------------------------------------
@@ -616,6 +620,29 @@ test('planBookLanguage: single body chapter BELOW the floor → skip-fallback (g
     manuscriptChapters: null,
   });
   assert.equal(plan.action, 'skip-fallback');
+});
+
+test('planBookLanguage: single body chapter BELOW the floor names the too-thin winner, not the generic surrender message (a single candidate is the n=1 case of the same vote, not a separate code path)', () => {
+  // describeSurrenderReason used to bail out (return null) for
+  // candidates.length <= 1, so this exact shape — one confidently-detected
+  // 'en' chapter, too thin to clear PROSE_UNIT_FLOOR alone — fell through to
+  // the generic "detection surrendered (confidence-floor guess ...)"
+  // message even though the real vote DID have a winner (its own whole
+  // mass, unanimously) and surrendered on the floor, not on a missing
+  // majority. n=1 is just the n=1 case of the same vote (see
+  // detectManuscriptLanguageFromChapters's own comment), so it must get the
+  // same "won a clear majority ... but only N prose unit(s)" explanation
+  // n>=2 already gets.
+  const plan = planBookLanguage({
+    bookId: 'book-thin-reason',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', SHORT_ENGLISH_SENTENCE)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /en won a clear majority across analysis-cache body chapters/);
+  assert.match(plan.reason, /only \d+ prose unit\(s\) — under the 20-unit floor/);
+  assert.doesNotMatch(plan.reason, /detection surrendered \(confidence-floor guess/);
 });
 
 // ---------------------------------------------------------------------------
