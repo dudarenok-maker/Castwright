@@ -63,9 +63,9 @@ owner: null
 
 ### Automated coverage
 
-- Vitest unit (`src/views/advanced.test.tsx`) — asserts group headers render after `fetchConfig` hydrates, a knob label renders inside the open TTS section, `saveOverride` is dispatched with the correct key + value on **blur** (not on the preceding `change` event) for a number input, the restart banner appears when a restart-sidecar knob is overridden, and it does NOT appear when no knob is overridden.
+- Vitest unit (`src/views/advanced.test.tsx`) — asserts group headers render after `fetchConfig` hydrates, a knob label renders inside the open (fixture-local) "tts" section, `saveOverride` is dispatched with the correct key + value on **blur** (not on the preceding `change` event) for a number input, the restart banner appears when a restart-sidecar knob is overridden, and it does NOT appear when no knob is overridden.
 - Vitest unit (`src/components/settings/override-row.test.tsx`) — asserts number/integer/string `KnobControl`s buffer keystrokes locally and only call `onChange` on blur, that an invalid numeric draft reverts to the last effective value on blur rather than committing, that a focus+blur with no edit (or a blur where the draft still equals `value.effective`) does NOT call `onChange`, that a field kept showing the just-typed value immediately after blur rather than snapping back to the pre-edit value for the render before the save resolves, that clicking Revert directly (a real `input.focus()` + `mouseDown`+`click` on the Revert button, exercising `beginConfigAction`'s imperative blur) abandons an uncommitted edit — `onChange` is never called, `onRevert` still fires, the draft resets to the current value — that Tab landing focus directly on Revert (a `blur` with `relatedTarget` set to the button, no mousedown involved) abandons the same way, that clicking an UNRELATED row's Revert does NOT abandon a different row's in-progress edit (two `OverrideRow`s rendered side by side), that a rejected save resets the draft to the last known value UNLESS the user has since refocused and started a fresh edit, OR a second newer edit has already been committed, OR the field was reset externally (a Revert/Reset resolving) while the original save was still pending (in which case the stale rejection must not clobber any of the three), that a rejected boolean save doesn't leave an unhandled promise rejection, and that enum/boolean/device controls still commit immediately (single discrete action).
-- Playwright e2e (`e2e/advanced-settings.spec.ts`) — six specs: heading visible at `#/advanced`, TTS accordion `aria-expanded="true"` + knob label on load, Admin card navigation to `#/advanced`, LIVE knob edit → Revert button + `default: N` label, Revert click → button disappears, restart-sidecar knob edit → amber `RestartSidecarBanner` + "Restart sidecar" CTA.
+- Playwright e2e (`e2e/advanced-settings.spec.ts`) — six specs: heading visible at `#/advanced`, "LLM sampling parameters" (the first, open-by-default registry group) accordion `aria-expanded="true"` + knob label on load, Admin card navigation to `#/advanced`, LIVE knob edit → Revert button + `default: N` label, Revert click → button disappears, restart-sidecar knob edit (expands the collapsed "Voice engine & device" group, edits `tts.qwen.codecChunkSize`) → amber `RestartSidecarBanner` + "Restart sidecar" CTA. #2270 re-pointed this spec at real registry groups/knobs — it used to assert against `src/lib/api.ts`'s hand-authored mock catalogue, which no longer exists.
 - Playwright responsive (`e2e/responsive/coverage.spec.ts`) — `advanced configuration view` case asserts no horizontal overflow at chromium / mobile-chrome / tablet-chrome viewports.
 - Server unit (`server/src/routes/config.test.ts`) — GET returns descriptors + values, PUT merges override, DELETE resets to defaults, env-locked keys are ignored in PUT body. (Server test file to be verified against existing coverage.)
 
@@ -73,19 +73,19 @@ owner: null
 
 Run in mock mode (`VITE_USE_MOCKS=true`, default in dev) via `npm run dev`:
 
-1. **Navigate to `#/advanced`** — heading "Advanced configuration" visible, "Text-to-speech" section open (no accordion collapse needed), "Kokoro sample rate" and "Max re-records per segment" rows rendered.
-2. **Edit "Max re-records per segment"** from 2 to 5 and press Tab — the row shows `default: 2` + a "Revert" button; no banner (apply: live).
+1. **Navigate to `#/advanced`** — heading "Advanced configuration" visible, "LLM sampling parameters" section open (no accordion collapse needed, it's the first registry group), "Ollama temperature" and "Signal QA max re-records" rows rendered.
+2. **Edit "Signal QA max re-records"** from 2 to 5 and press Tab — the row shows `default: 2` + a "Revert" button; no banner (apply: live).
 3. **Click "Revert"** — the value resets to 2, the Revert button disappears.
-4. **Edit "Kokoro sample rate"** to 16000 and press Tab — the amber "Voice-engine setting changed — restart the sidecar to apply." banner appears; "Restart sidecar" button visible.
+4. **Open "Voice engine & device"** — click its accordion toggle (collapsed by default); it expands and shows "Qwen codec chunk size". Edit it to 16000 and press Tab — the amber "Voice-engine setting changed — restart the sidecar to apply." banner appears; "Restart sidecar" button visible.
 5. **Click "Restart sidecar"** — button shows "Restarting…" then returns to idle (mock returns `{ok:true}`); banner may persist (knob still overridden).
-6. **Open the "Analyzer" section** — click the "Analyzer" accordion toggle; it expands and shows the stage-1 prompt row.
+6. **Open "Analyzer prompts & skills"** — click its accordion toggle; it expands and shows the "Cast detection prompt" row.
 7. **Click "Edit" on the prompt row** — textarea opens pre-filled with the default text; click Cancel to discard.
 8. **Click "Reset all"** — confirm dialog → all knobs back to defaults; Revert buttons gone; banner gone (all `overridden: false`).
 9. **Navigate from Admin** — go to `#/admin`, find "Advanced configuration →" card (`data-testid="admin-open-advanced"`), click it → lands on `#/advanced`.
 
 **Live GPU acceptance** (run with the real server + sidecar, `VITE_USE_MOCKS=false`):
 
-- Change `KOKORO_SAMPLE_RATE` to 16000, restart the sidecar via the banner, synthesize a chapter → audio comes out at the new sample rate.
+- Change `tts.qwen.codecChunkSize` ("Qwen codec chunk size", a real `restart-sidecar` knob), restart the sidecar via the banner, synthesize a chapter → generation succeeds, confirming the restart-sidecar edit actually reached the running sidecar process. (Codec chunk size is a decode-implementation detail, not an audible parameter — this does not assert a change in the OUTPUT audio; #2270 retired the mock-only `KOKORO_SAMPLE_RATE` knob this line used to name, which had no server-side equivalent to verify against.)
 - Verify `.env`-sourced values appear as locked (read-only) when a real `.env` carries the key.
 - Verify `config.json` is written to `<workspaceRoot>/config.json` and survives a server restart.
 

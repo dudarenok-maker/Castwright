@@ -8310,7 +8310,11 @@ async function mockRestoreBookBackup(_bookId: string, _backupFile: string): Prom
    solely to host them. */
 const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = allKnobDescriptors();
 
-const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = REGISTRY_GROUPS;
+/* #2270 review nit — copy rather than alias REGISTRY_GROUPS: no caller
+   mutates MOCK_CONFIG_GROUPS today, but handing out the server registry's
+   own array by reference means a future in-place mutation here would
+   corrupt the real registry's GROUPS for every other consumer. */
+const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [...REGISTRY_GROUPS];
 
 /* In-memory mock config store. Starts with default values; PUT/reset mutate it.
    Every knob's `effective` is derived from MOCK_CONFIG_DESCRIPTORS' `default`

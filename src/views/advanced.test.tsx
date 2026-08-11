@@ -42,7 +42,15 @@ const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
 };
 
 /* Small fixture: two groups, three knobs — a live number knob, a
-   restart-sidecar boolean knob, and a prompt knob. */
+   restart-sidecar boolean knob, and a prompt knob. The GROUP shape ('tts'/
+   'analyzer-prompts' ids, collapsedByDefault, risk) is fixture-local and
+   deliberately does NOT mirror the real registry's tts-engine group (which
+   is risk:'high' and therefore starts collapsed, per SettingsSection) — the
+   tests below need the section open on render without an extra expand
+   step. The two real descriptor KEYS below (tts.qwen.codecChunkSize,
+   prompt.castDetection) do carry their real per-key registry metadata
+   (apply/risk/default) so a reader can't copy a wrong fact off them; only
+   their `group` placement is fixture-local. */
 const FIXTURE_CONFIG: ConfigResponse = {
   groups: [
     {
@@ -68,8 +76,8 @@ const FIXTURE_CONFIG: ConfigResponse = {
       help: 'Codec decode chunk size (time-axis frames).',
       type: 'integer',
       min: 1,
-      apply: 'live',
-      risk: 'low',
+      apply: 'restart-sidecar',
+      risk: 'high',
       isPrompt: false,
       default: 300,
     },
@@ -91,7 +99,7 @@ const FIXTURE_CONFIG: ConfigResponse = {
       help: 'Prompt used for per-chapter cast detection.',
       type: 'string',
       apply: 'live',
-      risk: 'medium',
+      risk: 'high',
       isPrompt: true,
       default: 'skills/audiobook-character-detection-per-chapter.md',
     },

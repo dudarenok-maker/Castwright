@@ -196,12 +196,17 @@ describe('mockResetConfig round-trip', () => {
 
   it('resets keys in a group', async () => {
     await mockPutConfig({ 'qa.asr.enabled': true, 'qa.seg.maxRerecords': 9 });
+    /* #2270 review nit — override a key from an UNRELATED (analyzer-prompts)
+       group too. Without this, MOCK_PROMPT_KEY's effective value equals its
+       default either way, so a group reset that wrongly cleared EVERY key
+       (not just the targeted group's) would still pass. Asserting the
+       override SURVIVES is the isolation check that can actually fail. */
+    await mockPutConfig({ [MOCK_PROMPT_KEY]: 'a forked prompt path' });
     const resetResult = await mockResetConfig({ group: 'qa-gates' });
     expect(resetResult.values['qa.asr.enabled'].effective).toBe(false);
     expect(resetResult.values['qa.seg.maxRerecords'].effective).toBe(2);
-    /* A key from an unrelated (analyzer-prompts) group should be unaffected. */
-    const promptDefault = KNOBS.find((k) => k.key === MOCK_PROMPT_KEY)!.default;
-    expect(resetResult.values[MOCK_PROMPT_KEY].effective).toBe(promptDefault);
+    expect(resetResult.values[MOCK_PROMPT_KEY].effective).toBe('a forked prompt path');
+    expect(resetResult.values[MOCK_PROMPT_KEY].overridden).toBe(true);
   });
 });
 
