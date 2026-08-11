@@ -75,16 +75,26 @@ describe('config registry', () => {
     expect(g!.collapsedByDefault).toBe(false);
   });
 
-  it('registers the device-token TTL knob with a 30-day default', () => {
+  it('registers the device-token TTL knob with a 365-day default and a 400-day ceiling', () => {
     const k = KNOBS.find((x) => x.key === 'lan.deviceTokenTtlDays');
     expect(k).toMatchObject({
       env: 'LAN_DEVICE_TTL_DAYS',
       group: 'lan-access',
       type: 'integer',
-      default: 30,
+      default: 365,
       min: 1,
+      max: 400,
       apply: 'live',
     });
+  });
+
+  // The spec's Testing §Server item 2 requires the ceiling to REJECT, not just
+  // to be present. `coerceAndValidate` is already imported at :3.
+  it('rejects a TTL above the 400-day ceiling', () => {
+    const k = KNOBS.find((x) => x.key === 'lan.deviceTokenTtlDays')!;
+    expect(coerceAndValidate(k, '401').ok).toBe(false);
+    expect(coerceAndValidate(k, '400').ok).toBe(true);
+    expect(coerceAndValidate(k, '0').ok).toBe(false);
   });
 
   it('qa.speaker settings registers three qa-gates keys with correct apply modes', () => {
