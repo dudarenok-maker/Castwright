@@ -552,7 +552,43 @@ test('planBookLanguage: uneven CHAPTER split (3-vs-1) that is an exact tie by MA
   // Must report the tied MASS split (570 words / 50% each), never the 3-vs-1
   // chapter-count split a naive tally would have printed.
   assert.match(plan.reason, /en 570 words \(50%\) \/ ru 570 words \(50%\)/);
+  // Format tripwire only, not independent coverage: given the positive
+  // assertion above (an exact "en 570 words (50%) / ru 570 words (50%)"
+  // match), describeSurrenderReason's own output shape can't ALSO contain a
+  // bare "en 3 / ru 1" chapter-count fragment — this can't fail on its own,
+  // it just documents that the old chapter-count format is gone.
   assert.doesNotMatch(plan.reason, /en 3 \/ ru 1/);
+});
+
+test('planBookLanguage: a winner that clears a strict majority outright still surrenders on the prose-unit floor → reason says "too thin", never "no clear majority"', () => {
+  // The reason-string bug this test locks: describeSurrenderReason used to
+  // report EVERY surrender as "no clear majority", even a 100%-mass-share
+  // winner that only surrendered because ITS OWN prose sample was too thin
+  // — self-contradictory output ("no clear majority ... (ru 320 words
+  // (100%))"). Two body chapters, each clearing FRONT_MATTER_WORD_THRESHOLD
+  // by word count (160 words) but each built from ONE long, sparsely-
+  // punctuated Russian "sentence" (multiple clauses joined by commas, a
+  // single terminal period) — so the combined 2 prose units sits well under
+  // PROSE_UNIT_FLOOR (20) even though Russian is the ONLY detected language,
+  // at a full 100% mass share.
+  const ruClause = 'Смотритель маяка поднимался по винтовой лестнице каждый вечер перед закатом';
+  const ruChapterBody = `${Array(16).fill(ruClause).join(', ')}.`;
+  assert.equal(countWords(ruChapterBody), 160, 'fixture sanity: 160 words, clears FRONT_MATTER_WORD_THRESHOLD');
+  const ruDetection = detectManuscriptLanguage(ruChapterBody);
+  assert.equal(ruDetection.language, 'ru');
+  assert.equal(ruDetection.fallback, false, 'fixture sanity: a genuine, non-guessed per-chapter detection');
+
+  const plan = planBookLanguage({
+    bookId: 'book-thin-majority',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', ruChapterBody), makeCacheChapter(2, 'Chapter Two', ruChapterBody)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.doesNotMatch(plan.reason, /no clear majority/, 'a 100% mass share is never "no clear majority"');
+  assert.match(plan.reason, /too thin/);
+  assert.match(plan.reason, /ru 320 words \(100%\)/);
+  assert.match(plan.reason, /2 prose unit/);
 });
 
 test('planBookLanguage: single body chapter ABOVE the floor → backfills (the floor is not a blanket single-chapter refusal)', () => {

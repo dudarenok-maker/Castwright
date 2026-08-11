@@ -102,8 +102,10 @@ import {
   detectManuscriptLanguage,
   detectManuscriptLanguageFromChapters,
   selectBodyChapters,
+  prepareSample,
 } from '../server/src/tts/detect-language.js';
 import { countWords } from '../server/src/parsers/front-matter.js';
+import { countProseUnits, PROSE_UNIT_FLOOR } from '../server/src/tts/prose-units.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
 import { parseManuscript } from '../server/src/parsers/index.js';
@@ -138,42 +140,106 @@ export type BookLanguagePlan =
   | { bookId: string; action: 'skip-fallback'; language: string; sampleSource: SampleSource; reason: string }
   | { bookId: string; action: 'backfill'; language: string; sampleSource: SampleSource };
 
-/* Diagnostic-only: replays the SAME body-chapter selection
-   detectManuscriptLanguageFromChapters applies internally — reusing its own
-   exported selectBodyChapters, never a second classifier — purely to name
-   the vote split in a 'skip-fallback' reason. The real vote is MASS-weighted
-   (#2276 — a chapter is an arbitrary container, so counting chapters would
-   make the answer depend on how the text happens to be divided), so this
-   reports each language's word MASS (via the same countWords the vote
-   itself weighs by), not a chapter count — a chapter-count tally here would
-   describe a mass-driven surrender in units the decision never used (e.g. an
-   uneven 3-vs-1 CHAPTER split could be a near-tie in words). The accept/
-   reject DECISION always comes from detectManuscriptLanguageFromChapters
-   itself; this only explains a surrender after the fact, so it can never
-   disagree with the real decision — at worst it returns null (no split to
-   report) and the reason falls back to a generic surrender message. */
-function describeVoteSplit(
+interface MassEntry {
+  language: string;
+  mass: number;
+}
+
+/* Percentage labels for a mass breakdown. Largest-remainder rounded so the
+   printed shares always sum to exactly 100 — a plain per-language
+   Math.round can print e.g. a three-way 33.3/33.3/33.3 tie as "33% / 33% /
+   33%", which sums to 99, not 100 — and so a genuinely nonzero mass never
+   prints as "0%", which a plain per-language Math.round does for any share
+   under half a percentage point. */
+function shareLabel(entries: MassEntry[], totalMass: number): string {
+  const withFloor = entries.map((e) => {
+    const exact = totalMass > 0 ? (e.mass / totalMass) * 100 : 0;
+    return { ...e, exact, pct: Math.floor(exact) };
+  });
+  let remaining = 100 - withFloor.reduce((sum, e) => sum + e.pct, 0);
+  const byRemainder = [...withFloor].sort((a, b) => (b.exact - b.pct) - (a.exact - a.pct));
+  for (let i = 0; i < byRemainder.length && remaining > 0; i++, remaining--) byRemainder[i].pct += 1;
+
+  // A nonzero mass should never read 0% even when its true share rounds
+  // down to it — steal one point from the current largest share instead of
+  // leaving a real contributor invisible.
+  for (const e of withFloor) {
+    if (e.mass > 0 && e.pct === 0) {
+      const donor = [...withFloor].filter((x) => x !== e).sort((a, b) => b.pct - a.pct)[0];
+      if (donor && donor.pct > 1) {
+        donor.pct -= 1;
+        e.pct = 1;
+      }
+    }
+  }
+
+  return withFloor
+    .sort((a, b) => b.mass - a.mass)
+    .map((e) => `${e.language} ${e.mass.toLocaleString('en-US')} words (${e.pct}%)`)
+    .join(' / ');
+}
+
+export type SurrenderDiagnostic =
+  | { kind: 'no-majority'; split: string }
+  | { kind: 'too-thin'; language: string; split: string; units: number; floor: number };
+
+/* Diagnostic-only: replays the SAME body-chapter selection and MASS-weighted
+   vote detectManuscriptLanguageFromChapters applies internally — reusing its
+   own exported selectBodyChapters and detectManuscriptLanguage, never a
+   second classifier — purely to explain a 'skip-fallback' reason after the
+   fact. The accept/reject DECISION always comes from
+   detectManuscriptLanguageFromChapters itself; this can never disagree with
+   it — at worst it returns null (nothing to report) and the reason falls
+   back to a generic surrender message.
+
+   Every surrender used to be reported here as "no clear majority" — including
+   one where a language won outright (a strict majority of the non-surrendered
+   mass) and the ONLY reason detectManuscriptLanguageFromChapters still
+   surrendered was that winning language's own combined prose-unit count
+   sitting under PROSE_UNIT_FLOOR: self-contradictory output, e.g. "no clear
+   majority ... (de 720 words (100%))". This now branches on the SAME share
+   the real vote decides on: a winner over the strict-majority line (> 0.5)
+   can only have surrendered via the floor, so that case is reported as too
+   thin — naming the winning language's own prose-unit count and the floor —
+   never as a majority problem. */
+function describeSurrenderReason(
   chapters: ChapterSample[],
   meta: { author?: string | null; title?: string | null },
-): string | null {
+): SurrenderDiagnostic | null {
   const bodyChapters = selectBodyChapters(chapters);
   const candidates = bodyChapters.length > 0 ? bodyChapters : chapters;
   if (candidates.length <= 1) return null; // no split possible — single-chapter/floor path, not a vote
 
+  const ballots = candidates.map((c) => ({ chapter: c, detection: detectManuscriptLanguage(c.body, meta) }));
+  const nonSurrendered = ballots.filter((b) => !b.detection.fallback);
+  if (nonSurrendered.length === 0) return null;
+
   const massByLanguage = new Map<string, number>();
   let totalMass = 0;
-  for (const c of candidates) {
-    const d = detectManuscriptLanguage(c.body, meta);
-    if (d.fallback) continue;
-    const mass = countWords(c.body);
-    massByLanguage.set(d.language, (massByLanguage.get(d.language) ?? 0) + mass);
+  for (const { chapter, detection } of nonSurrendered) {
+    const mass = countWords(chapter.body);
+    massByLanguage.set(detection.language, (massByLanguage.get(detection.language) ?? 0) + mass);
     totalMass += mass;
   }
   if (massByLanguage.size === 0 || totalMass === 0) return null;
-  return [...massByLanguage.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([language, mass]) => `${language} ${mass.toLocaleString('en-US')} words (${Math.round((mass / totalMass) * 100)}%)`)
-    .join(' / ');
+
+  const entries: MassEntry[] = [...massByLanguage.entries()].map(([language, mass]) => ({ language, mass }));
+  const split = shareLabel(entries, totalMass);
+
+  let winner: string | null = null;
+  let winnerMass = 0;
+  for (const { language, mass } of entries) {
+    if (mass > winnerMass) {
+      winner = language;
+      winnerMass = mass;
+    }
+  }
+  if (!winner || winnerMass / totalMass <= 0.5) return { kind: 'no-majority', split };
+
+  const winningUnits = nonSurrendered
+    .filter((b) => b.detection.language === winner)
+    .reduce((sum, b) => sum + countProseUnits(prepareSample(b.chapter.body, meta)), 0);
+  return { kind: 'too-thin', language: winner, split, units: winningUnits, floor: PROSE_UNIT_FLOOR };
 }
 
 /* Chapter-aware (#2263): one sample source only (analysis cache preferred,
@@ -217,16 +283,22 @@ export function planBookLanguage(input: {
   const detection = detectManuscriptLanguageFromChapters(sample.chapters, meta);
 
   if (detection.fallback) {
-    const split = describeVoteSplit(sample.chapters, meta);
+    const diag = describeSurrenderReason(sample.chapters, meta);
+    const reason =
+      diag?.kind === 'no-majority'
+        ? `no clear majority across ${sample.source} body chapters (${diag.split}) — a guess is never written`
+        : diag?.kind === 'too-thin'
+          ? `${diag.language} won a clear majority across ${sample.source} body chapters (${diag.split}), but ` +
+            `only ${diag.units} prose unit(s) — under the ${diag.floor}-unit floor — so the sample is too thin ` +
+            'to trust; a guess is never written'
+          : `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
+            'chapters — a guess is never written';
     return {
       bookId,
       action: 'skip-fallback',
       language: detection.language,
       sampleSource: sample.source,
-      reason: split
-        ? `no clear majority across ${sample.source} body chapters (${split}) — a guess is never written`
-        : `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
-          'chapters — a guess is never written',
+      reason,
     };
   }
 
