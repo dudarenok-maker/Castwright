@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { LanAccessCard } from './lan-access-card';
 import { ApiError } from '../lib/api';
 
@@ -47,6 +47,8 @@ const PAIR_SESSION = {
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('LanAccessCard', () => {
   it('renders device label, added date, expires date, and Revoke calls revokeDevice', async () => {
@@ -161,6 +163,35 @@ describe('LanAccessCard', () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByTestId('mock-qr')).not.toBeInTheDocument();
+  });
+
+  it('navigates to the friendly URL with self=1 when authorizing this browser', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockResolvedValue({
+      url: 'https://192.168.1.5:8443/#/pair?c=ABC', code: 'ABC', expiresAt: Date.now() + 300_000,
+      friendlyUrl: 'https://castwright.local/#/pair?c=ABC',
+    });
+    const assign = vi.fn();
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443', assign });
+    render(<LanAccessCard />);
+    fireEvent.click(await screen.findByRole('button', { name: /authorize this browser/i }));
+    await waitFor(() =>
+      expect(api.createDevicePairSession).toHaveBeenCalledWith({ label: 'This computer' }),
+    );
+    expect(assign).toHaveBeenCalledWith('https://castwright.local/#/pair?c=ABC&self=1');
+  });
+
+  it("explains when castwright.local is not reachable instead of navigating", async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockResolvedValue({
+      url: 'https://192.168.1.5:8443/#/pair?c=ABC', code: 'ABC', expiresAt: Date.now() + 300_000,
+    }); // no friendlyUrl
+    const assign = vi.fn();
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443', assign });
+    render(<LanAccessCard />);
+    fireEvent.click(await screen.findByRole('button', { name: /authorize this browser/i }));
+    expect(await screen.findByText(/castwright\.local isn't reachable/i)).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('shows "manage from desktop" note on 401 from listDevices (no crash)', async () => {

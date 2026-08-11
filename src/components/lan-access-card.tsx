@@ -17,6 +17,7 @@ export function LanAccessCard() {
     { url: string; friendlyUrl?: string; expiresAt: number } | null
   >(null);
   const [err, setErr] = useState<string | null>(null);
+  const [selfErr, setSelfErr] = useState<string | null>(null);
 
   const refresh = () => {
     api.listDevices()
@@ -34,6 +35,21 @@ export function LanAccessCard() {
       if (e instanceof ApiError && e.status === 403)
         setErr('Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.');
       else setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const authorizeThisBrowser = async () => {
+    setSelfErr(null);
+    try {
+      const s = await api.createDevicePairSession({ label: 'This computer' });
+      if (!s.friendlyUrl) {
+        setSelfErr("castwright.local isn't reachable right now — use the QR flow above, or check the app is running in production LAN mode.");
+        return;
+      }
+      window.location.assign(`${s.friendlyUrl}&self=1`);
+    } catch (e) {
+      setSelfErr(e instanceof ApiError && e.status === 409
+        ? 'LAN mode is not active on this server, so there is nothing to authorize against.'
+        : e instanceof Error ? e.message : String(e));
     }
   };
   const revoke = async (id: string) => {
@@ -64,6 +80,15 @@ export function LanAccessCard() {
             <PrimaryButton variant="dark" onClick={authorize} icon={false}>Authorize a device</PrimaryButton>
           </div>
           {err && <p className="mt-2 text-sm text-rose-700">{err}</p>}
+          <div className="mt-3">
+            <PrimaryButton variant="dark" onClick={authorizeThisBrowser} icon={false}>
+              Authorize this browser
+            </PrimaryButton>
+            <p className="mt-1 text-xs text-ink/55">
+              Re-links this computer to https://castwright.local. No QR needed.
+            </p>
+            {selfErr && <p className="mt-2 text-sm text-rose-700">{selfErr}</p>}
+          </div>
           {session && (
             <div className="mt-4">
               <PairingQr payload={session.url} expiresAt={session.expiresAt} onRegenerate={authorize} />
