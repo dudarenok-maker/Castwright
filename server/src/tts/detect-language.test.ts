@@ -331,6 +331,30 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count-dependenc
     expect(oneResult).toEqual({ language: 'en', supported: true, fallback: true });
     expect(twoResult).toEqual(oneResult);
   });
+
+  it('a surrendered chapter\'s own mass does not dilute the vote\'s denominator — a huge numerals-only chapter cannot drag a real, unanimous winner below a strict majority', () => {
+    // voteLanguage's totalMass accumulates over nonSurrendered ballots only
+    // (detect-language.ts's own vote loop). A book with one real German
+    // chapter and one much larger chapter that is pure space-separated
+    // numerals (no letters at all, so it surrenders via the letters === 0
+    // script pre-pass gate) must resolve on the German chapter's mass alone
+    // — the numerals chapter cleared FRONT_MATTER_WORD_THRESHOLD and its
+    // title ("Statistical Tables") isn't front-matter-shaped, so it stays a
+    // vote candidate, but its OWN surrendered detection must not count
+    // toward the denominator any winner's share is measured against.
+    const deChapter = { title: 'Chapter One', body: repeat(DE_SENTENCE, 200) }; // 5,000 words, real German
+    const numeralsChapter = {
+      title: 'Statistical Tables',
+      body: Array.from({ length: 8000 }, (_, i) => i + 1).join(' '), // 8,000 words, zero letters
+    };
+    expect(countWords(deChapter.body)).toBe(5000);
+    expect(countWords(numeralsChapter.body)).toBe(8000);
+    const numeralsDetection = detectManuscriptLanguage(numeralsChapter.body);
+    expect(numeralsDetection.fallback).toBe(true); // fixture sanity: surrenders on its own, via letters === 0
+
+    const result = detectManuscriptLanguageFromChapters([deChapter, numeralsChapter]);
+    expect(result).toEqual({ language: 'de', supported: true, fallback: false });
+  });
 });
 
 /* #2276 — the mandatory invariant: detection must not depend on how a book
@@ -493,7 +517,7 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
     const thinBodySentences = Array(thinRepeats).fill(DE_LONG_SENTENCE);
     const thinConfigs = buildConfigs(thinBodySentences);
 
-    it('fixture sanity: every shape’s winning mass stays under PROSE_UNIT_FLOOR, even merged with the front matter’s own units', () => {
+    it('fixture sanity: every shape’s winning prose-unit count stays under PROSE_UNIT_FLOOR, even merged with the front matter’s own units', () => {
       expect(thinRepeats).toBeLessThan(PROSE_UNIT_FLOOR);
       expect(thinRepeats + frontMatterUnits).toBeLessThan(PROSE_UNIT_FLOOR);
     });

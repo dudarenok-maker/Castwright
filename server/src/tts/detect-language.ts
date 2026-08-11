@@ -56,8 +56,12 @@ function resultFor(code: string, fallback: boolean): DetectionResult {
 
 /* Front-matter strip, then sample a prefix — the exact text both
    detectManuscriptLanguage's own script-pre-pass/franc steps and the
-   chapter-aware single-body-chapter prose-unit floor (below) look at. */
-function prepareSample(text: string, meta: { author?: string | null; title?: string | null }): string {
+   chapter-aware single-body-chapter prose-unit floor (below) look at.
+   Exported so a caller that needs to explain (not decide) a surrender —
+   e.g. the repair script's diagnostic reason string — can compute the same
+   winning-language prose-unit count voteLanguage itself used, rather than
+   drifting from it. */
+export function prepareSample(text: string, meta: { author?: string | null; title?: string | null }): string {
   const cleaned = stripFrontMatterBoilerplate(text, {
     author: meta.author ?? undefined,
     title: meta.title ?? undefined,
