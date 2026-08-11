@@ -8,7 +8,8 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and [A45](onbox-acceptance-register.md) (#2128 audio currency, §9 below)
+> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and A45 (#2128 audio currency, §9 below) — **A45 is discharged (2026-08-11)
+and no longer in the register; §9 below is its record**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -689,7 +690,9 @@ discrepancy by re-running until the numbers happen to match.
 
 ## 9. #2128 — audio currency (`isAudioCurrent` / `castHistorySeq`)
 
-> Register row: [`onbox-acceptance-register.md` A45](onbox-acceptance-register.md)
+> Register row: **A45 — discharged 2026-08-11, row removed from
+> [`onbox-acceptance-register.md`](onbox-acceptance-register.md)** (owed 64 →
+> 63, Group A 45 → 44). This section is the surviving record of the run.
 
 ### 9.1 Purpose & scope
 
@@ -714,13 +717,25 @@ the unknown rule was inverted.
 
 ### 9.2 Preconditions
 
-- [ ] Real TTS sidecar running (or loadable) for the re-render in step 2 —
+- [x] Real TTS sidecar running (or loadable) for the re-render in step 2 —
       not mock mode.
-- [ ] The real workspace is present, with `WORKSPACE_DIR`/`CACHE_DIR` set the
+- [x] The real workspace is present, with `WORKSPACE_DIR`/`CACHE_DIR` set the
       same way §8.3 establishes for the repair script.
-- [ ] SHA and a clean tree recorded below.
+- [x] SHA and a clean tree recorded below.
 
-SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
+SHA: `9d7894c7`  Clean tree: ☑  Date: `2026-08-11`  Run by: `dudarenok-maker (Claude Code)`
+
+The server was started from the primary checkout at `9d7894c7`, which carries
+`d658e932` (the #2128 merge) as an ancestor. That checkout was moved to
+`022e830b` by a concurrent session mid-run; the two differ **only in docs**
+(`git diff --name-only 9d7894c7 022e830b -- server/src scripts` is empty), so
+the re-render and both dry runs exercised identical production code. Real
+sidecar (pid 30076, `engines: [coqui, kokoro, qwen]`, `qwenInstallState:
+ready`), real workspace at `WORKSPACE_DIR=C:\AudiobookWorkspace` — note the
+script does **not** read `server/.env`, so it must be passed explicitly or it
+defaults to `%USERPROFILE%\AudiobookWorkspace`, scans **0 books**, and prints a
+full page of clean zeros. `server/dist` also had to be rebuilt first: it
+predated `store/cast-audio-currency.js` and the script hard-fails without it.
 
 ### 9.3 Stamp, re-render, confirm the row clears
 
@@ -730,18 +745,44 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
    `recordedAtSeq` field it previously lacked. This sets `seq` to S+1 and
    every `supersededBy` key's marker to S+1.
 
-Result: _______________________________________________________________
+Result: **PASS (2026-08-11).** Baseline dry run first: **23 chapter rows /
+188 segments** — reproducing the pre-fix figure exactly, as §9.1 predicts.
+`--apply` then printed `stamped cast-id-history recordedAtSeq on 4 book(s)
+(#2128 one-shot)` — 4 being every book in the workspace that has a
+`cast-id-history.json`. Verified against pre-run copies of all four files:
+each previously held **only** `schema` + `supersededBy` (no `seq`, no
+`recordedAtSeq`), and each now carries `seq: 1` plus a `recordedAtSeq` entry
+for **every** `supersededBy` key — Заказ Коалфолла 2/2, Playing with Fire
+2/2, Everblaze 1/1, Ночной дозор 4/4 — with a matching `recordedAtIso`. So
+S was 0 and S+1 = 1. The `--apply` liveness rail also held: it is the reason
+the server had to be stopped, and it refuses on its own rather than trusting
+the operator.
 
 2. Re-render **one** chapter named on the re-render list. That render stamps
    `castHistorySeq: S+1` into its segments file.
 
-Result: _______________________________________________________________
+Result: **PASS (2026-08-11).** Re-rendered *Заказ Коалфолла* ch2 «Глава
+первая — Стук» via `POST /api/books/:bookId/generation` with
+`{modelKey: 'qwen3-tts-0.6b', chapterIds: [2], force: true}`. Completed
+`audioEngines {qwen: 3, coqui: 1}`, `durationSec` 248.02, `audioQa.status:
+ok` (LUFS −16.1, true peak −1.3 dB). Its `segments.json` went from
+`castHistorySeq: ABSENT` to **`castHistorySeq: 1`** — equal to the book's
+new `seq`, exactly S+1 as specified. **This book was chosen deliberately:**
+it is the Castwright-owned fixture, so a real re-render costs nothing if the
+audio changes, and it owns **two** rows on one chapter rather than one,
+which tests "the re-rendered chapter's rows clear" harder than the minimum.
 
 3. Re-run the dry run. **That chapter's row must disappear, and the segment
    total must drop by exactly that chapter's segment count, while every
    other row remains.**
 
-Result: _______________________________________________________________
+Result: **PASS (2026-08-11), against a prediction registered before the
+run.** Expected 23 → 21 rows and 188 → 167 segments (ch2's `mayrin` 8 +
+`coalfall` 13 = 21). Observed **exactly** `re-render candidates: 21 chapter
+row(s) / 167 segment(s)`. A line-by-line diff of the two re-render lists
+shows **removed: exactly those two rows; added: none**; the other 21 rows
+are byte-identical. Both halves of the criterion hold — the re-rendered
+chapter's rows cleared, and nothing else moved.
 
 **Refinement:** `'normalised-id'`-tier rows clear on **stamp presence
 alone**, so they drop off after a re-render even without step 1;
@@ -755,7 +796,40 @@ before reaching them.
 
 ### 9.4 Outcome
 
-- [ ] §9.3 run
-- [ ] Defects filed: ____________________________________
+- [x] §9.3 run — **2026-08-11, all three steps PASS.** Register row **A45
+      discharged and removed** (owed 64 → 63, Group A 45 → 44).
+- [x] Defects filed: **none.** Nothing in the loop misbehaved.
 
-Record what was observed, by whom, and when — here and in register row A45.
+**Observed, by whom, when:** run end-to-end on the dev box 2026-08-11 by
+dudarenok-maker via Claude Code, against the real workspace
+(`C:\AudiobookWorkspace`, 20 books) and a real sidecar. 23/188 → `--apply`
+(4 books stamped) → one real qwen re-render → 21/167, with the diff showing
+only the re-rendered chapter's two rows gone.
+
+**What this run additionally proved**, beyond the three numbered steps —
+these are the paths §9.3's own note flags as having no automated coverage,
+and they only execute inside a live `--apply`:
+
+- `scannedBookDirs` is correct end-to-end inside a real `main()`: it stamped
+  4 books, not 20 — i.e. the books that actually have a history file, not
+  every scanned directory.
+- `mods.stampRecordedAtSeqIfAbsent` resolves and writes at runtime, and is
+  genuinely **if-absent**: the second dry run did not re-stamp or move any
+  marker, and the four files still read `seq: 1`.
+- The dry/apply split is real: the baseline and the final dry run both wrote
+  nothing, and only the `--apply` mutated disk.
+
+**Two traps worth recording for whoever runs §9 next**, both of which
+silently produce a confident wrong answer rather than an error:
+
+1. **The script does not read `server/.env`.** Without an explicit
+   `WORKSPACE_DIR` it scans `%USERPROFILE%\AudiobookWorkspace`, finds **0
+   books**, and prints a complete summary of zeros. It does warn — `books
+   scanned: 0 — WARNING: … NOTHING WAS SCANNED` — but every figure under it
+   still reads like a clean bill of health.
+2. **`segments.json` records the engine only at file level.** Individual
+   segments carry just `groupIndex`, `characterId`, `sentenceIds`,
+   `startSec`, `endSec` — there is no per-segment `modelKey`. Grouping
+   segments by `modelKey` therefore returns one silent empty bucket and
+   proves nothing; read the file-level `modelKey`, or `state.json`'s
+   `audioModelKey`/`audioEngines`, instead.
