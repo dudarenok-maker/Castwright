@@ -3162,6 +3162,7 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
       confirmed: 0,
       corrected: 0,
       flagged: 0,
+      unresolved: 0,
       lumped: 0,
       escalated: 0,
       escalationAccepted: 0,
@@ -3184,6 +3185,7 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
       confirmed: 3,
       corrected: 1,
       flagged: 1,
+      unresolved: 0,
       escalated: 1,
       escalationAccepted: 1,
     });
@@ -3209,9 +3211,22 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
       confirmed: 0,
       corrected: 0,
       flagged: 0,
+      unresolved: 0,
       escalated: 0,
       escalationAccepted: 0,
     });
+  });
+
+  it('#2253 — sums unresolved and counts it toward the alignedPct weight', () => {
+    // Chapter A: 100 classified sentences, 90 of them unresolved, 100% aligned.
+    // Chapter B: 10 classified sentences, all confirmed, 0% aligned.
+    // If `unresolved` is left out of the weight, A weighs 10 instead of 100 and
+    // the book reads ~9% aligned instead of ~91% — an inverted headline number.
+    const chapterA = makeReport({ alignedPct: 100, confirmed: 10, unresolved: 90 });
+    const chapterB = makeReport({ alignedPct: 0, confirmed: 10, flagOnly: true });
+    const result = aggregateStructureReports([chapterA, chapterB]);
+    expect(result?.unresolved).toBe(90);
+    expect(result?.alignedPct).toBeCloseTo((100 * 100 + 0 * 10) / 110, 5);
   });
 });
 
@@ -3396,6 +3411,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
     confirmed: 2,
     corrected: 2,
     flagged: 0,
+    unresolved: 0,
     escalated: 0,
     escalationAccepted: 0,
   };
