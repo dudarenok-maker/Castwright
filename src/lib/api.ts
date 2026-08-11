@@ -7360,7 +7360,7 @@ const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
   expiresAt: null,
 });
 const mockRedeemBrowserPair = async (_b: { code: string }) =>
-  ({ label: 'This browser', expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
+  ({ label: 'This browser', expiresAt: new Date(Date.now() + 365 * 86_400_000).toISOString() });
 
 /* Plan 75 — portable book bundle (single .zip with state + manuscript +
    audio + cover + change-log for one book). The export returns the
@@ -8978,12 +8978,12 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     key: 'tts.preload.kokoro',
     group: 'tts-engine',
     label: 'Preload Kokoro at startup',
-    help: 'When true (default), the sidecar eagerly loads Kokoro v1 at startup (~1 s, ~1 GB VRAM). When false, Kokoro warms on demand on the first synth that needs it. Turn off if Qwen is your main engine and you want the ~1 GB VRAM back. Changing this requires a sidecar restart.',
+    help: 'When true, the sidecar eagerly loads Kokoro v1 at startup (~1 s, ~1 GB VRAM). When false (default), Kokoro warms on demand on the first synth that needs it — fs-60: non-English books can now use Coqui too, so an always-hot English-only engine is a less universally good default. Changing this requires a sidecar restart.',
     type: 'boolean',
     apply: 'restart-sidecar',
     risk: 'high',
     isPrompt: false,
-    default: true,
+    default: false,
   },
   {
     key: 'tts.preload.qwen',
@@ -9297,7 +9297,7 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     apply: 'live',
     risk: 'medium',
     isPrompt: false,
-    default: 'gemma-4-31b-it',
+    default: 'gemini-3.5-flash-lite',
   },
   {
     key: 'analyzer.gemini.voiceStyleModel',
@@ -9437,13 +9437,14 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     key: 'lan.deviceTokenTtlDays',
     group: 'lan-access',
     label: 'Device authorization lifetime (days)',
-    help: 'How long a browser/device authorization stays valid before it must be re-paired.',
+    help: 'How long a NEWLY authorized browser or device stays valid. Changing this does not extend authorizations that already exist — re-authorize a device to give it the new lifetime.',
     type: 'integer',
     min: 1,
+    max: 400,
     apply: 'live',
     risk: 'low',
     isPrompt: false,
-    default: 30,
+    default: 365,
   },
   // analyzer-structure — mirror server/src/config/registry.ts (parity-tested
   // in api.config.test.ts so this can't drift from the real §12 group).

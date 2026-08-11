@@ -13,7 +13,7 @@ import {
   mockRestartSidecar,
   _resetMockConfig,
 } from './api';
-import { knobsInGroup, GROUPS } from '../../server/src/config/registry';
+import { knobsInGroup, GROUPS, KNOBS } from '../../server/src/config/registry';
 import { PAIR_RULES } from '../../server/src/config/pair-rules';
 
 beforeEach(() => {
@@ -357,5 +357,20 @@ describe('mock config parity with the server registry', () => {
     const mockGroup = groups.find((g) => g.id === 'analyzer-structure');
     const registryGroup = GROUPS.find((g) => g.id === 'analyzer-structure');
     expect(mockGroup?.help).toBe(registryGroup?.help);
+  });
+
+  it('mock descriptors match the server registry on default/min/max for every shared knob', async () => {
+    const { descriptors } = await mockGetConfig();
+    const real = new Map(KNOBS.map((k) => [k.key, k]));
+    const project = (d: { key: string; default?: unknown; min?: number; max?: number }) => ({
+      key: d.key, default: d.default, min: d.min, max: d.max,
+    });
+
+    // Intersection only: the mock is a documented subset (see :311-313), and it
+    // carries two UI-only entries that are not registry keys.
+    const shared = descriptors.filter((d) => real.has(d.key));
+    expect(shared.length).toBeGreaterThan(90); // guards against the filter silently emptying
+
+    expect(shared.map(project)).toEqual(shared.map((d) => project(real.get(d.key)!)));
   });
 });
