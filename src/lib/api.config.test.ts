@@ -16,6 +16,17 @@ import {
 import { knobsInGroup, KNOBS } from '../../server/src/config/registry';
 import { PAIR_RULES } from '../../server/src/config/pair-rules';
 
+/* #2270 — real registry keys standing in for the two retired UI-only
+   fictions (a numeric knob with no registry equivalent, and a prompt key
+   superseded by the six real isPrompt knobs): a numeric restart-sidecar
+   knob for the round-trip/reset cases below, and one of those six real
+   isPrompt knobs (registry.ts:1198-1248) for the prompt-fork cases. The
+   default is read off KNOBS itself rather than hand-copied, so this file
+   can't independently drift from the registry's own value. */
+const MOCK_NUM_KEY = 'tts.qwen.codecChunkSize';
+const MOCK_NUM_DEFAULT = KNOBS.find((k) => k.key === MOCK_NUM_KEY)!.default as number;
+const MOCK_PROMPT_KEY = 'prompt.castDetection';
+
 beforeEach(() => {
   _resetMockConfig();
 });
@@ -47,12 +58,12 @@ describe('mockGetConfig', () => {
 
 describe('mockPutConfig round-trip', () => {
   it('updates a numeric knob and reflects it in values', async () => {
-    const putResult = await mockPutConfig({ KOKORO_SAMPLE_RATE: 16000 });
+    const putResult = await mockPutConfig({ [MOCK_NUM_KEY]: 16000 });
     expect(putResult.ok).toBe(true);
-    expect(putResult.applied).toContain('KOKORO_SAMPLE_RATE');
-    expect(putResult.values.KOKORO_SAMPLE_RATE.effective).toBe(16000);
-    expect(putResult.values.KOKORO_SAMPLE_RATE.overridden).toBe(true);
-    expect(putResult.values.KOKORO_SAMPLE_RATE.source).toBe('override');
+    expect(putResult.applied).toContain(MOCK_NUM_KEY);
+    expect(putResult.values[MOCK_NUM_KEY].effective).toBe(16000);
+    expect(putResult.values[MOCK_NUM_KEY].overridden).toBe(true);
+    expect(putResult.values[MOCK_NUM_KEY].source).toBe('override');
   });
 
   it('updates a boolean knob and reflects it in values', async () => {
@@ -158,28 +169,28 @@ describe('mockPutConfig — cross-field pair rule (#2209 review B4)', () => {
   });
 
   it('does not run the pair check when the patch touches neither key', async () => {
-    const result = await mockPutConfig({ KOKORO_SAMPLE_RATE: 16000 });
+    const result = await mockPutConfig({ [MOCK_NUM_KEY]: 16000 });
     expect(result.ok).toBe(true);
   });
 });
 
 describe('mockResetConfig round-trip', () => {
   it('resets a specific key back to its default', async () => {
-    await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000 });
+    await mockPutConfig({ [MOCK_NUM_KEY]: 8000 });
     const afterPut = await mockGetConfig();
-    expect(afterPut.values.KOKORO_SAMPLE_RATE.effective).toBe(8000);
+    expect(afterPut.values[MOCK_NUM_KEY].effective).toBe(8000);
 
-    const resetResult = await mockResetConfig({ keys: ['KOKORO_SAMPLE_RATE'] });
+    const resetResult = await mockResetConfig({ keys: [MOCK_NUM_KEY] });
     expect(resetResult.ok).toBe(true);
-    expect(resetResult.values.KOKORO_SAMPLE_RATE.effective).toBe(24000);
-    expect(resetResult.values.KOKORO_SAMPLE_RATE.overridden).toBe(false);
-    expect(resetResult.values.KOKORO_SAMPLE_RATE.source).toBe('default');
+    expect(resetResult.values[MOCK_NUM_KEY].effective).toBe(MOCK_NUM_DEFAULT);
+    expect(resetResult.values[MOCK_NUM_KEY].overridden).toBe(false);
+    expect(resetResult.values[MOCK_NUM_KEY].source).toBe('default');
   });
 
   it('resets all keys when all:true', async () => {
-    await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000, 'qa.seg.maxRerecords': 7 });
+    await mockPutConfig({ [MOCK_NUM_KEY]: 8000, 'qa.seg.maxRerecords': 7 });
     const resetResult = await mockResetConfig({ all: true });
-    expect(resetResult.values.KOKORO_SAMPLE_RATE.effective).toBe(24000);
+    expect(resetResult.values[MOCK_NUM_KEY].effective).toBe(MOCK_NUM_DEFAULT);
     expect(resetResult.values['qa.seg.maxRerecords'].effective).toBe(2);
   });
 
@@ -188,10 +199,9 @@ describe('mockResetConfig round-trip', () => {
     const resetResult = await mockResetConfig({ group: 'qa-gates' });
     expect(resetResult.values['qa.asr.enabled'].effective).toBe(false);
     expect(resetResult.values['qa.seg.maxRerecords'].effective).toBe(2);
-    /* Analyzer group key should be unaffected */
-    expect(resetResult.values.ANALYZER_STAGE1_PROMPT.effective).toBe(
-      'Attribute each sentence to its speaker.',
-    );
+    /* A key from an unrelated (analyzer-prompts) group should be unaffected. */
+    const promptDefault = KNOBS.find((k) => k.key === MOCK_PROMPT_KEY)!.default;
+    expect(resetResult.values[MOCK_PROMPT_KEY].effective).toBe(promptDefault);
   });
 });
 
@@ -245,8 +255,8 @@ describe('mockResetConfig — cross-field pair rule (#2209 review B4)', () => {
   });
 
   it('does not run the pair check when the reset touches neither key', async () => {
-    await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000 });
-    const result = await mockResetConfig({ keys: ['KOKORO_SAMPLE_RATE'] });
+    await mockPutConfig({ [MOCK_NUM_KEY]: 8000 });
+    const result = await mockResetConfig({ keys: [MOCK_NUM_KEY] });
     expect(result.ok).toBe(true);
   });
 });
@@ -266,32 +276,36 @@ describe('_resetMockConfig', () => {
 });
 
 describe('mockGetPrompt / mockPutPrompt / mockResetPrompt', () => {
+  /* Seeded (via _resetMockConfig, beforeEach) with the mock prompt-content
+     stand-in for MOCK_PROMPT_KEY — see api.ts's MOCK_PROMPTS comment. */
+  const seededDefaultText = 'Detect every speaking character introduced or recurring in this chapter.';
+
   it('getPrompt returns the default state for a known prompt', async () => {
-    const prompt = await mockGetPrompt('ANALYZER_STAGE1_PROMPT');
-    expect(prompt.id).toBe('ANALYZER_STAGE1_PROMPT');
+    const prompt = await mockGetPrompt(MOCK_PROMPT_KEY);
+    expect(prompt.id).toBe(MOCK_PROMPT_KEY);
     expect(prompt.isForked).toBe(false);
     expect(prompt.text).toBe(prompt.defaultText);
   });
 
   it('putPrompt forks the prompt when text differs from default', async () => {
-    const updated = await mockPutPrompt('ANALYZER_STAGE1_PROMPT', 'Custom attribution prompt');
+    const updated = await mockPutPrompt(MOCK_PROMPT_KEY, 'Custom attribution prompt');
     expect(updated.isForked).toBe(true);
     expect(updated.text).toBe('Custom attribution prompt');
-    expect(updated.defaultText).toBe('Attribute each sentence to its speaker.');
+    expect(updated.defaultText).toBe(seededDefaultText);
   });
 
   it('putPrompt then getPrompt reflects the forked state', async () => {
-    await mockPutPrompt('ANALYZER_STAGE1_PROMPT', 'My custom prompt');
-    const after = await mockGetPrompt('ANALYZER_STAGE1_PROMPT');
+    await mockPutPrompt(MOCK_PROMPT_KEY, 'My custom prompt');
+    const after = await mockGetPrompt(MOCK_PROMPT_KEY);
     expect(after.text).toBe('My custom prompt');
     expect(after.isForked).toBe(true);
   });
 
   it('resetPrompt reverts to default and clears isForked', async () => {
-    await mockPutPrompt('ANALYZER_STAGE1_PROMPT', 'Custom text');
-    const reset = await mockResetPrompt('ANALYZER_STAGE1_PROMPT');
+    await mockPutPrompt(MOCK_PROMPT_KEY, 'Custom text');
+    const reset = await mockResetPrompt(MOCK_PROMPT_KEY);
     expect(reset.isForked).toBe(false);
-    expect(reset.text).toBe('Attribute each sentence to its speaker.');
+    expect(reset.text).toBe(seededDefaultText);
   });
 });
 
@@ -349,14 +363,14 @@ describe('mock config parity with the server registry', () => {
   });
 
   /* #2259 — the mock catalogue is now PROJECTED from the registry (see
-     api.ts's MOCK_CONFIG_DESCRIPTORS: UI_ONLY_MOCK_DESCRIPTORS +
-     allKnobDescriptors()), so a per-field parity check against KNOBS on the
-     shared key set is tautological — both sides are the same projection of
-     the same data by construction. What this guards instead is the mock's
-     *construction*: (1) a registry knob silently dropped by a `.filter`/
-     `.slice` in api.ts (the #2259 gap-1 failure mode), (2) a descriptor's
-     `group` not resolving to any group the mock returns (the failure mode
-     the group-list rewrite below introduces), and (3) a reversion to a
+     api.ts's MOCK_CONFIG_DESCRIPTORS = allKnobDescriptors()), so a
+     per-field parity check against KNOBS on the shared key set is
+     tautological — both sides are the same projection of the same data by
+     construction. What this guards instead is the mock's *construction*:
+     (1) a registry knob silently dropped by a `.filter`/`.slice` in api.ts
+     (the #2259 gap-1 failure mode), (2) a descriptor's `group` not
+     resolving to any group the mock returns (the failure mode the
+     group-list rewrite below introduces), and (3) a reversion to a
      hand-copied descriptor list that duplicates a registry key — the exact
      `tts.qwen.device` shape #2259 removed, plus the non-vacuity floor so an
      accidentally-empty KNOBS/descriptors projection can't pass this whole
@@ -371,21 +385,18 @@ describe('mock config parity with the server registry', () => {
     expect(new Set(descriptors.map((d) => d.key)).size).toBe(descriptors.length);
   });
 
-  /* #2271 review — registry⊆mock and key-uniqueness above both still pass
-     if a THIRD hand-authored descriptor is appended to api.ts's mock
-     catalogue (MOCK_CONFIG_DESCRIPTORS = UI_ONLY_MOCK_DESCRIPTORS +
-     allKnobDescriptors()) — neither check bounds the mock's total size.
-     Pin the count exactly: KNOBS.length (the registry projection) plus the
-     two declared UI-only legacy descriptors (KOKORO_SAMPLE_RATE,
-     ANALYZER_STAGE1_PROMPT — see api.ts's UI_ONLY_MOCK_DESCRIPTORS comment).
-     UI_ONLY_MOCK_DESCRIPTORS itself isn't exported, so its length is pinned
-     as the literal `2` rather than imported. */
-  it('the mock catalogue has no descriptors beyond the registry plus the two declared UI-only ones', async () => {
+  /* #2270 — the last two UI-only hand-authored descriptors are gone
+     (registry⊆mock and key-uniqueness above don't bound the mock's total
+     size, so this pins it exactly): the mock catalogue is now the registry
+     projection with NO extra keys at all, not "registry plus N declared
+     exceptions". A reversion that appends even one hand-authored descriptor
+     back onto MOCK_CONFIG_DESCRIPTORS fails this. */
+  it('the mock catalogue has no descriptors beyond the registry', async () => {
     const { descriptors } = await mockGetConfig();
     const registryKeys = new Set(KNOBS.map((k) => k.key));
     const mockOnlyKeys = descriptors.filter((d) => !registryKeys.has(d.key)).map((d) => d.key);
-    expect(mockOnlyKeys.sort()).toEqual(['ANALYZER_STAGE1_PROMPT', 'KOKORO_SAMPLE_RATE']);
-    expect(descriptors.length).toBe(KNOBS.length + 2);
+    expect(mockOnlyKeys).toEqual([]);
+    expect(descriptors.length).toBe(KNOBS.length);
   });
 
   it("every mock descriptor's group resolves to a group mockGetConfig() returns", async () => {

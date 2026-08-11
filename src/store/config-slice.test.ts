@@ -26,6 +26,13 @@ vi.mock('../lib/api', () => ({
 
 import { api } from '../lib/api';
 
+/* #2270 — a real registry key standing in for the retired UI-only numeric
+   fiction this fixture used to use (this fixture is otherwise
+   self-contained and unconnected to the real registry — see
+   api.config.test.ts for the tests that actually exercise mock/registry
+   parity). */
+const NUM_KEY = 'tts.qwen.codecChunkSize';
+
 /* ── fixtures ───────────────────────────────────────────────────────────── */
 
 const MOCK_GROUPS: ConfigGroup[] = [
@@ -34,18 +41,16 @@ const MOCK_GROUPS: ConfigGroup[] = [
 
 const MOCK_DESCRIPTORS: KnobDescriptor[] = [
   {
-    key: 'KOKORO_SAMPLE_RATE',
+    key: NUM_KEY,
     group: 'tts',
-    label: 'Sample rate',
-    help: 'Hz.',
+    label: 'Codec chunk size',
+    help: 'Frames.',
     type: 'integer',
-    min: 8000,
-    max: 48000,
-    step: 1000,
+    min: 1,
     apply: 'restart-sidecar',
     risk: 'low',
     isPrompt: false,
-    default: 24000,
+    default: 300,
   },
   {
     key: 'SEG_ASR_ENABLED',
@@ -75,7 +80,7 @@ const MOCK_DESCRIPTORS: KnobDescriptor[] = [
 ];
 
 const MOCK_VALUES: ConfigValues = {
-  KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 24000, source: 'default', locked: false, overridden: false },
+  [NUM_KEY]: { key: NUM_KEY, effective: 300, source: 'default', locked: false, overridden: false },
   SEG_ASR_ENABLED: { key: 'SEG_ASR_ENABLED', effective: false, source: 'default', locked: false, overridden: false },
   SERVER_PORT: { key: 'SERVER_PORT', effective: 8080, source: 'default', locked: false, overridden: false },
 };
@@ -136,27 +141,27 @@ describe('saveOverride', () => {
   it('calls api.putConfig with the key/value pair and re-hydrates values', async () => {
     const updatedValues: ConfigValues = {
       ...MOCK_VALUES,
-      KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 16000, source: 'override', locked: false, overridden: true },
+      [NUM_KEY]: { key: NUM_KEY, effective: 16000, source: 'override', locked: false, overridden: true },
     };
-    vi.mocked(api.putConfig).mockResolvedValue({ ok: true, applied: ['KOKORO_SAMPLE_RATE'], values: updatedValues });
+    vi.mocked(api.putConfig).mockResolvedValue({ ok: true, applied: [NUM_KEY], values: updatedValues });
 
     const store = makeStore();
-    const promise = store.dispatch(saveOverride({ key: 'KOKORO_SAMPLE_RATE', value: 16000 }));
+    const promise = store.dispatch(saveOverride({ key: NUM_KEY, value: 16000 }));
     expect(store.getState().config.status).toBe('saving');
 
     await promise;
-    expect(api.putConfig).toHaveBeenCalledWith({ KOKORO_SAMPLE_RATE: 16000 });
+    expect(api.putConfig).toHaveBeenCalledWith({ [NUM_KEY]: 16000 });
     const s = store.getState().config;
     expect(s.status).toBe('idle');
-    expect(s.values.KOKORO_SAMPLE_RATE.effective).toBe(16000);
-    expect(s.values.KOKORO_SAMPLE_RATE.overridden).toBe(true);
+    expect(s.values[NUM_KEY].effective).toBe(16000);
+    expect(s.values[NUM_KEY].overridden).toBe(true);
   });
 
   it('sets status:error on rejection', async () => {
     vi.mocked(api.putConfig).mockRejectedValue(new Error('save failed'));
     const store = makeStore();
 
-    await store.dispatch(saveOverride({ key: 'KOKORO_SAMPLE_RATE', value: 16000 }));
+    await store.dispatch(saveOverride({ key: NUM_KEY, value: 16000 }));
     expect(store.getState().config.status).toBe('error');
     expect(store.getState().config.error).toBe('save failed');
   });
@@ -168,14 +173,14 @@ describe('resetKnob', () => {
   it('calls api.resetConfig with the key and re-hydrates values', async () => {
     const resetValues: ConfigValues = {
       ...MOCK_VALUES,
-      KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 24000, source: 'default', locked: false, overridden: false },
+      [NUM_KEY]: { key: NUM_KEY, effective: 300, source: 'default', locked: false, overridden: false },
     };
     vi.mocked(api.resetConfig).mockResolvedValue({ ok: true, values: resetValues });
 
     const store = makeStore();
-    await store.dispatch(resetKnob('KOKORO_SAMPLE_RATE'));
-    expect(api.resetConfig).toHaveBeenCalledWith({ keys: ['KOKORO_SAMPLE_RATE'] });
-    expect(store.getState().config.values.KOKORO_SAMPLE_RATE.overridden).toBe(false);
+    await store.dispatch(resetKnob(NUM_KEY));
+    expect(api.resetConfig).toHaveBeenCalledWith({ keys: [NUM_KEY] });
+    expect(store.getState().config.values[NUM_KEY].overridden).toBe(false);
   });
 });
 
@@ -192,7 +197,7 @@ describe('selectRestartPending', () => {
     const store = makeStore();
     const overriddenValues: ConfigValues = {
       ...MOCK_VALUES,
-      KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 16000, source: 'override', locked: false, overridden: true },
+      [NUM_KEY]: { key: NUM_KEY, effective: 16000, source: 'override', locked: false, overridden: true },
     };
     store.dispatch(
       fetchConfig.fulfilled({ ...MOCK_CONFIG_RESPONSE, values: overriddenValues }, '', undefined),
@@ -217,7 +222,7 @@ describe('selectRestartPending', () => {
     const envLockedValues: ConfigValues = {
       ...MOCK_VALUES,
       // restart-sidecar knob driven by an env var: source='env', overridden=false
-      KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 16000, source: 'env', locked: true, overridden: false },
+      [NUM_KEY]: { key: NUM_KEY, effective: 16000, source: 'env', locked: true, overridden: false },
     };
     store.dispatch(
       fetchConfig.fulfilled({ ...MOCK_CONFIG_RESPONSE, values: envLockedValues }, '', undefined),

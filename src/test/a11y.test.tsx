@@ -87,24 +87,22 @@ vi.mock('../lib/api', () => ({
         ],
         descriptors: [
           {
-            key: 'KOKORO_SAMPLE_RATE',
+            key: 'tts.qwen.codecChunkSize',
             group: 'tts',
-            label: 'Kokoro sample rate',
-            help: 'PCM output sample rate in Hz.',
+            label: 'Qwen codec chunk size',
+            help: 'Codec decode chunk size (time-axis frames).',
             type: 'integer',
-            min: 8000,
-            max: 48000,
-            step: 1000,
+            min: 1,
             apply: 'live',
             risk: 'low',
             isPrompt: false,
-            default: 24000,
+            default: 300,
           },
         ],
         values: {
-          KOKORO_SAMPLE_RATE: {
-            key: 'KOKORO_SAMPLE_RATE',
-            effective: 24000,
+          'tts.qwen.codecChunkSize': {
+            key: 'tts.qwen.codecChunkSize',
+            effective: 300,
             source: 'default',
             locked: false,
             overridden: false,
@@ -368,7 +366,7 @@ describe('a11y — advanced configuration view', () => {
     );
     // Wait for fetchConfig to hydrate so axe scans real content, not the
     // loading state.
-    await screen.findByText('Kokoro sample rate');
+    await screen.findByText('Qwen codec chunk size');
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });
