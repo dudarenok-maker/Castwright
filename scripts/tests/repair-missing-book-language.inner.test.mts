@@ -302,3 +302,36 @@ test('main: skips .upgrade-backups entirely, even if it holds a bare state.json'
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// #2246 C5 — a missing books root must exit non-zero, not read as a clean run.
+// ---------------------------------------------------------------------------
+
+test('main: missing books root sets a non-zero exit code (#2246 C5)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-missing-root-'));
+  const missingRoot = join(tmp, 'does-not-exist');
+  const before = process.exitCode;
+  try {
+    process.exitCode = 0;
+    await main([], missingRoot);
+    assert.notEqual(process.exitCode, 0, 'a missing books root must not read as a clean (exit 0) run');
+  } finally {
+    process.exitCode = before;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('main: an EXISTING books root leaves the exit code untouched', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-existing-root-'));
+  const before = process.exitCode;
+  try {
+    process.exitCode = 0;
+    const booksRoot = join(tmp, 'books');
+    mkdirSync(booksRoot, { recursive: true }); // exists, but empty — zero books, still a clean run
+    await main([], booksRoot);
+    assert.equal(process.exitCode, 0, 'an existing (even empty) books root is a normal run, not an error');
+  } finally {
+    process.exitCode = before;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

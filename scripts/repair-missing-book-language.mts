@@ -227,6 +227,7 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
 
   if (!existsSync(booksRoot)) {
     console.error(`No books root at ${booksRoot}. Set WORKSPACE_DIR (server/.env) to your workspace.`);
+    process.exitCode = 1;
     return;
   }
 
