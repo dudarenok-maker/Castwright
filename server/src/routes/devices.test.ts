@@ -238,21 +238,36 @@ describe('devices route (srv-33)', () => {
     expect(typeof res.body.expiresAt).toBe('number');
   });
 
-  it('pair-session includes a friendlyUrl when isFriendlyHostnameReachable is set true', async () => {
+  it('pair-session includes a friendlyUrl when mdns and forwarder are both live', async () => {
     process.env.LAN_HTTPS = '1';
     process.env.LAN_AUTH_TOKEN = 'secret';
     process.env.LAN_HTTPS_PORT = '8443';
-    app.set('isFriendlyHostnameReachable', () => true);
+    app.set('friendlyHostnameLiveness', () => ({ mdns: true, forwarder: true }));
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
     expect(res.status).toBe(200);
     expect(res.body.friendlyUrl).toMatch(/^https:\/\/castwright\.local\/#\/pair\?c=[0-9A-HJKMNP-TV-Z]{16}$/);
   });
 
-  it('pair-session omits friendlyUrl when isFriendlyHostnameReachable is set false', async () => {
+  // #2258 — mDNS alive but the :443 forwarder down still yields a usable
+  // friendly URL, carrying the actual bound port rather than disappearing.
+  it('pair-session carries the bound port when mdns is live but the forwarder is down', async () => {
     process.env.LAN_HTTPS = '1';
     process.env.LAN_AUTH_TOKEN = 'secret';
     process.env.LAN_HTTPS_PORT = '8443';
-    app.set('isFriendlyHostnameReachable', () => false);
+    app.set('friendlyHostnameLiveness', () => ({ mdns: true, forwarder: false }));
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
+    expect(res.status).toBe(200);
+    const { port } = vi.mocked(await import('../lan-runtime.js')).getLanRuntime();
+    expect(res.body.friendlyUrl).toMatch(
+      new RegExp(`^https://castwright\\.local:${port}/#/pair\\?c=[0-9A-HJKMNP-TV-Z]{16}$`),
+    );
+  });
+
+  it('pair-session omits friendlyUrl when mdns is down, regardless of forwarder state', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+    app.set('friendlyHostnameLiveness', () => ({ mdns: false, forwarder: true }));
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
     expect(res.status).toBe(200);
     expect(res.body.friendlyUrl).toBeUndefined();

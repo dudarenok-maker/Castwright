@@ -23,6 +23,7 @@ import {
 } from '../workspace/device-tokens.js';
 import { createPairingSession } from '../workspace/pairing-sessions.js';
 import {
+  FRIENDLY_HOSTNAME,
   isLanTokenEnforced,
   isLoopbackRequest,
   mayStartPairingSession,
@@ -102,10 +103,15 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   const label = typeof (req.body as { label?: unknown })?.label === 'string'
     ? (req.body as { label: string }).label : 'Device';
   const { code, expiresAt } = createPairingSession(label, undefined, 10);
-  const isFriendlyHostnameReachable = req.app.get('isFriendlyHostnameReachable') as
-    (() => boolean) | undefined;
-  const friendlyUrl = isFriendlyHostnameReachable?.() === true
-    ? `https://castwright.local/#/pair?c=${code}`
+  const liveness = req.app.get('friendlyHostnameLiveness') as
+    (() => { mdns: boolean; forwarder: boolean }) | undefined;
+  const live = liveness?.();
+  // mDNS resolves the name; the :443 forwarder is what makes the port
+  // implicit. With the responder up and the forwarder down,
+  // https://castwright.local:<bound port> still works — emit that rather
+  // than dropping the friendly flow entirely (#2258).
+  const friendlyUrl = live?.mdns
+    ? `https://${FRIENDLY_HOSTNAME}${live.forwarder ? '' : `:${port}`}/#/pair?c=${code}`
     : undefined;
   res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt, friendlyUrl });
 });
