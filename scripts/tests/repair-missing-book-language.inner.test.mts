@@ -12,12 +12,12 @@
    detect-language.ts still 404s under plain node.)
 
    Covers planBookLanguage (the pure decision function — no I/O, calls the REAL
-   detectManuscriptLanguage) and main() (the I/O shell) against a temp
-   workspace. */
+   detectManuscriptLanguage), cacheSampleText (the analysis-cache sample
+   builder), and main() (the I/O shell) against a temp workspace. */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -38,6 +38,16 @@ const REAL_ENGLISH_PROSE =
   'home ahead of the coming storm, their captains calling out familiar greetings ' +
   'across the darkening water while gulls wheeled overhead in search of scraps.';
 
+// A second, distinct English paragraph — used wherever a test needs TWO
+// independent-but-agreeing samples, so "both sources say 'en'" isn't
+// secretly "both sources are the literal same string".
+const SECOND_ENGLISH_PROSE =
+  'A cold wind moved through the empty market square long after the vendors had ' +
+  'packed up their stalls and gone home for the night, rattling the loose shutters ' +
+  'of the old bakery and scattering a handful of dry leaves across the cobblestones ' +
+  'where a stray cat watched from beneath a parked cart, waiting for the street to ' +
+  'fall completely silent.';
+
 // Real Russian prose. Deterministic via detect-language.ts's Cyrillic-ratio
 // SCRIPT PRE-PASS (not franc), same determinism rationale as NO_LETTERS_TEXT
 // below — no dependency on franc's fuzzy Latin disambiguation.
@@ -53,6 +63,15 @@ const REAL_RUSSIAN_PROSE =
 // branch deterministically (no dependency on franc's fuzzy behaviour).
 const NO_LETTERS_TEXT = '12345 000 --- !!! ??? 000000 111 222 333 444 555 666 777 888';
 
+// #2246 C1 (confirmed review finding): a genuinely English table of contents
+// that franc mis-disambiguates to 'es' with `fallback: false` — a fluent,
+// WRONG, non-fallback result. Real repro, reproduced against the real
+// detectManuscriptLanguage before writing this fixture:
+//   detectManuscriptLanguage(TOC_MISDETECTED_AS_SPANISH) →
+//     { language: 'es', supported: true, fallback: false }
+const TOC_MISDETECTED_AS_SPANISH =
+  'Prologue 1 Kaz 2 Inej 3 Kaz 4 Jesper 5 Nina 6 Matthias 7 Inej 8 Wylan 9 Kaz 10 Nina';
+
 test('planBookLanguage: book already has a language key → untouched, reported as-is', () => {
   const plan = planBookLanguage({
     bookId: 'book-a',
@@ -64,61 +83,102 @@ test('planBookLanguage: book already has a language key → untouched, reported 
   assert.deepEqual(plan, { bookId: 'book-a', action: 'has-language', existingLanguage: 'ru' });
 });
 
-test('planBookLanguage: no language key, confident detection → backfill', () => {
+test('planBookLanguage: no language key, only cache text available → skip (single source, not corroborated)', () => {
   const plan = planBookLanguage({
     bookId: 'book-b',
     hasLanguageKey: false,
     cacheText: REAL_ENGLISH_PROSE,
     manuscriptText: null,
   });
-  assert.equal(plan.action, 'backfill');
-  assert.equal(plan.language, 'en');
+  assert.equal(plan.action, 'skip-single-source');
   assert.equal(plan.sampleSource, 'analysis-cache');
+  assert.match(plan.reason, /only analysis-cache text is available/);
 });
 
-test('planBookLanguage: no language key, detection surrenders → NOT backfilled, reported', () => {
-  const plan = planBookLanguage({
-    bookId: 'book-c',
-    hasLanguageKey: false,
-    cacheText: NO_LETTERS_TEXT,
-    manuscriptText: null,
-  });
-  assert.equal(plan.action, 'skip-fallback');
-  assert.match(plan.reason, /surrendered/);
-});
-
-test('planBookLanguage: no cache, falls back to manuscript text, confident detection → backfill', () => {
+test('planBookLanguage: no language key, only manuscript text available → skip (single source, not corroborated)', () => {
   const plan = planBookLanguage({
     bookId: 'book-d',
     hasLanguageKey: false,
     cacheText: null,
     manuscriptText: REAL_ENGLISH_PROSE,
   });
-  assert.equal(plan.action, 'backfill');
-  assert.equal(plan.language, 'en');
+  assert.equal(plan.action, 'skip-single-source');
   assert.equal(plan.sampleSource, 'manuscript');
+  assert.match(plan.reason, /only manuscript text is available/);
 });
 
-test('planBookLanguage: cache preferred over manuscript text when both present', () => {
+test('planBookLanguage: both sources present, agree, both confident → backfill (#2246 C1 gate)', () => {
   const plan = planBookLanguage({
     bookId: 'book-e',
     hasLanguageKey: false,
     cacheText: REAL_ENGLISH_PROSE,
-    manuscriptText: NO_LETTERS_TEXT,
+    manuscriptText: SECOND_ENGLISH_PROSE,
   });
   assert.equal(plan.action, 'backfill');
-  assert.equal(plan.sampleSource, 'analysis-cache');
+  assert.equal(plan.language, 'en');
+});
+
+test('planBookLanguage: both sources present but detect DIFFERENT languages → skip-disagreement, names both (#2246 C1)', () => {
+  // The exact C1 repro: a genuine English TOC-shaped cache sample franc
+  // mis-disambiguates to 'es' with fallback:false, against a real English
+  // manuscript sample that correctly detects 'en'. Old (single-source)
+  // logic would have preferred the cache sample and written 'es' onto an
+  // ENGLISH book — the bug this gate exists to close.
+  const plan = planBookLanguage({
+    bookId: 'book-f',
+    hasLanguageKey: false,
+    cacheText: TOC_MISDETECTED_AS_SPANISH,
+    manuscriptText: REAL_ENGLISH_PROSE,
+  });
+  assert.equal(plan.action, 'skip-disagreement');
+  assert.equal(plan.cacheLanguage, 'es');
+  assert.equal(plan.manuscriptLanguage, 'en');
+  assert.match(plan.reason, /'es'/);
+  assert.match(plan.reason, /'en'/);
+});
+
+test('planBookLanguage: cache surrenders, manuscript confident → skip-fallback (either side surrendering is a skip)', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-g',
+    hasLanguageKey: false,
+    cacheText: NO_LETTERS_TEXT,
+    manuscriptText: REAL_ENGLISH_PROSE,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /surrendered/);
+});
+
+test('planBookLanguage: manuscript surrenders, cache confident → skip-fallback', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-h',
+    hasLanguageKey: false,
+    cacheText: REAL_ENGLISH_PROSE,
+    manuscriptText: NO_LETTERS_TEXT,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /surrendered/);
+});
+
+test('planBookLanguage: both sources surrender → skip-fallback', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-i',
+    hasLanguageKey: false,
+    cacheText: NO_LETTERS_TEXT,
+    manuscriptText: NO_LETTERS_TEXT,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /both/);
 });
 
 test('planBookLanguage: no cache and no manuscript text → skipped, reported', () => {
   const plan = planBookLanguage({
-    bookId: 'book-f',
+    bookId: 'book-j',
     hasLanguageKey: false,
     cacheText: null,
     manuscriptText: null,
   });
   assert.deepEqual(plan, {
-    bookId: 'book-f',
+    bookId: 'book-j',
     action: 'skip-no-text',
     reason: 'no analysis-cache sentence text and no readable manuscript file',
   });
@@ -126,7 +186,7 @@ test('planBookLanguage: no cache and no manuscript text → skipped, reported', 
 
 test('planBookLanguage: whitespace-only cache/manuscript text counts as no text', () => {
   const plan = planBookLanguage({
-    bookId: 'book-g',
+    bookId: 'book-k',
     hasLanguageKey: false,
     cacheText: '   \n  ',
     manuscriptText: '  ',
@@ -189,7 +249,10 @@ test('cacheSampleText: returns null when the book has no cache at all', async ()
 // main() — integration against a temp workspace. Every fixture book gets a
 // fresh random manuscriptId so it can never collide with a real entry in
 // server/handoff/cache/ — that keeps "no cache" naturally true without
-// touching (or needing to clean up) the real cache directory.
+// touching (or needing to clean up) the real cache directory, EXCEPT for the
+// tests below that deliberately populate a cache file to exercise the
+// analysis-cache sample-source path (previously ZERO coverage — every other
+// main() fixture leaves cacheText null).
 // ---------------------------------------------------------------------------
 
 function makeBook(booksRoot, relPath, state) {
@@ -225,8 +288,11 @@ test('main: book with an explicit language is left untouched', async () => {
   }
 });
 
-test('main: no language key + readable manuscript file + confident detection → --apply backfills', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-backfill-'));
+test('main: only a manuscript sample (no cache) → single source, NOT backfilled (#2246 C1)', async () => {
+  // Before the C1 fix this backfilled from the one available source. After
+  // the fix a single, uncorroborated source is a skip — recoverable, unlike
+  // a wrong write.
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-single-source-'));
   try {
     const booksRoot = join(tmp, 'books');
     const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'No Language'), {
@@ -242,8 +308,12 @@ test('main: no language key + readable manuscript file + confident detection →
     await main(['--apply'], booksRoot);
 
     const written = readState(statePath);
-    assert.equal(written.language, 'en');
-    // Every other field is preserved (spread, never reconstructed).
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(written, 'language'),
+      'a single, uncorroborated source must never be enough to write',
+    );
+    // Every other field still preserved (spread, never reconstructed) —
+    // there's simply no write at all here.
     assert.equal(written.narratorCredit, 'Castwright');
     assert.equal(written.title, 'No Language');
   } finally {
@@ -251,7 +321,75 @@ test('main: no language key + readable manuscript file + confident detection →
   }
 });
 
-test('main: detection surrenders → --apply does NOT write, book stays without a language key', async () => {
+test('main: cache + manuscript agree on a NON-ENGLISH language → --apply backfills (#2246 C1 + analysis-cache branch coverage)', async () => {
+  // Closes the "analysis-cache sample-source branch of main() has zero
+  // coverage" gap (every other fixture uses a random, cache-less
+  // manuscriptId) AND is the suite's one non-English fixture.
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-ru-agree-'));
+  const manuscriptId = `mns_${randomUUID()}`;
+  const cacheFilePath = cachePath(manuscriptId);
+  try {
+    const booksRoot = join(tmp, 'books');
+    const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'Russian Book'), {
+      bookId: 'author__series__russian-book',
+      manuscriptId,
+      title: 'Russian Book',
+      author: 'Author',
+      manuscriptFile: 'manuscript.md',
+    });
+    writeFileSync(join(bookDir, 'manuscript.md'), `# Russian Book\n\n${REAL_RUSSIAN_PROSE}\n`);
+    mkdirSync(dirname(cacheFilePath), { recursive: true });
+    writeFileSync(
+      cacheFilePath,
+      JSON.stringify({ chapters: { 0: [{ text: REAL_RUSSIAN_PROSE, speakerId: 'narrator' }] } }),
+    );
+
+    await main(['--apply'], booksRoot);
+
+    const written = readState(statePath);
+    assert.equal(written.language, 'ru');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
+  }
+});
+
+test('main: cache and manuscript DISAGREE → --apply does NOT write (#2246 C1)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-disagree-'));
+  const manuscriptId = `mns_${randomUUID()}`;
+  const cacheFilePath = cachePath(manuscriptId);
+  try {
+    const booksRoot = join(tmp, 'books');
+    const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'Disagreement'), {
+      bookId: 'author__series__disagreement',
+      manuscriptId,
+      title: 'Disagreement',
+      author: 'Author',
+      manuscriptFile: 'manuscript.md',
+    });
+    // Manuscript re-parse sees real English prose → 'en'. Cache sample is
+    // the TOC-shaped text that franc mis-disambiguates to 'es'.
+    writeFileSync(join(bookDir, 'manuscript.md'), `# Disagreement\n\n${REAL_ENGLISH_PROSE}\n`);
+    mkdirSync(dirname(cacheFilePath), { recursive: true });
+    writeFileSync(
+      cacheFilePath,
+      JSON.stringify({ chapters: { 0: [{ text: TOC_MISDETECTED_AS_SPANISH, speakerId: 'narrator' }] } }),
+    );
+
+    await main(['--apply'], booksRoot);
+
+    const written = readState(statePath);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(written, 'language'),
+      'sources disagreeing must never resolve to a write',
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
+  }
+});
+
+test('main: detection surrenders on both sources → --apply does NOT write, book stays without a language key', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-surrender-'));
   try {
     const booksRoot = join(tmp, 'books');
@@ -297,6 +435,99 @@ test('main: no manuscript file and no cache → skipped, book stays without a la
   }
 });
 
+test('main: dry-run (no --apply) writes nothing at all', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-dry-'));
+  const manuscriptId = `mns_${randomUUID()}`;
+  const cacheFilePath = cachePath(manuscriptId);
+  try {
+    const booksRoot = join(tmp, 'books');
+    const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'Dry Run'), {
+      bookId: 'author__series__dry-run',
+      manuscriptId,
+      title: 'Dry Run',
+      author: 'Author',
+      manuscriptFile: 'manuscript.md',
+    });
+    writeFileSync(join(bookDir, 'manuscript.md'), `# Dry Run\n\n${REAL_ENGLISH_PROSE}\n`);
+    mkdirSync(dirname(cacheFilePath), { recursive: true });
+    writeFileSync(
+      cacheFilePath,
+      JSON.stringify({ chapters: { 0: [{ text: SECOND_ENGLISH_PROSE, speakerId: 'narrator' }] } }),
+    );
+    const before = readFileSync(statePath, 'utf8');
+
+    await main([], booksRoot); // no --apply → dry-run default
+
+    const after = readFileSync(statePath, 'utf8');
+    assert.equal(after, before, 'dry-run must not touch state.json byte-for-byte');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
+  }
+});
+
+test('main: skips .upgrade-backups entirely, even if it holds a bare state.json', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-upgrade-backups-'));
+  const manuscriptId = `mns_${randomUUID()}`;
+  const cacheFilePath = cachePath(manuscriptId);
+  try {
+    const booksRoot = join(tmp, 'books');
+    // A real book that WOULD backfill, to prove the walk still finds it —
+    // now needs an agreeing cache sample too, since a manuscript-only
+    // sample is a skip under the #2246 C1 cross-source-agreement gate.
+    const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'Real Book'), {
+      bookId: 'author__series__real-book',
+      manuscriptId,
+      title: 'Real Book',
+      author: 'Author',
+      manuscriptFile: 'manuscript.md',
+    });
+    writeFileSync(join(bookDir, 'manuscript.md'), `# Real Book\n\n${REAL_ENGLISH_PROSE}\n`);
+    mkdirSync(dirname(cacheFilePath), { recursive: true });
+    writeFileSync(
+      cacheFilePath,
+      JSON.stringify({ chapters: { 0: [{ text: SECOND_ENGLISH_PROSE, speakerId: 'narrator' }] } }),
+    );
+
+    // ...alongside an .upgrade-backups snapshot NESTED INSIDE booksRoot (worst
+    // case for the walk — it must still be skipped even when it sits directly
+    // in the subtree being walked, not just as a WORKSPACE_ROOT sibling). Give
+    // it a manuscript that WOULD confidently backfill if the skip ever broke,
+    // so the assertion below is a real proof, not a vacuous one. (No cache for
+    // this one — a manuscript-only sample would be skip-single-source anyway,
+    // which is itself still proof the walk never reached it: if the walk HAD
+    // reached it, the run's overall counts would differ from the real book's,
+    // but the direct assertion below — the backup file never being written to
+    // — is definitive regardless.)
+    const backupDir = join(booksRoot, '.upgrade-backups', 'from-1-to-2', 'Author', 'Series', 'Real Book');
+    const backupAudiobookDir = join(backupDir, '.audiobook');
+    mkdirSync(backupAudiobookDir, { recursive: true });
+    writeFileSync(
+      join(backupAudiobookDir, 'state.json'),
+      JSON.stringify({
+        bookId: 'stale-backup-copy',
+        manuscriptId: `mns_${randomUUID()}`,
+        title: 'Stale',
+        author: 'Author',
+        manuscriptFile: 'manuscript.md',
+      }),
+    );
+    writeFileSync(join(backupDir, 'manuscript.md'), `# Stale\n\n${REAL_ENGLISH_PROSE}\n`);
+    const backupStatePath = join(backupAudiobookDir, 'state.json');
+    const backupBefore = readFileSync(backupStatePath, 'utf8');
+
+    await main(['--apply'], booksRoot);
+
+    const written = readState(statePath);
+    assert.equal(written.language, 'en');
+    const backupAfter = readFileSync(backupStatePath, 'utf8');
+    assert.equal(backupAfter, backupBefore, '.upgrade-backups must never be walked, let alone written to');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cacheFilePath)) rmSync(cacheFilePath, { force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // #2246 C3 — one corrupt state.json must not abort the whole run.
 // ---------------------------------------------------------------------------
@@ -331,76 +562,6 @@ test('main: a corrupt state.json (unparsable, no valid backup) is skipped as unr
     assert.equal(readFileSync(corruptStatePath, 'utf8'), '{ this is not valid json');
     const healthyWritten = readState(healthyStatePath);
     assert.equal(healthyWritten.language, 'ru');
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test('main: dry-run (no --apply) writes nothing at all', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-dry-'));
-  try {
-    const booksRoot = join(tmp, 'books');
-    const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'Dry Run'), {
-      bookId: 'author__series__dry-run',
-      manuscriptId: `mns_${randomUUID()}`,
-      title: 'Dry Run',
-      author: 'Author',
-      manuscriptFile: 'manuscript.md',
-    });
-    writeFileSync(join(bookDir, 'manuscript.md'), `# Dry Run\n\n${REAL_ENGLISH_PROSE}\n`);
-    const before = readFileSync(statePath, 'utf8');
-
-    await main([], booksRoot); // no --apply → dry-run default
-
-    const after = readFileSync(statePath, 'utf8');
-    assert.equal(after, before, 'dry-run must not touch state.json byte-for-byte');
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test('main: skips .upgrade-backups entirely, even if it holds a bare state.json', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-upgrade-backups-'));
-  try {
-    const booksRoot = join(tmp, 'books');
-    // A real book that WOULD backfill, to prove the walk still finds it...
-    const { bookDir, statePath } = makeBook(booksRoot, join('Author', 'Series', 'Real Book'), {
-      bookId: 'author__series__real-book',
-      manuscriptId: `mns_${randomUUID()}`,
-      title: 'Real Book',
-      author: 'Author',
-      manuscriptFile: 'manuscript.md',
-    });
-    writeFileSync(join(bookDir, 'manuscript.md'), `# Real Book\n\n${REAL_ENGLISH_PROSE}\n`);
-
-    // ...alongside an .upgrade-backups snapshot NESTED INSIDE booksRoot (worst
-    // case for the walk — it must still be skipped even when it sits directly
-    // in the subtree being walked, not just as a WORKSPACE_ROOT sibling). Give
-    // it a manuscript that WOULD confidently backfill if the skip ever broke,
-    // so the assertion below is a real proof, not a vacuous one.
-    const backupDir = join(booksRoot, '.upgrade-backups', 'from-1-to-2', 'Author', 'Series', 'Real Book');
-    const backupAudiobookDir = join(backupDir, '.audiobook');
-    mkdirSync(backupAudiobookDir, { recursive: true });
-    writeFileSync(
-      join(backupAudiobookDir, 'state.json'),
-      JSON.stringify({
-        bookId: 'stale-backup-copy',
-        manuscriptId: `mns_${randomUUID()}`,
-        title: 'Stale',
-        author: 'Author',
-        manuscriptFile: 'manuscript.md',
-      }),
-    );
-    writeFileSync(join(backupDir, 'manuscript.md'), `# Stale\n\n${REAL_ENGLISH_PROSE}\n`);
-    const backupStatePath = join(backupAudiobookDir, 'state.json');
-    const backupBefore = readFileSync(backupStatePath, 'utf8');
-
-    await main(['--apply'], booksRoot);
-
-    const written = readState(statePath);
-    assert.equal(written.language, 'en');
-    const backupAfter = readFileSync(backupStatePath, 'utf8');
-    assert.equal(backupAfter, backupBefore, '.upgrade-backups must never be walked, let alone written to');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
