@@ -1470,6 +1470,110 @@ test("#2199: passing baselineText has no effect on the default direction:'both' 
 });
 
 // ---------------------------------------------------------------------------
+// #2272: `options.dischargingIds` — the narrower gap #2199's baseline cannot
+// close on its own. The baseline can only recognise a discharge that has
+// ALREADY merged to origin/main; `--against-published` runs BEFORE merge,
+// from the shipping branch, so origin/main still has the row at that moment
+// and the baseline (correctly, per its own contract) calls it genuinely
+// BEHIND. `dischargingIds` is the operator's explicit assertion that a named
+// row was deliberately discharged by the change about to publish — it
+// suppresses exactly the rows named, and only those.
+// ---------------------------------------------------------------------------
+
+// The register discharged BOTH A3 and A4 (only A1/A2 remain); origin/main's
+// baseline hasn't merged that discharge yet, so it still has all four; the
+// live page (fetched before the publish that will fix it) still shows all
+// four too. Naming both suppresses both — the run must pass.
+test('#2272: --discharging suppresses exactly the named live-only rows and the run passes', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const baselineRegister = buildSingleGroupRegister('A', [1, 2, 3, 4]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 4,
+    glanceCount: 4,
+    headerCount: 4,
+    rowIds: ['A1', 'A2', 'A3', 'A4'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['A3', 'A4'],
+  });
+  assert.deepEqual(errors, []);
+});
+
+// Same fixture, but only A3 is named. A4 must still fail — and still name
+// A4 specifically — whether it was simply forgotten or is a genuine
+// competing-lane row: this is the A44 regression (2026-08-11) that #2199
+// exists to keep failing, and #2272 must not trade it away.
+test('#2272: an unnamed live-only row in the same run still fails, naming its own ID', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const baselineRegister = buildSingleGroupRegister('A', [1, 2, 3, 4]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 4,
+    glanceCount: 4,
+    headerCount: 4,
+    rowIds: ['A1', 'A2', 'A3', 'A4'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['A3'],
+  });
+  assert.ok(
+    errors.some((e) => e.includes('BEHIND what is already published') && e.includes('A4')),
+    `expected a stale-row error naming A4, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('A3')),
+    `A3 was named via --discharging and must not appear in any error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Naming an ID that is NOT live-only — here, a row present in the register,
+// the baseline, AND the live page, i.e. fully in sync — must be a loud
+// error, not a silent no-op. Without this, a typo (or a name copied from
+// the wrong discharge) would pass silently and the flag would degenerate
+// into a blanket mute.
+test('#2272: naming an ID that is not live-only is an error, not a silent no-op', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const baselineRegister = buildSingleGroupRegister('A', [1, 2]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 2,
+    glanceCount: 2,
+    headerCount: 2,
+    rowIds: ['A1', 'A2'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['A1'],
+  });
+  assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+  assert.match(errors[0], /not a live-only row/);
+  assert.match(errors[0], /A1/);
+});
+
+// `dischargingIds` has no effect outside 'extraOnly' — the flag is scoped to
+// the pre-publish comparison it was built for, mirroring baselineText's own
+// direction:'both' no-op test above.
+test("#2272: dischargingIds has no effect on the default direction:'both' comparison", () => {
+  const withDischarging = checkLiveView(
+    buildRegister(),
+    buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }),
+    { dischargingIds: ['A3'] },
+  );
+  const withoutDischarging = checkLiveView(
+    buildRegister(),
+    buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }),
+  );
+  assert.deepEqual(withDischarging, withoutDischarging);
+  assert.ok(
+    withDischarging.some((e) => e.startsWith("Live view's Group A section has row A3")),
+    `expected the ordinary 'both'-mode extra-row error to still fire, got: ${JSON.stringify(withDischarging)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // #2199 review round 2: `resolveBaselineText` — the CLI layer's git surface.
 //
 // A first version of the fix read the LOCAL `origin/main` ref as-is, with no
@@ -2156,6 +2260,59 @@ test('--against-published exits 1 with "Not found" when the given file does not 
     const r = runCli(['--against-published', missingPath]);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Not found:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2272: `--discharging <id>[,<id>...]` at the CLI layer. The unit tests
+// above pin the semantics inside `checkLiveView`; these spawn the real
+// process (like the rest of the --against-published CLI tests above) to
+// prove the real argv parsing and threading (CLI -> checkLiveView) actually
+// wire up, not just that the option works when passed directly.
+// ---------------------------------------------------------------------------
+
+test('--discharging without --against-published fails loudly rather than being silently ignored', () => {
+  const r = runCli(['--discharging', 'E10']);
+  assert.equal(
+    r.status,
+    1,
+    `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+  );
+  assert.match(r.stderr, /--discharging only makes sense alongside --against-published/);
+});
+
+test('--discharging with no value fails with a usage message', () => {
+  const r = runCli(['--against-published', 'unused.html', '--discharging']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--discharging requires a value/);
+});
+
+// End-to-end proof that the CLI actually threads --discharging's argv value
+// into checkLiveView's `dischargingIds` option. Same fixture shape as the
+// "genuinely BEHIND" test above (A6): a live-page row absent from this
+// register, present in the (hermetic) baseline — but here it's named via
+// --discharging, so the run must now pass instead of failing.
+test('--discharging names the row genuinely absent from this register and the run passes, real argv end to end', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, #2272)',
+  );
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath, '--discharging', newId], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      0,
+      `expected exit 0 (row ${newId} named via --discharging), got ${r.status}. ` +
+        `stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    assert.match(r.stdout, /check:onbox-register: OK/);
   });
 });
 

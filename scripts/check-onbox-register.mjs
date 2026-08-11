@@ -584,12 +584,34 @@ export const CANNOT_VERIFY_BASELINE_ERROR =
 //     origin/main as suspect — is the exact false positive #2199 exists to
 //     fix, just with the roles of "register" and "origin/main" swapped. See
 //     the register's own "Live view" step 3 for the operator-facing note.
+//
+//     #2272: `options.dischargingIds` closes a narrower gap the baseline
+//     above cannot — it can only recognise a discharge that has ALREADY
+//     MERGED to `origin/main`, but `--against-published` runs BEFORE merge,
+//     from the shipping branch itself. At that moment `origin/main` still
+//     has the row, so the baseline calls it genuinely BEHIND even though
+//     this very branch already removed it. `dischargingIds` names the row
+//     IDs the operator asserts were deliberately discharged by the change
+//     being published; each suppresses exactly the one live-only row it
+//     names (present on the published page, absent from this register) —
+//     it never widens beyond the IDs actually named, and it has no effect
+//     outside `direction: 'extraOnly'`. Naming an ID that does NOT
+//     correspond to a live-only row is an error, not a silent no-op — see
+//     the check at the end of this function — so a typo can't degenerate
+//     the flag into a blanket mute. Renumbering wrinkle: rows renumber
+//     contiguously within a group, so discharging a MIDDLE row (say E5)
+//     does not make E5 the live-only one — every row after it shifts down
+//     to fill the gap, so the group's HIGHEST id (e.g. E10) is the one that
+//     vanishes. Name the ID that actually disappeared, not the row you
+//     conceptually discharged.
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
-  { direction = 'both', baselineText } = {},
+  { direction = 'both', baselineText, dischargingIds = [] } = {},
 ) {
   const errors = [];
+  const dischargingSet = new Set(dischargingIds);
+  const consumedDischargingIds = new Set();
   const liveViewHtml = stripHtmlComments(rawLiveViewHtml);
   const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(markdownText);
   // Same bail-out as checkRegister, for the same reason: an unterminated fence
@@ -777,6 +799,20 @@ export function checkLiveView(
     // row filed under the wrong group (see the comment above) is checked
     // against ITS letter's baseline group, matching how `expected`/`found`
     // are keyed.
+    //
+    // #2272: every id in `extra` is, by definition, "live-only" (present on
+    // the live page, absent from this register) — the exact target
+    // `--discharging` suppresses — so a named id is marked consumed here,
+    // BEFORE the baseline filter below, regardless of whether the baseline
+    // would have called it stale. That way a name for a row the baseline
+    // ALSO already lacks (harmless — it was never going to be reported)
+    // still counts as a match, not a typo, and only a name that never shows
+    // up in ANY group's `extra` set at all is left unconsumed and reported.
+    if (direction === 'extraOnly') {
+      for (const id of extra) {
+        if (dischargingSet.has(id)) consumedDischargingIds.add(id);
+      }
+    }
     const staleExtra =
       direction === 'extraOnly'
         ? extra.filter((id) => {
@@ -784,7 +820,12 @@ export function checkLiveView(
             if (!idMatch) return true; // shouldn't happen — rowIds is pre-filtered to this shape
             const [, idLetter, idNumber] = idMatch;
             const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
-            return baselineNumbers.includes(Number(idNumber));
+            if (!baselineNumbers.includes(Number(idNumber))) return false;
+            // #2272: a named id suppresses exactly this BEHIND verdict — the
+            // baseline (pre-merge origin/main) hasn't caught up yet because
+            // this run is BEFORE merge, not because the row is a genuine
+            // competing-lane addition.
+            return !dischargingSet.has(id);
           })
         : extra;
     if (staleExtra.length > 0) {
@@ -815,6 +856,26 @@ export function checkLiveView(
       errors.push(
         `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
       );
+    }
+  }
+
+  // #2272: any --discharging name that never matched a live-only row is an
+  // error, not a silent no-op — an unmatched name (a typo, or an ID copied
+  // from the wrong discharge) must be loud, or the flag degenerates into a
+  // blanket mute that would let a genuine competing-lane row slip through
+  // unreported. Scoped to 'extraOnly' — dischargingIds has no effect in
+  // 'both' mode, so an unconsumed name there is not an error.
+  if (direction === 'extraOnly') {
+    for (const id of dischargingSet) {
+      if (!consumedDischargingIds.has(id)) {
+        errors.push(
+          `--discharging named ${id}, but it is not a live-only row (present on the ` +
+            'published page, absent from this register) — there is nothing to suppress. ' +
+            'If you discharged a middle row, remember rows renumber contiguously: the ID ' +
+            "that actually vanished from the live page is the group's HIGHEST id, not the " +
+            'row you conceptually discharged. Name that one instead.',
+        );
+      }
     }
   }
 
@@ -977,6 +1038,41 @@ if (invokedAsCli) {
   // onbox-register-check.yml, which has no such file to read and no network
   // access to fetch one.
   const againstPublishedIdx = process.argv.indexOf('--against-published');
+
+  // --discharging <id>[,<id>...] (#2272): names row IDs the operator asserts
+  // were deliberately discharged by the change about to publish. Parsed here,
+  // at the CLI layer — the flag/argv surface — and threaded into
+  // `checkLiveView` as plain data (`options.dischargingIds`); `checkLiveView`
+  // itself never touches argv or shells out (see its own header comment),
+  // and that separation is what keeps it unit-testable. Only meaningful
+  // alongside --against-published — there is nothing for it to suppress in
+  // any other run — so it fails loudly rather than being silently ignored
+  // when passed without it.
+  const dischargingIdx = process.argv.indexOf('--discharging');
+  let dischargingIds = [];
+  if (dischargingIdx !== -1) {
+    const dischargingArg = process.argv[dischargingIdx + 1];
+    if (!dischargingArg) {
+      console.error(
+        '--discharging requires a value: one row ID, or a comma-separated list, e.g. ' +
+          '--discharging E10 or --discharging E10,E11.',
+      );
+      process.exit(1);
+    }
+    if (againstPublishedIdx === -1) {
+      console.error(
+        '--discharging only makes sense alongside --against-published — it names a row ' +
+          'deliberately discharged by the change about to publish, and there is nothing ' +
+          'for it to suppress outside that comparison.',
+      );
+      process.exit(1);
+    }
+    dischargingIds = dischargingArg
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
+
   if (againstPublishedIdx !== -1) {
     const publishedPath = process.argv[againstPublishedIdx + 1];
     if (!publishedPath) {
@@ -1102,6 +1198,7 @@ if (invokedAsCli) {
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
       baselineText: baseline.text,
+      dischargingIds,
     });
     // The fail-closed "cannot verify" case (#2199) does not mean the
     // register IS behind (that's unknown), so it gets its own label rather
