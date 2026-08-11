@@ -128,13 +128,48 @@ comparison, see the edge list above). The merge step that closes this, run
    complete step 4 either.
 3. **If it fails**, do NOT publish. There are two distinct failure shapes,
    named in the error text:
-   - **A row/group named as already live and BEHIND** — your register is
-     genuinely behind. Pull the latest `main` (the row that's already live
-     should already be merged there via its own PR), confirm
-     `npm run check:onbox-register` (no flag) is green, and re-run step 2
-     against the SAME saved copy from step 1 to confirm it now passes. It
-     should — main pulling in the missing row is what resolves this, not
-     another fetch of the live page.
+   - **A row/group named as already live and BEHIND** — this message has TWO
+     different causes, and they need opposite fixes; check which one applies
+     before you act:
+     - **Another lane's row, already merged into `main`.** Pull the latest
+       `main` (the row that's already live should already be merged there
+       via its own PR), confirm `npm run check:onbox-register` (no flag) is
+       green, and re-run step 2 against the SAME saved copy from step 1 to
+       confirm it now passes. It should — `main` pulling in the missing row
+       is what resolves this, not another fetch of the live page.
+     - **Your OWN change discharged this row, and it just hasn't merged
+       yet.** Publishing (step 4) happens BEFORE this PR merges to `main` —
+       that is the normal order, not a mistake — so `origin/main` cannot yet
+       know your branch removed the row: the baseline can only recognise a
+       discharge that has already landed there. Every pre-merge discharge
+       therefore trips this exact same message, and pulling `main` will not
+       help (there's nothing to pull yet). Instead, re-run step 2 with
+       `--discharging <ID>[,<ID>...]` naming the row(s) you deliberately
+       removed, e.g. `npm run check:onbox-register -- --against-published
+       <saved-file> --discharging E10` or `--discharging E10,E11` for more
+       than one. **Which ID(s) to name depends on which of these two shapes
+       applies — check before you act, they need opposite reasoning:**
+       - **A middle row of a group that still has survivors (the
+         renumbering wrinkle).** Rows renumber contiguously within a group,
+         so discharging a MIDDLE row does NOT make that row the one
+         reported — every row after it shifts down to fill the gap, so it's
+         the group's HIGHEST id that vanishes from the live page instead.
+         Name the ID the error message actually names, not the row you
+         conceptually discharged.
+       - **A whole group with NO survivors left** — e.g. discharging a
+         single-row group's only row (Group F's sole row, F1, is a real,
+         live example of exactly this shape). There is nothing left to
+         renumber, so every row the group's live-page section still lists
+         is still live-only — name **all** of them, comma-separated, in
+         one `--discharging` value. Naming only SOME of a wholly-vanished
+         group's rows still fails: the error names exactly which leftover
+         ID(s) remain unaccounted for, so add those and re-run rather than
+         guessing at the rest.
+
+       Either way, naming an ID that turns out not to be live-only at all (a
+       typo, or copied from the wrong discharge) is itself a refusal, not a
+       silent no-op — the point is to keep a genuinely competing-lane row
+       from slipping through unreported, not to mute the check wholesale.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine

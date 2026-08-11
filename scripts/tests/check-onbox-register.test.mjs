@@ -1470,6 +1470,286 @@ test("#2199: passing baselineText has no effect on the default direction:'both' 
 });
 
 // ---------------------------------------------------------------------------
+// #2272: `options.dischargingIds` — the narrower gap #2199's baseline cannot
+// close on its own. The baseline can only recognise a discharge that has
+// ALREADY merged to origin/main; `--against-published` runs BEFORE merge,
+// from the shipping branch, so origin/main still has the row at that moment
+// and the baseline (correctly, per its own contract) calls it genuinely
+// BEHIND. `dischargingIds` is the operator's explicit assertion that a named
+// row was deliberately discharged by the change about to publish — it
+// suppresses exactly the rows named, and only those.
+// ---------------------------------------------------------------------------
+
+// The register discharged BOTH A3 and A4 (only A1/A2 remain); origin/main's
+// baseline hasn't merged that discharge yet, so it still has all four; the
+// live page (fetched before the publish that will fix it) still shows all
+// four too. Naming both suppresses both — the run must pass.
+test('#2272: --discharging suppresses exactly the named live-only rows and the run passes', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const baselineRegister = buildSingleGroupRegister('A', [1, 2, 3, 4]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 4,
+    glanceCount: 4,
+    headerCount: 4,
+    rowIds: ['A1', 'A2', 'A3', 'A4'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['A3', 'A4'],
+  });
+  assert.deepEqual(errors, []);
+});
+
+// Same fixture, but only A3 is named. A4 must still fail — and still name
+// A4 specifically — whether it was simply forgotten or is a genuine
+// competing-lane row: this is the A44 regression (2026-08-11) that #2199
+// exists to keep failing, and #2272 must not trade it away.
+test('#2272: an unnamed live-only row in the same run still fails, naming its own ID', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const baselineRegister = buildSingleGroupRegister('A', [1, 2, 3, 4]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 4,
+    glanceCount: 4,
+    headerCount: 4,
+    rowIds: ['A1', 'A2', 'A3', 'A4'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['A3'],
+  });
+  assert.ok(
+    errors.some((e) => e.includes('BEHIND what is already published') && e.includes('A4')),
+    `expected a stale-row error naming A4, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('A3')),
+    `A3 was named via --discharging and must not appear in any error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Naming an ID that is NOT live-only — here, a row present in the register,
+// the baseline, AND the live page, i.e. fully in sync — must be a loud
+// error, not a silent no-op. Without this, a typo (or a name copied from
+// the wrong discharge) would pass silently and the flag would degenerate
+// into a blanket mute.
+test('#2272: naming an ID that is not live-only is an error, not a silent no-op', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const baselineRegister = buildSingleGroupRegister('A', [1, 2]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 2,
+    glanceCount: 2,
+    headerCount: 2,
+    rowIds: ['A1', 'A2'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['A1'],
+  });
+  assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+  assert.match(errors[0], /never accounts for a live-only row/);
+  assert.match(errors[0], /A1/);
+});
+
+// `dischargingIds` has no effect outside 'extraOnly' — the flag is scoped to
+// the pre-publish comparison it was built for, mirroring baselineText's own
+// direction:'both' no-op test above.
+test("#2272: dischargingIds has no effect on the default direction:'both' comparison", () => {
+  const withDischarging = checkLiveView(
+    buildRegister(),
+    buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }),
+    { dischargingIds: ['A3'] },
+  );
+  const withoutDischarging = checkLiveView(
+    buildRegister(),
+    buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }),
+  );
+  assert.deepEqual(withDischarging, withoutDischarging);
+  assert.ok(
+    withDischarging.some((e) => e.startsWith("Live view's Group A section has row A3")),
+    `expected the ordinary 'both'-mode extra-row error to still fire, got: ${JSON.stringify(withDischarging)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #2272 review finding 1: a discharge that removes a group's LAST row makes
+// the whole group vanish from the working register (not just one row within
+// a group the register still has) — a shape the per-row `extra`/`staleExtra`
+// logic above never sees, because it only runs for letters `mdBodyGroups`
+// still has. This is live today: Group F has exactly one row in the real
+// register, so discharging it removes the whole group. Builds a register
+// with more than one group so a whole-group discharge can be modelled
+// without disturbing the group that survives.
+// ---------------------------------------------------------------------------
+
+// A register/baseline pair spanning MULTIPLE groups — buildSingleGroupRegister
+// only ever produces one group, which can't model "the register still has
+// Group A but has lost Group F entirely".
+function buildMultiGroupRegister(groups) {
+  const glanceRows = groups
+    .map(({ letter, rowNumbers }) => `| **${letter}** | Setup ${letter} | ${rowNumbers.length} |`)
+    .join('\n');
+  const total = groups.reduce((sum, g) => sum + g.rowNumbers.length, 0);
+  const bodySections = groups
+    .map(({ letter, rowNumbers }) => {
+      const body = rowNumbers
+        .map((n) => `### ${letter}${n} · thing ${n}\n\nBody text.\n`)
+        .join('\n');
+      return `## Group ${letter} — setup ${letter.toLowerCase()}\n\n${body}---\n`;
+    })
+    .join('\n');
+  return `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+${glanceRows}
+
+**${total} owed.** Oldest: **2026-01-01**.
+
+---
+
+${bodySections}`;
+}
+
+function buildMultiGroupLiveView(owed, groups) {
+  const glanceRows = groups
+    .map(({ letter, glanceCount }) => {
+      const lower = letter.toLowerCase();
+      return `      <tr><td><a href="#g${lower}">${letter}</a></td><td>Setup ${letter}</td><td>${glanceCount}</td></tr>`;
+    })
+    .join('\n');
+  const sections = groups
+    .map(({ letter, headerCount, rowIds }) => {
+      const lower = letter.toLowerCase();
+      const rowSpans = rowIds
+        .map(
+          (id) =>
+            `      <summary><span class="num">${id}</span><span class="iname">t</span></summary>`,
+        )
+        .join('\n');
+      return `  <section class="group" id="g${lower}">
+    <h3 class="gtitle"><span class="gtag">${letter}</span> Setup ${letter} <span class="gcount">${headerCount} rows</span></h3>
+${rowSpans}
+  </section>`;
+    })
+    .join('\n\n');
+  return `<title>On-box acceptance register — Castwright</title>
+
+  <div class="strip">
+    <div class="n owed">${owed}</div><div class="l">Owed</div>
+  </div>
+
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+${glanceRows}
+    </tbody>
+  </table>
+
+${sections}
+`;
+}
+
+// Group F had exactly one row (F1); this change discharges it, so Group F
+// disappears from the working register entirely, while origin/main's
+// baseline (not merged yet) and the live page (fetched before the publish
+// that will fix it) both still show it. Naming F1 must suppress BOTH the
+// glance-table and body-section whole-group BEHIND verdicts and let the run
+// pass — before this fix, no invocation of --discharging produced green for
+// a single-row group.
+test('#2272 review finding 1: --discharging on a whole-group (single-row) discharge passes', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]); // Group F is entirely absent
+  const baselineRegister = buildMultiGroupRegister([
+    { letter: 'A', rowNumbers: [1] },
+    { letter: 'F', rowNumbers: [1] },
+  ]);
+  const liveView = buildMultiGroupLiveView(2, [
+    { letter: 'A', glanceCount: 1, headerCount: 1, rowIds: ['A1'] },
+    { letter: 'F', glanceCount: 1, headerCount: 1, rowIds: ['F1'] },
+  ]);
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['F1'],
+  });
+  assert.deepEqual(errors, []);
+});
+
+// Group D had two rows (D1, D2), both discharged by this change — but only
+// D1 is named. A partial name must NOT suppress the whole group: the run
+// still fails, naming D2 (the leftover, unaccounted-for row) specifically —
+// not just "add the group back" — and D1 must not appear in any error (it
+// really was consumed) nor trigger the separate "not a live-only row" error.
+test('#2272 review finding 1: a partially-named whole-group discharge still fails, naming only the leftover row', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]); // Group D is entirely absent
+  const baselineRegister = buildMultiGroupRegister([
+    { letter: 'A', rowNumbers: [1] },
+    { letter: 'D', rowNumbers: [1, 2] },
+  ]);
+  const liveView = buildMultiGroupLiveView(3, [
+    { letter: 'A', glanceCount: 1, headerCount: 1, rowIds: ['A1'] },
+    { letter: 'D', glanceCount: 2, headerCount: 2, rowIds: ['D1', 'D2'] },
+  ]);
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    dischargingIds: ['D1'],
+  });
+  assert.ok(
+    errors.some(
+      (e) =>
+        e.includes('BEHIND what is already published') &&
+        e.includes('D2') &&
+        e.includes('not named via --discharging'),
+    ),
+    `expected a BEHIND error naming leftover D2, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('D1')),
+    `D1 was named via --discharging and consumed — it must not appear in any error, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('never accounts for a live-only row')),
+    `D1 genuinely is live-only (for the partially-discharged Group D) and must not be reported as an unrecognised name, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// A plain run with NO --discharging involvement for a vanished group must
+// keep its ORIGINAL wording verbatim — the leftover-naming message is only
+// for a PARTIAL --discharging match, not every whole-group BEHIND verdict.
+test('#2272 review finding 1: a whole-group BEHIND verdict with no --discharging keeps its original wording', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildMultiGroupRegister([
+    { letter: 'A', rowNumbers: [1] },
+    { letter: 'F', rowNumbers: [1] },
+  ]);
+  const liveView = buildMultiGroupLiveView(2, [
+    { letter: 'A', glanceCount: 1, headerCount: 1, rowIds: ['A1'] },
+    { letter: 'F', glanceCount: 1, headerCount: 1, rowIds: ['F1'] },
+  ]);
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+  });
+  assert.ok(
+    errors.some((e) => e.endsWith('Add the group to the register before publishing.')),
+    `expected the original glance-table wording, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    errors.some((e) => e.endsWith('Add the section before publishing.')),
+    `expected the original body-section wording, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('not named via --discharging')),
+    `no --discharging was passed at all — the leftover-naming wording must not appear, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // #2199 review round 2: `resolveBaselineText` — the CLI layer's git surface.
 //
 // A first version of the fix read the LOCAL `origin/main` ref as-is, with no
@@ -2157,6 +2437,219 @@ test('--against-published exits 1 with "Not found" when the given file does not 
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Not found:/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// #2272: `--discharging <id>[,<id>...]` at the CLI layer. The unit tests
+// above pin the semantics inside `checkLiveView`; these spawn the real
+// process (like the rest of the --against-published CLI tests above) to
+// prove the real argv parsing and threading (CLI -> checkLiveView) actually
+// wire up, not just that the option works when passed directly.
+// ---------------------------------------------------------------------------
+
+test('--discharging without --against-published fails loudly rather than being silently ignored', () => {
+  const r = runCli(['--discharging', 'E10']);
+  assert.equal(
+    r.status,
+    1,
+    `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+  );
+  assert.match(r.stderr, /--discharging only makes sense alongside --against-published/);
+});
+
+test('--discharging with no value fails with a usage message', () => {
+  const r = runCli(['--against-published', 'unused.html', '--discharging']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--discharging requires a value/);
+});
+
+// End-to-end proof that the CLI actually threads --discharging's argv value
+// into checkLiveView's `dischargingIds` option. Same fixture shape as the
+// "genuinely BEHIND" test above (A6): a live-page row absent from this
+// register, present in the (hermetic) baseline — but here it's named via
+// --discharging, so the run must now pass instead of failing.
+test('--discharging names the row genuinely absent from this register and the run passes, real argv end to end', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, #2272)',
+  );
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath, '--discharging', newId], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      0,
+      `expected exit 0 (row ${newId} named via --discharging), got ${r.status}. ` +
+        `stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    assert.match(r.stdout, /check:onbox-register: OK/);
+  });
+});
+
+// #2272 review finding 2: an unconsumed --discharging name used to be
+// wrapped in the "register is BEHIND" banner, whose remedy ("Merge the rows
+// named above — already live, not yet in this register") is false for a
+// name like an already-registered row, and would tell an operator (or an
+// agent) to add a duplicate. This proves the CLI now reports it under its
+// OWN label, with its OWN remedy, and never prints the BEHIND remedy at all.
+// Names the register's own first row heading — genuinely present
+// everywhere, so definitely not live-only.
+test('#2272 review finding 2: naming an ID that is not live-only is reported under its own label, not the BEHIND banner', () => {
+  const existingIdMatch = REAL_REGISTER_TEXT.match(/^### ([A-Z]\d+)\b/m);
+  assert.ok(
+    existingIdMatch,
+    'fixture setup: the real register must have at least one row heading',
+  );
+  const existingId = existingIdMatch[1];
+  withHermeticBaseline(REAL_LIVE_VIEW_HTML, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath, '--discharging', existingId], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      1,
+      `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    assert.match(r.stderr, new RegExp(`--discharging named ${existingId}`));
+    assert.match(
+      r.stderr,
+      /Fix the --discharging value/,
+      'expected the bad-name-specific remedy, not the BEHIND one',
+    );
+    assert.doesNotMatch(
+      r.stderr,
+      /Merge the rows named above/,
+      `a bad --discharging name has no rows to merge — the BEHIND remedy must not print, got: ${r.stderr}`,
+    );
+    assert.doesNotMatch(
+      r.stderr,
+      /shows the register is BEHIND what is already live/,
+      `an unrecognised --discharging name is not evidence the register is behind, got: ${r.stderr}`,
+    );
+  });
+});
+
+// #2272 review (mixed-case regression): the branch interaction between
+// `dischargeNameErrors` and `behindErrors` in the CLI layer — one invocation
+// producing BOTH an unconsumed --discharging name AND a genuine
+// competing-lane BEHIND row. This must never blend into one report: each
+// class gets its own banner and its own remedy, in its own block, and
+// neither remedy leaks onto the other's list. Combines the A6-style
+// genuinely-BEHIND fixture (a real, hermetic-baseline BEHIND row, not named)
+// with a bad --discharging name (the register's own first row heading — it's
+// present everywhere, so it can never be live-only) in the SAME run.
+test('#2272 review: an unconsumed --discharging name AND a genuine BEHIND row in one run both surface, each under its own banner and remedy', () => {
+  const existingIdMatch = REAL_REGISTER_TEXT.match(/^### ([A-Z]\d+)\b/m);
+  assert.ok(
+    existingIdMatch,
+    'fixture setup: the real register must have at least one row heading',
+  );
+  const badDischargeName = existingIdMatch[1];
+
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  assert.notEqual(
+    badDischargeName,
+    newId,
+    'fixture setup: the bad name and the genuinely-BEHIND row must be distinct IDs',
+  );
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, #2272 mixed-case regression)',
+  );
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath, '--discharging', badDischargeName], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      1,
+      `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    // Both banners, and both remedies, must be present.
+    assert.match(r.stderr, /does not account for any live-only row/);
+    assert.match(r.stderr, /shows the register is BEHIND what is already live/);
+    assert.match(r.stderr, /Fix the --discharging value\(s\) named above/);
+    assert.match(r.stderr, /Do not publish\. Merge the rows named above/);
+    // Ordering pins that each remedy sits with its OWN list, never blended:
+    // the discharge-name block (label + remedy) prints entirely before the
+    // BEHIND block (label + remedy) starts.
+    const dischargeLabelIdx = r.stderr.indexOf('does not account for any live-only row');
+    const dischargeRemedyIdx = r.stderr.indexOf('Fix the --discharging value(s) named above');
+    const behindLabelIdx = r.stderr.indexOf('shows the register is BEHIND what is already live');
+    const behindRemedyIdx = r.stderr.indexOf('Do not publish. Merge the rows named above');
+    assert.ok(
+      [dischargeLabelIdx, dischargeRemedyIdx, behindLabelIdx, behindRemedyIdx].every(
+        (i) => i !== -1,
+      ),
+      `expected all four markers present, got stderr: ${r.stderr}`,
+    );
+    assert.ok(
+      dischargeLabelIdx < dischargeRemedyIdx &&
+        dischargeRemedyIdx < behindLabelIdx &&
+        behindLabelIdx < behindRemedyIdx,
+      `expected the discharge-name block (label+remedy) entirely before the BEHIND block ` +
+        `(label+remedy), got stderr: ${r.stderr}`,
+    );
+    // Each ID is named only inside its OWN block — the bad name never leaks
+    // into the BEHIND list, and the genuinely-BEHIND row never leaks into
+    // the discharge-name list.
+    assert.ok(
+      r.stderr.indexOf(badDischargeName) < behindLabelIdx,
+      `the bad --discharging name (${badDischargeName}) must be named before the BEHIND ` +
+        `banner starts, got stderr: ${r.stderr}`,
+    );
+    assert.ok(
+      r.stderr.indexOf(newId) > dischargeRemedyIdx,
+      `the genuinely-BEHIND row (${newId}) must be named after the discharge-name remedy, ` +
+        `got stderr: ${r.stderr}`,
+    );
+  });
+});
+
+// #2272 review (nit 2): a repeated --discharging flag used to silently keep
+// only the FIRST occurrence (process.argv.indexOf finds only one match) —
+// `--discharging A1 --discharging A2` parsed as just A1, with A2 dropped
+// with no warning. Now rejected outright.
+test('#2272 review (nit 2): a repeated --discharging flag is rejected, not silently narrowed to the first occurrence', () => {
+  const r = runCli([
+    '--against-published',
+    'unused.html',
+    '--discharging',
+    'A1',
+    '--discharging',
+    'A2',
+  ]);
+  assert.equal(
+    r.status,
+    1,
+    `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+  );
+  assert.match(r.stderr, /passed more than once/);
+});
+
+// #2272 review (nit 3): a value like ",,," survives the "requires a value"
+// check (the raw argv string is non-empty) but filters down to an EMPTY
+// array after splitting on commas — which used to proceed exactly as if
+// --discharging had never been passed at all: flag accepted, did nothing,
+// said nothing. Now rejected with its own usage message.
+test('#2272 review (nit 3): --discharging ",,," has no usable ID after splitting and is rejected', () => {
+  const r = runCli(['--against-published', 'unused.html', '--discharging', ',,,']);
+  assert.equal(
+    r.status,
+    1,
+    `expected exit 1, got ${r.status}. stdout: ${r.stdout}, stderr: ${r.stderr}`,
+  );
+  assert.match(r.stderr, /has no usable row ID/);
 });
 
 // Belt-and-suspenders on the CLI entry point itself: nothing else here spawns
