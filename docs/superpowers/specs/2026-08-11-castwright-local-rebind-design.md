@@ -1,7 +1,7 @@
 # One-click `castwright.local` re-bind + a longer device-token lifetime
 
 **Date:** 2026-08-11
-**Status:** approved (design, revision 3)
+**Status:** approved (design, revision 4)
 **Area:** `frontend` + `server` (LAN device auth)
 
 ## Problem
@@ -48,10 +48,18 @@ self-bind marker (it needed a wire-format change across four files), held three
 incompatible models of when the button is visible, and deferred a new
 unauthenticated endpoint to "the plan".
 
-**Revision 3 (this one) removes scope rather than adding it.** The
-revoke-prior-record behaviour and the `friendlyUrl` emitter change are both
-dropped; the button renders unconditionally and explains failure after the
-click. Component 2 is now frontend-only.
+**Revision 3** removed scope rather than adding it: the revoke-prior-record
+behaviour and the `friendlyUrl` emitter change were both dropped as follow-ups,
+making Component 2 frontend-only.
+
+**Revision 4 (this one) fixes precision, not shape.** The design has been stable
+since revision 2 — button, recovery link, longer lifetime. What kept breaking
+was this document's accuracy about *which files and tests are involved*: a third
+review found the button placed in a branch the card hides in exactly the target
+scenario, a prescribed parity test that could never fail, and a `Max-Age`
+assertion contradicted by an existing mock. All three are corrected below. The
+remaining risk is now the kind TDD catches during implementation, not the kind a
+fourth spec review would.
 
 ## Decisions taken
 
@@ -73,9 +81,25 @@ plus a matching upper clamp in `clampTtlDays`.
 days since M104; WebKit shipped no equivalent cap, so this is Chrome-specific
 rather than universal — but on Chrome, a value above 400 gives a server record
 valid for years against a cookie truncated at 400 days, which is the original
-bug with a longer fuse. `registry.ts:1260` is `type: 'integer', min: 1` with no
-`max`, and `clampTtlDays` (`device-tokens.ts:85-86`) clamps only the lower
-bound, so today that hazard is one Settings edit away.
+bug with a longer fuse.
+
+**Why the clamp is still needed once `max: 400` exists** — the obvious
+justification is wrong and a reviewer will cut the clamp if the spec repeats it.
+`max` is **enforced**, not advisory: `coerceAndValidate`
+(`server/src/config/resolver.ts:168`) rejects `n > knob.max` on *both* write
+paths — the env path (`parseEnv` → `coerceAndValidate`, called from
+`resolveKnobInner:19`) and the Settings PUT (`server/src/routes/config.ts:101`).
+So `LAN_DEVICE_TTL_DAYS=1000` is already rejected and warned, and after this
+change no Settings edit can exceed 400 either. The one path that reaches a read
+site **unvalidated** is a stored override: `resolveKnobInner` returns
+`{ effective: raw, source: 'override' }` (`resolver.ts:32-55`) with no
+re-validation, so a hand-edited `user-settings.json` is what the clamp actually
+guards. State that reason, not the Settings-edit one.
+
+Note also that `clampTtlDays` has **no tests at all** today — the only hit is a
+mock reimplementation at `pairing.test.ts:85`. `docs/features/225-lan-browser-device-auth.md:46`
+claims `device-tokens.pure.test.ts` / `device-tokens.test.ts` cover it; that
+claim is false and the file is already moving in this diff, so correct it there.
 
 **Every site that bakes in 30** — the inventory, because Component 1 is
 otherwise a two-line change and the search *is* the risk:
@@ -84,16 +108,30 @@ otherwise a two-line change and the search *is* the risk:
 |---|---|
 | `server/src/config/registry.ts:1261` | the default |
 | `server/src/workspace/device-tokens.ts:86` | `clampTtlDays` fallback |
-| **`src/lib/api.ts:9437-9446`** | **mock registry mirror — see below** |
-| `server/src/config/registry.test.ts:79-84` | existing assertion — an *edit*, not a new test |
-| `server/src/routes/pairing.test.ts:85` | test-local reimplementation |
-| `docs/wiki/Advanced-Settings.md` | published by `npm run wiki:sync` |
+| **`src/lib/api.ts:9446`** | **mock registry mirror — see below** |
+| **`src/lib/api.ts:7363`** | `mockRedeemBrowserPair`'s hardcoded `30 * 86_400_000` expiry |
+| **`server/src/routes/pairing.test.ts:59`** | `vi.mock('../config/resolver.js', () => ({ configValue: () => 30 }))` — see Testing |
+| `server/src/routes/pairing.test.ts:85` | test-local `clampTtlDays` reimplementation |
+| `server/src/config/registry.test.ts:78-84` | existing assertion **and its title** ("…with a 30-day default") — an *edit* |
+| `docs/wiki/Advanced-Settings.md:363` | the row's default **and** its Constraints cell (`integer, min 1` → add `max 400`) |
 
-The mock mirror is the dangerous one: the config-parity guard
-(`src/lib/api.config.test.ts:305-361`) asserts **keys only, for two groups
-only** — neither of them `lan-access` — so mock mode would keep rendering "30"
-against a server saying 365 with nothing failing. Extend that guard to cover
-`lan-access` and `default`.
+`server/.env.example:683` also carries the value but is generated by
+`config:sync` and mechanically gated by `config:check` in
+`verify:fast:branch`, so it cannot be forgotten. `docs/wiki/` is **mirrored**,
+not generated (`scripts/sync-wiki.mjs:1-9` — the repo copy is the source of
+truth), so the hand edit is correct and will not be clobbered. `openapi.yaml`
+has no pairing paths and `apps/android/` has no TTL reference — no sites there.
+
+The mock mirror is the dangerous one, and the fix revisions 2-3 prescribed was
+itself a placebo. The parity guard (`src/lib/api.config.test.ts:305-361`)
+compares `.map(d => d.key).sort()` plus group blurbs, for two groups, neither of
+them `lan-access` — and `lan-access` holds exactly **one** knob
+(`registry.ts:1257`), so a keys-only comparison over it can never catch a
+30-vs-365 drift. There is also no group named `default`; that word meant the
+*field*. The guard must therefore compare a **projected object per knob —
+`{key, default, min, max}` — across all groups**, not keys, and not whole
+descriptors: `MOCK_CONFIG_DESCRIPTORS` (`src/lib/api.ts:8306`) omits `env`, so a
+whole-descriptor `toEqual` fails for unrelated reasons.
 
 Three consequences to state plainly:
 
@@ -117,12 +155,26 @@ A second button, **"Authorize this browser"**, beside the existing device flow.
 It calls `api.createDevicePairSession({ label: 'This computer' })` and, on a
 response carrying `friendlyUrl`, navigates there with `self=1` appended.
 
-**It renders unconditionally.** `friendlyUrl` exists only in that endpoint's
-response (`devices.ts:107-110`) and the `409 not-lan-https` /
+**Where it renders — precisely.** The card already gates its whole device flow
+on a 401 from `listDevices()`: `manageHint ? <p>Manage devices from the desktop
+app.</p> : <>…</>` (`lan-access-card.tsx:24`, `:55-58`). The button goes in the
+**authorized branch**, alongside the existing flow.
+
+That is not a limitation, it is the constraint from the Problem section
+restated: on `castwright.local` with a lapsed cookie the button could not work
+anyway — `POST /api/devices/pair-session` sits behind the guard, and
+`mayStartPairingSession` (`lan-auth.ts:138`) refuses a non-loopback caller whose
+token has expired. **The self-bind button serves the loopback origin; the 401
+branch is served by Component 4's recovery text, not by this button.** Revisions
+2 and 3 both said "renders unconditionally", which is wrong in opposite
+directions and is what made the visibility model incoherent — the honest rule is
+that visibility follows authorization, and the *unauthorized* case is a
+different component's job.
+
+Within the authorized branch there is no pre-flight: `friendlyUrl` exists only
+in the endpoint's response (`devices.ts:107-110`), and the `409 not-lan-https` /
 `409 lan-auth-not-enforced` cases are likewise replies *to the click*
-(`devices.ts:84-95`) — nothing is knowable before the press, and inventing a
-pre-flight endpoint to find out is not worth it. So the button is always there
-and every failure is explained inline afterwards, including
+(`devices.ts:84-95`). So every failure is explained inline afterwards, including
 `friendlyUrl === undefined` → *"castwright.local isn't reachable right now —
 use the QR flow, or check that the app is running in production LAN mode."*
 
@@ -160,9 +212,18 @@ failed redeem leaves `#/pair?c=CODE&self=1` live in history for the rest of the
 code's TTL — armed to re-fire on a tab restore or Back. With auto-redeem that
 is an unattended side effect.
 
+**Capture the code in a ref before scrubbing — do not rely on it surviving.**
+The app uses `createHashRouter` (`src/routes/index.tsx:1128`), whose history
+listens on `popstate`/`hashchange`; `replaceState` fires neither, so
+`params.get('c')` keeps returning the code only because react-router's location
+is now *stale*. An implementer who scrubs the idiomatic way instead —
+`navigate('/', { replace: true })` — updates the router, `code` becomes `''`,
+and Retry is dead. Hold the code in a `useRef`/lazy `useState` so correctness
+does not depend on which scrub idiom is chosen.
+
 **The scrub creates a retry obligation.** `pair.tsx:8` reads `code` from
-`useSearchParams()`; once scrubbed, the code lives only in the component's
-closure, while remaining valid server-side (the 403 path returns before
+`useSearchParams()`; once scrubbed, the captured code is the only reliable
+copy, while the session remains valid server-side (the 403 path returns before
 `redeemPairingSession`, and the 503 path calls `restorePairingSession`,
 `pairing.ts:148-151`, `:177`). The error copy invites a retry, so the component
 must own an **in-place Retry button reusing the closured code** — otherwise the
@@ -203,12 +264,24 @@ Also fix the second dead end: on `castwright.local` with a lapsed cookie the
 Account LAN card renders only "Manage devices from the desktop app."
 (`lan-access-card.tsx:55-56`). It gets the same recovery text.
 
-**The link address:** no new endpoint, and no hardcoded `:8443`. When the
-failing page is served on the direct port, `window.location.port` **is** the
-bound port and the link can be exact. Only the `:443`-forwarder path is blind,
-and there the copy names the computer rather than promising a port. This
-deliberately avoids revision 2's other option — a new unauthenticated endpoint
-on a LAN-exposed server — which is a blast-radius decision, not a plan detail.
+**The link address — all three branches, because two of them are wrong if
+unhandled.** No new endpoint (revision 2's other option was a new
+unauthenticated route on a LAN-exposed server — a blast-radius decision, not a
+plan detail), and no new hardcoded `:8443`:
+
+| Failing page | `location.port` | What to render |
+|---|---|---|
+| `castwright.local` via the `:443` forwarder — **the shipped config** | `''` | Copy naming the computer, **no port promised**. `location.port` is empty for default ports, so a derived `https://localhost:` is a broken link |
+| `castwright.local:8443` direct | `'8443'` | Exact link — `https://localhost:8443` is loopback-exempt and cert-covered |
+| A bare LAN IP (a phone) | `'8443'` | **Must not say `localhost`** — on a phone that resolves to the phone. Copy points at the computer running Castwright |
+
+Host-vs-remote is decided by hostname, not port: `localhost` and
+`castwright.local` mean the host, a bare private IPv4 means another device
+(the same split `lan-auth.ts:169`'s `PRIVATE_V4` and the client-side
+`_isPrivateIpv4Host` already make). Note `lan-access-card.tsx:35` and
+`PAIRING_ORIGIN_HINT` (`lan-auth.ts:144-145`) already hardcode
+`https://localhost:8443`; this design does not add a third such promise, and
+does not rewrite those two — out of scope.
 
 ## Data flow
 
@@ -241,8 +314,17 @@ and the ported form anyway.
 | No `friendlyUrl` in response | — | Inline: castwright.local not reachable |
 | Off-LAN redeem | `403` | Own message (new branch) |
 | Stale / reused code | `401` / `410` | "This code expired — generate a new one." |
-| Rate cap (5/min per IP) | `429` | "Too many attempts" + **Retry button** |
+| Rate cap (5/min per IP) | `429` | "Too many attempts — wait a minute." **No Retry button** |
 | Device store degraded | `503` | Own message, transient + **Retry button** |
+
+The code survives all three, so Retry is mechanically sound where offered: the
+403 path returns *before* `redeemPairingSession` (`pairing.ts:148-151`), the
+`429` is rejected by middleware so the handler never runs (`pairing.ts:143`),
+and the 503 path calls `restorePairingSession` (`:177`). Retry is nonetheless
+withheld on `429` — the limiter is a fixed 60-second window
+(`pairing.ts:89-91`), so a button offered immediately would simply fail again;
+the copy tells the user to wait instead. It is withheld on `403` because an
+off-LAN caller will never succeed.
 
 `pair.tsx:22-26` currently funnels everything but 401/410/429 into a generic
 message. With auto-redeem the user took no action to explain a failure, so 403
@@ -252,13 +334,25 @@ and 503 need their own branches. `PAIRING_ORIGIN_HINT` is **not** what
 
 ## Testing
 
-**Server:** the registry default is `365` **as a literal** and `clampTtlDays`'s
-fallback equals it (an equality-only assertion is a no-op — it passes at 30===30,
-at 365===365, and if the change is never made; at least one side must be a
-literal); `max: 400` is present and both bounds clamp; **the `Set-Cookie`
-carries `Max-Age=31536000`** — `pairing.test.ts:227-239` asserts `HttpOnly` /
-`SameSite` / `Secure` and *no* `Max-Age`, and revision 1 died precisely because
-the record and the cookie can disagree.
+**Server.** Three assertions, and it matters which proves what:
+
+1. **The registry default is `365`, as a literal** — the only assertion that can
+   fail before the change. `clampTtlDays`'s fallback equals it, but an
+   equality-only assertion is a no-op (it passes at 30===30, at 365===365, and
+   if the change is never made), so at least one side must be a literal.
+   `clampTtlDays` also gets its **first real tests**: both bounds, and the
+   non-integer fallback.
+2. **`max: 400` is present and rejects 401** through `coerceAndValidate`.
+3. **The `Set-Cookie` carries `Max-Age`** — `pairing.test.ts:227-239` asserts
+   `HttpOnly` / `SameSite` / `Secure` and *no* `Max-Age` today, and revision 1
+   died precisely because the record and the cookie can disagree. **This test
+   cannot be written as revision 3 stated it:** `pairing.test.ts:59` mocks
+   `configValue` to a hardcoded `30`, so the route emits `Max-Age=2592000`
+   regardless of the registry. Change that mock to `365` and assert
+   `Max-Age=31536000` — but be clear what it proves: that `maxAge` tracks
+   `ttl()`, **not** that the default is 365. Assertion 1 is what proves the
+   default. Neither is sufficient alone; the spec asks for both because
+   revision 1's failure mode lived exactly in the gap between them.
 
 **Frontend:** the button mints with the fixed label and navigates to
 `friendlyUrl` with `self=1` (`window.location` stubbed); an absent
@@ -287,7 +381,8 @@ and that a fresh bind shows `expires` ~a year out.
 
 - GitHub issue + implementation-brief comment; `Closes #NN` in the PR body.
 - `docs/features/225-lan-browser-device-auth.md` (`active`) documents the 30-day
-  default at `:33` and `:53` — moves in the same diff.
+  default at `:53` (only — `:33` carries no `30`), and falsely claims
+  `clampTtlDays` test coverage at `:46`. Both move in the same diff.
 - `docs/wiki/Advanced-Settings.md` row (published by `npm run wiki:sync`).
 - `npm run config:sync` to regenerate `server/.env.example`.
 - Release notes in **both** `docs/release-notes-next.md` and `RELEASE_NOTES.md`.
