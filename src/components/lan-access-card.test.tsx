@@ -88,7 +88,13 @@ describe('LanAccessCard', () => {
   // presented to a caller who would only get a 403 for pressing it. The
   // empty action cell that leaves also gets an explanation (review round 2,
   // Finding 4) rather than sitting there with no way to tell why it's gone.
-  it('hides the Revoke control for a non-loopback caller (castwright.local), and explains why in its place', async () => {
+  // Pins the ACTUAL guidance, not just "some text is present": recoveryHint()
+  // (the 401/lapsed-auth helper) would also satisfy a looser assertion here,
+  // but its "Authorize this browser" instruction is a dead end from
+  // castwright.local — that button always navigates back to
+  // castwright.local, so following it can never bring the hostname back to
+  // loopback. The right message names the loopback address revoke needs.
+  it('hides the Revoke control for a non-loopback caller (castwright.local), and explains the loopback-only fix in its place — not the unrelated 401 recovery hint', async () => {
     vi.stubGlobal('location', { hostname: 'castwright.local', port: '' });
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
 
@@ -97,8 +103,11 @@ describe('LanAccessCard', () => {
     await waitFor(() => screen.getByText('Mike phone'));
     expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
     expect(
-      screen.getByText(/open castwright on the computer running it and use/i),
+      screen.getByText(/revoking only works from https:\/\/localhost:8443/i),
     ).toBeInTheDocument();
+    // recoveryHint()'s wording must NOT be what renders here — it points at
+    // "Authorize this browser", which is not the fix for a hidden Revoke button.
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });
 
   // #2269 review round 2, Finding 1 — isLoopbackHost() is a hostname-only,

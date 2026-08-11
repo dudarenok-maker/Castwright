@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
-import { isLoopbackHost, recoveryHint } from '../lib/lan-recovery-hint';
+import { isLoopbackHost } from '../lib/lan-recovery-hint';
 import type { PublicDevice } from '../lib/types';
 import { PairingQr } from './pairing/pairing-qr';
 import { PrimaryButton } from './primitives';
@@ -9,6 +9,15 @@ import { ADMIN_WIKI } from '../lib/wiki-links';
 import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
+
+// Revoke is loopback-only with no castwright.local fallback (#2269) —
+// narrower than Authorize, which does admit the friendly hostname. Shared by
+// the 403 catch below (a caller whose hostname reads as loopback but was
+// actually relayed through the :443 forwarder, peer 127.0.0.2) and the
+// hidden-button case (a caller whose hostname genuinely isn't loopback) —
+// one string so the two can't drift apart and disagree about the fix.
+const REVOKE_LOOPBACK_ONLY_HINT =
+  "Revoking only works from https://localhost:8443 on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.";
 
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
@@ -64,15 +73,12 @@ export function LanAccessCard() {
     try {
       await api.revokeDevice(id);
     } catch (e) {
-      // Revoke is loopback-only with no castwright.local fallback (#2269) —
-      // narrower than Authorize, which does admit the friendly hostname. A
-      // caller viewing this page at `localhost` but reached through the :443
-      // forwarder or castwright.local (peer 127.0.0.2, never loopback) still
-      // sees the button (isLoopbackHost() is a hostname-only, client-side
-      // heuristic that can't see the forwarder) and gets refused here — name
-      // the one address that does work rather than echoing the raw code.
+      // A caller viewing this page at `localhost` but reached through the
+      // :443 forwarder (peer 127.0.0.2, never loopback) still sees the
+      // button (isLoopbackHost() is a hostname-only, client-side heuristic
+      // that can't see the forwarder) and gets refused here.
       if (e instanceof ApiError && e.status === 403) {
-        setErr("Revoking only works from https://localhost:8443 on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.");
+        setErr(REVOKE_LOOPBACK_ONLY_HINT);
       } else {
         setErr(e instanceof Error ? e.message : String(e));
       }
@@ -141,7 +147,12 @@ export function LanAccessCard() {
                 ) : (
                   // Revoke removed rather than left disabled-and-failing (#2269) —
                   // don't leave the row's action cell empty with no explanation.
-                  <span className="text-xs text-ink/45 text-right">{recoveryHint()}</span>
+                  // NOT recoveryHint(): that helper points at "Authorize this
+                  // browser", which navigates TO castwright.local and back —
+                  // useless (an unbreakable loop) for a caller who is already
+                  // on castwright.local trying to revoke, so it needs this
+                  // route's own hint, not the 401/lapsed-auth one.
+                  <span className="text-xs text-ink/45 text-right">{REVOKE_LOOPBACK_ONLY_HINT}</span>
                 )}
               </li>
             ))}
