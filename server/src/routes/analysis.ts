@@ -2225,6 +2225,9 @@ export async function attributeChapterStage2(opts: {
       rosterIds,
       unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
       alignmentFloorPct: 80,
+      /* #2253 — the language's own turn marker, so a merged paragraph (#2254)
+         costs the engine its structural evidence but not the speaker. */
+      dialogueOpen: conventions.dialogueOpen,
     });
     result.sentences = examined.sentences;
     if (opts.onStages) { detSnapshot = structuredClone(examined.sentences); detReasons = examined.reasons; }
