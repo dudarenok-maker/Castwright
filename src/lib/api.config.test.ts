@@ -377,6 +377,12 @@ describe('mock config parity with the server registry', () => {
     // documented UI-only ones, so this scales automatically as knobs are
     // added instead of drifting toward its own threshold.
     expect(shared.length).toBe(descriptors.length - UI_ONLY_MOCK_DESCRIPTORS);
+    // Coarse floor kept alongside the equality above: that check alone is
+    // vacuous if the mock catalogue itself shrank to just its two UI-only
+    // descriptors (0 === 2 - 2), which would also collapse the `toEqual`
+    // below to two empty arrays — silently "passing" the exact
+    // filter-emptying failure this floor exists to catch.
+    expect(shared.length).toBeGreaterThan(90);
 
     expect(shared.map(project)).toEqual(shared.map((d) => project(real.get(d.key)!)));
   });

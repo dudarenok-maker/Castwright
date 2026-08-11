@@ -301,11 +301,25 @@ describe('LanAccessCard', () => {
     await waitFor(() => screen.getByText('LAN access'));
 
     expect(screen.queryByRole('button', { name: /authorize this browser/i })).not.toBeInTheDocument();
+    // Structural guard: the button is absent because the loopback gate excluded
+    // it specifically, not because the whole authorized branch failed to render
+    // (e.g. a broken listDevices call) — "Authorize a device" always renders here.
+    expect(screen.getByRole('button', { name: 'Authorize a device' })).toBeInTheDocument();
   });
 
   it('shows "Authorize this browser" when viewed from localhost (true loopback)', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
     vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
+
+    render(<LanAccessCard />);
+    await waitFor(() => screen.getByText('LAN access'));
+
+    expect(screen.getByRole('button', { name: /authorize this browser/i })).toBeInTheDocument();
+  });
+
+  it('shows "Authorize this browser" when viewed from localhost via the :443 forwarder (empty port) — the motivating scenario for the loopback check', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.stubGlobal('location', { hostname: 'localhost', port: '' });
 
     render(<LanAccessCard />);
     await waitFor(() => screen.getByText('LAN access'));
