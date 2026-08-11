@@ -236,7 +236,9 @@ measurement and a re-run of history.
 
 | Field | Target | 2026-08-06 baseline |
 |---|---|---|
-| `flagged` | **≤ ~500** (plan 247 target 1) | 6,568 book-level; ch9 alone **488**, the only chapter over the floor |
+| confidence < 0.75 share (1a) | **≤ 44% per chapter** (plan 247 target 1a, re-specified 2026-08-11 via #2253) | not yet measured against the model column — see the offline replay below for the post-fix confidence-bucket numbers this bar was derived from |
+| `unresolved` share (1b reading 2) | no fixed bar — read alongside `flagged`/`alignedPct`/`flagOnly` | not yet measured; the bucket did not exist at the 2026-08-06 baseline |
+| `flagged` / victim rate (1b readings 1, 3) | victim rate **≤ 4%** (n=30) (plan 247 target 1b) | 6,568 book-level; ch9 alone **488**, the only chapter over the old absolute bar (retained as history — the absolute bar is no longer the criterion) |
 | `aligned` | > 80% floor, expect ~92–99% | 47.4% book, ch5–8 below floor |
 | `escalated` / `escalationAccepted` | non-zero — confirm escalation **runs** | 22 / 130, skipped chapter-wide |
 | wall-clock | target 5: +2–5 h | never measurable |
@@ -316,11 +318,21 @@ chapter instead of being skipped on 5–8.
    ch5 with 521 mid-paragraph dialogue dashes against 64 paragraph-initial.
    Upstream of #2187, in manuscript ingestion.
 
-**Refuted, and recorded so it is not re-proposed:** the hypothesis that (3)
-causes the known 28.2% narrator collapse. `corr(narrator% on dash lines,
-%chars in big paragraphs) = **−0.073**` — none. Ch5/ch6 have the worst
-paragraph structure and the *lowest* narrator misattribution (11.4%, 11.8%);
-ch4 is middling and worst (48.1%).
+**Withdrawn (2026-08-11).** This section previously recorded that finding (3)
+was refuted as a cause of the narrator collapse (`corr = −0.073`). That
+correlation was computed on the **model's** `characterId` column, which is the
+engine's *input*, not its output. Re-measured on the engine's output column,
+ch5's dash lines are **69.7% narrator against the model's 11.4%**, and the
+degradation drives the collapse directly: **879 lines book-wide** are rewritten
+character→narrator, unflagged, and booked as `corrected` successes. Zero on
+every structurally-intact chapter, 58.3% on ch5.
+
+Fixed by the dialogue-convention invariant in `cross-examine.ts` (#2253);
+design of record
+`docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`.
+A tag-span length bound was also prototyped and measured a **complete no-op**
+(879 → 879) — un-tagging a span leaves it `narration`, which demotes too. Do
+not re-propose it.
 
 ### 2A.4 What still needs the real run
 

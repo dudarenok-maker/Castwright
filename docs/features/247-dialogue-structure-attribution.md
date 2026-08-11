@@ -11,7 +11,11 @@ owner: null
 > "Delivery sequencing" below; **on-box acceptance RUN 2026-08-06 — flagged 6,568 vs the ≤~500
 > target, because only 1 of 5 measured chapters cleared the 80% alignment floor; where the engine
 > did run it hit the target at 488. The aligner, not the engine, is the bottleneck —
-> [#2187](https://github.com/dudarenok-maker/Castwright/issues/2187). See "Acceptance RESULT" below.**)
+> [#2187](https://github.com/dudarenok-maker/Castwright/issues/2187). See "Acceptance RESULT" below.
+> Target 1's `flagged ≤ ~500` bar was itself unsound (absolute over chapters varying 3× in
+> length) and was re-specified 2026-08-11 via #2253 into the 1a legibility / 1b engine-health
+> criteria below — see "Targets" and
+> `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`.**)
 > Key files: `server/src/analyzer/dialogue-structure/{types,parser,windows,aligner,cross-examine,escalation,name-matcher}.ts`,
 > `server/src/analyzer/dialogue-structure/lang/{en,es,fr,de,ru,index}.ts`, `server/src/routes/analysis.ts`
 > (`attributeChapterStage2`), `server/src/config/registry.ts` (`analyzer-structure` group),
@@ -265,8 +269,65 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
 
 **Targets:**
 
-1. Flagged sentences land at triage scale — target **≤ ~500** (down from 0-that-should-have-been-
-   thousands), concentrated on genuinely ambiguous lines.
+1. **Legibility and engine health, replacing the original absolute `flagged
+   ≤ ~500` bar** (re-specified 2026-08-11 via #2253; the original was unsound —
+   it was absolute over chapters varying 3× in length, and a chapter could pass
+   it by giving the engine LESS to see. Design of record:
+   `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`).
+
+   **1a — Legibility.** Share of a chapter's sentences with `confidence < 0.75`
+   — the set the review UI actually highlights (`src/views/manuscript.tsx:415`,
+   `:529`, `:1919`) — at or below **44%**. 44% = the worst structurally-intact
+   chapter (ch2, 38.9%, post-fix — ch1/2/3/9 are the four chapters with zero
+   dash-invariant victims), rounded up to 39%, plus 5 points of headroom.
+   Defined over confidence, not over a report bucket, because nothing in `src/`
+   or `openapi.yaml` reads `structureReport` at all; a bucket-defined 1a would
+   report ~0.03% while the UI coloured a quarter of the chapter.
+
+   **What a 1a breach means.** 1a grades the *manuscript's* legibility, not the
+   engine's correctness — the two are separable and this criterion is
+   deliberately the former. A chapter whose source lost its paragraph structure
+   (#2254) will breach 1a **because the engine is correctly refusing to guess**,
+   and that breach is the intended signal: it says *re-convert this source*, not
+   *the engine regressed*. A breach is therefore a real failure with a specific
+   remedy, never grounds for widening the threshold. The threshold is set from
+   structurally-intact chapters precisely so a degraded one cannot hide inside
+   it. This means the next on-box run is expected to record chapters 4–8 as
+   failing target 1a, and that is the expected, correct outcome — not evidence
+   the threshold needs raising.
+
+   **1b — Engine health.** Three readings, interpreted together, never alone:
+   1. **Victim rate ≤ 4%** (1/30 = 3.3%, rounded up; n=30 hand-labelled sample,
+      Task 1) — sentences opening with the language's dialogue marker that the
+      engine demoted to `narrator` against the model, as a share of
+      dialogue-marker-opening sentences. Stated as a rate with a named
+      denominator so it cannot be passed by shrinking the numerator's
+      population. Stated with its sample size because it is an estimate, not a
+      measurement.
+   2. **`unresolved` share** — the coverage disclosure that separates "few
+      conflicts because attribution is confident" from "few conflicts because
+      nothing was examined".
+   3. **`alignedPct` and `flagOnly`** — because reading 1 and reading 2 land in
+      *different counters* depending on the chapter. Above the alignment floor a
+      rescued dialogue line is `dash-line-keep-flag`, bucket `flagged`. Below
+      it, the whole chapter is `flag-only-floor`, bucket `unresolved` — the
+      engine reached no verdict at all, so the conflict was never adjudicated.
+      Same sentence, different counter. Reading `flagged` without `flagOnly`
+      beside it will look like the conflict count collapsed when in fact the
+      chapter was never examined.
+
+   **Explicitly rejected: a "narrator delta ≈ 0" invariant.** Below the
+   alignment floor `flagOnly` passes the model's id through verbatim on every
+   sentence carrying a speech span, so the engine column equals the model column
+   and the delta is 0 by construction — and turning `analyzer.structure.enabled`
+   off gives 0 too. It reproduced the exact flaw it was written to close.
+
+   This change ships for all three languages carrying a dash dialogue marker —
+   ru, es, fr — per Global Constraints in
+   `docs/superpowers/plans/2026-08-11-dialogue-convention-invariant.md`. All
+   measurement above is Russian (the only language with a corpus in the
+   workspace); es/fr ship on unit coverage plus the identical-convention
+   argument, not on a measured replay.
 2. The hard-error class (structure-says-speech attributed to narrator/unknown-bucket) drops to
    **near-zero** after correction + escalation, from the ~859-sentence baseline.
 3. Named-character line counts rise / unknown-bucket (`unknown-male`/`unknown-female`) share
@@ -375,11 +436,13 @@ read the cached stage-2 sentences from `server/handoff/cache/mns_oyK7Po6BiT.json
 `alignSentences(sentences, paras, body)` and read `alignedPct`. Run it once on the branch and once
 with `aligner.ts` reverted to `main` to get both columns.
 
-**Target 1 (flagged ≤ ~500/chapter) is not yet re-measured end to end** — that needs a real
-re-analysis, because `flagged` is an output of the cross-examiner running over the *model's* stage-2
-output, not of alignment alone. What is now established is that the precondition it was blocked on
-is satisfied on every chapter. Chapter 9 already showed the engine hits the target once alignment is
-good (488 ≤ ~500).
+**Target 1 (now the 1a legibility / 1b engine-health criteria, re-specified 2026-08-11 via
+#2253 — see "Targets" above) is not yet re-measured end to end** — that needs a real
+re-analysis, because `flagged`/`unresolved`/`confidence` are outputs of the cross-examiner running
+over the *model's* stage-2 output, not of alignment alone. What is now established is that the
+precondition it was blocked on is satisfied on every chapter. Chapter 9 already showed the engine
+hits the old absolute bar once alignment is good (488 ≤ ~500) — retained here as history; the
+absolute bar itself is no longer the criterion.
 
 ## Appendix — §5.4 probe methodology (reproduce for acceptance re-runs)
 

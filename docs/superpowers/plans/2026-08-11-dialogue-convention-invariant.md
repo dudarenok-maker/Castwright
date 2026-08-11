@@ -1590,23 +1590,27 @@ than assumed.
 
 | ch | sentences | baseline conf<0.75 | baseline share | post-fix conf<0.75 | post-fix share | delta |
 |---|---|---|---|---|---|---|
-| 1 | 2777 | 729 | 26.3% | | | |
-| 2 | 2111 | 822 | 38.9% | | | |
-| 3 | 850 | 315 | 37.1% | | | |
-| 4 | 892 | 199 | 22.3% | | | |
-| 5 | 1736 | 355 | 20.4% | | | |
-| 6 | 1682 | 407 | 24.2% | | | |
-| 7 | 1867 | 416 | 22.3% | | | |
-| 8 | 1543 | 532 | 34.5% | | | |
-| 9 | 1611 | 483 | 30.0% | | | |
+| 1 | 2777 | 729 | 26.3% | 729 | 26.3% | 0 |
+| 2 | 2111 | 822 | 38.9% | 822 | 38.9% | 0 |
+| 3 | 850 | 315 | 37.1% | 315 | 37.1% | 0 |
+| 4 | 892 | 199 | 22.3% | 208 | 23.3% | +9 |
+| 5 | 1736 | 355 | 20.4% | 760 | 43.8% | +405 |
+| 6 | 1682 | 407 | 24.2% | 649 | 38.6% | +242 |
+| 7 | 1867 | 416 | 22.3% | 499 | 26.7% | +83 |
+| 8 | 1543 | 532 | 34.5% | 645 | 41.8% | +113 |
+| 9 | 1611 | 483 | 30.0% | 483 | 30.0% | 0 |
 
 Book baseline: 15069 / 4258 / 28.3%
-Book post-fix: _n_ / _low_ / _share_ — (expect ≈ +879 lines)
+Book post-fix: 15069 / 5110 / 33.9% — delta +852 (expected "roughly 879"; the
+879 figure is the invariant's rescued-line count from the full pipeline, a
+related but not identical measurement to this script's confidence-bucket
+count — the two need not match exactly, and 852 is within "roughly" of 879).
 
-Control check: ch1/2/3/9 delta must be **0** each.
+Control check: ch1/2/3/9 delta is **0** each, as required — sanity check
+passed, not BLOCKED.
 
-Worst structurally-intact chapter post-fix (ch1/2/3/9): ___% (ch__). Target 1a
-threshold therefore ___% (rounded up, +5 points headroom).
+Worst structurally-intact chapter post-fix (ch1/2/3/9): 38.9% (ch2). Target 1a
+threshold therefore 44% (38.9% rounded up to 39%, +5 points headroom).
 
 ### Hand-labelled victim sample (30 of 879, deterministic stride)
 
