@@ -355,6 +355,40 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count-dependenc
     const result = detectManuscriptLanguageFromChapters([deChapter, numeralsChapter]);
     expect(result).toEqual({ language: 'de', supported: true, fallback: false });
   });
+
+  it("a surrendered chapter's own prose units do not corroborate the winning language's floor — only reachable with an 'en' winner, since a surrender's guessed language is always 'en'", () => {
+    // voteLanguage's winningProseUnits sums nonSurrendered ballots only
+    // (detect-language.ts's own vote loop, the winningProseUnits filter
+    // right after totalMass/winner are computed). This is the numerator
+    // sibling of the denominator test above, but it CANNOT reuse that
+    // test's 'de'-winner fixture: a surrender always guesses 'en'
+    // (resultFor('en', true)), so the numerals chapter's own
+    // `detection.language` is 'en' regardless of winner — it only lands in
+    // `winningProseUnits`'s filter (`language === winner`) when the winner
+    // IS 'en'. A book with one real, thin English chapter (well under
+    // PROSE_UNIT_FLOOR alone) and one much larger all-numerals chapter must
+    // still surrender on the English chapter's own prose units alone — the
+    // numerals chapter's units must not backfill the floor just because its
+    // surrendered guess happens to coincide with the real winner.
+    const enChapter = { title: 'Chapter One', body: repeat(EN_SENTENCE, 6) }; // 150 words, 6 prose units — clears FRONT_MATTER_WORD_THRESHOLD, well under PROSE_UNIT_FLOOR (20)
+    const numeralsChapter = {
+      title: 'Statistical Tables',
+      body: Array.from({ length: 400 }, (_, i) => `${i + 1}.`).join(' '), // 400 words, 400 prose units, zero letters
+    };
+    expect(countWords(enChapter.body)).toBe(150);
+    expect(countProseUnits(enChapter.body)).toBe(6);
+    expect(countWords(numeralsChapter.body)).toBe(400);
+    const numeralsDetection = detectManuscriptLanguage(numeralsChapter.body);
+    // fixture sanity: surrenders on its own, via letters === 0 — and its
+    // guessed language is 'en', the SAME language the real chapter wins
+    // with, which is exactly the coincidence this test is pinning.
+    expect(numeralsDetection).toEqual({ language: 'en', supported: true, fallback: true });
+
+    const result = detectManuscriptLanguageFromChapters([enChapter, numeralsChapter]);
+    // Correct surrender: the real English chapter's own 6 prose units never
+    // clear PROSE_UNIT_FLOOR (20) on their own.
+    expect(result).toEqual({ language: 'en', supported: true, fallback: true });
+  });
 });
 
 /* #2276 — the mandatory invariant: detection must not depend on how a book
