@@ -6,8 +6,8 @@ owner: null
 
 # Model routing & review gates
 
-> Status: active — mechanized gate (issue-linkage) is tested + CI-enforced; the other five gates are self-enforced prose, not locked by automated tests, so `stable` (which this repo's INDEX.md lifecycle defines as "behavior locked by automated tests") does not yet apply.
-> Key files: `CLAUDE.md`, `.claude/skills/model-routing/SKILL.md`, `scripts/validate-pr-issue-link.mjs`, `.github/workflows/pr-issue-link.yml`
+> Status: active — the issue-linkage gate (`scripts/validate-pr-issue-link.mjs`) is tested + CI-enforced end-to-end (it proves the gate ran). A second guard, `scripts/tests/review-gate-mechanism.test.mjs` (ops-55), locks that the PR-review gate's *mechanism* — `pr-review-gate` staying model-invocable and cross-referenced — doesn't rot, but it does not prove the gate actually ran on any given PR. The other four gates remain self-enforced prose, not locked by automated tests, so `stable` (which this repo's INDEX.md lifecycle defines as "behavior locked by automated tests") does not yet apply.
+> Key files: `CLAUDE.md`, `.claude/skills/model-routing/SKILL.md`, `scripts/validate-pr-issue-link.mjs`, `.github/workflows/pr-issue-link.yml`, `.claude/skills/pr-review-gate/SKILL.md`, `scripts/tests/review-gate-mechanism.test.mjs`
 > URL surface: n/a — process/tooling change, no application UI
 > OpenAPI ops: none
 

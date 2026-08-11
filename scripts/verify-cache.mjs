@@ -233,6 +233,20 @@ export const STEPS = [
         // so the structural test never ran on the one diff shape it exists
         // to catch.
         'server/madge-cycles-allowlist.json',
+        // ops-55 (#2241): review-gate-mechanism.test.mjs reads all three of
+        // these as TEXT at RUNTIME (frontmatter + prose regex, not a
+        // module-graph edge) to assert the mandated PR-review-gate mechanism
+        // stays model-invocable and cross-referenced. None sits under this
+        // step's own globs above (.claude/skills/** and root CLAUDE.md are
+        // both outside scripts/**, pinokio-scripts/**, .github/**, .husky/**)
+        // — without these entries, a diff touching only .claude/skills/** or
+        // CLAUDE.md prints test:hooks [cached] locally and (ci-scope.mjs
+        // derives its scope from this same STEPS[] entry) skips the guard's
+        // CI leg too, on exactly the diff shape that would break it. Same
+        // #1847 runtime-read trap as fixtures/** above.
+        '.claude/skills/pr-review-gate/SKILL.md',
+        '.claude/skills/model-routing/SKILL.md',
+        'CLAUDE.md',
       ],
       includeLockfiles: ['root'],
     },

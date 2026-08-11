@@ -125,14 +125,15 @@ implementation-brief comment as the sole source of requirements. Runs
 `superpowers:subagent-driven-development` as the **primary** mode: cut the
 worktree + branch (per Branching workflow), then dispatch a fresh implementer
 subagent per task, a task-review subagent (spec + quality) after each, and a
-broad whole-branch `code-review` at the end — models chosen per the
-Model-routing table. The controlling thread coordinates and curates context; it
-does **not** hand-write task code a subagent could do. Keep the progress ledger
-(`.superpowers/sdd/progress.md`) so the run survives compaction — including
-every incidental finding and its disposition, per below.
+broad whole-branch review at the end — the mandatory gate is phase 3's, not
+this one — models chosen per the Model-routing table. The controlling thread
+coordinates and curates context; it does **not** hand-write task code a
+subagent could do. Keep the progress ledger
+(`.superpowers/sdd/progress.md`) so the run survives compaction —
+including every incidental finding and its disposition, per below.
 
-**3. Ship.** PR with `Closes #NN`, the mandatory `code-review` gate, merge —
-per the Before-shipping checklist and Branching workflow.
+**3. Ship.** PR with `Closes #NN`, the mandatory `pr-review-gate` pass,
+merge — per the Before-shipping checklist and Branching workflow.
 
 **Why the split:** design and implementation have different context needs; one
 thread pollutes both. The issue-comment handoff lets an implementation thread
@@ -154,7 +155,7 @@ A change is trivial when **nothing can break and nothing needs review**:
 - no regression test is owed, because there is no behaviour to regress.
 
 In practice that is a typo, a dead comment, a single-line doc tweak, and very
-little else. **If you would want a `code-review` pass on it, it is not
+little else. **If you would want a review pass on it, it is not
 trivial.** If a reviewer could reasonably ask "why this way?", it is not
 trivial. **When in doubt, it is not trivial** — an unnecessary branch costs
 thirty seconds; an unreviewed change on `main` costs whatever it costs.
@@ -235,13 +236,14 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 **Mandatory review gates**, both using this table's Premium tier:
 - Every non-trivial spec (`brainstorming`) or plan (`writing-plans`) gets a
   real `assumption-checker` pass before the user is asked to approve it.
-- Every PR gets a `code-review` pass (no `--fix`) once fully staged, before
-  merge — except a docs-only PR (same file-set test as CONTRIBUTING.md's
-  doc-only CI fast-path), which is exempt entirely. Otherwise effort scales
-  with the PR's commit type/scope (CONTRIBUTING.md's commit-convention
-  vocabulary): `low` for a single-scope `chore`/`test`/`build`/`ci`, `medium`
-  for a single-scope `feat`/`fix`, `high` for `refactor`/`perf` or any
-  multi-scope PR — see the model-routing skill for the full split.
+- Every PR gets a `pr-review-gate` pass (findings only, never auto-applied)
+  once fully staged, before merge — except a docs-only PR (same file-set
+  test as CONTRIBUTING.md's doc-only CI fast-path), which is exempt
+  entirely. Otherwise effort scales with the PR's commit type/scope
+  (CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
+  `chore`/`test`/`build`/`ci`, `medium` for a single-scope `feat`/`fix`,
+  `high` for `refactor`/`perf` or any multi-scope PR — see the model-routing
+  skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the
@@ -571,7 +573,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
 8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
-10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory `code-review` pass — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
+10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
 
 ## Out of scope until told otherwise
 
@@ -864,7 +866,7 @@ junction and its target rather than trusting an exit code.
 
 **Trivial changes may skip the worktree** — same [trivial
 bar](#the-trivial-bar) as the Execution model's, no separate definition. Nothing
-can break, nothing needs review, and you would not want a `code-review` pass on
+can break, nothing needs review, and you would not want a review pass on
 it. Commit on a branch in the primary checkout, PR it, merge. **Announce the
 shortcut in the end-of-turn summary** so the user can redirect if they disagree.
 This should be rare; when in doubt, take the worktree.
@@ -992,7 +994,7 @@ Working practice:
 - Default loop for non-trivial work: finalize the change → run
   `npm run verify:fast:branch` (same branch-scoped check pre-push now runs)
   → open the PR → cloud `verify.yml` (required, opt-out) and the mandatory
-  code-review pass run independently → merge once both are green. Run the
+  `pr-review-gate` pass run independently → merge once both are green. Run the
   full `npm run verify` manually only when you specifically want the full
   local battery (e.g. before a release cut, or debugging something scope-
   filtering might be hiding).
