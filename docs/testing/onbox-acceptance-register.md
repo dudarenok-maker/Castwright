@@ -2509,8 +2509,12 @@ entry would overwrite the qwen36 cast the owner is keeping.
 **What is already proven, and does NOT need re-running:** the fix itself, at
 corpus scale. Two offline replays over the 2026-08-06 cache
 (`server/handoff/cache/replay-experiment.mts`, gitignored, throwaway) measured
-`HARM TOTAL victims=0` — down from the pre-fix baseline's 879 — at both the
-production 80% alignment floor and forced to 100%, and all 17 workspace-book
+`HARM TOTAL victims=41` — down from the pre-fix baseline's 879, not to 0,
+because the rescue guard now also requires roster membership and 41 lines
+(`борис-игнатьевич` ×17, `егор` ×24) carry off-roster ids that
+`reconcileSentenceCharacterIds` demotes to `narrator` downstream regardless,
+so they were never actually recoverable — at both the production 80%
+alignment floor and forced to 100%, and all 17 workspace-book
 structure hashes unchanged (parser untouched, confirmed by construction and by
 diff). Unit and regression coverage for the invariant, the bucket split and
 every `EngineReport` consumer ships in the same PR.

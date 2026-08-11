@@ -967,8 +967,12 @@
       <div class="body">
         <div class="flag"><b>Corpus-verified offline, does NOT need re-running.</b> Two replays over
         the 2026-08-06 cache (<code>server/handoff/cache/replay-experiment.mts</code>, gitignored,
-        throwaway) measured <code>HARM TOTAL victims=0</code> — down from the pre-fix baseline's
-        <b>879</b> — at both the production 80% alignment floor and forced to 100%, and all
+        throwaway) measured <code>HARM TOTAL victims=41</code> — down from the pre-fix baseline's
+        <b>879</b>, not to 0, because the rescue guard now also requires roster membership and 41
+        lines (<code>борис-игнатьевич</code> ×17, <code>егор</code> ×24) carry off-roster ids that
+        <code>reconcileSentenceCharacterIds</code> demotes to <code>narrator</code> downstream
+        regardless, so they were never actually recoverable — at both the production 80% alignment
+        floor and forced to 100%, and all
         <b>17</b> workspace-book structure hashes unchanged (parser untouched, confirmed by
         construction and by diff). Unit and regression coverage for the invariant, the bucket split,
         and every <code>EngineReport</code> consumer ships in the same PR.</div>

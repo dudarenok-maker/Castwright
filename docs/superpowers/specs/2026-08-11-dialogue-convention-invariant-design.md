@@ -176,6 +176,10 @@ if (isPureNarrationAligned(as) && as.sentence.characterId !== NARRATOR_ID &&
 
 ### 2.3 Measured result
 
+**These are the spec-time numbers, as originally measured — kept as-is below.
+See the 2026-08-11 correction immediately after the table for what actually
+shipped.**
+
 | | baseline | with the change |
 |---|---|---|
 | victims (floor 80) | **879** | **0** |
@@ -192,6 +196,27 @@ revision's empirical byte-identical gate, which §7.2 explains was close to taut
 Confidence `0.6` sits below the review UI's `< 0.75` highlight threshold
 (`src/views/manuscript.tsx:415`, `:526-529`, `:1919`), so the 879 recovered lines
 actually surface to the user rather than only moving a counter.
+
+> **Correction (2026-08-11, PR #2266 review-gate fix wave).** The table above is
+> the spec-time measurement and is left unmodified as the historical record of
+> what was measured before implementation. It is not what shipped. A
+> review-gate fix wave added a roster-membership check to the rescue guard
+> (`isConventionRescue` in `cross-examine.ts`): a rescued line must now also
+> carry a `characterId` present in the book's roster. 41 of the 879 lines
+> don't (`борис-игнатьевич` ×17, `егор` ×24) — `reconcileSentenceCharacterIds`
+> (`server/src/routes/analysis.ts:1442`) demotes those to `narrator` downstream
+> regardless, so keeping them "rescued" recovered nothing and only inflated the
+> `victims` counter that feeds a hard analysis-abort gate. **Shipped figures:**
+> `victims=41` (both floor 80 and floor forced to 100, not 0), and `flagged`
+> splits into **`flagged=843`** + **`unresolved=4,046`** — the spec-time row's
+> single `flagged=4,930` was the pre-split *union* of what later became two
+> separate buckets, which is precisely the conflation this PR exists to end;
+> it is not a like-for-like comparison with the shipped `843`. The
+> `978 pass | 978 pass` test-count row is also stale: the same selection
+> (`server/src/analyzer/` + the two structure route test files) now measures
+> **1002 pass** on this branch (`src/analyzer/` alone is 979) — see the PR
+> body's "Measured result" table for the exact command. Structure hashes and
+> the 44% target-1a threshold are unaffected by this correction.
 
 ### 2.4 What this buys, stated honestly
 

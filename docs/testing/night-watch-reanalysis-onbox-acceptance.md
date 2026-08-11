@@ -346,8 +346,11 @@ that it would) and the wall-clock target 5. Both need §2 as written.
 The dialogue-convention invariant (#2253, `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`)
 shipped after 2A.1-2A.4 were written and is corpus-verified only by two offline
 replays over the 2026-08-06 cache (`server/handoff/cache/replay-experiment.mts`,
-gitignored, throwaway) — `HARM TOTAL victims=0` at both the production 80% floor
-and forced to 100%, all 17 workspace-book structure hashes unchanged. What
+gitignored, throwaway) — `HARM TOTAL victims=41` at both the production 80% floor
+and forced to 100% (down from the pre-fix baseline's 879, not to 0 — the rescue
+guard now also requires roster membership, and the 41 off-roster lines were
+never actually recoverable; `reconcileSentenceCharacterIds` demotes them to
+`narrator` downstream regardless), all 17 workspace-book structure hashes unchanged. What
 offline replay over a cache **cannot** show, and what this row now also owes on
 top of §2A.4:
 

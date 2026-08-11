@@ -293,7 +293,8 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
    remedy, never grounds for widening the threshold. The threshold is set from
    structurally-intact chapters precisely so a degraded one cannot hide inside
    it. **Measured (2026-08-11, post-#2253-fix incl. the #2266 review-gate
-   roster fix, from this plan's "Measured Baselines" appendix):** the five
+   roster fix, from `docs/superpowers/plans/2026-08-11-dialogue-convention-invariant.md`'s
+   "Measured Baselines" appendix):** the five
    paragraph-degraded chapters read ch4 23.2%, ch5 42.9%, ch6 37.2%, ch7
    26.7%, ch8 41.8% — none exceeds 44%. As calibrated, 1a does **not**
    separate these paragraph-degraded chapters from the structurally-intact

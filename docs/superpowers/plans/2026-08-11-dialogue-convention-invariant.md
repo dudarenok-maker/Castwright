@@ -1443,8 +1443,12 @@ EPUBs, which are not in the repo. Run the existing harness instead:
 
 Run: `cd server && npx tsx handoff/cache/replay-experiment.mts`
 
-Expected, against the values recorded in the spec §2.3:
-- `HARM TOTAL victims=0` (was 879)
+Expected, against the shipped (post-roster-fix) values — see the "Measured
+Baselines" appendix below, not spec §2.3's pre-roster-fix table:
+- `HARM TOTAL victims=41` (was 879) — not 0: the rescue guard also requires
+  roster membership, and 41 lines carry off-roster ids
+  (`борис-игнатьевич` ×17, `егор` ×24) that demote to `narrator` downstream
+  regardless, so they were never actually recoverable
 - controls ch1 / ch2 / ch3 / ch9 still `victims=0`
 - every one of the 17 `GATE` hashes **identical** to the baseline. This is
   guaranteed by construction — no task in this plan touches the parser — so any
@@ -1460,7 +1464,8 @@ once, then:
 
 Run: `cd server && FLOOR=100 npx tsx handoff/cache/replay-experiment.mts`
 
-Expected: `HARM TOTAL victims=0` with every chapter in `flagOnly`. Post-#2187 no
+Expected: `HARM TOTAL victims=41` (not 0, same roster-membership reason as
+above) with every chapter in `flagOnly`. Post-#2187 no
 chapter of this book is below the floor naturally, so **this run is the only
 evidence Task 3 has**.
 
@@ -1605,7 +1610,7 @@ Book post-fix: 15069 / 5070 / 33.6% — delta **+812**, against the pipeline's
 838 rescued lines (879 dash-convention lines minus the 41 off-roster/unknown-
 bucket ids the PR #2266 review-gate fix wave sends back to `narrator`, see
 below). Mechanism, not a discrepancy: `decideNarrationOnly`
-(`server/src/analyzer/dialogue-structure/cross-examine.ts:259-274`) clamps
+(`server/src/analyzer/dialogue-structure/cross-examine.ts:272-287`) clamps
 the first sentence of a contiguous demoted run to
 `Math.min(CONFIDENCE.NARRATION_DEMOTE, 0.5)` = 0.5, so that sentence was
 already below the 0.75 threshold in the baseline and stays below it (rescued
@@ -1667,7 +1672,7 @@ Target 1b reading 1 bar therefore **≤ 4%** (1/30 = 3.3%, rounded up; n=30).
 | Spec section | Covered by |
 |---|---|
 | §2 the invariant, §2.1 two call sites, §2.2 prototype | Tasks 2, 3 |
-| §2.3 measured result (879→0, 17 hashes, forced floor) | Task 8 step 1 |
+| §2.3 measured result (879→41 shipped — see the dated correction in the design doc and the "Measured Baselines" appendix; spec's own table reads 879→0, pre-roster-fix — 17 hashes, forced floor) | Task 8 step 1 |
 | §2.4 flags-not-attributes (confidence below 0.75) | Task 2 step 1, asserted |
 | §3 *Unlocked* — analyse before building an English arm | Task 8 step 4, issue 1 |
 | §4.1 the bucket split | Tasks 5, 6 |
