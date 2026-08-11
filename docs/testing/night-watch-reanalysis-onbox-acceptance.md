@@ -186,7 +186,20 @@ this session will write.
 ### 2.2 Settings
 
 Account → analyzer settings: engine **local**, model **`qwen36-cw-iq4-32k`**, structure
-engine **on**, `analyzer.structure.escalation` = **`local`**. Sidecar auto-start off.
+engine **on**, `analyzer.structure.escalation` = **`local`**.
+
+Two more, both load-bearing for a *local* measurement (see the 2026-08-11
+attempt-2 log for why each was missing):
+
+- **`allowCloudFallback: false`** in `~/.castwright/user-settings.json` — back the
+  file up first. With it on, a queued Ollama call that stalls before first byte
+  is classified `LocalUnreachableError` and silently completes on Gemini,
+  contaminating both the flagged counts and the wall-clock. Off, the same
+  condition fails loudly, which is what a measurement wants. **Env cannot
+  override this** — only the settings file can.
+- **`DISABLE_AUTOSTART_SIDECAR=1`** in the environment that launches the app —
+  this one *does* beat the saved setting, and keeps the sidecar off the 16 GB
+  card Ollama needs 14 GB of.
 
 ### 2.3 Run
 
@@ -234,6 +247,85 @@ like chapter 9 rather than like their old selves.
 
 **C2 passes** when every chapter's `flagged` lands near ~500 rather than the 1,200–1,700
 the below-floor chapters produced, and `escalated` is non-zero throughout.
+
+---
+
+## 2A · Offline replay — what it settles without a run (2026-08-11)
+
+Before spending 2–5 h, the deterministic half of the structure pass was replayed
+offline over the 2026-08-06 cache. **It answers C2's primary criterion exactly**,
+and it changed what the remaining debt is.
+
+### 2A.1 Why the replay is sound
+
+In `routes/analysis.ts` the block runs `alignSentences` → `crossExamine`, and
+*only then* `escalateFlaggedWindows`, which assigns nothing but `escalated` /
+`escalationAccepted` (verified: nothing outside tests assigns `.flagged =`). So
+`alignedPct` / `confirmed` / `corrected` / **`flagged`** are fully determined by
+the deterministic pass, which is pure over three inputs we already hold:
+
+| Input | Source |
+|---|---|
+| per-chapter sentences | Aug 6 cache `mns_oyK7Po6BiT.json` (raw stage-2, pre-edit) |
+| roster | `stage1.characters` in the same cache |
+| chapter bodies | re-parse `manuscript.epub` via `parseManuscript` (deterministic) |
+
+**Tooling control:** ch9 cleared the floor on the OLD aligner and ran the full
+engine to 488 flagged. The replay lands it at **471** (Δ −17) and 96.7% vs 95.0%
+— it reproduces the chapter the fix should barely have moved, so the rows below
+are trustworthy. *A replay that could not reproduce ch9 would be measuring
+itself, not the aligner.*
+
+**What it is not:** the production path. It holds the Aug 6 LLM output fixed and
+varies only the aligner — a cleaner causal A/B than a fresh run, but a fresh run
+would generate different sentences and so somewhat different counts.
+
+### 2A.2 Results
+
+| ch | aligned (was) | flagged | sentences | rate | vs ~500 |
+|---|---|---|---|---|---|
+| 1 | 98.0% | 687 | 2,777 | 24.7% | **fails** |
+| 2 | 97.8% | 812 | 2,111 | 38.5% | **fails** |
+| 3 | 99.1% | 308 | 850 | 36.2% | passes |
+| 4 | 99.7% | 178 | 892 | 20.0% | passes |
+| 5 | 94.6% (3.7%) | 326 | 1,736 | 18.8% | passes |
+| 6 | 92.7% (1.7%) | 392 | 1,682 | 23.3% | passes |
+| 7 | 92.0% (66.4%) | 366 | 1,867 | 19.6% | passes |
+| 8 | 95.7% (73.5%) | 511 | 1,543 | 33.1% | **fails** |
+| 9 | 96.7% (95.0%) | 471 | 1,611 | 29.2% | passes |
+
+**Book: aligned 47.4% → 96.0%; flagged 6,568 → 4,051 (−38%); chapters below the
+80% floor 4 → 0.** The #2187 fix works: escalation would now run on every
+chapter instead of being skipped on 5–8.
+
+### 2A.3 Three findings that outrank the pass/fail
+
+1. **Target 1 (`flagged` ≤ ~500/chapter) is mis-shaped.** It is absolute, but
+   chapters vary 3× in length: `corr(flagged, sentence count) = 0.772` vs
+   `corr(flagged, flag rate) = 0.549`. Ch1 has the third-*best* flag rate in the
+   book and fails; ch3 has nearly the worst and passes because it is short.
+2. **Chapters can pass by giving the engine less to see.** ~90% of all flags are
+   `unanchored-*` (model named a speaker, no structural evidence either way).
+   Ch5 yields only **101 speech spans from 702 dash-dialogue sentences (14%)**
+   against ch1's 444/777 (57%), because 88% of ch5's characters sit in
+   paragraphs over 500 chars. So `flagged` measures **engine engagement, not
+   correctness** — which makes it unsound as an acceptance metric, and no full
+   run would have shown this, since a run reports the same number.
+3. **The EPUB has degraded paragraph structure in ch4–8** — 70–89% of characters
+   in >500-char paragraphs (ch3: 7%), ch7's first paragraph alone 5,716 chars,
+   ch5 with 521 mid-paragraph dialogue dashes against 64 paragraph-initial.
+   Upstream of #2187, in manuscript ingestion.
+
+**Refuted, and recorded so it is not re-proposed:** the hypothesis that (3)
+causes the known 28.2% narrator collapse. `corr(narrator% on dash lines,
+%chars in big paragraphs) = **−0.073**` — none. Ch5/ch6 have the worst
+paragraph structure and the *lowest* narrator misattribution (11.4%, 11.8%);
+ch4 is middling and worst (48.1%).
+
+### 2A.4 What still needs the real run
+
+Only `escalated` / `escalationAccepted` (proof escalation *executes*, not merely
+that it would) and the wall-clock target 5. Both need §2 as written.
 
 ---
 
@@ -326,11 +418,60 @@ Blocked on:
 - **§1.2 — box contended.** Four `verify:fast:scoped` batteries plus Playwright runs
   active in sibling worktrees.
 
+**2026-08-11 14:00 — attempt 2. Pre-flight PASSED; ran the offline replay (§2A)
+instead of the full analysis. Both rows still owed, but C2's remaining debt is
+now only escalation counts + wall-clock.**
+
+Pre-flight, all re-verified after the reboot:
+
+- §1.1 **cleared** — both cards enumerate and the 5070 Ti reports real
+  `memory.free` (15,995 MiB), not merely a list entry. `qwen36-cw-iq4-32k` is
+  14 GB, so it fits with ~1.9 GiB headroom — the eGPU is load-bearing, not a
+  preference.
+- §0.1 baseline re-measured byte-for-byte: cache 3,704,853 B @ 2026-08-06 20:49,
+  cast 140,846, edits 3,099,754, dropped-quotes 115,866. Backup intact (14 files,
+  6.9 MB).
+- §1.3.3 `b2be5b7b` confirmed an ancestor of HEAD.
+
+Three gaps in this sheet, found by executing it:
+
+1. **§1.2's process query false-positives on idle Playwright MCP servers.** Eight
+   matched, all at 0.14–0.52% of one core — they are stdio servers held by other
+   Claude sessions, not test batteries. Judge by CPU, not by name match.
+2. **§2.2 never gated `allowCloudFallback`, and it should.** `AbortError` before
+   first byte is classified `LocalUnreachableError` (`ollama.ts:888`), the *sole*
+   fallback trigger — so a queued local call that stalls silently routes to
+   Gemini and contaminates a "local" measurement. It **cannot** be suppressed by
+   env: `getResolvedAllowCloudFallback()` returns the cached setting whenever
+   settings are loaded and only consults `ANALYZER_ALLOW_CLOUD_FALLBACK`
+   otherwise. Set it to `false` in `~/.castwright/user-settings.json` for the
+   session (back it up first) and revert in §5.
+3. **Suppress the sidecar with `DISABLE_AUTOSTART_SIDECAR=1`**, which *is*
+   checked before the cached setting. Otherwise it takes VRAM on the very card
+   Ollama needs. Note `LAN_HTTPS=1` in `server/.env` puts the app on
+   `https://localhost:5173` with the server on `:8443`, not `:8080`.
+
+Also: Ollama auto-updated 0.32.6 → 0.32.7 on first invocation after the reboot.
+A deferred auto-update is a landmine under a multi-hour measured run — trigger it
+deliberately at pre-flight rather than discovering it at hour three.
+
 ### Results
 
-- **C2 — flagged ≤ ~500/chapter:** _Result:_
-- **C2 — escalation runs, escalated/accepted counts:** _Result:_
-- **C2 — wall-clock vs target 5:** _Result:_
+- **C2 — flagged ≤ ~500/chapter:** _Result:_ **NOT MET, and the criterion is
+  unsound** (offline replay, §2A, 2026-08-11). 6/9 chapters pass; ch1 687, ch2
+  812, ch8 511 fail. Book-level 6,568 → 4,051 (−38%). Because `flagged` is never
+  mutated by escalation, this figure is final — a full run reports the same
+  number. See §2A.3 finding 1: the absolute per-chapter bar tracks chapter length
+  (r=0.772) more than difficulty (r=0.549). **Re-specify the target before
+  re-testing.**
+- **C2 — alignment / floor (the actual #2187 claim):** _Result:_ **PASS** —
+  book 47.4% → **96.0%**, chapters below the 80% floor **4 → 0**, so escalation
+  is no longer skipped chapter-wide. Ch5 3.7% → 94.6%, ch6 1.7% → 92.7%.
+  Control: ch9 reproduces at 471 vs the recorded 488.
+- **C2 — escalation runs, escalated/accepted counts:** _Result:_ still owed —
+  needs the real run (§2A.4). The replay proves escalation *would* run on every
+  chapter (`flagOnly=false` throughout), not that it executes.
+- **C2 — wall-clock vs target 5:** _Result:_ still owed — needs the real run.
 - **C1 — cloud pass on `gemma-4-31b-it` incl. script-review:** _Result:_
 - **C1 — per-minute 429 retried, not misclassified:** _Result:_
 - **C1 — working `localInputFraction` for zero truncation drops:** _Result:_
@@ -346,5 +487,8 @@ Nothing here writes to the library book, so rollback is deletion, not restore:
    `manuscriptId`s — recorded in 2.1 and 3.2).
 3. **Revert `server/.env:17`** to `GEMINI_MODEL=gemini-3.5-flash-lite` if that is what you
    want day to day. Easy to forget; it silently changes every later cloud analysis.
+3b. **Revert `allowCloudFallback` to `true`** in `~/.castwright/user-settings.json`
+   (§2.2). Left off, a later local-analysis run hard-fails instead of falling
+   back to cloud — a surprising failure days after the session that caused it.
 4. Confirm the baseline is intact — the 0.1 table, re-measured. In particular
    `mns_oyK7Po6BiT.json` should still be 3,704,853 bytes with its 2026-08-06 mtime.
