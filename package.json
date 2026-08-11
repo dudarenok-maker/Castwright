@@ -78,6 +78,7 @@
     "audit:stage2-coverage": "npx tsx scripts/audit-stage2-coverage.mts",
     "audit:missing-speakers": "npx tsx scripts/audit-missing-speakers.mts",
     "repair:missing-speakers": "npx tsx scripts/repair-missing-speakers.mts",
+    "repair:book-language": "npx tsx scripts/repair-missing-book-language.mts",
     "diff:analysis-ab": "npx tsx scripts/diff-analysis-ab.mjs",
     "eval:attribution": "node scripts/run-attribution-eval.mjs",
     "eval:attribution:capture": "npx tsx server/src/analyzer/attribution-eval/capture-cli.ts",
