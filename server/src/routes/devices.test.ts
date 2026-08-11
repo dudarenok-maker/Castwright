@@ -48,6 +48,7 @@ let app: Express;
 let deviceTokens: typeof import('../workspace/device-tokens.js');
 let lanAuth: typeof import('../lan-auth.js');
 let pairingSessions: typeof import('../workspace/pairing-sessions.js');
+let devicesRouter: import('express').Router;
 
 function mkReq(opts: { ip?: string; headers?: Record<string, string> } = {}) {
   const ip = opts.ip ?? '203.0.113.5'; // non-loopback documentation range
@@ -85,7 +86,7 @@ beforeEach(async () => {
   // device-tokens instance as deviceTokens, keeping isValidDeviceToken in sync.
   const realLanAuth = await vi.importActual<typeof import('../lan-auth.js')>('../lan-auth.js');
   _requireLanToken = realLanAuth.requireLanToken;
-  const { devicesRouter } = await import('./devices.js');
+  ({ devicesRouter } = await import('./devices.js'));
   pairingSessions = await import('../workspace/pairing-sessions.js');
   app = express();
   app.use(express.json());
@@ -302,14 +303,21 @@ describe('devices route (srv-33)', () => {
     expect(res.status).toBe(409);
   });
 
-  // #2257 (security case) — the marker is server-derived from BOTH true
-  // loopback AND the client's ask, never the client flag alone: a caller
-  // that reaches pair-session without true loopback (isLoopbackRequest
-  // mocked false here, mirroring the "admin mint" test below) but is
-  // otherwise pairing-eligible (mayStartPairingSession still passes) must
-  // NOT get a self-binding session just by sending `selfBind: true` — this
-  // is what stops any LAN phone from revoking the host's own credential.
-  it('pair-session from a non-loopback but pairing-eligible caller with selfBind:true in the body produces a session that does not self-bind on redeem (#2257 security case)', async () => {
+  // #2257 — NOT a friendly-hostname-arm case: `mayStartPairingSession` comes
+  // through the mock factory's `...real` spread (only isLoopbackRequest and
+  // isLanTokenEnforced are individually wrapped), so its own internal call to
+  // isLoopbackRequest resolves lexically inside lan-auth.ts and never sees
+  // this mock. supertest's connection is genuinely loopback, so
+  // mayStartPairingSession admits this request via its TRUE loopback arm
+  // regardless of the mock below. What this test actually pins:
+  // `mockReturnValueOnce(false)` is consumed only by devices.ts:113's own
+  // selfBind computation, which re-derives isLoopbackRequest independently
+  // rather than trusting mayStartPairingSession's verdict — so faking that
+  // one call to false must still suppress selfBind even though the request
+  // both passed the gate and, in reality, is loopback. See the dedicated
+  // friendly-hostname-arm test below for the actual :443-forwarder attack
+  // this conjunct exists to stop.
+  it('pair-session with isLoopbackRequest faked false at the selfBind check produces a session that does not self-bind on redeem (#2257)', async () => {
     process.env.LAN_HTTPS = '1';
     process.env.LAN_AUTH_TOKEN = 'secret';
     process.env.LAN_HTTPS_PORT = '8443';
@@ -339,6 +347,56 @@ describe('devices route (srv-33)', () => {
     const result = pairingSessions.redeemPairingSession(res.body.code);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.selfBind).toBe(true);
+  });
+
+  // #2257 (security case, real attack) — the actual :443-forwarder scenario the
+  // loopback conjunct exists to stop: an already-paired device reaching the
+  // server through the forwarder lands with peer IP 127.0.0.2 (never loopback)
+  // and Host castwright.local, which is exactly what admits it through
+  // mayStartPairingSession's friendly-hostname arm (isLanTokenEnforced() &&
+  // isFriendlyHostnameRequest(req)) rather than the loopback arm. supertest's
+  // real TCP connection can't be made to present that peer IP, so this drives
+  // devicesRouter directly with a fabricated request/response instead of going
+  // through HTTP — the same `mkReq({ ip, host })` shape
+  // lan-auth.pairing.test.ts:44 already uses for this exact case.
+  it('pair-session reached via the friendly hostname (peer 127.0.0.2, Host castwright.local) with selfBind:true does not self-bind on redeem (#2257 security case)', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    process.env.LAN_HTTPS_PORT = '8443';
+
+    const req = {
+      method: 'POST',
+      url: '/devices/pair-session',
+      ip: '127.0.0.2',
+      socket: { remoteAddress: '127.0.0.2' },
+      headers: { host: 'castwright.local' },
+      body: { label: 'This computer', selfBind: true },
+      app: { get: () => undefined },
+      query: {},
+    } as never;
+    let status = 200;
+    let body: { code?: string } = {};
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload as { code?: string };
+        return this;
+      },
+    } as never;
+    let nextErr: unknown;
+    devicesRouter(req, res, (err?: unknown) => {
+      nextErr = err;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (nextErr) throw nextErr;
+
+    expect(status).toBe(200);
+    const result = pairingSessions.redeemPairingSession(body.code as string);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.selfBind).toBe(false);
   });
 
   it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {

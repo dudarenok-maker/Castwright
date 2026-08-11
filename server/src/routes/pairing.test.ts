@@ -133,6 +133,10 @@ describe('pairing routes', () => {
     const first = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
     expect(first.status).toBe(201);
     expect(first.body.token).toBe('tok_test');
+    // The companion QR redeem path must never self-bind -- it has no way to
+    // know it's running on the host, unlike redeem-browser's server-derived
+    // session.selfBind. createDevice is called with no options argument at all.
+    expect(vi.mocked(createDevice).mock.lastCall?.length).toBe(2);
     const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code });
     expect(second.status).toBe(410);
   });

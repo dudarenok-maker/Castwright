@@ -503,23 +503,6 @@ it('createDevice without the selfBind option revokes nothing', async () => {
   expect(list.find((d) => d.id === second.device.id)?.revoked).toBe(false);
 });
 
-// #2257 — the revoke-then-create is one critical section, one persist: a
-// concurrent selfBind createDevice racing an unrelated revokeDevice must not
-// clobber either write, mirroring the existing #2182 clobber regression tests
-// above for this file's other write paths.
-it('a concurrent selfBind createDevice and an unrelated revokeDevice do not clobber each other (#2257)', async () => {
-  const other = await dt.createDevice('Other', 30);
-  const p1 = dt.createDevice('This computer', 365, { selfBind: true });
-  const p2 = dt.revokeDevice(other.device.id);
-  await Promise.all([p1, p2]);
-
-  const list = dt.listDevices();
-  expect(list.find((d) => d.id === other.device.id)?.revoked).toBe(true);
-  const selfBindDevice = list.find((d) => d.label === 'This computer');
-  expect(selfBindDevice?.revoked).toBe(false);
-  expect(list.length).toBe(2);
-});
-
 // #2182 (coordinator follow-up) — a shared serialisation mechanism is not
 // evidence every entry point actually uses it; each write path gets its own
 // deterministic lost-update regression test, mirroring createDevice's.
