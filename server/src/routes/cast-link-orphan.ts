@@ -118,13 +118,15 @@
       `store/cast-id-history.ts`), entirely independent of cast.json's
       lock. The only cast.json write this route can trigger — the
       self-loop cleanup below, via `clearNotLinkedEdgesForDroppedRejections`
-      — takes its OWN `withCastLock` (`analysis.ts`), and this route never
-      holds that lock itself, so there is no nesting or lock-order
-      inversion. (Fix round, F6: this decision used to be justified by a
-      now-false claim that the route "never writes cast.json" — it does,
-      via that helper, whenever a link retires an id that was the `from` of
-      an earlier rejected pair. The no-lock CONCLUSION above was always
-      correct; only the stated REASON was wrong.)
+      — takes its OWN `withCastLock` (`store/not-linked-edges.ts`, moved out
+      of `analysis.ts` by #2239 precisely because this route's import of it
+      was a route→route dependency), and this route never holds that lock
+      itself, so there is no nesting or lock-order inversion. (Fix round,
+      F6: this decision used to be justified by a now-false claim that the
+      route "never writes cast.json" — it does, via that helper, whenever a
+      link retires an id that was the `from` of an earlier rejected pair.
+      The no-lock CONCLUSION above was always correct; only the stated
+      REASON was wrong.)
 
    `retireCharacterId`'s `droppedSelfLoopRejections` return is handled: when
    a self-loop rejection is dropped (repointing a `rejectedPairs` entry into
@@ -140,7 +142,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { retireCharacterId, loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { clearNotLinkedEdgesForDroppedRejections } from './analysis.js';
+import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { normaliseIdKey } from '../util/character-id.js';
