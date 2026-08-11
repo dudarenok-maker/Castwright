@@ -94,10 +94,13 @@ async function seedOrphanedFallback(page: Page): Promise<void> {
    (see src/views/cast.tsx's own comment on the `info.resolution !==
    'unresolved'` gate: both 'alias' and 'normalised' carry it — #2107's
    ruling is that only 'exact' means the rendered bytes are fine, and this
-   section never shows an 'exact' row). Both rows carry `audioCurrent: 'true'`
-   so they land in the SAME (current) audio-currency section — this seed
-   pins the per-row resolution-based note, not the #2129 bucket split
-   itself (see `seedOrphanedFallbackMixedCurrency` below for that). */
+   section never shows an 'exact' row). Both rows carry `audioCurrent:
+   'unknown'`, which buckets with STALE (never "current") per #2129's Global
+   Constraint 4, so they land in the same STALE section; the note is gated on
+   resolution AND audio currency, so this seed pins the per-row RESOLUTION
+   half of that gate — that both non-exact tiers ('alias' and 'normalised')
+   get the note — while holding currency constant. See `seedOrphanedFallbackMixedCurrency`
+   below for the bucket split itself. */
 async function seedOrphanedFallbackWithNormalised(page: Page): Promise<void> {
   await page.evaluate(() => {
     const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
@@ -108,13 +111,13 @@ async function seedOrphanedFallbackWithNormalised(page: Page): Promise<void> {
           resolution: 'alias',
           resolvedCharacterId: 'narrator',
           segments: 6,
-          audioCurrent: 'true',
+          audioCurrent: 'unknown',
         },
         Mayrin_: {
           resolution: 'normalised',
           resolvedCharacterId: 'narrator',
           segments: 2,
-          audioCurrent: 'true',
+          audioCurrent: 'unknown',
         },
       },
     });
@@ -336,8 +339,8 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     await reachCastView(page);
     await seedOrphanedFallbackWithNormalised(page);
 
-    await page.getByRole('button', { name: /character ids.*auto-reconciled/i }).click();
-    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-current');
+    await page.getByRole('button', { name: /character ids.*auto-reconciled.*re-render/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-stale');
     await expect(autoReconciled).toBeVisible();
 
     const aliasNote = page.getByTestId('orphaned-alias-audio-note-mayrin');
