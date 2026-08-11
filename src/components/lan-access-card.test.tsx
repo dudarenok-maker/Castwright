@@ -209,26 +209,47 @@ describe('LanAccessCard', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
-  it('shows a recovery pointer on 401 from listDevices (no crash)', async () => {
+  it('shows actionable guidance instead of the raw code on a 403 from createDevicePairSession (self-bind), without navigating', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError('pair-session failed (403)', 403),
+    );
+    const assign = vi.fn();
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443', assign });
+    render(<LanAccessCard />);
+    fireEvent.click(await screen.findByRole('button', { name: /authorize this browser/i }));
+    expect(
+      await screen.findByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
+    ).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('shows a working-exit recovery pointer on 401 from listDevices (no crash)', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
 
     render(<LanAccessCard />);
 
     await waitFor(() =>
-      // jsdom's default test URL is http://localhost:3000, so the on-host
-      // branch of recoveryHint() fires here with a port present.
-      expect(screen.getByText(/open https:\/\/localhost/i)).toBeInTheDocument(),
+      // The card's own 401 branch doesn't render the "Authorize this browser"
+      // button (it lives in the else branch), so recoveryHint()'s pointer
+      // back at that button would be circular — this names the concrete
+      // working exit instead, same copy as the 403 branch above.
+      expect(
+        screen.getByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
+      ).toBeInTheDocument(),
     );
   });
 
-  it('shows the portless recovery pointer on 401 when on loopback via the :443 forwarder (location.port === "")', async () => {
+  it('gives the same working-exit pointer on 401 regardless of the viewing hostname (location.port === "")', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
     vi.stubGlobal('location', { hostname: 'localhost', port: '' });
 
     render(<LanAccessCard />);
 
     await waitFor(() =>
-      expect(screen.getByText(/open castwright on this computer/i)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
+      ).toBeInTheDocument(),
     );
   });
 
@@ -265,10 +286,30 @@ describe('LanAccessCard', () => {
 
     render(<LanAccessCard />);
     await waitFor(() =>
-      // jsdom's default test URL is http://localhost:3000, so the on-host
-      // branch of recoveryHint() fires here with a port present.
-      expect(screen.getByText(/open https:\/\/localhost/i)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
+      ).toBeInTheDocument(),
     );
     expect(screen.queryByRole('button', { name: /regenerate certificate/i })).not.toBeInTheDocument();
+  });
+
+  it('hides "Authorize this browser" when viewed from castwright.local — mintable-from-a-phone would let a phone stamp itself "This computer"', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.stubGlobal('location', { hostname: 'castwright.local', port: '' });
+
+    render(<LanAccessCard />);
+    await waitFor(() => screen.getByText('LAN access'));
+
+    expect(screen.queryByRole('button', { name: /authorize this browser/i })).not.toBeInTheDocument();
+  });
+
+  it('shows "Authorize this browser" when viewed from localhost (true loopback)', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
+
+    render(<LanAccessCard />);
+    await waitFor(() => screen.getByText('LAN access'));
+
+    expect(screen.getByRole('button', { name: /authorize this browser/i })).toBeInTheDocument();
   });
 });

@@ -21,6 +21,13 @@ describe('recoveryHint', () => {
     );
   });
 
+  it('[::1] also counts as loopback (what location.hostname reports for https://[::1]:8443)', () => {
+    vi.stubGlobal('location', { hostname: '[::1]', port: '8443' });
+    expect(recoveryHint()).toBe(
+      'Open https://localhost:8443 on this computer and use “Authorize this browser”.',
+    );
+  });
+
   it('omits the port on loopback when the :443 forwarder hides it (location.port === "")', () => {
     vi.stubGlobal('location', { hostname: 'localhost', port: '' });
     expect(recoveryHint()).toBe(

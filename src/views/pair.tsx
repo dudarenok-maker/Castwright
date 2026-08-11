@@ -53,9 +53,11 @@ export function PairShell() {
           {busy ? 'Authorizing…' : 'Authorize'}
         </PrimaryButton>
         {canRetry && (
-          <PrimaryButton variant="dark" onClick={() => authorize(isSelf)} disabled={busy} icon={false}>
-            Try again
-          </PrimaryButton>
+          <div className="mt-3">
+            <PrimaryButton variant="dark" onClick={() => authorize(isSelf)} disabled={busy} icon={false}>
+              Try again
+            </PrimaryButton>
+          </div>
         )}
       </div>
     </div>

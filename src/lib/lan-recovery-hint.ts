@@ -1,3 +1,10 @@
+/** True loopback only — `castwright.local` is the mDNS name every device on
+ *  the LAN resolves, so it is NOT evidence the user is sitting at the host. */
+export function isLoopbackHost(): boolean {
+  const h = window.location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+}
+
 /** Recovery pointer for a 401 caused by this browser's LAN authorization
  *  lapsing. Shared by the library-panel error state (book-library.tsx) and
  *  the LAN-access card's own 401-on-listDevices state (lan-access-card.tsx)
@@ -6,8 +13,7 @@
  *  LAN resolves, so it is NOT evidence the user is sitting at the host;
  *  only true loopback counts. */
 export function recoveryHint(): string {
-  const h = window.location.hostname;
-  const onHost = h === 'localhost' || h === '127.0.0.1';
+  const onHost = isLoopbackHost();
   if (!onHost) return 'Open Castwright on the computer running it and use “Authorize this browser”, then reload here.';
   // location.port is '' on the :443 forwarder path — never promise a port we don't know.
   return window.location.port

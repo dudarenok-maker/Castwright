@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { api } from '../lib/api';
@@ -16,15 +17,16 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
-function renderPair(search = '/pair?c=ABC') {
-  return render(
+function renderPair(search = '/pair?c=ABC', { strict = false } = {}) {
+  const tree = (
     <MemoryRouter initialEntries={[search]}>
       <Routes>
         <Route path="/pair" element={<PairShell />} />
         <Route path="/" element={<div>home</div>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 describe('PairShell', () => {
@@ -32,6 +34,10 @@ describe('PairShell', () => {
     vi.clearAllMocks();
     vi.mocked(api.redeemBrowserPair).mockResolvedValue({ label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z' });
   });
+
+  // Any earlier assertion failure would otherwise leak a history.replaceState
+  // stub into every later test in this file.
+  afterEach(() => vi.restoreAllMocks());
 
   it('renders the authorize screen', () => {
     renderPair();
@@ -77,7 +83,7 @@ describe('PairShell', () => {
 
   it('redeems on mount when self=1, scrubbing the code before the call', async () => {
     const order: string[] = [];
-    const spy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => { order.push('scrub'); });
+    vi.spyOn(window.history, 'replaceState').mockImplementation(() => { order.push('scrub'); });
     vi.mocked(api.redeemBrowserPair).mockImplementation(async () => {
       order.push('redeem');
       return { label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z' };
@@ -85,7 +91,6 @@ describe('PairShell', () => {
     renderPair('/pair?c=ABC&self=1');
     await waitFor(() => expect(api.redeemBrowserPair).toHaveBeenCalledWith({ code: 'ABC' }));
     expect(order).toEqual(['scrub', 'redeem']);
-    spy.mockRestore();
   });
 
   // REGRESSION GUARD, not a red-phase test — see Step 2.
@@ -95,13 +100,15 @@ describe('PairShell', () => {
     expect(api.redeemBrowserPair).not.toHaveBeenCalled();
   });
 
-  it('auto-redeems exactly once', async () => {
+  it('auto-redeems exactly once — the didRun guard survives StrictMode double-invoking the effect', async () => {
     vi.mocked(api.redeemBrowserPair).mockResolvedValue({
       label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z',
     });
-    const { rerender } = renderPair('/pair?c=ABC&self=1');
-    await waitFor(() => expect(api.redeemBrowserPair).toHaveBeenCalledTimes(1));
-    rerender(<div />);
+    // StrictMode deliberately mounts → runs effects → cleans up → runs effects
+    // again in development, to surface effects that aren't idempotent. This
+    // is exactly the scenario didRun exists to guard against.
+    renderPair('/pair?c=ABC&self=1', { strict: true });
+    await waitFor(() => expect(screen.getByText('home')).toBeInTheDocument());
     expect(api.redeemBrowserPair).toHaveBeenCalledTimes(1);
   });
 
@@ -126,7 +133,7 @@ describe('PairShell', () => {
   it('QR-path retry does not scrub the URL before the second attempt', async () => {
     const { ApiError } = await import('../lib/api');
     const order: string[] = [];
-    const spy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => { order.push('scrub'); });
+    vi.spyOn(window.history, 'replaceState').mockImplementation(() => { order.push('scrub'); });
     let callCount = 0;
     vi.mocked(api.redeemBrowserPair).mockImplementation(async () => {
       order.push('redeem');
@@ -142,7 +149,6 @@ describe('PairShell', () => {
     // Exactly one scrub, and it comes AFTER both redeem attempts — i.e. never
     // before the retry's redeemBrowserPair call, unlike the self-bind path.
     expect(order).toEqual(['redeem', 'redeem', 'scrub']);
-    spy.mockRestore();
   });
 
   it('shows a network-restriction message on 403 and offers no Retry', async () => {
