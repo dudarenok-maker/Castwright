@@ -46,7 +46,10 @@ export function isSpokenLine(text: string, conventions: LanguageConventions): bo
 }
 
 /** Return a new sentence list where every non-spoken sentence's characterId is
-    `narrator`. Spoken lines are returned unchanged. Pure — never mutates
+    `narrator`. Spoken lines are returned unchanged. With `conventions === null`
+    (no table for this language) there is no basis to judge spoken vs.
+    narration, so the input array itself is returned by reference, untouched —
+    see the `:158` test asserting `toBe(input)`. Otherwise pure — never mutates
     input. Deliberately retained though it has no production caller — see
     docs/superpowers/plans/2026-06-20-english-narrator-default.md:215, "Do NOT
     delete it as dead code." */

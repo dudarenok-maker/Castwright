@@ -74,7 +74,7 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('«Привет', RU)).toBe(true); // Russian leading «, no close in this fragment
     expect(isSpokenLine('‘Aye, Captain,', EN)).toBe(true); // English smart-single leading-only spoken split
   });
-  it('#2245: straight single-quote dialogue no longer reads as spoken — en.quotePairs carries no [\'\',\'\'] pair', () => {
+  it(`#2245: straight single-quote dialogue no longer reads as spoken — en.quotePairs carries no ["'","'"] pair`, () => {
     // Measured on the live 20-book corpus (issue #2245): the -83/+226 replay
     // shows this shape occurs ZERO times in 90,566 English sentences — all 83
     // lost lines lead with a dash, none with a straight single quote. Adding
@@ -86,13 +86,31 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine("She said 'go away' angrily.", EN)).toBe(false); // was embedded, boundary-anchored
     expect(isSpokenLine("'Aye, Captain,'", EN)).toBe(false); // was leading-only spoken split
   });
+  it('#2279: a quote style ABSENT from the language table is not spoken — declared narrowing, not an accident', () => {
+    /* The tables are now the only definition of dialogue, so a convention a
+       table does not carry is narration — including several the old
+       language-blind bundle caught. This is the SAME gap the structure engine
+       has today (it reads the same `quotePairs`), so the default path is
+       unchanged; with `analyzer.structure.enabled` OFF these lines now go to
+       the narrator instead. Zero occurrences in the live 20-book corpus —
+       which holds one book each of de/es/fr and therefore cannot produce a
+       counter-example either way, so that zero is not evidence of safety.
+       The fix belongs in the tables, measured against findQuoteRuns: #2279. */
+    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false); // fully-ASCII German; de carries „…" but not "…"
+    expect(isSpokenLine('«Lass das.»', DE)).toBe(false); // Swiss-German order; de carries »…« only
+    expect(isSpokenLine('"Hola", dijo.', ES)).toBe(false); // es carries «» and “” only
+    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false); // es.dialogueOpen carries &mdash; but not &ndash;
+    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(false); // fr.quotePairs is «» only
+    expect(isSpokenLine('‘Привет’', RU)).toBe(false); // ru carries «», „“, “”, "" — not ‘’
+    expect(isSpokenLine('«Bonjour»', EN)).toBe(false); // en carries no guillemets
+  });
   it('a single quote used as an apostrophe does NOT make narration spoken', () => {
     expect(isSpokenLine('She didn’t know where she was.', EN)).toBe(false); // smart apostrophe (lone U+2019)
     expect(isSpokenLine("She didn't know where she'd been.", EN)).toBe(false); // straight apostrophes, word-internal
     expect(isSpokenLine("The dogs' bones lay by the cats' bowls.", EN)).toBe(false); // possessive apostrophes
     expect(isSpokenLine("O'Brien walked past the corner.", EN)).toBe(false); // name apostrophe
   });
-  it('narration quoting a sign with straight double quotes still reads as spoken (documented false-negative)', () => {
+  it('narration quoting a sign with straight double quotes still reads as spoken (documented false-positive)', () => {
     expect(isSpokenLine('She read the sign that said "Exit".', EN)).toBe(true);
   });
   it('#2245: English leading dashes stop being dialogue — en.dialogueOpen is null', () => {
@@ -107,10 +125,11 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('Er sagte „komm her“ leise.', DE)).toBe(true); // embedded German span
   });
   it('#2245: all four de.quotePairs forms are spoken in BOTH leading and embedded position', () => {
-    // The 8-cell table from issue #2245's body. Before the fix, 3 of the 4
-    // leading forms and all 4 embedded forms were missed (only „…“ leading
-    // and „…“ embedded worked) — the old regex bundle carried one German
-    // quote form of the four in de.quotePairs.
+    // The 8-cell table from issue #2245's body. Before the fix, only »…«
+    // was missed in leading position (the other three „-opening forms
+    // matched); in embedded position only „…“ matched and the other three
+    // were missed — the old regex bundle carried one German quote form of
+    // the four in de.quotePairs.
     // Leading:
     expect(isSpokenLine('„Lass das.“', DE)).toBe(true);
     expect(isSpokenLine('„Lass das.”', DE)).toBe(true);
