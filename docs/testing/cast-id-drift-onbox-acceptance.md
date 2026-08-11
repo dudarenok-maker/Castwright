@@ -8,7 +8,7 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), and [A33](onbox-acceptance-register.md) (Wave 3, §8 below)
+> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and [A45](onbox-acceptance-register.md) (#2128 audio currency, §9 below)
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -684,3 +684,78 @@ This is the first time the repair pass has ever written to the real
 workspace; if anything here diverges from the dry-run numbers in §8.1, stop
 and investigate before treating the run as clean — do not paper over a
 discrepancy by re-running until the numbers happen to match.
+
+---
+
+## 9. #2128 — audio currency (`isAudioCurrent` / `castHistorySeq`)
+
+> Register row: [`onbox-acceptance-register.md` A45](onbox-acceptance-register.md)
+
+### 9.1 Purpose & scope
+
+Waves 1-3 above (§§1-8) resolve and report drift, but neither the Cast banner
+nor the repair pass could tell "this row's rendered audio is current" apart
+from "this row merely resolves" — a resolution that recovers via `'alias'` or
+`'normalised'` carried the same "may still need a re-render" note forever,
+even after the chapter behind it had actually been re-rendered. #2128 closes
+that: a per-book monotonic `seq` counter on `cast-id-history.json`, a
+`castHistorySeq` stamp written by every full-render `segments.json`, and one
+shared predicate, `isAudioCurrent`, consulted by both the Cast banner and
+`scripts/repair-cast-id-drift.mjs`. Every unit and route test drives a
+synthetic fixture; this section is the proof that a real re-render against
+the real workspace actually clears a row.
+
+**Why the figure looks unchanged today.** `castHistorySeq` is written at
+exactly one production site (`generation.ts`, added by this branch), so no
+segments file in the existing workspace can carry it yet. Every real segment
+therefore reads `'unknown'` → listed, reproducing the pre-fix output
+exactly. A dry run reporting *fewer* rows before the steps below would mean
+the unknown rule was inverted.
+
+### 9.2 Preconditions
+
+- [ ] Real TTS sidecar running (or loadable) for the re-render in step 2 —
+      not mock mode.
+- [ ] The real workspace is present, with `WORKSPACE_DIR`/`CACHE_DIR` set the
+      same way §8.3 establishes for the repair script.
+- [ ] SHA and a clean tree recorded below.
+
+SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
+
+### 9.3 Stamp, re-render, confirm the row clears
+
+1. Run `node scripts/repair-cast-id-drift.mjs --apply` once. Confirm the
+   console line `stamped cast-id-history recordedAtSeq on N book(s) (#2128
+   one-shot)` appears, and that a book's `cast-id-history.json` gains a
+   `recordedAtSeq` field it previously lacked. This sets `seq` to S+1 and
+   every `supersededBy` key's marker to S+1.
+
+Result: _______________________________________________________________
+
+2. Re-render **one** chapter named on the re-render list. That render stamps
+   `castHistorySeq: S+1` into its segments file.
+
+Result: _______________________________________________________________
+
+3. Re-run the dry run. **That chapter's row must disappear, and the segment
+   total must drop by exactly that chapter's segment count, while every
+   other row remains.**
+
+Result: _______________________________________________________________
+
+**Refinement:** `'normalised-id'`-tier rows clear on **stamp presence
+alone**, so they drop off after a re-render even without step 1;
+`'history'`-tier rows need step 1 first.
+
+**What step 1 additionally exercises.** It is the only path with no
+automated coverage: `scannedBookDirs`'s end-to-end correctness inside a live
+`main()`, and `mods.stampRecordedAtSeqIfAbsent`'s runtime resolution and
+write behaviour. Every automated run to date was a dry run, which returns
+before reaching them.
+
+### 9.4 Outcome
+
+- [ ] §9.3 run
+- [ ] Defects filed: ____________________________________
+
+Record what was observed, by whom, and when — here and in register row A45.

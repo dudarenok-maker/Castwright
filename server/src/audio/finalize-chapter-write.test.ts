@@ -462,6 +462,28 @@ describe('finalizeChapterAudioWrite resolvedVoiceName strips the emotion-variant
   });
 });
 
+describe('finalizeChapterAudioWrite castHistorySeq stamp (#2128)', () => {
+  const segPath = () => join(audioRoot, `${SLUG}.segments.json`);
+
+  it('writes the castHistorySeq the caller resolved against (#2128)', async () => {
+    await finalizeChapterAudioWrite({ ...baseInput(), castHistorySeq: 7 });
+    const written = JSON.parse(readFileSync(segPath(), 'utf8'));
+    expect(written.castHistorySeq).toBe(7);
+  });
+
+  it('writes castHistorySeq 0 as a real value, not an omission (#2128)', async () => {
+    await finalizeChapterAudioWrite({ ...baseInput(), castHistorySeq: 0 });
+    const written = JSON.parse(readFileSync(segPath(), 'utf8'));
+    expect(written).toHaveProperty('castHistorySeq', 0);
+  });
+
+  it('omits castHistorySeq entirely when the caller supplies none', async () => {
+    await finalizeChapterAudioWrite(baseInput());
+    const written = JSON.parse(readFileSync(segPath(), 'utf8'));
+    expect(written).not.toHaveProperty('castHistorySeq');
+  });
+});
+
 describe('finalizeChapterAudioWrite QA — three-shape fail-soft (plan 274 T2)', () => {
   afterEach(() => {
     vi.doUnmock('./measure-loudness.js');

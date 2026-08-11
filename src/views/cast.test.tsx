@@ -13,6 +13,7 @@ import { Provider } from 'react-redux';
 import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import type { OrphanedCharacterFallback } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { notificationsSlice } from '../store/notifications-slice';
@@ -673,6 +674,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
               voiceName: 'qwen-oduvan',
               resolution: 'unresolved' as const,
               segments: 1,
+              // #2129 — not exercised by this test (Task 8 renders it); any
+              // valid value satisfies the required field.
+              audioCurrent: 'true' as const,
             },
           },
         },
@@ -748,10 +752,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'alias' as const,
                 resolvedCharacterId: 'marrow',
                 segments: 6,
+                // #2129 — not exercised by this describe block (Task 8 wires
+                // this into the split); any valid value satisfies the field.
+                audioCurrent: 'true' as const,
               },
               coalfall: {
                 resolution: 'unresolved' as const,
                 segments: 67,
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -788,7 +796,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
     it('auto-reconciled is collapsed by default, and expands on click to show the segment count + resolved name', () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
-      expect(screen.queryByTestId('orphaned-auto-reconciled')).toBeNull();
+      // #2129 — makeSplitStore's mayrin carries audioCurrent: 'true', so it
+      // lands in the "current" bucket/section.
+      expect(screen.queryByTestId('orphaned-auto-reconciled-current')).toBeNull();
       const toggle = screen.getByRole('button', { name: /1 character id auto-reconciled/i });
       // #2040 Task 17 fix round 2 finding 8 — no aria-controls while
       // collapsed (the <ul> it would reference doesn't exist in the DOM yet).
@@ -797,14 +807,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
 
       fireEvent.click(toggle);
 
-      const section = screen.getByTestId('orphaned-auto-reconciled');
+      const section = screen.getByTestId('orphaned-auto-reconciled-current');
       expect(within(section).getByText(/mayrin/)).toBeInTheDocument();
       expect(within(section).getByText(/6 segments/)).toBeInTheDocument();
       expect(within(section).getByText('Mr. Marrow')).toBeInTheDocument();
       // Now pointing at the expanded list's own id.
       expect(toggle).toHaveAttribute('aria-expanded', 'true');
       expect(toggle).toHaveAttribute('aria-controls', section.id);
-      expect(section.id).toBe('orphaned-auto-reconciled-list');
+      expect(section.id).toBe('orphaned-auto-reconciled-current-list');
     });
 
     it("#2129, widened by I2 (fix round, #2163) — both an alias-resolved AND a normalised-id row are marked so the banner stops implying the audio is fine", () => {
@@ -826,7 +836,15 @@ describe('CastView Qwen status pill (plan 117)', () => {
             orphanedCharacterFallbacks: {
               // 'alias' — resolved through the id-history side-table
               // (`'history'`/`'normalised-history'` server-side).
-              mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'marrow', segments: 6 },
+              // #2129 — `audioCurrent` is not yet consumed by this static
+              // advisory note (Task 8 wires the real value in); any valid
+              // value satisfies the now-required field.
+              mayrin: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+                audioCurrent: 'unknown' as const,
+              },
               // 'normalised' — a live id-shape match with no history entry
               // (`'normalised-id'` server-side). The repair pass can list
               // THIS exact shape as damage needing a re-render — register
@@ -836,14 +854,21 @@ describe('CastView Qwen status pill (plan 117)', () => {
               // split) — so per #2107's ruling ("only 'exact' means the
               // rendered bytes are fine") this must ALSO carry the note,
               // not be excluded from it.
-              Mayrin_: { resolution: 'normalised' as const, resolvedCharacterId: 'marrow', segments: 2 },
+              Mayrin_: {
+                resolution: 'normalised' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 2,
+                audioCurrent: 'unknown' as const,
+              },
             },
           },
         },
       });
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /2 character ids auto-reconciled/i }));
-      const section = screen.getByTestId('orphaned-auto-reconciled');
+      // #2129 — both rows here carry audioCurrent: 'unknown', which buckets
+      // with "stale" (needs a re-render), never with "current".
+      const section = screen.getByTestId('orphaned-auto-reconciled-stale');
       expect(within(section).getByTestId('orphaned-alias-audio-note-mayrin')).toHaveTextContent(
         /resolves now.*audio may still need a re-render/i,
       );
@@ -885,6 +910,10 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'exact' as unknown as 'alias' | 'normalised' | 'unresolved',
                 resolvedCharacterId: 'marrow',
                 segments: 6,
+                // #2129 — determines which section this row lands in
+                // (stale); the note itself is driven by `resolution`, not
+                // this field.
+                audioCurrent: 'unknown' as const,
               },
             },
           },
@@ -892,16 +921,70 @@ describe('CastView Qwen status pill (plan 117)', () => {
       });
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
-      const section = screen.getByTestId('orphaned-auto-reconciled');
+      const section = screen.getByTestId('orphaned-auto-reconciled-stale');
       expect(within(section).getByText(/mayrin/)).toBeInTheDocument();
       expect(within(section).queryByTestId('orphaned-alias-audio-note-mayrin')).toBeNull();
+    });
+
+    it('F2 (PR #2244 review gate) — the "resolves now — audio may still need a re-render" note is absent in the CURRENT section and present in the STALE one, for the SAME stale-audio-allowlisted resolution', () => {
+      // Both rows use the identical allowlisted resolution ('alias') — only
+      // `audioCurrent` differs. Before the fix, STALE_AUDIO_RESOLUTIONS alone
+      // gated the note, so it rendered unconditionally in BOTH sections
+      // (every row landing in either section already has an allowlisted
+      // resolution, by construction of the two filters) — contradicting the
+      // "audio is current" headline directly above it.
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              mayrin: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+                audioCurrent: 'true' as const,
+              },
+              coalfall: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 4,
+                audioCurrent: 'false' as const,
+              },
+            },
+          },
+        },
+      });
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled — audio is current/i }));
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled — audio needs a re-render/i }));
+
+      const currentSection = screen.getByTestId('orphaned-auto-reconciled-current');
+      expect(within(currentSection).getByText(/mayrin/)).toBeInTheDocument();
+      expect(within(currentSection).queryByTestId('orphaned-alias-audio-note-mayrin')).toBeNull();
+
+      const staleSection = screen.getByTestId('orphaned-auto-reconciled-stale');
+      expect(within(staleSection).getByText(/coalfall/)).toBeInTheDocument();
+      expect(within(staleSection).getByTestId('orphaned-alias-audio-note-coalfall')).toHaveTextContent(
+        /resolves now.*audio may still need a re-render/i,
+      );
     });
 
     it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
-      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
       fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
 
       await waitFor(() => {
@@ -916,6 +999,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
           resolution: 'unresolved',
           resolvedCharacterId: undefined,
           segments: 6,
+          // #2129 — applyOrphanRejection always sets 'unknown' (it has no
+          // history/segments to compute a real verdict).
+          audioCurrent: 'unknown',
           rejectedAgainst: ['marrow'],
         });
       });
@@ -937,7 +1023,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
-      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
       fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
 
       const movedRow = await waitFor(() =>
@@ -962,6 +1048,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
           resolution: 'alias',
           resolvedCharacterId: 'marrow',
           segments: 6,
+          // #2129 — undoOrphanRejection always sets 'unknown' too (same
+          // reasoning as applyOrphanRejection above).
+          audioCurrent: 'unknown',
           rejectedAgainst: undefined,
         });
       });
@@ -991,7 +1080,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
-      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
       fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
 
       const movedRow = await waitFor(() =>
@@ -1057,6 +1146,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 6,
                 rejectedAgainst: ['marrow'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1144,6 +1236,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 6,
                 rejectedAgainst: ['marrow'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1224,11 +1319,15 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 4,
                 rejectedAgainst: ['marrow'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
               'The-Torment': {
                 resolution: 'unresolved' as const,
                 segments: 2,
                 rejectedAgainst: ['marrow'],
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1294,6 +1393,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 67,
                 rejectedAgainst: ['marrow', 'ghost-target'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1377,6 +1479,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
                 resolution: 'unresolved' as const,
                 segments: 67,
                 rejectedAgainst: ['narrator'],
+                // #2129 — not exercised here; any valid value satisfies the
+                // now-required field.
+                audioCurrent: 'false' as const,
               },
             },
           },
@@ -1453,6 +1558,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
                   resolution: 'unresolved' as const,
                   segments: 67,
                   rejectedAgainst: ['marrow'],
+                  audioCurrent: 'false' as const,
                 },
               },
             },
@@ -1684,7 +1790,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
               ...castSlice.getInitialState(),
               characters: [narrator, marrow, unknownMale],
               orphanedCharacterFallbacks: {
-                coalfall: { resolution: 'unresolved' as const, segments: 67 },
+                coalfall: { resolution: 'unresolved' as const, segments: 67, audioCurrent: 'false' as const },
               },
             },
           },
@@ -1745,7 +1851,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
               ...castSlice.getInitialState(),
               characters: [narrator, marrow],
               orphanedCharacterFallbacks: {
-                'unknown-male': { resolution: 'unresolved' as const, segments: 34 },
+                'unknown-male': { resolution: 'unresolved' as const, segments: 34, audioCurrent: 'false' as const },
               },
             },
           },
@@ -1784,7 +1890,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
               ...castSlice.getInitialState(),
               characters: [narrator, marrow],
               orphanedCharacterFallbacks: {
-                narrator: { resolution: 'unresolved' as const, segments: 12 },
+                narrator: { resolution: 'unresolved' as const, segments: 12, audioCurrent: 'false' as const },
               },
             },
           },
@@ -1830,7 +1936,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
               ...castSlice.getInitialState(),
               characters: [narrator, marrow, charNarrator],
               orphanedCharacterFallbacks: {
-                narrator: { resolution: 'unresolved' as const, segments: 12 },
+                narrator: { resolution: 'unresolved' as const, segments: 12, audioCurrent: 'false' as const },
               },
             },
           },
@@ -1886,7 +1992,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
               ...castSlice.getInitialState(),
               characters: [narrator, marrow],
               orphanedCharacterFallbacks: {
-                Unknown_Male: { resolution: 'unresolved' as const, segments: 9 },
+                Unknown_Male: { resolution: 'unresolved' as const, segments: 9, audioCurrent: 'false' as const },
               },
             },
           },
@@ -1928,7 +2034,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
               ...castSlice.getInitialState(),
               characters: [narrator, marrow, driftedBucket],
               orphanedCharacterFallbacks: {
-                coalfall: { resolution: 'unresolved' as const, segments: 67 },
+                coalfall: { resolution: 'unresolved' as const, segments: 67, audioCurrent: 'false' as const },
               },
             },
           },
@@ -2010,6 +2116,11 @@ describe('CastView Qwen status pill (plan 117)', () => {
         expect(store.getState().cast.orphanedCharacterFallbacks?.coalfall).toEqual({
           resolution: 'unresolved',
           segments: 67,
+          // #2129 x #2238 (merge-reconciliation fix) — makeSplitStore seeds
+          // this row's audioCurrent as 'false'; a failed link call never
+          // dispatches applyOrphanLink, so the field is untouched, not
+          // dropped.
+          audioCurrent: 'false',
         });
         expect(linkButton).not.toBeDisabled();
       });
@@ -2020,7 +2131,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
-      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
       const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
 
       fireEvent.click(rejectButton);
@@ -2032,11 +2143,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
         kind: 'error',
         message: 'Reject match failed (500).',
       });
-      // The failed call never landed locally — the entry is untouched.
+      // The failed call never landed locally — the entry is untouched,
+      // including 'audioCurrent' (makeSplitStore's initial 'true' — the
+      // reducer never ran, so it did not get forced to 'unknown').
       expect(store.getState().cast.orphanedCharacterFallbacks?.mayrin).toEqual({
         resolution: 'alias',
         resolvedCharacterId: 'marrow',
         segments: 6,
+        audioCurrent: 'true',
       });
       // Busy state resets after the failure — the button isn't stuck disabled.
       await waitFor(() => {
@@ -2066,7 +2180,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
       fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
-      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
       const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
       expect(rejectButton).not.toBeDisabled();
 
@@ -2084,6 +2198,86 @@ describe('CastView Qwen status pill (plan 117)', () => {
       // the button no longer exists to assert on; confirm the call landed
       // exactly once instead (no duplicate dispatch from a stuck busy state).
       expect(api.rejectOrphanMatch).toHaveBeenCalledTimes(1);
+    });
+
+    describe('#2129 — the auto-reconciled disclosure splits by audio currency', () => {
+      const orphan = (over: Partial<OrphanedCharacterFallback>): OrphanedCharacterFallback => ({
+        resolution: 'alias',
+        resolvedCharacterId: 'marrow',
+        segments: 3,
+        audioCurrent: 'true',
+        ...over,
+      });
+
+      function renderWithOrphans(orphanedCharacterFallbacks: Record<string, OrphanedCharacterFallback>) {
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow],
+              orphanedCharacterFallbacks,
+            },
+          },
+        });
+        render(
+          <Provider store={store}>
+            <CastView
+              characters={[narrator, marrow]}
+              setCharacters={() => {}}
+              library={library}
+              title="The Northern Star"
+              onOpenProfile={() => {}}
+              onShowMatchDetail={() => {}}
+              driftEvents={[]}
+              onShowDrift={() => {}}
+              onContinueToManuscript={() => {}}
+            />
+          </Provider>,
+        );
+        return store;
+      }
+
+      it('splits the auto-reconciled disclosure by audio currency (#2129)', () => {
+        renderWithOrphans({
+          fine: orphan({ audioCurrent: 'true' }),
+          stale: orphan({ audioCurrent: 'false', segments: 67 }),
+          dunno: orphan({ audioCurrent: 'unknown', segments: 1 }),
+          missing: orphan({ resolution: 'unresolved', resolvedCharacterId: undefined, audioCurrent: 'false' }),
+        });
+
+        // Both auto-reconciled sections are COLLAPSED and both counts are readable.
+        expect(screen.getByText(/1 character id auto-reconciled — audio is current/i)).toBeInTheDocument();
+        expect(
+          screen.getByText(/2 character ids auto-reconciled — audio needs a re-render/i),
+        ).toBeInTheDocument();
+        // The needs-decision section is untouched by this change.
+        expect(screen.getByText(/1 character id needs your decision/i)).toBeInTheDocument();
+      });
+
+      it('keeps the actionable count visible without expanding anything (#2129)', () => {
+        renderWithOrphans({ stale: orphan({ audioCurrent: 'false', segments: 67 }) });
+        // No click. The number an operator acts on must be in the collapsed header.
+        expect(
+          screen.getByText(/1 character id auto-reconciled — audio needs a re-render/i),
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/67 segments/i)).not.toBeInTheDocument(); // detail stays inside
+      });
+
+      it('buckets unknown with needs-a-re-render, never with current (#2129)', () => {
+        renderWithOrphans({ dunno: orphan({ audioCurrent: 'unknown' }) });
+        expect(screen.queryByText(/audio is current/i)).not.toBeInTheDocument();
+        expect(screen.getByText(/audio needs a re-render/i)).toBeInTheDocument();
+      });
     });
   });
 

@@ -74,6 +74,7 @@ import {
   collectRenderedInstructHashesByChapter,
   collectRenderedSpeakerMaps,
   collectRenderedTextHashesByChapter,
+  type OrphanedCharacterFallback,
 } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
@@ -497,12 +498,28 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        which measured 0/188 coverage across all 20 books (spec §4.6). Empty
        `{}` when nothing is orphaned. Tolerant of a missing audio dir /
        missing history file. */
-    const orphanedCharacterFallbacks = await collectOrphanedCharacterFallbacks(
-      bookDir,
-      state.chapters,
-      (cast?.characters ?? []) as Array<{ id: string }>,
-      orphanedCharacterFallbackHistoryFile,
-    ).catch(() => ({}));
+    /* #2129 — the collector's own type stays `AudioCurrency` (`true | false |
+       'unknown'`), which the repair-pass consumer (Task 9) imports directly;
+       OpenAPI cannot express that union as one scalar without an awkward
+       `oneOf`, so the wire shape is the STRING enum `'true' | 'false' |
+       'unknown'` instead — converted here, at the route boundary, not inside
+       the collector. The `.catch(() => ({}))` must stay INSIDE the awaited
+       call and typed, or the result widens to `Record<…> | {}` and `v` below
+       will not narrow (round 1, M19) — annotating the local is the smallest
+       fix. */
+    const rawFallbacks: Record<string, OrphanedCharacterFallback> =
+      await collectOrphanedCharacterFallbacks(
+        bookDir,
+        state.chapters,
+        (cast?.characters ?? []) as Array<{ id: string }>,
+        orphanedCharacterFallbackHistoryFile,
+      ).catch(() => ({}));
+    const orphanedCharacterFallbacks = Object.fromEntries(
+      Object.entries(rawFallbacks).map(([id, v]) => [
+        id,
+        { ...v, audioCurrent: String(v.audioCurrent) },
+      ]),
+    );
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend
        diffs it against the live manuscript to flag a `done` chapter whose

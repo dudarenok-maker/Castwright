@@ -228,7 +228,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -238,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**63 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2368,6 +2368,33 @@ conflated once already during triage.
 `#2026 — additional acceptance criteria: Russian XTTS quality` section.
 *Cost:* short — a handful of `/synthesize` probes plus one attempt at
 reproducing the degenerate collapse.
+
+### A45 · #2128 — a real re-render actually clears an audio-currency row ([#2128](https://github.com/dudarenok-maker/Castwright/issues/2128), plan [280](../features/archive/280-cast-identity-followups.md)) · **single 8 GB card for the re-render; the two dry runs need no GPU, server stopped**
+
+The Cast banner and `scripts/repair-cast-id-drift.mjs` now both consult one
+shared predicate, `isAudioCurrent`, so the banner's auto-reconciled section can
+split into "audio is current" vs. "audio needs a re-render" and the repair
+pass's re-render list can actually shrink as chapters get fixed — instead of
+listing the same row forever, the bug #2128 was filed about. Every automated
+test drives a synthetic fixture; nothing proves a real `--apply` stamp
+followed by a real re-render against the real workspace actually clears a row.
+
+*What to observe* — full steps, preconditions and the "why the figure looks
+unchanged today" explanation live in the run sheet, §9:
+[`cast-id-drift-onbox-acceptance.md` §9](cast-id-drift-onbox-acceptance.md).
+In short: run `--apply` once (confirms the one-shot `recordedAtSeq` back-fill
+stamp and its console line), re-render one chapter off the current re-render
+list, then re-run the dry run and confirm that chapter's row — and only that
+chapter's row — disappears, with the segment total dropping by exactly its
+segment count.
+
+*Hardware:* a live sidecar for the re-render step; the two dry runs (before
+and after) need no GPU, just the server stopped so `--apply` isn't refused.
+*Criteria:* plan [280](../features/archive/280-cast-identity-followups.md)'s
+Global Constraints 4-8 (the `'unknown'`-is-damage rule, the uniform stamp
+rule, the two partial writers carrying `castHistorySeq` forward verbatim) all
+have unit/guard coverage; only this run proves the end-to-end loop — stamp,
+render, re-check — against real audio.
 
 ## Group B — local Ollama analyzer only
 
