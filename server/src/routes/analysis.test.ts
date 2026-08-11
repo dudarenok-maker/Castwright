@@ -33,6 +33,8 @@ import {
   runMainAnalyzerJob,
   runSubsetAnalyzerJob,
   aggregateStructureReports,
+  aggregateMaxMergedTurns,
+  mergeMaxMergedTurns,
   buildStage2ChapterInbox,
   buildStage2ChunkInbox,
   STAGE2_ATTRIBUTION_RULES,
@@ -41,6 +43,7 @@ import {
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
+import type { AnalysisProvenanceReport, BookStateJson } from '../workspace/scan.js';
 import { GeminiContentBlockedError } from '../analyzer/errors.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
@@ -85,6 +88,41 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       );
     },
     isPerPhaseModelSelectionActive: () => false,
+  };
+});
+
+/* #2267 — `resolveBookLanguageForManuscript` (analysis.ts) resolves a book's
+   language via `findBookByManuscriptId`, which scans the REAL on-disk
+   `BOOKS_ROOT` tree — a tmpdir-based test book (as every provenance test
+   below uses) is never found there, so it always falls through to the 'en'
+   default (see the existing "writes analysisProvenance..." test's comment).
+   That's fine for tests that don't care about language, but the
+   fully-cached-book §4 test below needs a language WITH a paragraph-dash
+   convention (ru) to get a non-`undefined` legibility reading. Mirrors the
+   `__analyzer_device_test_phase1_selection` global-hook pattern above rather
+   than a real BOOKS_ROOT write (which would touch the real workspace) or a
+   file-wide behavior change (every other test keeps the real 'en' fallback
+   since the override only fires when the hook is set for that manuscriptId). */
+vi.mock('../workspace/scan.js', async () => {
+  const actual = await vi.importActual<typeof import('../workspace/scan.js')>('../workspace/scan.js');
+  return {
+    ...actual,
+    findBookByManuscriptId: async (manuscriptId: string) => {
+      const g = globalThis as Record<string, unknown>;
+      const override = g.__analysis_test_book_language_override as
+        | { manuscriptId: string; language: string }
+        | undefined;
+      if (override && override.manuscriptId === manuscriptId) {
+        return {
+          bookDir: '/test-language-override',
+          author: 'A',
+          series: 'S',
+          title: 'T',
+          state: { manuscriptId, language: override.language } as unknown as BookStateJson,
+        };
+      }
+      return actual.findBookByManuscriptId(manuscriptId);
+    },
   };
 });
 
@@ -3230,6 +3268,63 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
   });
 });
 
+describe('aggregateMaxMergedTurns (#2267 — cross-chapter fold)', () => {
+  it('reports the MAXIMUM across chapters, never the sum', () => {
+    // A book whose chapters yield 3 and 11 reports 11, not 14 (Global
+    // Constraint: Math.max over paragraphs/chapters, never a sum).
+    expect(aggregateMaxMergedTurns([3, 11])).toBe(11);
+  });
+
+  it('is order-independent', () => {
+    expect(aggregateMaxMergedTurns([11, 3])).toBe(11);
+  });
+
+  it('skips a chapter that contributed undefined rather than treating it as 0', () => {
+    expect(aggregateMaxMergedTurns([undefined, 5])).toBe(5);
+  });
+
+  it('returns undefined when no chapter in this pass contributed a reading', () => {
+    expect(aggregateMaxMergedTurns([])).toBeUndefined();
+    expect(aggregateMaxMergedTurns([undefined, undefined])).toBeUndefined();
+  });
+});
+
+describe('mergeMaxMergedTurns (#2267 — merge into the provenance report, independent of aggregateStructureReports)', () => {
+  it('adds the field onto an existing aggregated report', () => {
+    const aggregated: AnalysisProvenanceReport = {
+      confirmed: 1,
+      corrected: 2,
+      flagged: 0,
+      escalated: 0,
+      escalationAccepted: 0,
+    };
+    expect(mergeMaxMergedTurns(aggregated, 11)).toEqual({ ...aggregated, maxMergedTurnsInParagraph: 11 });
+  });
+
+  it('is a no-op when there is nothing to merge', () => {
+    const aggregated: AnalysisProvenanceReport = {
+      confirmed: 1,
+      corrected: 0,
+      flagged: 0,
+      escalated: 0,
+      escalationAccepted: 0,
+    };
+    expect(mergeMaxMergedTurns(aggregated, undefined)).toEqual(aggregated);
+    expect(mergeMaxMergedTurns(undefined, undefined)).toBeUndefined();
+  });
+
+  it('#2267/spec §4 — the value is still emitted when aggregateStructureReports returned undefined ' +
+    '(the fully-cached-book case: zero EngineReports this pass)', () => {
+    // aggregateStructureReports([]) is undefined — no engine ran this pass —
+    // yet the manuscript-text-only metric still has a reading. The merge must
+    // not let the absent EngineReport aggregate swallow it.
+    expect(aggregateStructureReports([])).toBeUndefined();
+    const result = mergeMaxMergedTurns(aggregateStructureReports([]), 11);
+    expect(result).toBeDefined();
+    expect(result?.maxMergedTurnsInParagraph).toBe(11);
+  });
+});
+
 describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persistence (srv-59 Task 11)', () => {
   /* English tag-anchored dialogue fixture (mirrors the proven shape in
      parser.test.ts's "en quotes" case: “…,” Name verb.). Paragraph 1 is a
@@ -3494,6 +3589,128 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
         process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    '#2267 spec §4 — main route STILL persists maxMergedTurnsInParagraph when EVERY chapter is served from ' +
+      'cache (the fully-cached-book case: zero fresh EngineReports this pass)',
+    async () => {
+      /* This is the scenario spec §4 exists to protect: a re-run of an
+         already-analysed book where every chapter's sentences come back from
+         the stage-2 cache, so attributeChapterStage2 (and therefore
+         crossExamine / the EngineReport it produces) never runs at all this
+         pass. structureReports stays empty and aggregateStructureReports
+         returns undefined either way — the metric under test must not
+         vanish along with it, because it needs only chapter text + the
+         book's resolved language, neither of which requires the engine to
+         have run. `phase1Analyzer.runStage2Chapter` is wired to THROW below
+         so this test fails loudly (not silently) if the cache-seeding here
+         ever stops actually skipping fresh attribution. */
+      const manuscriptId = `test-provenance-cached-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      // Chapter 1's single paragraph has 2 merged turns (mirrors Task 1's
+      // legibility.test.ts fixture); chapter 2 is clean narration.
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: 'Он кивнул. - Привет. - Как дела?' },
+        { id: 2, title: 'Chapter Two', body: 'Тихо было.' },
+      ];
+      seedStateJson(bookDir, manuscriptId, { language: 'ru' });
+      // `resolveBookLanguageForManuscript` scans the real BOOKS_ROOT tree, which
+      // this tmpdir-based test book is never part of — route it through the
+      // `../workspace/scan.js` mock's override hook (see that mock's own
+      // comment above) instead, so `bookLanguage` actually resolves to 'ru'.
+      (globalThis as Record<string, unknown>).__analysis_test_book_language_override = {
+        manuscriptId,
+        language: 'ru',
+      };
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Provenance Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+      // Pre-seed the Phase-1 attribution cache for BOTH chapters, so the
+      // cached-chapter replay loop (analysis.ts, "Replay cached chapters
+      // synchronously up front") picks them up and skips
+      // attributeChapterStage2WithEval entirely for this run.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {
+          1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 1, text: 'Он кивнул.' }],
+          2: [{ id: 201, chapterId: 2, characterId: 'narrator', confidence: 1, text: 'Тихо было.' }],
+        },
+      });
+
+      function buildPhase1AnalyzerThatMustNotRun(): Analyzer {
+        return {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () =>
+            Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+          runStage2Chapter: () =>
+            Promise.reject(
+              new Error(
+                'fully-cached-book test: Phase-1 attribution must NOT run when every chapter is cached',
+              ),
+            ),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.reject(new Error('not used')),
+        };
+      }
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1AnalyzerThatMustNotRun(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // requestedFresh: false — a resumed run, NOT "Start fresh" (which
+        // would discard the cache we just seeded and defeat the test).
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const stateAfter = readState(bookDir);
+        const provenance = stateAfter.analysisProvenance as {
+          report?: { maxMergedTurnsInParagraph?: number };
+        };
+        expect(provenance.report?.maxMergedTurnsInParagraph).toBe(2);
+      } finally {
+        delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
       }
     },
     60_000,

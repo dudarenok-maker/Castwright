@@ -301,6 +301,11 @@ export interface AnalysisProvenanceReport {
   unresolved?: number;
   escalated: number;
   escalationAccepted: number;
+  /** #2267 — worst-paragraph merged dialogue-turn count across the book
+      (max, not sum). ABSENT means not measured: either an older analysis, or
+      a language with no paragraph-dash convention. Never default it to 0 —
+      0 means "measured clean", absent means "not measured". */
+  maxMergedTurnsInParagraph?: number;
 }
 
 /** Resolved chapter audio format for a book — `audioFormat` from

@@ -173,6 +173,7 @@ import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
 import { annotateSceneBreaks } from '../analyzer/scene-breaks.js';
 import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
 import type { DecisionBucket, EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
+import { measureChapterLegibility } from '../analyzer/dialogue-structure/legibility.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
@@ -2271,11 +2272,22 @@ export async function attributeChapterStage2(opts: {
     }
 
     result.structureReport = { ...examined.report, language: conventions.language };
+    /* #2267 — worst-paragraph merged-turn count, for THIS chapter's operator
+       log line only. Local, not exposed on Stage2ChunkRunResult: the
+       persisted book-level reading (analysisProvenance.report) is computed
+       independently, over every non-excluded chapter's text regardless of
+       whether it was freshly attributed or served from cache this pass (see
+       the accumulation at the `runMainAnalyzerJob`/`runSubsetAnalyzerJob`
+       call sites) — routing it through this engine-gated branch would miss
+       every cached chapter, which is exactly the fully-cached-book case
+       design of record §4 exists to protect. */
+    const chapterMaxMergedTurns = measureChapterLegibility(opts.chapter.body, conventions);
     console.log(
       `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
         `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} ` +
         `flagged=${examined.report.flagged} unresolved=${examined.report.unresolved} ` +
-        `escalated=${examined.report.escalated} escalationAccepted=${examined.report.escalationAccepted}`,
+        `escalated=${examined.report.escalated} escalationAccepted=${examined.report.escalationAccepted} ` +
+        `merged=${chapterMaxMergedTurns ?? 'n/a'}`,
     );
   } else {
     /* Deterministic narrator-default: force non-spoken sentences to `narrator`
@@ -2371,6 +2383,55 @@ export function aggregateStructureReports(
     unresolved,
     escalated,
     escalationAccepted,
+  };
+}
+
+/** #2267 — collapse this pass's per-chapter `measureChapterLegibility`
+    readings (Task 1) into the book-level worst-paragraph reading. `Math.max`
+    across chapters, never a sum — Global Constraint, see the design of
+    record §2.1 for why a rate/sum was tried and refuted. A chapter that
+    contributed `undefined` (no supported language for that chapter, or the
+    engine didn't run for it this pass) is skipped rather than counted as 0.
+    `undefined` when no chapter in this pass contributed a reading at all. */
+export function aggregateMaxMergedTurns(perChapter: Array<number | undefined>): number | undefined {
+  let worst: number | undefined;
+  for (const n of perChapter) {
+    if (n === undefined) continue;
+    if (worst === undefined || n > worst) worst = n;
+  }
+  return worst;
+}
+
+/** #2267 — merge the independently-accumulated worst-paragraph merged-turn
+    reading (`aggregateMaxMergedTurns` above) into the aggregated structure
+    report, AFTER `aggregateStructureReports` has already run. Deliberately
+    NOT folded into that function (design of record §4): it returns
+    `undefined` whenever `reports` is empty — the engine was off, or every
+    chapter in this pass served from the stage-2 cache — and this metric's
+    whole point is that it still has a reading in exactly that case, because
+    it needs only chapter text + language, never an `EngineReport`.
+
+    When `aggregated` is `undefined` and there IS a reading to carry, this
+    constructs a report from scratch. The other counters are set to 0 in that
+    branch — an honest count of what the structure engine did THIS PASS (it
+    did not run at all, so it confirmed/corrected/flagged/escalated nothing),
+    not a claim that anything was "measured clean". `maxMergedTurnsInParagraph`
+    is the only field in that constructed report backed by a real measurement.
+    Returns `undefined`, unchanged, when there is nothing to merge. */
+export function mergeMaxMergedTurns(
+  aggregated: AnalysisProvenanceReport | undefined,
+  maxMergedTurnsInParagraph: number | undefined,
+): AnalysisProvenanceReport | undefined {
+  if (maxMergedTurnsInParagraph === undefined) return aggregated;
+  return {
+    ...(aggregated ?? {
+      confirmed: 0,
+      corrected: 0,
+      flagged: 0,
+      escalated: 0,
+      escalationAccepted: 0,
+    }),
+    maxMergedTurnsInParagraph,
   };
 }
 
@@ -4416,6 +4477,24 @@ export async function runMainAnalyzerJob(
        Rolled up into `analysisProvenance.report` at the persist site below
        via aggregateStructureReports. */
     const structureReports: EngineReport[] = [];
+    /* #2267 — Task 1's worst-paragraph merged-turn reading, one per
+       non-excluded chapter. Deliberately computed HERE, over every chapter's
+       text up front, rather than accumulated from `attributeChapterStage2`
+       as `structureReports` above is: that path only runs for chapters
+       freshly attributed THIS pass, so on a fully-cached re-run (every
+       chapter served from the stage-2 cache below) it would never fire at
+       all — exactly the case design of record §4 exists to protect, since
+       this metric needs only chapter text + the book's resolved language,
+       never an EngineReport or the engine having run. Folded via
+       `aggregateMaxMergedTurns` (Math.max, never a sum) and merged into the
+       persisted report separately from `aggregateStructureReports` at the
+       persist site below. */
+    const legibilityConventions = conventionsFor(bookLanguage);
+    const perChapterMaxMergedTurns: Array<number | undefined> = recordRef.chapterHints
+      .filter((c) => !c.excluded)
+      .map((c) =>
+        legibilityConventions ? measureChapterLegibility(c.body, legibilityConventions) : undefined,
+      );
     const completedSet = new Set<number>();
 
     /* Replay cached chapters synchronously up front. Cheap, deterministic
@@ -5440,7 +5519,15 @@ export async function runMainAnalyzerJob(
                 model: phase1Selection.model,
                 at: new Date().toISOString(),
                 structureEngineVersion: 1,
-                report: aggregateStructureReports(structureReports),
+                /* #2267 — merged AFTER aggregateStructureReports returns, not
+                   routed through it: that function returns `undefined` for an
+                   empty `structureReports` (engine off, or every chapter this
+                   pass served from cache), but this reading needs neither —
+                   see mergeMaxMergedTurns's doc comment / design of record §4. */
+                report: mergeMaxMergedTurns(
+                  aggregateStructureReports(structureReports),
+                  aggregateMaxMergedTurns(perChapterMaxMergedTurns),
+                ),
                 scope: 'book',
                 chaptersCovered: chapters.length,
               },
@@ -6271,6 +6358,21 @@ export async function runSubsetAnalyzerJob(
        Only chapters actually re-run here (`toRun`) can contribute — a
        subset retry never touches other chapters' cached sentences. */
     const subsetStructureReports: EngineReport[] = [];
+    /* #2267 — mirrors the main route's `perChapterMaxMergedTurns`: computed
+       up front from `toRun`'s chapter text + the book's resolved language,
+       independent of whether the structure engine ran for a given chapter
+       (see the main route's matching comment / design of record §4). Every
+       `toRun` chapter IS freshly attributed below by construction (a subset
+       retry targets exactly the chapters it reprocesses), so there is no
+       cache-skip gap here — but computing it this way keeps it decoupled
+       from the `analyzer.structure.enabled` knob too, the same as the main
+       route. */
+    const subsetLegibilityConventions = conventionsFor(bookLanguage);
+    const subsetPerChapterMaxMergedTurns: Array<number | undefined> = toRun.map((c) =>
+      subsetLegibilityConventions
+        ? measureChapterLegibility(c.body, subsetLegibilityConventions)
+        : undefined,
+    );
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
@@ -6750,7 +6852,12 @@ export async function runSubsetAnalyzerJob(
                 model: phase1Selection.model,
                 at: new Date().toISOString(),
                 structureEngineVersion: 1,
-                report: aggregateStructureReports(subsetStructureReports),
+                /* #2267 — see the matching comment at the main route's persist
+                   site above. */
+                report: mergeMaxMergedTurns(
+                  aggregateStructureReports(subsetStructureReports),
+                  aggregateMaxMergedTurns(subsetPerChapterMaxMergedTurns),
+                ),
                 scope: 'subset',
                 chaptersCovered: toRun.length,
               },
