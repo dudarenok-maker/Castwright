@@ -122,4 +122,37 @@ describe('PairShell', () => {
     expect(await screen.findByText(/wait a minute/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
   });
+
+  it('QR-path retry does not scrub the URL before the second attempt', async () => {
+    const { ApiError } = await import('../lib/api');
+    const order: string[] = [];
+    const spy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => { order.push('scrub'); });
+    let callCount = 0;
+    vi.mocked(api.redeemBrowserPair).mockImplementation(async () => {
+      order.push('redeem');
+      callCount += 1;
+      if (callCount === 1) throw new ApiError('degraded', 503);
+      return { label: 'This browser', expiresAt: '2099-01-01T00:00:00.000Z' };
+    });
+    // No self=1 — this is the manual QR/click journey, not the self-bind mount.
+    renderPair('/pair?c=ABC');
+    fireEvent.click(screen.getByRole('button', { name: /Authorize/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+    await waitFor(() => expect(order).toContain('scrub'));
+    // Exactly one scrub, and it comes AFTER both redeem attempts — i.e. never
+    // before the retry's redeemBrowserPair call, unlike the self-bind path.
+    expect(order).toEqual(['redeem', 'redeem', 'scrub']);
+    spy.mockRestore();
+  });
+
+  it('shows a network-restriction message on 403 and offers no Retry', async () => {
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.redeemBrowserPair).mockRejectedValueOnce(new ApiError('forbidden', 403));
+    renderPair('/pair?c=ABC');
+    fireEvent.click(screen.getByRole('button', { name: /Authorize/i }));
+    expect(
+      await screen.findByText('Pairing only works from your own network.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
 });
