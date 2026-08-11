@@ -326,6 +326,17 @@ describe('reconcileRejectEdgesOnDisk', () => {
     }
   });
 
+  /* #2228 disposition (kept, not retired): analysis.persist-block-degraded-
+     history.test.ts now drives runMainAnalyzerJob's persist block end to end
+     — a degraded cast-id-history.json produces the shared log line and the
+     file is left byte-identical — which is real behavioural coverage for
+     ONE of the two authoritative persists. [C7]/[C11] stay as cheap
+     backstops for the other: they are the only coverage on
+     runSubsetAnalyzerJob's mirror block (standing that one up too would cost
+     a second ~60s stub-analyzer run for the same wiring fact this source
+     scan already pins for free), and they also continue to catch the
+     ~zero-cost regression the behavioural test doesn't aim at — the helper
+     being exported but silently uncalled from one of the two call sites. */
   it('[C7] is wired into BOTH authoritative persists', () => {
     /* A source scan, not a behavioural test — deliberately. The two call sites
        live inside the analysis persist path, which no unit test stands up, so
