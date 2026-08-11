@@ -1,5 +1,5 @@
 /* Deterministic narrator-default heuristic (plan 221 Wave A; generalized to all
-   languages 2026-06-20).
+   languages 2026-06-20; made conventions-driven #2245).
 
    The per-sentence attribution model mislabels third-person NARRATION as the
    named character (e.g. "She was lost." -> stephanie), which would read
@@ -8,54 +8,77 @@
    forced to narrator. Runs for English too (the model ignores the same rule in
    the skill prompt).
 
-   A spoken line begins with a dialogue dash or any opening quote, OR contains a
-   quoted span (double / guillemet / smart-single / boundary-anchored
-   straight-single). Everything else is narration. Demote-only at the sentence
-   level: it never reassigns a quoted line and never promotes narrator->character
-   (it does lower line counts, which fold/reconcile consume downstream). Coverage
-   is unaffected (the coverage guard keys on sentence text, not characterId).
+   A spoken line is driven by the same `LanguageConventions` tables the
+   structure engine uses (`dialogue-structure/lang/*.ts`), not a separate
+   language-blind regex bundle — see #2245: the old bundle carried only one of
+   German's four `quotePairs` forms and recognised no CJK quote glyphs at all.
+   Everything else is narration. Demote-only at the sentence level: it never
+   reassigns a quoted line and never promotes narrator->character (it does
+   lower line counts, which fold/reconcile consume downstream). Coverage is
+   unaffected (the coverage guard keys on sentence text, not characterId).
    Pure: no I/O, no model calls. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
+import type { LanguageConventions } from './dialogue-structure/types.js';
 
 const NARRATOR_ID = 'narrator';
 
-/** True when the sentence text reads as spoken dialogue: a leading dialogue
-    dash / opening quote, or an embedded quoted span. Also matches the named
-    HTML dash entities `&mdash;`/`&ndash;` — some EPUB toolchains emit these and
-    `stripHtml` (parsers/html-utils.ts) only decodes a small named-entity set, so
-    the dash can survive literally in the body the model echoes. Without this,
-    real dialogue prefixed by `&mdash;` would be wrongly forced to narrator. */
-export function isSpokenLine(text: string): boolean {
+/** True when the sentence text reads as spoken dialogue under `conventions`:
+    (1) `conventions.dialogueOpen` matches at line start; (2) any
+    `conventions.quotePairs` opener occurs at line start; (3) any
+    `conventions.quotePairs` pair forms an embedded `open…close` span with at
+    least one character between. `conventions` is required — the no-table case
+    (no basis to judge) is handled one level up, in `applyNarratorDefault`, so
+    "no table -> no demotion" is a structural property of that function rather
+    than something this one has to special-case for a `null` input. */
+export function isSpokenLine(text: string, conventions: LanguageConventions): boolean {
   const t = (text ?? '').trimStart();
   if (!t) return false;
-  if (/^(&mdash;|&ndash;|[-–—])/i.test(t)) return true; // dash entities + literal dashes
-  if (/^[«„"“‘']/.test(t)) return true; // any opening quote: guillemet / German open / straight+smart double / smart+straight single
-  if (/«[^»]+»/.test(t) || /„[^“]+“/.test(t) || /"[^"]+"/.test(t) || /“[^”]+”/.test(t) || /‘[^’]+’/.test(t)) return true; // embedded span: guillemet / German „…“ / straight+smart double / smart single
-  // embedded STRAIGHT single, word-boundary-anchored: opens after start/space/bracket/dash, closes before space/punct.
-  // Avoids apostrophes (don't, O'Brien, dogs') whose ' is never at a word boundary.
-  if (/(?:^|[\s([{<«—–-])'(?=\S)[^']*?\S'(?=[\s.,!?;:)\]}>»]|$)/.test(t)) return true;
+  if (conventions.dialogueOpen && conventions.dialogueOpen.test(t)) return true;
+  for (const [open] of conventions.quotePairs) {
+    if (t.startsWith(open)) return true;
+  }
+  for (const [open, close] of conventions.quotePairs) {
+    const o = t.indexOf(open);
+    if (o >= 0 && t.indexOf(close, o + open.length + 1) > o) return true;
+  }
   return false;
 }
 
 /** Return a new sentence list where every non-spoken sentence's characterId is
-    `narrator`. Spoken lines are returned unchanged. Pure — never mutates input. */
-export function forceNarratorOnNonSpokenLines(sentences: SentenceOutput[]): SentenceOutput[] {
+    `narrator`. Spoken lines are returned unchanged. Pure — never mutates
+    input. Deliberately retained though it has no production caller — see
+    docs/superpowers/plans/2026-06-20-english-narrator-default.md:215, "Do NOT
+    delete it as dead code." */
+export function forceNarratorOnNonSpokenLines(
+  sentences: SentenceOutput[],
+  conventions: LanguageConventions | null,
+): SentenceOutput[] {
+  if (!conventions) return sentences;
   return sentences.map((s) =>
-    isSpokenLine(s.text) ? s : { ...s, characterId: NARRATOR_ID },
+    isSpokenLine(s.text, conventions) ? s : { ...s, characterId: NARRATOR_ID },
   );
 }
 
-/** Apply the narrator-default heuristic for ALL languages. Each non-spoken
-    sentence whose model-assigned characterId is a real character is demoted to
-    `narrator`; the FIRST such override in each contiguous demoted run has its
-    confidence clamped to <= 0.5 so the Confirm-view low-confidence navigator
-    gets one review stop per block (not one per sentence). Spoken lines and
-    pre-existing-narrator lines are returned by reference, untouched. Pure. */
-export function applyNarratorDefault(sentences: SentenceOutput[]): SentenceOutput[] {
+/** Apply the narrator-default heuristic for ALL languages that have a
+    conventions table. Each non-spoken sentence whose model-assigned
+    characterId is a real character is demoted to `narrator`; the FIRST such
+    override in each contiguous demoted run has its confidence clamped to
+    <= 0.5 so the Confirm-view low-confidence navigator gets one review stop
+    per block (not one per sentence). Spoken lines and pre-existing-narrator
+    lines are returned by reference, untouched. With `conventions === null`
+    (no table for this language) there is no basis to judge spoken vs.
+    narration, so the whole list is returned by reference, untouched — no
+    demotion at all, which is a far milder failure than sending the whole
+    book to the narrator. Pure. */
+export function applyNarratorDefault(
+  sentences: SentenceOutput[],
+  conventions: LanguageConventions | null,
+): SentenceOutput[] {
+  if (!conventions) return sentences;
   let clampedThisRun = false;
   return sentences.map((s) => {
-    if (isSpokenLine(s.text)) {
+    if (isSpokenLine(s.text, conventions)) {
       clampedThisRun = false;
       return s;
     }

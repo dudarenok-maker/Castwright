@@ -2207,14 +2207,15 @@ export async function attributeChapterStage2(opts: {
      per-sentence attribution against the chapter's structural evidence (dash/
      quote dialogue tags, conversation-window alternation, pronoun resolution)
      and derives an honest confidence for every sentence, auto-correcting
-     tag-proven misattributions. Gated by the `analyzer.structure.enabled`
-     knob AND language support; the ELSE branch is byte-identical to the
-     pre-engine `applyNarratorDefault` behaviour (coverage keys on text, not
-     characterId, so the verdict above is unaffected either way). */
-  const conventions = configValue<boolean>('analyzer.structure.enabled')
-    ? conventionsFor(opts.stageCall.language)
-    : null;
-  if (conventions) {
+     tag-proven misattributions. The engine itself is gated by the
+     `analyzer.structure.enabled` knob AND language support; #2245 split
+     conventions resolution off the knob (it was `knob ? conventionsFor(lang)
+     : null`, so turning the engine off also threw the language away) so the
+     ELSE branch's `applyNarratorDefault` fallback still gets the right
+     per-language quote rules even with the knob off — mirrors `fpConventions`
+     above, which already resolves conventions independently of this knob. */
+  const conventions = conventionsFor(opts.stageCall.language);
+  if (configValue<boolean>('analyzer.structure.enabled') && conventions) {
     const index = buildNameIndex(stage1.characters, conventions);
     const paras = parseChapterStructure(opts.chapter.body, index);
     const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
@@ -2279,10 +2280,12 @@ export async function attributeChapterStage2(opts: {
     );
   } else {
     /* Deterministic narrator-default: force non-spoken sentences to `narrator`
-       and flag the first of each demoted block low-confidence. Runs for ALL
-       languages, AFTER coverage (coverage keys on text, not characterId, so the
-       verdict is unchanged) and UPSTREAM of fold/reconcile. */
-    result.sentences = applyNarratorDefault(result.sentences);
+       and flag the first of each demoted block low-confidence. Runs for every
+       language that has a conventions table, AFTER coverage (coverage keys on
+       text, not characterId, so the verdict is unchanged) and UPSTREAM of
+       fold/reconcile. `conventions === null` (no table) is a no-op inside
+       applyNarratorDefault — no basis to judge, so nothing is demoted. */
+    result.sentences = applyNarratorDefault(result.sentences, conventions);
     if (opts.onStages) { detSnapshot = structuredClone(result.sentences); detReasons = []; }
   }
 
