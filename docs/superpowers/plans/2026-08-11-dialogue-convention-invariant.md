@@ -33,7 +33,19 @@ calls — so every behavioural claim in this plan is checkable offline.
   string may change in Task 5.
 - **`AnalysisProvenanceReport.unresolved` is an additive OPTIONAL field.**
   `CURRENT_STATE_SCHEMA` does **not** bump (`server/src/workspace/scan.ts:245-247`
-  rename-vs-add policy). Old `state.json` files simply lack the key.
+  rename-vs-add policy). Old `state.json` files simply lack the key. **Absent
+  does not mean zero** — it means the run predates the split, and a reader
+  cannot distinguish the two. No reader may default it to 0; nothing reads it
+  today, and that must stay true or the ambiguity becomes a bug.
+- **This change activates for three languages, not one.** `dialogueOpen` is
+  non-null for **ru, es, fr** (`lang/es.ts:5`, `lang/fr.ts:5` — both
+  `/^\s*(?:&mdash;|[-–—])\s*/iu`) and null for en/de/ja/zh. Every measurement
+  in this plan is Russian: the fixture is ru, the corpus harness's
+  `guessLanguage` only ever returns `ru`/`ja`/`en`, and no es/fr book exists in
+  the workspace to measure. es/fr therefore ship on **unit coverage only**
+  (Task 2 step 1, last case) plus the argument that they use the identical
+  paragraph-initial-dash convention. Declare this residual risk in the PR body;
+  do not describe the change as verified for es/fr.
 - **`dialogueOpen` regexes must not carry the `g` flag.** `ru.dialogueOpen` is
   `/^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu` — no `g`, so `.test()` is stateless. A
   `g`-flagged regex would make `.test()` stateful via `lastIndex` and produce
@@ -84,8 +96,15 @@ own test, not folded into Task 2's diff where it would be invisible.
 
 ## Task 1: Measure the two baselines the metric depends on
 
-The spec leaves two numbers unmeasured, and §4.2's threshold cannot be set
-without the first. No product code changes in this task.
+The spec leaves two numbers unmeasured. No product code changes in this task.
+
+**The script is written to run TWICE** — once here (baseline) and once in Task 7
+step 0 (post-fix, via `POSTFIX=1`). That is not optional polish. Spec §4.2 says
+target 1a's threshold is *"calibrated on post-change replay"*, and the fix's
+entire mechanism is moving 879 sentences from confidence 0.9 to 0.6 — i.e. from
+above the 0.75 threshold to below it. **1a measures exactly the quantity the fix
+inflates**, so a threshold set from the baseline alone would be set from the
+wrong distribution and would fail on the chapters the fix repairs.
 
 **Files:**
 - Create: `server/handoff/cache/replay-legibility.mts` (throwaway; `server/handoff/cache/` is gitignored)
@@ -93,7 +112,13 @@ without the first. No product code changes in this task.
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: two recorded figures later tasks read — `LOWCONF_BASELINE` (per-chapter share of sentences with `confidence < 0.75`, used to set target 1a's threshold in Task 7) and `VICTIM_ERROR_RATE` (from the hand-labelled sample, used to set target 1b reading 1's bar in Task 7).
+- Produces:
+  - `replay-legibility.mts` itself — Task 7 step 0 re-runs it with `POSTFIX=1`;
+  - the **baseline** per-chapter `confidence < 0.75` table, which is the *control*
+    against which step 0's post-fix table is read (the threshold comes from the
+    post-fix column, never this one);
+  - `VICTIM_ERROR_RATE` from the hand-labelled sample, which sets target 1b
+    reading 1's bar in Task 7.
 
 **Prerequisites (verify before starting):**
 - `C:/Claude/Projects/Audiobook-Generator/server/handoff/cache/mns_oyK7Po6BiT.json`
@@ -108,13 +133,16 @@ without the first. No product code changes in this task.
 Create `server/handoff/cache/replay-legibility.mts`:
 
 ```ts
-/* THROWAWAY (#2253 Task 1). Two baselines the acceptance metric needs:
+/* THROWAWAY (#2253 Task 1). Two numbers the acceptance metric needs:
      LEGIBILITY — per-chapter share of sentences the review UI highlights
                   (confidence < 0.75). Sets target 1a's threshold.
      SAMPLE     — a deterministic 30-victim sample with context, for hand
                   labelling (spec §5). Converts a DISAGREEMENT count into an
                   ERROR rate.
-   Run: cd server && npx tsx handoff/cache/replay-legibility.mts */
+   Run TWICE. Baseline:  cd server && npx tsx handoff/cache/replay-legibility.mts
+              Post-fix:  POSTFIX=1 npx tsx handoff/cache/replay-legibility.mts
+   POSTFIX=1 threads `dialogueOpen` exactly as production does after Task 4, so
+   the second run measures the distribution target 1a is actually graded on. */
 import { readFileSync } from 'node:fs';
 import { parseManuscript } from '../../src/parsers/index.js';
 import { conventionsFor } from '../../src/analyzer/dialogue-structure/lang/index.js';
@@ -131,6 +159,11 @@ const NIGHT_WATCH =
 const NARRATOR_ID = 'narrator';
 const UI_THRESHOLD = 0.75;
 const SAMPLE_SIZE = 30;
+/* Baseline vs post-fix, and the alignment floor, both via env — NEVER by hand-
+   editing this file. It is gitignored, so a forgotten hand edit is invisible to
+   git and silently corrupts every later run. */
+const POSTFIX = process.env.POSTFIX === '1';
+const FLOOR = Number(process.env.FLOOR ?? 80);
 
 const cache = JSON.parse(readFileSync(CACHE, 'utf8'));
 const characters = cache.stage1?.characters ?? [];
@@ -167,7 +200,8 @@ for (const k of Object.keys(cache.chapters)
   const ex = crossExamine(alignSentences(sentences, paras, body), {
     rosterIds,
     unknownBucketIds: unk,
-    alignmentFloorPct: 80,
+    alignmentFloorPct: FLOOR,
+    ...(POSTFIX ? { dialogueOpen: conv.dialogueOpen } : {}),
   });
   const low = ex.sentences.filter((s) => s.confidence != null && s.confidence < UI_THRESHOLD).length;
   totalN += ex.sentences.length;
@@ -190,7 +224,10 @@ for (const k of Object.keys(cache.chapters)
     });
   });
 }
-console.log(`LEGIBILITY  BOOK n=${totalN} low=${totalLow} share=${((totalLow / totalN) * 100).toFixed(1)}%`);
+console.log(
+  `LEGIBILITY  BOOK n=${totalN} low=${totalLow} share=${((totalLow / totalN) * 100).toFixed(1)}% ` +
+    `mode=${POSTFIX ? 'POSTFIX' : 'baseline'} floor=${FLOOR}`,
+);
 
 // Deterministic evenly-spaced sample — no RNG, so the sample is reproducible.
 console.log(`\nSAMPLE  ${victims.length} victims total; every ${Math.floor(victims.length / SAMPLE_SIZE)}th\n`);
@@ -223,10 +260,19 @@ For each block, read `prev` / `LINE` / `next` and label the LINE:
 - `unclear` — cannot tell from three sentences of context.
 
 Record the tally. **Report it honestly, including if it undermines the fix's
-headline number.** Spec §5: if a material share are `wrong`, the change is
-still correct — flagging beats a silent confident error either way — but target
-1b reading 1's bar is not "≈ 0" and Task 7 must restate it as
-"≈ the labelled error rate".
+headline number.** Then apply this decision rule — it exists so the answer
+changes something, rather than being recorded and ignored:
+
+| `wrong` share of 30 | What it means | Action |
+|---|---|---|
+| 0 | The 879 are real losses. | Target 1b reading 1's bar is `0`. Proceed. |
+| 1–5 (≤ ~17%) | Mostly real, with a tail of model segmentation artefacts and non-dialogue dashes. | Bar = the observed share, rounded up, stated with `n=30`. Proceed. |
+| > 5 | The trigger is too loose: the fix is manufacturing review stops on lines the narrator held correctly. | **Stop and report before Task 7.** The change direction is still right — a visible uncertainty beats a silent confident error — but the trigger needs narrowing (e.g. requiring the dash be followed by an uppercase letter, or excluding sentences under N characters), and that is a design decision, not an implementation one. |
+
+Note the failure modes to watch for while labelling, since both would inflate
+`wrong`: an em-dash opening a *narration* aside rather than a turn, and a
+hyphen-initial list item — `ru.dialogueOpen` matches a bare `-` as well as
+`–`/`—`.
 
 - [ ] **Step 4: Record both baselines in this plan's appendix**
 
@@ -342,12 +388,24 @@ describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
     expect(res.sentences[0].confidence).toBe(CONFIDENCE.TAG_SPAN);
   });
 
-  it('a quote-only language (dialogueOpen absent) is byte-identical to today', () => {
-    const s = mkText('anton', '— Не стоит');
-    const withOpt = run([aligned(s, [tagSpan()])], 100, { ...BASE_OPTS, dialogueOpen: null });
+  it('a quote-only language (dialogueOpen null) is byte-identical to today', () => {
+    // en/de/ja/zh all carry `dialogueOpen: null`, so the invariant is inert.
+    const NULL_OPTS = { ...BASE_OPTS, dialogueOpen: null };
+    const withOpt = run([aligned(mkText('anton', '— Не стоит'), [tagSpan()])], 100, NULL_OPTS);
     const without = run([aligned(mkText('anton', '— Не стоит'), [tagSpan()])], 100, BASE_OPTS);
     expect(withOpt.sentences[0].characterId).toBe('narrator');
     expect(without.sentences[0].characterId).toBe('narrator');
+  });
+
+  it('es/fr get the same behaviour from their own marker', () => {
+    // The invariant activates for THREE languages. es/fr have no book in the
+    // workspace corpus and no fixture, so this unit case is their ONLY
+    // coverage — see Global Constraints.
+    const ES_DASH = /^\s*(?:&mdash;|[-–—])\s*/iu; // lang/es.ts:5, identical in lang/fr.ts:5
+    const ES_OPTS = { ...BASE_OPTS, dialogueOpen: ES_DASH };
+    const res = run([aligned(mkText('anton', '—No vale la pena'), [tagSpan()])], 100, ES_OPTS);
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
   });
 
   it('a speech span still wins — the invariant never overrides real evidence', () => {
@@ -355,21 +413,75 @@ describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
     const res = run([aligned(s, [speechSpan({ characterId: 'anton', source: 'tag-name' })])], 100, DASH_OPTS);
     expect(res.sentences[0].characterId).toBe('anton'); // strong tag-name still force-corrects
   });
+
+  it('a rescued line has no speech span, so escalation drops it at grouping', () => {
+    // This adds ~879 entries to `flags` on the reference book, and `flags` is
+    // escalation's input. escalateFlaggedWindows groups via
+    //   const span = as?.spans.find((s) => s.kind === 'speech');
+    //   if (!span || span.windowId === undefined) continue;
+    // so a flag whose sentence has NO speech span never becomes a window and
+    // consumes ZERO budget. The absence of a speech span is precisely WHY the
+    // line was being demoted, so this is structural, not incidental — pin it
+    // here rather than relying on `isFillEligible` one layer further down.
+    const as = aligned(mkText('anton', '— Не стоит'), [tagSpan()]);
+    const res = run([as], 100, DASH_OPTS);
+    expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
+    expect(as.spans.some((s) => s.kind === 'speech')).toBe(false);
+  });
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+**Why this last case matters.** Without it the plan would be resting on spec
+§4.4's argument, which reasons from `escalation.ts:72-74`'s `isFillEligible`.
+That argument reaches the right conclusion by the wrong route: these lines never
+reach `isFillEligible` at all — they are dropped one layer earlier, at window
+grouping. If they *were* grouped, 879 new flags would create new escalation
+windows, consume `maxWindowsPerBook`, starve the genuinely fillable
+`unanchored-narrator` lines, and add hours to plan 247's target 5.
+
+- [ ] **Step 2: Retype the test file's `run()` helper — do this BEFORE running**
+
+`cross-examine.test.ts:45-47` currently reads:
+
+```ts
+const BASE_OPTS = { rosterIds: ROSTER, unknownBucketIds: UNKNOWN, alignmentFloorPct: 80 };
+
+function run(list: AlignedSentence[], alignedPct = 100, opts = BASE_OPTS) {
+```
+
+`opts` has no declared type, so TypeScript infers it from `BASE_OPTS` — a shape
+with **no `dialogueOpen`**. Every fresh object literal carrying the new field
+then trips excess-property checking. **Vitest runs on esbuild and does not
+typecheck, so the tests would pass green and the failure would not surface until
+Task 6's `npm run typecheck`, four commits later.** Fix it now:
+
+```ts
+import type { CrossExamineOpts } from './cross-examine.js';
+```
+
+```ts
+const BASE_OPTS: CrossExamineOpts = { rosterIds: ROSTER, unknownBucketIds: UNKNOWN, alignmentFloorPct: 80 };
+
+function run(list: AlignedSentence[], alignedPct = 100, opts: CrossExamineOpts = BASE_OPTS) {
+```
+
+This edit is inert until step 3 adds the field, so it can land in the red phase
+without weakening it.
+
+- [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/cross-examine.test.ts -t "#2253"`
 
-Expected: **FAIL**. Cases 1 and 2 fail with `expected 'narrator' to be 'anton'`.
-Cases 3–7 already pass (they pin behaviour that must NOT change) — that is
-correct and expected; two red is the red phase here.
+Expected: **FAIL**. Cases 1, 2 and 8 (es/fr) fail with
+`expected 'narrator' to be 'anton'`. Cases 3–7 already pass — they pin behaviour
+that must NOT change; three red is the red phase here.
 
-If a case fails to compile on `dialogueOpen`, that is also the red phase — the
-field does not exist yet.
+Also run `cd /c/Claude/Projects/wt-2253-dialogue-turn-segmentation && npm run typecheck`
+once at this point. Expected: it names `dialogueOpen` as unknown on
+`CrossExamineOpts`. That is the red phase for the type too — and confirms step 2
+did not silently mask it.
 
-- [ ] **Step 3: Add the opts field**
+- [ ] **Step 4: Add the opts field**
 
 In `server/src/analyzer/dialogue-structure/cross-examine.ts`, extend
 `CrossExamineOpts` (currently ending at `alignmentFloorPct` on `:58`):
@@ -390,7 +502,7 @@ export interface CrossExamineOpts {
 }
 ```
 
-- [ ] **Step 4: Add the invariant helpers**
+- [ ] **Step 5: Add the invariant helpers**
 
 Insert immediately **above** `decideTagSpanOnly` (currently `:204`):
 
@@ -427,7 +539,7 @@ function decideConventionDialogue(modelId: string): Decision {
 }
 ```
 
-- [ ] **Step 5: Wire it into the cascade**
+- [ ] **Step 6: Wire it into the cascade**
 
 In `decideSentence`, between the `speechSpan` branch (ends `:269`) and the
 `as.spans.some((s) => s.kind === 'tag')` branch (`:271`), insert:
@@ -443,13 +555,17 @@ In `decideSentence`, between the `speechSpan` branch (ends `:269`) and the
   }
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/cross-examine.test.ts src/analyzer/dialogue-structure/cross-examine-reasons.test.ts src/analyzer/dialogue-structure/escalation.test.ts`
 
 Expected: **PASS**, all files, no test removed or skipped.
 
-- [ ] **Step 7: Run the whole analyzer suite for collateral damage**
+Then `npm run typecheck` from the repo root. Expected: clean — step 2's
+retyping plus step 4's field must leave zero errors. Do not defer this to
+Task 6.
+
+- [ ] **Step 8: Run the whole analyzer suite for collateral damage**
 
 Run: `cd server && npx vitest run src/analyzer src/routes/analysis.structure-fixture.test.ts`
 
@@ -458,7 +574,7 @@ Expected: **PASS**. Nothing should move — the production call site does not pa
 A failure here means something reads the field indirectly; investigate, do not
 adjust the assertion.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add server/src/analyzer/dialogue-structure/cross-examine.ts server/src/analyzer/dialogue-structure/cross-examine.test.ts
@@ -503,6 +619,10 @@ describe('#2253 — the invariant also holds BELOW the alignment floor', () => {
     expect(res.report.flagOnly).toBe(true); // the branch under test really ran
     expect(res.sentences[0].characterId).toBe('anton');
     expect(res.sentences[0].confidence).toBeLessThan(0.75);
+    // Below the floor the line falls through to the flag-only pass-through, NOT
+    // to `dash-line-keep-flag`. Assert the REASON, which is stable; the bucket
+    // is not (Task 5 moves `flag-only-floor` to `unresolved`).
+    expect(res.flags).toEqual([{ index: 0, reason: 'flag-only-floor' }]);
   });
 
   it('flagOnly: a NON-dash narration-aligned line still demotes (unchanged)', () => {
@@ -555,6 +675,14 @@ to:
 A dash-opening line now falls through to `flagOnlyDecision(as)`, which keeps the
 model id at `min(modelConfidence, 0.74)` — below the 0.75 UI threshold, so it
 still surfaces.
+
+**Consequence to carry into Task 7's criteria:** below the floor a rescued dash
+line carries reason `flag-only-floor`, not `dash-line-keep-flag`, and after
+Task 5 it is bucketed `unresolved` rather than `flagged`. That is the honest
+answer — below the floor the engine reached no verdict at all — but it means
+the same sentence contributes to a different counter depending on its chapter's
+alignment. Target 1b must say so, or the two readings will look inconsistent to
+whoever runs the acceptance.
 
 - [ ] **Step 4: Run to verify all three pass**
 
@@ -943,32 +1071,38 @@ and skews the book-level `alignedPct`. The weight must gain `unresolved`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `server/src/routes/analysis.test.ts` inside the existing
-`describe('aggregateStructureReports …')` block:
+First, the helper. `analysis.test.ts:3158-3171` defines
+
+```ts
+  function makeReport(overrides: Partial<EngineReport>): EngineReport {
+    return {
+      language: 'en', alignedPct: 100, confirmed: 0, corrected: 0, flagged: 0,
+      lumped: 0, escalated: 0, escalationAccepted: 0, flagOnly: false,
+      ...overrides,
+    };
+  }
+```
+
+It is a **fully-typed `EngineReport` literal**, so Task 5's required
+`unresolved` field breaks it at compile time. Add `unresolved: 0,` next to
+`flagged: 0,` in the defaults. Every existing case then keeps working unchanged.
+
+Then append inside the same `describe('aggregateStructureReports …')` block,
+using the helper rather than raw literals:
 
 ```ts
   it('#2253 — sums unresolved and counts it toward the alignedPct weight', () => {
     // Chapter A: 100 classified sentences, 90 of them unresolved, 100% aligned.
     // Chapter B: 10 classified sentences, all confirmed, 0% aligned.
     // If `unresolved` is left out of the weight, A weighs 10 instead of 100 and
-    // the book reads 50% aligned instead of ~91%.
-    const chapterA = {
-      language: 'ru', alignedPct: 100, confirmed: 10, corrected: 0, flagged: 0,
-      unresolved: 90, lumped: 0, escalated: 0, escalationAccepted: 0, flagOnly: false,
-    };
-    const chapterB = {
-      language: 'ru', alignedPct: 0, confirmed: 10, corrected: 0, flagged: 0,
-      unresolved: 0, lumped: 0, escalated: 0, escalationAccepted: 0, flagOnly: true,
-    };
+    // the book reads ~9% aligned instead of ~91% — an inverted headline number.
+    const chapterA = makeReport({ alignedPct: 100, confirmed: 10, unresolved: 90 });
+    const chapterB = makeReport({ alignedPct: 0, confirmed: 10, flagOnly: true });
     const result = aggregateStructureReports([chapterA, chapterB]);
     expect(result?.unresolved).toBe(90);
     expect(result?.alignedPct).toBeCloseTo((100 * 100 + 0 * 10) / 110, 5);
   });
 ```
-
-**Before writing it,** read `analysis.test.ts:3178-3200` and match the existing
-fixtures' exact shape — if they use a helper or a partial object, use the same
-construction rather than the literals above.
 
 Then update `analysis.structure-fixture.test.ts:222-235`. The fixture's two
 flags are both `unanchored-narrator` (the file's own header inventory says Zone
@@ -1092,8 +1226,19 @@ Expected: **PASS**.
 
 Run: `cd /c/Claude/Projects/wt-2253-dialogue-turn-segmentation && npm run typecheck`
 
-Expected: clean. Any remaining error naming `unresolved` is a consumer this
-plan missed — fix it and note it in the PR body rather than casting it away.
+Expected: clean. The full set of `EngineReport`-shaped literals in the tree was
+enumerated before this plan was written, so there should be no surprises:
+
+| site | shape | breaks? |
+|---|---|---|
+| `analysis.test.ts:3158` `makeReport` | typed `EngineReport` | **yes** — fixed in step 1 |
+| `analysis.structure-fixture.test.ts:227` | `toMatchObject` | no — partial match |
+| `analysis.structure-engine.test.ts:99` | `toMatchObject` | no — partial match |
+| `analysis.test.ts:3398`, `:3599`, `book-state.reparse.test.ts:605` | `AnalysisProvenanceReport` | no — field is optional |
+| `cross-examine.ts` `report` literal | typed `EngineReport` | **yes** — fixed in Task 5 step 4 |
+
+Any error *outside* that table is a consumer this enumeration missed — fix it
+and declare it in the PR body rather than casting it away.
 
 - [ ] **Step 8: Commit**
 
@@ -1115,9 +1260,30 @@ refutation computed on the wrong column.
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 
 **Interfaces:**
-- Consumes: Task 1's `LOWCONF_BASELINE` (sets 1a's threshold) and the
-  hand-label tally (sets 1b reading 1's bar).
+- Consumes: Task 1's baseline table, the **post-fix** table from step 0 below,
+  and the hand-label tally.
 - Produces: the acceptance criteria the next on-box run is judged against.
+
+- [ ] **Step 0: Measure post-fix legibility — 1a cannot be set without it**
+
+All the code is landed as of Task 6, so re-run Task 1's script in post-fix mode:
+
+Run: `cd server && POSTFIX=1 npx tsx handoff/cache/replay-legibility.mts`
+
+Expected: the BOOK line reads `mode=POSTFIX`, and the book-level `low` count is
+**higher than Task 1's baseline by roughly 879** — the rescued lines moved from
+0.9 to 0.6, which is from above the 0.75 threshold to below it.
+
+**This is the whole reason the step exists.** Target 1a is the share of
+sentences under 0.75; the fix inflates that share by construction. Calibrating
+1a on the baseline table would set the bar from a distribution this change
+demolishes, and the chapters the fix repairs would then fail the target — a
+metric that punishes the correct change, which is the same class of defect
+#2253 was filed about.
+
+Record the post-fix table in the appendix beside the baseline one, and note the
+delta per chapter. Expect ch1/ch2/ch3/ch9 **unchanged** (0 victims each) and
+ch4–8 up.
 
 - [ ] **Step 1: Replace plan 247's target 1**
 
@@ -1138,7 +1304,17 @@ In `docs/features/247-dialogue-structure-attribution.md`, replace target 1
    `structureReport` at all; a bucket-defined 1a would report ~0.03% while the
    UI coloured a quarter of the chapter.
 
-   **1b — Engine health.** Read together, never alone:
+   **What a 1a breach means.** 1a grades the *manuscript's* legibility, not the
+   engine's correctness — the two are separable and this criterion is
+   deliberately the former. A chapter whose source lost its paragraph structure
+   (#2254) will breach 1a **because the engine is correctly refusing to guess**,
+   and that breach is the intended signal: it says *re-convert this source*, not
+   *the engine regressed*. A breach is therefore a real failure with a specific
+   remedy, never grounds for widening the threshold. The threshold is set from
+   structurally-intact chapters precisely so a degraded one cannot hide inside
+   it.
+
+   **1b — Engine health.** Three readings, interpreted together, never alone:
    1. **Victim rate ≤ <VICTIM_BAR>%** — sentences opening with the language's
       dialogue marker that the engine demoted to `narrator` against the model,
       as a share of dialogue-marker-opening sentences. Stated as a rate with a
@@ -1146,8 +1322,15 @@ In `docs/features/247-dialogue-structure-attribution.md`, replace target 1
       population.
    2. **`unresolved` share** — the coverage disclosure that separates "few
       conflicts because attribution is confident" from "few conflicts because
-      nothing was examined". Report it beside `alignedPct` and `flagOnly`;
-      1b is not interpretable without all three.
+      nothing was examined".
+   3. **`alignedPct` and `flagOnly`** — because reading 1 and reading 2 land in
+      *different counters* depending on the chapter. Above the alignment floor a
+      rescued dialogue line is `dash-line-keep-flag`, bucket `flagged`. Below
+      it, the whole chapter is `flag-only-floor`, bucket `unresolved` — the
+      engine reached no verdict at all, so the conflict was never adjudicated.
+      Same sentence, different counter. Reading `flagged` without `flagOnly`
+      beside it will look like the conflict count collapsed when in fact the
+      chapter was never examined.
 
    **Explicitly rejected: a "narrator delta ≈ 0" invariant.** Below the
    alignment floor `flagOnly` passes the model's id through verbatim on every
@@ -1156,12 +1339,22 @@ In `docs/features/247-dialogue-structure-attribution.md`, replace target 1
    off gives 0 too. It reproduced the exact flaw it was written to close.
 ```
 
-Replace `<THRESHOLD>` with a value derived from Task 1's LEGIBILITY table:
-round the **worst structurally-intact chapter's** share (ch1/2/3/9) up to the
-next whole percent, then add 5 points of headroom. State the derivation in one
-sentence next to the number. Replace `<VICTIM_BAR>` with `0` if Task 1's
-hand-label tally found no `wrong` labels, otherwise the labelled `wrong` share
-rounded up — and say which.
+Replace `<THRESHOLD>` from **step 0's POSTFIX table, not Task 1's baseline**:
+take the worst structurally-intact chapter (ch1/2/3/9 — the four with zero
+victims, whose share the fix does not move), round up to the next whole
+percent, add 5 points of headroom. Write the derivation in one sentence beside
+the number, naming which chapter set it, so the next person can tell a
+recalibration from a fudge.
+
+Sanity check before writing it: ch1/2/3/9's post-fix shares must equal their
+baseline shares. If any moved, the invariant is firing on a structurally-intact
+chapter and Task 4's control assumption is wrong — stop and investigate rather
+than taking the higher number.
+
+Replace `<VICTIM_BAR>` with `0` if Task 1's hand-label tally found no `wrong`
+labels, otherwise the labelled `wrong` share rounded up — and say which, with
+the sample size (30) alongside, so the bar is legible as an estimate rather
+than a measurement.
 
 Also update the plan-header note at `:11` and the "Target 1 … is not yet
 re-measured end to end" paragraph at `:378-382` to point at the new criteria.
@@ -1258,12 +1451,29 @@ Expected, against the values recorded in the spec §2.3:
   moved hash means something outside this plan's scope changed. Stop and
   investigate rather than re-baselining.
 
-Then re-run with the floor forced, to prove Task 3 actually closed the bypass:
-temporarily change `alignmentFloorPct: 80` to `100` in the harness's
-`crossExamine` call, re-run, confirm `victims=0`, and **revert the edit**.
-Without this, Task 3 has no corpus-level evidence at all.
+Then prove Task 3 actually closed the bypass, which nothing else in this plan
+does at corpus level. **Do not hand-edit the floor** — the harness is gitignored,
+so a forgotten edit is invisible to git and silently corrupts every later run.
+Make it an env read instead, matching `replay-legibility.mts`: change
+`alignmentFloorPct: 80` to `alignmentFloorPct: Number(process.env.FLOOR ?? 80)`
+once, then:
 
-Record all three numbers in the PR body.
+Run: `cd server && FLOOR=100 npx tsx handoff/cache/replay-experiment.mts`
+
+Expected: `HARM TOTAL victims=0` with every chapter in `flagOnly`. Post-#2187 no
+chapter of this book is below the floor naturally, so **this run is the only
+evidence Task 3 has**.
+
+**What these two runs can and cannot show.** `GATE` never calls `crossExamine` —
+it hashes parser output with an empty roster, so it is unchanged by this fix
+*whether or not the fix is correct*. It detects out-of-scope parser drift and
+nothing else. `HARM` is therefore the only cross-examine-level corpus
+measurement in the plan, and it covers **one Russian book**. Spanish and French
+are activated by Task 4 and measured by nothing — see Global Constraints, and
+say so in the PR body.
+
+Record all four numbers (victims, controls, hashes, forced-floor victims) in the
+PR body.
 
 - [ ] **Step 2: Run the local gate**
 
@@ -1367,16 +1577,23 @@ then remove the worktree.
 *Filled in by Task 1. Until then this section is the plan's only open
 dependency — Task 7 cannot set its thresholds without it.*
 
-### Legibility — `confidence < 0.75` share per chapter (baseline, pre-fix)
+### Legibility — `confidence < 0.75` share per chapter
 
-| ch | sentences | conf < 0.75 | share |
-|---|---|---|---|
-| _(Task 1 step 4)_ | | | |
+Two runs. The **post-fix** column is the one target 1a is derived from; the
+baseline is kept beside it so the fix's effect on the metric is visible rather
+than assumed.
 
-Book: _n_ / _low_ / _share_ —
+| ch | sentences | baseline conf<0.75 | baseline share | post-fix conf<0.75 | post-fix share | delta |
+|---|---|---|---|---|---|---|
+| _(Task 1 step 4 / Task 7 step 0)_ | | | | | | |
 
-Worst structurally-intact chapter (ch1/2/3/9): ___%. Target 1a threshold
-therefore ___% (rounded up, +5 points headroom).
+Book baseline: _n_ / _low_ / _share_ —
+Book post-fix: _n_ / _low_ / _share_ — (expect ≈ +879 lines)
+
+Control check: ch1/2/3/9 delta must be **0** each.
+
+Worst structurally-intact chapter post-fix (ch1/2/3/9): ___% (ch__). Target 1a
+threshold therefore ___% (rounded up, +5 points headroom).
 
 ### Hand-labelled victim sample (30 of 879, deterministic stride)
 
@@ -1399,7 +1616,7 @@ Target 1b reading 1 bar therefore ___%.
 | §2.4 flags-not-attributes (confidence below 0.75) | Task 2 step 1, asserted |
 | §3 *Unlocked* — analyse before building an English arm | Task 8 step 4, issue 1 |
 | §4.1 the bucket split | Tasks 5, 6 |
-| §4.2 target 1a over confidence | Tasks 1, 7 |
+| §4.2 target 1a over confidence, *"calibrated on post-change replay"* | Task 1 (baseline), **Task 7 step 0 (post-fix — the calibration input)**, Task 7 step 1 |
 | §4.3 target 1b, narrator-delta rejected | Task 7 step 1 |
 | §4.4 known consumers (all six) | Task 6 (five) + Task 5 (`cross-examine-reasons.test.ts`) |
 | §4.4 `escalation.ts` unchanged, deliberately | Task 5 step 1, last case |
@@ -1409,4 +1626,23 @@ Target 1b reading 1 bar therefore ___%.
 | §7.1 tag-span bound refuted | Task 7 step 2, recorded so it is not re-proposed |
 | §7.2 parser segmentation deferred | Task 8 step 4, issue 2 |
 | §8 out of scope — no parser change | Global Constraints |
-| §10 open questions 1–3 | Task 1 (Q1, Q3), Task 8 step 4 (Q2) |
+| §10 open questions 1–3 | Task 1 + Task 7 step 0 (Q1), Task 1 step 3 (Q3), Task 8 step 4 (Q2) |
+
+---
+
+## Review findings folded in (assumption-checker, 2026-08-11)
+
+Recorded so a later reader can tell which parts of this plan are the product of
+a failed first draft rather than a first-pass design.
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | **Target 1a was calibrated on the pre-fix baseline** — but the fix moves 879 sentences from 0.9 to 0.6, i.e. across the very 0.75 threshold 1a measures. The bar would have been set from a distribution the change demolishes, failing the chapters the fix repairs. Contradicted the source spec's own §4.2. | Task 1's script gained a `POSTFIX=1` mode; **Task 7 step 0** is a new mandatory post-fix measurement, and the threshold is now derived from it. The appendix carries both columns and a control check. |
+| 2 | **The proposed tests would not compile.** `cross-examine.test.ts:47` infers `run()`'s `opts` from an untyped `BASE_OPTS`, so fresh literals carrying `dialogueOpen` trip excess-property checking. Vitest does not typecheck, so this would have run green for four commits and surfaced only at Task 6. | **Task 2 step 2** retypes `BASE_OPTS`/`run` against `CrossExamineOpts` before anything else, and Task 2 steps 3 and 7 both run `npm run typecheck` explicitly. |
+| 3 | **The `unresolved` blast radius was under-listed**, with a hedge ("any remaining error is a consumer this plan missed") standing in for a checkable enumeration. `analysis.test.ts:3158`'s `makeReport` is a typed `EngineReport` literal and breaks. | Task 6 step 1 names `makeReport` and gives its edit; step 7 carries a full enumeration of every `EngineReport`-shaped literal in the tree, with break/no-break per site. |
+| 4 | **Escalation safety rested on the wrong reason.** Spec §4.4 argued from `isFillEligible`; the actual protection is one layer earlier — a rescued line has no speech span, so `escalateFlaggedWindows` drops it at window grouping and it consumes zero budget. | Reason corrected and **pinned by a test** (Task 2 step 1, last case) on the structural property itself, not on the downstream predicate. |
+| 5 | **es/fr are activated but measured by nothing.** `lang/es.ts:5` and `lang/fr.ts:5` both carry a non-null `dialogueOpen`, so Task 4 switches the invariant on for them; the fixture is ru, and the corpus harness's `guessLanguage` can only return ru/ja/en. | Declared in Global Constraints as a named residual risk, given unit coverage (Task 2 step 1), and required in the PR body. The change is **not** to be described as verified for es/fr. |
+| 6 | **The below-floor bucket asymmetry was undocumented.** Above the floor a rescued line is `dash-line-keep-flag`/`flagged`; below it, `flag-only-floor`/`unresolved`. Same sentence, different counter. | Documented at Task 3 step 3, asserted by reason (not bucket, which moves in Task 5) at Task 3 step 1, and written into target 1b as reading 3. |
+| 7 | **The forced-floor check was a hand edit to a gitignored file with a manual revert** — invisible to git if forgotten, silently corrupting later runs. | Replaced with a `FLOOR` env read in Task 8 step 1, matching `replay-legibility.mts`. |
+| 8 | **`GATE` was presented as verification but cannot fail for this change** — it hashes parser output and never reaches `crossExamine`. | Task 8 step 1 now states plainly what each corpus run can and cannot show, and that `HARM` over one Russian book is the only cross-examine-level corpus evidence. |
+| 9 | **`AnalysisProvenanceReport.unresolved` absent vs zero was ambiguous.** | Global Constraints: absent means "predates the split", no reader may default it to 0, and nothing reads it today. |
