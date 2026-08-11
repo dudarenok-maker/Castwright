@@ -82,20 +82,25 @@ independently of the defect are what produce error in both directions.
 ## 2. The metric
 
 **Worst-paragraph merged-turn count.** In a language whose typography gives
-every dialogue turn its own paragraph, a turn opener *inside* a non-dialogue
-paragraph cannot occur in correctly-converted text. It is a merge artefact **by
+every dialogue turn its own paragraph, a turn opener *inside* a paragraph
+cannot occur in correctly-converted text. It is a merge artefact **by
 construction**, not a correlate of one.
 
 Given a chapter `body` and its `LanguageConventions`:
 
 1. Split `body` on `\n`; drop blank lines. Each remaining line is a paragraph
    (`parser.ts:94` uses the same rule).
-2. Skip any paragraph matching `conventions.dialogueOpen` — a properly-formed
-   dialogue paragraph.
-3. In every remaining paragraph, count matches of
-   `([.!?…:])\s+DASH\s+(?=\p{Lu})`, where `DASH` is
-   `(?:&mdash;|&ndash;|[-–—])`.
-4. The chapter's reading is the **maximum** of those per-paragraph counts. The
+2. In every remaining paragraph — **including one that itself opens with a
+   dash** — count matches of `(?:[.!?…:])\s+DASH\s+(?=\p{Lu})`, where `DASH`
+   is `(?:&mdash;|&ndash;|[-–—])`. `conventions.dialogueOpen` is used only to
+   decide language applicability (§2.3), never to skip a paragraph: under a
+   **maximum**, excluding a paragraph because it opens with a dash buys
+   nothing and actively hides merges — a fully-merged mega-paragraph reads
+   clean purely because its first turn happens to start the paragraph. (An
+   earlier revision of this module *did* skip dash-opening paragraphs; #2275
+   found it hid five breaching paragraphs across the calibration corpus,
+   worst 63, and it was removed. §8.1 records the correction.)
+3. The chapter's reading is the **maximum** of those per-paragraph counts. The
    book's reading is the maximum over its chapters.
 
 The uppercase lookahead is what excludes intra-word hyphens (`где-то`,
@@ -141,7 +146,13 @@ merged.
 | Юный дрессировщик (ru) | **1** | real published EPUB, 208k chars, 15 chapters |
 | Заказ Коалфолла (ru) | **2** | Castwright-owned, authored clean |
 | Ночной дозор ch3 | 6 | see below — **not** a calibration source |
-| Ночной дозор, other 8 chapters | **58 – 133** | 34 paragraphs hold ≥10 |
+| Ночной дозор, other 8 chapters | **58 – 133** | 39 paragraphs hold ≥10 |
+
+(#2275 C1: 5 of those 39 are dash-opening paragraphs the pre-fix skip used to
+hide entirely — ch6=63, ch5=31, ch8=25, ch9=18, ch2=13. None raises any
+chapter's own maximum, since each sits below that chapter's already-measured
+worst paragraph; the book max (133) and every per-chapter max are unchanged.
+Re-measured via `server/handoff/cache/replay-worstpara.mts`.)
 
 **Threshold: ≥ 10 merged turns in a single paragraph means the chapter is
 paragraph-degraded.** Four independent clean sources occupy **0–2**; the lowest
@@ -193,11 +204,18 @@ threshold.**
 - New pure module `server/src/analyzer/dialogue-structure/legibility.ts`:
   `measureChapterLegibility(body, conventions) → number | undefined` — the
   chapter's worst-paragraph count, or `undefined` when `dialogueOpen` is null.
-- `AnalysisProvenanceReport.maxMergedTurnsInParagraph?: number` — additive,
-  **optional**, no `CURRENT_STATE_SCHEMA` bump. **Absent ≠ zero**; no reader
-  may default it to 0 (§2.3).
-- The per-chapter operator log line gains `merged=`, so a breaching chapter can
-  be named rather than only the book.
+- `BookStateJson.analysisProvenance.maxMergedTurnsInParagraph?: number` —
+  additive, **optional**, no `CURRENT_STATE_SCHEMA` bump. **Absent ≠ zero**;
+  no reader may default it to 0 (§2.3). Post-ship correction (#2275 C3): this
+  originally lived on `AnalysisProvenanceReport` (i.e. nested inside
+  `analysisProvenance.report`); it is now a **sibling** of `report` on
+  `analysisProvenance` itself — see the next paragraph for why.
+- One `merged=` line per non-excluded chapter, logged **up front** at the
+  `runMainAnalyzerJob`/`runSubsetAnalyzerJob` call sites (post-ship correction,
+  #2275 C4) rather than only from inside the engine-gated per-chapter log line,
+  so a breaching chapter is still named on a fully-cached run — the case this
+  metric exists to score, and the one run where the engine-gated line never
+  fires at all.
 
 **It must not be emitted through `aggregateStructureReports`.**  That function
 (`server/src/routes/analysis.ts:2338`) takes a single `EngineReport[]` and
@@ -207,11 +225,17 @@ cache**. This metric is pure manuscript text and needs neither, and its main
 advantage over target 1a is precisely that it scores books that were never
 analysed. Routing it through an engine-gated function would throw that away.
 
-So: `analysis.ts` accumulates the per-chapter maximum independently, and merges
-it into the provenance report **after** `aggregateStructureReports` returns —
-including constructing a report that carries only this field when the aggregate
-returned `undefined`. Aggregation is `Math.max`, so there is no weighting
-subtlety.
+So: `analysis.ts` accumulates the per-chapter maximum independently and sets it
+directly on `analysisProvenance.maxMergedTurnsInParagraph`, computed and
+persisted **independently of** `aggregateStructureReports`/`report` rather than
+merged into it. (An earlier revision merged it into `report` post hoc —
+including fabricating a report carrying only this field when the aggregate
+returned `undefined` — which broke the exact invariant this section opens
+with: a caller reading `report.flagged === 0` after a fully-cached re-run could
+no longer tell "the engine confirmed zero issues" from "the engine did not run
+this pass". #2275 C3 corrected this; scan.ts's doc comment on
+`analysisProvenance` records the same history.) Aggregation is `Math.max`, so
+there is no weighting subtlety.
 
 `EngineReport` is deliberately **not** extended: it reports the
 cross-examiner's decisions about sentences, and this is a property of the
@@ -229,9 +253,12 @@ manuscript.
 ## 6. Testing
 
 - Unit tests for `measureChapterLegibility`: a dash-opening paragraph is
-  skipped; a paragraph with one legitimate narration-then-quoted-speech match
+  counted like any other, never skipped (#2275 C1 — a 21-turn dash-opening
+  mega-paragraph reads 20, the same as the identical text without the leading
+  dash); a paragraph with one legitimate narration-then-quoted-speech match
   reads 1 (the false-positive shape must stay far under the bar rather than be
-  claimed absent); intra-word hyphens not counted; a lowercase-following dash
+  claimed absent — pinned exactly, not with a vacuous `<=` that would also
+  pass at 0); intra-word hyphens not counted; a lowercase-following dash
   not counted; a colon-introduced turn counted; the result is the **maximum**
   over paragraphs, not the sum — a chapter of twenty 1-match paragraphs must
   read 1, not 20.
@@ -269,6 +296,41 @@ Two smaller corrections carried over: the supersession pointer said §6 where it
 meant §4/§4.2, and the English exclusion was argued from a 5.1 reading that
 came from a *different*, quote-based regex rather than from this probe.
 
+### 8.1 Post-ship correction (#2275 C1)
+
+The shipped implementation additionally skipped any paragraph matching
+`conventions.dialogueOpen` (§2 originally had this as step 2). Under a
+maximum that exclusion was never sound — a fully-merged mega-paragraph reads
+clean purely because its first turn happens to start the paragraph — and it
+was found live: it hid 5 of the 39 breaching paragraphs in the calibration
+corpus (worst 63, in Ночной дозор ch6), suppressing zero false positives in
+exchange. §2 and §2.2 above reflect the fix — no exclusion at all; `dialogueOpen`
+gates language applicability only — and the four clean sources' readings and
+Ночной дозор's book/chapter maxima are unchanged by it (re-measured via
+`server/handoff/cache/replay-worstpara.mts`).
+
+### 8.2 Post-ship corrections (#2275 C2/C3/C4)
+
+Three more review findings against the shipped implementation, distinct from
+C1 above:
+
+- **C2 — the subset (chapter-retry) route computed the book-level max over
+  only the chapters it re-ran this pass, not every non-excluded chapter.**
+  Re-analysing one clean chapter alone silently overwrote a high reading left
+  by every other chapter with that chapter's own low one. Fixed to compute
+  over `record.chapterHints` (filtered to non-excluded), mirroring §4's main-
+  route accumulation, never over the subset being retried.
+- **C3 — `maxMergedTurnsInParagraph` was folded into `report` post hoc,
+  fabricating a zeroed report on a run where the structure engine never ran
+  at all** (every chapter cached). §4 above is corrected to reflect the fix:
+  the field is a sibling of `report` on `analysisProvenance`, computed and
+  persisted independently, per its rewritten §4 text.
+- **C4 — the per-chapter `merged=` log line lived only inside the engine-gated
+  branch**, so a fully-cached run — target 1c's per-chapter grading case —
+  never named a breaching chapter. Moved to the up-front computation site in
+  both routes (§4), unconditional on engine state or caching; the
+  engine-gated line no longer duplicates it.
+
 ## 9. Risks
 
 1. **The degraded end of the calibration is one book.** The clean end now has
@@ -285,7 +347,8 @@ came from a *different*, quote-based regex rather than from this probe.
 4. **Three definitions of "dialogue paragraph" now coexist** in this
    subsystem: `parser.ts:94` (dash only), `parser.ts:258` (any paragraph
    *containing* a quote run — which is why Russian quoted place names get
-   filed as dialogue), and this module (dash only, matching `parser.ts:94`).
-   This design deliberately matches the first. The divergence at `:258` is
-   pre-existing and out of scope here, but it is a live trap for anyone
-   partitioning paragraphs by `ParagraphEvidence.kind`.
+   filed as dialogue), and this module's own `conventions.dialogueOpen` check
+   (dash only, matching `parser.ts:94`) — used, since #2275 C1, only to gate
+   language applicability (§2.3), never to classify or skip a paragraph. The
+   divergence at `:258` is pre-existing and out of scope here, but it is a
+   live trap for anyone partitioning paragraphs by `ParagraphEvidence.kind`.

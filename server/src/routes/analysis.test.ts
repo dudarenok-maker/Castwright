@@ -34,7 +34,6 @@ import {
   runSubsetAnalyzerJob,
   aggregateStructureReports,
   aggregateMaxMergedTurns,
-  mergeMaxMergedTurns,
   buildStage2ChapterInbox,
   buildStage2ChunkInbox,
   STAGE2_ATTRIBUTION_RULES,
@@ -43,7 +42,7 @@ import {
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
-import type { AnalysisProvenanceReport, BookStateJson } from '../workspace/scan.js';
+import type { BookStateJson } from '../workspace/scan.js';
 import { GeminiContentBlockedError } from '../analyzer/errors.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
@@ -3289,42 +3288,6 @@ describe('aggregateMaxMergedTurns (#2267 — cross-chapter fold)', () => {
   });
 });
 
-describe('mergeMaxMergedTurns (#2267 — merge into the provenance report, independent of aggregateStructureReports)', () => {
-  it('adds the field onto an existing aggregated report', () => {
-    const aggregated: AnalysisProvenanceReport = {
-      confirmed: 1,
-      corrected: 2,
-      flagged: 0,
-      escalated: 0,
-      escalationAccepted: 0,
-    };
-    expect(mergeMaxMergedTurns(aggregated, 11)).toEqual({ ...aggregated, maxMergedTurnsInParagraph: 11 });
-  });
-
-  it('is a no-op when there is nothing to merge', () => {
-    const aggregated: AnalysisProvenanceReport = {
-      confirmed: 1,
-      corrected: 0,
-      flagged: 0,
-      escalated: 0,
-      escalationAccepted: 0,
-    };
-    expect(mergeMaxMergedTurns(aggregated, undefined)).toEqual(aggregated);
-    expect(mergeMaxMergedTurns(undefined, undefined)).toBeUndefined();
-  });
-
-  it('#2267/spec §4 — the value is still emitted when aggregateStructureReports returned undefined ' +
-    '(the fully-cached-book case: zero EngineReports this pass)', () => {
-    // aggregateStructureReports([]) is undefined — no engine ran this pass —
-    // yet the manuscript-text-only metric still has a reading. The merge must
-    // not let the absent EngineReport aggregate swallow it.
-    expect(aggregateStructureReports([])).toBeUndefined();
-    const result = mergeMaxMergedTurns(aggregateStructureReports([]), 11);
-    expect(result).toBeDefined();
-    expect(result?.maxMergedTurnsInParagraph).toBe(11);
-  });
-});
-
 describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persistence (srv-59 Task 11)', () => {
   /* English tag-anchored dialogue fixture (mirrors the proven shape in
      parser.test.ts's "en quotes" case: “…,” Name verb.). Paragraph 1 is a
@@ -3702,10 +3665,15 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         });
 
         const stateAfter = readState(bookDir);
+        // #2275 C3 — maxMergedTurnsInParagraph is a SIBLING of `report`, not
+        // nested inside it (report stays absent here: the engine never ran,
+        // every chapter was cached).
         const provenance = stateAfter.analysisProvenance as {
-          report?: { maxMergedTurnsInParagraph?: number };
+          report?: unknown;
+          maxMergedTurnsInParagraph?: number;
         };
-        expect(provenance.report?.maxMergedTurnsInParagraph).toBe(2);
+        expect(provenance.report).toBeUndefined();
+        expect(provenance.maxMergedTurnsInParagraph).toBe(2);
       } finally {
         delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
         removeManuscript(manuscriptId);
@@ -3914,6 +3882,140 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         expect(narr.aliases).toContain('Narrator');
         expect(narr.voiceStyle).toContain('folkloric warmth');
       } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'C2 — subset route computes maxMergedTurnsInParagraph over every non-excluded chapter, ' +
+      "not just the chapters this pass re-attributes (`toRun`)",
+    async () => {
+      /* Regression for #2275 C2: re-analysing a single CLEAN chapter used to
+         recompute the book-level max over `toRun` alone, so a subset retry
+         that only touches a clean chapter silently overwrote a HIGH reading
+         left by every OTHER chapter with that chapter's own low reading.
+         Chapter 1 here is a 21-turn merged paragraph (reads 20 — the exact
+         fixture from legibility.test.ts's C1 case) and is deliberately left
+         OUT of `toRun`; only chapter 2 (a single clean narration sentence,
+         reads 0) is retried. The persisted book-level reading must still be
+         20 — it must come from `record.chapterHints`, not `toRun`. */
+      const manuscriptId = `test-provenance-subset-scope-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      const mergedTurns = Array.from({ length: 21 }, (_, i) => `Реплика ${i}`);
+      const chapter1Body = mergedTurns.join('. - ') + '.';
+      const chapter2Body = 'Тихо было.';
+
+      seedStateJson(bookDir, manuscriptId, { language: 'ru' });
+      (globalThis as Record<string, unknown>).__analysis_test_book_language_override = {
+        manuscriptId,
+        language: 'ru',
+      };
+
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: chapter1Body },
+        { id: 2, title: 'Chapter Two', body: chapter2Body },
+      ];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Provenance Subset-Scope Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+
+      const stage1: Stage1Output = {
+        characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
+        chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+      };
+      const narratorCast: CharacterOutput[] = [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      ];
+      // isPhase0aCoverageComplete requires a non-empty chapterCast entry for
+      // EVERY non-excluded chapter (including chapter 1, which this test
+      // never re-runs Phase 0a for) or the subset job defers cast
+      // finalisation and returns before ever reaching Phase 1 / persist.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1,
+        chapterCast: { 1: narratorCast, 2: narratorCast },
+      });
+
+      function buildSubsetOnlyPhase1Analyzer(): Analyzer {
+        return {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () =>
+            Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+          async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+            return {
+              sentences: [
+                { id: 201, chapterId: 2, characterId: 'narrator', confidence: 1, text: 'Тихо было' },
+              ],
+            };
+          },
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.reject(new Error('not used')),
+        };
+      }
+
+      const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset-scope');
+      const phase1Selection = buildSelection(
+        buildSubsetOnlyPhase1Analyzer(),
+        'phase1-model-subset-scope',
+      );
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: [2],
+        bookDir,
+        engine: selection.engine,
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // toRun = ONLY chapter 2 — chapter 1 (the merged mega-paragraph) is
+        // never re-attributed this pass.
+        const toRun = recordRef.chapterHints.filter((c) => c.id === 2);
+
+        await runSubsetAnalyzerJob(job, recordRef as never, selection, phase1Selection, toRun, false);
+
+        const stateAfter = readState(bookDir);
+        // #2275 C3 — maxMergedTurnsInParagraph is a SIBLING of `report`, not
+        // nested inside it.
+        const provenance = stateAfter.analysisProvenance as {
+          maxMergedTurnsInParagraph?: number;
+        };
+        expect(provenance.maxMergedTurnsInParagraph).toBe(20);
+      } finally {
+        delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });

@@ -22,14 +22,21 @@ and §2.1 records which alternatives were tried and refuted.
 
 - The metric is `Math.max` over paragraphs — **never a sum and never a rate**.
   Spec §2.1 records why; a rate was specified first and failed review.
-- Only the `dialogueOpen` dash excludes a paragraph. **Do not** also exclude
-  quote-opening paragraphs — that was tried and it drops real narration
-  paragraphs beginning with a quoted place name.
+- **No paragraph is excluded, including one that itself opens with a dash**
+  (post-ship correction, #2275 C1 — an earlier revision skipped dash-opening
+  paragraphs via `dialogueOpen`; under a maximum that hid real merges for
+  free and was removed. `dialogueOpen` now gates only language applicability,
+  spec §2.3). **Do not** exclude quote-opening paragraphs either — that was
+  tried and it drops real narration paragraphs beginning with a quoted place
+  name.
 - `undefined`, never `0`, when `conventions.dialogueOpen` is null. A `0` would
   read as "this book is clean" for a language the probe cannot score.
-- `AnalysisProvenanceReport.maxMergedTurnsInParagraph` is **optional and
-  additive**. No `CURRENT_STATE_SCHEMA` bump. Absent ≠ zero; no reader may
-  default it to 0.
+- `BookStateJson.analysisProvenance.maxMergedTurnsInParagraph` is **optional
+  and additive**. No `CURRENT_STATE_SCHEMA` bump. Absent ≠ zero; no reader may
+  default it to 0. Post-ship correction (#2275 C3): lives as a **sibling** of
+  `analysisProvenance.report`, not nested inside `AnalysisProvenanceReport` —
+  folding it into `report` fabricated a zeroed report on a fully-cached run
+  where the engine never ran at all.
 - Do not extend `EngineReport`, and do not route the value through
   `aggregateStructureReports` (spec §4 — it returns `undefined` for a
   fully-cached book, which would defeat the metric's purpose).
@@ -47,7 +54,7 @@ and §2.1 records which alternatives were tried and refuted.
 - Consumes: `LanguageConventions` from `./types.js`.
 - Produces: `measureChapterLegibility(body: string, conventions: LanguageConventions): number | undefined`
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -101,11 +108,11 @@ describe('measureChapterLegibility', () => {
 });
 ```
 
-- [ ] **Step 2: Run them and confirm they fail** with "does not provide an export named" / module not found.
+- [x] **Step 2: Run them and confirm they fail** with "does not provide an export named" / module not found.
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/legibility.test.ts`
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
 ```ts
 import type { LanguageConventions } from './types.js';
@@ -147,8 +154,8 @@ export function measureChapterLegibility(
 }
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass.**
-- [ ] **Step 5: Commit** — `feat(server): measure worst-paragraph merged turns (#2267)`
+- [x] **Step 4: Run the tests and confirm they pass.**
+- [x] **Step 5: Commit** — `feat(server): measure worst-paragraph merged turns (#2267)`
 
 ---
 
@@ -163,7 +170,7 @@ export function measureChapterLegibility(
 - Consumes: `measureChapterLegibility` from Task 1.
 - Produces: `AnalysisProvenanceReport.maxMergedTurnsInParagraph?: number`
 
-- [ ] **Step 1: Add the field**, mirroring how `unresolved` is declared, with a
+- [x] **Step 1: Add the field**, mirroring how `unresolved` is declared, with a
   doc comment stating **absent ≠ zero** and that `undefined` means the language
   has no dash convention.
 
@@ -175,15 +182,15 @@ export function measureChapterLegibility(
   maxMergedTurnsInParagraph?: number;
 ```
 
-- [ ] **Step 2: Write the failing tests.** Two cases matter:
+- [x] **Step 2: Write the failing tests.** Two cases matter:
   1. a book whose chapters yield 3 and 11 reports **11**, not 14;
   2. the value is emitted **even when no `EngineReport` exists at all** (the
      fully-cached-book case, spec §4) — i.e. it does not vanish when
      `aggregateStructureReports` returns `undefined`.
 
-- [ ] **Step 3: Run them and confirm they fail.**
+- [x] **Step 3: Run them and confirm they fail.**
 
-- [ ] **Step 4: Implement.** Where `analysis.ts` already has each chapter's
+- [x] **Step 4: Implement.** Where `analysis.ts` already has each chapter's
   `body` and resolved `conventions` (the same place `parseChapterStructure` is
   called, near the `crossExamine` call at ~`:2224`), call
   `measureChapterLegibility` and keep a running `Math.max`. After
@@ -191,9 +198,9 @@ export function measureChapterLegibility(
   report carrying only this field if the aggregate returned `undefined`. Add
   `merged=` to the per-chapter operator log line beside `unresolved=`.
 
-- [ ] **Step 5: Run the tests and confirm they pass.**
-- [ ] **Step 6: Run** `npm run typecheck` **and** `cd server && npx vitest run src/routes/analysis` **and confirm green.**
-- [ ] **Step 7: Commit** — `feat(server): report worst-paragraph merged turns in analysis provenance (#2267)`
+- [x] **Step 5: Run the tests and confirm they pass.**
+- [x] **Step 6: Run** `npm run typecheck` **and** `cd server && npx vitest run src/routes/analysis` **and confirm green.**
+- [x] **Step 7: Commit** — `feat(server): report worst-paragraph merged turns in analysis provenance (#2267)`
 
 ---
 
@@ -205,14 +212,14 @@ export function measureChapterLegibility(
 - Modify: `docs/superpowers/plans/2026-08-11-dialogue-convention-invariant.md` (~:1636)
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 
-- [ ] **Step 1:** In plan 247, restructure target 1 per spec §3 — 1a renamed to
+- [x] **Step 1:** In plan 247, restructure target 1 per spec §3 — 1a renamed to
   **Review burden** with no bar and no structural claim, 1b unchanged, **1c**
   added with the §2.2 calibration table and the `< 10` bar. **Rewrite** the
   "What a 1a breach means" paragraph under 1c rather than moving it (spec §3
   says exactly what survives and what cannot).
-- [ ] **Step 2:** In the run sheet, replace the 1a row and the **C2 passes**
+- [x] **Step 2:** In the run sheet, replace the 1a row and the **C2 passes**
   criterion. C2 must grade on 1c, not on `≤ 44%`.
-- [ ] **Step 3:** In the 2026-08-11 plan, annotate the 38.9%→44% derivation as
+- [x] **Step 3:** In the 2026-08-11 plan, annotate the 38.9%→44% derivation as
   superseded with a dated pointer. Do **not** rewrite history — annotate.
-- [ ] **Step 4:** Append the release-notes entries (technical + brand-voice).
-- [ ] **Step 5: Commit** — `docs(docs): re-specify plan 247 target 1 around merged-turn legibility (#2267)`
+- [x] **Step 4:** Append the release-notes entries (technical + brand-voice).
+- [x] **Step 5: Commit** — `docs(docs): re-specify plan 247 target 1 around merged-turn legibility (#2267)`
