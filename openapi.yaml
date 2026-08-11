@@ -3209,6 +3209,10 @@ paths:
     delete:
       summary: Revoke a paired device (srv-33)
       operationId: revokeDevice
+      description: |
+        LOOPBACK-ONLY (#2269), symmetric with `POST /api/devices`: a stolen
+        browser cookie that cannot mint a fresh token must equally not be
+        able to revoke the legitimate owner's.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
       responses:
@@ -3219,6 +3223,15 @@ paths:
               schema:
                 type: object
                 properties: { ok: { type: boolean } }
+        '403':
+          description: Devices can only be revoked from the host UI
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
         '404': { description: Unknown device }
 
   /api/lan/cert/regenerate:
