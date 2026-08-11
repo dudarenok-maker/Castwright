@@ -130,11 +130,21 @@ for subagent dispatch above.
   - **Never report the gate as having run when it did not.** If the agent
     pass was substituted, or skipped, say so plainly in the user-facing
     summary.
-- **Findings handling**: triage the report by hand. Clear-cut findings
-  (unambiguous bug, obvious dead code, a straightforward CLAUDE.md
-  violation) get fixed directly, committed, and pushed. Findings that turn
-  on a judgment call route through the carve-out below instead of being
-  auto-applied.
+- **Findings handling**: triage the report by hand, then **fix in this round**.
+  Every finding gets a dispatched fix agent — one finding, one fix, one paired
+  test — committed and pushed before merge. Clear-cut findings (unambiguous
+  bug, obvious dead code, a straightforward CLAUDE.md violation) are the
+  ordinary case, not the only case. **The single finding allowed to leave the
+  round unfixed is one needing a design pass** — more than one defensible
+  outcome, a decision the user has a stake in — which routes through the
+  judgment-call carve-out below and gets an issue naming that decision as its
+  deliverable. Everything else is fixed now: "it expands the PR's scope",
+  "it's pre-existing", "it needs its own test", and "we can batch these" are
+  **not** deferral grounds — see [CLAUDE.md → Incidental
+  findings](../../../CLAUDE.md#incidental-findings-report-fix-record) for the
+  full void-reasons list. A ten-finding report ends as ten fix commits, not a
+  follow-up epic. None of this licenses `--fix`: the fixes are dispatched and
+  reviewed per finding, never applied wholesale.
 - **Re-review trigger**: only when the initial pass surfaced ≥1 finding
   that is an actual correctness bug (wrong behavior, crash, security issue —
   not a reuse/simplification/efficiency-only cleanup nit). Fixing and
