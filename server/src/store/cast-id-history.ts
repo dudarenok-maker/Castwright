@@ -8,52 +8,52 @@
    map to c for O(1) resolution without chasing — regardless of which of
    the two retirements is recorded first.
 
-   #2161/#2268 — LAST-SURVIVING EVIDENCE vs. A DERIVED STASH, and why a
-   dropped record sometimes moves to `displaced` and sometimes is simply
-   discarded. This is the second time this exact question has come up (the
-   first was why `forgotSupersededTo` exists on `RejectedPair` at all — see
-   its own doc comment), so it is answered here, once, for a future reader
-   about to add a THIRD variant.
+   #2161/#2268 — why a REFUSED `forgotSupersededTo` restore files into
+   `displaced` rather than being discarded (round 3, reversing an earlier,
+   wrong version of this same paragraph — see below for why it was wrong).
+   Answered here, once, for a future reader about to make the same mistake.
 
-   The rule: a record moves to `displaced` when it is the ONLY remaining
-   copy of information something else still needs — reserving an id against
-   re-mint, in `displaced`'s case (#2040 Task 14 / #2110). A record is
-   simply discarded when it was never anything more than a working stash
-   scoped to ONE pending operation, and that operation has become
-   permanently impossible — nothing else in the system reads it, so there
-   is nothing left to lose.
+   `displaced` is keyed BY THE RETIRED ID, not by what it used to resolve
+   to — `history.displaced[entry.id] = entry.supersededBy`
+   (`dropSupersededIdsReclaimedByLiveCast`/`dropSupersededTargetsNoLongerLive`
+   below), and `cast-create.ts` reads `Object.keys(history.displaced)` as
+   its taken-id set. That is the whole mechanism: filing `displaced[id] =
+   target` reserves `id` — never `target` — against a bare re-mint.
 
-   `forgotSupersededTo` (on `RejectedPair`, below) is the second kind.
-   D6 created it for exactly one purpose: making ONE specific Undo
-   (`unrejectOrphanedPair`/`undoRejectedPairs`) reversible, by stashing the
-   `supersededBy[from]` value `forgetSupersededId` was about to remove.
-   #2161 (`applyRestoreSupersededId`) refuses to write that stash back once
-   its own target has quietly stopped being live — restoring it would
+   `forgotSupersededTo` (on `RejectedPair`, below) stashes the
+   `supersededBy[from]` value `forgetSupersededId` removed at reject time,
+   so `unrejectOrphanedPair`/`undoRejectedPairs` can restore it later (D6).
+   `applyRestoreSupersededId` (#2161) refuses to write that stash back once
+   its own target has quietly stopped being live — writing it would
    reintroduce the exact dangling `supersededBy` entry #2110 exists to
-   prevent. At that point the stash has no remaining consumer: the ONE undo
-   it existed to make reversible is no longer performable, by construction,
-   and nothing else in this module or its callers ever reads
-   `forgotSupersededTo` for any other purpose. So — unlike `displaced` —
-   the refused record is discarded, not preserved. Routing it into
-   `displaced` instead was considered (#2268) and rejected: `displaced`'s
-   stated meaning is "a supersededBy association that lost its target";
-   a refused `forgotSupersededTo` is a different thing wearing the same
-   shape ("a rejection whose stashed restore target lost liveness"), and
-   filing it there would permanently reserve the dead id against re-mint —
-   wrong when the id died because the character was genuinely cut from the
-   book, which is the ordinary case this refusal is guarding, not the
-   exceptional one.
+   prevent. What a refused restore actually IS, at that point, is a
+   `supersededBy` association (`from → target`) that lost its target before
+   it could be re-established — precisely `displaced`'s stated meaning, not
+   a stretch of it. Filing `displaced[from] = target` (`from` is `id` in
+   `applyRestoreSupersededId`'s own parameter names) reserves exactly the id
+   this refusal puts at risk: `from` is no longer in `supersededBy` (nothing
+   was written), no longer has a governing `rejectedPairs` entry (the same
+   Undo call removes it unconditionally, regardless of whether the restore
+   itself succeeded), and — before this fix — was in `displaced` only if
+   some UNRELATED drop happened to have filed it there. A bare re-mint of
+   `from` would then resolve every segment still carrying it straight onto
+   the new, unrelated character — the #2040 misattribution class, reached
+   by re-mint instead of a dangling `supersededBy` key.
 
-   The residual risk, stated plainly rather than left implicit: discarding
-   the stash frees the dead id to be re-minted. If a LATER analysis mints a
-   fresh, unrelated character under that same id, any segment still stamped
-   with the old `characterId` resolves — via `buildCastResolver`'s ordinary
-   exact-id tier — onto the NEW, unrelated character. That is the same
-   misattribution class #2040 exists to prevent, reached here by re-mint
-   rather than by a dangling `supersededBy` key. It is ACCEPTED, by owner
-   decision on 2026-08-11, not overlooked: #2110's `displaced` reservation
-   is precisely the mechanism that would have blocked this if it applied
-   here, and it was judged not to apply — see the paragraph above for why. */
+   The earlier version of this paragraph (round 1) reasoned about the wrong
+   id: it treated `displaced` as reserving `target` — the dead id — and
+   discarded the stash on the theory that reserving a genuinely-cut
+   character's id was undesirable. `displaced` reserves the KEY, not the
+   value; the id actually at risk of hijack is `from`, which the discard
+   left unreserved in every one of the four post-Undo states. That
+   misreading is why the decision reverses here rather than merely gaining
+   an exception.
+
+   No residual beyond what `displaced` already carries generally (#2040
+   Task 14 review item 2b — entries accumulate and are never pruned once
+   filed, the same for every `displaced` writer in this module, not
+   specific to this refusal case). There is no separate hazard this
+   refusal's `displaced` write leaves open. */
 
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -1029,9 +1029,28 @@ function applyRestoreSupersededId(
       `[cast-id-history] restoreSupersededId("${id}" -> "${target}") skipped — "${target}" is no ` +
         `longer a live cast id; writing it back would reintroduce a dangling supersededBy target (#2110's ` +
         `hazard, reopened through a stale forgotSupersededTo stash). The rejection is still undone; only ` +
-        `this alias restore was refused.`,
+        `this alias restore was refused. Filed into displaced[id] to keep "${id}" reserved against re-mint.`,
     );
-    return { result: { restored: false, targetNotLive: true }, changed: false, touchedKeys: [] };
+    /* [K1] (round 3) — file into `displaced`, not discard: `displaced` is
+       keyed by the id AT RISK of re-mint (`id`, i.e. the pair's `from`), not
+       by its target — see this file's own module doc comment for the full
+       reasoning (#2268, reversed from an earlier, wrong rationale). Without
+       this, `id` ends up in NONE of `cast-create.ts`'s taken-id sets (not
+       `supersededBy` — nothing was written there; not `displaced` — nothing
+       filed here, before this fix; not `rejectedPairs[].from` — the pair was
+       just removed by the same Undo), so a bare re-mint of `id` resolves the
+       OLD segments straight onto the NEW, unrelated character. Same
+       `displaced` merge shape `dropSupersededIdsReclaimedByLiveCast`/
+       `dropSupersededTargetsNoLongerLive` already use for a dropped
+       `supersededBy` entry. `touchedKeys` stays empty — this write never
+       touches `supersededBy`, so it must not be stamped as though it did
+       (`bumpSeqAndStamp`'s reconcile loop keys off `supersededBy` alone; a
+       phantom `recordedAtSeq` entry for a key absent from `supersededBy`
+       would be stamped then immediately deleted by that same loop — wasted,
+       not harmful, but `changed: true` is what actually matters here so the
+       caller persists the write at all. */
+    history.displaced = { ...(history.displaced ?? {}), [id]: target };
+    return { result: { restored: false, targetNotLive: true }, changed: true, touchedKeys: [] };
   }
   history.supersededBy[id] = target;
   return { result: { restored: true }, changed: true, touchedKeys: [id] };

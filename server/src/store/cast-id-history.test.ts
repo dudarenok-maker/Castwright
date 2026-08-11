@@ -1010,13 +1010,26 @@ describe('cast id history', () => {
      check itself, independent of the route-level regression test in
      cast-reject-orphan.test.ts. */
   describe('restoreSupersededId / undoRejectedPairs — liveness guard (#2161)', () => {
-    it('restoreSupersededId refuses to write when the target is not in liveIds, and reports targetNotLive', async () => {
+    it('restoreSupersededId refuses to write supersededBy when the target is not in liveIds, and reports targetNotLive', async () => {
       const result = await restoreSupersededId(dir, 'mayrin', 'wren', []);
       expect(result).toEqual({ restored: false, targetNotLive: true });
       expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
-      // No write at all — an absent file stays absent (idempotent-write
-      // discipline this module applies everywhere else).
-      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+    });
+
+    /* K1 (#2161 round 3) — the refusal DOES write, unlike every other
+       no-op branch in this module: `displaced['mayrin'] = 'wren'` reserves
+       "mayrin" against a bare re-mint the same way
+       `dropSupersededIdsReclaimedByLiveCast`/`dropSupersededTargetsNoLongerLive`
+       already reserve a dropped `supersededBy` key. Without this, "mayrin"
+       ends up in none of cast-create.ts's taken-id sets after the pair is
+       removed — see cast-create.test.ts's "K1" end-to-end test for the
+       full re-mint repro this closes. */
+    it('K1 — restoreSupersededId files the refused target into displaced, keyed by the id at risk (not the dead target)', async () => {
+      const result = await restoreSupersededId(dir, 'mayrin', 'wren', []);
+      expect(result).toEqual({ restored: false, targetNotLive: true });
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({});
+      expect(history.displaced).toEqual({ mayrin: 'wren' });
     });
 
     it('restoreSupersededId writes normally when the target IS in liveIds', async () => {

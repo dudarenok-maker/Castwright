@@ -363,7 +363,8 @@ describe('reconcileRejectEdgesOnDisk', () => {
      persist blocks are not standable-up in a unit test, and the ordering is
      the whole fix — a capture that drifted below the first `recordRetirements`
      would leave every behavioural test green while the file was laundered
-     again in production. */
+     again in production. Kept, not retired, for the same #2228 disposition
+     recorded on [C7] above (same cheap-backstop reasoning, unrepeated here). */
   it('[C11] captures the id-history verdict BEFORE the persist rewrites it, on both paths', () => {
     const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
 

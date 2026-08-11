@@ -400,7 +400,11 @@ castRejectOrphanRouter.post(
       const changed = appendNotLinked(character, bookId, orphanedId);
       if (changed) {
         try {
-          await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+          /* Preserves sibling top-level keys on cast.json (dbcf36c5's fix at
+             not-linked-edges.ts:92, same defect, same shape here) — `{
+             characters: cast.characters }` would silently drop anything else
+             on the object `cast` was read as. */
+          await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: cast.characters });
         } catch (castErr) {
           console.error(
             '[cast-reject-orphan] failed to write the notLinkedTo edge to cast.json — surfacing as a failure',
@@ -571,7 +575,9 @@ castRejectOrphanRouter.delete(
          the recorded residual. */
       if (removeNotLinked(character, bookId, orphanedId)) changed = true;
       if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+        // Preserves sibling top-level keys on cast.json — see the POST
+        // handler's identical write above for the fix reference (dbcf36c5).
+        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: cast.characters });
       }
 
       /* #2198 — a single BATCHED call, not two separate loops each taking

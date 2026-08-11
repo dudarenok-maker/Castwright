@@ -535,4 +535,69 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
       logSpy.mockRestore();
     }
   });
+
+  /* K1 (#2161 round 3) — a FOURTH path to #2110's end state, distinct from
+     F1 above: F1's rejected pair has no `forgotSupersededTo` to restore, so
+     the freed key survives only in `rejectedPairs`. This repro clicks Undo
+     on a pair whose stashed alias target has quietly stopped being live —
+     `unrejectOrphanedPair`'s pair removal takes the id out of
+     `rejectedPairs` REGARDLESS of whether the restore succeeded, and before
+     this fix the refused restore left `supersededBy` untouched too, so
+     "mayrin" ended up reserved by NEITHER `historyKeys` nor `displacedKeys`
+     nor `rejectedPairs[].from` — free for a bare re-mint. Drives the real
+     DELETE undo route (exercising `applyRestoreSupersededId`'s new
+     `displaced` write directly, not a hand-seeded `displaced` fixture like
+     F6/F7 above) then the real create route, so a regression in either
+     route's own write path would also be caught — same reasoning as F1. */
+  it('K1 — a name minted after an Undo whose stashed alias target is no longer live does not re-mint the freed id (#2161)', async () => {
+    // 1. Seed the precondition directly (same style as F6/F7's `displaced`
+    //    fixtures): "mayrin" was rejected against the live "narrator",
+    //    having previously aliased to "wren" — a character no longer in
+    //    this book's live cast (initialCast is narrator-only), simulating a
+    //    later re-analysis that dropped it with no retirement recorded.
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'narrator', forgotSupersededTo: 'wren' }],
+      }),
+    );
+
+    // 2. Click Undo — the real DELETE route, so undoRejectedPairs' refusal
+    //    and its new displaced[] write both happen exactly as the UI
+    //    triggers them.
+    const undoRes = await request(app)
+      .delete(`/api/books/${bookId}/cast/narrator/reject-orphan-match`)
+      .set('Content-Type', 'application/json')
+      .send({ orphanedId: 'mayrin' });
+    expect(undoRes.status).toBe(200);
+    expect(undoRes.body.wasRejected).toBe(true);
+    expect(undoRes.body.targetNotLive).toEqual(['wren']);
+
+    const historyAfterUndo = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    // The refused restore never wrote supersededBy...
+    expect(historyAfterUndo.supersededBy).toEqual({});
+    // ...the pair is gone regardless (Undo's primary consequence)...
+    expect(historyAfterUndo.rejectedPairs).toEqual([]);
+    // ...and THE FIX: "mayrin" is reserved via displaced instead.
+    expect(historyAfterUndo.displaced).toEqual({ mayrin: 'wren' });
+
+    // 3. Create a brand-new character named "Mayrin" — the naive mint is
+    //    the now-unprotected-by-supersededBy-or-rejectedPairs bare id.
+    const createRes = await callCreate(bookId, { name: 'Mayrin' });
+    expect(createRes.status).toBe(200);
+    expect(createRes.body.character.id).not.toBe('mayrin');
+
+    // 4. resolve('mayrin') must not land on the new row — the segments that
+    //    still carry the raw id "mayrin" must not silently start reading as
+    //    the brand-new, unrelated character.
+    const castAfterCreate = JSON.parse(readFileSync(join(bookDir(), '.audiobook', 'cast.json'), 'utf8'));
+    const historyAfterCreate = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    const resolution = buildCastResolver(castAfterCreate.characters, historyAfterCreate).resolve(
+      'mayrin',
+    );
+    expect(resolution).toBeUndefined();
+  });
 });
