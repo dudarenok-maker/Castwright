@@ -8,7 +8,7 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and [A44](onbox-acceptance-register.md) (#2128 audio currency, §9 below)
+> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and [A45](onbox-acceptance-register.md) (#2128 audio currency, §9 below)
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -689,7 +689,7 @@ discrepancy by re-running until the numbers happen to match.
 
 ## 9. #2128 — audio currency (`isAudioCurrent` / `castHistorySeq`)
 
-> Register row: [`onbox-acceptance-register.md` A44](onbox-acceptance-register.md)
+> Register row: [`onbox-acceptance-register.md` A45](onbox-acceptance-register.md)
 
 ### 9.1 Purpose & scope
 
@@ -758,4 +758,4 @@ before reaching them.
 - [ ] §9.3 run
 - [ ] Defects filed: ____________________________________
 
-Record what was observed, by whom, and when — here and in register row A44.
+Record what was observed, by whom, and when — here and in register row A45.
