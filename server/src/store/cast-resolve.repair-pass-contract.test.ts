@@ -170,6 +170,47 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
     const { orphans: staleOrphans } = buildOrphansFromSegments([staleSeg], resolver, history, isAudioCurrent);
     expect(staleOrphans.get('mayrin')?.segments).toBe(1); // stamp (1) < marker (3) -> stale, stays listed
   });
+
+  it("round 2 review gate — a 'history' tier match WITH a stamp that would otherwise clear, against the REAL resolver AND the REAL isAudioCurrent: stays listed when the render substituted the narrator", () => {
+    // The identical fail-open F1 fixed one tier over, found by the review
+    // gate: nothing bumps history.seq when the live roster changes under a
+    // tier-3 match, so the marker comparison alone cannot see a render-time
+    // narrator substitution. Same fixture as the immediately-preceding test
+    // (marker mayrin@3, seq 5) but at castHistorySeq 5, where the marker
+    // comparison alone (5 >= 3) would clear it. The two segments-files below
+    // both carry that same finite stamp and differ ONLY in whether the
+    // segment recorded a substitution.
+    const liveCast = [{ id: 'mairin', name: 'Мэйрин' }];
+    const history = {
+      schema: 1 as const,
+      supersededBy: { mayrin: 'mairin' },
+      seq: 5,
+      recordedAtSeq: { mayrin: 3 },
+    };
+    const resolver = buildCastResolver(liveCast, history);
+    const cleanSeg = {
+      chapterId: 5,
+      chapterTitle: 'Five',
+      castHistorySeq: 5,
+      segments: [{ characterId: 'mayrin' }],
+    };
+    const { orphans: clearedOrphans } = buildOrphansFromSegments([cleanSeg], resolver, history, isAudioCurrent);
+    expect(clearedOrphans.has('mayrin')).toBe(false); // marker comparison alone clears it
+
+    const substitutedSeg = {
+      chapterId: 5,
+      chapterTitle: 'Five',
+      castHistorySeq: 5,
+      segments: [{ characterId: 'mayrin', renderedFallbackCharacterId: 'narrator' }],
+    };
+    const { orphans: staleOrphans } = buildOrphansFromSegments(
+      [substitutedSeg],
+      resolver,
+      history,
+      isAudioCurrent,
+    );
+    expect(staleOrphans.get('mayrin')?.segments).toBe(1); // substitution overrides the marker comparison, stays listed
+  });
 });
 
 describe("resolveTierBId against the REAL buildCastResolver (round 4 review, #2130) — a consumer buildOrphansFromSegments's own tests above cannot stand in for, since it branches on the literal string returned by resolution.via ('normalised-id'), not merely on whether SOME tier other than 'exact' matched", () => {

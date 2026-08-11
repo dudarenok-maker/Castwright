@@ -84,6 +84,33 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
     });
   });
 
+  describe('the hoisted substitution check — a substituted segment is damage in EVERY tier, not just normalised-id (round 2 review gate)', () => {
+    /* The review gate found the identical fail-open one tier over from F1:
+       nothing bumps `history.seq` when the live roster changes under a
+       tier-3 match, so a marker comparison cannot see a render-time
+       narrator substitution either. `renderedFallbackCharacterId` is now
+       consulted BEFORE the tier dispatch, not just inside 'normalised-id'. */
+    it('is STALE on the alias tier even though the marker comparison alone would clear it', () => {
+      // Same shape as the review gate's own example: seq 5, marker
+      // mayrin@3, castHistorySeq 5 -> 5 >= 3 is true via the marker
+      // comparison alone. The hoisted substitution check must override
+      // that verdict.
+      expect(
+        isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 5 }, history(), 'narrator'),
+      ).toBe(false);
+    });
+    it('control — the identical fixture without the substitution field still clears via the marker comparison', () => {
+      expect(
+        isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 5 }, history()),
+      ).toBe(true);
+    });
+    it('no stamp + substitution is UNKNOWN — the !finite(stamp) guard still precedes the hoisted check', () => {
+      expect(isAudioCurrent(res('history', ['mayrin']), {}, history(), 'narrator')).toBe(
+        'unknown',
+      );
+    });
+  });
+
   describe('the alias tiers', () => {
     it('is current when the render is at or above the marker', () => {
       expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 3 }, history())).toBe(
