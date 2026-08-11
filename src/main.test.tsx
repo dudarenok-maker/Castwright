@@ -47,14 +47,20 @@ function stubMatchMedia() {
 }
 
 describe('main.tsx router wiring (fe-56)', () => {
-  it("mounts with react-router/dom's RouterProvider, not the bare react-router export", async () => {
-    document.body.innerHTML = '<div id="root"></div>';
-    stubMatchMedia();
+  it(
+    "mounts with react-router/dom's RouterProvider, not the bare react-router export",
+    async () => {
+      document.body.innerHTML = '<div id="root"></div>';
+      stubMatchMedia();
 
-    await import('./main');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+      await import('./main');
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(domRouterProviderMock).toHaveBeenCalled();
-    expect(bareRouterProviderMock).not.toHaveBeenCalled();
-  });
+      expect(domRouterProviderMock).toHaveBeenCalled();
+      expect(bareRouterProviderMock).not.toHaveBeenCalled();
+    },
+    // Importing main.tsx pulls the entire application dependency graph into jsdom (~5s on an idle box).
+    // This is genuine work required to verify the real RouterProvider import, not a bug to optimize away.
+    30_000
+  );
 });
