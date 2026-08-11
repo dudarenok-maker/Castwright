@@ -21,6 +21,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError, type WorkspaceInfo } from '../lib/api';
+import { recoveryHint } from '../lib/lan-recovery-hint';
 import { parseRuntime } from '../lib/time';
 import { useAppSelector, useAppDispatch } from '../store';
 import { startLinearTour } from '../store/tour-slice';
@@ -250,20 +251,6 @@ export function BookLibraryView({
       );
   };
 
-  /** Recovery pointer for a 401 library error — this browser's LAN
-   *  authorization lapsed. `castwright.local` is the mDNS name every
-   *  device on the LAN resolves, so it is NOT evidence the user is
-   *  sitting at the host; only true loopback counts. */
-  const recoveryHint = (): string => {
-    const h = window.location.hostname;
-    const onHost = h === 'localhost' || h === '127.0.0.1';
-    if (!onHost) return 'Open Castwright on the computer running it and use “Authorize this browser”, then reload here.';
-    // location.port is '' on the :443 forwarder path — never promise a port we don't know.
-    return window.location.port
-      ? `Open https://localhost:${window.location.port} on this computer and use “Authorize this browser”.`
-      : 'Open Castwright on this computer and use “Authorize this browser” under Account → LAN access.';
-  };
-
   /* Plan 73 — union of all tags across the library. We read the raw
      books array from the slice and derive the sorted tag union with
      useMemo so React 18 doesn't warn about a selector returning a
@@ -414,9 +401,9 @@ export function BookLibraryView({
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center" role="alert">
           <h3 className="font-serif text-2xl font-bold text-ink">Couldn&apos;t load your library</h3>
           <p className="mt-2 text-sm text-ink/60">
-            {error?.status === 401
+            {error.status === 401
               ? <>This browser is no longer authorized for Castwright on your network. {recoveryHint()}</>
-              : error?.message}
+              : error.message}
           </p>
           <div className="mt-6">
             <PrimaryButton variant="dark" onClick={retry} icon={false}>Retry</PrimaryButton>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
+import { recoveryHint } from '../lib/lan-recovery-hint';
 import type { PublicDevice } from '../lib/types';
 import { PairingQr } from './pairing/pairing-qr';
 import { PrimaryButton } from './primitives';
@@ -8,21 +9,6 @@ import { ADMIN_WIKI } from '../lib/wiki-links';
 import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
-
-/** Recovery pointer for a 401 while trying to manage LAN devices — this
- *  browser's own authorization lapsed. `castwright.local` is the mDNS name
- *  every device on the LAN resolves, so it is NOT evidence the user is
- *  sitting at the host; only true loopback counts. Mirrors the same-named
- *  helper in book-library.tsx. */
-function recoveryHint(): string {
-  const h = window.location.hostname;
-  const onHost = h === 'localhost' || h === '127.0.0.1';
-  if (!onHost) return 'Open Castwright on the computer running it and use “Authorize this browser”, then reload here.';
-  // location.port is '' on the :443 forwarder path — never promise a port we don't know.
-  return window.location.port
-    ? `Open https://localhost:${window.location.port} on this computer and use “Authorize this browser”.`
-    : 'Open Castwright on this computer and use “Authorize this browser” under Account → LAN access.';
-}
 
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);

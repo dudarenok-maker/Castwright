@@ -221,6 +221,17 @@ describe('LanAccessCard', () => {
     );
   });
 
+  it('shows the portless recovery pointer on 401 when on loopback via the :443 forwarder (location.port === "")', async () => {
+    vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
+    vi.stubGlobal('location', { hostname: 'localhost', port: '' });
+
+    render(<LanAccessCard />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/open castwright on this computer/i)).toBeInTheDocument(),
+    );
+  });
+
   it('Regenerate certificate: click -> success re-fetches and re-renders LanCertStatus', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
     vi.mocked(api.regenerateLanCert).mockResolvedValue({

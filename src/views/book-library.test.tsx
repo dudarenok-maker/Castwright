@@ -924,6 +924,7 @@ describe('BookLibraryView — loading affordance', () => {
 });
 
 describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
+  beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
   it('renders a recovery pointer on a 401 library error', () => {
@@ -939,19 +940,26 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
     expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });
 
-  it('keeps the recovery pointer after Retry fails again with 401', async () => {
+  it('shows the recovery pointer after Retry fails with 401 (a real state transition, not a preload)', async () => {
+    /* Preload a NON-401 error so the recovery pointer is provably absent
+       before the click — a 401 preload here would make this test pass even
+       if book-library.tsx dropped `status:` from the Retry dispatch entirely,
+       since findByText's first (synchronous) check would already see the
+       pointer from the preloaded state. */
     const { ApiError } = await import('../lib/api');
     vi.mocked(api.getLibrary).mockRejectedValue(new ApiError('nope', 401));
-    renderWithLibraryError({ message: 'x', status: 401 });
+    renderWithLibraryError({ message: 'boom', status: 500 });
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(await screen.findByText(/authorize this browser/i)).toBeInTheDocument();
   });
 
   it.each([
     ['localhost', '8443', /https:\/\/localhost:8443/],
+    ['localhost', '', /Open Castwright on this computer/],
     ['castwright.local', '', /Open Castwright on the computer running it/],
     ['192.168.1.9', '8443', /Open Castwright on the computer running it/],
-  ])('addresses the %s case', (hostname, port, expected) => {
+  ])('addresses the %s (port=%s) case', (hostname, port, expected) => {
     vi.stubGlobal('location', { hostname, port });
     renderWithLibraryError({ message: 'x', status: 401 });
     expect(screen.getByText(expected)).toBeInTheDocument();
