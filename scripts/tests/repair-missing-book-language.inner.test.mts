@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 import { planBookLanguage, cacheChaptersFor, main } from '../repair-missing-book-language.mts';
 import { cachePath } from '../../server/src/store/analysis-cache.js';
 import { detectManuscriptLanguage } from '../../server/src/tts/detect-language.js';
+import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../../server/src/parsers/front-matter.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -409,28 +410,65 @@ test('planBookLanguage: a front-matter-titled chapter is excluded from the vote,
   assert.equal(plan.language, 'en');
 });
 
-test('planBookLanguage: word-count filter alone, 1-vs-1 head-to-head — only resolves once the short chapter is dropped', () => {
-  // Isolates the word-count half of the selection filter from vote-majority
-  // robustness: with only one other chapter, an unfiltered short chapter is
-  // a 1-vs-1 split (no majority) — dropping it by word count is the only
-  // way this resolves to a backfill.
+// A short, real Russian sentence used only to build several under-threshold
+// "wrong-language" chapters for the combined-mass test below — distinct from
+// REAL_RUSSIAN_PROSE (which is deliberately sized to individually clear the
+// floor/threshold on its own).
+const SHORT_RUSSIAN_SENTENCE = 'Смотритель маяка поднимался по винтовой лестнице каждый вечер перед закатом.';
+
+test('planBookLanguage: SEVERAL short, non-front-matter-titled chapters dropped by WORD COUNT — their COMBINED mass would otherwise outweigh the real body (#2276 mass-vote isolation)', () => {
+  // #2276 — detectManuscriptLanguageFromChapters now votes by MASS (word
+  // count), not by chapter count. Under mass-weighted voting a literal
+  // 1-vs-1 (one short lookalike vs one real chapter) can NEVER isolate the
+  // word-count filter: a chapter that clears FRONT_MATTER_WORD_THRESHOLD to
+  // remain a candidate always carries at least as much mass as one that fell
+  // short of it, so removing the filter can't flip a clean two-way contest
+  // (see the retitled 煤落的委托 test below). FOUR short chapters, each
+  // individually under the threshold, combine to out-mass the real English
+  // body if the word-count filter doesn't drop them — that is what actually
+  // exercises the mechanism.
+  const shortWrongChapters = [1, 2, 3, 4].map((n) =>
+    makeCacheChapter(n, `Aside ${n}`, Array(14).fill(SHORT_RUSSIAN_SENTENCE).join(' ')),
+  );
+  const realBody = makeCacheChapter(5, 'Chapter One', REAL_ENGLISH_PROSE);
+
+  // Fixture sanity, not trusted by eye: each short chapter is confidently
+  // 'ru' alone and under the word-count threshold; the four together outmass
+  // the real English body.
+  const shortDetection = detectManuscriptLanguage(shortWrongChapters[0].body);
+  assert.equal(shortDetection.language, 'ru');
+  assert.equal(shortDetection.fallback, false);
+  assert.ok(countWords(shortWrongChapters[0].body) < FRONT_MATTER_WORD_THRESHOLD);
+  const combinedShortMass = shortWrongChapters.reduce((sum, c) => sum + countWords(c.body), 0);
+  assert.ok(combinedShortMass > countWords(realBody.body), 'fixture sanity: combined short mass must outweigh the real body');
+
   const plan = planBookLanguage({
-    bookId: 'book-word-count-head-to-head',
+    bookId: 'book-word-count-mass-flip',
     hasLanguageKey: false,
-    cacheChapters: [FRONT_MATTER_LOOKALIKE_CHAPTER, makeCacheChapter(2, '第一章', REAL_CJK_PROSE)],
+    cacheChapters: [...shortWrongChapters, realBody],
     manuscriptChapters: null,
   });
   assert.equal(plan.action, 'backfill');
-  assert.equal(plan.language, 'zh');
+  assert.equal(plan.language, 'en');
 });
 
-test('planBookLanguage: 煤落的委托 shape — a short, non-front-matter-titled first chapter is dropped by the WORD-COUNT filter, body resolves the language', () => {
+test('planBookLanguage: 煤落的委托 shape — a short, non-front-matter-titled first chapter is dropped by the WORD-COUNT filter, body resolves the language (real-world repro; NOT the word-count-filter-necessity lock — see the mass-flip test above for that)', () => {
   // Chapter 1's title ("Chapter 1") does NOT match the front-matter title
   // regex — only its short body (well under FRONT_MATTER_WORD_THRESHOLD)
   // gets it dropped from the vote. Real repro against the live corpus book:
   // detectManuscriptLanguage on this exact chapter body alone returns
   // { language: 'en', fallback: false } — a confident, WRONG vote that
   // must never reach the tally.
+  //
+  // #2276 — this fixture alone does NOT prove the word-count filter is
+  // NECESSARY under mass-weighted voting: the lookalike chapter's body is
+  // only ~6 words of mass against two ~380-word real Chinese chapters, so
+  // even with the countWords clause of selectBodyChapters deleted, the
+  // lookalike's tiny mass can never flip a >50%-of-mass vote already won by
+  // the real body (verified — deleting that clause does NOT redden this
+  // test). It's still a valid regression for the real-world book shape and
+  // for the title-vs-word-count filter distinction; the mass-flip test above
+  // is what locks the filter's necessity.
   const wrongVote = detectManuscriptLanguage(FRONT_MATTER_LOOKALIKE_CHAPTER.body);
   assert.equal(wrongVote.fallback, false, 'fixture sanity: the lookalike chapter must be a confident (wrong) en vote on its own');
   assert.equal(wrongVote.language, 'en', 'fixture sanity: must reproduce the real 煤落的委托 chapter-1 mis-detection');
@@ -450,14 +488,28 @@ test('planBookLanguage: 煤落的委托 shape — a short, non-front-matter-titl
 });
 
 test('planBookLanguage: 2-vs-2 split (en/ru, no strict majority) → surrenders, reason names the split', () => {
+  // #2276 — mass-weighted, so a genuine tie needs equal MASS, not equal
+  // chapter count. REAL_ENGLISH_PROSE(+_2) and REAL_RUSSIAN_PROSE(+_2) are
+  // NOT equal mass (768 vs 544 words) — under mass-weighted voting that's a
+  // 58.5% English majority, not a tie, so this test is rebuilt on
+  // SHORT_ENGLISH_SENTENCE (19 words) x SHORT_RUSSIAN_SENTENCE (10 words)
+  // repeated to the same total (190 words/chapter, LCM of 19 and 10) — a
+  // real 380-vs-380 tie, verified below rather than trusted by eye. Chapter
+  // COUNT stays 2-vs-2 so describeVoteSplit's diagnostic reason text
+  // ("en 2 / ru 2") is unaffected — that tally is chapter-count based by
+  // design (a report of the split, not the decision).
+  const enChapterBody = Array(10).fill(SHORT_ENGLISH_SENTENCE).join(' ');
+  const ruChapterBody = Array(19).fill(SHORT_RUSSIAN_SENTENCE).join(' ');
+  assert.equal(countWords(enChapterBody), countWords(ruChapterBody));
+
   const plan = planBookLanguage({
     bookId: 'book-split',
     hasLanguageKey: false,
     cacheChapters: [
-      makeCacheChapter(1, 'Chapter One', REAL_ENGLISH_PROSE),
-      makeCacheChapter(2, 'Chapter Two', REAL_ENGLISH_PROSE_2),
-      makeCacheChapter(3, 'Глава первая', REAL_RUSSIAN_PROSE),
-      makeCacheChapter(4, 'Глава вторая', REAL_RUSSIAN_PROSE_2),
+      makeCacheChapter(1, 'Chapter One', enChapterBody),
+      makeCacheChapter(2, 'Chapter Two', enChapterBody),
+      makeCacheChapter(3, 'Глава первая', ruChapterBody),
+      makeCacheChapter(4, 'Глава вторая', ruChapterBody),
     ],
     manuscriptChapters: null,
   });
@@ -806,14 +858,21 @@ test('main: 2-vs-2 split (no majority) → --apply does NOT write, reason names 
       author: 'Author',
     });
     mkdirSync(dirname(cacheFilePath), { recursive: true });
+    // #2276 — mass-weighted vote, so a genuine tie needs equal MASS (see the
+    // planBookLanguage-level '2-vs-2 split' test above for the full
+    // rationale: REAL_ENGLISH_PROSE(+_2)/REAL_RUSSIAN_PROSE(+_2) are not mass-
+    // equal, so this test is rebuilt on the same 190-word-per-chapter tie.
+    const enChapterBody = Array(10).fill(SHORT_ENGLISH_SENTENCE).join(' ');
+    const ruChapterBody = Array(19).fill(SHORT_RUSSIAN_SENTENCE).join(' ');
+    assert.equal(countWords(enChapterBody), countWords(ruChapterBody));
     writeFileSync(
       cacheFilePath,
       JSON.stringify({
         chapters: {
-          1: [{ text: REAL_ENGLISH_PROSE, speakerId: 'narrator' }],
-          2: [{ text: REAL_ENGLISH_PROSE_2, speakerId: 'narrator' }],
-          3: [{ text: REAL_RUSSIAN_PROSE, speakerId: 'narrator' }],
-          4: [{ text: REAL_RUSSIAN_PROSE_2, speakerId: 'narrator' }],
+          1: [{ text: enChapterBody, speakerId: 'narrator' }],
+          2: [{ text: enChapterBody, speakerId: 'narrator' }],
+          3: [{ text: ruChapterBody, speakerId: 'narrator' }],
+          4: [{ text: ruChapterBody, speakerId: 'narrator' }],
         },
       }),
     );
