@@ -41,21 +41,30 @@
 
    An eighth guard sits alongside the seven above but does NOT belong to the
    'unknown' list: ANY tier — not only `'normalised-id'` — additionally reads
-   `false`, never vacuously `true`, when its segment recorded
+   `false`, never vacuously `true` or `'unknown'`, when its segment recorded
    `renderedFallbackCharacterId` (render-time narrator substitution; register
    row A32). Originally added (fix round, PR #2244 review gate, F1) checking
    only inside the `'normalised-id'` branch; round 2's review gate found the
    identical fail-open one tier over — nothing bumps `history.seq` when the
    live roster changes underneath an already-matched alias, so a marker
    comparison on the 'history'/'normalised-history' tiers cannot see a
-   render-time substitution either. The check is now hoisted above the tier
-   dispatch entirely, after the `!finite(stamp)` guard. Distinct in kind from
-   the seven: those are "no evidence either way", this is affirmative
-   evidence OF damage, so `false` is the correct verdict, not `'unknown'`.
+   render-time substitution either. Round 3's review gate found the same gap
+   one tier further still: hoisting the check above the tier dispatch but
+   BELOW the `'exact'` early return left `'exact'` uncovered, on the false
+   premise that `'exact'` never reaches this function in practice — the
+   banner does `continue` past `'exact'` before calling in, but the repair
+   pass (`repair-cast-id-drift.mjs`) resolves every string id with no such
+   filter and reaches `'exact'` routinely. The check now sits FIRST, above
+   every tier including `'exact'` and above the `!finite(stamp)` guard: a
+   recorded substitution is affirmative evidence of damage on its own, so it
+   needs neither a tier match nor a stamp to be meaningful. Distinct in kind
+   from the seven: those are "no evidence either way", this is affirmative
+   evidence OF damage, so `false` is the correct verdict, not `'unknown'`,
+   even with no stamp present.
    Still governed by the same rule at the top of this comment — only `true`
    clears a row — so collapsing this eighth guard back into a per-tier check
-   (or dropping it for any tier) is exactly as dangerous as inverting one of
-   the seven. */
+   (or dropping it for any tier), or sinking it back below `'exact'` or the
+   stamp guard, is exactly as dangerous as inverting one of the seven. */
 
 import type { CastIdHistory } from './cast-id-history.js';
 import type { CastResolution } from './cast-resolve.js';
@@ -90,37 +99,44 @@ export function isAudioCurrent(
      and always listed. */
   if (!resolution) return false;
 
-  /* Unchanged from #2107: the id IS the live cast id today, so the frozen
-     bytes were rendered against the same row they resolve to now. The only
-     tier that means "fine". */
+  /* A segment carrying `renderedFallbackCharacterId` was rendered in the
+     narrator's voice, whatever id it resolves to TODAY — including
+     `'exact'`. A live cast row can be reintroduced under the SAME id after
+     a fallback render (the likeliest recovery path, since the analyzer
+     produced that id from the manuscript originally), so `resolve(id).via
+     === 'exact'` proves the id matches the roster TODAY, not that it
+     matched at RENDER time. Checked first, above every tier including
+     `'exact'` and above the `!finite(stamp)` guard below: a recorded
+     substitution is itself affirmative evidence the audio is wrong — it
+     needs no stamp and no tier match to be meaningful, unlike the seven
+     "no evidence either way" cases in the header comment. That is why this
+     reads `false`, not `'unknown'`, even when `segmentsFile.castHistorySeq`
+     is absent — `'unknown'` means "we cannot tell"; a substitution record
+     means we CAN tell, and the answer is "wrong". `== null`, not
+     truthiness — the field is `string | null | undefined` and an empty
+     string would BE a substitution record, not an absence of one.
+
+     Both consumers actually reach every tier here, including `'exact'`:
+     the banner (`segments-io.ts`'s `collectOrphanedCharacterFallbacks`)
+     `continue`s past `'exact'` before ever calling in, but the repair pass
+     (`repair-cast-id-drift.mjs`) resolves every string `characterId` and
+     calls `isAudioCurrent` with no exact-tier filter ahead of it — an
+     unguarded `'exact'` branch above this check silently cleared 67
+     narrator-voiced segments there. Do not move this below `'exact'` or
+     below the stamp guard without re-deriving that consumer fact. */
+  if (renderedFallbackCharacterId != null) return false;
+
+  /* The substitution check above has already run, so any segment reaching
+     here that resolves `'exact'` really was rendered against the row it
+     resolves to now — a narrator-voiced substitution under this id would
+     have returned `false` above regardless of today's roster. The only
+     tier that means "fine" outright, with no marker to compare. */
   if (resolution.via === 'exact') return true;
 
   const stamp = segmentsFile?.castHistorySeq;
   /* `0` is a VALID stamp, not an absent one — a truthiness check here routes
      every legacy render to 'unknown' and ships #2128 dead. */
   if (!finite(stamp)) return 'unknown';
-
-  /* Round 2 review gate found the identical fail-open one tier over from F1
-     below: a segment carrying `renderedFallbackCharacterId` was rendered in
-     the narrator's voice, whatever id it resolves to TODAY — no tier's
-     marker evidence can override that, because nothing bumps `history.seq`
-     when the live roster changes underneath an already-matched alias either
-     (unlike tiers 2/4's own alias WRITE, which both bumps `seq` and
-     restamps the key — a later reconciliation of the roster itself leaves
-     no trace for a marker comparison to catch). Hoisted above the tier
-     dispatch so every tier below is covered by the same check, not just
-     'normalised-id'. `== null`, not truthiness — the field is `string |
-     null | undefined` and an empty string would BE a substitution record,
-     not an absence of one.
-
-     Kept after `!finite(stamp)` above: a segment with no stamp must still
-     read 'unknown' ("we cannot tell"), never `false` ("we know it is
-     wrong") — those are different states and the register/UI distinguish
-     them. Kept after the 'exact' early return above, though 'exact' never
-     reaches this function from either consumer in practice
-     (`collectOrphanedCharacterFallbacks` `continue`s on it) — do not move
-     this without saying why. */
-  if (renderedFallbackCharacterId != null) return false;
 
   /* `'normalised-id'` has no history entry, so there is no marker to compare
      against. Its hazard is different in kind: the render may predate the

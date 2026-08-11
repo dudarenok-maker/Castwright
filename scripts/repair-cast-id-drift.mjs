@@ -2162,8 +2162,13 @@ async function loadServerModules() {
  *  F1 (PR #2244 review gate, fix round) — there IS per-segment evidence
  *  after all: the PER-SEGMENT field `renderedFallbackCharacterId`, stamped
  *  by #2023 exactly when the render-time resolver missed and substituted
- *  the narrator. `isAudioCurrent`'s `'normalised-id'` branch
- *  (`server/src/store/cast-audio-currency.ts`) now consults it — this
+ *  the narrator. `isAudioCurrent` (`server/src/store/cast-audio-currency.ts`)
+ *  now consults it FIRST, above the entire tier dispatch including
+ *  `'exact'` (originally added inside the `'normalised-id'` branch alone;
+ *  round 2 hoisted it above every tier's marker comparison, round 3 hoisted
+ *  it above `'exact'` too, since this function — unlike the banner's
+ *  `collectOrphanedCharacterFallbacks` — resolves every string
+ *  `characterId` with no exact-tier filter ahead of it) — this
  *  function threads `s.renderedFallbackCharacterId` through on every call,
  *  same as `collectOrphanedCharacterFallbacks` (`segments-io.ts`) does on
  *  the banner side. Measured absent from all 84,642 real segments as of the
@@ -2197,9 +2202,14 @@ async function loadServerModules() {
  *  from candidate ranking to currency) — this function must call it, never
  *  re-derive "is this id fine?" with its own `castHistorySeq`/`recordedAtSeq`
  *  comparison (Global Constraint 3, one comparator two callers). `'exact'`
- *  is still unconditionally fine (that branch of `isAudioCurrent` returns
- *  `true` with no stamp needed), so this is a strict widening of the old
- *  skip, not a replacement of it. */
+ *  is fine with no stamp needed UNLESS the segment itself recorded
+ *  `renderedFallbackCharacterId` — round 3 found this function (unlike the
+ *  banner) reaches `'exact'` routinely, with no filter ahead of the call, so
+ *  a stale claim that `'exact'` is "unconditionally fine" here would have
+ *  silently cleared every re-minted-id substitution case; see the doc
+ *  comment on the `renderedFallbackCharacterId` parameter below for the full
+ *  reasoning. This is a strict widening of the old skip, not a replacement
+ *  of it. */
 export function buildOrphansFromSegments(segs, resolver, history, isAudioCurrent) {
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
   /* #2128 — ids that skipped `orphans` because their audio is affirmatively
@@ -2227,10 +2237,13 @@ export function buildOrphansFromSegments(segs, resolver, history, isAudioCurrent
          affirmative comparison clears a row).
 
          F1 (PR #2244 review gate) — also passes `s.renderedFallbackCharacterId`,
-         the per-segment render-time narrator-substitution stamp: the
-         `'normalised-id'` tier inside `isAudioCurrent` needs it to tell a
-         genuine live-roster match from a render that substituted the
-         narrator and merely happens to carry a finite `castHistorySeq`. */
+         the per-segment render-time narrator-substitution stamp: `isAudioCurrent`
+         consults it FIRST, above its entire tier dispatch (originally only
+         inside `'normalised-id'`; round 2 hoisted it above every tier's marker
+         comparison, round 3 hoisted it above `'exact'` too) — this function
+         reaches `'exact'` routinely, with no filter ahead of the call, so the
+         hoist above `'exact'` is load-bearing HERE specifically, not merely a
+         tidy-up. */
       if (isAudioCurrent(resolution, seg, history, s.renderedFallbackCharacterId) === true) {
         if (resolution?.via !== 'exact') currentNonExact.add(id);
         continue;

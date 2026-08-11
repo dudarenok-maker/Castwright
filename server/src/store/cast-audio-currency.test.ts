@@ -34,6 +34,30 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
     expect(isAudioCurrent(res('exact'), undefined, history())).toBe(true);
   });
 
+  describe('the hoisted substitution check now also covers `exact` (round 3 review gate — F1/round 2 stopped one tier short)', () => {
+    /* Round 3 finding: the check sat above the tier dispatch but BELOW the
+       `'exact'` early return, on the false premise that `'exact'` never
+       reaches this function in practice. The repair pass
+       (`repair-cast-id-drift.mjs`) resolves every string `characterId` with
+       no exact-tier filter ahead of it, so a chapter rendered against an
+       absent-then-recreated `the_torment` id — narrator-voiced,
+       `renderedFallbackCharacterId: 'narrator'` — resolves `'exact'` once
+       the analyzer re-mints the SAME id, and the unguarded `'exact'` branch
+       silently cleared it. */
+    it('exact + substitution is STALE, not vacuously current', () => {
+      expect(isAudioCurrent(res('exact'), { castHistorySeq: 5 }, history(), 'narrator')).toBe(
+        false,
+      );
+    });
+    it('control — exact with no substitution still clears (no over-correction)', () => {
+      expect(isAudioCurrent(res('exact'), { castHistorySeq: 5 }, history())).toBe(true);
+    });
+    it('exact + substitution + no stamp is STALE too, not unknown (round 3 decision: a substitution is affirmative evidence and needs no stamp to be meaningful)', () => {
+      expect(isAudioCurrent(res('exact'), {}, history(), 'narrator')).toBe(false);
+      expect(isAudioCurrent(res('exact'), undefined, history(), 'narrator')).toBe(false);
+    });
+  });
+
   it('a genuine miss is damage', () => {
     expect(isAudioCurrent(undefined, { castHistorySeq: 9 }, history())).toBe(false);
   });
@@ -104,10 +128,8 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
         isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 5 }, history()),
       ).toBe(true);
     });
-    it('no stamp + substitution is UNKNOWN — the !finite(stamp) guard still precedes the hoisted check', () => {
-      expect(isAudioCurrent(res('history', ['mayrin']), {}, history(), 'narrator')).toBe(
-        'unknown',
-      );
+    it('no stamp + substitution is STALE, not UNKNOWN — round 3 hoisted the check above the !finite(stamp) guard too, since a recorded substitution is affirmative evidence and needs no stamp to be meaningful', () => {
+      expect(isAudioCurrent(res('history', ['mayrin']), {}, history(), 'narrator')).toBe(false);
     });
   });
 

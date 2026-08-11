@@ -211,6 +211,45 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
     );
     expect(staleOrphans.get('mayrin')?.segments).toBe(1); // substitution overrides the marker comparison, stays listed
   });
+
+  it("round 3 review gate — an 'exact' tier match, against the REAL resolver AND the REAL isAudioCurrent: stays listed when the render substituted the narrator, even though the id resolves live today", () => {
+    // The concrete break this fix closes: a chapter renders while
+    // `the_torment` is absent from cast.json, so the segment keeps
+    // `characterId: 'the_torment'` and records
+    // `renderedFallbackCharacterId: 'narrator'`. A later re-analysis mints a
+    // live cast row under that SAME id — this function (unlike the banner,
+    // which `continue`s past `'exact'` before ever calling in) resolves
+    // every string characterId with no exact-tier filter, so it reaches
+    // 'exact' here. Both fixtures below are finite-stamped and differ ONLY
+    // in whether the segment recorded a substitution.
+    const liveCast = [{ id: 'the_torment', name: 'The Torment' }];
+    const history = { schema: 1 as const, supersededBy: {}, rejected: [] };
+    const resolver = buildCastResolver(liveCast, history);
+    const cleanSeg = {
+      chapterId: 19,
+      chapterTitle: 'Nineteen',
+      castHistorySeq: 5,
+      segments: [{ characterId: 'the_torment' }],
+    };
+    const { orphans: clearedOrphans } = buildOrphansFromSegments([cleanSeg], resolver, history, isAudioCurrent);
+    expect(clearedOrphans.has('the_torment')).toBe(false); // exact, no substitution -> current, clears
+
+    const substitutedSeg = {
+      chapterId: 19,
+      chapterTitle: 'Nineteen',
+      castHistorySeq: 5,
+      segments: [{ characterId: 'the_torment', renderedFallbackCharacterId: 'narrator' }],
+    };
+    const { orphans: staleOrphans } = buildOrphansFromSegments(
+      [substitutedSeg],
+      resolver,
+      history,
+      isAudioCurrent,
+    );
+    // register row A32's own recovery shape: the id resolves 'exact' TODAY,
+    // but the frozen bytes were rendered against the narrator, not this row.
+    expect(staleOrphans.get('the_torment')?.segments).toBe(1);
+  });
 });
 
 describe("resolveTierBId against the REAL buildCastResolver (round 4 review, #2130) — a consumer buildOrphansFromSegments's own tests above cannot stand in for, since it branches on the literal string returned by resolution.via ('normalised-id'), not merely on whether SOME tier other than 'exact' matched", () => {
