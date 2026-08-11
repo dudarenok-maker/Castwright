@@ -9292,7 +9292,7 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     key: 'analyzer.gemini.model',
     group: 'analyzer-models',
     label: 'Gemini analyzer model',
-    help: 'Gemini model used directly (ANALYZER=gemini) or as the Ollama-unreachable fallback (ANALYZER=local). Separate free-tier bucket from gemini-* models; lower daily-hit risk for per-chapter stage-2 analysis.',
+    help: 'Gemini model used directly (engine=gemini) or as the Ollama-unreachable fallback (engine=local). Ships defaulting to gemini-3.5-flash-lite (500 RPD, comfortably parses a novel). Switch to a gemma-* model (30 RPM / 14,400 RPD, its own free-tier bucket) to avoid the RECITATION content filter that can block copyrighted-book chapters on gemini-* models.',
     type: 'string',
     apply: 'live',
     risk: 'medium',
