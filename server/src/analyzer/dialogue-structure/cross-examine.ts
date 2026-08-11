@@ -225,6 +225,19 @@ function isConventionDialogue(as: AlignedSentence, opts: CrossExamineOpts): bool
   return opts.dialogueOpen != null && opts.dialogueOpen.test(as.sentence.text ?? '');
 }
 
+/** #2253 — the convention rescue applies only when there is a real speaker to
+    KEEP. `narrator` and the unknown-gender buckets are not speakers, and an id
+    absent from the roster is one `reconcileSentenceCharacterIds` will demote
+    downstream anyway — keeping it rescues nothing and inflates `demotedCount`
+    toward the hard attribution-drift abort. Mirrors `decideUnanchoredSpeech`'s
+    test at :101. BOTH call sites must ask this same question: asking it
+    differently made the same input decide differently either side of the
+    alignment floor. */
+function isConventionRescue(as: AlignedSentence, opts: CrossExamineOpts): boolean {
+  const id = as.sentence.characterId;
+  return isConventionDialogue(as, opts) && opts.rosterIds.has(id) && !isNarratorOrUnknown(id, opts);
+}
+
 /** Keep the model's speaker and flag it below the review UI's 0.75 highlight
     threshold. This FLAGS, it does not ATTRIBUTE — the kept speaker may still be
     wrong, and is surfaced as uncertain rather than asserted. */
@@ -309,7 +322,7 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
      inside decideTagSpanOnly) so it also covers decideNarrationOnly below:
      "no speech span => narrator" has two producers, and guarding only one
      reroutes traffic instead of fixing the outcome. */
-  if (isConventionDialogue(as, opts) && !isNarratorOrUnknown(modelId, opts)) {
+  if (isConventionRescue(as, opts)) {
     block.active = false;
     return decideConventionDialogue(modelId);
   }
@@ -365,7 +378,7 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
       if (
         isPureNarrationAligned(as) &&
         as.sentence.characterId !== NARRATOR_ID &&
-        !isConventionDialogue(as, opts)
+        !isConventionRescue(as, opts)
       ) {
         decision = decideNarrationOnly(as.sentence.characterId, block);
       } else {

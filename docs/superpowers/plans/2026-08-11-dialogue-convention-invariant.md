@@ -1593,26 +1593,44 @@ than assumed.
 | 1 | 2777 | 729 | 26.3% | 729 | 26.3% | 0 |
 | 2 | 2111 | 822 | 38.9% | 822 | 38.9% | 0 |
 | 3 | 850 | 315 | 37.1% | 315 | 37.1% | 0 |
-| 4 | 892 | 199 | 22.3% | 208 | 23.3% | +9 |
-| 5 | 1736 | 355 | 20.4% | 760 | 43.8% | +405 |
-| 6 | 1682 | 407 | 24.2% | 649 | 38.6% | +242 |
+| 4 | 892 | 199 | 22.3% | 207 | 23.2% | +8 |
+| 5 | 1736 | 355 | 20.4% | 745 | 42.9% | +390 |
+| 6 | 1682 | 407 | 24.2% | 625 | 37.2% | +218 |
 | 7 | 1867 | 416 | 22.3% | 499 | 26.7% | +83 |
 | 8 | 1543 | 532 | 34.5% | 645 | 41.8% | +113 |
 | 9 | 1611 | 483 | 30.0% | 483 | 30.0% | 0 |
 
 Book baseline: 15069 / 4258 / 28.3%
-Book post-fix: 15069 / 5110 / 33.9% — delta **+852**, against the pipeline's
-879 rescued lines. Mechanism, not a discrepancy: `decideNarrationOnly`
+Book post-fix: 15069 / 5070 / 33.6% — delta **+812**, against the pipeline's
+838 rescued lines (879 dash-convention lines minus the 41 off-roster/unknown-
+bucket ids the PR #2266 review-gate fix wave sends back to `narrator`, see
+below). Mechanism, not a discrepancy: `decideNarrationOnly`
 (`server/src/analyzer/dialogue-structure/cross-examine.ts:259-274`) clamps
 the first sentence of a contiguous demoted run to
 `Math.min(CONFIDENCE.NARRATION_DEMOTE, 0.5)` = 0.5, so that sentence was
 already below the 0.75 threshold in the baseline and stays below it (rescued
-at 0.6) post-fix — it is one of the 879 rescued lines but contributes 0 to
+at 0.6) post-fix — it is one of the 838 rescued lines but contributes 0 to
 the threshold-crossing delta. `decideTagSpanOnly` always returns 0.9, so
 tag-routed victims do cross and are counted, which is the majority case.
 The gap is therefore structural and one-directional — it can only make the
-delta smaller than 879, never larger — so +852 is the expected shape, not a
+delta smaller than 838, never larger — so +812 is the expected shape, not a
 number to re-investigate.
+
+**2026-08-11, review-gate fix wave (PR #2266):** the review found the
+convention rescue kept two classes of id it shouldn't — narrator/unknown-
+gender-bucket ids below the alignment floor (finding 1), and ids absent
+from `stage1.characters` at both call sites (finding 2) — since
+`reconcileSentenceCharacterIds` demotes an off-roster id to `narrator`
+downstream regardless, so keeping it rescues nothing and only inflates
+`demotedCount`. Fixing both (a single shared `isConventionRescue` helper,
+`server/src/analyzer/dialogue-structure/cross-examine.ts`) sends 41 of the
+original 879 rescued lines (`борис-игнатьевич` ×17, `егор` ×24, both
+off-roster) back to `narrator`. `HARM TOTAL victims` therefore now reads
+**41**, not 0 — the correct result, not a regression: those 41 lines were
+never actually recoverable. The table above and the book totals reflect
+this fix; the 44% threshold below was re-checked against the new numbers
+and is unaffected (ch5, the new maximum among the five degraded chapters,
+still sits under it).
 
 Control check: ch1/2/3/9 delta is **0** each, as required — sanity check
 passed, not BLOCKED.

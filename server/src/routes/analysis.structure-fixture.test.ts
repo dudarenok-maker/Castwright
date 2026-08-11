@@ -282,6 +282,10 @@ describe('#2253 — a merged (paragraph-degraded) chapter keeps its speakers', (
       }
       // Before the fix all three were bucketed `corrected` (silently narratored).
       expect(result.structureReport?.corrected).toBe(0);
+      // Pin the PRODUCER, not just an id/confidence outcome a `lumped` (0.65)
+      // or `unresolved` bucket would equally satisfy: all three must land in
+      // `flagged` via the dash-convention rescue, not some other route.
+      expect(result.structureReport?.flagged).toBe(3);
     });
   }
 });

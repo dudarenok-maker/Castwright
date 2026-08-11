@@ -384,6 +384,36 @@ describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
     expect(res.flags).toEqual([]);
   });
 
+  // #2253 review findings 1+2 — the two call sites (above/below the alignment
+  // floor) must ask the SAME rescue question. Below the floor, an
+  // unknown-gender-bucket id is not a speaker to keep: it must demote to
+  // narrator exactly like the above-floor case just above, not survive as
+  // `flag-only-floor`.
+  it('below the floor, a dash-opening line attributed to an unknown-gender bucket demotes to narrator (not kept)', () => {
+    const s = mkText(MALE_BUCKET_ID, '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 50, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'narration-demote:first' });
+  });
+
+  // Roster membership: an id absent from stage1.characters is one
+  // `reconcileSentenceCharacterIds` demotes downstream anyway — keeping it
+  // here rescues nothing and only inflates `demotedCount`.
+  it('below the floor, a dash-opening line with an off-roster id demotes to narrator (not kept)', () => {
+    const s = mkText('борис-игнатьевич', '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 50, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'narration-demote:first' });
+  });
+
+  it('above the floor, a dash-opening line with an off-roster id demotes to narrator (not kept)', () => {
+    const s = mkText('борис-игнатьевич', '— Не стоит');
+    const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);
+    expect(res.sentences[0].characterId).toBe('narrator');
+    expect(res.sentences[0].confidence).toBe(CONFIDENCE.TAG_SPAN);
+    expect(res.flags).toEqual([]);
+  });
+
   it('a NON-dash sentence with tag-only spans still demotes (unchanged)', () => {
     const s = mkText('anton', 'сказал Антон, не поднимая головы');
     const res = run([aligned(s, [tagSpan()])], 100, DASH_OPTS);

@@ -14,6 +14,7 @@ describe('evidenceFamily', () => {
     ['unanchored-narrator', 'unanchored'],
     ['narration-confirm', 'narration'],
     ['narration-demote:first', 'narration'],
+    ['dash-line-keep-flag:alice', 'dash-convention'],
     ['lumped', 'lumped'],
     ['unaligned', 'unaligned'],
     ['flag-only-floor', 'other'],

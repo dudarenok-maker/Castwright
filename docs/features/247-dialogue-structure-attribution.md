@@ -292,9 +292,19 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
    *the engine regressed*. A breach is therefore a real failure with a specific
    remedy, never grounds for widening the threshold. The threshold is set from
    structurally-intact chapters precisely so a degraded one cannot hide inside
-   it. This means the next on-box run is expected to record chapters 4–8 as
-   failing target 1a, and that is the expected, correct outcome — not evidence
-   the threshold needs raising.
+   it. **Measured (2026-08-11, post-#2253-fix incl. the #2266 review-gate
+   roster fix, from this plan's "Measured Baselines" appendix):** the five
+   paragraph-degraded chapters read ch4 23.2%, ch5 42.9%, ch6 37.2%, ch7
+   26.7%, ch8 41.8% — none exceeds 44%. As calibrated, 1a does **not**
+   separate these paragraph-degraded chapters from the structurally-intact
+   ones on this book: intact ch2 sits at 38.9%, only 4.0 points below
+   degraded ch5's 42.9%, and ch5 itself sits 1.1 points *under* the bar. So
+   the next on-box run is **not** expected to record a ch4–8 breach — the
+   criterion as defined cannot emit the "re-convert this source" signal the
+   paragraph above describes on this book. That is a real gap in target 1a,
+   tracked as its own design question in #2267 (found via PR #2266's review
+   gate); it is not fixed by retuning this threshold, which the previous
+   paragraph already rules out.
 
    **1b — Engine health.** Three readings, interpreted together, never alone:
    1. **Victim rate ≤ 4%** (1/30 = 3.3%, rounded up; n=30 hand-labelled sample,
