@@ -926,6 +926,60 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(within(section).queryByTestId('orphaned-alias-audio-note-mayrin')).toBeNull();
     });
 
+    it('F2 (PR #2244 review gate) — the "resolves now — audio may still need a re-render" note is absent in the CURRENT section and present in the STALE one, for the SAME stale-audio-allowlisted resolution', () => {
+      // Both rows use the identical allowlisted resolution ('alias') — only
+      // `audioCurrent` differs. Before the fix, STALE_AUDIO_RESOLUTIONS alone
+      // gated the note, so it rendered unconditionally in BOTH sections
+      // (every row landing in either section already has an allowlisted
+      // resolution, by construction of the two filters) — contradicting the
+      // "audio is current" headline directly above it.
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              mayrin: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+                audioCurrent: 'true' as const,
+              },
+              coalfall: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 4,
+                audioCurrent: 'false' as const,
+              },
+            },
+          },
+        },
+      });
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled — audio is current/i }));
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled — audio needs a re-render/i }));
+
+      const currentSection = screen.getByTestId('orphaned-auto-reconciled-current');
+      expect(within(currentSection).getByText(/mayrin/)).toBeInTheDocument();
+      expect(within(currentSection).queryByTestId('orphaned-alias-audio-note-mayrin')).toBeNull();
+
+      const staleSection = screen.getByTestId('orphaned-auto-reconciled-stale');
+      expect(within(staleSection).getByText(/coalfall/)).toBeInTheDocument();
+      expect(within(staleSection).getByTestId('orphaned-alias-audio-note-coalfall')).toHaveTextContent(
+        /resolves now.*audio may still need a re-render/i,
+      );
+    });
+
     it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);

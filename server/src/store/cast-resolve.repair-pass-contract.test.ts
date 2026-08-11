@@ -116,6 +116,42 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
     expect(orphans.get('mayrin')?.segments).toBe(2);
   });
 
+  it("F1 (PR #2244 review gate) — a 'normalised-id' match WITH a stamp, against the REAL resolver AND the REAL isAudioCurrent: clears with no renderedFallbackCharacterId, stays listed when the render substituted the narrator", () => {
+    // The prior two 'normalised-id' tests above (and the file's own history)
+    // only ever exercised this tier with the stamp ABSENT — the one case
+    // where the bug (an unconditional `true`) cannot fire, since the
+    // `!finite(stamp)` guard returns 'unknown' before the tier-specific
+    // branch is ever reached. This fixture supplies a finite stamp so the
+    // branch under test actually runs.
+    const liveCast = [{ id: 'the_torment', name: 'The Torment' }];
+    const history = { schema: 1 as const, supersededBy: {}, rejected: [] };
+    const resolver = buildCastResolver(liveCast, history);
+    const cleanSeg = {
+      chapterId: 19,
+      chapterTitle: 'Nineteen',
+      castHistorySeq: 4,
+      segments: [{ characterId: 'the-torment' }],
+    };
+    const { orphans: cleanOrphans } = buildOrphansFromSegments([cleanSeg], resolver, history, isAudioCurrent);
+    expect(cleanOrphans.has('the-torment')).toBe(false); // no substitution recorded -> current, clears
+
+    const substitutedSeg = {
+      chapterId: 19,
+      chapterTitle: 'Nineteen',
+      castHistorySeq: 4,
+      segments: [{ characterId: 'the-torment', renderedFallbackCharacterId: 'narrator' }],
+    };
+    const { orphans: staleOrphans } = buildOrphansFromSegments(
+      [substitutedSeg],
+      resolver,
+      history,
+      isAudioCurrent,
+    );
+    // register row A32's own shape: a finite stamp with a recorded
+    // narrator substitution must stay listed, not clear.
+    expect(staleOrphans.get('the-torment')?.segments).toBe(1);
+  });
+
   it("#2128 (review round 1, I1) — the currency comparison itself, against the REAL resolver AND the REAL isAudioCurrent: a render stamped AT the marker clears, one stamped BELOW it stays", () => {
     // The three tests above all omit `castHistorySeq`, so every one resolves
     // at 'exact' -> `true` or `!finite(stamp)` -> `'unknown'` before ever

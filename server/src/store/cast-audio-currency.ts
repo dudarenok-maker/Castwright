@@ -37,7 +37,18 @@
    "simplifying" a guard the header never mentioned. Inverting any of the
    seven is the most dangerous mistake available here — it silently re-opens
    #2107, whose whole point was that only the `'exact'` tier means "these
-   bytes are fine". */
+   bytes are fine".
+
+   An eighth guard sits alongside the seven above but does NOT belong to the
+   'unknown' list: the `'normalised-id'` tier (fix round, PR #2244 review gate,
+   F1) additionally reads `false` — never vacuously `true` — when its segment
+   recorded `renderedFallbackCharacterId` (render-time narrator substitution;
+   register row A32). Distinct in kind from the seven: those are "no evidence
+   either way", this is affirmative evidence OF damage, so `false` is the
+   correct verdict, not `'unknown'`. Still governed by the same rule at the
+   top of this comment — only `true` clears a row — so collapsing this
+   eighth guard back into an unconditional `true` for `'normalised-id'` is
+   exactly as dangerous as inverting one of the seven. */
 
 import type { CastIdHistory } from './cast-id-history.js';
 import type { CastResolution } from './cast-resolve.js';
@@ -57,6 +68,13 @@ export function isAudioCurrent(
   resolution: CastResolution<{ id: string }> | undefined,
   segmentsFile: AudioCurrencyStamp | undefined,
   history: CastIdHistory,
+  /** F1 (PR #2244 review gate) — the SAME segment's `renderedFallbackCharacterId`
+   *  (`segments-io.ts`'s `SegmentsFile['segments'][number]`, `string | null |
+   *  undefined`). Only consulted by the `'normalised-id'` tier below; every
+   *  other tier ignores it. Appended after `history` rather than folded into
+   *  `segmentsFile` so guard 3 (`cast-history-threading.guard.test.ts`)'s
+   *  `argIndex = 2` pin for the `history` position needs no change. */
+  renderedFallbackCharacterId?: string | null,
 ): AudioCurrency {
   /* A genuine miss never resolved to anything, so there is nothing to be
      current WITH — it is the original #2040 damage, reported as 'unresolved'
@@ -78,18 +96,32 @@ export function isAudioCurrent(
      four-tier resolver EXISTING (pre-Wave-1 `resolveGroup` did a bare
      `castById.get()` and substituted the narrator). Per register row A32 that
      is `the-torment` (67 segments) and `lightning-dave` (1) — 68 of the 188
-     known damaged segments. The presence of `castHistorySeq` is itself the
-     proof the resolver ran, which is the only distinction this tier needs.
+     known damaged segments.
+
+     `castHistorySeq` presence alone is NOT complete affirmative evidence
+     (fix round, PR #2244 review gate, F1 — a regression against `main`
+     caught before merge): `castHistorySeq` is stamped once per chapter
+     UNCONDITIONALLY (`generation.ts`'s `castHistorySeq: castIdHistory.seq ??
+     0`), with nothing about whether any given id actually resolved to a live
+     row — it proves A resolver ran, not that THIS id resolved to THIS
+     character. And nothing bumps `history.seq` when the live roster changes
+     under a tier-3 match (unlike tiers 2/4, whose alias write both bumps
+     `seq` AND restamps the key), so the counter-reset guard below has no
+     signal to catch a roster change here either. The per-SEGMENT
+     `renderedFallbackCharacterId` is the affirmative evidence this tier
+     actually has: stamped exactly when the render-time resolver missed and
+     substituted the narrator. `== null`, not truthiness — the field is
+     `string | null | undefined` and an empty string would BE a substitution
+     record, not an absence of one.
 
      Deliberately returns BEFORE the counter-reset guard below (`history.seq`
      is never consulted for this tier): this tier reads no `recordedAtSeq`
      marker at all, so it has nothing for the file's write counter to be
-     "reset" relative to — stamp presence alone is its complete affirmative
-     evidence. Do not reorder this beneath the guard; that would make a
-     resolution `res('normalised-id')` with a stale-looking `castHistorySeq`
-     read `'unknown'` for a reason this tier's own contract has nothing to do
-     with. */
-  if (resolution.via === 'normalised-id') return true;
+     "reset" relative to. Do not reorder this beneath the guard; that would
+     make a resolution `res('normalised-id')` with a stale-looking
+     `castHistorySeq` read `'unknown'` for a reason this tier's own contract
+     has nothing to do with. */
+  if (resolution.via === 'normalised-id') return renderedFallbackCharacterId == null;
 
   // 'history' | 'normalised-history'
   const markers = history.recordedAtSeq;

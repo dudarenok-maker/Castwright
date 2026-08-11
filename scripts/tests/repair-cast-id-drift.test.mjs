@@ -3023,6 +3023,41 @@ describe('stampScannedBooks (#2128 — the --apply one-shot recordedAtSeq back-f
     assert.equal(calls, 0);
     assert.equal(stamped, 0);
   });
+
+  test('F3 (PR #2244 review gate) — a write failure on one book (e.g. an AV-scanner EPERM) does not abort the rest of the run', async () => {
+    // stampRecordedAtSeqIfAbsent's own READ failures are already caught and
+    // warned (cast-id-history.ts:1211-1217) — but its writeJsonAtomic call
+    // is NOT, so an unguarded per-book loop here propagates that throw
+    // straight to main()'s top-level .catch, and every book after the
+    // failing one silently never gets stamped, with no
+    // "stamped ... (#2128 one-shot)" line and a bare stack trace instead.
+    const calls = [];
+    const stampFn = async (bookDir) => {
+      calls.push(bookDir);
+      if (bookDir === '/book-2') throw new Error('EPERM: operation not permitted, open cast-id-history.json');
+      return true;
+    };
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args.join(' '));
+    let stamped;
+    try {
+      stamped = await stampScannedBooks(true, ['/book-1', '/book-2', '/book-3'], stampFn);
+    } finally {
+      console.warn = originalWarn;
+    }
+    // Every book is still attempted — book-3 is not skipped just because
+    // book-2 threw.
+    assert.deepEqual(calls, ['/book-1', '/book-2', '/book-3']);
+    // book-1 and book-3 stamped successfully; book-2's failure does not
+    // count, but also does not stop the count for the others.
+    assert.equal(stamped, 2);
+    // The failure is surfaced, not silently swallowed.
+    assert.ok(
+      warnings.some((w) => w.includes('/book-2') && w.includes('EPERM')),
+      `expected a warning naming the failing book and the error; got: ${JSON.stringify(warnings)}`,
+    );
+  });
 });
 
 describe('collectSegmentOrphans (#2092/#2089 Task 9 — threads the loaded history object, not a hand-built subset)', () => {

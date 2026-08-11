@@ -288,11 +288,20 @@ function AutoReconciledSection({
                     "was the rendered audio ever produced under the resolved
                     voice?" — `repair-cast-id-drift.mjs` can (and does) list
                     these same rows as damage needing a re-render. Gated on
-                    the STALE_AUDIO_RESOLUTIONS allowlist, not "not
-                    unresolved" — a resolution-based note, independent of
-                    (and complementary to) which audioCurrent bucket this row
-                    landed in above. */}
-                {STALE_AUDIO_RESOLUTIONS.has(info.resolution) && (
+                    the STALE_AUDIO_RESOLUTIONS allowlist AND `audioCurrent`
+                    (F2, PR #2244 review gate) — the allowlist alone is
+                    unconditionally true for every row in BOTH sections
+                    (`autoReconciledCurrent`/`autoReconciledStale` both
+                    already filter to `resolution !== 'unresolved'`, and
+                    `'unresolved'` is the only tier STALE_AUDIO_RESOLUTIONS
+                    excludes), so the note used to render under the "audio is
+                    current" headline too, contradicting it outright. A row
+                    only reaches the "current" section when its OWN
+                    `audioCurrent` is `'true'`, so gating on that directly —
+                    rather than on which section/slug rendered it — keeps
+                    this one component correct regardless of which caller
+                    passes it entries. */}
+                {STALE_AUDIO_RESOLUTIONS.has(info.resolution) && info.audioCurrent !== 'true' && (
                   <span
                     data-testid={`orphaned-alias-audio-note-${orphanedId}`}
                     className="text-xs text-amber-700"

@@ -429,8 +429,13 @@ export async function collectOrphanedCharacterFallbacks(
          reads `.via`/`.matchedHistoryKeys` off it directly) and this
          segment's OWN per-chapter `seg`, which carries the render-time
          `castHistorySeq` stamp `isAudioCurrent` compares against the
-         history markers. */
-      const currency = isAudioCurrent(resolution, seg, castIdHistory);
+         history markers. F1 (PR #2244 review gate) — also `s`'s OWN
+         `renderedFallbackCharacterId`: the `'normalised-id'` tier needs the
+         PER-SEGMENT substitution stamp, not anything at the segments-file
+         level, to tell a genuine live-roster match from a render-time
+         narrator substitution that merely happens to carry a finite
+         `castHistorySeq`. */
+      const currency = isAudioCurrent(resolution, seg, castIdHistory, s.renderedFallbackCharacterId);
 
       const governingPairs = rejectedPairsGoverning(s.characterId, cast, castIdHistory);
 

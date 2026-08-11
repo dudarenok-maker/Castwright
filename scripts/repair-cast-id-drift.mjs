@@ -2157,19 +2157,33 @@ async function loadServerModules() {
  *  today, but their audio was rendered BEFORE Wave 1's resolver existed at
  *  all — `resolveGroup` did a bare `castById.get()` and substituted the
  *  narrator regardless of tier, so a normalised-id match today says
- *  nothing about what voice rendered the frozen bytes. There is no
- *  per-segment evidence on the real workspace to discriminate a genuinely
- *  fine `'normalised-id'` match from a stale one either way — the
- *  PER-SEGMENT field `renderedFallbackCharacterId` is absent from all
- *  84,642 real segments (only `renderedFallbackEngine`, 77 segments,
- *  exists). `characterSnapshots` is a FILE-level map, not a per-segment
+ *  nothing about what voice rendered the frozen bytes by itself.
+ *
+ *  F1 (PR #2244 review gate, fix round) — there IS per-segment evidence
+ *  after all: the PER-SEGMENT field `renderedFallbackCharacterId`, stamped
+ *  by #2023 exactly when the render-time resolver missed and substituted
+ *  the narrator. `isAudioCurrent`'s `'normalised-id'` branch
+ *  (`server/src/store/cast-audio-currency.ts`) now consults it — this
+ *  function threads `s.renderedFallbackCharacterId` through on every call,
+ *  same as `collectOrphanedCharacterFallbacks` (`segments-io.ts`) does on
+ *  the banner side. Measured absent from all 84,642 real segments as of the
+ *  ORIGINAL writing of this comment (only `renderedFallbackEngine`, 77
+ *  segments, existed then) — that measurement predates most real renders
+ *  ever having a reason to carry it, not evidence the field can't fire: a
+ *  render that post-dates #2023 and DID substitute the narrator stamps it
+ *  every time. `characterSnapshots` is a FILE-level map, not a per-segment
  *  field — this function reads it below, once per file, and it IS present
- *  (497 files, 2,625 keys) — but it doesn't say which tier resolved any
- *  ONE segment either, so it isn't per-segment discriminating evidence —
- *  so this is still a policy call, not something detectable from the
- *  data: over-reporting is the safe failure direction for a one-shot
- *  repair tool, under-reporting tells an operator the workspace is clean
- *  when it might not be.
+ *  (497 files, 2,625 keys) — but it doesn't say which tier resolved any ONE
+ *  segment either, so it remains unusable as a `'normalised-id'`
+ *  discriminator. Where `renderedFallbackCharacterId` is itself absent (a
+ *  pre-#2023 render, or one that never substituted), the tier still falls
+ *  back to `true` — over-reporting every legacy normalised-id match forever
+ *  was tried and rejected: it would re-list every already-verified row on
+ *  every run with no way to ever clear it. A stamped, non-null substitution
+ *  is treated as damage on sight; its absence is not treated as proof of the
+ *  opposite, only as "no evidence found," which for THIS tier the owner
+ *  ruled reads `true`, not `'unknown'` (unlike the seven other guards in
+ *  `isAudioCurrent`'s own header, where absent evidence reads `'unknown'`).
  *
  *  Empty-result note (the defect shape this wave keeps hitting): `orphans`
  *  being empty for an id must mean "resolves via `'exact'`, OR its rendered
@@ -2210,8 +2224,14 @@ export function buildOrphansFromSegments(segs, resolver, history, isAudioCurrent
          is a genuine miss or a stale render, and `'unknown'` means the
          comparison could not be made at all — reading THAT as clean is
          exactly what #2107 exists to prevent (Global Constraint 4: only an
-         affirmative comparison clears a row). */
-      if (isAudioCurrent(resolution, seg, history) === true) {
+         affirmative comparison clears a row).
+
+         F1 (PR #2244 review gate) — also passes `s.renderedFallbackCharacterId`,
+         the per-segment render-time narrator-substitution stamp: the
+         `'normalised-id'` tier inside `isAudioCurrent` needs it to tell a
+         genuine live-roster match from a render that substituted the
+         narrator and merely happens to carry a finite `castHistorySeq`. */
+      if (isAudioCurrent(resolution, seg, history, s.renderedFallbackCharacterId) === true) {
         if (resolution?.via !== 'exact') currentNonExact.add(id);
         continue;
       }
@@ -2324,7 +2344,24 @@ export async function stampScannedBooks(apply, scannedBookDirs, stampRecordedAtS
   if (!apply) return 0;
   let stamped = 0;
   for (const bookDir of scannedBookDirs) {
-    if (await stampRecordedAtSeqIfAbsent(bookDir)) stamped += 1;
+    /* F3 (PR #2244 review gate) — `stampRecordedAtSeqIfAbsent`'s own READ
+       failures are already caught and warned (cast-id-history.ts's
+       `stampRecordedAtSeqIfAbsent`, ~:1211-1217), but its `writeJsonAtomic`
+       call is not — an EPERM from an AV scanner (or any other transient I/O
+       failure) on one book must not propagate out of this loop and abort
+       main()'s whole `--apply` run: every book after the failing one would
+       silently never get stamped, with no "stamped ... (#2128 one-shot)"
+       line and a bare stack trace instead. Matches the surrounding failure
+       discipline (warn and continue), same as the read-failure branch this
+       mirrors. */
+    try {
+      if (await stampRecordedAtSeqIfAbsent(bookDir)) stamped += 1;
+    } catch (err) {
+      console.warn(
+        `[repair-cast-id-drift] failed to stamp recordedAtSeq for ${bookDir} ` +
+          `(${err?.message ?? err}) — skipping this book's #2128 one-shot stamp, continuing with the rest.`,
+      );
+    }
   }
   return stamped;
 }

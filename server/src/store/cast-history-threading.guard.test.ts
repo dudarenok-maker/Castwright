@@ -250,6 +250,25 @@ describe('guard 3 — the loaded CastIdHistory is threaded whole (#2128)', () =>
     expect(findLiteralHistoryCalls('isAudioCurrent(resolution, seg, castIdHistory);')).toEqual([]);
   });
 
+  /* F1 (PR #2244 review gate) added a 4th `isAudioCurrent` parameter
+     (`renderedFallbackCharacterId`) AFTER `history` — deliberately, so this
+     guard's `argIndex = 2` mapping for `isAudioCurrent` needs no change. This
+     pins that the guard still catches a literal in the history position, and
+     still passes the correct shape, once every real call site carries the
+     4th argument — a signature change silently retiring half this guard's
+     scope (round-1 review's own warning, restated in the isAudioCurrent
+     `argIndex` comment above) is exactly what this test exists to catch. */
+  it('F1 — still catches a literal history argument, and still passes the correct shape, once the 4th (renderedFallbackCharacterId) argument is present', () => {
+    expect(
+      findLiteralHistoryCalls("isAudioCurrent(res, seg, { supersededBy: {} }, fallbackId);"),
+    ).toHaveLength(1);
+    expect(
+      findLiteralHistoryCalls(
+        'isAudioCurrent(resolution, seg, castIdHistory, s.renderedFallbackCharacterId);',
+      ),
+    ).toEqual([]);
+  });
+
   it('is not fooled by a nested call or an object in an EARLIER argument', () => {
     expect(findLiteralHistoryCalls('buildCastResolver(pick({ id: 1 }), castIdHistory);')).toEqual([]);
     expect(findLiteralHistoryCalls('isAudioCurrent(resolve(id), { castHistorySeq: 3 }, history);')).toEqual([]);

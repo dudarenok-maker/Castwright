@@ -57,6 +57,31 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
       // suite still green.
       expect(isAudioCurrent(res('normalised-id'), { castHistorySeq: 9 }, history())).toBe(true);
     });
+
+    /* F1 (PR #2244 review gate, HIGH) — `castHistorySeq` presence proves the
+       resolver RAN, not that THIS id resolved to THIS character: nothing
+       bumps `seq` when the live roster changes underneath a tier-3 match, so
+       a stamped chapter that actually rendered under a render-time narrator
+       substitution (`resolveGroup` had no live row to normalise onto, so it
+       fell back to the narrator and stamped `renderedFallbackCharacterId` on
+       the segment) must NOT clear just because a stamp exists — register row
+       A32's own shape (`the-torment`, 67 segments). The per-segment
+       `renderedFallbackCharacterId` is the affirmative evidence this tier was
+       missing; `== null` (not truthiness) because the field is `string |
+       null | undefined` and an empty string would BE a substitution record. */
+    it('F1 — is STALE when the segment recorded a render-time narrator substitution', () => {
+      expect(
+        isAudioCurrent(res('normalised-id'), { castHistorySeq: 0 }, history(), 'narrator'),
+      ).toBe(false);
+    });
+    it('F1 — is current when renderedFallbackCharacterId is explicitly null (no substitution)', () => {
+      expect(
+        isAudioCurrent(res('normalised-id'), { castHistorySeq: 0 }, history(), null),
+      ).toBe(true);
+    });
+    it('F1 — is current when renderedFallbackCharacterId is absent (pre-#2023 render, no 4th arg)', () => {
+      expect(isAudioCurrent(res('normalised-id'), { castHistorySeq: 0 }, history())).toBe(true);
+    });
   });
 
   describe('the alias tiers', () => {
