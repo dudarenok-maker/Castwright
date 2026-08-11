@@ -233,6 +233,45 @@ test('main: no manuscript file and no cache → skipped, book stays without a la
   }
 });
 
+// ---------------------------------------------------------------------------
+// #2246 C3 — one corrupt state.json must not abort the whole run.
+// ---------------------------------------------------------------------------
+
+test('main: a corrupt state.json (unparsable, no valid backup) is skipped as unreadable — the run continues past it (#2246 C3)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-corrupt-'));
+  try {
+    const booksRoot = join(tmp, 'books');
+    // The corrupt book: state.json is not valid JSON, and there's no
+    // .bak.N to recover from, so readStateJsonWithRecovery re-throws.
+    const corruptBookDir = join(booksRoot, 'Author', 'Series', 'Corrupt Book');
+    const corruptAudiobookDir = join(corruptBookDir, '.audiobook');
+    mkdirSync(corruptAudiobookDir, { recursive: true });
+    const corruptStatePath = join(corruptAudiobookDir, 'state.json');
+    writeFileSync(corruptStatePath, '{ this is not valid json');
+
+    // A second, healthy book alphabetically AFTER the corrupt one, so the
+    // only way this test can pass is if the run actually continues past
+    // the corrupt book rather than aborting on its throw.
+    const { statePath: healthyStatePath } = makeBook(booksRoot, join('Author', 'Series', 'Zebra Book'), {
+      bookId: 'author__series__zebra-book',
+      manuscriptId: `mns_${randomUUID()}`,
+      title: 'Zebra Book',
+      author: 'Author',
+      language: 'ru', // already has a language — simplest possible "did the run reach it" probe
+    });
+
+    await main(['--apply'], booksRoot);
+
+    // The corrupt book's file is untouched (never even attempted) and the
+    // run reached the healthy book after it.
+    assert.equal(readFileSync(corruptStatePath, 'utf8'), '{ this is not valid json');
+    const healthyWritten = readState(healthyStatePath);
+    assert.equal(healthyWritten.language, 'ru');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('main: dry-run (no --apply) writes nothing at all', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-dry-'));
   try {

@@ -246,7 +246,19 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
     const bookDir = dirname(audiobookDir);
     const bookLabel = relative(booksRoot, bookDir);
     const statePath = stateJsonPath(bookDir);
-    const state = await readStateJsonWithRecovery(statePath);
+    // readStateJsonWithRecovery re-throws the original parse error when the
+    // main state.json is corrupt AND every rotated backup is also corrupt or
+    // missing (state-io.ts) — that's a real, reachable case (one bad book
+    // in a workspace of many), not a reason to abort the entire run. Caught
+    // here so `state` lands `null` the same as the missing-file case below,
+    // rather than letting the parse error propagate and kill every book
+    // after this one.
+    let state: BookStateJson | null;
+    try {
+      state = await readStateJsonWithRecovery(statePath);
+    } catch {
+      state = null;
+    }
     if (!state) {
       unreadable += 1;
       console.log(`  [${bookLabel}] SKIP — state.json unreadable`);
