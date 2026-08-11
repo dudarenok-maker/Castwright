@@ -194,6 +194,21 @@ describe('LanAccessCard', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it('shows the "LAN mode is not active" message on a 409 from createDevicePairSession, without navigating', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError('pair-session failed (409)', 409),
+    );
+    const assign = vi.fn();
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443', assign });
+    render(<LanAccessCard />);
+    fireEvent.click(await screen.findByRole('button', { name: /authorize this browser/i }));
+    expect(
+      await screen.findByText(/lan mode is not active on this server/i),
+    ).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it('shows "manage from desktop" note on 401 from listDevices (no crash)', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
 
