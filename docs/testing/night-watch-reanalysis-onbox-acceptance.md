@@ -247,8 +247,10 @@ Chapter 9 is the calibration point: it aligned at 95% on the old run, ran the fu
 engine, and landed at 488. If the fix works, the other eight chapters should now look
 like chapter 9 rather than like their old selves.
 
-**C2 passes** when every chapter's `flagged` lands near ~500 rather than the 1,200–1,700
-the below-floor chapters produced, and `escalated` is non-zero throughout.
+**C2 passes** when every chapter's confidence<0.75 share (1a) lands at or below **44%**,
+the 1b victim rate lands at or below **4%**, `unresolved` reads alongside `flagged`/
+`alignedPct`/`flagOnly` rather than being read alone, and `escalated` is non-zero
+throughout.
 
 ---
 

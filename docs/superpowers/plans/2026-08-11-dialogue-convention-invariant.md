@@ -1601,10 +1601,18 @@ than assumed.
 | 9 | 1611 | 483 | 30.0% | 483 | 30.0% | 0 |
 
 Book baseline: 15069 / 4258 / 28.3%
-Book post-fix: 15069 / 5110 / 33.9% — delta +852 (expected "roughly 879"; the
-879 figure is the invariant's rescued-line count from the full pipeline, a
-related but not identical measurement to this script's confidence-bucket
-count — the two need not match exactly, and 852 is within "roughly" of 879).
+Book post-fix: 15069 / 5110 / 33.9% — delta **+852**, against the pipeline's
+879 rescued lines. Mechanism, not a discrepancy: `decideNarrationOnly`
+(`server/src/analyzer/dialogue-structure/cross-examine.ts:259-274`) clamps
+the first sentence of a contiguous demoted run to
+`Math.min(CONFIDENCE.NARRATION_DEMOTE, 0.5)` = 0.5, so that sentence was
+already below the 0.75 threshold in the baseline and stays below it (rescued
+at 0.6) post-fix — it is one of the 879 rescued lines but contributes 0 to
+the threshold-crossing delta. `decideTagSpanOnly` always returns 0.9, so
+tag-routed victims do cross and are counted, which is the majority case.
+The gap is therefore structural and one-directional — it can only make the
+delta smaller than 879, never larger — so +852 is the expected shape, not a
+number to re-investigate.
 
 Control check: ch1/2/3/9 delta is **0** each, as required — sanity check
 passed, not BLOCKED.
