@@ -1106,6 +1106,129 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(undoToast.message).not.toMatch(/^Undid "not the same character" for "mayrin"\.$/);
     });
 
+    it('#2161 — targetNotLive names the dead alias target in the Undo toast, instead of reading identically to a full success', async () => {
+      // The sibling of the supersededByOther case above, for the OTHER
+      // reason a forgotten alias can fail to come back: its own target
+      // quietly stopped being live (rather than a newer alias occupying the
+      // slot). Without this, the toast would read exactly like a lossless
+      // undo even though the alias did not come back.
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'mayrin',
+        wasRejected: true,
+        resolution: null,
+        resolvedCharacterId: undefined,
+        removedFrom: ['mayrin'],
+        targetNotLive: ['wren'],
+      });
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      const movedRow = await waitFor(() =>
+        within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/mayrin/)
+          .closest('li'),
+      );
+      const undoButton = within(movedRow!).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(store.getState().notifications.toasts.length).toBeGreaterThanOrEqual(2);
+      });
+      const toasts = store.getState().notifications.toasts;
+      const undoToast = toasts[toasts.length - 1];
+      // Names the dead target and says it was not restored — distinguishable
+      // from the unqualified success message.
+      expect(undoToast).toMatchObject({
+        kind: 'info',
+        message: expect.stringMatching(/"wren".*no longer exists.*not restored/),
+      });
+      expect(undoToast.message).not.toMatch(/^Undid "not the same character" for "mayrin"\.$/);
+    });
+
+    it('#2161 — the ordinary Undo toast carries no "no longer exists" note when targetNotLive is absent (the negative direction)', async () => {
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'mayrin',
+        wasRejected: true,
+        resolution: 'history',
+        resolvedCharacterId: 'marrow',
+        removedFrom: ['mayrin'],
+      });
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      const movedRow = await waitFor(() =>
+        within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/mayrin/)
+          .closest('li'),
+      );
+      const undoButton = within(movedRow!).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(store.getState().notifications.toasts.length).toBeGreaterThanOrEqual(2);
+      });
+      const toasts = store.getState().notifications.toasts;
+      const undoToast = toasts[toasts.length - 1];
+      expect(undoToast.message).not.toMatch(/no longer exists/);
+      expect(undoToast.message).toBe('Undid "not the same character" for "mayrin".');
+    });
+
+    it('#2161 (J1, round 2) — both supersededByOther and targetNotLive present: both notes APPEND in the toast, neither replaces the other', async () => {
+      // A row governing more than one pair (M-6/M-7) can have one restore
+      // skip for a DIFFERENT reason than the other — one pair's stashed
+      // alias was superseded by something newer, another pair's was for a
+      // now-dead target. Pin the ACTUAL joined string, not two isolated
+      // substring checks: a composition bug that lets one note silently
+      // replace the other (e.g. `notes[notes.length - 1]` instead of
+      // `notes.join(...)`) would still satisfy two independent
+      // `toMatch` assertions run against the same string.
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'mayrin',
+        wasRejected: true,
+        resolution: null,
+        resolvedCharacterId: undefined,
+        removedFrom: ['mayrin'],
+        supersededByOther: ['narrator'],
+        targetNotLive: ['wren'],
+      });
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      const movedRow = await waitFor(() =>
+        within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/mayrin/)
+          .closest('li'),
+      );
+      const undoButton = within(movedRow!).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(store.getState().notifications.toasts.length).toBeGreaterThanOrEqual(2);
+      });
+      const toasts = store.getState().notifications.toasts;
+      const undoToast = toasts[toasts.length - 1];
+      // THE ASSERTION THIS TEST EXISTS FOR: the exact joined message, both
+      // notes present, in order, separated by the real join text — not
+      // "contains X" and "contains Y" as two separate checks.
+      expect(undoToast.message).toBe(
+        'Undid "not the same character" for "mayrin"' +
+          ' — its previous alias now points to "Narrator", so that was left as-is' +
+          '; and its previous alias ("wren") no longer exists, so it was not restored.',
+      );
+    });
+
     it("review round 3 (I-B) — the notLinkedTo redux mirror is removed by the server's removedFrom, not by orphanedId, when the two differ", async () => {
       // Simulates the resolver's normalised-tier collision shape
       // (`the_torment`/`The-Torment`, cast-resolve.ts's

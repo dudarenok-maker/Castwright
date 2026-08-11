@@ -26,6 +26,7 @@ import { withCastLock } from '../workspace/cast-lock.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { retireCharacterId } from '../store/cast-id-history.js';
+import { clearNotLinkedEdgesForDroppedRejectionsLocked } from '../store/not-linked-edges.js';
 import { normaliseForMatch } from './analysis.js';
 import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
@@ -228,31 +229,32 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        sites. */
     try {
       const historyResult = await retireCharacterId(bookDir, sourceId, targetId);
-      /* #2133 — a reject's two writes (the `rejectedPairs` entry on
+      /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
          cast-id-history.json and the one-sided `notLinkedTo` edge on
          cast.json) are created together and must be destroyed together (see
          `docs/features/278-cast-character-identity.md`'s invariant of the
          same name). `retireCharacterId` reports a dropped self-loop pair but
          never touches cast.json itself — this merge already holds the cast
          lock and has `nextCharacters` (the roster just persisted above) in
-         hand, so the cleanup is a plain in-place mutation plus a second write
-         in the SAME lock span, not a new `withCastLock` call (rule 1: a
-         locked function must not call another locked function on the same
-         book). Best-effort, mirroring the retirement write itself: a
-         surviving stale edge merely re-suppresses one future §4.4 name-match
-         rather than corrupting anything already on disk. */
+         hand, so the cleanup uses the LOCK-FREE
+         `clearNotLinkedEdgesForDroppedRejectionsLocked` (`store/not-linked-
+         edges.ts`) — a plain in-place mutation, no fs of its own — plus a
+         second write in the SAME lock span, not a new `withCastLock` call
+         (rule 1: a locked function must not call another locked function on
+         the same book). This is the third copy #2239 retired: the shared
+         module's locked-vs-lock-free pair replaces this merge's own inline
+         mutation loop, which used to hand-duplicate the logic
+         `clearNotLinkedEdgesForDroppedRejections` performs for its two
+         unlocked callers (`analysis.ts`, `cast-link-orphan.ts`). Best-effort,
+         mirroring the retirement write itself: a surviving stale edge merely
+         re-suppresses one future §4.4 name-match rather than corrupting
+         anything already on disk. */
       if (historyResult.droppedSelfLoopRejections.length) {
-        const deadIds = new Set(historyResult.droppedSelfLoopRejections.map((p) => p.from));
-        let notLinkedChanged = false;
-        for (const character of nextCharacters) {
-          const existing = character.notLinkedTo ?? [];
-          if (!existing.length) continue;
-          const next = existing.filter((p) => !(p.bookId === bookId && deadIds.has(p.characterId)));
-          if (next.length !== existing.length) {
-            character.notLinkedTo = next;
-            notLinkedChanged = true;
-          }
-        }
+        const notLinkedChanged = clearNotLinkedEdgesForDroppedRejectionsLocked(
+          nextCharacters,
+          bookId,
+          historyResult.droppedSelfLoopRejections,
+        );
         if (notLinkedChanged) {
           await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
         }

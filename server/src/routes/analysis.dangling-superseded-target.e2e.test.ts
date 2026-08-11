@@ -403,7 +403,8 @@ describe('#2110 — dangling supersededBy target: retirement -> re-analysis drop
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         clearPhase1Selection();
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -501,7 +502,8 @@ describe('#2110 — dangling supersededBy target: retirement -> re-analysis drop
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         clearPhase1Selection();
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,

@@ -6,7 +6,54 @@
 
    The supersededBy map is transitive: if a→b then b→c, both a and b
    map to c for O(1) resolution without chasing — regardless of which of
-   the two retirements is recorded first. */
+   the two retirements is recorded first.
+
+   #2161/#2268 — why a REFUSED `forgotSupersededTo` restore files into
+   `displaced` rather than being discarded (round 3, reversing an earlier,
+   wrong version of this same paragraph — see below for why it was wrong).
+   Answered here, once, for a future reader about to make the same mistake.
+
+   `displaced` is keyed BY THE RETIRED ID, not by what it used to resolve
+   to — `history.displaced[entry.id] = entry.supersededBy`
+   (`dropSupersededIdsReclaimedByLiveCast`/`dropSupersededTargetsNoLongerLive`
+   below), and `cast-create.ts` reads `Object.keys(history.displaced)` as
+   its taken-id set. That is the whole mechanism: filing `displaced[id] =
+   target` reserves `id` — never `target` — against a bare re-mint.
+
+   `forgotSupersededTo` (on `RejectedPair`, below) stashes the
+   `supersededBy[from]` value `forgetSupersededId` removed at reject time,
+   so `unrejectOrphanedPair`/`undoRejectedPairs` can restore it later (D6).
+   `applyRestoreSupersededId` (#2161) refuses to write that stash back once
+   its own target has quietly stopped being live — writing it would
+   reintroduce the exact dangling `supersededBy` entry #2110 exists to
+   prevent. What a refused restore actually IS, at that point, is a
+   `supersededBy` association (`from → target`) that lost its target before
+   it could be re-established — precisely `displaced`'s stated meaning, not
+   a stretch of it. Filing `displaced[from] = target` (`from` is `id` in
+   `applyRestoreSupersededId`'s own parameter names) reserves exactly the id
+   this refusal puts at risk: `from` is no longer in `supersededBy` (nothing
+   was written), no longer has a governing `rejectedPairs` entry (the same
+   Undo call removes it unconditionally, regardless of whether the restore
+   itself succeeded), and — before this fix — was in `displaced` only if
+   some UNRELATED drop happened to have filed it there. A bare re-mint of
+   `from` would then resolve every segment still carrying it straight onto
+   the new, unrelated character — the #2040 misattribution class, reached
+   by re-mint instead of a dangling `supersededBy` key.
+
+   The earlier version of this paragraph (round 1) reasoned about the wrong
+   id: it treated `displaced` as reserving `target` — the dead id — and
+   discarded the stash on the theory that reserving a genuinely-cut
+   character's id was undesirable. `displaced` reserves the KEY, not the
+   value; the id actually at risk of hijack is `from`, which the discard
+   left unreserved in every one of the four post-Undo states. That
+   misreading is why the decision reverses here rather than merely gaining
+   an exception.
+
+   No residual beyond what `displaced` already carries generally (#2040
+   Task 14 review item 2b — entries accumulate and are never pruned once
+   filed, the same for every `displaced` writer in this module, not
+   specific to this refusal case). There is no separate hazard this
+   refusal's `displaced` write leaves open. */
 
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -18,7 +65,9 @@ export interface CastIdHistory {
   /** #2040 Task 14 review item 2b — ids dropped from `supersededBy` because a
    *  fresh roster reclaimed the KEY as a live cast id
    *  (`dropSupersededIdsReclaimedByLiveCast`), OR because the entry's TARGET
-   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110)
+   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110),
+   *  OR because a refused `forgotSupersededTo` restore put an orphaned
+   *  association at risk of hijack (`applyRestoreSupersededId`, #2161)
    *  — keyed the same way `supersededBy` was before the drop (id -> what it
    *  used to resolve to). This is the only surviving record of that pair
    *  once the drop runs — losing it would mean every book that re-analyses
@@ -135,7 +184,13 @@ export interface RejectedPair {
   /** The `supersededBy[from]` target `forgetSupersededId` removed at reject
    *  time, if any. Absent when there was nothing to forget (e.g. `from` only
    *  ever matched through a normalised tier, which has no `supersededBy`
-   *  entry to begin with). */
+   *  entry to begin with).
+   *
+   *  Historical record, not necessarily still true: the character this names
+   *  can itself quietly stop being live before Undo is ever clicked (#2161,
+   *  the same unvoiced-drop mechanism #2110 closed for `supersededBy`
+   *  itself). `applyRestoreSupersededId` is what checks liveness before
+   *  writing this value back — see its own doc comment. */
   forgotSupersededTo?: string;
 }
 
@@ -876,16 +931,26 @@ export async function forgetSupersededId(
  *  write, so a mid-loop failure leaves a half-completed state that blinds the
  *  retry. Batch callers use `undoRejectedPairs`.
  */
+/** `liveIds` (#2161) — the caller's current live cast roster. Required, not
+ *  optional: a caller that forgets to pass its roster would otherwise
+ *  silently reopen the hazard this parameter exists to close (see
+ *  `applyRestoreSupersededId`'s own doc comment for the mechanism). */
 export async function restoreSupersededId(
   bookDir: string,
   id: string,
   target: string,
-): Promise<{ restored: boolean; supersededByOther?: string }> {
+  liveIds: ReadonlyArray<string>,
+): Promise<{ restored: boolean; supersededByOther?: string; targetNotLive?: boolean }> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
-    const { result, changed, touchedKeys } = applyRestoreSupersededId(history, id, target);
+    const { result, changed, touchedKeys } = applyRestoreSupersededId(
+      history,
+      id,
+      target,
+      new Set(liveIds),
+    );
     if (changed) {
       bumpSeqAndStamp(history, touchedKeys);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
@@ -918,22 +983,76 @@ export async function restoreSupersededId(
  *  behaviour is correct BY the explicit list, not by relying on the
  *  self-heal loop as the only mechanism — a future refactor that trims or
  *  reorders `bumpSeqAndStamp`'s reconcile loops must not assume nothing here
- *  depends on the back-fill still running. */
+ *  depends on the back-fill still running.
+ *
+ *  `liveIds` (#2161) — the caller's current live cast roster, the SAME
+ *  determination `dropSupersededTargetsNoLongerLive` already makes for
+ *  `supersededBy` itself (`live.has(target)`), reused here rather than
+ *  invented a second way for `restoreSupersededId`/`undoRejectedPairs` to
+ *  answer "is this id still live". Closes #2161: `target` is only ever
+ *  about to be WRITTEN into `supersededBy[id]` in the branch below (the
+ *  other two branches above already return without touching disk), so this
+ *  is the one place a stale `forgotSupersededTo` could reintroduce the
+ *  dangling-target shape #2110 closed for `supersededBy` — a character
+ *  retired and referenced from a `rejectedPairs` stash, then quietly
+ *  dropped from the live roster by a later re-analysis with no retirement
+ *  ever recorded for the drop. SURFACED, not thrown: the pair removal is
+ *  Undo's primary consequence and still happens regardless (see this
+ *  function's two callers) — mirrors the existing `supersededByOther`
+ *  branch just above, which already skips-and-reports rather than failing
+ *  the whole undo over a value it declines to write. */
 function applyRestoreSupersededId(
   history: CastIdHistory,
   id: string,
   target: string,
+  liveIds: ReadonlySet<string>,
 ): {
-  result: { restored: boolean; supersededByOther?: string };
+  result: { restored: boolean; supersededByOther?: string; targetNotLive?: boolean };
   changed: boolean;
   touchedKeys: string[];
 } {
   const existing = history.supersededBy[id];
+  /* [H2] — deliberately no `liveIds` check on THIS branch: it is idempotent
+     (the desired end state — `supersededBy[id] === target` — already holds),
+     so it writes nothing and there is nothing for the #2161 liveness guard
+     below to protect against. A caller cannot reach this branch with a
+     `target` that is genuinely dangling without that same dangling entry
+     already having been written by some EARLIER call — this function
+     reports the existing state honestly rather than re-litigating a write
+     that already happened. */
   if (existing === target) {
     return { result: { restored: true }, changed: false, touchedKeys: [] };
   }
   if (existing !== undefined) {
     return { result: { restored: false, supersededByOther: existing }, changed: false, touchedKeys: [] };
+  }
+  if (!liveIds.has(target)) {
+    console.warn(
+      `[cast-id-history] restoreSupersededId("${id}" -> "${target}") skipped — "${target}" is no ` +
+        `longer a live cast id; writing it back would reintroduce a dangling supersededBy target (#2110's ` +
+        `hazard, reopened through a stale forgotSupersededTo stash). The rejection is still undone; only ` +
+        `this alias restore was refused. Filed into displaced[id] to keep "${id}" reserved against re-mint.`,
+    );
+    /* [K1] (round 3) — file into `displaced`, not discard: `displaced` is
+       keyed by the id AT RISK of re-mint (`id`, i.e. the pair's `from`), not
+       by its target — see this file's own module doc comment for the full
+       reasoning (#2268, reversed from an earlier, wrong rationale). Without
+       this, `id` ends up in NONE of `cast-create.ts`'s taken-id sets (not
+       `supersededBy` — nothing was written there; not `displaced` — nothing
+       filed here, before this fix; not `rejectedPairs[].from` — the pair was
+       just removed by the same Undo), so a bare re-mint of `id` resolves the
+       OLD segments straight onto the NEW, unrelated character. Same
+       `displaced` merge shape `dropSupersededIdsReclaimedByLiveCast`/
+       `dropSupersededTargetsNoLongerLive` already use for a dropped
+       `supersededBy` entry. `touchedKeys` stays empty — this write never
+       touches `supersededBy`, so it must not be stamped as though it did
+       (`bumpSeqAndStamp`'s reconcile loop keys off `supersededBy` alone); a
+       phantom `recordedAtSeq` entry for a key absent from `supersededBy`
+       would be stamped then immediately deleted by that same loop — wasted,
+       not harmful, but `changed: true` is what actually matters here so the
+       caller persists the write at all. */
+    history.displaced = { ...(history.displaced ?? {}), [id]: target };
+    return { result: { restored: false, targetNotLive: true }, changed: true, touchedKeys: [] };
   }
   history.supersededBy[id] = target;
   return { result: { restored: true }, changed: true, touchedKeys: [id] };
@@ -1099,9 +1218,10 @@ function applyUnrejectOrphanedPair(
  *  A pair with `forgotSupersededTo === undefined` contributes no alias
  *  restore (mirrors the pre-#2198 loop's `continue`) — only its
  *  `rejectedPairs` removal happens. `restored` on that pair's result is
- *  `true` (nothing blocked it): the field's only `false` case is a NEWER
- *  alias occupying `supersededBy[from]`, which cannot happen when no restore
- *  was attempted at all.
+ *  `true` (nothing blocked it): the field's `false` cases — a NEWER alias
+ *  occupying `supersededBy[from]`, or (#2161) the stashed target quietly no
+ *  longer being live — can only arise from an ATTEMPTED restore, so neither
+ *  applies when no restore was attempted at all.
  *
  *  If nothing in the batch changes anything (every pair already absent, no
  *  alias needed restoring), no write happens at all — same idempotent-write
@@ -1109,19 +1229,33 @@ function applyUnrejectOrphanedPair(
 export interface UndoRejectedPairResult {
   from: string;
   to: string;
-  /** false only when a NEWER alias already occupies supersededBy[from]. */
+  /** false when a NEWER alias already occupies supersededBy[from] (see
+   *  `supersededByOther`), OR when the stashed target has quietly stopped
+   *  being live (#2161, see `targetNotLive`). */
   restored: boolean;
   supersededByOther?: string;
+  /** #2161 — true when the restore was refused because `forgotSupersededTo`
+   *  no longer names a live cast id (the #2110 hazard, reopened through a
+   *  stale stash — see `applyRestoreSupersededId`'s own doc comment). The
+   *  pair is still removed regardless; only the alias restore was skipped.
+   *  A `displaced` entry is filed to reserve the orphaned id. */
+  targetNotLive?: boolean;
 }
 
+/** `liveIds` (#2161) — the caller's current live cast roster, threaded into
+ *  every pair's restore via `applyRestoreSupersededId`. Required for the
+ *  same reason `restoreSupersededId` requires it: see that function's own
+ *  doc comment. */
 export async function undoRejectedPairs(
   bookDir: string,
   pairs: ReadonlyArray<{ from: string; to: string; forgotSupersededTo?: string }>,
+  liveIds: ReadonlyArray<string>,
 ): Promise<UndoRejectedPairResult[]> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
+    const live = new Set(liveIds);
     const results: UndoRejectedPairResult[] = [];
     /* #2128 — the tenth write site (P1). Each pair's `applyRestoreSupersededId`
        reports the `supersededBy` keys IT touched; accumulated here and stamped
@@ -1134,10 +1268,12 @@ export async function undoRejectedPairs(
     for (const pair of pairs) {
       let restored = true;
       let supersededByOther: string | undefined;
+      let targetNotLive: boolean | undefined;
       if (pair.forgotSupersededTo !== undefined) {
-        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo);
+        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo, live);
         restored = applied.result.restored;
         supersededByOther = applied.result.supersededByOther;
+        targetNotLive = applied.result.targetNotLive;
         if (applied.changed) changed = true;
         /* Review round 1 (I1 follow-up) — confirmed by mutation testing that
            dropping this accumulation is UNOBSERVABLE by any test today: the
@@ -1156,11 +1292,13 @@ export async function undoRejectedPairs(
       }
       const { changed: unrejectChanged } = applyUnrejectOrphanedPair(history, pair.from, pair.to);
       if (unrejectChanged) changed = true;
-      results.push(
-        supersededByOther === undefined
-          ? { from: pair.from, to: pair.to, restored }
-          : { from: pair.from, to: pair.to, restored, supersededByOther },
-      );
+      results.push({
+        from: pair.from,
+        to: pair.to,
+        restored,
+        ...(supersededByOther === undefined ? {} : { supersededByOther }),
+        ...(targetNotLive === undefined ? {} : { targetNotLive }),
+      });
     }
     if (changed) {
       bumpSeqAndStamp(history, touchedKeys);

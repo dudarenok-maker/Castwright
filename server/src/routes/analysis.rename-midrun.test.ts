@@ -288,7 +288,8 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
         seed.releasePhase0();
         if (jobPromise) await jobPromise.catch(() => {});
         removeManuscript(seed.manuscriptId);
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
 
       /* POSITIVE CONTROL FIRST. `renameWithRetry` carried the seeded cast.json to
@@ -343,7 +344,8 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
         seed.releasePhase0();
         if (jobPromise) await jobPromise.catch(() => {});
         removeManuscript(seed.manuscriptId);
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
 
       expect(existsSync(analysisStateJsonPath(seed.newDir))).toBe(true);

@@ -280,7 +280,7 @@ describe('#2128 — the two hazard scenarios', () => {
     await retireCharacterId(dir, 'mayrin', 'mairin'); // seq 1, mayrin@1
     await forgetSupersededId(dir, 'mayrin'); // seq 2
     const renderedWithNoAlias = { castHistorySeq: 2 }; // narrator bytes
-    await restoreSupersededId(dir, 'mayrin', 'mairin'); // seq 3, mayrin@3
+    await restoreSupersededId(dir, 'mayrin', 'mairin', ['mairin']); // seq 3, mayrin@3
     const h = await loadCastIdHistory(dir);
 
     expect(isAudioCurrent(res('history', ['mayrin']), renderedWithNoAlias, h)).toBe(false);

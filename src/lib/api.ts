@@ -4639,7 +4639,24 @@ export interface UndoRejectOrphanMatchResponse {
       removed pair can each skip independently. The mock never sets this
       (it has no `supersededBy` state to conflict with). */
   supersededByOther?: string[];
+  /** #2161 — the sibling refusal case: set (non-empty) when one or more
+      removed pairs had a forgotten `supersededBy` alias to restore, but the
+      restore was REFUSED because that alias's own target has quietly
+      stopped being a live cast id since the original reject (see the
+      server route's own doc comment). Each entry is the dead target id.
+      `mockUndoRejectOrphanMatch` sets this for the
+      `MOCK_TARGET_NOT_LIVE_ORPHANED_ID` sentinel orphaned id, for e2e
+      coverage — see its own comment. */
+  targetNotLive?: string[];
 }
+
+/** #2161 — e2e sentinel: `mockUndoRejectOrphanMatch` reports this exact id
+    as the dead target of a refused alias restore whenever the row being
+    undone is THIS orphaned id, giving `test:e2e` a deterministic way to
+    drive the "the toast must not claim success" path without a real
+    `cast-id-history.json` on disk (mock mode has none). Not a real
+    character id — chosen to read unambiguously as a fixture in a toast. */
+export const MOCK_TARGET_NOT_LIVE_ORPHANED_ID = 'orphan-with-dead-alias-target';
 
 async function realUndoRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
@@ -4684,6 +4701,23 @@ export async function mockUndoRejectOrphanMatch(
     };
   }
   mockRejectedOrphanPairs.delete(key);
+  /* #2161 — the `MOCK_TARGET_NOT_LIVE_ORPHANED_ID` sentinel simulates the
+     server refusing to restore a forgotten alias because its own target
+     has quietly stopped being live, so `test:e2e` (mock mode, no real
+     cast-id-history.json to seed) can still drive the "the toast must not
+     claim success" path deterministically. Every other orphanedId keeps
+     the ordinary canned-success shape below. */
+  if (args.orphanedId === MOCK_TARGET_NOT_LIVE_ORPHANED_ID) {
+    return {
+      characterId: args.characterId,
+      orphanedId: args.orphanedId,
+      wasRejected: true,
+      resolution: null,
+      resolvedCharacterId: undefined,
+      removedFrom: [args.orphanedId],
+      targetNotLive: ['ghost-alias-target'],
+    };
+  }
   /* Mock mode has no real resolver either, so it assumes the common/lossless
      case: undo restores resolution onto the same `characterId` the reject
      had blocked (a 'history' match — collapses to 'alias' in the frontend's

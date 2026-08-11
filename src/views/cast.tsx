@@ -663,12 +663,28 @@ export function CastView({
       const otherNames = (res.supersededByOther ?? []).map(
         (id) => characters.find((c) => c.id === id)?.name ?? id,
       );
+      /* #2161 — the sibling of the C1 note just above, for the other reason
+         a forgotten alias can fail to come back: its own target quietly
+         stopped being a live cast id (rather than being superseded by a
+         DIFFERENT newer one). Without this, the toast read identically to a
+         fully successful undo, silently implying the alias came back when
+         it did not. */
+      const deadTargetIds = res.targetNotLive ?? [];
       const removedFrom = res.removedFrom ?? [];
       const multiNote =
         removedFrom.length > 1 ? ` (undid ${removedFrom.length} rejected spellings of this id)` : '';
-      const aliasNote = otherNames.length
-        ? ` — its previous alias now points to ${otherNames.map((n) => `"${n}"`).join(' / ')}, so that was left as-is.`
-        : '.';
+      const notes: string[] = [];
+      if (otherNames.length) {
+        notes.push(
+          `its previous alias now points to ${otherNames.map((n) => `"${n}"`).join(' / ')}, so that was left as-is`,
+        );
+      }
+      if (deadTargetIds.length) {
+        notes.push(
+          `its previous alias (${deadTargetIds.map((id) => `"${id}"`).join(' / ')}) no longer exists, so it was not restored`,
+        );
+      }
+      const aliasNote = notes.length ? ` — ${notes.join('; and ')}.` : '.';
       const message = `Undid "not the same character" for "${orphanedId}"${multiNote}${aliasNote}`;
       dispatch(
         notificationsActions.pushToast({

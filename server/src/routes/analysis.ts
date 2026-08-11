@@ -131,6 +131,7 @@ import {
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
+import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -280,55 +281,10 @@ export async function recordRetirements(
   }
 }
 
-/* #2133 — a reject's two writes (the `rejectedPairs` entry on
-   cast-id-history.json and the one-sided `notLinkedTo` edge on cast.json)
-   are created together and must be destroyed together (see
-   `docs/features/278-cast-character-identity.md`'s invariant of the same
-   name). `retireCharacterId` reports a dropped self-loop pair
-   (`droppedSelfLoopRejections`) but never touches cast.json itself — this is
-   the caller-side half: a fresh read-through-write on cast.json, wrapped in
-   its OWN `withCastLock` (none of `recordRetirements`' callers in this file
-   hold one for this book already — the only `withCastLock` in this file
-   guards the unrelated "Start fresh" cast.json delete). Best-effort: a
-   failure here must not fail the retirement itself, mirroring every other
-   id-history write in this file — the side-table is never authoritative for
-   identity, and a surviving stale edge merely re-suppresses one future
-   §4.4 name-match rather than corrupting anything already on disk. */
-export async function clearNotLinkedEdgesForDroppedRejections(
-  bookDir: string,
-  bookId: string,
-  dropped: ReadonlyArray<{ from: string; to: string }>,
-): Promise<void> {
-  const deadIds = new Set(dropped.map((p) => p.from));
-  try {
-    await withCastLock(bookDir, async () => {
-      const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
-      if (!cast?.characters?.length) return;
-      let changed = false;
-      for (const character of cast.characters) {
-        const existing = character.notLinkedTo ?? [];
-        if (!existing.length) continue;
-        const next = existing.filter((p) => !(p.bookId === bookId && deadIds.has(p.characterId)));
-        if (next.length !== existing.length) {
-          character.notLinkedTo = next;
-          changed = true;
-        }
-      }
-      if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
-      }
-    });
-  } catch (err) {
-    console.warn(
-      '[analysis] failed to clear a dropped-rejection notLinkedTo edge (non-fatal)',
-      err,
-    );
-  }
-}
-
 /* #2166 — the per-persist half of the reject-edge invariant. Its sibling
-   above (`clearNotLinkedEdgesForDroppedRejections`, #2133) is PER-RETIREMENT
-   and driven by `droppedSelfLoopRejections`; this one is PER-PERSIST and
+   (`clearNotLinkedEdgesForDroppedRejections`, #2133 — moved to
+   `store/not-linked-edges.ts` by #2239) is PER-RETIREMENT and driven by
+   `droppedSelfLoopRejections`; this one is PER-PERSIST and
    derived purely from state, which is what lets it heal a reject that failed
    between its two writes — a state no retirement ever reports. The two are
    compatible in either order: after the #2133 helper runs, pair and edge are

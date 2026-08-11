@@ -338,7 +338,8 @@ describe('spawnSidecar', () => {
       expect(calls[1].cmd).toBe('powershell.exe'); // fresh spawn happened
       expect(handle).not.toBeNull();
     } finally {
-      process.env.NODE_ENV = prev;
+      if (prev === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prev;
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     }
   });
@@ -399,7 +400,8 @@ describe('spawnSidecar', () => {
     } finally {
       if (prevRestart === undefined) delete process.env.SIDECAR_RESTART_MB;
       else process.env.SIDECAR_RESTART_MB = prevRestart;
-      process.env.NODE_ENV = prevNodeEnv;
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     }
   });
@@ -441,7 +443,8 @@ describe('spawnSidecar', () => {
     } finally {
       if (prevRestart === undefined) delete process.env.SIDECAR_RESTART_MB;
       else process.env.SIDECAR_RESTART_MB = prevRestart;
-      process.env.NODE_ENV = prevNodeEnv;
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
     }
   });
 
@@ -479,7 +482,8 @@ describe('spawnSidecar', () => {
       expect(spawnFn).not.toHaveBeenCalled();
       expect(res).toBeNull(); // adopt path returns null (no owned child)
     } finally {
-      process.env.NODE_ENV = prev;
+      if (prev === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prev;
     }
   });
 
