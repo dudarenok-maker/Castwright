@@ -128,7 +128,7 @@ jobs:
             }
 
             if (-not $ffmpegOk) {
-              Write-Host "Attempt $attempt/$maxAttempts: choco reported success but ffmpeg is not runnable (a transient Chocolatey feed error is the likely cause -- see the choco output above). Trying the winget fallback."
+              Write-Host "Attempt $attempt/${maxAttempts}: choco reported success but ffmpeg is not runnable (a transient Chocolatey feed error is the likely cause -- see the choco output above). Trying the winget fallback."
               if (Get-Command winget -ErrorAction SilentlyContinue) {
                 try {
                   winget install --id Gyan.FFmpeg --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
@@ -154,7 +154,7 @@ jobs:
               Write-Host "ffmpeg verified working (attempt $attempt/$maxAttempts)."
               exit 0
             }
-            Write-Host "Attempt $attempt/$maxAttempts: ffmpeg is still not runnable after choco and the winget fallback."
+            Write-Host "Attempt $attempt/${maxAttempts}: ffmpeg is still not runnable after choco and the winget fallback."
             if ($attempt -lt $maxAttempts) {
               Start-Sleep -Seconds 15
             }
