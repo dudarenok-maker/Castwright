@@ -907,10 +907,20 @@ export async function generatePersonaViaOllama(
      it without replacing it would have traded a wrong diagnosis for a deadlock.
      Ceiling matches design-voice-core.ts's DESIGN_ABSOLUTE_MAX_MS — the same
      "a big local model on CPU is slow but not infinite" judgement. */
-  const budget = AbortSignal.timeout(opts.absoluteMaxMs ?? PERSONA_ABSOLUTE_MAX_MS);
-  const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
-
   const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
+  /* Start the clock AFTER the semaphore, not before: AbortSignal.timeout
+     cannot be paused, so building it above the acquire charges FIFO queue
+     time to the request. With K=2 held by two slow chapter calls, a persona
+     request could exhaust its whole budget waiting and then reject without
+     sending a byte — reported as a bare "operation was aborted due to
+     timeout" naming neither daemon nor model, about an Ollama that never saw
+     it. undici's implicit clock started at socket dispatch too, so this also
+     keeps the replacement bound faithful to what it replaced. */
+  const maxMs = opts.absoluteMaxMs && opts.absoluteMaxMs > 0
+    ? opts.absoluteMaxMs
+    : PERSONA_ABSOLUTE_MAX_MS;
+  const budget = AbortSignal.timeout(maxMs);
+  const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
   try {
     let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {

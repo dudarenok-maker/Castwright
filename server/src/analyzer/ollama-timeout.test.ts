@@ -26,6 +26,7 @@ import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from 'undici';
+import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
 import {
   OllamaAnalyzer,
   LocalUnreachableError,
@@ -174,6 +175,16 @@ describe('OllamaAnalyzer fetch timeout', () => {
          crucially not swallowed into LocalUnreachableError, which would
          reroute a healthy local daemon to the cloud. */
       expect(err).not.toBeInstanceOf(LocalUnreachableError);
+
+      /* The ACTUAL harm this guards: the slot is taken before the await and
+         released only in the `finally`, so a hang would leak a token from the
+         bounded analyzer semaphore and silently starve every later analyzer
+         call. Prove the token came back — this resolves only if it did. */
+      const release = await Promise.race([
+        acquireAnalyzerSlot('qwen3.5:9b', true).then(() => 'acquired' as const),
+        new Promise<'starved'>((r) => setTimeout(() => r('starved'), 5_000)),
+      ]);
+      expect(release, 'the analyzer slot must be released on the timeout path').toBe('acquired');
     } finally {
       if (prevUrl === undefined) delete process.env.OLLAMA_URL;
       else process.env.OLLAMA_URL = prevUrl;

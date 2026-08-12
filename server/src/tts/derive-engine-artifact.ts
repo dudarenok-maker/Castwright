@@ -129,7 +129,7 @@ export async function deriveEngineArtifact(
       (s) =>
         undiciFetch(target, {
           method: 'POST',
-          signal: s ?? bounded,
+          signal: s,
           headers,
           body: input.masterPcm,
           dispatcher: DERIVE_DISPATCHER,

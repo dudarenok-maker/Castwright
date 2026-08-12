@@ -27,6 +27,20 @@ vi.mock('./sidecar-supervisor.js', async (importOriginal) => {
 
 import { ensureSidecarEngineReady, reconcileResidentQwenTiers } from './ensure-sidecar-loaded.js';
 
+/* reconcileResidentQwenTiers' /unload moved to undici's fetch — it needs
+   UNLOAD_DISPATCHER plus its own ceiling, because that call waits on the
+   sidecar's `_synth_lock` and neither production caller supplies a signal.
+   Delegating undici's fetch to whatever this file stubs globally keeps every
+   existing stub and assertion working across both transports. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) =>
+      (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
+
 const realFetch = global.fetch;
 afterEach(() => {
   global.fetch = realFetch;
