@@ -456,3 +456,54 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
     expect(speechOf('‘Don’t you ‘dare’ leave,’ she said.')).toEqual(['Don’t you ‘dare']);
   });
 });
+
+// Salvaged from blocked PR #2286 (source commit b5e7a365): only the cases that
+// pass against the SHIPPED lang tables, with no table change of any kind. That
+// PR widens several languages' quotePairs; those widened-table cases stay
+// there and are NOT reproduced here. `de` is the one language #2286 concluded
+// should gain nothing from its table widening — every candidate opener it
+// tried (ASCII same-glyph, curly, Swiss) let a „ run extend past the next
+// turn's opener and swallow it, per #1601 — so these three pin the shipped,
+// unwidened `de` table against exactly the counter-examples that sank the
+// widening attempt.
+describe('parser — #2288 de gains no opener from #2279 (counter-examples, PR #2286 salvage)', () => {
+  const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, deIdx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('#2288: de + ASCII-quoted sign — a turn pair around it keeps BOTH turns', () => {
+    const body = '„Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.';
+    expect(speechOf(body)).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + curly-opened sign — a „…” turn pair around a “-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag”, sagte er. Das Schild sagte “Zu". „Und du?”, fragte sie.';
+    expect(speechOf(body)).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + Swiss-opened sign — a „…“ / »…« turn pair around a «-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag“, sagte er. Das Schild sagte «Zu". »Und du?«, fragte sie.';
+    expect(speechOf(body)).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de carries no opener beyond „ and » — the exclusion IS the fix', () => {
+    expect(new Set(conventionsFor('de')!.quotePairs.map(([o]) => o))).toEqual(new Set(['„', '»']));
+  });
+});
+
+describe('parser — #2288 deep nesting stays one turn (design-alternative pin)', () => {
+  // This is the shape that killed the rejected convention-election design
+  // alternative during the #2288 design pass — it collapsed into four
+  // fragments instead of one turn. The shipped design (an apostrophe is not a
+  // closing quote, plus never-delete-a-run) cannot regress it, which is
+  // exactly why it is worth pinning now, ahead of the next attempt at #2286.
+  it('an outer double-quoted turn containing THREE inner single-quoted phrases stays one turn', () => {
+    const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+    const body = '“He said ‘hi’ and ‘bye’ and ‘hi’ to me,” she reported.';
+    const speech = parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+    expect(speech).toEqual(['He said ‘hi’ and ‘bye’ and ‘hi’ to me,']);
+  });
+});

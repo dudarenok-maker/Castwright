@@ -28,7 +28,7 @@ describe('conventionsFor', () => {
     expect(en.nameStemmer('halloran')).toBe('halloran');
   });
   it('quotePairs has no collapsed duplicate pairs for any supported language', () => {
-    for (const lang of ['ru', 'en', 'es', 'fr', 'de']) {
+    for (const lang of ['ru', 'en', 'es', 'fr', 'de', 'zh', 'ja']) {
       const c = conventionsFor(lang)!;
       const seen = new Set<string>();
       for (const [open, close] of c.quotePairs) {
