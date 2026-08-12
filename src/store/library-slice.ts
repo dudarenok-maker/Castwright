@@ -12,13 +12,14 @@ export interface LibraryState {
   /** Non-null when the most recent library fetch failed. Carries the HTTP
    *  status so the books view can offer a recovery path for a 401 instead of
    *  printing the server's raw text. Cleared on a successful hydrate.
-   *  `fromServer` (#2278 review round 3, Finding 3) is true only when
-   *  `message` came from the server's own JSON `{error}` body
-   *  (ApiError.fromServer, src/lib/api.ts) — book-library.tsx's 401 branch
-   *  prefers that server message over its own composed recoveryHint() only
-   *  when this is true, so a synthetic "Library scan failed (401)" fallback
-   *  string never displaces the client-side hint that actually has something
-   *  to say. */
+   *  `fromServer` is true only when `message` came from the server's own JSON
+   *  `{error}` body (ApiError.fromServer, src/lib/api.ts). It selects WHICH
+   *  pointer follows book-library.tsx's 401 explanation — the server's
+   *  live-port guidance when true, recoveryHint() otherwise — and never
+   *  whether that explanation renders: the "no longer authorized" sentence
+   *  is unconditional (#2278 review round 4). Without the flag a synthetic
+   *  "Library scan failed (401)" would displace a hint that actually has
+   *  something to say. */
   error: { message: string; status?: number; fromServer?: boolean } | null;
   authors: LibraryResponse['authors'];
   /** Flat denormalised list for quick lookup by bookId. */
