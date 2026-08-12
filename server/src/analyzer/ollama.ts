@@ -916,12 +916,15 @@ export async function generatePersonaViaOllama(
      timeout" naming neither daemon nor model, about an Ollama that never saw
      it. undici's implicit clock started at socket dispatch too, so this also
      keeps the replacement bound faithful to what it replaced. */
-  const maxMs = opts.absoluteMaxMs && opts.absoluteMaxMs > 0
-    ? opts.absoluteMaxMs
-    : PERSONA_ABSOLUTE_MAX_MS;
-  const budget = AbortSignal.timeout(maxMs);
-  const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
   try {
+    /* Built INSIDE the try: AbortSignal.timeout/any can throw (ERR_OUT_OF_RANGE
+       on a bad ceiling, TypeError on a non-signal), and the slot is already
+       held by this point — anything that throws between the acquire and the
+       try would leak it, which is the exact harm the regression test guards. */
+    const maxMs =
+      opts.absoluteMaxMs && opts.absoluteMaxMs > 0 ? opts.absoluteMaxMs : PERSONA_ABSOLUTE_MAX_MS;
+    const budget = AbortSignal.timeout(maxMs);
+    const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
     let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {
       /* Same ANALYZER_DISPATCHER as chat(), and this call needs it MORE:

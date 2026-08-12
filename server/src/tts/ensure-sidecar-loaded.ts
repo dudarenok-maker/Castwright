@@ -205,13 +205,20 @@ export async function ensureSidecarEngineReady(
    bogus `true` makes withCapacityRetry burn a retry attempt on an eviction
    that freed nothing.
 
+   NARROWED, NOT CLOSED: the 300s cap was by far the likeliest way to reach
+   that state, but past the ceiling below — or on any other error — the
+   swallow-and-return-`true` path still exists. Closing it means changing what
+   this function's return value MEANS ("issued an unload" per the doc above vs
+   "the tier is actually gone"), which both callers and evictIdleQwenBase read,
+   so it is a deliberate design decision rather than a fix to smuggle in here.
+
    BOTH production callers (generation.ts:194 and :1069) pass no signal, so
    the hidden 300s cap was the only bound in existence — meaning a dispatcher
    alone would reproduce the round-4 persona regression verbatim. Hence a
    ceiling as well, matching the 600_000 used by SYNTH_CALL_TIMEOUT_MS,
    DESIGN_ABSOLUTE_MAX_MS, PERSONA_ABSOLUTE_MAX_MS and DERIVE_ABSOLUTE_MAX_MS.
    A caller-supplied signal still wins. */
-const UNLOAD_DISPATCHER = new Agent({
+export const UNLOAD_DISPATCHER = new Agent({
   headersTimeout: 0,
   bodyTimeout: 0,
   connectTimeout: 10_000,

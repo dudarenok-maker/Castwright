@@ -179,12 +179,35 @@ describe('OllamaAnalyzer fetch timeout', () => {
       /* The ACTUAL harm this guards: the slot is taken before the await and
          released only in the `finally`, so a hang would leak a token from the
          bounded analyzer semaphore and silently starve every later analyzer
-         call. Prove the token came back — this resolves only if it did. */
-      const release = await Promise.race([
-        acquireAnalyzerSlot('qwen3.5:9b', true).then(() => 'acquired' as const),
-        new Promise<'starved'>((r) => setTimeout(() => r('starved'), 5_000)),
-      ]);
-      expect(release, 'the analyzer slot must be released on the timeout path').toBe('acquired');
+         call.
+
+         This MUST run at capacity 1. At the shipped default of 2 the check is
+         a placebo: only one token is ever outstanding, so `1 < 2` grants
+         immediately and deleting releaseSlot() still passes. acquireAnalyzerSlot
+         calls syncAnalyzerConcurrency() on every acquire, so setting the env
+         resizes the semaphore live with no module reset. And the token this
+         probe takes must be handed back, or the next test in this file queues
+         forever at capacity 1. */
+      const prevK = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const outcome = await Promise.race([
+          acquireAnalyzerSlot('qwen3.5:9b', true).then((rel) => ({ rel })),
+          new Promise<{ rel: null }>((r) => {
+            timer = setTimeout(() => r({ rel: null }), 5_000);
+          }),
+        ]);
+        expect(
+          outcome.rel,
+          'the analyzer slot must be released on the timeout path (capacity 1)',
+        ).not.toBeNull();
+        outcome.rel?.();
+      } finally {
+        clearTimeout(timer);
+        if (prevK === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+        else process.env.ANALYZER_OLLAMA_CONCURRENCY = prevK;
+      }
     } finally {
       if (prevUrl === undefined) delete process.env.OLLAMA_URL;
       else process.env.OLLAMA_URL = prevUrl;
