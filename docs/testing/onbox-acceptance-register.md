@@ -2892,7 +2892,8 @@ thing standing between an owner and "the button vanished with no explanation."
   button still **renders** — `isLoopbackHost()` is a hostname-only client-side
   heuristic that cannot see the forwarder — and pressing it returns 403. Confirm
   the error shown is the actionable sentence naming the direct-port address, **not**
-  a raw `revoke failed (403)`.
+  a raw `revoke failed (403)`, **and that the port in it is the one you actually
+  bound** (see the run-with-a-non-default-port note below).
 - From **`https://castwright.local` on a phone**: no Revoke control on any row, and
   the explanation renders **once below the device list, not once per row**. Check
   this with **at least 3 paired devices** — per-row rendering was the shape caught
@@ -2905,12 +2906,27 @@ thing standing between an owner and "the button vanished with no explanation."
   record is **still live, not revoked**. Before #2269 this succeeded and locked the
   owner out of their own install.
 
+**Run this with a NON-DEFAULT `LAN_HTTPS_PORT`** — e.g. `LAN_HTTPS_PORT=9443`.
+This is not a nicety, it is what makes two of the bullets above mean anything.
+Every one of these hint strings hardcoded `https://localhost:8443` until
+[#2278](https://github.com/dudarenok-maker/Castwright/issues/2278) (PR
+[#2294](https://github.com/dudarenok-maker/Castwright/pull/2294)) made them read
+the actually-bound port. **On a default-port box the old hardcoded string and the
+new dynamic one render identically**, so the run would pass without proving the
+fix — the same trap the automated tests avoid by pinning 9443 rather than 8443.
+A non-default port also exercises the case the fix exists for: an operator who
+moved the port had, until #2278, no way to discover the one address revoke works
+from. (Note production auto-rebind can move the port again beyond whatever you
+set; the bound value is the one in the server's own startup line.)
+
 *Needs:* the LAN HTTPS server running with the `:443` forwarder actually bound
 (`npm run start:lan`; no elevation required on Windows — see plan 283's ship
-notes), plus a phone or second machine paired over `castwright.local`. *Cost:*
-15–20 minutes; shares its whole setup with E2 and E3, so run the three together.
-*Criteria:* PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280)
-body; plan 225 §Invariants item 6.
+notes), a **non-default `LAN_HTTPS_PORT`** per the note above, plus a phone or
+second machine paired over `castwright.local`. *Cost:* 15–20 minutes; shares its
+whole setup with E2 and E3, so run the three together. *Criteria:* PR
+[#2280](https://github.com/dudarenok-maker/Castwright/pull/2280) body and PR
+[#2294](https://github.com/dudarenok-maker/Castwright/pull/2294) body; plan 225
+§Invariants item 6.
 
 ## Group F — a real Android device
 

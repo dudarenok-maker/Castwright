@@ -11,8 +11,16 @@ export interface LibraryState {
   loaded: boolean;
   /** Non-null when the most recent library fetch failed. Carries the HTTP
    *  status so the books view can offer a recovery path for a 401 instead of
-   *  printing the server's raw text. Cleared on a successful hydrate. */
-  error: { message: string; status?: number } | null;
+   *  printing the server's raw text. Cleared on a successful hydrate.
+   *  `fromServer` is true only when `message` came from the server's own JSON
+   *  `{error}` body (ApiError.fromServer, src/lib/api.ts). It selects WHICH
+   *  pointer follows book-library.tsx's 401 explanation — the server's
+   *  live-port guidance when true, recoveryHint() otherwise — and never
+   *  whether that explanation renders: the "no longer authorized" sentence
+   *  is unconditional (#2278 review round 4). Without the flag a synthetic
+   *  "Library scan failed (401)" would displace a hint that actually has
+   *  something to say. */
+  error: { message: string; status?: number; fromServer?: boolean } | null;
   authors: LibraryResponse['authors'];
   /** Flat denormalised list for quick lookup by bookId. */
   books: LibraryBook[];
@@ -73,7 +81,7 @@ export const librarySlice = createSlice({
     /** Sets loaded = true and records the error message so the books view
      *  can render a "Couldn't load — Retry" panel instead of an eternal
      *  skeleton. Cleared by the next successful `hydrate`. */
-    hydrateError: (s, a: PayloadAction<{ message: string; status?: number }>) => {
+    hydrateError: (s, a: PayloadAction<{ message: string; status?: number; fromServer?: boolean }>) => {
       s.loaded = true;
       s.error = a.payload;
     },
