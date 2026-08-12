@@ -147,24 +147,50 @@ comparison, see the edge list above). The merge step that closes this, run
        `--discharging <ID>[,<ID>...]` naming the row(s) you deliberately
        removed, e.g. `npm run check:onbox-register -- --against-published
        <saved-file> --discharging E10` or `--discharging E10,E11` for more
-       than one. **Which ID(s) to name depends on which of these two shapes
-       applies — check before you act, they need opposite reasoning:**
+       than one.
+
+       **The rule for which IDs to name is arithmetic, never trial-and-error:
+       name exactly as many IDs from a group as rows you actually discharged
+       from that group — never "whichever IDs the error message lists," and
+       never "keep adding IDs until the command goes green."** Padding
+       `--discharging` until the check passes is the exact failure mode this
+       check exists to catch (the #1931/A44 incident this whole mechanism was
+       built to close): a group with one genuine competing-lane addition on
+       top of your own discharge will always leave one leftover ID after you
+       have named your true count, and appeasing that leftover — naming it
+       too, just because the check is still red — silently deletes another
+       lane's live row at publish time. **If, after naming your true count
+       for a group, the check still reports a leftover for that group, STOP.
+       Do not name that ID too.** It is not yours to discharge: another lane
+       published a row into that same group, and the fix is to merge it in
+       (see "Another lane's row, already merged into `main`," above) before
+       you publish — not to add its ID to `--discharging`. The tool's own
+       error text already says this ("merge it in before publishing"); when
+       the doc and the tool disagree, trust the tool, not the instinct to
+       make it stop complaining.
+
+       Two shapes, both governed by that same count rule — knowing which one
+       you're in tells you how the IDs will be spelled, not how many to name:
        - **A middle row of a group that still has survivors (the
          renumbering wrinkle).** Rows renumber contiguously within a group,
          so discharging a MIDDLE row does NOT make that row the one
          reported — every row after it shifts down to fill the gap, so it's
-         the group's HIGHEST id that vanishes from the live page instead.
-         Name the ID the error message actually names, not the row you
-         conceptually discharged.
+         the group's HIGHEST id that vanishes from the live page instead. If
+         your true count for this group is 1, the single ID the error names
+         is correct — but it's correct *because your true count is 1*, not
+         because the error said so. If your true count is N, expect to name
+         N ids this way (the shifted id can change each time you re-run);
+         never name an (N+1)th id just because the check is still red after N.
        - **A whole group with NO survivors left** — e.g. discharging a
          single-row group's only row (Group F's sole row, F1, is a real,
          live example of exactly this shape). There is nothing left to
          renumber, so every row the group's live-page section still lists
-         is still live-only — name **all** of them, comma-separated, in
-         one `--discharging` value. Naming only SOME of a wholly-vanished
-         group's rows still fails: the error names exactly which leftover
-         ID(s) remain unaccounted for, so add those and re-run rather than
-         guessing at the rest.
+         reads as live-only. Name exactly the rows you discharged — for a
+         one-row group, that's one ID, not "every ID the error currently
+         lists for this group." A second live-only ID surviving after you've
+         named your one is proof another lane independently published into
+         the same now-otherwise-empty group, not evidence you actually
+         discharged two rows.
 
        Either way, naming an ID that turns out not to be live-only at all (a
        typo, or copied from the wrong discharge) is itself a refusal, not a
