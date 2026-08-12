@@ -12,10 +12,11 @@
 //   node scripts/bulk-add-project-items.mjs            (dry-run — prints the manifest)
 //   node scripts/bulk-add-project-items.mjs --apply    (adds items + sets Status via gh)
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { gh, ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -176,7 +177,6 @@ async function main() {
   info(`\n[OK] added ${plan.length} item(s), seeding Priority from today's docs/BACKLOG.md row order for every type:feature issue. Now do the manual pass: open the board and move anything that should be Next or Parked.`);
 }
 
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

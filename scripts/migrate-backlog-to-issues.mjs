@@ -26,10 +26,11 @@
 // real run. The tidy pass (drop/merge/archive stale items) is human judgement,
 // never scripted.
 
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { gh, ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -301,9 +302,8 @@ async function main() {
   process.exit(0);
 }
 
-// Guard so tests can import the pure helpers without running the migration
-// (realpath argv[1] to survive symlinked temp dirs — see bump-version.mjs).
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+// Guard so tests can import the pure helpers without running the migration.
+// See scripts/lib/is-main-module.mjs (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

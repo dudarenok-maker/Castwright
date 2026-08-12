@@ -10,10 +10,11 @@
 //   node scripts/clear-done-project-items.mjs           (dry-run — lists Done items)
 //   node scripts/clear-done-project-items.mjs --apply   (archives them)
 
-import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { gh, ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -150,7 +151,6 @@ async function main() {
   ]);
 }
 
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

@@ -163,6 +163,7 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTER_PATH = resolve(ROOT, 'docs/testing/flaky-register.md');
@@ -850,13 +851,8 @@ function main() {
   // — this lane is non-blocking by design (see the header comment).
 }
 
-// Only run when invoked directly (not when imported by tests) — mirrors the
-// same guard used in scripts/stage-marketing-screenshots.mjs.
-const invokedAsCli = (() => {
-  try {
-    return resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
-  } catch {
-    return false;
-  }
-})();
+// Only run when invoked directly (not when imported by tests). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+const invokedAsCli = isDirectlyInvoked(import.meta.url);
 if (invokedAsCli) main();

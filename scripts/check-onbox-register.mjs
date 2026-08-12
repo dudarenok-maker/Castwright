@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -1066,12 +1067,7 @@ export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCo
 }
 
 // CLI mode: `node scripts/check-onbox-register.mjs`
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/check-onbox-register.mjs');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   const REGISTER = 'docs/testing/onbox-acceptance-register.md';
   const LIVE_VIEW = 'docs/testing/onbox-acceptance-register-live-view.html';
 

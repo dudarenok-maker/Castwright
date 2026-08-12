@@ -22,9 +22,9 @@
 // be run only from a clean working tree, on `main`, by a maintainer.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   checkReleaseNotes,
   checkMojibake,
@@ -38,6 +38,7 @@ import { gh, ghSpawn } from './gh.mjs';
 // #2170 — same normaliser release.yml's publish step applies, imported
 // rather than copied so the two can't drift apart (see the refusal below).
 import { normalise } from './release-body.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -782,17 +783,9 @@ async function main() {
 }
 
 // Guarded so tests can import the pure helpers (semverBump, pickWorkflowRun)
-// without executing the release procedure (matches install-qwen3.mjs).
-//
-// `process.argv[1]` is resolved through realpathSync before the compare: Node
-// realpaths `import.meta.url` (symlinks resolved unless --preserve-symlinks),
-// but `pathToFileURL(process.argv[1])` keeps the symlinked invocation path. On
-// macOS the temp dir is a symlink (`/var/folders` → `/private/var/folders`), so
-// running the script from there (e.g. the bump-version test's throwaway repo)
-// left the two hrefs unequal — the guard was false, main() silently never ran,
-// and the script exited 0 with empty output. realpathing argv[1] makes both
-// sides the canonical path so the guard holds regardless of symlinks.
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+// without executing the release procedure (matches install-qwen3.mjs). See
+// scripts/lib/is-main-module.mjs (#2291) for the symlink/junction mechanism
+// this guards against — first found here via a macOS symlinked tmpdir.
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

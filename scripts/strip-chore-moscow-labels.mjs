@@ -14,9 +14,9 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { gh, ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -124,7 +124,6 @@ async function main() {
   info(`\n[OK] reclassified ${total} chore(s), ${needsTracking ? 1 : 0} tracking label added, ${finalTracking.length} set to Waiting/Blocked.`);
 }
 
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

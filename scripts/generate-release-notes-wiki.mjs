@@ -9,8 +9,8 @@
 // then `npm run wiki:sync` to publish docs/wiki -> the wiki repo.
 import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { gh } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_DIR = path.join(REPO_ROOT, 'docs', 'wiki');
@@ -255,6 +255,6 @@ function main() {
   );
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

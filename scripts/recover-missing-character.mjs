@@ -47,6 +47,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 /* The dialogue-tag verbs we look for. Pattern: <Name> <verb> at the start of a
    narrator sentence, with the immediately-preceding sentence being the dialogue.
@@ -361,9 +362,10 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-/* Run main() when invoked directly (not when imported by a test). Same
-   pattern as scripts/relufs-existing.mjs:316. */
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Run main() when invoked directly (not when imported by a test). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) {
   main().catch((err) => {
     console.error(err.stack ?? err.message);

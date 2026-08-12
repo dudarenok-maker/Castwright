@@ -9,10 +9,11 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
 import { resolveVenvPython } from './run-sidecar-tests.mjs';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -1188,15 +1189,9 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
   return 0;
 }
 
-const isDirectInvocation = (() => {
-  const arg1 = process.argv[1];
-  if (!arg1) return false;
-  try {
-    return import.meta.url === pathToFileURL(arg1).href;
-  } catch {
-    return false;
-  }
-})();
+// See scripts/lib/is-main-module.mjs (#2291) for the symlink/junction guard
+// mechanism.
+const isDirectInvocation = isDirectlyInvoked(import.meta.url);
 
 if (isDirectInvocation) {
   const here = dirname(fileURLToPath(import.meta.url));

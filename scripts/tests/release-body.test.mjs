@@ -79,6 +79,14 @@ function setupRepo() {
   // #2169 — release-body.mjs also imports ./git-env.mjs; mirror it too, or
   // the spawned CLI crashes on module resolution.
   writeFileSync(resolve(dir, 'scripts', 'git-env.mjs'), readFileSync(gitEnvScript, 'utf8'));
+  // #2291 — release-body.mjs (and release-notes-gate.mjs) now import
+  // ./lib/is-main-module.mjs (the shared direct-execution guard); mirror it
+  // too, or the spawned CLI crashes on module resolution.
+  mkdirSync(resolve(dir, 'scripts', 'lib'));
+  writeFileSync(
+    resolve(dir, 'scripts', 'lib', 'is-main-module.mjs'),
+    readFileSync(resolve(here, '..', 'lib', 'is-main-module.mjs'), 'utf8'),
+  );
 
   const env = cleanGitEnv();
   gitExec(['init', '-q', '-b', 'main'], { cwd: dir, env });

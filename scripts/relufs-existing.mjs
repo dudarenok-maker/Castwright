@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -324,8 +325,10 @@ export async function main(cliOpts = {}) {
   return { workspaceRoot, processed, rewritten, skipped, failed };
 }
 
-/* Run main() when invoked directly (not when imported by a test). */
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Run main() when invoked directly (not when imported by a test). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) {
   const opts = parseArgs(process.argv.slice(2));
   main(opts).then(

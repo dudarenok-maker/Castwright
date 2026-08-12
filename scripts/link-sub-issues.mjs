@@ -9,9 +9,9 @@
 //   node scripts/link-sub-issues.mjs --parent 1234 --children 111,222,333 --apply
 
 import { dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { gh, ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_OWNER = 'dudarenok-maker';
@@ -77,7 +77,6 @@ async function main() {
   info(`\n[OK] linked ${args.children.length} sub-issue(s) under #${args.parent}.`);
 }
 
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

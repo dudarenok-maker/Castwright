@@ -10,6 +10,7 @@
 import { createWriteStream, mkdirSync, statSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -398,14 +399,10 @@ async function main() {
   process.exit(0);
 }
 
-// Only run the CLI if invoked directly (not when imported by tests).
-const invokedAsCli = (() => {
-  try {
-    return resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
-  } catch {
-    return false;
-  }
-})();
+// Only run the CLI if invoked directly (not when imported by tests). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+const invokedAsCli = isDirectlyInvoked(import.meta.url);
 if (invokedAsCli) {
   main().catch((err) => die(err.stack ?? String(err)));
 }
