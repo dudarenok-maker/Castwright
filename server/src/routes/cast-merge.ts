@@ -23,6 +23,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { retireCharacterId } from '../store/cast-id-history.js';
@@ -260,6 +261,17 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
         }
       }
     } catch (historyErr) {
+      /* #2260 round 2 — the reasoning above ("the side-table is never
+         authoritative for identity, so losing an entry degrades to today's
+         behaviour") is sound for a disk fault and WRONG for a withKeyLock
+         acquisition timeout on `cast-id-history:<bookDir>`, which ordinary
+         contention can reach. Swallowing that returns 200 with cast.json
+         already missing sourceId and the retirement never recorded — the
+         identity-of-record divergence #2040 exists to prevent, silently, and
+         strictly worse than the hang the timeout replaced. Let exactly that
+         one class through; EPERM/ENOSPC/AV-lock are swallowed exactly as
+         before. See `LockAcquisitionTimeoutError` in workspace/file-lock.ts. */
+      if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
       console.warn('[cast-merge] failed to record character-id retirement', historyErr);
     }
 

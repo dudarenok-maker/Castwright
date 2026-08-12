@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { withKeyLock, __chainsSizeForTest } from './file-lock.js';
+import {
+  withKeyLock,
+  __chainsSizeForTest,
+  LockAcquisitionTimeoutError,
+  LOCK_ACQUISITION_TIMEOUT_CODE,
+  isLockAcquisitionTimeout,
+} from './file-lock.js';
 
 /* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
    is module-level mutable state keyed by a fixed string — exactly the shape
@@ -170,14 +176,23 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
     expect(order).not.toContain('b-ran');
   });
 
-  it('leaves exactly one inert chains entry after a timeout, reclaimed by the next completed caller', async () => {
+  it('leaves exactly one chains entry after a timeout behind a holder that FINISHES, reclaimed by the next completed caller', async () => {
     /* PR #2284 review C3. The timeout path deliberately does NOT delete its
        `chains` entry -- deleting it is what breaks mutual exclusion. The cost
        is that the entry outlives the timeout, and nothing pinned that before:
        the holder ahead will not remove it (its `finally` guards on its OWN
        `mine`, and the map now holds the waiter's). Pin both halves -- the
        entry that stays, and the later caller that reclaims it -- so a future
-       change cannot quietly reintroduce the delete without this going red. */
+       change cannot quietly reintroduce the delete without this going red.
+
+       SCOPED TO THE BENIGN BRANCH, deliberately (review round 2, CB4): this
+       fixture's holder finishes on its own, so the retained `mine` resolves
+       and nothing stays attached to it. The title used to say "inert", which
+       generalised past that fixture -- in the DEADLOCK branch `prior` never
+       settles, `mine` stays PENDING for the process lifetime, and each further
+       caller chains another reaction record onto it. Only the map entry COUNT
+       is bounded there, and that is a property of `Map`. See file-lock.ts's
+       comment on the retained entry. */
     const key = 'chains-accounting-key';
     const before = __chainsSizeForTest();
 
@@ -194,5 +209,63 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
     /* ...and the next caller to run fn() to completion does reclaim it. */
     await withKeyLock(key, async () => 'ok');
     expect(__chainsSizeForTest()).toBe(before);
+  });
+});
+
+/* #2260 review round 2 -- the expiry must be DISTINGUISHABLE from a plain
+   Error, because the best-effort `catch` blocks around the cast-identity
+   writes swallow by default and must keep swallowing EPERM/ENOSPC while
+   letting an expiry through. A bare `Error` gave them nothing to branch on.
+   retry:0 for the same module-state reason as the suites above. */
+describe('withKeyLock typed timeout error (#2260 round 2)', { retry: 0 }, () => {
+  it('rejects with LockAcquisitionTimeoutError, not a plain Error, and carries the key', async () => {
+    const key = 'typed-error-key';
+    void withKeyLock(key, () => new Promise<void>(() => {}));
+
+    const err = await withKeyLock(key, async () => 'never', 20).then(
+      () => {
+        throw new Error('expected the acquisition to time out');
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(LockAcquisitionTimeoutError);
+    expect((err as LockAcquisitionTimeoutError).code).toBe(LOCK_ACQUISITION_TIMEOUT_CODE);
+    expect((err as LockAcquisitionTimeoutError).key).toBe(key);
+    expect((err as LockAcquisitionTimeoutError).timeoutMs).toBe(20);
+    expect((err as Error).name).toBe('LockAcquisitionTimeoutError');
+    /* The round-1 message text is unchanged -- swallow sites branch on `code`,
+       but a maintainer still meets this string first. */
+    expect((err as Error).message).toContain('withKeyLock: timed out after 20ms');
+    expect((err as Error).message).toContain(`"${key}"`);
+  });
+
+  it('isLockAcquisitionTimeout accepts the expiry and rejects everything a swallow site must keep swallowing', () => {
+    expect(isLockAcquisitionTimeout(new LockAcquisitionTimeoutError('k', 10))).toBe(true);
+
+    /* The negatives are the load-bearing half: a predicate that said `true`
+       here would turn every swallow site into an unconditional rethrow, which
+       is a regression, not a fix. */
+    expect(isLockAcquisitionTimeout(new Error('boom'))).toBe(false);
+    expect(isLockAcquisitionTimeout(Object.assign(new Error('eperm'), { code: 'EPERM' }))).toBe(
+      false,
+    );
+    expect(isLockAcquisitionTimeout(Object.assign(new Error('enospc'), { code: 'ENOSPC' }))).toBe(
+      false,
+    );
+    expect(isLockAcquisitionTimeout(null)).toBe(false);
+    expect(isLockAcquisitionTimeout(undefined)).toBe(false);
+    expect(isLockAcquisitionTimeout('ELOCKACQUIRETIMEOUT')).toBe(false);
+  });
+
+  it('matches by code, not identity -- a foreign object carrying the code still discriminates', () => {
+    /* This is the point of checking `code` rather than `instanceof`: two copies
+       of this module (vitest per-file registry, a future dual ESM/CJS load)
+       must not make a swallow site fail OPEN and re-swallow the expiry. */
+    const fromAnotherModuleInstance = Object.assign(new Error('withKeyLock: timed out'), {
+      code: LOCK_ACQUISITION_TIMEOUT_CODE,
+    });
+    expect(fromAnotherModuleInstance instanceof LockAcquisitionTimeoutError).toBe(false);
+    expect(isLockAcquisitionTimeout(fromAnotherModuleInstance)).toBe(true);
   });
 });

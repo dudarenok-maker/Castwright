@@ -1543,8 +1543,11 @@ function advisoryMessage(block: CloneAssignBlock, engine: CloneEngine, voiceName
    #1933 readiness gate) has to be inside it too (rule 2); it must open
    BEFORE the cast lock, never after, because the DELETE path (Task 5) holds
    `library-voice:<uuid>` across a helper that itself takes cast locks per
-   book — the other order is an AB/BA deadlock with no timeout and no
-   diagnostic. See cast-lock.ts's header for the four rules, and the
+   book — the other order is an AB/BA deadlock. Since #2260 that surfaces as a
+   `LockAcquisitionTimeoutError` after 10s per acquisition rather than a
+   permanent hang, but it is still a deadlock and this route is still 2 locks
+   deep. See cast-lock.ts's header for the four rules and the timeout's limits,
+   and the
    `shouldWriteCoquiSlot` comment below for the fuller version of this. */
 voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
@@ -2101,8 +2104,15 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: 
    `withCastLock` per book INSIDE this lock, never the other way — this is
    `library-voice -> cast`, matching cast-lock.ts's rule 4/global order, and
    the same order `/assign` takes; either route taking the two locks in the
-   opposite order would AB/BA-deadlock the other, with no timeout and no
-   diagnostic (see cast-lock.ts's header). */
+   opposite order would AB/BA-deadlock the other — since #2260 surfacing as a
+   `LockAcquisitionTimeoutError` after 10s per acquisition rather than a
+   permanent hang (see cast-lock.ts's header). NOTE this path is the deepest
+   nesting in the codebase: it holds `library-voice:<uuid>` while
+   `clearLibraryVoiceReferences` takes a cast lock per confirmed book, so its
+   worst-case acquisition budget is (N + 1) × 10s for N books — and on a large
+   library ordinary contention here is the most likely way a user ever meets
+   that error, which is why `/assign`'s 500 handler is where the raw message
+   surfaces. */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
   const { voiceUuid } = req.params;
   try {

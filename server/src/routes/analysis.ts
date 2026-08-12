@@ -106,6 +106,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
   describeFingerprintForLog,
@@ -424,6 +425,15 @@ export async function reconcileRejectEdgesOnDisk(
       }
     });
   } catch (err) {
+    /* #2260 round 2 — a withKeyLock ACQUISITION timeout is not the disk fault
+       this handler is scoped for, and swallowing it is strictly worse than the
+       hang it replaced: the route returns 200 with cast.json already written
+       and the identity record never updated, which is the divergence #2040
+       exists to prevent, silently. Let exactly that one class through;
+       everything else (EPERM/ENOSPC/AV-lock, CastIdHistoryUnreadableError) is
+       swallowed exactly as before. See `LockAcquisitionTimeoutError` in
+       workspace/file-lock.ts. */
+    if (isLockAcquisitionTimeout(err)) throw err;
     console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
   }
 }
@@ -3257,6 +3267,9 @@ export async function runMainAnalyzerJob(
           log,
         );
       } catch (historyErr) {
+        // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above for
+        // why a lock-acquisition timeout must NOT be swallowed here.
+        if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
     }
@@ -5409,6 +5422,9 @@ export async function runMainAnalyzerJob(
                rewrote, not the one the persist started with. */
             await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
+            // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
+            // for why a lock-acquisition timeout must NOT be swallowed here.
+            if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
             /* #2214/#2201 — a degraded cast-id-history.json now makes the
                unconditional `dropSupersededIdsReclaimedByLiveCast` call above
@@ -5939,6 +5955,9 @@ export async function runSubsetAnalyzerJob(
         log,
       );
     } catch (historyErr) {
+      // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above for why
+      // a lock-acquisition timeout must NOT be swallowed here.
+      if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
@@ -6770,6 +6789,9 @@ export async function runSubsetAnalyzerJob(
             // the pre-rewrite verdict captured at the top of this block.
             await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
+            // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
+            // for why a lock-acquisition timeout must NOT be swallowed here.
+            if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
             // #2214/#2201 — mirrors the main path's same-named handler above.
             logIfDegradedCastIdHistory(historyErr, log);

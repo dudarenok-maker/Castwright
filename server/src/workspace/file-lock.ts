@@ -11,8 +11,10 @@ const chains = new Map<string, Promise<unknown>>();
    design -> library-voice -> cast). Either way the request just hangs
    forever. Bound the wait instead.
 
-   WHAT THE BUDGET BOUNDS: queue wait, not the length of any one critical
-   section -- everything ahead of you on this key, plus your own turn. The
+   WHAT THE BUDGET BOUNDS: queue wait ONLY -- everything ahead of you on this
+   key, and nothing else. It does NOT bound your own critical section: the
+   timer is cleared the instant you acquire, before fn() is called, so once you
+   are in you may run as long as you like (review round 2, N1). The
    longest known holder is NOT a cast.json read-modify-write (sub-second): it
    is voice-library.ts's DELETE, which holds `library-voice:<uuid>` across
    scanLibraryVoiceUsage + clearLibraryVoiceReferences, i.e. two full walks of
@@ -27,12 +29,78 @@ const chains = new Map<string, Promise<unknown>>();
    wins, the failure reads `Test timed out in 15000ms` -- no key, no rule
    pointer, i.e. exactly the diagnostic-free hang this change exists to
    remove, delivered in the first place a maintainer would meet it. 10s breaks
-   the tie so the lock's own error always wins.
+   the tie for a SINGLE, un-nested acquisition -- and only for that case
+   (review round 2, CB1). Nesting defeats it: each nested withKeyLock starts
+   its own fresh 10s timer AFTER the outer one is acquired, so the budgets add
+   rather than share a deadline. A 2-deep path whose outer acquisition takes
+   9s reaches its inner deadline at ~19s, past vitest's 15s, and the
+   diagnostic-free `Test timed out in 15000ms` wins after all. That is a known,
+   accepted gap in the tie-break, NOT a reason to raise or lower the budget:
+   no value fixes it, because the depth is unbounded (see below).
 
-   NOTE the nesting asymmetry: withCastLocks chains one withKeyLock per book,
-   so a two-book route's effective acquisition budget is 2x this, a one-book
-   route's is 1x. */
+   NOTE the nesting rule (review round 2, N2 -- this is general, not a
+   withCastLocks quirk): every nested acquisition adds one full budget, so the
+   effective worst case is depth x this. withCastLocks chains one withKeyLock
+   per book, so a two-book route is 2 deep; voice-library.ts's POST /assign
+   takes `library-voice:<uuid>` then a cast lock, so it is 2 deep; and its
+   DELETE path holds `library-voice:<uuid>` while clearLibraryVoiceReferences
+   takes a cast lock per confirmed book, so it is N+1 deep for N books. */
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 10_000;
+
+/** Stable discriminator carried by `LockAcquisitionTimeoutError`. */
+export const LOCK_ACQUISITION_TIMEOUT_CODE = 'ELOCKACQUIRETIMEOUT';
+
+/* #2260 review round 2 -- the timeout used to throw a bare `Error`, which gave
+   the best-effort `catch` blocks around the cast-identity writes (analysis.ts,
+   cast-merge.ts, not-linked-edges.ts) no way to tell an expiry apart from the
+   EPERM/ENOSPC/AV-lock they are deliberately scoped to swallow. Swallowing an
+   expiry is strictly worse than the hang it replaced: the route returns 200
+   with cast.json already written and the retirement never recorded -- the
+   exact identity-of-record divergence CLAUDE.md's #2040 convention exists to
+   prevent, silently. So the expiry gets a shape those handlers can single out.
+
+   WHY A NAMED SUBCLASS *AND* an exported predicate, rather than either alone:
+   the subclass matches the existing precedent in this repo
+   (`CastIdHistoryUnreadableError`, store/cast-id-history.ts), keeps the class
+   greppable, and carries `key`/`timeoutMs` for a handler that wants them. But
+   the swallow sites discriminate through `isLockAcquisitionTimeout`, which
+   tests the stable `code` STRING and deliberately NOT `instanceof`. Every
+   consumer of this is a `catch` that swallows by default, so an `instanceof`
+   that fails to match -- two copies of this module under vitest's per-file
+   module registry, or a future dual ESM/CJS load -- fails OPEN: the expiry is
+   swallowed again and we are back to the silent 200. A string-`code` check has
+   no such failure mode. `code` cannot collide with the fs errors these
+   handlers still swallow (`EPERM`, `ENOSPC`, `EBUSY`, ...). */
+export class LockAcquisitionTimeoutError extends Error {
+  readonly code: string = LOCK_ACQUISITION_TIMEOUT_CODE;
+  readonly key: string;
+  readonly timeoutMs: number;
+
+  constructor(key: string, timeoutMs: number) {
+    super(
+      `withKeyLock: timed out after ${timeoutMs}ms waiting to acquire "${key}" -- ` +
+        'either a cast-lock.ts rule 1 (locked fn re-entering a locked fn on the ' +
+        'same key) or rule 4 (lock-order cycle across design/library-voice/cast) ' +
+        'violation, OR ordinary contention behind a legitimately long holder on ' +
+        'this key (see the budget note above). Check for a long holder before ' +
+        'hunting a rule violation -- both reach here',
+    );
+    this.name = 'LockAcquisitionTimeoutError';
+    this.key = key;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** True for a `withKeyLock` acquisition expiry. Checks the `code` string, not
+ *  `instanceof` -- see `LockAcquisitionTimeoutError`'s comment for why that
+ *  distinction is load-bearing at a swallow site. */
+export function isLockAcquisitionTimeout(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === LOCK_ACQUISITION_TIMEOUT_CODE
+  );
+}
 
 export async function withKeyLock<T>(
   key: string,
@@ -53,14 +121,7 @@ export async function withKeyLock<T>(
   let timer!: ReturnType<typeof setTimeout>;
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(
-        `withKeyLock: timed out after ${timeoutMs}ms waiting to acquire "${key}" -- ` +
-          'either a cast-lock.ts rule 1 (locked fn re-entering a locked fn on the ' +
-          'same key) or rule 4 (lock-order cycle across design/library-voice/cast) ' +
-          'violation, OR ordinary contention behind a legitimately long holder on ' +
-          'this key (see the budget note above). Check for a long holder before ' +
-          'hunting a rule violation -- both reach here',
-      ));
+      reject(new LockAcquisitionTimeoutError(key, timeoutMs));
     }, timeoutMs);
     /* A pending timer keeps the event loop (and vitest) alive; unref so a
        cleared-on-happy-path timer is never the reason a process hangs at
@@ -99,10 +160,23 @@ export async function withKeyLock<T>(
        guards on `chains.get(key) === its mine` and the map now holds ours.
        So `mine` stays until some later caller overwrites it and runs `fn()`
        to completion. If no later caller ever takes this key, it stays for
-       the process lifetime -- one resolved, inert entry per timed-out key.
-       That is a bounded cost we accept; deleting it is what breaks the
-       mutex, and the two are not both available. Pinned by the
-       `__chainsSizeForTest` case in file-lock.test.ts. */
+       the process lifetime.
+
+       What "bounded" does and does not mean here (review round 2, CB4 -- an
+       earlier version of this said "one resolved, inert entry", and BOTH of
+       those words were wrong in the case that matters). The MAP is bounded at
+       one entry per key, but that is a property of `Map`, not of anything this
+       code does. The entry itself is only resolved and inert in the BENIGN
+       branch, where the holder ahead eventually finishes: `prior` settles,
+       `mine` resolves, and nothing is left attached to it. In the DEADLOCK
+       branch -- the case this timeout exists for -- `prior` never settles, so
+       `mine` stays PENDING for the process lifetime and every further caller
+       on this key chains another reaction record onto it before timing out in
+       turn. Those records accumulate, unbounded in the number of callers,
+       even though the map still shows one entry. That is a slow leak on an
+       already-broken key, and we accept it: deleting the entry is what breaks
+       mutual exclusion, and the two are not both available. Pinned (benign
+       branch only) by the `__chainsSizeForTest` case in file-lock.test.ts. */
     clearTimeout(timer);
     release();
     throw err;
