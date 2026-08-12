@@ -22,6 +22,7 @@ import type {
 } from '../handoff/schemas.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
 import { CONFIDENCE } from '../analyzer/dialogue-structure/cross-examine.js';
+import { conventionsFor } from '../analyzer/dialogue-structure/lang/index.js';
 import { attributeChapterStage2, reconcileSentenceCharacterIds } from './analysis.js';
 
 const CHAPTER_BODY =
@@ -106,21 +107,26 @@ describe('attributeChapterStage2 — structure engine wiring (srv-59)', () => {
     });
   });
 
-  it('(d): engine OFF (knob false via STRUCTURE_ENGINE=0) is byte-identical to the applyNarratorDefault path', async () => {
+  it("(d): engine OFF (knob false via STRUCTURE_ENGINE=0) is byte-identical to the applyNarratorDefault path with THIS language's conventions threaded through — #2245 split conventions resolution off the knob, so engine-off no longer throws the language away", async () => {
     process.env.STRUCTURE_ENGINE = '0';
     const sentences = mockSentences();
     const result = await attributeChapterStage2(baseOpts('ru', sentences));
 
-    const expected = applyNarratorDefault(mockSentences());
+    const expected = applyNarratorDefault(mockSentences(), conventionsFor('ru'));
     expect(result.sentences).toEqual(expected);
     expect(result.structureReport).toBeUndefined();
   });
 
-  it("(e): unsupported language ('xx') is identical to the engine-OFF/applyNarratorDefault path", async () => {
+  it("(e): unsupported language ('xx') is a pass-through — no table means no basis to judge, so nothing is demoted (#2245 fix, not a regression)", async () => {
     // 'ja' now has a conventions table (fs-59 W3) — use a genuinely unsupported code.
     const result = await attributeChapterStage2(baseOpts('xx', mockSentences()));
 
-    const expected = applyNarratorDefault(mockSentences());
+    // conventions = conventionsFor('xx') = null -> applyNarratorDefault is
+    // identity: the pre-#2245 behaviour here demoted via the language-blind
+    // heuristic instead, which is exactly the catastrophic-fallback bug this
+    // ticket fixes (an unsupported language got the MOST aggressive rewrite,
+    // not the least).
+    const expected = mockSentences();
     expect(result.sentences).toEqual(expected);
     expect(result.structureReport).toBeUndefined();
   });

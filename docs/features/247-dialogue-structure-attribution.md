@@ -49,8 +49,12 @@ owner: null
   - `LanguageConventions` table per language (`dialogue-structure/lang/{en,es,fr,de,ru}.ts`),
     keyed off the book's already-resolved `opts.stageCall.language` — no new opts field. An
     unsupported/unknown language resolves to an empty table, so the parser emits no evidence and
-    the cross-examiner falls back to exactly current behaviour (narrator-default only, model
-    confidence passed through) — **byte-identical to pre-engine output**.
+    the cross-examiner falls back to the narrator-default path (model confidence passed through).
+    **Since #2245 that fallback is a pass-through — with no table there is no basis to judge, so
+    nothing is demoted — which is the OPPOSITE of pre-engine output, not byte-identical to it**
+    (pre-engine demoted every non-spoken line). This is a default-path change: the
+    `structure.enabled && conventions` guard fails on the null table whatever the knob says. See
+    invariant 4.
   - Four new registry knobs under a new `analyzer-structure` group (`server/src/config/registry.ts`
     lines 1062-1103) — see "Registry knobs" below.
   - `state.json` gains an optional `analysisProvenance` block (`server/src/workspace/scan.ts`) —
@@ -65,8 +69,11 @@ owner: null
   has no `analysisProvenance` block; the book-state GET route already tolerates that (pinned by
   a dedicated back-compat test, see Test plan).
 - **Reversibility:** one registry kill-switch, `analyzer.structure.enabled` (env `STRUCTURE_ENGINE`,
-  default `true`). Flipping it off restores exactly the pre-engine `applyNarratorDefault`-only
-  behaviour. Escalation has its own independent off-switch
+  default `true`). Flipping it off returns to the `applyNarratorDefault`-only path — no longer
+  *byte-identical* to pre-engine behaviour since #2245, which made that path read the book's own
+  conventions table instead of one language-blind regex bundle (so e.g. an English leading dash is
+  narration there now, and a no-table language is left alone rather than demoted wholesale).
+  Escalation has its own independent off-switch
   (`analyzer.structure.escalation` = `'off'`).
 
 ## Invariants to preserve
@@ -136,15 +143,19 @@ full commit history):
    pinned in `parser.test.ts` (multi-sentence utterance cases) and end-to-end in
    `analysis.structure-fixture.test.ts` (assertion 3, the multi-sentence utterance test — the
    continuation is explicitly asserted `!== 'narrator'`).
-4. **Engine-OFF / unsupported-language → byte-identical; below-alignment-floor → flag-only
-   (correction disabled).** Three independent fallback paths, all safe, but not all the same
-   output:
+4. **Engine-OFF → byte-identical to a plain `applyNarratorDefault` call; unsupported-language →
+   pass-through, no demotion (#2245); below-alignment-floor → flag-only (correction disabled).**
+   Three independent fallback paths, all safe, but not all the same output:
    - `analyzer.structure.enabled = false` (env `STRUCTURE_ENGINE=0`): the engine does not run at
-     all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call.
-     Pinned by a dedicated `toEqual` test comparing the two code paths (task 8).
-   - Unsupported/unknown book language: the language convention table resolves empty, so the
-     parser (`parser.ts`) emits zero `StructuralEvidence`, and the cross-examiner's per-sentence
-     decisions degrade to the same narrator-default-only shape.
+     all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call, now
+     with the book's own conventions table (#2245 decoupled conventions resolution from this
+     knob, so turning the engine off no longer discards the language). Pinned by a dedicated
+     `toEqual` test comparing the two code paths (task 8).
+   - Unsupported/unknown book language: `conventionsFor` resolves to `null`, so the engine's
+     `structure.enabled && conventions` guard fails before `parser.ts` ever runs, and the ELSE
+     branch's `applyNarratorDefault(sentences, null)` call is a pass-through: with no conventions
+     table there is no basis to judge spoken vs. narration, so nothing is demoted — the sentence
+     list is returned by reference, untouched.
    - Alignment rate for a chapter falls below the floor (`analyzer.structure.alignmentFloorPct`
      concept from spec §5.2, default 80%): `crossExamine`'s `flagOnly` branch
      (`cross-examine.ts:264, 77-85`) disables correction chapter-wide — every sentence passes

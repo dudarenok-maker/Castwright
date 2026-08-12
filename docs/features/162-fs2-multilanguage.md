@@ -113,6 +113,8 @@ language param.
 ### Non-English narrator-default heuristic (plan 221 Wave A)
 
 > **Update (2026-06-20, bug #954 / PR #955):** this heuristic now runs for ALL languages — renamed `applyNarratorDefault` with the `isNonEnglish` gate removed — recognizing every common quote convention (incl. boundary-anchored straight-single, apostrophe-safe) and flagging the first sentence of each demoted block low-confidence. The English path is no longer a byte-identical no-op. Full design: `docs/superpowers/specs/2026-06-20-english-narrator-default-attribution-design.md`.
+>
+> **Superseded (2026-08, #2245):** "every common quote convention" was one language-blind regex bundle, and it was a *second* definition of dialogue alongside the per-language `LanguageConventions` tables. `isSpokenLine(text, conventions)` is now driven by those tables alone: the straight-single matcher is gone (English's `quotePairs` carries no same-glyph `'`/`'` pair) and the unconditional leading-dash rule is gone (a leading dash reads as spoken only where the language's own `dialogueOpen` matches — `en`, `de`, `zh` and `ja` have none). With no table for a language, the heuristic now demotes nothing at all rather than everything.
 
 The per-sentence attribution model — especially on non-Latin scripts —
 mislabels third-person NARRATION as the named character (e.g. "Егор засунул
