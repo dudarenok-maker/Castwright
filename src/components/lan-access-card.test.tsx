@@ -13,7 +13,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       revokeDevice: vi.fn(),
       regenerateLanCert: vi.fn(),
       getLanCertStatus: vi.fn().mockResolvedValue({
-        requested: true, active: true, httpsPort: 8443, health: 'healthy',
+        requested: true, active: true, boundPort: 8443, health: 'healthy',
         certHosts: ['192.168.1.42'], currentLanIps: ['192.168.1.42'],
         uncoveredIps: [], expiresAt: '2099-01-01T00:00:00.000Z',
       }),
@@ -205,7 +205,15 @@ describe('LanAccessCard', () => {
 
   it('shows actionable guidance instead of the raw code on a 403 (reached via a bare LAN IP)', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
-    vi.mocked(api.createDevicePairSession).mockRejectedValue(new ApiError('pair-session failed (403)', 403));
+    // #2278 review Finding 1 — the card renders the server's own message
+    // verbatim now (see src/lib/api.ts's apiErrorFromResponse), so the mock
+    // carries the actual guidance text rather than a synthetic placeholder.
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError(
+        'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+        403,
+      ),
+    );
 
     render(<LanAccessCard />);
     fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
@@ -269,7 +277,10 @@ describe('LanAccessCard', () => {
   it('shows actionable guidance instead of the raw code on a 403 from createDevicePairSession (self-bind), without navigating', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
     vi.mocked(api.createDevicePairSession).mockRejectedValue(
-      new ApiError('pair-session failed (403)', 403),
+      new ApiError(
+        'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+        403,
+      ),
     );
     const assign = vi.fn();
     vi.stubGlobal('location', { hostname: 'localhost', port: '8443', assign });
@@ -282,7 +293,15 @@ describe('LanAccessCard', () => {
   });
 
   it('shows a working-exit recovery pointer on 401 from listDevices (no crash)', async () => {
-    vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
+    // #2278 review Finding 1 — the card renders the SERVER's 401 message
+    // verbatim (requireLanToken builds it from pairingOriginHint() —
+    // server/src/lan-auth.ts), not a client-composed hint.
+    vi.mocked(api.listDevices).mockRejectedValue(
+      new ApiError(
+        'Missing or invalid LAN access token. Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+        401,
+      ),
+    );
 
     render(<LanAccessCard />);
 
@@ -298,7 +317,12 @@ describe('LanAccessCard', () => {
   });
 
   it('gives the same working-exit pointer on 401 regardless of the viewing hostname (location.port === "")', async () => {
-    vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
+    vi.mocked(api.listDevices).mockRejectedValue(
+      new ApiError(
+        'Missing or invalid LAN access token. Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+        401,
+      ),
+    );
     vi.stubGlobal('location', { hostname: 'localhost', port: '' });
 
     render(<LanAccessCard />);
@@ -339,7 +363,12 @@ describe('LanAccessCard', () => {
   });
 
   it('Regenerate certificate button is hidden when viewing from a paired phone (401 on listDevices)', async () => {
-    vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
+    vi.mocked(api.listDevices).mockRejectedValue(
+      new ApiError(
+        'Missing or invalid LAN access token. Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+        401,
+      ),
+    );
 
     render(<LanAccessCard />);
     await waitFor(() =>
@@ -385,24 +414,26 @@ describe('LanAccessCard', () => {
   });
 });
 
-// #2278 — all four hint sites (REVOKE_LOOPBACK_ONLY_HINT and the three pairing-copy
-// sites) must name the ACTUALLY-bound LAN HTTPS port (GET /api/lan/cert/status's new
-// httpsPort field), not a hardcoded 8443. A test pinning only the 8443 default would
-// pass today and prove nothing — these use a non-default port (9443) so they fail
-// without the fix and pass with it.
+// #2278 review round 2 (Findings 1, 4, 5, 6) — the mechanism split in two:
+// the pairing/401 hints are now the SERVER's own message (pairingOriginHint()
+// in server/src/lan-auth.ts, already port-correct) rendered verbatim by the
+// card — no client-side cert-status fetch involved at all for those. Only the
+// revoke hint (whose server-side 403 stays a generic, non-port message)
+// still needs the port client-side, and now gets it from <LanCertStatus>'s
+// existing onStatus callback rather than a second independent fetch. These
+// tests use a non-default port (9443) so they'd fail against a hardcoded
+// 8443 and pass only with the real port threaded through.
 describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
-  it('names the actually-bound port in the pairing hint (403 from createDevicePairSession)', async () => {
+  it('names the actually-bound port in the pairing hint (403 from createDevicePairSession) — straight from the server message, no cert-status fetch involved', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
-    vi.mocked(api.getLanCertStatus).mockResolvedValue({
-      requested: true, active: true, httpsPort: 9443, health: 'healthy',
-      certHosts: [], currentLanIps: [], uncoveredIps: [], expiresAt: null,
-    });
-    vi.mocked(api.createDevicePairSession).mockRejectedValue(new ApiError('pair-session failed (403)', 403));
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError(
+        'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+        403,
+      ),
+    );
 
     render(<LanAccessCard />);
-    // Let the cert-status fetch resolve (and the resulting re-render land) before
-    // triggering the 403 branch, so its closure captures the live port.
-    await screen.findByTestId('lan-cert-status-admin');
 
     fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
     fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
@@ -417,7 +448,7 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
 
   it('names the actually-bound port in the revoke hint (non-loopback caller, castwright.local)', async () => {
     vi.mocked(api.getLanCertStatus).mockResolvedValue({
-      requested: true, active: true, httpsPort: 9443, health: 'healthy',
+      requested: true, active: true, boundPort: 9443, health: 'healthy',
       certHosts: [], currentLanIps: [], uncoveredIps: [], expiresAt: null,
     });
     vi.stubGlobal('location', { hostname: 'castwright.local', port: '' });
@@ -434,7 +465,7 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
   it('names the actually-bound port in the revoke hint (403 from revokeDevice)', async () => {
     vi.stubGlobal('location', { hostname: 'localhost', port: '9443' });
     vi.mocked(api.getLanCertStatus).mockResolvedValue({
-      requested: true, active: true, httpsPort: 9443, health: 'healthy',
+      requested: true, active: true, boundPort: 9443, health: 'healthy',
       certHosts: [], currentLanIps: [], uncoveredIps: [], expiresAt: null,
     });
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
@@ -450,13 +481,30 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
     );
   });
 
-  it('names the actually-bound port on the 401/manageHint pointer, even though <LanCertStatus> never mounts on this branch', async () => {
-    // The manageHint (401 on listDevices) branch renders BEFORE the else-branch's
-    // <LanCertStatus> ever would — this pins that the port still resolves via the
-    // card's own independent cert-status fetch, not just via that child's onStatus.
-    vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
+  // #2278 review Findings 1 + 4 — the mechanism this branch shipped first
+  // (a card-level GET /api/lan/cert/status fetch) COULD NOT WORK: that route
+  // sits behind the identical requireLanToken guard as listDevices, so a 401
+  // on one always means a 401 on the other in production — the previous
+  // version of this test pinned exactly that impossible combination (401 on
+  // listDevices, 200 on getLanCertStatus) and passed anyway, proving nothing
+  // about production behaviour. The fix moves the guidance server-side
+  // instead: requireLanToken's own 401 body already carries the live port
+  // (server/src/lan-auth.ts's pairingOriginHint()), so the manageHint branch
+  // renders e.message and is decoupled from cert-status entirely — pinned
+  // here by mocking getLanCertStatus with a DIFFERENT, wrong port (1111) and
+  // asserting it never leaks into the visible 401 text. (<LanCertStatus>
+  // briefly mounts during the render before manageHint flips, per its own
+  // useEffect, so "never called" isn't the invariant to assert — "never
+  // rendered" is.)
+  it('names the actually-bound port on the 401/manageHint pointer via the SERVER message, decoupled from getLanCertStatus', async () => {
+    vi.mocked(api.listDevices).mockRejectedValue(
+      new ApiError(
+        'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+        401,
+      ),
+    );
     vi.mocked(api.getLanCertStatus).mockResolvedValue({
-      requested: true, active: true, httpsPort: 9443, health: 'healthy',
+      requested: true, active: true, boundPort: 1111, health: 'healthy',
       certHosts: [], currentLanIps: [], uncoveredIps: [], expiresAt: null,
     });
 
@@ -467,18 +515,16 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
         screen.getByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
       ).toBeInTheDocument(),
     );
+    expect(screen.queryByText(/localhost:1111/i)).not.toBeInTheDocument();
   });
 
-  it('drops the https:// address (rather than pointing at a dead http-only port) when LAN HTTPS is not active', async () => {
+  it('drops the https:// address (rather than pointing at a dead http-only port) when LAN HTTPS is not active — the server already decided this, the card just renders it', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
-    vi.mocked(api.getLanCertStatus).mockResolvedValue({
-      requested: false, active: false, httpsPort: 8080, health: 'missing',
-      certHosts: [], currentLanIps: [], uncoveredIps: [], expiresAt: null,
-    });
-    vi.mocked(api.createDevicePairSession).mockRejectedValue(new ApiError('pair-session failed (403)', 403));
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError('Start pairing on the computer running Castwright.', 403),
+    );
 
     render(<LanAccessCard />);
-    await screen.findByTestId('lan-cert-status-admin');
 
     fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
     fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
@@ -491,7 +537,7 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
 
   it('drops the https:// address in the revoke hint when LAN HTTPS is not active', async () => {
     vi.mocked(api.getLanCertStatus).mockResolvedValue({
-      requested: false, active: false, httpsPort: 8080, health: 'missing',
+      requested: false, active: false, boundPort: 8080, health: 'missing',
       certHosts: [], currentLanIps: [], uncoveredIps: [], expiresAt: null,
     });
     vi.stubGlobal('location', { hostname: 'castwright.local', port: '' });

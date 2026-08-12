@@ -23,6 +23,13 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
   const [status, setStatus] = useState<
     'naming' | 'loading' | 'ready' | 'unavailable' | 'error' | 'restricted'
   >('naming');
+  // #2278 review Finding 2 — the server's own 403 message (pairingOriginHint()
+  // on the server, already port-correct), rendered verbatim in the
+  // 'restricted' state below instead of this modal's own hardcoded
+  // https://localhost:8443 copy. Falls back to generic wording only if a
+  // caller somehow lands on 'restricted' without a message (defensive; the
+  // real 403 always carries one).
+  const [restrictedMessage, setRestrictedMessage] = useState('');
   const [label, setLabel] = useState('');
   /* Bumped on every open and every generate(); an in-flight createPairSession
      whose token no longer matches is stale (the modal was reopened or the user
@@ -58,13 +65,18 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
         if (reqToken.current !== token) return;
         const code = e instanceof ApiError ? e.status : undefined;
         const msg = e instanceof Error ? e.message : '';
-        setStatus(
-          code === 409 || /\b409\b/.test(msg)
-            ? 'unavailable'
-            : code === 403 || /\b403\b/.test(msg)
-              ? 'restricted'
-              : 'error',
-        );
+        if (code === 409 || /\b409\b/.test(msg)) {
+          setStatus('unavailable');
+        } else if (code === 403 || /\b403\b/.test(msg)) {
+          // #2278 review Finding 2 — the server's message already names the
+          // actual bound port; render it as-is.
+          setRestrictedMessage(
+            msg || 'Pairing can only be started from the computer running Castwright.',
+          );
+          setStatus('restricted');
+        } else {
+          setStatus('error');
+        }
       });
   };
 
@@ -133,12 +145,7 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
 
             {status === 'restricted' && (
               <div data-testid="pair-device-restricted" className="space-y-3">
-                <p>
-                  Pairing can only be started from the computer running Castwright. Open{' '}
-                  <code className="bg-ink/5 px-1 rounded">https://castwright.local</code> or{' '}
-                  <code className="bg-ink/5 px-1 rounded">https://localhost:8443</code> on that
-                  computer, then try again.
-                </p>
+                <p>{restrictedMessage}</p>
                 <button
                   type="button"
                   onClick={() => setStatus('naming')}

@@ -9,7 +9,7 @@ vi.mock('../../lib/api', async (importOriginal) => {
 });
 
 const base = {
-  requested: true, active: false, httpsPort: 8443, certHosts: [] as string[],
+  requested: true, active: false, boundPort: 8443, certHosts: [] as string[],
   currentLanIps: ['192.168.1.42'], uncoveredIps: [] as string[], expiresAt: null,
 };
 

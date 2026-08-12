@@ -41,6 +41,12 @@ vi.mock('../lan-auth.js', () => ({
   getLanAuthToken: vi.fn(() => undefined),
   extractToken: vi.fn(() => undefined),
   readCwLanCookie: vi.fn(() => undefined),
+  // #2278 review Finding 1/7 — pairing.ts's 403 branch calls this; without a
+  // mock here it would be undefined and throw (masking the 403 as a 500).
+  pairingOriginHint: vi.fn(
+    () =>
+      'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+  ),
 }));
 vi.mock('./export-lan.js', async (orig) => {
   const real = await orig<typeof import('./export-lan.js')>();
@@ -207,6 +213,11 @@ describe('pairing routes', () => {
     vi.mocked(mayStartPairingSession).mockReturnValueOnce(false);
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
     expect(res.status).toBe(403);
+    // #2278 review Finding 1 — the 403 body is pairingOriginHint()'s
+    // port-correct guidance, not a hardcoded string.
+    expect(res.body.error).toBe(
+      'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+    );
   });
 
   it('POST /session stores the desktop label; /redeem prefers it over the phone-supplied label', async () => {

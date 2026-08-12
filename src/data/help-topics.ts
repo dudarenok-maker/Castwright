@@ -235,9 +235,13 @@ export const HELP_TOPICS: HelpTopic[] = [
       'This means `LAN_AUTH_TOKEN` is set in `server/.env` — every non-loopback request then needs ' +
       'to pair first, and `castwright.local` / `castwright.dev.local` / a raw LAN IP all count as ' +
       'non-loopback, even from a browser on the desktop machine itself. Only the direct loopback ' +
-      'address — `https://localhost:<port>`, the port Castwright reports in Admin → LAN access, ' +
-      '8443 unless `LAN_HTTPS_PORT` moved it — skips pairing, and it is the quickest fix for ' +
-      'same-machine testing. To authorize an actual phone or ' +
+      'address — `https://localhost:<port>` — skips pairing, and it is the quickest fix for ' +
+      'same-machine testing. The port is not always `8443`: `LAN_HTTPS_PORT` sets the requested ' +
+      'port, but a production install auto-rebinds to the next free one when that port is already ' +
+      'taken, so the value it actually bound can differ from either. Admin → LAN access doesn\'t ' +
+      "show the port on this happy path (only in its two error states) — the reliable source is " +
+      'the server\'s own startup log line, `[server] listening on https://localhost:<port>`, ' +
+      'printed wherever `npm start` / `npm run dev:lan` / `npm run start:lan` runs. To authorize an actual phone or ' +
       'tablet, open Admin → LAN access and click "Authorize a device" for a pairing QR, then scan it ' +
       'with that device\'s camera. For a different desktop browser tab on the same machine, the LAN Access ' +
       'card also shows a one-click "Open pairing link on castwright.local" link right next to the QR — ' +

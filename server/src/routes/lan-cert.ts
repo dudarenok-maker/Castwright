@@ -31,9 +31,13 @@ export interface LanCertStatus {
   /** The port the server actually bound (getLanRuntime().port) — #2278: the
       client can't derive this itself (window.location.port is empty on the
       castwright.local / :443-forwarder paths, exactly when the answer
-      matters), so the LAN-access card's hint copy reads it from here instead
-      of hardcoding 8443. */
-  httpsPort: number;
+      matters), so LAN-access hint copy reads it from here instead of
+      hardcoding 8443. NOT necessarily an HTTPS port (#2278 review Finding 5)
+      — this is whatever the server actually bound, HTTP or HTTPS; check
+      `active` before composing an `https://` URL from it, or you'll compose
+      one against a plain-HTTP listener when LAN HTTPS degraded (cert-less
+      box, loopback-HTTP fallback). */
+  boundPort: number;
   health: CertHealth;
   certHosts: string[];
   currentLanIps: string[];
@@ -144,7 +148,7 @@ lanCertRouter.get('/cert/status', (_req: Request, res: Response) => {
   const body: LanCertStatus = {
     requested: isLanHttpsEnabled(),
     active: httpsActive,
-    httpsPort: port,
+    boundPort: port,
     health,
     certHosts: parsed?.ips ?? [],
     currentLanIps,

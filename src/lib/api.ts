@@ -7316,11 +7316,12 @@ async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(trimmed ? { label: trimmed } : {}),
   });
-  if (!res.ok)
-    throw new ApiError(
-      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
-      res.status,
-    );
+  // #2278 review Finding 2 — parses the server's JSON `{ error }` body (see
+  // apiErrorFromResponse below) rather than embedding the raw response text:
+  // a 403 here now carries port-correct pairing guidance (pairingOriginHint()
+  // on the server) that PairDeviceModal renders verbatim instead of its own
+  // hardcoded copy.
+  if (!res.ok) throw await apiErrorFromResponse(res, `pair session failed (${res.status})`);
   return res.json();
 }
 
@@ -7328,16 +7329,29 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
 }
 
+/** Build an ApiError from a non-ok Response, preferring the server's own
+ *  JSON `{ error }` body over a synthetic `fallback` string (#2278 review
+ *  Finding 1). Several LAN-guard 401/403 bodies now carry actionable,
+ *  port-correct guidance (e.g. `pairingOriginHint()` on the server) that the
+ *  UI renders verbatim — discarding it here would silently regress that fix.
+ *  Falls back to `fallback` when the body is absent, not JSON, or has no
+ *  non-empty string `error` field. */
+async function apiErrorFromResponse(res: Response, fallback: string): Promise<ApiError> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  const message = typeof body?.error === 'string' && body.error.length > 0 ? body.error : fallback;
+  return new ApiError(message, res.status);
+}
+
 async function realCreateDevicePairSession(body: { label: string; selfBind?: boolean }) {
   const res = await fetch('/api/devices/pair-session', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(`pair-session failed (${res.status})`, res.status);
+  if (!res.ok) throw await apiErrorFromResponse(res, `pair-session failed (${res.status})`);
   return res.json() as Promise<{ url: string; code: string; expiresAt: number; friendlyUrl?: string }>;
 }
 async function realListDevices() {
   const res = await fetch('/api/devices');
-  if (!res.ok) throw new ApiError(`list devices failed (${res.status})`, res.status);
+  if (!res.ok) throw await apiErrorFromResponse(res, `list devices failed (${res.status})`);
   return res.json() as Promise<{ devices: PublicDevice[] }>;
 }
 async function realRevokeDevice(id: string) {
@@ -7359,8 +7373,10 @@ export interface LanCertStatus {
   /** The port the server actually bound (#2278) — read this instead of
       hardcoding 8443: window.location.port is empty on the castwright.local
       and :443-forwarder paths, exactly when the real port is unknowable
-      client-side. */
-  httpsPort: number;
+      client-side. NOT necessarily an HTTPS port (#2278 review Finding 5) —
+      this is whatever the server bound, HTTP or HTTPS; check `active` before
+      composing an `https://` URL from it. */
+  boundPort: number;
   health: 'healthy' | 'missing' | 'expired';
   certHosts: string[];
   currentLanIps: string[];
@@ -7395,7 +7411,7 @@ const mockRegenerateLanCert = async () => ({
 const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
   requested: true,
   active: false,
-  httpsPort: 8443,
+  boundPort: 8443,
   health: 'missing',
   certHosts: [],
   currentLanIps: ['192.168.1.42'],

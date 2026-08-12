@@ -16,6 +16,7 @@ import { parse as parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
 import { isValidDeviceToken } from './workspace/device-tokens.js';
+import { getLanRuntime } from './lan-runtime.js';
 
 /* The configured shared secret, or undefined when unset/empty. */
 export function getLanAuthToken(): string | undefined {
@@ -139,10 +140,26 @@ export function mayStartPairingSession(req: Request): boolean {
   return isLoopbackRequest(req) || (isLanTokenEnforced() && isFriendlyHostnameRequest(req));
 }
 
-/* The actionable 403 body both pairing-session routes return when the caller
-   may not start a session — one source so the two never drift. */
-export const PAIRING_ORIGIN_HINT =
-  'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.';
+/* The actionable 403/401 body the pairing-session routes AND requireLanToken's
+   own 401 return when the caller isn't authorized to proceed — one source so
+   they never drift. A function, not a constant (#2278 review Finding 1/7):
+   the prior hardcoded `https://localhost:8443` was itself a second copy of
+   the exact defect this issue exists to delete — the server's own canonical
+   guidance named a port that might not be the one it actually bound. Reads
+   getLanRuntime() (set by index.ts the moment the server listens) for the
+   ACTUAL bound port, never the requested/default one — and, mirroring the
+   frontend-side check this replaces, drops the `https://` address entirely
+   when LAN HTTPS isn't actually active (cert-less, degraded to loopback
+   HTTP): selectBindHost() means that state normally isn't LAN-reachable at
+   all, but an explicit BIND_HOST override can still expose it, and naming an
+   `https://` address against a plain HTTP listener would be a dead link of a
+   new kind (wrong protocol, not just a stale port). */
+export function pairingOriginHint(): string {
+  const { httpsActive, port } = getLanRuntime();
+  return httpsActive
+    ? `Start pairing from https://localhost:${port} or https://castwright.local on the computer running Castwright.`
+    : 'Start pairing on the computer running Castwright.';
+}
 
 /** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
  *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
@@ -215,5 +232,14 @@ export function requireLanToken(req: Request, res: Response, next: NextFunction)
     /* … or an individually-revocable per-device token (srv-33). */
     if (isValidDeviceToken(provided)) return next();
   }
-  res.status(401).json({ error: 'Missing or invalid LAN access token.' });
+  // #2278 review Finding 1 — carries the same port-correct pairing guidance a
+  // 403 from mayStartPairingSession already does, so a caller 401'd here
+  // (e.g. the LAN-access card's own listDevices call) can render actionable,
+  // live-port text straight from the response instead of a client-side
+  // fetch of its own — GET /api/lan/cert/status sits behind this exact same
+  // guard, so a 401 here always implies a 401 there too; that route could
+  // never actually serve as the port source on the one branch it mattered.
+  res.status(401).json({
+    error: `Missing or invalid LAN access token. ${pairingOriginHint()}`,
+  });
 }

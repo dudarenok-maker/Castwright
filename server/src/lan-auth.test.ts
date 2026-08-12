@@ -15,7 +15,9 @@ import {
   extractToken,
   getLanAuthToken,
   ensureLanAuthToken,
+  pairingOriginHint,
 } from './lan-auth.js';
+import { setLanRuntime } from './lan-runtime.js';
 
 interface ReqOpts {
   ip?: string;
@@ -54,6 +56,17 @@ describe('lan-auth (srv-20)', () => {
     else process.env.LAN_HTTPS = origHttps;
     if (origToken === undefined) delete process.env.LAN_AUTH_TOKEN;
     else process.env.LAN_AUTH_TOKEN = origToken;
+    setLanRuntime({ httpsActive: false, port: 8080 }); // restore the module default
+  });
+
+  // #2278 review Finding 1/7 — PAIRING_ORIGIN_HINT used to be a hardcoded
+  // `https://localhost:8443` const; it's now a function reading the ACTUAL
+  // bound port off getLanRuntime(), never a requested/default one.
+  it('pairingOriginHint names the actually-bound port, not a hardcoded default', () => {
+    setLanRuntime({ httpsActive: true, port: 9443 });
+    expect(pairingOriginHint()).toBe(
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+    );
   });
 
   it('is OFF unless LAN mode AND a token are both set', () => {
@@ -111,6 +124,23 @@ describe('lan-auth (srv-20)', () => {
       });
       expect(called).toBe(false);
       expect(res._res.statusCode).toBe(401);
+    });
+
+    // #2278 review Finding 1 — the 401 body itself carries the same
+    // port-correct pairing guidance a 403 from mayStartPairingSession does,
+    // so a caller (e.g. the LAN-access card's listDevices call) can render
+    // it straight from the response body instead of a separate client-side
+    // fetch of its own for the port (which would sit behind this exact same
+    // guard and could never actually resolve on this branch).
+    it('the 401 body carries port-correct pairing guidance, not just a bare message', () => {
+      setLanRuntime({ httpsActive: true, port: 9443 });
+      const res = mkRes();
+      requireLanToken(mkReq(), res as never, () => {});
+      expect(res._res.statusCode).toBe(401);
+      expect(res._res.body).toEqual({
+        error:
+          'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+      });
     });
 
     it('401s a non-loopback request with the wrong token', () => {

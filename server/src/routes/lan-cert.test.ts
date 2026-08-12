@@ -304,20 +304,25 @@ describe('GET /api/lan/cert/status', () => {
     expect(res.body.active).toBe(true);
   });
 
-  // #2278 — httpsPort must mirror the ACTUAL bound port (getLanRuntime().port),
+  // #2278 — boundPort must mirror the ACTUAL bound port (getLanRuntime().port),
   // not a hardcoded 8443: a LAN_HTTPS_PORT override otherwise leaves every
   // client-side hint built from this response pointing at a dead address.
   it('reports the actually-bound port, not a hardcoded default', async () => {
     process.env.LAN_HTTPS = '1';
     setLanRuntime({ httpsActive: true, port: 9443 });
     const res = await request(makeApp()).get('/api/lan/cert/status');
-    expect(res.body.httpsPort).toBe(9443);
+    expect(res.body.boundPort).toBe(9443);
   });
 
+  // #2278 review Finding 5 — boundPort is whatever the server actually bound,
+  // HTTP or HTTPS; it is NOT guaranteed to be an https:// port. This pins that
+  // the degraded (loopback-HTTP) case still reports it under its own name
+  // rather than something that implies HTTPS, so a consumer is nudged to gate
+  // on `active` before composing an `https://` URL from it.
   it('still reports the bound port when LAN HTTPS is not active (degraded to loopback HTTP)', async () => {
     setLanRuntime({ httpsActive: false, port: 8080 });
     const res = await request(makeApp()).get('/api/lan/cert/status');
     expect(res.body.active).toBe(false);
-    expect(res.body.httpsPort).toBe(8080);
+    expect(res.body.boundPort).toBe(8080);
   });
 });

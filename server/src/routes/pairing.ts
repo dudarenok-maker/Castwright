@@ -25,7 +25,7 @@ import {
   isLanTokenEnforced,
   isPrivateNetworkRequest,
   mayStartPairingSession,
-  PAIRING_ORIGIN_HINT,
+  pairingOriginHint,
 } from '../lan-auth.js';
 import { configValue } from '../config/resolver.js';
 
@@ -51,7 +51,7 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
   // Loopback (the host UI) OR an already-paired device on the friendly hostname
   // may start a pairing session; bare-LAN-IP access stays loopback-only.
   if (!mayStartPairingSession(req)) {
-    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
+    res.status(403).json({ error: pairingOriginHint() });
     return;
   }
   // Gate on what the server ACTUALLY bound, not the requested flag: a cert-less box
