@@ -49,8 +49,12 @@ owner: null
   - `LanguageConventions` table per language (`dialogue-structure/lang/{en,es,fr,de,ru}.ts`),
     keyed off the book's already-resolved `opts.stageCall.language` — no new opts field. An
     unsupported/unknown language resolves to an empty table, so the parser emits no evidence and
-    the cross-examiner falls back to exactly current behaviour (narrator-default only, model
-    confidence passed through) — **byte-identical to pre-engine output**.
+    the cross-examiner falls back to the narrator-default path (model confidence passed through).
+    **Since #2245 that fallback is a pass-through — with no table there is no basis to judge, so
+    nothing is demoted — which is the OPPOSITE of pre-engine output, not byte-identical to it**
+    (pre-engine demoted every non-spoken line). This is a default-path change: the
+    `structure.enabled && conventions` guard fails on the null table whatever the knob says. See
+    invariant 4.
   - Four new registry knobs under a new `analyzer-structure` group (`server/src/config/registry.ts`
     lines 1062-1103) — see "Registry knobs" below.
   - `state.json` gains an optional `analysisProvenance` block (`server/src/workspace/scan.ts`) —
@@ -65,8 +69,11 @@ owner: null
   has no `analysisProvenance` block; the book-state GET route already tolerates that (pinned by
   a dedicated back-compat test, see Test plan).
 - **Reversibility:** one registry kill-switch, `analyzer.structure.enabled` (env `STRUCTURE_ENGINE`,
-  default `true`). Flipping it off restores exactly the pre-engine `applyNarratorDefault`-only
-  behaviour. Escalation has its own independent off-switch
+  default `true`). Flipping it off returns to the `applyNarratorDefault`-only path — no longer
+  *byte-identical* to pre-engine behaviour since #2245, which made that path read the book's own
+  conventions table instead of one language-blind regex bundle (so e.g. an English leading dash is
+  narration there now, and a no-table language is left alone rather than demoted wholesale).
+  Escalation has its own independent off-switch
   (`analyzer.structure.escalation` = `'off'`).
 
 ## Invariants to preserve
@@ -136,15 +143,19 @@ full commit history):
    pinned in `parser.test.ts` (multi-sentence utterance cases) and end-to-end in
    `analysis.structure-fixture.test.ts` (assertion 3, the multi-sentence utterance test — the
    continuation is explicitly asserted `!== 'narrator'`).
-4. **Engine-OFF / unsupported-language → byte-identical; below-alignment-floor → flag-only
-   (correction disabled).** Three independent fallback paths, all safe, but not all the same
-   output:
+4. **Engine-OFF → byte-identical to a plain `applyNarratorDefault` call; unsupported-language →
+   pass-through, no demotion (#2245); below-alignment-floor → flag-only (correction disabled).**
+   Three independent fallback paths, all safe, but not all the same output:
    - `analyzer.structure.enabled = false` (env `STRUCTURE_ENGINE=0`): the engine does not run at
-     all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call.
-     Pinned by a dedicated `toEqual` test comparing the two code paths (task 8).
-   - Unsupported/unknown book language: the language convention table resolves empty, so the
-     parser (`parser.ts`) emits zero `StructuralEvidence`, and the cross-examiner's per-sentence
-     decisions degrade to the same narrator-default-only shape.
+     all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call, now
+     with the book's own conventions table (#2245 decoupled conventions resolution from this
+     knob, so turning the engine off no longer discards the language). Pinned by a dedicated
+     `toEqual` test comparing the two code paths (task 8).
+   - Unsupported/unknown book language: `conventionsFor` resolves to `null`, so the engine's
+     `structure.enabled && conventions` guard fails before `parser.ts` ever runs, and the ELSE
+     branch's `applyNarratorDefault(sentences, null)` call is a pass-through: with no conventions
+     table there is no basis to judge spoken vs. narration, so nothing is demoted — the sentence
+     list is returned by reference, untouched.
    - Alignment rate for a chapter falls below the floor (`analyzer.structure.alignmentFloorPct`
      concept from spec §5.2, default 80%): `crossExamine`'s `flagOnly` branch
      (`cross-examine.ts:264, 77-85`) disables correction chapter-wide — every sentence passes
@@ -275,37 +286,39 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
    it by giving the engine LESS to see. Design of record:
    `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`).
 
-   **1a — Legibility.** Share of a chapter's sentences with `confidence < 0.75`
-   — the set the review UI actually highlights (`src/views/manuscript.tsx:415`,
-   `:529`, `:1919`) — at or below **44%**. 44% = the worst structurally-intact
-   chapter (ch2, 38.9%, post-fix — ch1/2/3/9 are the four chapters with zero
-   dash-invariant victims), rounded up to 39%, plus 5 points of headroom.
-   Defined over confidence, not over a report bucket, because nothing in `src/`
-   or `openapi.yaml` reads `structureReport` at all; a bucket-defined 1a would
-   report ~0.03% while the UI coloured a quarter of the chapter.
+   **1a — Review burden** (renamed from "Legibility" on 2026-08-12 via #2267).
+   Share of a chapter's sentences with `confidence < 0.75` — the set the review
+   UI actually highlights (`src/views/manuscript.tsx:415`, `:529`, `:1919`).
+   **No bar, and no structural claim.** It reports how much of a chapter the
+   review UI will light up, which is worth knowing on its own; it does *not*
+   grade the source's legibility, and a high reading is not a reason to
+   re-convert anything. Defined over confidence, not over a report bucket,
+   because nothing in `src/` or `openapi.yaml` reads `structureReport` at all.
 
-   **What a 1a breach means.** 1a grades the *manuscript's* legibility, not the
-   engine's correctness — the two are separable and this criterion is
-   deliberately the former. A chapter whose source lost its paragraph structure
-   (#2254) will breach 1a **because the engine is correctly refusing to guess**,
-   and that breach is the intended signal: it says *re-convert this source*, not
-   *the engine regressed*. A breach is therefore a real failure with a specific
-   remedy, never grounds for widening the threshold. The threshold is set from
-   structurally-intact chapters precisely so a degraded one cannot hide inside
-   it. **Measured (2026-08-11, post-#2253-fix incl. the #2266 review-gate
-   roster fix, from `docs/superpowers/plans/2026-08-11-dialogue-convention-invariant.md`'s
-   "Measured Baselines" appendix):** the five
-   paragraph-degraded chapters read ch4 23.2%, ch5 42.9%, ch6 37.2%, ch7
-   26.7%, ch8 41.8% — none exceeds 44%. As calibrated, 1a does **not**
-   separate these paragraph-degraded chapters from the structurally-intact
-   ones on this book: intact ch2 sits at 38.9%, only 4.0 points below
-   degraded ch5's 42.9%, and ch5 itself sits 1.1 points *under* the bar. So
-   the next on-box run is **not** expected to record a ch4–8 breach — the
-   criterion as defined cannot emit the "re-convert this source" signal the
-   paragraph above describes on this book. That is a real gap in target 1a,
-   tracked as its own design question in #2267 (found via PR #2266's review
-   gate); it is not fixed by retuning this threshold, which the previous
-   paragraph already rules out.
+   **Why 1a lost its bar and its structural claim.** It carried `≤ 44%` and was
+   meant to name paragraph-degraded chapters. Measured, it did the opposite in
+   both directions, and the ≤44% bar is **withdrawn, not re-tuned**:
+
+   - *False negatives.* The five paragraph-degraded Ночной дозор chapters read
+     ch4 23.2%, ch5 42.9%, ch6 37.2%, ch7 26.7%, ch8 41.8% — **none exceeds
+     44%**.
+   - *False positives.* *Unlocked* (English) is structurally healthy — 1 victim
+     in 1,430 quote-opening sentences, 0.07% (#2264) — yet **three** of its
+     chapters breach 44%: ch72 54.9%, ch61 53.0%, ch69 45.2%.
+   - *The calibration set was contaminated.* 44% came from "the worst
+     structurally-intact chapter (ch2, 38.9%)", where "intact" meant only that
+     ch1/2/3/9 had zero **dash-invariant victims** — a fact about victims,
+     reused as a claim about structure. Direct measurement of the source text
+     refutes it: **ch2 has 64 merged dialogue turns inside a single 8,604-char
+     paragraph and ch1 has 87 inside a 10,651-char one.** Chapter 1 contains
+     `- Не надо, - буркнул я. - То-то. Проснулся? - Да.` — a whole exchange
+     collapsed into one narration paragraph. Degradation in this EPUB is a
+     **continuum across all nine chapters**, not a ch4–8 property; ch3 is the
+     only chapter that reads clean. The bar was calibrated from a degraded
+     chapter, which is why it never fired.
+
+   The structural question moves to **1c** below. Design of record:
+   [`docs/superpowers/specs/2026-08-12-merged-turn-legibility-design.md`](../superpowers/specs/2026-08-12-merged-turn-legibility-design.md).
 
    **1b — Engine health.** Three readings, interpreted together, never alone:
    1. **Victim rate ≤ 4%** (1/30 = 3.3%, rounded up; n=30 hand-labelled sample,
@@ -326,6 +339,48 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
       Same sentence, different counter. Reading `flagged` without `flagOnly`
       beside it will look like the conflict count collapsed when in fact the
       chapter was never examined.
+
+   **1c — Legibility** (new 2026-08-12 via #2267; replaces 1a's structural
+   role). **`maxMergedTurnsInParagraph < 10`** per chapter — the largest number
+   of dialogue turns found inside any single paragraph. **Every** paragraph
+   counts, including one that itself opens with a dialogue dash: under a
+   maximum, skipping those hid real merges for free (#2275 C1). Reported by the
+   analyzer at **`analysisProvenance.maxMergedTurnsInParagraph` — a sibling of
+   `analysisProvenance.report`, not a field inside it** (#2275 C3), so a
+   fully-cached re-run still carries it even though `report` is absent. Applies
+   to **ru / es / fr only** — languages
+   whose typography gives every dialogue turn its own paragraph, so a turn
+   found *inside* another paragraph is conversion damage **by construction**,
+   not a correlate of it. English has no such invariant to violate and is
+   `undefined`, never `0`.
+
+   Calibrated against four books that are **not** Ночной дозор, so no
+   assumption about that EPUB's chapters enters the clean end:
+
+   | source | max turns in one paragraph |
+   |---|---|
+   | El Encargo de Coalfall (es) | 0 |
+   | La Commande de Coalfall (fr) | 0 |
+   | Юный дрессировщик (ru, 208k chars, 15 chapters) | 1 |
+   | Заказ Коалфолла (ru) | 2 |
+   | **Ночной дозор — 8 of 9 chapters** | **58 – 133** |
+   | Ночной дозор ch3 | 6 |
+
+   The bar sits 5× above the worst clean reading and 5.8× below the lowest
+   degraded chapter, inside an empirically empty interval. It is a **maximum,
+   never a sum or a rate** — a rate was specified first and failed review,
+   because merging moves character mass out of dialogue paragraphs and into
+   narration ones, inflating a rate's numerator and denominator together and
+   making it *lenient on exactly the books it targets*. A maximum works because
+   false positives are sparse (a legitimate narration-then-quoted-speech
+   paragraph yields 1–2) while a genuine merge is dense (dozens).
+
+   **What a 1c breach means.** 1c grades the *manuscript's* legibility, not the
+   engine's correctness — the two are separable and this criterion is
+   deliberately the former. A breach says *re-convert this source*, not *the
+   engine regressed*. It is a real failure with a specific remedy, and **never
+   grounds for widening the threshold** — the clean end is calibrated from
+   other books precisely so a degraded chapter cannot hide inside it.
 
    **Explicitly rejected: a "narrator delta ≈ 0" invariant.** Below the
    alignment floor `flagOnly` passes the model's id through verbatim on every

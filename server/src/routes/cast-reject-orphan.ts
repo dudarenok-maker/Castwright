@@ -187,6 +187,15 @@
    is retry-safe: the pair (and its `forgotSupersededTo`) is untouched on
    disk, and a retry re-reads it fresh.
 
+   #2161 — the same skip-and-report shape as C1's `supersededByOther`, for a
+   second refusal case: `undoRejectedPairs` is passed this handler's own
+   `cast.characters` (read above, before any write) as the live roster, and
+   refuses to write a `forgotSupersededTo` that no longer names a live id —
+   the dangling-`supersededBy`-target hazard #2110 closed, reopened one door
+   over by a stale Undo stash. Surfaced via the response's `targetNotLive`,
+   not thrown: same reasoning as C1, the pair removal is Undo's primary
+   consequence and still happens regardless.
+
    Important 1/2 (review round 2): DELETE used to find "the" pair by a raw
    `p.from === orphanedId && p.to === characterId` match. Round 1 made the
    READ side (`collectOrphanedCharacterFallbacks`, segments-io.ts) show a
@@ -303,6 +312,15 @@ interface UndoRejectOrphanMatchResponse {
       array) when nothing was skipped: nothing to restore, or every restore
       that was attempted succeeded. */
   supersededByOther?: string[];
+  /** #2161 — same shape/reasoning as `supersededByOther` just above, for the
+      sibling refusal case: set when a pair had a `forgotSupersededTo` to
+      restore but the restore was SKIPPED because that target has quietly
+      stopped being a live cast id since the original reject (the #2110
+      hazard, reopened through a stale stash — see
+      `applyRestoreSupersededId`'s doc comment in `cast-id-history.ts`).
+      Each entry is the dead target id. Absent (never an empty array) when
+      nothing was skipped for this reason. */
+  targetNotLive?: string[];
 }
 
 castRejectOrphanRouter.post(
@@ -382,7 +400,11 @@ castRejectOrphanRouter.post(
       const changed = appendNotLinked(character, bookId, orphanedId);
       if (changed) {
         try {
-          await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+          /* Preserves sibling top-level keys on cast.json (dbcf36c5's fix at
+             not-linked-edges.ts:92, same defect, same shape here) — `{
+             characters: cast.characters }` would silently drop anything else
+             on the object `cast` was read as. */
+          await writeJsonAtomic(castJsonPath(bookDir), { ...cast });
         } catch (castErr) {
           console.error(
             '[cast-reject-orphan] failed to write the notLinkedTo edge to cast.json — surfacing as a failure',
@@ -553,7 +575,9 @@ castRejectOrphanRouter.delete(
          the recorded residual. */
       if (removeNotLinked(character, bookId, orphanedId)) changed = true;
       if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+        // Preserves sibling top-level keys on cast.json — see the POST
+        // handler's identical write above for the fix reference (dbcf36c5).
+        await writeJsonAtomic(castJsonPath(bookDir), { ...cast });
       }
 
       /* #2198 — a single BATCHED call, not two separate loops each taking
@@ -581,10 +605,21 @@ castRejectOrphanRouter.delete(
 
          Round 3 (M-7), preserved exactly: accumulated into an ARRAY — a row
          governing two pairs that both skip reports BOTH skipped targets, not
-         just the last one. */
+         just the last one.
+
+         #2161 — `cast.characters` (read above, before this write) is passed
+         as the live roster `undoRejectedPairs` checks each restore's target
+         against: a `forgotSupersededTo` naming an id no longer in this list
+         is refused rather than written back, closing the dangling-target
+         window a stale restore could otherwise reopen (#2110's hazard, one
+         door over). */
       let undoResults;
       try {
-        undoResults = await undoRejectedPairs(bookDir, matchingPairs);
+        undoResults = await undoRejectedPairs(
+          bookDir,
+          matchingPairs,
+          cast.characters.map((c) => c.id),
+        );
       } catch (undoErr) {
         console.error(
           '[cast-reject-orphan] failed to undo the rejection in cast-id-history.json — surfacing as a failure',
@@ -603,6 +638,7 @@ castRejectOrphanRouter.delete(
       }
 
       const supersededByOthers: string[] = [];
+      const targetsNotLive: string[] = [];
       matchingPairs.forEach((pair, i) => {
         const result = undoResults[i];
         if (!result.restored && result.supersededByOther !== undefined) {
@@ -610,6 +646,13 @@ castRejectOrphanRouter.delete(
           console.log(
             `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
               `"${pair.forgotSupersededTo}" — a newer alias to "${result.supersededByOther}" already exists`,
+          );
+        }
+        if (!result.restored && result.targetNotLive && pair.forgotSupersededTo !== undefined) {
+          targetsNotLive.push(pair.forgotSupersededTo);
+          console.log(
+            `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
+              `"${pair.forgotSupersededTo}" — "${pair.forgotSupersededTo}" is no longer a live cast id (#2161)`,
           );
         }
       });
@@ -636,6 +679,7 @@ castRejectOrphanRouter.delete(
          both since superseded by the same fresher one), and without this the
          client would render that alias's name twice ("Narrator" / "Narrator"). */
       const supersededByOther = [...new Set(supersededByOthers)];
+      const targetNotLive = [...new Set(targetsNotLive)];
       return res.json({
         characterId,
         orphanedId,
@@ -644,6 +688,7 @@ castRejectOrphanRouter.delete(
         resolvedCharacterId: resolution?.character.id,
         removedFrom,
         supersededByOther: supersededByOther.length ? supersededByOther : undefined,
+        targetNotLive: targetNotLive.length ? targetNotLive : undefined,
       });
     });
   },

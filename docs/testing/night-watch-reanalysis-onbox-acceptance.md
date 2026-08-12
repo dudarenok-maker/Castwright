@@ -236,7 +236,8 @@ measurement and a re-run of history.
 
 | Field | Target | 2026-08-06 baseline |
 |---|---|---|
-| confidence < 0.75 share (1a) | **≤ 44% per chapter** (plan 247 target 1a, re-specified 2026-08-11 via #2253) | not yet measured against the model column — see the offline replay below for the post-fix confidence-bucket numbers this bar was derived from |
+| confidence < 0.75 share (1a — **review burden**) | **no bar** (#2267 withdrew the ≤44% bar on 2026-08-12; 1a no longer carries a structural claim) | record it as an observation only — it says how much of the chapter the review UI highlights, nothing about the source |
+| `maxMergedTurnsInParagraph` (1c — **legibility**) | **< 10 per chapter** (plan 247 target 1c) | offline replay reads ch3 6, and 58–133 for the other eight chapters — so **eight chapters are expected to breach**, and that breach is the intended "re-convert this source" signal, not a regression |
 | `unresolved` share (1b reading 2) | no fixed bar — read alongside `flagged`/`alignedPct`/`flagOnly` | not yet measured; the bucket did not exist at the 2026-08-06 baseline |
 | `flagged` / victim rate (1b readings 1, 3) | victim rate **≤ 4%** (n=30) (plan 247 target 1b) | 6,568 book-level; ch9 alone **488**, the only chapter over the old absolute bar (retained as history — the absolute bar is no longer the criterion) |
 | `aligned` | > 80% floor, expect ~92–99% | 47.4% book, ch5–8 below floor |
@@ -247,10 +248,18 @@ Chapter 9 is the calibration point: it aligned at 95% on the old run, ran the fu
 engine, and landed at 488. If the fix works, the other eight chapters should now look
 like chapter 9 rather than like their old selves.
 
-**C2 passes** when every chapter's confidence<0.75 share (1a) lands at or below **44%**,
-the 1b victim rate lands at or below **4%**, `unresolved` reads alongside `flagged`/
-`alignedPct`/`flagOnly` rather than being read alone, and `escalated` is non-zero
-throughout.
+**C2 passes** when the 1b victim rate lands at or below **4%**, `unresolved` reads
+alongside `flagged`/`alignedPct`/`flagOnly` rather than being read alone, and
+`escalated` is non-zero throughout. The confidence<0.75 share (1a) is **recorded but
+does not gate** — #2267 withdrew its bar on 2026-08-12 after it was measured to miss
+every degraded chapter of this book while flagging three healthy chapters of an
+English one.
+
+**1c is recorded, and is expected to breach on this book.** Eight of nine chapters
+hold 58–133 merged dialogue turns inside a single paragraph. That is a finding about
+the *source*, not the engine: it says this EPUB needs re-converting (#2254). It does
+**not** fail C2, because C2 grades the engine. Record the per-chapter 1c figures so the
+re-conversion, when it happens, has a before number to beat.
 
 ---
 

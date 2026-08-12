@@ -473,6 +473,41 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     expect(history?.rejectedPairs).toEqual([]);
   });
 
+  it('#2161 — Undo refuses to restore a forgotSupersededTo whose target has quietly stopped being live, instead of reintroducing a dangling supersededBy entry (#2110 reopened)', async () => {
+    // Repro shape (issue #2161, steps 1-3 collapsed into the on-disk state
+    // they produce): 'mayrin' was once aliased to 'wren' via retirement/reject
+    // (D6's stash), but a LATER, unrelated retirement moved the pair's `to`
+    // from 'wren' onto 'mairin' while leaving the unrelated `forgotSupersededTo`
+    // stash untouched (see cast-id-history.test.ts's "preserves
+    // forgotSupersededTo across a repoint" for the same divergence at the
+    // store layer). 'wren' itself is NOT part of this book's live cast —
+    // step 3's "a later re-analysis drops Y with no retirement ever recorded".
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }],
+      }),
+    );
+
+    // Step 4: the user clicks Undo on the mayrin-vs-mairin rejected pair.
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    // The rejection is still undone — Undo's primary consequence.
+    expect(res.body.wasRejected).toBe(true);
+    // Surfaced, not silently dropped: the response names the dead target.
+    expect(res.body.targetNotLive).toEqual(['wren']);
+
+    // Step 5, THE HAZARD THIS TEST EXISTS TO PREVENT: since 'wren' is not
+    // live, supersededBy['mayrin'] must NOT be written back to 'wren' — that
+    // would be the exact dangling-target shape #2110 closed, reopened
+    // through a stale Undo stash.
+    const history = readHistory();
+    expect(history?.supersededBy).toEqual({});
+    expect(history?.rejectedPairs).toEqual([]);
+  });
+
   it('Important 2 (review round 2) — a chip shown via a normalised-tier match IS removable by the DELETE the UI sends for that row (round-trip)', async () => {
     // The repo's own real drift shape: 'the_torment'/'The-Torment' both
     // normalise to 'the-torment'. Add the live target to this book's cast.

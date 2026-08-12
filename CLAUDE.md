@@ -57,15 +57,22 @@ The seam is defect vs. taste, not near vs. far:
   formatting; don't refactor, rename, or reorganise what isn't broken. Match
   existing style even if you'd do it differently (see "Conventions worth
   preserving"). "I'd have written it another way" is never a reason to touch
-  a line.
-- **Defects in code you're already touching get fixed** — not noted, not
-  deferred, not left for a cleanup pass — provided they clear the fix-now bar
-  in [Execution model → Incidental
-  findings](#incidental-findings-report-judge-dispatch). A defect that needs
-  judgement or design is filed instead, and the ticket is the deliverable.
+  a line. This is narrower than it looks: a comment your change made *false*
+  is a chore, not taste, and gets fixed under the next bullet — the test is
+  whether the repo's own rules already say it's owed, or only your preference
+  does.
+- **Defects _and chores_ get fixed in the same round** — not noted, not
+  deferred, not left for a cleanup pass. This covers code you're already
+  touching *and* code next door that the work surfaced; adjacency is not the
+  test. A chore the work made owed — a staled derived artifact, a missing index
+  or register row, a knob without its wiring — is a finding on the same footing
+  as a bug, not a lesser one. The only finding that is filed instead of fixed is
+  one needing a **design pass** — a decision with more than one defensible
+  outcome — and then the ticket names that decision. Full protocol: [Execution
+  model → Incidental findings](#incidental-findings-report-fix-record).
 - **Remove what YOUR changes orphaned** (imports, variables, functions).
   Pre-existing dead code is a finding, not a licence: route it through the
-  same report-judge-dispatch path rather than deleting it on sight.
+  same report-fix-record path rather than deleting it on sight.
 - The test: every changed line traces to the user's request **or to a defect
   that request exposed** — and the PR body says which.
 
@@ -164,50 +171,105 @@ Invoking the bar is **announced, not silent**: say so in the end-of-turn summary
 so the shortcut can be redirected. It should be rare. A run in which several
 changes were "trivial" is a run that mis-scoped the work.
 
-### Incidental findings: report, judge, dispatch
+### Incidental findings: report, fix, record
 
-Long-running agent work turns up defects in passing — in code being touched, in
-code next door. These are **fixed as found, not accumulated into a cleanup pass
-after the fact.** The accumulation is the failure mode: it converts a day of
-agent work into a day of human janitorial work.
+Long-running agent work turns things up in passing — in code being touched, in
+code next door. **They are fixed in the same round, by a dispatched fix agent.**
+Not accumulated into a cleanup pass, not converted into a queue of tickets for
+someone else's day. The queue is the failure mode: it turns a day of agent work
+into a day of human janitorial work, and every deferral re-pays the whole cost
+of rediscovering the finding from cold.
+
+**A finding is a defect OR a chore — the rule does not distinguish them.** The
+`bug`-vs-`type:chore` label is a routing detail for the board, not a licence to
+defer one and fix the other. Both were surfaced by this work; both cost the same
+to fix now and strictly more to fix later. Chores that count, with real examples
+from this repo:
+
+- **a derived artifact your change staled** — `src/lib/api-types.ts` after an
+  `openapi.yaml` edit, `docs/BACKLOG.md` after a board change, brand PNGs after
+  an SVG edit;
+- **a bookkeeping row your change made owed** — an `INDEX.md` entry, an
+  on-box-acceptance register row, a flaky-register line;
+- **a knob that landed without its wiring** — a registry key with no
+  `config:sync`, no Settings row, no `.env.example` line;
+- **dead or duplicated code the work exposed** — an orphaned export, a helper
+  that is now the second copy of one that already exists;
+- **a seam you touched that has no test**, or a `.skip` with no replacement;
+- **a stale comment or doc sentence your change made false.**
+
+**The seam is defect / chore / taste — the first two are fixed, the third is
+never touched.** Taste is "I'd have written it another way": renaming,
+reordering, restyling, or refactoring code that is correct and consistent with
+its neighbours. That stays off-limits under "Surgical changes" and does not
+become fixable by being relabelled a chore. The test: a chore is something the
+repo's own rules already say is owed; taste is something only your preference
+says is owed.
 
 The subagent's behaviour is unchanged — **it reports, it does not
-opportunistically fix.** Judgement stays in the main thread:
+opportunistically fix.** The main thread dispatches:
 
 1. **The subagent reports the finding** in its return value (implementer or
    task-review agent alike). It does not widen its own diff to fix it.
-2. **The main thread judges it** against the fix-now bar, **at the task boundary
-   where it surfaced** — not at the end of the branch. Deferring the triage
-   recreates the pile with extra steps.
-3. **Clears the bar → dispatch a dedicated fix agent immediately.** Fresh,
+2. **The main thread dispatches a dedicated fix agent immediately**, at the task
+   boundary where the finding surfaced — not at the end of the branch. Fresh,
    narrowly scoped: one finding, one fix, one paired test, briefed from the
    report. Not "and while you're there."
-4. **Doesn't clear it → file it** and move on: a GitHub issue in the same round,
-   labelled and boarded per "The backlog" — plus a `docs/BACKLOG.md` row *only*
-   if it is `type:feature`, since chores and bugs never render there. A finding
-   parked only in a plan's "suggested follow-ups" is a finding being lost.
+3. **Record it too.** File the GitHub issue in the same round, labelled and
+   boarded per "The backlog" — plus a `docs/BACKLOG.md` row *only* if it is
+   `type:feature`, since chores and bugs never render there. **The issue is
+   bookkeeping that accompanies the fix, not a substitute for it.** Filing one
+   and moving on is the leak this protocol exists to close.
 
-**The fix-now bar.** All four must hold:
+**The one thing that defers a finding: it needs a design pass.** That means the
+fix has more than one defensible outcome and something has to *choose* between
+them — an interface, a contract, or a behaviour the user has a stake in. Only
+then is the issue the whole deliverable for this round, and it goes through
+phase 1. Say in the issue which decision is owed; "needs design" without the
+decision named is a deferral in disguise.
 
-- the defect is in code the branch already touches, or directly adjacent to it;
-- the fix is **obvious** — one defensible answer, no options to weigh;
-- it needs no interface, contract, or behaviour decision;
-- it is coverable by a test in this same PR, and needs no regression plan of
-  its own.
+> This replaces the four-conjunct **"fix-now bar"** that earlier plans and code
+> comments cite. That bar gated *fixing*; this one gates *deferring*, and only
+> its third clause (no interface/contract/behaviour decision) survives. A
+> historical doc saying something "fails the fix-now bar" recorded a decision
+> under the old rule — it is not precedent under this one.
 
-Anything else — two defensible fixes, a changed signature, widened blast radius
-— is design work, and design work goes through phase 1.
+**These are NOT reasons to defer.** Each has been used; each is void:
 
-**Cost is not an objection.** A finding that clears the bar is by definition the
-Model-routing table's "single well-specified bug fix with a clear repro and no
-design decisions" — **Cheap tier**. The judgement is yours and stays cheap; the
-typing is Haiku's. More dispatches is the intended outcome, not a side effect.
+- **"it would expand the scope of this PR"** — a finding the work surfaced is in
+  scope by definition. The PR body declares the fix and that settles it.
+- **"it needs a judgement call"** — every fix needs judgement. The bar is
+  needing a *decision*, not needing thought. Weighing two implementations of
+  one agreed behaviour is not a design pass; picking which behaviour is right
+  is.
+- **"it's pre-existing"** / "the branch doesn't touch that file" / "it's next
+  door" — adjacency stopped being the test.
+- **"it needs its own test / its own regression plan"** — write the test in this
+  PR. That is the standing requirement anyway.
+- **"it's cheaper to batch these later"** — it is not. Ten open tickets cost
+  strictly more than ten dispatched agents, and they cost it in the user's time.
+- **"the user can decide later whether it's worth fixing"** — the user asked for
+  working code, not a triage inbox.
+- **"it's only a chore"** — the label is the board's routing, not a priority
+  ruling, and a chore is the *cheapest* thing on this list to dispatch. "It's
+  not user-visible" and "nothing is broken yet" are the same excuse: a stale
+  derived artifact or an unwired knob is a defect that has not been noticed
+  yet.
+
+**Cost is not an objection.** A finding that needs no design pass is by
+definition Cheap tier on the Model-routing table — a defect is its "single
+well-specified bug fix with a clear repro and no design decisions", a chore its
+"boilerplate/scaffolding" or "running commands and summarizing output". The
+dispatch is yours and stays cheap; the typing is Haiku's. More dispatches is the
+intended outcome, not a side effect: a round that turns up ten findings ends
+with ten fix agents, not ten tickets.
 
 **Nothing is dropped silently.** Every finding lands in the progress ledger as
-either fixed-here (with the fix agent's SHA) or deferred-with-issue-number. A
-finding that is neither is the exact leak this protocol closes. Incidental
-fixes are also **declared in the PR body** ("Also fixed, found in passing: …")
-— an unannounced fix reads as scope creep to a reviewer.
+fixed-here (with the fix agent's SHA), or — for the design-pass case only — as
+an issue number *plus the decision that is owed*. A finding that is neither is
+the exact leak this protocol closes. Incidental fixes are also **declared in the
+PR body** ("Also fixed, found in passing: …") — an unannounced fix reads as
+scope creep to a reviewer.
 
 This is the operative half of "Surgical changes": *fix what's broken, don't
 restyle what works.*
@@ -538,6 +600,17 @@ added to a plan), file a Backlog-item issue in the same round — it gets
 re-run `npm run backlog:sync`** so its row lands in `docs/BACKLOG.md`; a
 `type:chore` or `bug` issue is complete at the board and needs no row (see
 above). The backlog is only useful while it stays current.
+
+**Filing is for net-new work, not for findings.** A "suggested follow-up" that
+is a genuinely new capability belongs here. A **defect or a chore** found in
+passing does not: it gets **fixed in the same round** by a dispatched fix agent,
+and its issue merely records that — see [Incidental
+findings](#incidental-findings-report-fix-record). This is where the `type:chore`
+label misleads: it exists so the item routes to the board's "Bugs & Chores" view
+instead of `docs/BACKLOG.md`, **not** to mark it as deferrable. A chore the work
+made owed is fixed now and the issue closes in the same PR. A plan that ends
+with a list of unfixed defects or chores under "Suggested follow-ups" has
+mis-filed them.
 
 ## Planning-mode behaviour
 

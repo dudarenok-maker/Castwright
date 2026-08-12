@@ -7536,10 +7536,15 @@ components:
             recomputed AFTER the undo's writes land. Restoring a rejected
             pair's forgotten `supersededBy` alias (when present) makes this
             the SAME value the resolver returned before the original reject
-            — the lossless-undo contract, UNLESS `supersededByOther` is set
-            (a later, unrelated re-analysis has since recorded a different
-            alias for `orphanedId`; the restore is skipped rather than
-            overwriting it — see `supersededByOther`).
+            — the lossless-undo contract, UNLESS either `supersededByOther`
+            or `targetNotLive` is set: `supersededByOther` when a later,
+            unrelated re-analysis has since recorded a DIFFERENT alias for
+            `orphanedId` (the restore is skipped rather than overwriting it
+            — see `supersededByOther`); `targetNotLive` when the forgotten
+            alias's own target has quietly stopped being a live cast id
+            since the original reject (#2161 — the restore is refused
+            rather than reintroducing a dangling alias — see
+            `targetNotLive`).
         resolvedCharacterId:
           type: string
           description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
@@ -7577,6 +7582,23 @@ components:
             skip but the last one. Absent (never an empty array) in the
             ordinary case: nothing to restore, or every restore attempted
             succeeded.
+        targetNotLive:
+          type: array
+          items: { type: string }
+          description: |
+            #2161 — same shape and reasoning as `supersededByOther` above,
+            for the sibling refusal case: set (non-empty) when one or more
+            of the removed pairs had a forgotten `supersededBy` alias to
+            restore, but the restore was REFUSED because that alias's own
+            target has quietly stopped being a live cast id since the
+            original reject (the #2110 dangling-alias hazard, reopened
+            through a stale Undo stash if written back unconditionally).
+            Each entry is the dead target id, one per refused restore.
+            Writing it back anyway would silently reintroduce a
+            `supersededBy` entry pointing at a character that no longer
+            exists. Absent (never an empty array) in the ordinary case:
+            nothing to restore, or every restore attempted succeeded or was
+            skipped for the different reason `supersededByOther` covers.
     LinkOrphanMatchResponse:
       type: object
       required: [characterId, orphanedId, resolution]
