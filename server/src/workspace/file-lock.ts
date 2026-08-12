@@ -105,6 +105,35 @@ export function isLockAcquisitionTimeout(err: unknown): boolean {
   );
 }
 
+/* #2292 (owner decision) — five batch routes (script-review, cast-design,
+   voice-style, cast-series-patch, voice-override-linked) report a failed item
+   inside an otherwise-successful 200/207 body. A `LockAcquisitionTimeoutError`
+   reaching one of those handlers says NOTHING about the item: the chapter /
+   character / book is fine, the lock was merely held by something else.
+
+   Escalating the whole batch was considered and rejected: failing N-1 healthy
+   items because one hit contention is worse than reporting the one. So the
+   per-item SHAPE stays exactly as it was and only the REASON changes — the
+   user is no longer told their chapter is broken when it isn't.
+
+   ONE shared constant rather than five hand-written strings: the five routes
+   phrase their ordinary fallbacks differently and five copies of this one
+   would drift apart the first time it was reworded. Deliberately says nothing
+   about which file or key: the five sites contend on three different lock
+   classes (`cast:`, `script-review-ledger:`, `library-voice:`), and the
+   thrown error's own message already names the key for the server log. */
+export const LOCK_CONTENTION_ITEM_REASON =
+  'Timed out waiting for another operation on this book to release its file lock — that is ' +
+  'contention, not a problem with this item. Retry once the other operation has finished.';
+
+/** The reason string a per-item failure should report: `fallback` for an
+ *  ordinary error, `LOCK_CONTENTION_ITEM_REASON` for a lock-acquisition
+ *  expiry. Callers keep their own per-item failure shape — this only decides
+ *  the words that go in it. */
+export function itemFailureReason(err: unknown, fallback: string): string {
+  return isLockAcquisitionTimeout(err) ? LOCK_CONTENTION_ITEM_REASON : fallback;
+}
+
 export async function withKeyLock<T>(
   key: string,
   fn: () => Promise<T>,

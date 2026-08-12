@@ -21,6 +21,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
+import { itemFailureReason } from '../workspace/file-lock.js';
 import { readJson } from '../workspace/state-io.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
@@ -170,7 +171,12 @@ voiceStyleRouter.post(
         const written = await writeVoiceStylePersona(bookDir, c.id, voiceStyle);
         if (written) voiceStyles[c.id] = voiceStyle;
       } catch (e) {
-        failures[c.id] = (e as Error).message || 'Voice-style generation failed.';
+        /* #2292 (owner decision) — `writeVoiceStylePersona` takes the book's
+           cast lock, so ordinary contention lands here. Keep the per-character
+           `failures` shape (one contended character must not fail the batch),
+           but say contention rather than letting the user read it as "this
+           character's persona could not be generated". */
+        failures[c.id] = itemFailureReason(e, (e as Error).message || 'Voice-style generation failed.');
         console.error('[voice-style] book=%s character=%s failed', bookId, c.id, e);
       }
     }

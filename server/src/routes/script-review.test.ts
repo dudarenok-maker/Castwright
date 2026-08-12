@@ -2008,3 +2008,62 @@ describe('mutation endpoints', () => {
     expect(res.body.error).toBe('chapterId, version, and selected are required.');
   });
 });
+
+/* #2292 (owner decision) — a checkpoint-save lock timeout reports contention,
+ * not a broken chapter.
+ *
+ * `upsertChapterEntry` takes `script-review-ledger:<bookId>`, so ordinary
+ * contention (a concurrent /resolve or selection PATCH on the same book)
+ * reaches this route's per-chapter failure path. The shape stays per-chapter —
+ * failing a whole multi-chapter review because one chapter hit the ledger lock
+ * is worse than reporting the one, and the chapter's ops were already
+ * broadcast live — but the reason no longer reads as a fault in that chapter.
+ *
+ * Two-directional: an ordinary ledger-write failure keeps its own message,
+ * which is the half that reddens if the route rewrote every reason.
+ */
+describe('script-review — per-chapter reason on a lock timeout (#2292)', () => {
+  async function reviewWithLedgerThrow(toThrow: unknown) {
+    writeBook(SENTENCES);
+    runReview.mockImplementation((_m: string, chapterId: number): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.resolve(CANNED_OPS);
+      return Promise.resolve({ ops: [] });
+    });
+
+    const ledger = await import('../workspace/script-review-ledger.js');
+    const spy = vi.spyOn(ledger, 'upsertChapterEntry').mockRejectedValue(toThrow);
+    try {
+      return await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('names contention in the chapter-failed message', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const res = await reviewWithLedgerThrow(
+      new LockAcquisitionTimeoutError('script-review-ledger:b_x', 10_000),
+    );
+
+    const events = parseSse(res.text);
+    /* The site really ran — chapter 1 is the only one with ops, so it is the
+       only one that reaches `upsertChapterEntry` at all. */
+    const failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed).toBeDefined();
+    expect(failed?.message).toBe(`Failed to save findings: ${LOCK_CONTENTION_ITEM_REASON}`);
+    /* The route's own framing survives; only the reason changed. And never
+       the raw lock text, which read as "this chapter is broken". */
+    expect(failed?.message).toContain('Failed to save findings:');
+    expect(failed?.message).not.toContain('withKeyLock');
+  });
+
+  it('an ordinary ledger failure keeps its own message', async () => {
+    const res = await reviewWithLedgerThrow(new Error('simulated disk-full'));
+
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed?.message).toBe('Failed to save findings: simulated disk-full');
+  });
+});

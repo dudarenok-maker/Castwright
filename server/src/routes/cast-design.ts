@@ -37,6 +37,7 @@ import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { itemFailureReason } from '../workspace/file-lock.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
@@ -610,13 +611,22 @@ async function runDesignJob(
             });
             return;
           }
-          /* Per-character synthesis failure — record it and move on. */
-          job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+          /* Per-character synthesis failure — record it and move on.
+             #2292 (owner decision) — a `LockAcquisitionTimeoutError` out of
+             the persist steps in this try (`applyOverrideToCastFiles`,
+             `persistEmotionVariant`, `ensureCharacterVoiceUuid`,
+             `writeVoiceStylePersona`) keeps this per-character shape — one
+             contended character must not fail the other N — but reports
+             contention rather than implying the character itself is at fault.
+             The same string on both surfaces so the live toast and the
+             end-of-job `failures` list can't disagree. */
+          const reason = itemFailureReason(e, message);
+          job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',
             characterId,
             name: character.name ?? characterId,
-            errorReason: message,
+            errorReason: reason,
           });
           break;
         }

@@ -412,7 +412,18 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
     if (e.status && e.error) {
       return res.status(e.status).json({ error: e.error });
     }
-    throw err;
+    /* #2292 (owner decision) — this used to `throw err`. Anything without
+       `{status, error}` then reached Express 5's DEFAULT handler, which
+       answers `500 text/html` — not this route's JSON `{ error }` shape, which
+       is the only thing the frontend parses, so the user got a blank failure.
+       Pre-existing for any such throw (an EACCES on the cast.json write did it
+       too), but #2260's deferred rethrow made it reachable by ordinary
+       contention, so it is fixed here rather than left to the default handler.
+       Every exit from this route is now JSON. */
+    console.error('[cast-merge] merge failed', err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 });
 

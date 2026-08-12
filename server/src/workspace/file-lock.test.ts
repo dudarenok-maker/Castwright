@@ -5,6 +5,8 @@ import {
   LockAcquisitionTimeoutError,
   LOCK_ACQUISITION_TIMEOUT_CODE,
   isLockAcquisitionTimeout,
+  itemFailureReason,
+  LOCK_CONTENTION_ITEM_REASON,
 } from './file-lock.js';
 
 /* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
@@ -267,5 +269,46 @@ describe('withKeyLock typed timeout error (#2260 round 2)', { retry: 0 }, () => 
     });
     expect(fromAnotherModuleInstance instanceof LockAcquisitionTimeoutError).toBe(false);
     expect(isLockAcquisitionTimeout(fromAnotherModuleInstance)).toBe(true);
+  });
+});
+
+/* #2292 (owner decision) — the shared per-item reason used by the five batch
+ * routes (script-review, cast-design, voice-style, cast-series-patch,
+ * voice-override-linked). The per-item SHAPE is theirs; only the words are
+ * here, so all five say the same thing and cannot drift apart.
+ *
+ * Each route also has its own two-directional fixture proving it is wired to
+ * this; these cases pin the helper itself, including the negative half a
+ * route-level test cannot easily reach (a non-Error value).
+ */
+describe('itemFailureReason (#2292)', () => {
+  it('reports contention for a lock-acquisition expiry, whatever produced it', () => {
+    expect(itemFailureReason(new LockAcquisitionTimeoutError('cast:/w/b', 10_000), 'boom')).toBe(
+      LOCK_CONTENTION_ITEM_REASON,
+    );
+    /* Same `code`-not-`instanceof` contract as `isLockAcquisitionTimeout` --
+       a foreign copy of the class still discriminates. */
+    expect(
+      itemFailureReason(
+        Object.assign(new Error('withKeyLock: timed out'), { code: LOCK_ACQUISITION_TIMEOUT_CODE }),
+        'boom',
+      ),
+    ).toBe(LOCK_CONTENTION_ITEM_REASON);
+  });
+
+  it('passes an ordinary failure through untouched', () => {
+    /* The half that reddens if a route starts rewriting every reason: a real
+       per-item error must reach the user verbatim. */
+    expect(itemFailureReason(Object.assign(new Error('nope'), { code: 'EPERM' }), 'disk full')).toBe(
+      'disk full',
+    );
+    expect(itemFailureReason(new Error('plain'), 'plain')).toBe('plain');
+    expect(itemFailureReason(null, 'fallback')).toBe('fallback');
+    expect(itemFailureReason('ELOCKACQUIRETIMEOUT', 'fallback')).toBe('fallback');
+  });
+
+  it('never leaks the raw lock message, which is what read as a broken item', () => {
+    expect(LOCK_CONTENTION_ITEM_REASON).not.toContain('withKeyLock');
+    expect(LOCK_CONTENTION_ITEM_REASON).toContain('contention');
   });
 });

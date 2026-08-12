@@ -37,6 +37,24 @@ import request from 'supertest';
 
 const retire = vi.hoisted(() => ({ toThrow: null as unknown }));
 
+/* #2292 — a seam for a NON-lock failure that genuinely escapes
+   `performCastMerge`. `retire.toThrow` cannot serve for that: an EPERM there
+   is swallowed by design. `loadAnalysisCache` runs inside the merge with no
+   handler of its own, so a throw there escapes exactly as a cast.json EACCES
+   would. */
+const cacheLoad = vi.hoisted(() => ({ toThrow: null as unknown }));
+
+vi.mock('../store/analysis-cache.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
+  return {
+    ...actual,
+    loadAnalysisCache: async (...args: Parameters<typeof actual.loadAnalysisCache>) => {
+      if (cacheLoad.toThrow) throw cacheLoad.toThrow;
+      return actual.loadAnalysisCache(...args);
+    },
+  };
+});
+
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
   return {
@@ -62,6 +80,7 @@ let bookId: string;
 let cachePath: string;
 let performCastMerge: typeof import('./cast-merge.js').performCastMerge;
 let suggestionsApp: Express;
+let mergeApp: Express;
 let LockAcquisitionTimeoutError: typeof import('../workspace/file-lock.js').LockAcquisitionTimeoutError;
 
 const characters = [
@@ -192,6 +211,10 @@ beforeAll(async () => {
   suggestionsApp.use(express.json());
   suggestionsApp.use('/api/books', suggestionsRoute.castMergeSuggestionsRouter);
 
+  mergeApp = express();
+  mergeApp.use(express.json());
+  mergeApp.use('/api/books', castMerge.castMergeRouter);
+
   /* Same fixed-relative cache path cast-merge.test.ts computes. */
   const testFileDir = dirname(fileURLToPath(import.meta.url));
   cachePath = resolve(testFileDir, '..', '..', 'handoff', 'cache', `${MANUSCRIPT_ID}.json`);
@@ -200,6 +223,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   retire.toThrow = null;
+  cacheLoad.toThrow = null;
   seedDisk();
 });
 
@@ -339,5 +363,135 @@ describe('POST merge-suggestions/accept — a deferred timeout still dismisses (
     const ok = await callAccept();
     expect(ok.status).toBe(200);
     expect(readSuggestions()).toHaveLength(0);
+  });
+});
+
+/* #2292 (owner decision) — the ROUTE-level shape of a merge failure.
+ *
+ * Both callers of `performCastMerge` used to end their `catch` with a bare
+ * `throw err` for anything that did not carry `{status, error}`. Express 5
+ * forwards that to its DEFAULT handler, which answers `500 text/html` — not
+ * the JSON `{ error }` shape these routes return everywhere else and the only
+ * shape the frontend parses, so the user got a failure with no words in it.
+ *
+ * Pre-existing for any such throw (an EACCES on the cast.json write did the
+ * same), but #2260's deferred rethrow made it reachable by ORDINARY
+ * CONTENTION, which is why it is fixed here. The status was already 500 in
+ * both directions and still is; what changed is that the body is now readable.
+ *
+ * Three fixtures per route, not two, because the interesting regression is the
+ * third: a blanket `return res.status(500)` that also swallowed the
+ * `{status, error}` shapes would turn every 404 into a 500. That path is
+ * pinned alongside the two error classes.
+ */
+describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
+  /* A seam for a NON-lock failure that genuinely escapes `performCastMerge`.
+     `retire.toThrow` cannot serve: an EPERM there is swallowed by design (the
+     fixtures above pin exactly that), so it never reaches the route. */
+  function expectJsonError(res: { status: number; type: string; body: { error?: string } }): void {
+    expect(res.status).toBe(500);
+    expect(res.type).toBe('application/json');
+    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error).not.toBe('');
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('POST /cast/merge — a lock timeout comes back as JSON naming the lock key', async () => {
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+
+    const res = await request(mergeApp)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expectJsonError(res);
+    /* The diagnosable half: the message that names the key and both cast-lock
+       rules survives into the body the client can actually read. Before the
+       fix this body was an HTML error page. */
+    expect(res.body.error).toContain(`cast-id-history:${bookDir}`);
+    expect(res.body.error).toContain('rule 4');
+    /* And the merge really did land — the deferred rethrow's contract. */
+    expectMergeFullyApplied();
+  });
+
+  it('POST /cast/merge — an EPERM-shaped escape comes back as JSON too', async () => {
+    /* Aimed at `loadAnalysisCache`, which runs inside `performCastMerge` after
+       the retirement block and has no handler of its own, so a plain Error
+       there escapes exactly the way a cast.json EACCES would. Same 500 as
+       before; the body is the part that was unreadable. */
+    cacheLoad.toThrow = Object.assign(
+      new Error("EPERM: operation not permitted, open 'analysis-cache.json'"),
+      { code: 'EPERM' },
+    );
+
+    const res = await request(mergeApp)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expectJsonError(res);
+    expect(res.body.error).toContain('EPERM');
+  });
+
+  it('POST /cast/merge — a structured {status,error} failure keeps ITS status', async () => {
+    /* The regression this pair exists to prevent: the new 500 must not eat the
+       route's own 404/409 shapes. */
+    const res = await request(mergeApp)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: 'no-such-id', targetId: TARGET_ID });
+
+    expect(res.status).toBe(404);
+    expect(res.type).toBe('application/json');
+    expect(typeof res.body.error).toBe('string');
+  });
+
+  it('POST merge-suggestions/accept — the second caller answers JSON as well', async () => {
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+
+    const res = await request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expectJsonError(res);
+    expect(res.body.error).toContain(`cast-id-history:${bookDir}`);
+    /* Still dismissed (round 4's C1 fix) — the JSON body is additive to that,
+       not a replacement for it. */
+    expect(
+      (JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast-merge-suggestions.json'), 'utf8')) as {
+        suggestions?: unknown[];
+      }).suggestions ?? [],
+    ).toHaveLength(0);
+  });
+
+  it('POST merge-suggestions/accept — an EPERM-shaped escape is JSON too', async () => {
+    cacheLoad.toThrow = Object.assign(
+      new Error("EPERM: operation not permitted, open 'analysis-cache.json'"),
+      { code: 'EPERM' },
+    );
+
+    const res = await request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expectJsonError(res);
+    expect(res.body.error).toContain('EPERM');
+  });
+
+  it('POST merge-suggestions/accept — a structured failure keeps ITS status', async () => {
+    const res = await request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: 'no-such-id', targetId: TARGET_ID });
+
+    expect(res.status).toBe(404);
+    expect(res.type).toBe('application/json');
   });
 });

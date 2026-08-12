@@ -129,7 +129,15 @@ castMergeSuggestionsRouter.post(
       if (e.status && e.error) {
         return res.status(e.status).json({ error: e.error });
       }
-      throw err;
+      /* #2292 (owner decision) — mirrors the sibling `POST /cast/merge`
+         handler: a throw without `{status, error}` used to reach Express 5's
+         default handler and come back as `500 text/html` instead of this
+         route's JSON `{ error }`. The status was already 500 either way; what
+         the frontend could not read was the body. */
+      console.error('[cast-merge-suggestions] accept failed', err);
+      return res.status(500).json({
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     /* Drop the suggestion only after a successful merge. */
