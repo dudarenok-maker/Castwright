@@ -7,9 +7,14 @@ import type { LanguageConventions } from '../types.js';
 export const ja: LanguageConventions = {
   language: 'ja',
   dialogueOpen: null,
+  // #2279 — `“…”` and `"…"` appear in translated / web-converted Japanese that
+  // uses Western quotes instead of corner brackets. `zh` already carried `“…”`
+  // and `ja` did not, so the same line used to split by language.
   quotePairs: [
     ['「', '」'],
     ['『', '』'],
+    ['“', '”'],
+    ['"', '"'],
   ],
   speechVerbStems: ['言', '話', '答', '尋', '叫', '呟', '囁', '続け', '応え'],
   beatVerbStems: ['頷', '笑', '頬', '息'],

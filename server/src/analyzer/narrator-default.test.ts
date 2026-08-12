@@ -95,17 +95,14 @@ describe('isSpokenLine', () => {
        (a) `dialogueOpen: null` in en, de, zh AND ja — a leading dash is not
            dialogue in any of the four. The old bundle treated a leading dash
            as dialogue in EVERY language.
-       (b) A quote pair absent from `quotePairs` is not dialogue — including
-           the zh/ja asymmetry, where `zh` carries `“”` and `ja` does not, so
-           the same line splits by language.
+       (b) A quote pair absent from `quotePairs` is not dialogue. **#2279
+           closed most of this half** by adding the missing conventions to the
+           tables, so block (b) now pins what the tables gained.
+       (c) What is still excluded, and why — the residue after (b).
 
-     This is the SAME gap the structure engine has (it reads the same tables),
-     so the default path is unchanged and the gap is pre-existing there. With
-     `analyzer.structure.enabled` OFF these lines now go to the narrator. Zero
-     occurrences in the live 20-book corpus — which holds ONE book each of
-     de/es/fr/zh/ja and therefore cannot produce a counter-example either way,
-     so that zero is not evidence of safety. #2279 carries the row-by-row
-     enumeration and the measurement it needs; blocks (a) and (b) below are its
+     This is the SAME condition the structure engine reads (same tables), so
+     (a) and (c) describe both paths, not just the narrator-default fallback.
+     #2279 carries the row-by-row enumeration; blocks (a)–(c) are its
      executable copy, so a row added to either belongs in the other and in
      #2279's table. */
   it('#2279 (a): a leading dash is not dialogue where dialogueOpen is null — en, de, zh, ja', () => {
@@ -119,20 +116,41 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('——你好', ZH)).toBe(false);
     expect(isSpokenLine('— こんにちは', JA)).toBe(false);
   });
-  it('#2279 (b): a quote pair absent from the language table is not dialogue', () => {
-    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false); // fully-ASCII; de carries „…" but not "…"
-    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(false); // “ is German's CLOSER, never an opener
-    expect(isSpokenLine('«Lass das.»', DE)).toBe(false); // Swiss order; de carries »…« only
-    expect(isSpokenLine('"Hola", dijo.', ES)).toBe(false); // es carries «» and “” only
-    expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(false); // fr.quotePairs is «» only
-    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(false);
-    expect(isSpokenLine('‘Привет’', RU)).toBe(false); // ru carries «», „“, “”, "" — not ‘’
-    expect(isSpokenLine('«Bonjour»', EN)).toBe(false); // en carries no guillemets
-    // The zh/ja asymmetry: same line, opposite answers, because zh.quotePairs
-    // carries ['“','”'] and ja.quotePairs does not.
+  it('#2279 (b): the conventions the tables gained ARE dialogue', () => {
+    // Every row here read as narration before #2279, in both the fallback and
+    // the structure engine. Measured over the 22 real manuscripts: adding
+    // these changes 0 of 738 chapters' parseChapterStructure output, on a
+    // harness whose control (blank quotePairs) moves 568.
+    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(true); // fully-ASCII German
+    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(true); // “ was CLOSER-only before
+    expect(isSpokenLine('«Lass das.»', DE)).toBe(true); // Swiss order, mirror of »…«
+    expect(isSpokenLine('"Hola", dijo.', ES)).toBe(true);
+    expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(true);
+    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(true);
+    expect(isSpokenLine('‘Привет’', RU)).toBe(true);
+    expect(isSpokenLine('«Bonjour»', EN)).toBe(true);
+    expect(isSpokenLine('"你好"', ZH)).toBe(true);
+    expect(isSpokenLine('‘你好’', ZH)).toBe(true); // Mandarin's NESTED quote
+    // The zh/ja asymmetry is closed: `ja` now carries `“”` like `zh`, so the
+    // same line no longer splits by language.
     expect(isSpokenLine('“你好”', ZH)).toBe(true);
-    expect(isSpokenLine('“おはよう”', JA)).toBe(false);
-    // es/fr dialogueOpen carry &mdash; but not &ndash; (ru carries both).
+    expect(isSpokenLine('“おはよう”', JA)).toBe(true);
+    expect(isSpokenLine('"おはよう"', JA)).toBe(true);
+  });
+  it('#2279 (c): what is still excluded, and why', () => {
+    // Straight-single stays out of EVERY table: ' is the apostrophe, so a
+    // same-glyph pair opens a run on don't / she'd / the dogs'.
+    expect(isSpokenLine("'I'm lost,' she said.", EN)).toBe(false);
+    expect(isSpokenLine("'Komm her' sagte er.", DE)).toBe(false);
+    // A convention belonging to a DIFFERENT language stays out: German „…“
+    // inside a Spanish or Japanese book is not Spanish or Japanese typography.
+    expect(isSpokenLine('„Ven aquí“ dijo él.', ES)).toBe(false);
+    expect(isSpokenLine('„おはよう“ 彼は言った。', JA)).toBe(false);
+    expect(isSpokenLine('«你好» 他说。', ZH)).toBe(false);
+    // es/fr dialogueOpen carry &mdash; but not &ndash; (ru carries both) —
+    // a dialogueOpen change moves parser.ts:99's paragraph split, a different
+    // mechanism from quotePairs, and the corpus control for it is vacuous on
+    // the es/fr books (neither has a dash-opened paragraph). Left to #2279.
     expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false);
     expect(isSpokenLine('&ndash; Un instant', FR)).toBe(false);
     expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that IS carried, as the control

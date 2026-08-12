@@ -3,7 +3,8 @@ import type { LanguageConventions } from '../types.js';
 export const es: LanguageConventions = {
   language: 'es',
   dialogueOpen: /^\s*(?:&mdash;|[-–—])\s*/iu,
-  quotePairs: [['«', '»'], ['“', '”']],
+  // #2279 — `"…"` added for digital/converted texts that lost their curly glyphs.
+  quotePairs: [['«', '»'], ['“', '”'], ['"', '"']],
   speechVerbStems: [
     'dijo', 'pregunt', 'respond', 'susurr', 'grit', 'murmur', 'exclam', 'contest', 'añad', 'insist',
     'coment', 'cont', 'interrump', 'observ', 'manifest', 'asegur', 'afirm', 'ment', 'advier', 'advert',

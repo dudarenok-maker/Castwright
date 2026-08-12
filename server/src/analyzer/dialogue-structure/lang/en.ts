@@ -3,10 +3,14 @@ import type { LanguageConventions } from '../types.js';
 export const en: LanguageConventions = {
   language: 'en',
   dialogueOpen: null, // English opens with quotes, not paragraph dashes
+  // #2279 — `«…»` added for translated works typeset with guillemets. NOT the
+  // straight-single `'…'` pair: `'` is English's apostrophe, so a same-glyph
+  // pair would open a quote run on `don't` / `she'd` / `the dogs'`.
   quotePairs: [
     ['“', '”'],
     ['"', '"'],
     ['‘', '’'],
+    ['«', '»'],
   ],
   speechVerbStems: [
     'said', 'say', 'ask', 'repli', 'whisper', 'shout', 'mutter', 'murmur', 'call', 'answer',

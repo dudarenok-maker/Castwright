@@ -7,7 +7,8 @@ const CASE_ENDINGS = /(ами|ями|ого|его|ому|ему|ыми|ими|�
 export const ru: LanguageConventions = {
   language: 'ru',
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
-  quotePairs: [['«', '»'], ['„', '“'], ['“', '”'], ['"', '"']],
+  // #2279 — `‘…’` added for texts typeset with Western smart singles.
+  quotePairs: [['«', '»'], ['„', '“'], ['“', '”'], ['"', '"'], ['‘', '’']],
   speechVerbStems: [
     'сказа', 'говор', 'ответ', 'спрос', 'переспрос', 'прошепта', 'шепн', 'шепта', 'крикн', 'крича',
     'воскликн', 'произнес', 'произнос', 'поинтерес', 'пробормота', 'бормота', 'буркн', 'отрез',

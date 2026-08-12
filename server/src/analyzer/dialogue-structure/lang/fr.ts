@@ -3,7 +3,9 @@ import type { LanguageConventions } from '../types.js';
 export const fr: LanguageConventions = {
   language: 'fr',
   dialogueOpen: /^\s*(?:&mdash;|[-–—])\s*/iu,
-  quotePairs: [['«', '»']],
+  // #2279 — `“…”` and `"…"` added for translated / converted texts that use
+  // Western doubles rather than French guillemets.
+  quotePairs: [['«', '»'], ['“', '”'], ['"', '"']],
   speechVerbStems: [
     'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanç', 'rétorqu',
     'continu', 'interromp', 'observ', 'remarqu', 'affirm', 'assur', 'promis', 'averti', 'déclara',

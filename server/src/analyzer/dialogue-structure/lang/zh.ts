@@ -7,10 +7,14 @@ import type { LanguageConventions } from '../types.js';
 export const zh: LanguageConventions = {
   language: 'zh',
   dialogueOpen: null,
+  // #2279 — `‘…’` is Mandarin's NESTED quote inside `“…”`; `"…"` appears in
+  // web-converted texts that lost their curly glyphs.
   quotePairs: [
     ['「', '」'],
     ['『', '』'],
     ['“', '”'],
+    ['‘', '’'],
+    ['"', '"'],
   ],
   speechVerbStems: ['说', '道', '问', '答', '喊', '叫', '回答', '说道', '问道', '喃喃', '低语'],
   beatVerbStems: ['点头', '笑', '皱眉', '叹'],
