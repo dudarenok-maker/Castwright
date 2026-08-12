@@ -325,7 +325,9 @@ describe('requestFailureMessage (#2260 final round)', () => {
   it('curates a lock-acquisition expiry, whatever produced it', () => {
     expect(
       requestFailureMessage(
-        new LockAcquisitionTimeoutError('C:\Users\me\books\B\cast.json', 10_000),
+        /* The real shape of a cast-lock key: an absolute path into the user's
+           library. Backslashes escaped, so this is one literal Windows path. */
+        new LockAcquisitionTimeoutError('C:\\Users\\me\\books\\B\\cast.json', 10_000),
         'Voice library assign failed.',
       ),
     ).toBe(LOCK_CONTENTION_REQUEST_ERROR);
