@@ -31,6 +31,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseBranchName } from './lib/branch-name.mjs';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const BASE_PORTS = {
   VITE_PORT: 5173,
@@ -247,11 +248,6 @@ export async function main(argv) {
 }
 
 // CLI entry — only runs when invoked directly, not when imported by tests.
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/wt-new.mjs');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   main(process.argv.slice(2)).then((code) => process.exit(code));
 }

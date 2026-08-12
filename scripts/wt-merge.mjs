@@ -38,6 +38,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // ---- Argument parsing -------------------------------------------------------
 
@@ -354,11 +355,6 @@ export function main(argv = process.argv.slice(2), runners = makeDefaultRunners(
   });
 }
 
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/wt-merge.mjs');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   process.exit(main());
 }

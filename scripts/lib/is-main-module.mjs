@@ -38,10 +38,23 @@
 // Usage, at the bottom of a dual-purpose script:
 //   import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 //   if (isDirectlyInvoked(import.meta.url)) {
-//     process.exit(main());
+//     main();
 //   }
 //
-// Reach for this instead of hand-rolling a 23rd copy of the comparison.
+// Do NOT wrap that call as `process.exit(main())` unless main()'s own
+// output is provably tiny (a single short line, like ci-scope.mjs's one
+// JSON line). process.exit() terminates before Node flushes pending async
+// stdout writes — synchronous on Windows but ASYNCHRONOUS on Linux/macOS —
+// so a script with more than trivial output silently truncates its own
+// tail on a POSIX CI runner while looking perfect on every Windows dev box.
+// This is not hypothetical: several scripts under scripts/ were converted
+// OFF exactly this pattern for exactly this reason (see the comment by
+// scripts/build-release-zip.mjs's CliError/die for a worked example) —
+// have main() set process.exitCode itself and simply return/throw instead,
+// so the process exits naturally once the event loop drains.
+//
+// Reach for isDirectlyInvoked() instead of hand-rolling a 23rd copy of the
+// comparison.
 
 import { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';

@@ -7,7 +7,15 @@
 // Usage:
 //   node scripts/build-release-zip.mjs --version v1.2.3 [--out path] [--dry-run]
 
-import { createWriteStream, mkdirSync, statSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  createWriteStream,
+  mkdirSync,
+  statSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  unlinkSync,
+} from 'node:fs';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -59,13 +67,21 @@ export const MANIFEST = {
     // release; setup-versioned-install.mjs copies it to the install root once.
     'launch.mjs',
 
-    // #2291 — the shared direct-execution-guard helper. launch.mjs (above) and
-    // several already-shipped scripts/*.mjs runtime entry points (start-app-prod,
-    // restart-after-upgrade, setup-versioned-install) import this at the top
-    // level, so it MUST ship or those scripts crash at import time in a real
-    // install. Pinned by scripts/tests/entry-point-guard-convention.test.mjs's
-    // "shared helper ships in the release zip" assertion — do not remove this
-    // entry without removing that assertion first.
+    // #2291 — the shared direct-execution-guard helper. Several already-shipped
+    // scripts/*.mjs runtime entry points (start-app-prod, restart-after-upgrade,
+    // setup-versioned-install) and server/tts-sidecar/scripts/*.mjs installers
+    // (accelerator-profile, install-ort, install-torch, and others) import this
+    // at the top level, so it MUST ship or those scripts crash at import time in
+    // a real install. (launch.mjs deliberately does NOT import it — see the
+    // comment by its own isDirectlyInvoked for why — so it is not one of these.)
+    // The stake is higher than "four CLIs fail to run": server/src/index.ts:82,
+    // server/src/tts/spawn-sidecar.ts:33, and server/src/upgrade/apply.ts:24-30
+    // statically import several of those same sidecar .mjs installers directly
+    // into the server bundle, so a missing manifest entry here fails the
+    // SERVER at boot, not just a standalone installer CLI invocation. Pinned
+    // by scripts/tests/entry-point-guard-convention.test.mjs's "shared helper
+    // ships in the release zip" assertion — do not remove this entry without
+    // removing that assertion first.
     'scripts/lib/is-main-module.mjs',
 
     // Frontend source + pre-built bundle
@@ -289,9 +305,15 @@ function parseArgs(argv) {
 // #2297) while looking fine on every Windows dev box. Fixed by never calling
 // process.exit() here: die() sets process.exitCode and throws a CliError
 // instead, so the call stack unwinds back to the single catch at the bottom
-// of this file and the process exits naturally once the event loop drains —
-// this script holds no open handles (no server/timer/child process), so
-// nothing keeps it alive past that.
+// of this file and the process exits naturally once the event loop drains.
+// Every die() path holds no open handle by that point (no server/timer/child
+// process), so nothing keeps it alive past that. The ZIP path is the one
+// exception: while `archive.pipe(output)` is live and files are still
+// queued, an `archive.on('error', …)` there is NOT a die() call and does not
+// throw a CliError — it rejects the archiver Promise directly, and that
+// Promise's own error handler is responsible for aborting the archive
+// stream (rather than letting it drain) and removing the partial output
+// file. See that handler, below, for the reasoning.
 class CliError extends Error {}
 
 function die(msg) {
@@ -395,36 +417,74 @@ async function main() {
   }
 
   info(`[ZIP] writing ${outPath}`);
+  await writeReleaseZip({ outPath, matched, apkSrc, apkExists, version: args.version });
+
+  const finalSize = statSync(outPath).size;
+  info(`[OK] ${outPath}  (${Math.round(finalSize / 1024)} KB)`);
+}
+
+/**
+ * Streams `matched` (plus the companion APK, when present) into a zip at
+ * `outPath` via archiver's ZipArchive. Exported (and `loadArchiver`
+ * injectable) so the regression test can drive the exact error-handling
+ * wiring below without needing to reproduce a real archiver-internal race —
+ * scripts/tests/archiver-zip.test.mjs separately pins that the real
+ * .pipe/.file/.finalize/warning/error surface behaves as this code assumes.
+ *
+ * On a mid-archive error (a queued file becomes unreadable, e.g. EACCES/
+ * EMFILE/ENOENT after the initial stat), aborts the archiver — stopping it
+ * from draining the remaining queue — destroys the output stream, and
+ * removes the partial outPath: a failed build must never leave a larger,
+ * complete-looking but INVALID zip behind. See the comment by
+ * CliError/die above for why this function's own Promise, not a thrown
+ * CliError, is what carries that failure back to main()'s catch.
+ */
+export async function writeReleaseZip({
+  outPath,
+  matched,
+  apkSrc,
+  apkExists,
+  version,
+  loadArchiver = () => import('archiver'),
+}) {
   /* Lazy-load archiver — v8 is pure ESM and exposes only named class
      exports (Archiver / ZipArchive / …), with NO callable default
      factory (the v7 `archiver('zip', …)` signature is gone). Dynamic
      `import()` keeps the dep out of the module graph so the MANIFEST
      unit test (scripts/tests/release-manifest.test.mjs) imports this
      file without needing archiver installed. */
-  const { ZipArchive } = await import('archiver');
+  const { ZipArchive } = await loadArchiver();
   await new Promise((resolveZip, rejectZip) => {
     const output = createWriteStream(outPath);
     const archive = new ZipArchive({ zlib: { level: 9 } });
     output.on('close', resolveZip);
+    const onArchiveError = (err) => {
+      archive.abort();
+      output.destroy();
+      try {
+        unlinkSync(outPath);
+      } catch {
+        // Nothing (yet) written to outPath, or it's already gone — fine
+        // either way; the goal is just that it not survive with content.
+      }
+      rejectZip(err);
+    };
     archive.on('warning', (err) => {
       if (err.code === 'ENOENT') return;
-      rejectZip(err);
+      onArchiveError(err);
     });
-    archive.on('error', rejectZip);
+    archive.on('error', onArchiveError);
     archive.pipe(output);
     for (const { rel, abs } of matched) {
       // Use POSIX separators in the zip entries for cross-platform extract.
-      archive.file(abs, { name: posix.join(releaseInternalPrefix(args.version), toPosix(rel)) });
+      archive.file(abs, { name: posix.join(releaseInternalPrefix(version), toPosix(rel)) });
     }
     // Interim companion-app distribution — bundle the APK at its served path.
     if (apkExists) {
-      archive.file(apkSrc, { name: companionApkZipEntry(args.version) });
+      archive.file(apkSrc, { name: companionApkZipEntry(version) });
     }
     archive.finalize();
   });
-
-  const finalSize = statSync(outPath).size;
-  info(`[OK] ${outPath}  (${Math.round(finalSize / 1024)} KB)`);
 }
 
 // Only run the CLI if invoked directly (not when imported by tests). See
