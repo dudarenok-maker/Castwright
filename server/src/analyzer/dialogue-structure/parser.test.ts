@@ -330,6 +330,17 @@ describe('parser — #2288 an apostrophe is not a closing quote (en)', () => {
     expect(speechOf('‘Ask O’Brien,’ she said.')).toEqual(['Ask O’Brien,']);
   });
 
+  // (1b) same shape as above, but NFD-decomposed: the base letter before the
+  // apostrophe and its combining mark are separate code points, so `\p{L}`
+  // alone (pre-round-2) misses the mark and reads "not a letter" — the
+  // original #2288 bug, unfixed, for any manuscript that arrives decomposed
+  // (this path has no NFC-normalisation guarantee). Built with `.normalize`
+  // rather than typed pre-composed so an editor can't silently re-compose it.
+  it('a contraction survives even when the manuscript is NFD-decomposed (combining marks)', () => {
+    const body = '‘I saw André’s car,’ she said.'.normalize('NFD');
+    expect(speechOf(body)).toEqual(['I saw André’s car,'.normalize('NFD')]);
+  });
+
   // (2) whitespace-then-letter — elision that OPENS a word
   it('a leading-elision apostrophe does not end the turn', () => {
     expect(speechOf('‘Give ’em back,’ she said, ‘’cause they’re mine.’')).toEqual([
@@ -447,18 +458,55 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
     expect(speech).toEqual(['Frühstücks']);
   });
 
-  it('NOT FIXED: same-glyph nesting lets an inner closer end the outer turn early', () => {
-    // The inner closing `’` of nested `‘dare’` has a letter before it ('e')
-    // and a space after it — none of isRealCloser's three clauses fires, so
-    // it is accepted as the OUTER run's closer, truncating the turn before
-    // "leave,". The scan is single-glyph and non-stacking, so it cannot
-    // disambiguate an inner same-glyph pair from the outer one regardless of
-    // the rule. Pre-existing, and STRICTLY IMPROVED by Task 2: the old code
-    // stopped at the very first `’` (the one in "Don’t"), an even shorter
-    // capture — this is not a regression. Desired output is
-    // ['Don’t you ‘dare’ leave,']; flip this test if nested nesting is ever
-    // disambiguated (would need a stacking scan, out of scope for #2288).
-    expect(speechOf('‘Don’t you ‘dare’ leave,’ she said.')).toEqual(['Don’t you ‘dare']);
+  it('NOT FIXED: same-glyph nesting splits into two truncated fragments, not one long turn', () => {
+    // The inner `‘dare’` is a second occurrence of the SAME opener/closer
+    // glyphs as the outer run, so the round-2 skip bound (#2288 Critical: a
+    // rejected closer's resumed skip stops at the next opener of any class)
+    // treats the second `‘` as the boundary of the outer run's search. The
+    // outer run's only closer candidate before that boundary is the rejected
+    // `Don’t` apostrophe, so NEVER-DELETE falls back to it, truncating to
+    // "Don". The second `‘` then starts its OWN run, whose first closer
+    // (`dare’` — letter before, space after, no isRealCloser clause fires)
+    // is accepted immediately, yielding "dare" as a separate turn. The scan
+    // is single-glyph and non-stacking, so it cannot disambiguate an inner
+    // same-glyph pair from the outer one regardless of the rule — no turn is
+    // destroyed, but "leave," is lost from both fragments. Desired output is
+    // ['Don’t you ‘dare’ leave,']; flip this test if same-glyph nesting is
+    // ever disambiguated (would need a stacking scan, out of scope for #2288).
+    expect(speechOf('‘Don’t you ‘dare’ leave,’ she said.')).toEqual(['Don', 'dare']);
+  });
+});
+
+describe('parser — #2288 round 2: a rejected closer\'s skip is bounded to the next opener (Critical)', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }, { id: 'tom', name: 'Tom' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // Both bodies are the known-bug inputs from the #2288 review. Without a
+  // bound, a rejected apostrophe-shaped closer's search for a later
+  // occurrence of the same glyph wanders past intervening turns with no stop
+  // condition — landing on a plausible-looking closer several turns away and
+  // destroying everything in between. Expected arrays below are MEASURED
+  // (`parseChapterStructure` run against these exact bodies), not predicted:
+  // they are what `main` produces today, which the bound must reproduce.
+  it('a stray apostrophe between turns does not swallow the turns that follow', () => {
+    const body =
+      'Tom said the ‘phone wasn’t working. “I agree,” said Mary. It was the boys’ fault.';
+    // Without the bound: ["phone wasn’t working. “I agree,” said Mary. It was the boys"]
+    // — Mary's whole turn destroyed, walking past “I agree,” to accept the
+    // later "boys’" apostrophe as if it closed the ‘phone run.
+    expect(speechOf(body)).toEqual(['phone wasn', 'I agree,']);
+  });
+
+  it('a rejected closer immediately after an opener does not reach past the next turn', () => {
+    const body = '‘Yes’said Tom. “No,” said Mary. ‘Maybe,’ said Tom.';
+    // Without the bound the ‘Yes’said run's rejected "Yes’said" apostrophe
+    // would skip all the way to the later "Maybe,’" closer, merging three
+    // turns (and two speakers) into one.
+    expect(speechOf(body)).toEqual(['Yes', 'No,', 'Maybe,']);
   });
 });
 
