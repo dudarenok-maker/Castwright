@@ -83,7 +83,10 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
 // `file://${process.argv[1]}` form yields two slashes on Windows
 // (file://C:/...) where import.meta.url has three (file:///C:/...), so it is
 // ALWAYS false there — the script would silently do nothing and exit 0.
-// Every other script in scripts/ uses this form; see bump-version.mjs:654.
+// Every other script in scripts/ uses this pathToFileURL form; see
+// bump-version.mjs:795 — but that one still only realpaths argv[1], not both
+// sides, so it does NOT illustrate the BOTH-realpath'd fix below (#2291
+// fixed it here first, ahead of the wider hand-rolled-guard migration).
 //
 // argv[1] and import.meta.url are BOTH realpath'd before comparison (#2291).
 // process.argv[1] is always the path exactly as invoked; import.meta.url is

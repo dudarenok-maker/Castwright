@@ -88,6 +88,10 @@ test('a coherent register passes with no errors', () => {
 });
 
 test('the real docs/testing/onbox-acceptance-register.md is internally coherent', () => {
+  // Bare readFileSync, not readNormalized, is deliberate here: checkRegister
+  // tolerates '\r' throughout (measured CRLF-safe), so there is nothing for
+  // normalization to fix for this call. See the REAL_REGISTER_TEXT comment
+  // near the bottom of this file for the read that DOES need it.
   const path = new URL('../../docs/testing/onbox-acceptance-register.md', import.meta.url);
   const text = readFileSync(path, 'utf8');
   assert.deepEqual(checkRegister(text), []);
@@ -973,6 +977,10 @@ test("a modifier-classed Blocked section's rows never land in another group", ()
 // parsers actually fit the real, hand-authored markup — the thing that breaks
 // when someone restyles the live view.
 test('the real register and its real live view agree', () => {
+  // Bare readFileSync for both, not readNormalized: checkLiveView tolerates
+  // '\r' throughout (measured CRLF-safe), so there's no normalization gap
+  // to close here — unlike REAL_REGISTER_TEXT further down, which feeds a
+  // literal '\n---\n'/'\n## ' delimiter scan and needs it.
   const md = readFileSync(
     new URL('../../docs/testing/onbox-acceptance-register.md', import.meta.url),
     'utf8',
@@ -1982,6 +1990,10 @@ test('#2199 review (B3): the generic cannot-verify message does not prescribe gi
 // down, which does NOT use this override — a live `git fetch` failing is
 // the entire point there, and it's engineered (via an unreachable proxy) to
 // fail deterministically rather than depending on ambient network state.
+// Deliberately raw, unlike REAL_REGISTER_TEXT immediately below: every
+// live-view parser in check-onbox-register.mjs is `[\s\S]*?`/`[^<]*` plus a
+// trim, so a `\r` cannot move any of them (measured on CRLF input: byte-
+// identical results). Raw here is a decision, not an oversight.
 const REAL_LIVE_VIEW_HTML = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
 // readNormalized, not a bare readFileSync: buildAheadBaselineText below scans
 // this text for literal '\n---\n' / '\n## ' delimiters, which miss on a
