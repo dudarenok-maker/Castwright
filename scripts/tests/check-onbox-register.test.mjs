@@ -2463,6 +2463,19 @@ test('--discharging with no value fails with a usage message', () => {
   assert.match(r.stderr, /--discharging requires a value/);
 });
 
+// #2280 review (nit 5): a bare `--discharging` (no value AND no
+// --against-published) must report the more useful "only makes sense
+// alongside --against-published" reason, not "requires a value" — the flag
+// is unusable either way, but naming --against-published's absence first is
+// what actually explains why. Order-dependent: before the fix the
+// missing-value check ran first and always won this case.
+test('a bare --discharging with neither a value nor --against-published reports the --against-published reason, not "requires a value"', () => {
+  const r = runCli(['--discharging']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--discharging only makes sense alongside --against-published/);
+  assert.doesNotMatch(r.stderr, /--discharging requires a value/);
+});
+
 // End-to-end proof that the CLI actually threads --discharging's argv value
 // into checkLiveView's `dischargingIds` option. Same fixture shape as the
 // "genuinely BEHIND" test above (A6): a live-page row absent from this

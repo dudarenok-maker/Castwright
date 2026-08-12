@@ -1146,19 +1146,24 @@ if (invokedAsCli) {
       );
       process.exit(1);
     }
-    const dischargingArg = process.argv[dischargingIdx + 1];
-    if (!dischargingArg) {
-      console.error(
-        '--discharging requires a value: one row ID, or a comma-separated list, e.g. ' +
-          '--discharging E10 or --discharging E10,E11.',
-      );
-      process.exit(1);
-    }
+    // #2280 review (nit 5): checked before the missing-value check just
+    // below, so a bare `--discharging` with no `--against-published` reports
+    // the more useful "only makes sense alongside --against-published"
+    // rather than "requires a value" — the flag is pointless either way,
+    // but this names the actual reason first.
     if (againstPublishedIdx === -1) {
       console.error(
         '--discharging only makes sense alongside --against-published — it names a row ' +
           'deliberately discharged by the change about to publish, and there is nothing ' +
           'for it to suppress outside that comparison.',
+      );
+      process.exit(1);
+    }
+    const dischargingArg = process.argv[dischargingIdx + 1];
+    if (!dischargingArg) {
+      console.error(
+        '--discharging requires a value: one row ID, or a comma-separated list, e.g. ' +
+          '--discharging E10 or --discharging E10,E11.',
       );
       process.exit(1);
     }
