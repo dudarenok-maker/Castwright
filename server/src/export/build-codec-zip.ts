@@ -87,7 +87,20 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
 
   try {
     const zip = new ZipFile();
+    /* Hoisted so the per-chapter loop below can route a read-stream
+       failure into the same rejection as everything else — same gap and
+       same fix as build-mp3-zip.ts (see the comment on its own
+       `chapterReadStream.on('error', rejectBuild)`): yazl's `addFile`
+       attaches its own `readStream.on('error', ...)` before pumping, but
+       `addReadStream` — what we use here — does not, and `.pipe()` never
+       forwards 'error' from source to destination. An unforwarded error on
+       this stream (e.g. the source file vanishing mid-build) had zero
+       listeners: Node throws it as an uncaught exception, taking the whole
+       server down (crash-logging.ts's uncaughtException handler exits 1)
+       instead of failing just this export. */
+    let rejectBuild: (reason?: unknown) => void = () => {};
     const writePromise = new Promise<number>((resolve, reject) => {
+      rejectBuild = reject;
       const ws = createWriteStream(outPath);
       ws.on('error', reject);
       let bytes = 0;
@@ -95,15 +108,31 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
         bytes += chunk.length;
       });
       zip.outputStream.on('error', reject);
+      /* yazl's ZipFile also emits its own internal validation failures
+         (e.g. "file data stream has unexpected number of bytes") via
+         `self.emit('error', ...)` on the ZipFile object itself, not on
+         `outputStream` — same zero-listener/uncaught-exception gap. */
+      zip.on('error', reject);
       zip.outputStream.pipe(ws).on('finish', () => resolve(bytes));
     });
+    /* A chapter's read-stream error can settle this promise while the loop
+       is still mid-flight `await stat()`-ing a LATER chapter — i.e. before
+       execution reaches `await writePromise` below. In that window the
+       promise has rejected with no consumer attached yet, which Node flags
+       as an unhandled rejection even though `await writePromise` will
+       still observe (and re-throw) the same rejection once reached. A
+       no-op listener attached immediately marks it handled from Node's
+       perspective without swallowing the real value. */
+    writePromise.catch(() => {});
 
     for (let i = 0; i < resolved.length; i++) {
       signal?.throwIfAborted();
       const { chapter, path } = resolved[i];
       const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${meta.entryExt}`;
       const st = await stat(path);
-      zip.addReadStream(createReadStream(path), entryName, {
+      const readStream = createReadStream(path);
+      readStream.on('error', rejectBuild);
+      zip.addReadStream(readStream, entryName, {
         size: st.size,
         mtime: new Date(),
         compress: false,

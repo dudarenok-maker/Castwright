@@ -20,8 +20,34 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fromBuffer as yauzlFromBuffer, type Entry } from 'yauzl';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { buildPortableBundle, PORTABLE_SCHEMA_VERSION } from './build-portable-book.js';
+
+/* One-shot intercept for node:fs's createReadStream — lets the crash-
+   regression test below (see its own comment) delete a target audio file
+   at the EXACT moment buildPortableBundle's audio loop asks to stream it,
+   before Node's real (async) fs.open() behind the real createReadStream
+   can possibly have resolved. buildPortableBundle's own audio loop has no
+   `await` between entries (unlike build-mp3-zip.ts / build-codec-zip.ts,
+   which expose an `onProgress` hook that fires mid-loop), so there's no
+   production seam to piggyback a deletion on — this mock IS that seam,
+   test-only, deterministic, and a no-op passthrough for every other call
+   (every other test in this file goes through the real `real.
+   createReadStream(...)` below unchanged). */
+let deleteOnRead: string | null = null;
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...real,
+    createReadStream: (...args: Parameters<typeof real.createReadStream>) => {
+      const path = args[0];
+      if (deleteOnRead && path === deleteOnRead) {
+        real.rmSync(deleteOnRead, { force: true });
+      }
+      return real.createReadStream(...args);
+    },
+  };
+});
 import {
   audioDir,
   changeLogJsonPath,
@@ -271,4 +297,51 @@ describe('buildPortableBundle', () => {
     bMan.exportedAt = '<fixed>';
     expect(aMan).toEqual(bMan);
   });
+
+  /* Same defect class as build-mp3-zip.ts's own regression test (see that
+     file's comment for the full root cause): `zip.addReadStream(
+     createReadStream(a.diskPath), ...)` hands yazl a raw readStream. yazl's
+     `addFile` attaches its own `readStream.on('error', ...)` before pumping
+     — `addReadStream` does not, and `.pipe()` never forwards 'error' from
+     source to destination. A read failure on that stream (e.g. an audio
+     file vanishing between being enumerated and being zipped) had zero
+     listeners: Node throws it as an uncaught exception, killing the whole
+     server (crash-logging.ts's uncaughtException handler exits 1) instead
+     of just failing this export.
+
+     buildPortableBundle's audio loop has no `onProgress` hook and no
+     `await` between entries, so this test uses the `createReadStream`
+     intercept declared at the top of this file instead: it deletes
+     `01-chapter-1.mp3` the INSTANT buildPortableBundle asks to stream it,
+     before Node's real (async) fs.open() behind the real createReadStream
+     can possibly have resolved — deterministic on any platform, no sleep
+     or poll required. */
+  it('forwards a deleted-audio-file read error instead of crashing the process', async () => {
+    const raceDir = join(tmpRoot, 'race');
+    mkdirSync(join(raceDir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(raceDir), { recursive: true });
+    const raceState = { ...makeFixtureState(), bookId: 'demo__standalones__race' };
+    writeFileSync(stateJsonPath(raceDir), JSON.stringify(raceState, null, 2));
+    writeFileSync(join(raceDir, 'manuscript.txt'), manuscriptBytes);
+    const doomedPath = join(audioDir(raceDir), '01-chapter-1.mp3');
+    writeFileSync(doomedPath, chapter1Mp3);
+    writeFileSync(join(audioDir(raceDir), '02-chapter-2.mp3'), chapter2Mp3);
+
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    deleteOnRead = doomedPath;
+    try {
+      await expect(buildPortableBundle(raceDir, raceState)).rejects.toThrow(/ENOENT/);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      deleteOnRead = null;
+    }
+    // The real assertion: nothing escaped as a raw uncaught exception. If
+    // this is non-null, the read-stream error crashed the process instead
+    // of rejecting buildPortableBundle's own promise.
+    expect(escaped).toBeNull();
+  }, 10_000);
 });

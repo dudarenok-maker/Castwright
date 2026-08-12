@@ -104,6 +104,16 @@ const jobs = new Map<string, BookExportJob>();
    the build functions having to know about jobs/jobControllers. */
 const jobControllers = new Map<string, AbortController>();
 
+/* Sibling map of the fire-and-forget runExportJob promise itself, keyed by
+   exportId. Populated alongside jobControllers, self-removes once the job
+   settles. Exists so a caller (today: only test teardown, via
+   _awaitInFlightExportJobs) can wait for every in-flight job to fully
+   finish — including its own `finally` (manifest write) — before doing
+   anything destructive to the workspace those jobs are still reading/
+   writing. Nothing in production code awaits this map; runExportJob is
+   still fire-and-forget from the route's point of view. */
+const jobPromises = new Map<string, Promise<void>>();
+
 function manifestPath(bookDir: string, exportId: string): string {
   return join(bookExportManifestsDir(bookDir), `${exportId}.json`);
 }
@@ -389,15 +399,36 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   jobControllers.set(exportId, controller);
 
   /* Fire-and-forget the actual build. The client polls getBookExport for
-     progress + completion. */
-  void runExportJob(
+     progress + completion. runExportJob's own try/catch/finally already
+     turns every failure it knows about into a 'failed' job — the .catch
+     here is a backstop for anything that ever slips past that (a future
+     change adding code after the try/catch, a bug in the catch/finally
+     itself), not the primary failure path. Without it, an escaped
+     rejection here is an unhandled promise rejection: this server's own
+     crash-logging.ts survives an unhandledRejection (logs + continues),
+     so this specific case wouldn't take the process down — but the job
+     would otherwise vanish silently instead of reporting through the
+     same polling API every other failure uses. */
+  const jobPromise = runExportJob(
     job,
     located.bookDir,
     located.state,
     outPath,
     settings.exportSyncFolder,
     controller.signal,
-  );
+  )
+    .catch((e) => {
+      console.error(`[export] runExportJob rejected unexpectedly for ${job.id}:`, e);
+      job.status = 'failed';
+      job.errorReason = (e as Error)?.message || 'Export failed unexpectedly.';
+      job.completedAt = new Date().toISOString();
+      jobs.set(job.id, { ...job });
+      jobControllers.delete(job.id);
+    })
+    .finally(() => {
+      jobPromises.delete(exportId);
+    });
+  jobPromises.set(exportId, jobPromise);
 
   /* srv-28 — ride the disk-low advisory back on the 201 body (warn mode). The
      export modal surfaces `warning` next to the queued job; the build still
@@ -748,8 +779,30 @@ async function runExportJob(
   }
 }
 
-/** Test-only: drop the in-memory job table. */
+/** Test-only: drop the in-memory job table. Does NOT wait for any job
+    still in flight — a caller that's about to delete the workspace those
+    jobs read/write must call _awaitInFlightExportJobs() first (this
+    function only drops OUR bookkeeping, not the physical I/O a running
+    job is still doing). */
 export function _resetExportJobs(): void {
   jobs.clear();
   jobControllers.clear();
+  jobPromises.clear();
+}
+
+/** Test-only: abort every export job currently in flight, then wait for
+    each to fully settle — including its own `finally` (the manifest
+    write) — before returning. `_resetExportJobs()` alone only clears this
+    module's in-memory bookkeeping; it does not stop a runExportJob call
+    that's still mid-build from touching disk. A teardown that deletes the
+    workspace right after resetting jobs (but without draining them first)
+    can race a job that's still writing into it — on a loaded CI runner
+    (macOS cross-os.yml, run 31588267496) that lost race surfaced as an
+    ENOENT read racing rmSync, escaping as an uncaught exception. Abort
+    (not just wait) so a slow/stuck build can't hang the drain — every
+    build already honours its AbortSignal on the same path DELETE
+    /exports/:id already exercises. */
+export async function _awaitInFlightExportJobs(): Promise<void> {
+  for (const controller of jobControllers.values()) controller.abort();
+  await Promise.allSettled([...jobPromises.values()]);
 }

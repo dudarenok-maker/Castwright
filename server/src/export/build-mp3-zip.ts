@@ -110,7 +110,11 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
   const entries: string[] = [];
   try {
     const zip = new ZipFile();
+    /* Hoisted so the per-chapter loop below can route a read-stream
+       failure into the same rejection as everything else. */
+    let rejectBuild: (reason?: unknown) => void = () => {};
     const writePromise = new Promise<number>((resolve, reject) => {
+      rejectBuild = reject;
       const ws = createWriteStream(outPath);
       ws.on('error', reject);
       let bytes = 0;
@@ -118,8 +122,24 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
         bytes += chunk.length;
       });
       zip.outputStream.on('error', reject);
+      /* yazl's ZipFile emits several of its OWN internal validation
+         failures (e.g. "file data stream has unexpected number of bytes")
+         via `self.emit('error', ...)` on the ZipFile object itself — not
+         on `outputStream`. Without a listener here those are ALSO an
+         unhandled 'error' with zero listeners → an uncaught exception,
+         same failure class as the readStream gap below. */
+      zip.on('error', reject);
       zip.outputStream.pipe(ws).on('finish', () => resolve(bytes));
     });
+    /* A chapter's read-stream error (see below) can settle this promise
+       while the loop is still mid-flight tagging a LATER chapter — i.e.
+       well before execution reaches `await writePromise`. In that window
+       the promise has rejected with no consumer attached yet, which Node
+       flags as an unhandled rejection even though `await writePromise`
+       below will still observe (and re-throw) the same rejection once
+       reached. A no-op listener attached immediately marks it handled
+       from Node's perspective without swallowing the real value. */
+    writePromise.catch(() => {});
 
     for (let i = 0; i < resolved.length; i++) {
       signal?.throwIfAborted();
@@ -149,7 +169,22 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
          compressed, so deflate would burn CPU for ~0-1% gain. Stored
          entries also stay byte-readable from the zip without inflate,
          which keeps the test harness simple. */
-      zip.addReadStream(createReadStream(taggedPath), entryName, {
+      const chapterReadStream = createReadStream(taggedPath);
+      /* Production stability (macOS cross-os.yml crash, run 31588267496):
+         yazl's `addFile` attaches its own `readStream.on('error', ...)`
+         before pumping a file, but `addReadStream` — what we use here —
+         does NOT (see node_modules/yazl/index.js). `.pipe()` never
+         forwards 'error' from source to destination either. So a read
+         failure on this exact stream (e.g. `taggedPath` vanishing between
+         being staged and being read, which is exactly what happens when a
+         test/teardown deletes the workspace mid-build) had ZERO
+         listeners: Node throws it synchronously as an uncaught exception,
+         bypassing every try/catch in the awaited call chain — including
+         this function's own `finally` below — instead of failing the
+         export. Forward it into the same rejection as every other build
+         failure. */
+      chapterReadStream.on('error', rejectBuild);
+      zip.addReadStream(chapterReadStream, entryName, {
         size: taggedStat.size,
         mtime: new Date(),
         compress: false,

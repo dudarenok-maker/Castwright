@@ -197,6 +197,13 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
       bytes += chunk.length;
     });
     zip.outputStream.on('error', reject);
+    /* yazl's ZipFile emits several of its OWN internal validation
+       failures (e.g. "file data stream has unexpected number of bytes")
+       via `self.emit('error', ...)` on the ZipFile object itself — not
+       on `outputStream`. Without a listener here those are ALSO an
+       unhandled 'error' with zero listeners → an uncaught exception,
+       same failure class that would crash the server. */
+    zip.on('error', reject);
     zip.outputStream.pipe(ws).on('finish', () => resolve({ sizeBytes: bytes, warning }));
 
     for (let i = 0; i < resolved.length; i++) {

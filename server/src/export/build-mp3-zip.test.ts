@@ -8,9 +8,9 @@
    needs an MP3 on disk. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from './build-mp3-zip.js';
@@ -221,6 +221,62 @@ describeIfFfmpeg('buildMp3Zip', () => {
     expect(ratios[0]).toBeCloseTo(1 / 3, 5);
     expect(ratios[2]).toBe(1);
   });
+
+  /* Production stability + macOS cross-os.yml flake (run 31588267496): a
+     staged chapter file that disappears between being tagged and being
+     zipped (e.g. the workspace getting torn down mid-build) used to crash
+     the WHOLE process instead of failing the export.
+
+     Root cause: `zip.addReadStream(createReadStream(taggedPath), ...)`
+     hands yazl a raw readStream. yazl's `addFile` attaches its own
+     `readStream.on('error', ...)` before pumping — but `addReadStream`
+     does NOT (see node_modules/yazl/index.js: addFile line ~44 vs.
+     addReadStreamLazy, which has no equivalent). `.pipe()` never forwards
+     'error' from source to destination either. So an ENOENT on that read
+     stream had zero listeners: Node throws it synchronously as an
+     uncaught exception, bypassing every try/catch in the awaited call
+     chain (buildMp3Zip's own try/finally included) — exactly the
+     "Uncaught Exception" Vitest caught on the macOS runner, unrelated to
+     whether the caller of buildMp3Zip ever added a .catch().
+
+     This test deletes each chapter's staged file immediately after its
+     read stream is created (via onProgress, which fires right after
+     addReadStream in the loop) but before Node's async fs.open() behind
+     it can possibly have resolved — reproducing the race deterministically
+     on any platform, no sleep/poll required. */
+  it('forwards a deleted-staged-file read error instead of crashing the process', async () => {
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    const localOutPath = join(tmpRoot, 'deleted-staging-race.zip');
+    try {
+      await expect(
+        buildMp3Zip({
+          bookDir,
+          state: makeState(),
+          outPath: localOutPath,
+          onProgress: () => {
+            const dir = dirname(localOutPath);
+            const stagingPrefix = `${basename(localOutPath)}.staging-${process.pid}-`;
+            const stagingName = readdirSync(dir).find((n) => n.startsWith(stagingPrefix));
+            if (!stagingName) return;
+            const stagingDir = join(dir, stagingName);
+            for (const f of readdirSync(stagingDir)) {
+              rmSync(join(stagingDir, f), { force: true });
+            }
+          },
+        }),
+      ).rejects.toThrow(/ENOENT/);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+    // The real assertion: nothing escaped as a raw uncaught exception. If
+    // this is non-null, the read-stream error crashed the process instead
+    // of rejecting buildMp3Zip's own promise.
+    expect(escaped).toBeNull();
+  }, 10_000);
 });
 
 describe('sanitiseForZip', () => {

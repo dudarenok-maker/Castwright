@@ -19,6 +19,53 @@ import type { BookStateJson } from '../workspace/scan.js';
 vi.mock('./build-m4b.js', () => ({ probeDurationSec: vi.fn(async () => 0) }));
 vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment: vi.fn() }));
 
+/* Behavioral regression for the ZipFile-level `zip.on('error', reject)`
+   listener in build-captions.ts's per-chapter branch (~line 206). Real
+   yazl never routes an addBuffer-path failure through ZipFile's own
+   'error' event (only addFile/addReadStream's read-stream-error and
+   byte-count-mismatch paths do — see node_modules/yazl/index.js), so there
+   is no code-path-only way to provoke a genuine internal yazl error here.
+   Instead we intercept the `ZipFile` export itself and give it a
+   test-controlled way to emit 'error' on the INSTANCE, at a moment chosen
+   to mirror how yazl's own internal error emissions actually happen: from
+   an async callback (an fs.stat callback, a stream 'end' handler), never
+   synchronously during construction.
+
+   That timing choice is load-bearing, not cosmetic: `new Promise((resolve,
+   reject) => { const zip = new ZipFile(); ... })`'s executor runs
+   synchronously, and the Promise constructor auto-catches any *synchronous*
+   throw inside its executor and turns it into a rejection — with or
+   without `zip.on('error', reject)` ever being wired. Emitting synchronously
+   from the constructor would "pass" even with the fix line deleted, for the
+   wrong reason (JS's own executor-throw-to-rejection, not build-captions.ts's
+   deliberate forwarding). Scheduling the emit via `process.nextTick` moves
+   it outside that synchronous frame — same as yazl's real internal error
+   sites — so an absent `zip.on('error', reject)` reproduces the real bug:
+   the emit has zero listeners, Node throws it as a process-level
+   `uncaughtException`, and `buildCaptions`'s promise never settles.
+   `process.nextTick` (rather than `setImmediate`) also wins the race
+   against yazl's own real completion path deterministically: it's
+   scheduled at ZipFile construction time, before the per-chapter loop's
+   `addBuffer` calls even run, and Node drains the entire nextTick queue —
+   FIFO, so ours fires first — before any zlib thread-pool callback
+   (`addBuffer`'s own deflate step) can complete. */
+let triggerZipFileError: Error | null = null;
+vi.mock('yazl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('yazl')>();
+  class TestZipFile extends real.ZipFile {
+    constructor() {
+      super();
+      if (triggerZipFileError) {
+        const err = triggerZipFileError;
+        process.nextTick(() => {
+          this.emit('error', err);
+        });
+      }
+    }
+  }
+  return { ...real, ZipFile: TestZipFile };
+});
+
 const ffmpegPresent = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 
@@ -156,6 +203,56 @@ describeIfFfmpeg('buildCaptions', () => {
     });
     expect(result.sizeBytes).toBeGreaterThan(0);
   });
+
+  it('forwards a ZipFile-level internal error to the rejection instead of crashing the process (per-chapter scope)', async () => {
+    /* Behavioral regression for zip.on('error', reject) in the per-chapter
+       branch — see the vi.mock('yazl', ...) comment at the top of this file
+       for why the injected error is emitted via process.nextTick rather
+       than synchronously, and why that's what makes this test exercise
+       build-captions.ts's own forwarding rather than the Promise
+       constructor's unrelated executor-throw-to-rejection behavior. */
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level)');
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    triggerZipFileError = injected;
+    const outPath = join(bookDir, 'zipfile-level-error-test.zip');
+    try {
+      const raced = await Promise.race([
+        buildCaptions({
+          bookDir,
+          state,
+          captionFileFormat: 'srt',
+          captionGranularity: 'sentence',
+          captionScope: 'per-chapter',
+          outPath,
+        }).then(
+          (r) => ({ kind: 'resolved' as const, value: r }),
+          (e) => ({ kind: 'rejected' as const, value: e }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+        ),
+      ]);
+      // With the listener wired, the injected error rejects buildCaptions's
+      // own promise with the SAME error object. Without it, the promise
+      // never settles at all (nothing ever calls reject) — that's the
+      // 'timeout' branch, a deliberate, fast, diagnosable failure instead of
+      // waiting on vitest's own test timeout.
+      expect(raced.kind).toBe('rejected');
+      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      triggerZipFileError = null;
+    }
+    // The other half of the regression: the injected error must have been
+    // forwarded to the rejection, NOT escaped as a raw uncaught exception.
+    // If this is non-null, an error on the ZipFile object crashed the
+    // process instead of being caught by the error listener.
+    expect(escaped).toBeNull();
+  }, 10_000);
 
   it('throws ExportIncompleteError when a chapter has no audio file', async () => {
     const brokenState = {

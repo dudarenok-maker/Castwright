@@ -261,10 +261,34 @@ export async function buildPortableBundle(
      'data' Buffers and 'end' once finalised; we concatenate them. */
   const zip = new ZipFile();
   const chunks: Buffer[] = [];
+  /* Hoisted so the audio-entries loop below can route a read-stream
+     failure into the same rejection as everything else — same gap and
+     same fix as build-mp3-zip.ts / build-codec-zip.ts: yazl's `addFile`
+     attaches its own `readStream.on('error', ...)` before pumping, but
+     `addReadStream` — what the audio loop uses — does not, and `.pipe()`
+     never forwards 'error' from source to destination. An unforwarded
+     error on one of these streams (e.g. an audio file vanishing mid-build)
+     had zero listeners: Node throws it as an uncaught exception, taking
+     the whole server down (crash-logging.ts's uncaughtException handler
+     exits 1) instead of failing just this export.
+
+     No `done.catch(() => {})` no-op guard is needed here (unlike the
+     other two builders): the audio loop below has no `await` between
+     `addReadStream` calls, so `await done` is reached synchronously right
+     after `zip.end()` — before any async fs error could possibly fire —
+     and `await` itself attaches a consumer, closing the unhandled-
+     rejection window before it can open. */
+  let rejectBuild: (reason?: unknown) => void = () => {};
   const done = new Promise<Buffer>((resolve, reject) => {
+    rejectBuild = reject;
     zip.outputStream.on('data', (c: Buffer) => chunks.push(c));
     zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
     zip.outputStream.on('error', reject);
+    /* yazl's ZipFile also emits its own internal validation failures
+       (e.g. "file data stream has unexpected number of bytes") via
+       `self.emit('error', ...)` on the ZipFile object itself, not on
+       `outputStream` — same zero-listener/uncaught-exception gap. */
+    zip.on('error', reject);
   });
 
   const entries: string[] = [];
@@ -288,7 +312,9 @@ export async function buildPortableBundle(
   if (changeLogEntry) addBuffer(changeLogEntry.name, changeLogEntry.buf);
 
   for (const a of audioFilesByEntry) {
-    zip.addReadStream(createReadStream(a.diskPath), a.entryName, {
+    const readStream = createReadStream(a.diskPath);
+    readStream.on('error', rejectBuild);
+    zip.addReadStream(readStream, a.entryName, {
       size: a.size,
       mtime: stableMtime,
       compress: false,
