@@ -293,13 +293,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2872,6 +2872,45 @@ than taking some code path only the server-mediated call exercises.
 profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
 §On-box acceptance item 4; run sheet §6 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
+
+### E10 · revoke is loopback-only — the forwarder boundary and the copy that replaces the button ([#2269](https://github.com/dudarenok-maker/Castwright/issues/2269), PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280), plan [225](../features/225-lan-browser-device-auth.md)) · **group with E2/E3**
+
+`DELETE /api/devices/:id` is now gated to true loopback. Nothing automated reaches
+the real boundary: the server test **fabricates** a request object with
+`req.ip = '127.0.0.2'`, and the frontend test **stubs** `window.location`. Both are
+correct unit tests and neither has ever seen the actual `:443` forwarder, which is
+what makes the host's own browser non-loopback in the first place
+(`lan-port-forwarder.ts` dials upstream with `localAddress: '127.0.0.2'`, and it is
+host-blind, so a phone on `castwright.local` is indistinguishable from the desktop
+there). The narrowing is also user-visible, and the replacement copy is the only
+thing standing between an owner and "the button vanished with no explanation."
+
+- From **`https://localhost:<port>`** (the direct port, NOT the `:443` shortcut):
+  Revoke a device — it succeeds and the row drops out of the list. This is the one
+  address the feature leaves working; if it fails, the gate is too tight.
+- From **`https://localhost/`** (port 443, through the forwarder): the Revoke
+  button still **renders** — `isLoopbackHost()` is a hostname-only client-side
+  heuristic that cannot see the forwarder — and pressing it returns 403. Confirm
+  the error shown is the actionable sentence naming the direct-port address, **not**
+  a raw `revoke failed (403)`.
+- From **`https://castwright.local` on a phone**: no Revoke control on any row, and
+  the explanation renders **once below the device list, not once per row**. Check
+  this with **at least 3 paired devices** — per-row rendering was the shape caught
+  in review, and with one device the bug is invisible. Confirm it is legible at
+  phone width and does not crush the label/date columns.
+- **The security half, and the reason the row exists:** from a paired phone (or any
+  LAN device holding a valid credential), call `DELETE /api/devices/<the host's own
+  record id>` directly — the id is in `GET /api/devices`, which that device can
+  read. Expect **403**, and confirm afterwards via the host UI that the host's
+  record is **still live, not revoked**. Before #2269 this succeeded and locked the
+  owner out of their own install.
+
+*Needs:* the LAN HTTPS server running with the `:443` forwarder actually bound
+(`npm run start:lan`; no elevation required on Windows — see plan 283's ship
+notes), plus a phone or second machine paired over `castwright.local`. *Cost:*
+15–20 minutes; shares its whole setup with E2 and E3, so run the three together.
+*Criteria:* PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280)
+body; plan 225 §Invariants item 6.
 
 ## Group F — a real Android device
 
