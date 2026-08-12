@@ -269,8 +269,12 @@ Two chains land together. The first stops a refusal being issued against a pessi
   a letter on both sides, or opening a word (`’em`, `’cause`), or immediately
   after its own opening quote (`‘’Tis`) is no longer a closer. Where an opener
   has no valid closer at all the previous boundary is kept, so a turn can
-  never be deleted. Measured over 331 public-domain books: 949 paragraphs
-  repaired, none regressed. (#2288)
+  never be deleted. A rejected closer's search for a later occurrence of the
+  same glyph is bounded to the next opener of any class, so a stray
+  apostrophe between turns can no longer swallow the turns that follow.
+  Measured over 331 public-domain books: the unbounded rule merged 8
+  paragraphs and swallowed 18 turns; bounding the skip brings both to 0,
+  leaving 936 clean repairs. (#2288)
 
 ---
 
