@@ -8,9 +8,26 @@
    FallbackAnalyzer in index.ts to retry against Gemini. Everything else —
    HTTP non-2xx, validation failures, mid-stream aborts — surfaces as a plain
    Error and hard-fails. The point: a misbehaving local model should not
-   silently burn Gemini quota; if Ollama is up at all, we trust the error. */
+   silently burn Gemini quota; if Ollama is up at all, we trust the error.
+
+   That classification is only sound if the fetch itself never invents a
+   failure. Node's global fetch (undici) defaults `headersTimeout` to 300s,
+   and Ollama withholds response headers until the FIRST generated token —
+   so on a big prompt the whole prefill counts against that budget. A busy
+   but perfectly healthy daemon therefore dies at exactly 302s with a bare
+   `TypeError: fetch failed`, which classifyConnectError below reads as
+   "unreachable" — the one condition that reroutes to Gemini. A slow local
+   call thus silently completes in the cloud, which is precisely what the
+   paragraph above says must not happen (observed 2026-08-12: two chapters
+   of a 103k-word book failed cast detection this way, both at 302s).
+
+   Hence ANALYZER_DISPATCHER: unlimited header/body timeouts so a busy
+   daemon never aborts mid-call, with a short connectTimeout so a genuinely
+   down daemon still fails fast and still reaches the fallback. Same shape
+   and same rationale as tts/sidecar.ts and tts/embed-client.ts. */
 
 import { writeFile } from 'node:fs/promises';
+import { fetch as undiciFetch, Agent } from 'undici';
 import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
@@ -90,7 +107,25 @@ interface OllamaOptions {
   url: string;
   /** Model tag passed to /api/chat (e.g. `qwen3.5:9b`). */
   model: string;
+  /** Injected undici dispatcher — for testing only. Defaults to the
+      module-level ANALYZER_DISPATCHER singleton. */
+  dispatcher?: Agent;
 }
+
+/* Long-call dispatcher — see the header note. `headersTimeout: 0` is the
+   load-bearing field: Ollama sends no response headers until the first
+   generated token, so prefill on a large prompt otherwise races undici's
+   300s default. `bodyTimeout: 0` covers a long inter-token stall on a
+   loaded GPU. `connectTimeout` stays short so a down daemon still fails
+   fast into LocalUnreachableError, preserving the fallback path.
+   Exported for the regression test, which injects a deliberately tiny
+   `headersTimeout` to prove the dispatcher is actually wired into the
+   fetch — a bare global fetch ignores it. */
+export const ANALYZER_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
 
 /* Network-failure error codes that Node's undici fetch surfaces via
    `err.cause.code`. These are the "couldn't connect" cases that warrant
@@ -242,10 +277,12 @@ export function resolveNumPredict(): number {
 export class OllamaAnalyzer implements Analyzer {
   private readonly url: string;
   private readonly model: string;
+  private readonly dispatcher: Agent;
 
   constructor(opts: OllamaOptions) {
     this.url = opts.url;
     this.model = opts.model;
+    this.dispatcher = opts.dispatcher ?? ANALYZER_DISPATCHER;
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
@@ -632,13 +669,14 @@ export class OllamaAnalyzer implements Analyzer {
     const releaseSlot = await acquireAnalyzerSlot(this.model, getLastKnownAnalyzerDevice() === 'cpu');
 
     try {
-      let response: Response;
+      let response: Awaited<ReturnType<typeof undiciFetch>>;
       try {
-        response = await fetch(`${this.url}/api/chat`, {
+        response = await undiciFetch(`${this.url}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
           signal,
+          dispatcher: this.dispatcher,
         });
       } catch (err) {
         if (signal?.aborted) {

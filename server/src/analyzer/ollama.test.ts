@@ -6,8 +6,13 @@
        decorator)
      - validation-retry loop reusing the same helpers as GeminiAnalyzer
 
-   The Ollama daemon is mocked at global.fetch — we don't need a real
-   server, just a deterministic Response object per scenario. */
+   The Ollama daemon is mocked at undici's `fetch` — we don't need a real
+   server, just a deterministic Response object per scenario. It is undici's
+   fetch rather than the global one because chat() must pass an undici
+   `Agent` as its dispatcher (see ollama.ts's ANALYZER_DISPATCHER note), and
+   a dispatcher from the npm undici package is rejected by Node's built-in
+   fetch — the two are separate copies. `importOriginal` keeps the real
+   `Agent` export, which ollama.ts constructs at module load. */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import { z } from 'zod';
@@ -149,11 +154,18 @@ function okResponse(stream: ReadableStream<Uint8Array>): Response {
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
 }
 
-const fetchMock = vi.fn();
+/* Hoisted so the factory closes over the SAME vi.fn() the tests drive, and so
+   `fetchMock` stays a plain untyped mock — `vi.mocked(undiciFetch)` would type
+   it to undici's Response, which the global `new Response(...)` built by
+   okResponse below is not assignable to. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
 
 beforeEach(async () => {
   fetchMock.mockReset();
-  vi.stubGlobal('fetch', fetchMock);
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
   await mkdir(resolve(HANDOFF_ROOT, 'outbox'), { recursive: true });
 });

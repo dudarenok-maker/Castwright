@@ -4,6 +4,7 @@
    call succeeds, returns the parsed ops, and writes the inbox/outbox handoff. */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+
 import { z } from 'zod';
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -82,13 +83,20 @@ async function* asyncFromChunks(items: Array<{ text: string; finishReason?: stri
   }
 }
 
-const fetchMock = vi.fn();
+/* Ollama's transport is undici's fetch, not the global one — see the note in
+   ollama.test.ts. `importOriginal` keeps the real `Agent`, which ollama.ts
+   constructs at module load; `vi.hoisted` keeps fetchMock a plain untyped
+   mock so the global Responses these tests build stay assignable. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
 
 beforeEach(async () => {
   fetchMock.mockReset();
   generateContentStream.mockReset();
   geminiRateLimiter._reset();
-  vi.stubGlobal('fetch', fetchMock);
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
   await mkdir(resolve(HANDOFF_ROOT, 'outbox'), { recursive: true });
 });
