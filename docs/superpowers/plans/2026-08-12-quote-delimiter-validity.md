@@ -14,7 +14,7 @@
 
 - **The acceptance loop does not change.** `candidates.sort(...)` and the `cursor` loop at `parser.ts:207-214` are copied through verbatim. Every rule that touched acceptance destroyed nesting.
 - **A rule may move a run boundary; it may never delete a run.** If rejecting closers leaves an opener with no valid closer, fall back to the nearest closer of any kind — what the current implementation would have chosen. Without this, 90 real paragraphs lose speech and 74 lose all of it.
-- **"Letter" means `\p{L}` minus `Han`, `Hiragana`, `Katakana`, `Hangul`, `Thai`.** CJK has no inter-word spacing; without the exclusion zh's legitimate `“他说‘你好’然后走了”` breaks.
+- **"Letter" means `\p{L}` minus `Han`, `Hiragana`, `Katakana`, `Hangul`, `Thai`.** This is FORWARD-COVER for #2286, which adds `['‘','’']` to `zh` and `ru`. On today's tables it is unreachable — only `en` pairs an apostrophe-shaped glyph as a closer — so no test in this plan can make it fail. Keep it; do not claim it is covered.
 - **No table changes.** `server/src/analyzer/dialogue-structure/lang/*.ts` are not touched by this plan. #2286 stays blocked.
 - **Commit convention:** `<type>(<scope>): <subject>`, subject ≤ 100 chars. Scope is `server` for code, `docs` for docs.
 - **Branch:** cut a fresh worktree + branch `fix/server-2288-quote-delimiter-validity` off latest `origin/main` before Task 1, per CLAUDE.md's branching workflow. The design worktree (`wt-2288-quote-delimiter-design`) is docs-only and is NOT the implementation tree.
@@ -23,8 +23,9 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `server/src/analyzer/dialogue-structure/parser.ts` | run-boundary detection | Modify `findQuoteRuns` (:192-216); add two consts + `isRealCloser` above it; delete `escapeRegExp` (:168), orphaned by this change |
-| `server/src/analyzer/dialogue-structure/parser.test.ts` | engine-path regression tests | Add three `describe` blocks |
+| `server/src/analyzer/dialogue-structure/parser.ts` | run-boundary detection | Modify `findQuoteRuns` (:192-216); add two consts + `isRealCloser` above it; delete `escapeRegExp` (:168), orphaned by this change; rewrite the `findQuoteRuns` doc comment (:179-191), which this change falsifies |
+| `server/src/analyzer/dialogue-structure/parser.test.ts` | engine-path regression tests | Add four `describe` blocks + the salvaged `de` cases |
+| `server/src/analyzer/dialogue-structure/lang/index.test.ts` | table guards | Widen the duplicate-pair guard to `zh`/`ja` (salvaged from PR #2286) |
 | `docs/release-notes-next.md`, `RELEASE_NOTES.md` | release register | Append one entry each |
 
 Everything lives in one function because the change *is* one function. Splitting the predicate into its own module would add an import cycle risk (`server/src/gpu/` rules) for no benefit — it has one caller and is not part of any contract.
@@ -115,15 +116,28 @@ In `server/src/analyzer/dialogue-structure/parser.ts`, replace the body of `find
         openLen: open.length,
         closeLen: end.glyph.length,
       });
-      /* Scanning resumes at the END of the accepted run, exactly as `matchAll`
-         did: a second opener of the same class INSIDE a run yields no
-         candidate. */
+      /* Scanning resumes at the END of the accepted run: a second opener of
+         the same class INSIDE a run yields no candidate. (Task 2 may move that
+         end LATER than the old regex would have — the resume point follows the
+         run, not the regex.) */
       pos = end.at + end.glyph.length;
     }
   }
 ```
 
 Then delete `escapeRegExp` at `:168` — this change was its only caller.
+
+Finally, fix the doc comment on `findQuoteRuns` (`:179-191`), which this task
+makes false. It currently explains the boundary rule in terms of a regex that
+no longer exists — *"the per-pair `„…"` regex would lazily run the first `„`
+past an intervening `“`…"* — and closes with *"NOTE: alternation matches the
+leftmost alternative, not the longest — if a future language ever pairs
+prefix-related multi-char closers with one opener, order them longest-first
+here."* Keep both **conclusions** (a run ends at the nearest closer position;
+ties go to the earlier entry in the opener's closer list, so order
+prefix-related closers longest-first) and restate them for the explicit scan.
+A stale comment your own change falsified is a chore owed in the same round,
+not taste — see CLAUDE.md, Incidental findings.
 
 - [ ] **Step 4: Run the characterisation test and the whole server dialogue suite**
 
@@ -208,30 +222,47 @@ describe('parser — #2288 an apostrophe is not a closing quote (en)', () => {
 - [ ] **Step 2: Run them and confirm they fail for the right reason**
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/parser.test.ts -t "#2288 an apostrophe"`
-Expected: 5 FAIL, 2 PASS. The failures must show truncation, not an error:
+Expected: 5 FAIL, 2 PASS. These are the **speech spans** the failures must
+report — verified against the real parser, not derived from run boundaries (an
+empty run interior produces a run but no span, which is why the last two rows
+are shorter than the run count suggests):
 
 ```
-‘I don’t know,’ she said.                        → ["I don"]
-‘We can’t go back,’ said Mary. ‘It isn’t safe.’  → ["We can", "It isn"]
+‘I don’t know,’ she said.                         → ["I don"]
+‘We can’t go back,’ said Mary. ‘It isn’t safe.’   → ["We can", "It isn"]
 ‘Ask O’Brien,’ she said.                          → ["Ask O"]
-‘Give ’em back,’ she said, ‘’cause they’re mine.’ → ["Give ", ""]
-‘’Tis nothing,’ he said.                          → [""]
+‘Give ’em back,’ she said, ‘’cause they’re mine.’ → ["Give "]
+‘’Tis nothing,’ he said.                          → []          ← no speech at all
 ```
 
-If a test fails with a different actual value, stop and reconcile before implementing — the expectation is wrong, not the code.
+The last row is the strongest single piece of evidence for sub-clause (3): the
+turn is not truncated, it is **erased** — the whole paragraph is narration
+today.
+
+If a test fails with a different actual value, re-run that one string through
+`parseChapterStructure` before changing anything, and reconcile against this
+table. Do not assume either side is right.
 
 - [ ] **Step 3: Add the predicate**
 
 Insert into `server/src/analyzer/dialogue-structure/parser.ts` immediately above `findQuoteRuns`:
 
 ```ts
-/** Scripts with no inter-word spacing. A delimiter with letters on both sides
-    is ordinary text there, not a mis-read apostrophe — zh's legitimate nested
-    `“他说‘你好’然后走了”` has ideographs either side of the inner `’`. */
+/** Scripts with no inter-word spacing, where a delimiter with letters on both
+    sides is ordinary text rather than a mis-read apostrophe.
+    FORWARD-COVER, not live protection: `en` is the only shipped table pairing
+    an apostrophe-shaped glyph as a closer, so today this branch is never
+    reached and removing it leaves 725,066 corpus paragraphs byte-identical.
+    It matters when #2286 adds ['‘','’'] to `zh` and `ru`, at which point the
+    inner `’` of `“他说‘你好’然后走了”` becomes exactly the both-sides shape the
+    first clause rejects. No test can make this fail yet; do not delete it as
+    dead code. */
 const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}]/u;
-/** `‘` is here for completeness; no table pairs it as a CLOSER today, so the
-    predicate is never reached with it. Do not narrow the set without
-    re-measuring — this is the exact set the corpus and sweep were run against. */
+/** Only `’` is reachable today: `en` is the sole table pairing an
+    apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
+    nothing stops a future table pairing them, and because this is the exact
+    set the corpus and the sweep were measured against. Do not narrow it
+    without re-measuring. */
 const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
 
 function isSpacedLetter(ch: string | undefined): boolean {
@@ -340,12 +371,21 @@ describe('parser — #2288 a rule may move a run boundary, never delete a run', 
       .filter((s) => s.kind === 'speech')
       .map((s) => body.slice(s.start, s.end));
 
-  it('an unterminated outer quote still yields both inner turns', () => {
-    // No closing `”`, so the inner ‘…’ runs are top level. Rejecting their
-    // closers without a fallback deleted the SECOND turn outright.
-    expect(
-      speechOf('“ ‘In my youth,’ said the Hermit, ‘I was a shoemaker, and fastidious.’'),
-    ).toEqual(['In my youth,', 'I was a shoemaker, and fastidious.']);
+  // All three bodies below are REAL corpus paragraphs from
+  // se/anne-parrish_the-perennial-bachelor.epub. Each is an inner quotation
+  // whose ONLY `’` is a contraction, so every closer is rejected and the run
+  // vanishes unless the fallback restores it. Verified: each returns [] under
+  // the Step 3 mutation.
+  it('a quotation whose only closer is a contraction keeps its (truncated) turn', () => {
+    expect(speechOf('“ ‘Shoo fly! Don’t bother me!')).toEqual(['Shoo fly! Don']);
+  });
+
+  it('the same, for a possessive', () => {
+    expect(speechOf('“ ‘Ping Wing, the Pieman’s son,')).toEqual(['Ping Wing, the Pieman']);
+  });
+
+  it('the same, for a dialect elision', () => {
+    expect(speechOf('“ ‘The strife is o’er, the battle done;')).toEqual(['The strife is o']);
   });
 
   it('a turn whose only closer is an apostrophe is truncated, never dropped', () => {
@@ -375,14 +415,18 @@ describe('parser — #2288 a rule may move a run boundary, never delete a run', 
 - [ ] **Step 2: Run them**
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/parser.test.ts -t "never delete a run"`
-Expected: PASS, 4 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 3: Prove the tripwire actually trips (mutation check)**
 
-Temporarily change the fallback line in `parser.ts` from `if (end === null) end = nearestAny;` to `if (false) end = nearestAny;`.
+Temporarily change the fallback line in `parser.ts` from `if (end === null) end = nearestAny;` to `if (end === null && false) end = nearestAny;`.
+
+(Written this way, not as `if (false)`, so ESLint's `no-constant-condition` stays quiet if anyone runs `npm run lint` mid-mutation — it is `--max-warnings 0`.)
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/parser.test.ts -t "never delete a run"`
-Expected: **FAIL**, at least 3 of the 4. A test suite that stays green under this mutation is not pinning the invariant — fix the tests before continuing.
+Expected: **FAIL, all 6.** Every body in this block was chosen because it returns `[]` under the mutation.
+
+**This bar is the point of the task, not a formality.** An earlier draft of this block led with `“ ‘In my youth,’ said the Hermit, ‘I was a shoemaker, and fastidious.’` — which reads like a turn-loss case and is not one: both inner runs close on punctuation (`,’` and `.’`), so no closer is ever rejected and the fallback is never reached. It passed identically with and without the mutation. If any test here survives the mutation, replace its body with one that does not; do not lower the bar.
 
 Then revert the mutation and re-run to confirm PASS.
 
@@ -449,7 +493,60 @@ git commit -m "test(server): pin the two quote-run shapes #2288 does not fix"
 
 ---
 
-### Task 5: Release notes, and ship
+### Task 5: Land the #2286 salvage and the deep-nesting case
+
+The spec's test plan calls for salvaging coverage from the blocked PR #2286.
+Its `lang/index.test.ts` duplicate-pair guard and four of its `parser.test.ts`
+cases assert against the **shipped** tables, so they apply with no table change
+and would otherwise be owned by neither PR.
+
+**Files:**
+- Test: `server/src/analyzer/dialogue-structure/parser.test.ts`, `server/src/analyzer/dialogue-structure/lang/index.test.ts`
+
+**Interfaces:** none.
+
+- [ ] **Step 1: Read the source commit**
+
+Run: `git show b5e7a365 -- server/src/analyzer/dialogue-structure/lang/index.test.ts server/src/analyzer/dialogue-structure/parser.test.ts`
+
+Take only the cases that pass against the shipped tables: the duplicate-pair
+guard widened to `zh`/`ja`, and the `de`-table cases (`de carries no opener
+beyond „ and »`, and the `#2288: de + …` counter-examples). **Do not** take
+anything that asserts a widened table — those belong to #2286.
+
+- [ ] **Step 2: Add the deep-nesting case the spec asks for**
+
+```ts
+it('an outer turn containing THREE inner quotes stays one turn', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const body = '“He said ‘hi’ and ‘bye’ and ‘hi’ to me,” she reported.';
+  const speech = parseChapterStructure(body, idx)
+    .flatMap((p) => p.spans)
+    .filter((s) => s.kind === 'speech')
+    .map((s) => body.slice(s.start, s.end));
+  expect(speech).toEqual(['He said ‘hi’ and ‘bye’ and ‘hi’ to me,']);
+});
+```
+
+This is the shape that killed the convention-election rule (it collapsed into
+four fragments). Nothing in this design can regress it, which is exactly why it
+is worth pinning before the next attempt at M2.
+
+- [ ] **Step 3: Run both files**
+
+Run: `cd server && npx vitest run src/analyzer/dialogue-structure/`
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add server/src/analyzer/dialogue-structure/parser.test.ts server/src/analyzer/dialogue-structure/lang/index.test.ts
+git commit -m "test(server): salvage the table-independent guards from PR #2286"
+```
+
+---
+
+### Task 6: Release notes, and ship
 
 **Files:**
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
@@ -458,7 +555,11 @@ git commit -m "test(server): pin the two quote-run shapes #2288 does not fix"
 
 - [ ] **Step 1: Append the technical entry**
 
-To `docs/release-notes-next.md`, under the current version's Fixed section:
+To `docs/release-notes-next.md`, at the end of the **`## 🗣️ Analyzer, script
+review & manuscript`** section (line ~248). That file has no `Fixed` heading —
+its section anatomy is fixed by its own header comment and `bump-version.mjs`
+feeds it verbatim as the GitHub release body, so inventing a heading ships a
+malformed release. Append there, do not create a section:
 
 ```markdown
 - **Dialogue in single quotes is no longer cut short at the first apostrophe.**
@@ -506,9 +607,12 @@ Single-scope `fix(server)` → **medium** effort, per the model-routing ladder. 
 
 ## Self-review
 
-**Spec coverage.** Rule clause (1) → Task 2 Step 1 tests 1–3; clause (2) → test 4; clause (3) → test 5; the never-delete invariant → Task 2 Step 4 plus Task 3 in full, with a mutation check. "Acceptance untouched" → Task 1 copies the loop verbatim and Task 1's characterisation block pins nesting and #1601 before the rule lands. CJK exemption → Task 1's zh test. Test plan's "run count is asserted" → every test asserts a full array, and Task 3 Step 1 test 4 asserts count directly. Known limits → Task 4. Rejected clauses `G` and `H` are correctly absent — no task adds an opener rule or a shared-closer rule.
+**Spec coverage.** Rule clause (1) → Task 2 Step 1 tests 1–3; clause (2) → test 4; clause (3) → test 5; the never-delete invariant → Task 2 Step 4 plus Task 3 in full, gated by a mutation check every body in that block is verified to fail. "Acceptance untouched" → Task 1 copies the loop verbatim and its characterisation block pins nesting and #1601 *before* the rule lands. Test plan's "run count is asserted" → every test asserts a full array; Task 3's last test asserts count directly. Known limits → Task 4. #2286 salvage and the three-inner-quote nesting case → Task 5. Rejected clauses `G` and `H` are correctly absent — no task adds an opener rule or a shared-closer rule.
 
-**Not covered, deliberately:** the `british` sweep family is not ported into the unit suite wholesale; Task 2 carries five of its twelve cases and Task 4 carries the possessive-plural one. The remaining six are permutations of the same three sub-clauses. Recorded here rather than silently dropped.
+**Not covered, and why:**
+- **The script exclusion has no test, and cannot have one.** Only `en` pairs an apostrophe-shaped glyph as a closer today, so the branch is unreachable until #2286 widens `zh`/`ru`. Task 1's zh test is a *nesting characterisation*; it passes with the exclusion removed. Do not read it as coverage.
+- **The widened table set is not exercised in unit tests.** `findQuoteRuns` is module-private and takes its pairs from `conv.quotePairs`, so with no table changes there is no route to drive the wide set through `parseChapterStructure`. That evidence lives in the generated sweep and moves into unit tests with #2286.
+- **The `british` sweep family is not ported wholesale.** Task 2 carries five of its twelve cases, Task 4 the possessive-plural one; the remaining six are permutations of the same three sub-clauses.
 
 **Placeholders:** none — every step has the literal code or the literal command.
 

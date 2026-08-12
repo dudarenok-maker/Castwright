@@ -73,11 +73,21 @@ is rejected as a closer when any of:
    span at all: the turn is destroyed rather than truncated.
 
 "Cased" means `\p{L}` minus `Han`, `Hiragana`, `Katakana`, `Hangul`, `Thai`.
-The exclusion is required: CJK has no inter-word spacing, so `好’然` inside
-zh's legitimate `“他说‘你好’然后走了”` has letters on both sides and must stay a
-closer. The list is exhaustive for the seven tables that exist; scripts with no
-case and no table (Arabic, Hebrew, Devanagari) are unreachable today and the
-implementation must not silently assume otherwise.
+
+**That exclusion is forward-cover, not live protection, and the difference is
+worth stating precisely.** `en` is the only shipped table that pairs an
+apostrophe-shaped glyph as a *closer*, so on today's tables the predicate never
+reaches the script test at all: removing the exclusion entirely leaves all
+725,066 corpus paragraphs byte-identical, and zh's `“他说‘你好’然后走了”` parses
+correctly either way because its inner `’` is not a closer candidate. The
+exclusion exists because **#2286 adds `['‘','’']` to `zh` and `ru`**, at which
+point `好’然` becomes exactly the both-sides shape the first clause rejects. It
+is deliberate defence for a table that is coming, and no test can currently
+make it fail — which is why the zh test below is labelled a nesting
+characterisation rather than coverage of this rule.
+
+Scripts with no case and no table (Arabic, Hebrew, Devanagari) are unreachable
+today; the implementation must not silently assume otherwise.
 
 **The invariant — a rule may move a run boundary, never delete a run.** If
 rejecting closers leaves an opener with *no* valid closer at all, fall back to
@@ -88,12 +98,19 @@ it, D deletes **90 paragraphs' worth of speech** on the corpus, 74 of them
 losing every turn — turning dialogue into narration, which is the same harm
 class #2288 exists to fix.
 
+A real corpus paragraph (`se/anne-parrish_the-perennial-bachelor.epub`), an
+inner quotation whose only `’` is the contraction:
+
 ```
-“ ‘In my youth,’ said the Hermit, ‘I was a shoemaker, and fastidious.’ ”
-   main        ["In my youth,", "I was a shoemaker, and fastidious."]
-   D, no fallback  ["In my youth,"]              ← second turn deleted
-   D + fallback    ["In my youth,", "I was a shoemaker, and fastidious."]
+“ ‘Shoo fly! Don’t bother me!
+   main            ["Shoo fly! Don"]     truncated
+   D, no fallback  []                    ← ALL speech gone; the turn is narration
+   D + fallback    ["Shoo fly! Don"]     no better than main, and no worse
 ```
+
+Note what the fallback buys: not a repair, a **floor**. Where no valid closer
+exists the output is exactly `main`'s. That is the whole point — the clause is
+allowed to improve a paragraph or leave it alone, never to degrade it.
 
 ### Why acceptance is not touched
 
@@ -310,10 +327,15 @@ the absence of engine-path coverage is what let the first widening bug through.
   apostrophes must still produce its runs, unchanged from `main`.
 - **British single-quote convention**, the whole `british` sweep family — the
   convention the problem statement is about and the corpus has no example of.
-- **Nesting, at both table sets**, in `en`, `zh` and `de`, including an outer
-  turn containing three inner quotes; plus the three promotion cases above,
-  which are the ones that break if a future change deletes a candidate.
-- CJK exemption: zh's `“他说‘你好’然后走了”` stays one run.
+- **Nesting** in `en`, `zh` and `de`, including an outer turn containing three
+  inner quotes; plus the promotion cases above, which are the ones that break
+  if a future change deletes a candidate. *Only the shipped table set is
+  testable:* `findQuoteRuns` is module-private and its pairs come from
+  `conv.quotePairs`, so with no table changes there is no way to drive the
+  widened set through `parseChapterStructure`. The widened-set evidence stays
+  in the generated sweep and moves into unit tests with #2286.
+- zh's `“他说‘你好’然后走了”` stays one run — a **nesting characterisation**, not
+  coverage of the script exclusion, which is unreachable today (above).
 - Regression cases for the two shapes this does **not** fix — possessive-plural
   (`‘It was the boys’ fault,’`) — asserted at `main`'s current output, so a
   future fix has a failing test to flip rather than a silent gap.
