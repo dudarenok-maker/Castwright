@@ -475,6 +475,36 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
     // ever disambiguated (would need a stacking scan, out of scope for #2288).
     expect(speechOf('‘Don’t you ‘dare’ leave,’ she said.')).toEqual(['Don', 'dare']);
   });
+
+  it('NOT FIXED (under-repair, not regression): a dash-preceded elision apostrophe still ends the turn early', () => {
+    // Real corpus paragraph, `se/joseph-conrad_chance.epub` (#2288's
+    // hand-adjudication of the bound, `2288-overrun-adjudication.md` §4,
+    // "nearest miss"). `’pon`'s apostrophe is preceded by an em dash, which
+    // is neither a cased letter (clause 1) nor whitespace/bracket (clause 2),
+    // so `isRealCloser` accepts it as a genuine closer and the scan stops
+    // there — one apostrophe short of the turn's real end.
+    //
+    // This is an UNDER-repair, not a regression: `main` truncates this
+    // paragraph to ['It'], this rule gives ['It’s like being in jail—'] —
+    // strictly longer, still entirely speech, never narration, never a lost
+    // turn. Desired output is ['It’s like being in jail—’pon my word. I
+    // suppose that man is out there waiting for you. Head jailer! Ough!'];
+    // flip this test when that is fixed.
+    //
+    // A widened elision clause (treating a dash before the apostrophe the
+    // same as whitespace) was implemented and measured against this exact
+    // shape (`2288-dash-variant.md`): corpus-identical apart from repairing
+    // this one paragraph, but a synthetic interrupted-turn probe reproduces
+    // the same narration-swallowing over-run through a dash-preceded glued
+    // closer, and well-typeset public-domain prose systematically lacks the
+    // missing-space-after-closer defect that would exercise the new
+    // rejection branch — so a corpus zero cannot clear it. Rejected.
+    expect(
+      speechOf(
+        '‘It’s like being in jail—’pon my word. I suppose that man is out there waiting for you. Head jailer! Ough!’',
+      ),
+    ).toEqual(['It’s like being in jail—']);
+  });
 });
 
 describe('parser — #2288 round 2: a rejected closer\'s skip is bounded to the next opener (Critical)', () => {
