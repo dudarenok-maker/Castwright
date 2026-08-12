@@ -307,3 +307,48 @@ describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 
     expect(speechOf('“他说‘你好’然后走了”', zhIdx)).toEqual(['他说‘你好’然后走了']);
   });
 });
+
+describe('parser — #2288 an apostrophe is not a closing quote (en)', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // (1) a cased letter on BOTH sides — the contraction and the name
+  it('a contraction does not end a single-quoted turn', () => {
+    expect(speechOf('‘I don’t know,’ she said.')).toEqual(['I don’t know,']);
+  });
+  it('two single-quoted turns each survive their contraction', () => {
+    expect(speechOf('‘We can’t go back,’ said Mary. ‘It isn’t safe.’')).toEqual([
+      'We can’t go back,',
+      'It isn’t safe.',
+    ]);
+  });
+  it('an apostrophe inside a name does not end the turn', () => {
+    expect(speechOf('‘Ask O’Brien,’ she said.')).toEqual(['Ask O’Brien,']);
+  });
+
+  // (2) whitespace-then-letter — elision that OPENS a word
+  it('a leading-elision apostrophe does not end the turn', () => {
+    expect(speechOf('‘Give ’em back,’ she said, ‘’cause they’re mine.’')).toEqual([
+      'Give ’em back,',
+      '’cause they’re mine.',
+    ]);
+  });
+
+  // (3) opener-then-letter — turn-initial elision, which would otherwise
+  //     close on an EMPTY interior and produce no speech span at all
+  it('a turn-initial elision does not destroy the turn', () => {
+    expect(speechOf('‘’Tis nothing,’ he said.')).toEqual(['’Tis nothing,']);
+  });
+
+  // controls — these already pass on main and must keep passing
+  it('CONTROL: single-quoted turns with no apostrophe are unchanged', () => {
+    expect(speechOf('‘Hello,’ he said. ‘Goodbye,’ she said.')).toEqual(['Hello,', 'Goodbye,']);
+  });
+  it('CONTROL: a double-quoted turn containing a contraction is unchanged', () => {
+    expect(speechOf('“I don’t know,” she said.')).toEqual(['I don’t know,']);
+  });
+});

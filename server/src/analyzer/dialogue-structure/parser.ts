@@ -187,6 +187,48 @@ interface QuoteRun {
     multi-char closers with one opener, order them longest-first there. A run's
     `closeLen` is the actually-matched closer's length (all current closers are
     one code unit). */
+/** Scripts with no inter-word spacing, where a delimiter with letters on both
+    sides is ordinary text rather than a mis-read apostrophe.
+    FORWARD-COVER, not live protection: `en` is the only shipped table pairing
+    an apostrophe-shaped glyph as a closer, so today this branch is never
+    reached and removing it leaves 725,066 corpus paragraphs byte-identical.
+    It matters when #2286 adds ['‘','’'] to `zh` and `ru`, at which point the
+    inner `’` of `“他说‘你好’然后走了”` becomes exactly the both-sides shape the
+    first clause rejects. No test can make this fail yet; do not delete it as
+    dead code. */
+const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}]/u;
+/** Only `’` is reachable today: `en` is the sole table pairing an
+    apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
+    nothing stops a future table pairing them, and because this is the exact
+    set the corpus and the sweep were measured against. Do not narrow it
+    without re-measuring. */
+const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
+
+function isSpacedLetter(ch: string | undefined): boolean {
+  return ch !== undefined && /\p{L}/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
+}
+
+/** Is `line[k]` really a closing delimiter, or an apostrophe? English writes
+    both `’`, and `en`'s table carries ['‘','’'], so without this every
+    contraction ends the run early: `‘I don’t know,’ she said.` yields the
+    speech "I don" (#2288). Three shapes, all local to the glyph's neighbours:
+      don’t / O’Brien   a letter on both sides
+      ’em / ’cause      whitespace or a bracket, then a letter — a real closer
+                        is never preceded by whitespace, it closes onto the
+                        last character of the speech it terminates
+      ‘’Tis             its own opener, then a letter — accepting it would
+                        close on an empty interior and yield NO speech span,
+                        destroying the turn rather than truncating it */
+function isRealCloser(line: string, k: number, closer: string, openers: Set<string>): boolean {
+  if (!APOSTROPHE_SHAPED.has(closer)) return true;
+  const before = line[k - 1];
+  const after = line[k + 1];
+  if (isSpacedLetter(before) && isSpacedLetter(after)) return false;
+  if ((before === undefined || /[\s([{]/u.test(before)) && isSpacedLetter(after)) return false;
+  if (before !== undefined && openers.has(before) && isSpacedLetter(after)) return false;
+  return true;
+}
+
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
@@ -194,6 +236,7 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
     if (list) list.push(close);
     else closersByOpener.set(open, [close]);
   }
+  const openers = new Set(closersByOpener.keys());
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
     let pos = 0;
@@ -204,14 +247,38 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
          earlier entry in `closers`, matching the old alternation's
          leftmost-alternative rule. */
       let end: { at: number; glyph: string } | null = null;
+      let nearestAny: { at: number; glyph: string } | null = null;
       for (const closer of closers) {
-        const at = line.indexOf(closer, start + open.length);
-        if (at >= 0 && (end === null || at < end.at)) end = { at, glyph: closer };
+        let from = start + open.length;
+        let firstOfGlyph = true;
+        for (;;) {
+          const at = line.indexOf(closer, from);
+          if (at < 0) break;
+          if (firstOfGlyph) {
+            if (nearestAny === null || at < nearestAny.at) nearestAny = { at, glyph: closer };
+            firstOfGlyph = false;
+          }
+          if (isRealCloser(line, at, closer, openers)) {
+            if (end === null || at < end.at) end = { at, glyph: closer };
+            break;
+          }
+          from = at + closer.length;
+        }
       }
+      /* NEVER DELETE A RUN. If every closer after this opener is an
+         apostrophe, fall back to the nearest one — i.e. exactly what this
+         function chose before #2288. Truncating a turn is bad; deleting it
+         turns dialogue into narration, which is worse and is the same harm
+         class this change exists to fix. Measured: without this fallback the
+         change loses speech in 90 real paragraphs, 74 of them entirely. */
+      if (end === null) end = nearestAny;
       if (end === null) {
-        /* No closer after this opener. The old regex failed to match here and
-           `lastIndex` advanced by one, so the rest of the line was NOT
-           consumed and the next opener of this class still got its chance. */
+        /* No closer after this opener — and by the same shrinking-window
+           argument, none after any LATER occurrence of it either: the
+           closer-search window only shrinks as `start` increases, so once one
+           occurrence of this opener has no closer, no later one can. Scanning
+           still continues rather than stopping outright, so openers of OTHER
+           classes still get their turn. */
         pos = start + open.length;
         continue;
       }
