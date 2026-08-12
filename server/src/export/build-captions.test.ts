@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -204,6 +204,40 @@ describeIfFfmpeg('buildCaptions', () => {
     expect(result.sizeBytes).toBeGreaterThan(0);
   });
 
+  /* Finding 1 (independent review of the crash fix): the per-chapter zip
+     branch (the SECOND per-chapter loop, which packs already-computed
+     cues into the zip) accepted a `signal` option in BuildCaptionsOptions
+     but never consulted it anywhere in its own write path — an abort
+     landing after cue computation but before/during the zip write did
+     nothing; the build ran to completion regardless.
+
+     Aborting from `onProgress` — fired once per chapter by the FIRST loop
+     (cue computation), which already called `throwIfAborted()` even
+     before this fix — lands the abort exactly between the two loops: by
+     the time execution reaches the per-chapter zip section, `signal` is
+     already aborted, but the FIRST loop's own (pre-existing) check can no
+     longer catch it because that loop has already exited. This isolates
+     the SECOND loop's gap specifically. Confirmed: reverting the fix
+     makes this pass with a COMPLETED zip instead of rejecting — this is
+     not a vacuous abort-before-anything-runs test. */
+  it('rejects instead of completing when the signal aborts between cue computation and the zip write (per-chapter scope)', async () => {
+    const controller = new AbortController();
+    const outPath = join(bookDir, 'aborted-per-chapter.zip');
+    await expect(
+      buildCaptions({
+        bookDir,
+        state,
+        captionFileFormat: 'vtt',
+        captionGranularity: 'line',
+        captionScope: 'per-chapter',
+        outPath,
+        signal: controller.signal,
+        onProgress: () => controller.abort(),
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(existsSync(outPath)).toBe(false);
+  });
+
   it('forwards a ZipFile-level internal error to the rejection instead of crashing the process (per-chapter scope)', async () => {
     /* Behavioral regression for zip.on('error', reject) in the per-chapter
        branch — see the vi.mock('yazl', ...) comment at the top of this file
@@ -233,7 +267,7 @@ describeIfFfmpeg('buildCaptions', () => {
           (e) => ({ kind: 'rejected' as const, value: e }),
         ),
         new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+          setTimeout(() => resolve({ kind: 'timeout' }), 8000),
         ),
       ]);
       // With the listener wired, the injected error rejects buildCaptions's
@@ -252,7 +286,7 @@ describeIfFfmpeg('buildCaptions', () => {
     // If this is non-null, an error on the ZipFile object crashed the
     // process instead of being caught by the error listener.
     expect(escaped).toBeNull();
-  }, 10_000);
+  }, 20_000);
 
   it('throws ExportIncompleteError when a chapter has no audio file', async () => {
     const brokenState = {

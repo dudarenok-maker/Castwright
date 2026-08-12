@@ -10,10 +10,42 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { buildCodecZip } from './build-codec-zip.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
+
+/* Behavioral regression for the ZipFile-level `zip.on('error', rejectBuild)`
+   listener inside createZipWritePipeline (build-mp3-zip.ts) — shared by
+   buildCodecZip via `createZipWritePipeline`, and by buildMp3Zip. See
+   build-captions.test.ts's identical mock (the reference implementation
+   this is copied from) for the full explanation of why the injected error
+   is emitted via `process.nextTick` rather than synchronously during
+   construction: `new Promise(executor)` auto-catches a *synchronous* throw
+   inside its executor and turns it into a rejection on its own, so emitting
+   synchronously from the ZipFile constructor would "pass" this test even
+   with the fix line deleted, for JS's reasons rather than
+   createZipWritePipeline's own forwarding. Scheduling via `process.nextTick`
+   moves the emit outside that frame — same as yazl's real internal error
+   sites — so an absent `zip.on('error', rejectBuild)` reproduces the real
+   bug: zero listeners, an `uncaughtException`, and the pipeline's promise
+   never settling. */
+let triggerZipFileError: Error | null = null;
+vi.mock('yazl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('yazl')>();
+  class TestZipFile extends real.ZipFile {
+    constructor() {
+      super();
+      if (triggerZipFileError) {
+        const err = triggerZipFileError;
+        process.nextTick(() => {
+          this.emit('error', err);
+        });
+      }
+    }
+  }
+  return { ...real, ZipFile: TestZipFile };
+});
 
 /* Same minimal yazl-produced-zip reader as build-mp3-zip.test.ts — only the
    central directory + stored (uncompressed) entry bytes, no external dep. */
@@ -212,6 +244,140 @@ describe('buildCodecZip', () => {
     // The real assertion: nothing escaped as a raw uncaught exception. If
     // this is non-null, the read-stream error crashed the process instead
     // of rejecting buildCodecZip's own promise.
+    expect(escaped).toBeNull();
+  }, 10_000);
+
+  /* Independent review, findings 1+2 on the crash fix: the old shape only
+     checked `signal.throwIfAborted()` at the top of the per-chapter loop,
+     which (1) can't stop a slow/stuck write mid-flight — the loop merely
+     REGISTERS read streams, the dominant cost (`await writePromise`) had
+     no abort awareness at all — and (2) even when the check DID land
+     between chapters, nothing stopped yazl's internal pump: the builder's
+     promise settled while bytes kept landing on disk well after. Reviewer
+     measurement on this exact builder (3x40MB chapters, abort from the
+     first onProgress): settled at 65584 bytes, grew to 41943104 bytes 200ms
+     later — a fully-completed build despite the "abort". createZipWritePipeline
+     (build-mp3-zip.ts) now destroys the write stream + open read stream the
+     instant `signal` aborts, so nothing can write another byte after the
+     builder's promise settles. Large-ish (2 MB) fixtures + a real 150ms
+     settle window make growth observable if the fix regresses — a fixture
+     too small could pass vacuously (already fully flushed before either
+     sample). */
+  it('an abort actually stops the write — output size does not grow after the promise settles', async () => {
+    const abortDir = join(tmpRoot, 'abort-codec');
+    mkdirSync(join(abortDir, 'audio'), { recursive: true });
+    const chapterCount = 4;
+    const chapterBytes = 2 * 1024 * 1024; // 2 MB/chapter — large enough for growth to be observable
+    const state: BookStateJson = {
+      ...makeState(),
+      chapters: Array.from({ length: chapterCount }, (_, i) => ({
+        id: i + 1,
+        title: `Chapter ${i + 1}`,
+        slug: `${String(i + 1).padStart(2, '0')}-chapter-${i + 1}`,
+      })),
+    };
+    for (const chapter of state.chapters) {
+      writeFileSync(
+        join(abortDir, 'audio', `${chapter.slug}.m4a`),
+        Buffer.alloc(chapterBytes, chapter.id),
+      );
+    }
+    const outPath = join(tmpRoot, 'abort-codec.zip');
+
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    process.on('unhandledRejection', onUncaught);
+
+    const controller = new AbortController();
+    let rejection: unknown = null;
+    try {
+      const build = buildCodecZip({
+        bookDir: abortDir,
+        state,
+        outPath,
+        format: 'aac-m4a',
+        signal: controller.signal,
+        onProgress: () => {
+          // Abort partway through the first chapter's write, mirroring the
+          // reviewer's "abort from the first onProgress" repro.
+          controller.abort();
+        },
+      });
+      await build;
+    } catch (e) {
+      rejection = e;
+    }
+    // Give the fs layer a real window to keep writing IF the pump were
+    // still running — this is the actual proof, not the rejection itself.
+    const sizeAtSettle = readFileSync(outPath).length;
+    await new Promise((r) => setTimeout(r, 150));
+    const sizeAfterDelay = readFileSync(outPath).length;
+
+    process.off('uncaughtException', onUncaught);
+    process.off('unhandledRejection', onUncaught);
+
+    expect((rejection as Error)?.name).toBe('AbortError');
+    expect(escaped).toBeNull();
+    expect(sizeAfterDelay).toBe(sizeAtSettle);
+    // Sanity: the abort genuinely landed before the full archive was
+    // written (chapterCount * chapterBytes), so this isn't just proving
+    // "a completed build doesn't grow further".
+    expect(sizeAtSettle).toBeLessThan(chapterCount * chapterBytes);
+  });
+
+  /* Reviewer finding: `zip.on('error', rejectBuild)` inside
+     createZipWritePipeline (build-mp3-zip.ts) had NO regression test of
+     its own — deleting that one line and running the whole export suite
+     left every test green, including this file's.
+
+     A book with ZERO chapters is NOT a sufficient repro (tried first, see
+     PR discussion): with no `addReadStream` entries at all, yazl's own
+     completion is fully synchronous relative to the injected error and
+     finishes on its own regardless of whether the listener exists — the
+     promise resolves "successfully" either way, silently masking the
+     missing forwarding rather than exposing it. At least one REAL
+     `addReadStream` entry (a genuine async fs read) is what actually gives
+     the disruption something in flight to interrupt — confirmed
+     empirically: this test hangs to the 1s race timeout without the fix,
+     and resolves instantly with it. Reuses this describe block's real
+     `bookDir` fixture (`01-chapter-1.m4a` / `02-chapter-2.m4a`) so the
+     per-chapter loop does genuine addReadStream work before hitting
+     `zip.end()` / `await pipeline.donePromise`. */
+  it('forwards a ZipFile-level internal error to the rejection instead of crashing the process', async () => {
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level)');
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    triggerZipFileError = injected;
+    const outPath = join(tmpRoot, 'zipfile-level-error-test.m4a.zip');
+    try {
+      const raced = await Promise.race([
+        buildCodecZip({ bookDir, state: makeState(), outPath, format: 'aac-m4a' }).then(
+          (r) => ({ kind: 'resolved' as const, value: r }),
+          (e) => ({ kind: 'rejected' as const, value: e }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+        ),
+      ]);
+      // With the listener wired, the injected error rejects buildCodecZip's
+      // own promise with the SAME error object. Without it, the promise
+      // never settles at all — that's the 'timeout' branch, a deliberate,
+      // fast, diagnosable failure instead of waiting on vitest's own test
+      // timeout.
+      expect(raced.kind).toBe('rejected');
+      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      triggerZipFileError = null;
+    }
+    // The other half of the regression: the injected error must have been
+    // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
   }, 10_000);
 });

@@ -48,6 +48,40 @@ vi.mock('node:fs', async (importOriginal) => {
     },
   };
 });
+
+/* Behavioral regression for the ZipFile-level `zip.on('error', reject)`
+   listener in buildPortableBundle's own `done` promise (this file's
+   production module, ~line 291) — a SEPARATE line from the one shared by
+   buildMp3Zip/buildCodecZip (build-mp3-zip.ts's createZipWritePipeline):
+   buildPortableBundle drives yazl into an in-memory Buffer via its own
+   `new Promise` rather than that shared helper. See build-captions.test.ts's
+   identical mock (the reference implementation this is copied from) for
+   the full explanation of why the injected error is emitted via
+   `process.nextTick` rather than synchronously during construction: `new
+   Promise(executor)` auto-catches a *synchronous* throw inside its executor
+   and turns it into a rejection on its own, so emitting synchronously from
+   the ZipFile constructor would "pass" this test even with the fix line
+   deleted, for JS's reasons rather than buildPortableBundle's own
+   forwarding. Scheduling via `process.nextTick` moves the emit outside that
+   frame — same as yazl's real internal error sites — so an absent
+   `zip.on('error', reject)` reproduces the real bug: zero listeners, an
+   `uncaughtException`, and the bundle promise never settling. */
+let triggerZipFileError: Error | null = null;
+vi.mock('yazl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('yazl')>();
+  class TestZipFile extends real.ZipFile {
+    constructor() {
+      super();
+      if (triggerZipFileError) {
+        const err = triggerZipFileError;
+        process.nextTick(() => {
+          this.emit('error', err);
+        });
+      }
+    }
+  }
+  return { ...real, ZipFile: TestZipFile };
+});
 import {
   audioDir,
   changeLogJsonPath,
@@ -342,6 +376,62 @@ describe('buildPortableBundle', () => {
     // The real assertion: nothing escaped as a raw uncaught exception. If
     // this is non-null, the read-stream error crashed the process instead
     // of rejecting buildPortableBundle's own promise.
+    expect(escaped).toBeNull();
+  }, 10_000);
+
+  /* Reviewer finding: `zip.on('error', reject)` in buildPortableBundle's
+     own `done` promise had NO regression test — deleting that one line and
+     running the whole export suite left every test green, including this
+     file's.
+
+     An `addBuffer`-only bundle (MANIFEST/state.json/manuscript, no audio)
+     is NOT a sufficient repro (tried first, see PR discussion): those
+     writes are purely synchronous byte copies with `compress: false` — no
+     genuine async gap for the injected error to actually interrupt — so
+     yazl's own completion races ahead and finishes on its own regardless
+     of whether the listener exists, silently masking the missing
+     forwarding rather than exposing it. At least one REAL `addReadStream`
+     audio entry (a genuine async fs read, same as build-mp3-zip.ts /
+     build-codec-zip.ts) is what actually gives the disruption something in
+     flight to interrupt — confirmed empirically: this test hangs to the 1s
+     race timeout without the fix, and resolves instantly with it. */
+  it('forwards a ZipFile-level internal error to the rejection instead of crashing the process', async () => {
+    const errDir = join(tmpRoot, 'ziperr');
+    mkdirSync(join(errDir, 'audio'), { recursive: true });
+    const errState = { ...makeFixtureState(), bookId: 'demo__standalones__ziperr' };
+    writeFileSync(join(errDir, 'manuscript.txt'), manuscriptBytes);
+    writeFileSync(join(errDir, 'audio', '01-chapter-1.mp3'), chapter1Mp3);
+
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level)');
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    triggerZipFileError = injected;
+    try {
+      const raced = await Promise.race([
+        buildPortableBundle(errDir, errState).then(
+          (r) => ({ kind: 'resolved' as const, value: r }),
+          (e) => ({ kind: 'rejected' as const, value: e }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+        ),
+      ]);
+      // With the listener wired, the injected error rejects
+      // buildPortableBundle's own promise with the SAME error object.
+      // Without it, the promise never settles at all — that's the
+      // 'timeout' branch, a deliberate, fast, diagnosable failure instead
+      // of waiting on vitest's own test timeout.
+      expect(raced.kind).toBe('rejected');
+      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      triggerZipFileError = null;
+    }
+    // The other half of the regression: the injected error must have been
+    // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
   }, 10_000);
 });

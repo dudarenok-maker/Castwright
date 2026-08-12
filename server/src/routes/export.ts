@@ -246,7 +246,20 @@ function bookFilename(
   return base;
 }
 
-exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
+/* Nit (c) (independent review): `_awaitInFlightExportJobs()` snapshots
+   `jobPromises` atomically, but a POST parked on the pre-flight work below
+   (mkdir / disk-guard probe, both awaited BEFORE a job exists) hasn't
+   registered into `jobPromises` yet — it would do so AFTER the snapshot,
+   escaping the drain entirely. `pendingPostCreations` closes that window:
+   every POST call registers itself here for its own full duration (via
+   the wrapper below) and `_awaitInFlightExportJobs` waits for all
+   currently-registered ones to finish BEFORE taking its `jobPromises`
+   snapshot, so a request that's mid-preflight when the drain starts is
+   guaranteed to have either responded with no job created, or registered
+   its job, by the time the snapshot happens. */
+const pendingPostCreations = new Set<Promise<void>>();
+
+async function createExportJob(req: Request, res: Response): Promise<Response> {
   const body = (req.body ?? {}) as {
     format?: string;
     destination?: string;
@@ -417,13 +430,30 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
     settings.exportSyncFolder,
     controller.signal,
   )
-    .catch((e) => {
+    .catch(async (e) => {
       console.error(`[export] runExportJob rejected unexpectedly for ${job.id}:`, e);
       job.status = 'failed';
       job.errorReason = (e as Error)?.message || 'Export failed unexpectedly.';
       job.completedAt = new Date().toISOString();
       jobs.set(job.id, { ...job });
       jobControllers.delete(job.id);
+      /* Finding 5 (independent review): runExportJob's own `finally` already
+         wrote SOME manifest for this job before this backstop ever ran. If
+         the escaped rejection originated from within runExportJob's own
+         catch block (e.g. a non-Error thrown by a builder makes `(e as
+         Error).message` at that catch's own error-message line throw a
+         SECOND time — verified: this is exactly the shape that reaches
+         here), that manifest reflects an earlier, incomplete snapshot —
+         `errorReason`/`completedAt` never got set before the second throw
+         cut the catch block short. This backstop fixes those fields up
+         above, but only in memory unless we persist it too — without this,
+         a restart rehydrates the stale manifest instead of the corrected
+         one. Best-effort, same as runExportJob's own finally. */
+      try {
+        await writeJsonAtomic(manifestPath(located.bookDir, job.id), job);
+      } catch {
+        /* swallow — matches runExportJob's own finally */
+      }
     })
     .finally(() => {
       jobPromises.delete(exportId);
@@ -434,6 +464,24 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
      export modal surfaces `warning` next to the queued job; the build still
      proceeds. Omitted entirely when the guard was ok / off. */
   return res.status(201).json(diskWarning ? { ...job, warning: diskWarning } : job);
+}
+
+exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  pendingPostCreations.add(gate);
+  try {
+    return await createExportJob(req, res);
+  } finally {
+    /* Runs on every exit path (early-return error response, or the
+       success path after `jobPromises.set(...)`) — by the time this
+       fires, this POST has either created no job at all or has already
+       registered its job into `jobPromises`. */
+    releaseGate();
+    pendingPostCreations.delete(gate);
+  }
 });
 
 exportRouter.get('/:bookId/exports', async (req: Request, res: Response) => {
@@ -783,11 +831,25 @@ async function runExportJob(
     still in flight — a caller that's about to delete the workspace those
     jobs read/write must call _awaitInFlightExportJobs() first (this
     function only drops OUR bookkeeping, not the physical I/O a running
-    job is still doing). */
+    job is still doing).
+
+    Deliberately does NOT clear `jobPromises` (nit (b), independent
+    review): the docstring above states the required order (drain, THEN
+    reset), but nothing enforced it — a caller that reset first silently
+    destroyed `_awaitInFlightExportJobs`'s only handle on any still-running
+    job, so a SUBSEQUENT drain call would return immediately having waited
+    for nothing at all, with no error to signal the mistake. Each
+    `jobPromises` entry already self-removes via its own `.finally()` once
+    its job settles (see the map's own comment), so leaving it alone here
+    is a no-op for the correctly-ordered case and a safety net for the
+    misordered one: a drain called after a misordered reset still finds
+    the promise and still waits for it to genuinely finish — it just can't
+    abort it anymore, since `jobControllers` (cleared here, as intended)
+    is what `_awaitInFlightExportJobs` aborts through. Waiting longer than
+    ideal beats not waiting at all. */
 export function _resetExportJobs(): void {
   jobs.clear();
   jobControllers.clear();
-  jobPromises.clear();
 }
 
 /** Test-only: abort every export job currently in flight, then wait for
@@ -798,11 +860,35 @@ export function _resetExportJobs(): void {
     workspace right after resetting jobs (but without draining them first)
     can race a job that's still writing into it — on a loaded CI runner
     (macOS cross-os.yml, run 31588267496) that lost race surfaced as an
-    ENOENT read racing rmSync, escaping as an uncaught exception. Abort
-    (not just wait) so a slow/stuck build can't hang the drain — every
-    build already honours its AbortSignal on the same path DELETE
-    /exports/:id already exercises. */
+    ENOENT read racing rmSync, escaping as an uncaught exception.
+
+    Waits for `pendingPostCreations` FIRST (nit (c), independent review) —
+    a POST parked on its pre-flight work (mkdir / disk-guard probe) before
+    any job exists hasn't registered into `jobPromises` yet; without this,
+    it would register AFTER the `jobPromises` snapshot below and escape
+    the drain entirely. This guarantees every POST in flight when this is
+    called has, by the time the snapshot happens, either responded with no
+    job created or registered one.
+
+    Aborts (not just waits) so a slow/stuck build can't hang the drain
+    forever — every build's dominant cost now genuinely honours
+    AbortSignal on the same path DELETE /exports/:id already exercises:
+    buildM4b SIGTERMs its ffmpeg mux child, and the zip builders
+    (buildMp3Zip / buildCodecZip / buildCaptions's per-chapter branch)
+    destroy their write stream + whichever chapter read stream is open the
+    instant the signal fires, via the shared createZipWritePipeline
+    (build-mp3-zip.ts) — findings 1+2 on an earlier version of this fix,
+    which checked `signal.throwIfAborted()` only between chapters and left
+    yazl's internal pump running regardless, so an abort neither stopped a
+    stuck write NOR stopped bytes still landing on disk after the
+    builder's own promise had already settled. One residual gap: a
+    per-chapter SUBPROCESS already spawned when abort lands — buildMp3Zip's
+    per-chapter ffmpeg ID3 retag (`applyId3v24Tags`), buildM4b's/
+    buildCaptions's ffprobe duration probes — still runs to completion
+    before the next loop iteration notices, bounded to one chapter's
+    processing time rather than the whole export, not truly unbounded. */
 export async function _awaitInFlightExportJobs(): Promise<void> {
+  await Promise.allSettled([...pendingPostCreations]);
   for (const controller of jobControllers.values()) controller.abort();
   await Promise.allSettled([...jobPromises.values()]);
 }

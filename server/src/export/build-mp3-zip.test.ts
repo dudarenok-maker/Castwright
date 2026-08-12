@@ -8,13 +8,45 @@
    needs an MP3 on disk. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { encodePcmToAudio } from '../tts/mp3.js';
-import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from './build-mp3-zip.js';
+import { ZipFile } from 'yazl';
+import { buildMp3Zip, createZipWritePipeline, ExportIncompleteError, sanitiseForZip } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
+
+/* Behavioral regression for the ZipFile-level `zip.on('error', rejectBuild)`
+   listener inside createZipWritePipeline (this file) — shared by both
+   buildMp3Zip and buildCodecZip. See build-captions.test.ts's identical
+   mock (the reference implementation this is copied from) for the full
+   explanation of why the injected error is emitted via `process.nextTick`
+   rather than synchronously during construction: `new Promise(executor)`
+   auto-catches a *synchronous* throw inside its executor and turns it into
+   a rejection on its own, so emitting synchronously from the ZipFile
+   constructor would "pass" this test even with the fix line deleted, for
+   JS's reasons rather than createZipWritePipeline's own forwarding.
+   Scheduling via `process.nextTick` moves the emit outside that frame —
+   same as yazl's real internal error sites — so an absent
+   `zip.on('error', rejectBuild)` reproduces the real bug: zero listeners,
+   an `uncaughtException`, and the pipeline's promise never settling. */
+let triggerZipFileError: Error | null = null;
+vi.mock('yazl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('yazl')>();
+  class TestZipFile extends real.ZipFile {
+    constructor() {
+      super();
+      if (triggerZipFileError) {
+        const err = triggerZipFileError;
+        process.nextTick(() => {
+          this.emit('error', err);
+        });
+      }
+    }
+  }
+  return { ...real, ZipFile: TestZipFile };
+});
 
 const ffmpegPresent = (() => {
   try {
@@ -243,14 +275,31 @@ describeIfFfmpeg('buildMp3Zip', () => {
      read stream is created (via onProgress, which fires right after
      addReadStream in the loop) but before Node's async fs.open() behind
      it can possibly have resolved — reproducing the race deterministically
-     on any platform, no sleep/poll required. */
+     on any platform, no sleep/poll required.
+
+     Nit (d) (independent review): the staging-dir lookup below matches on
+     PREFIX only (`<basename>.staging-<pid>-`), first match wins. A leftover
+     staging dir from a prior attempt at the SAME outPath — exactly what a
+     hung build leaves, since it never reaches its `finally` cleanup —
+     collides on that prefix; `readdirSync`'s listing order then decides
+     which one "wins", and it is not guaranteed to be the fresh one.
+     Observed live on this box, reusing the shared `tmpRoot`/outPath across
+     a vitest retry: attempt 1 timed out (leaving its staging dir behind),
+     and attempt 2's `onProgress` matched attempt 1's ABANDONED dir instead
+     of its own, deleted files nobody was reading, and produced a clean
+     3-entry zip with no ENOENT at all — the seam disarmed itself between
+     attempts. Giving this test its own freshly `mkdtemp`ed directory (a
+     new random suffix every call, retries included) makes that collision
+     structurally impossible: there is never a second staging dir under
+     this path for the lookup to prefer by accident. */
   it('forwards a deleted-staged-file read error instead of crashing the process', async () => {
+    const raceRoot = mkdtempSync(join(tmpdir(), 'build-mp3-zip-staging-race-'));
     let escaped: unknown = null;
     const onUncaught = (err: unknown) => {
       escaped = err;
     };
     process.on('uncaughtException', onUncaught);
-    const localOutPath = join(tmpRoot, 'deleted-staging-race.zip');
+    const localOutPath = join(raceRoot, 'deleted-staging-race.zip');
     try {
       await expect(
         buildMp3Zip({
@@ -271,12 +320,118 @@ describeIfFfmpeg('buildMp3Zip', () => {
       ).rejects.toThrow(/ENOENT/);
     } finally {
       process.off('uncaughtException', onUncaught);
+      rmSync(raceRoot, { recursive: true, force: true });
     }
     // The real assertion: nothing escaped as a raw uncaught exception. If
     // this is non-null, the read-stream error crashed the process instead
     // of rejecting buildMp3Zip's own promise.
     expect(escaped).toBeNull();
   }, 10_000);
+
+  /* Reviewer finding: `zip.on('error', rejectBuild)` inside
+     createZipWritePipeline had NO regression test of its own — deleting
+     that one line and running the whole export suite left every test
+     green.
+
+     A book with ZERO chapters is NOT a sufficient repro here (tried first,
+     see PR discussion): with no `addReadStream`/`addBuffer` entries at
+     all, yazl's own completion is fully synchronous relative to the
+     injected error and finishes on its own regardless of whether the
+     listener exists — the promise resolves "successfully" either way,
+     silently masking the missing forwarding rather than exposing it. At
+     least one REAL `addReadStream` entry (a genuine async fs read, same
+     as this file's own chapters) is what actually gives the disruption
+     something in flight to interrupt — confirmed empirically: this test
+     hangs to the 1s race timeout without the fix, and resolves instantly
+     with it. Reuses this describe block's real ffmpeg-tagged chapter
+     fixture so the per-chapter loop does genuine work before hitting
+     `zip.end()` / `await pipeline.donePromise`. */
+  it('forwards a ZipFile-level internal error to the rejection instead of crashing the process', async () => {
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level)');
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    triggerZipFileError = injected;
+    const localOutPath = join(tmpRoot, 'zipfile-level-error-test.zip');
+    try {
+      const raced = await Promise.race([
+        buildMp3Zip({ bookDir, state: makeState(), outPath: localOutPath }).then(
+          (r) => ({ kind: 'resolved' as const, value: r }),
+          (e) => ({ kind: 'rejected' as const, value: e }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+        ),
+      ]);
+      // With the listener wired, the injected error rejects buildMp3Zip's
+      // own promise with the SAME error object. Without it, the promise
+      // never settles at all — that's the 'timeout' branch, a deliberate,
+      // fast, diagnosable failure instead of waiting on vitest's own test
+      // timeout.
+      expect(raced.kind).toBe('rejected');
+      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      triggerZipFileError = null;
+    }
+    // The other half of the regression: the injected error must have been
+    // forwarded to the rejection, NOT escaped as a raw uncaught exception.
+    expect(escaped).toBeNull();
+  }, 10_000);
+});
+
+describe('createZipWritePipeline', () => {
+  /* Nit (f) (independent review): on ANY rejection of the write pipeline —
+     not just abort — `ws` (the output write stream) was never destroyed,
+     leaking the write fd plus any open chapter read stream for the
+     process's lifetime. Previously masked by the crash itself. Verified
+     directly against the exported helper (rather than through a full
+     builder + real fs race, whose success/failure of an `rmSync` proved
+     unreliable as a leak signal on this box — Windows opens via libuv
+     default to share flags that let a file be unlinked while still open,
+     so "did the delete succeed" doesn't actually distinguish a released
+     fd from a leaked one). `.destroyed` is the direct, platform-independent
+     signal that Node itself has released the stream. */
+  it('destroys the write stream and the tracked read stream when rejectBuild fires on a plain error', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-'));
+    try {
+      const outPath = join(dir, 'out.zip');
+      const zip = new ZipFile();
+      const pipeline = createZipWritePipeline(outPath, zip);
+      const fakeReadStream = { destroyed: false, destroy(this: { destroyed: boolean }) { this.destroyed = true; } };
+      pipeline.trackReadStream(fakeReadStream);
+
+      pipeline.rejectBuild(new Error('boom'));
+
+      expect(fakeReadStream.destroyed).toBe(true);
+      return pipeline.donePromise.catch((e: unknown) => {
+        expect((e as Error).message).toBe('boom');
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves only once the write stream is genuinely closed, not merely flushed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-close-'));
+    try {
+      const outPath = join(dir, 'out.zip');
+      const zip = new ZipFile();
+      const pipeline = createZipWritePipeline(outPath, zip);
+      zip.end();
+      await pipeline.donePromise;
+      // If the promise resolved on 'finish' rather than 'close', the fd
+      // could still be open here — assert the file is at least readable
+      // with its final byte count settled (a `close`d stream guarantees
+      // this; a merely-`finish`ed one does not, on every platform, since
+      // autoClose can still be pending).
+      expect(existsSync(outPath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('sanitiseForZip', () => {
