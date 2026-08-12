@@ -73,6 +73,19 @@ describe('lan-auth (srv-20)', () => {
     );
   });
 
+  // #2278 review round 4, Finding 4 — the httpsActive:false arm was reachable
+  // by no test at all: every other case sets httpsActive true or mocks
+  // pairingOriginHint wholesale, so collapsing the ternary to an
+  // unconditional `https://localhost:${port}` template left the suite green.
+  // A degraded box's bound port is an HTTP one, so naming it behind https://
+  // would be a dead link of a new kind — this pins that it names no address.
+  it('pairingOriginHint drops the address entirely when LAN HTTPS is not active', () => {
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    expect(pairingOriginHint()).toBe('Start pairing on the computer running Castwright.');
+    expect(pairingOriginHint()).not.toMatch(/https?:\/\//);
+    expect(pairingOriginHint()).not.toContain('8080');
+  });
+
   it('is OFF unless LAN mode AND a token are both set', () => {
     delete process.env.LAN_HTTPS;
     delete process.env.LAN_AUTH_TOKEN;

@@ -7354,17 +7354,30 @@ export class ApiError extends Error {
 }
 
 /** Build an ApiError from a non-ok Response, preferring the server's own
- *  JSON `{ error }` body over a synthetic `fallback` string (#2278 review
- *  Finding 1). Several LAN-guard 401/403 bodies now carry actionable,
- *  port-correct guidance (e.g. `pairingOriginHint()` on the server) that the
- *  UI renders verbatim — discarding it here would silently regress that fix.
- *  Falls back to `fallback` (with `fromServer: false`) when the body is
- *  absent, not JSON, or has no non-empty string `error` field. */
+ *  JSON `{ error }` body over a synthetic `fallback` string (#2278). Several
+ *  LAN-guard 401/403 bodies carry actionable, port-correct guidance (e.g.
+ *  `pairingOriginHint()` on the server) that the UI renders verbatim —
+ *  discarding it here would silently regress that. Falls back to `fallback`
+ *  (with `fromServer: false`) when the body is absent, not JSON, or has no
+ *  non-empty string `error` field.
+ *
+ *  The rendered `message` deliberately stays short in the fallback case — a
+ *  reverse proxy's HTML error page is not a sentence to show a reader — so
+ *  the raw body is logged instead (#2278 review round 4, Finding 9). Without
+ *  it a gateway/proxy fault surfaces as a bare status code with no diagnostic
+ *  anywhere, including devtools. */
 async function apiErrorFromResponse(res: Response, fallback: string): Promise<ApiError> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  if (typeof body?.error === 'string' && body.error.length > 0) {
-    return new ApiError(body.error, res.status, true);
+  const text = await res.text().catch(() => '');
+  let parsed: { error?: unknown } | null = null;
+  try {
+    parsed = JSON.parse(text) as { error?: unknown };
+  } catch {
+    /* not JSON — the fallback path below owns this case */
   }
+  if (typeof parsed?.error === 'string' && parsed.error.length > 0) {
+    return new ApiError(parsed.error, res.status, true);
+  }
+  console.error(`${fallback}${text ? `: ${text.slice(0, 500)}` : ` ${res.statusText}`}`);
   return new ApiError(fallback, res.status, false);
 }
 
@@ -7395,10 +7408,7 @@ async function realRevokeDevice(id: string) {
 }
 async function realRegenerateLanCert() {
   const res = await fetch('/api/lan/cert/regenerate', { method: 'POST' });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new ApiError(body?.error ?? `regenerate cert failed (${res.status})`, res.status);
-  }
+  if (!res.ok) throw await apiErrorFromResponse(res, `regenerate cert failed (${res.status})`);
   return res.json() as Promise<{ hosts: string[] }>;
 }
 export interface LanCertStatus {
@@ -7407,9 +7417,11 @@ export interface LanCertStatus {
   /** The port the server actually bound (#2278) — read this instead of
       hardcoding 8443: window.location.port is empty on the castwright.local
       and :443-forwarder paths, exactly when the real port is unknowable
-      client-side. NOT necessarily an HTTPS port (#2278 review Finding 5) —
-      this is whatever the server bound, HTTP or HTTPS; check `active` before
-      composing an `https://` URL from it. */
+      client-side. NOT necessarily an HTTPS port — this is whatever the server
+      bound, HTTP or HTTPS; check `active` before composing an `https://` URL
+      from it. The response is an unchecked cast, so a body missing this field
+      types as `number` but reads `undefined`: composition sites must also
+      check it is a real port (see lan-access-card.tsx's loopbackHttpsOrigin). */
   boundPort: number;
   health: 'healthy' | 'missing' | 'expired';
   certHosts: string[];

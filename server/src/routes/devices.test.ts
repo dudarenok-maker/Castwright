@@ -409,6 +409,13 @@ describe('devices route (srv-33)', () => {
   // drive-the-router-directly technique with a fabricated non-loopback,
   // non-friendly-hostname request.
   it('pair-session 403s a genuinely non-loopback, non-friendly-hostname caller, with pairingOriginHint()\'s port-correct body', async () => {
+    // #2278 review round 4, Finding 5 — a NON-default port. Asserted against
+    // the file-level 8443 mock, this test passed unchanged against the
+    // pre-#2278 hardcoded const and so proved nothing about the port being
+    // dynamic. mayStartPairingSession runs first and reads no runtime, so
+    // pairingOriginHint() is the first (and only) consumer of this Once.
+    const { getLanRuntime } = await import('../lan-runtime.js');
+    vi.mocked(getLanRuntime).mockReturnValueOnce({ httpsActive: true, port: 9443 });
     const req = {
       method: 'POST',
       url: '/devices/pair-session',
@@ -439,9 +446,8 @@ describe('devices route (srv-33)', () => {
     if (nextErr) throw nextErr;
 
     expect(status).toBe(403);
-    // getLanRuntime is mocked at the top of this file to port 8443.
     expect(body.error).toBe(
-      'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
     );
   });
 

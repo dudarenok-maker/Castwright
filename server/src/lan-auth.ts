@@ -140,20 +140,15 @@ export function mayStartPairingSession(req: Request): boolean {
   return isLoopbackRequest(req) || (isLanTokenEnforced() && isFriendlyHostnameRequest(req));
 }
 
-/* The actionable 403/401 body the pairing-session routes AND requireLanToken's
-   own 401 return when the caller isn't authorized to proceed — one source so
-   they never drift. A function, not a constant (#2278 review Finding 1/7):
-   the prior hardcoded `https://localhost:8443` was itself a second copy of
-   the exact defect this issue exists to delete — the server's own canonical
-   guidance named a port that might not be the one it actually bound. Reads
-   getLanRuntime() (set by index.ts the moment the server listens) for the
-   ACTUAL bound port, never the requested/default one — and, mirroring the
-   frontend-side check this replaces, drops the `https://` address entirely
-   when LAN HTTPS isn't actually active (cert-less, degraded to loopback
-   HTTP): selectBindHost() means that state normally isn't LAN-reachable at
-   all, but an explicit BIND_HOST override can still expose it, and naming an
-   `https://` address against a plain HTTP listener would be a dead link of a
-   new kind (wrong protocol, not just a stale port). */
+/* The actionable 401/403 body requireLanToken and both pairing-session routes
+   return — one source so they can't drift. A function, not a constant (#2278):
+   it reads getLanRuntime() (set by index.ts the moment the server listens) for
+   the port actually bound, which the retired hardcoded `https://localhost:8443`
+   const could not. It drops the `https://` address entirely when LAN HTTPS
+   isn't active — a cert-less box degraded to loopback HTTP is normally not
+   LAN-reachable at all, but a BIND_HOST override can still expose it, and an
+   `https://` address aimed at a plain HTTP listener is a dead link of a new
+   kind, not just a stale port. */
 export function pairingOriginHint(): string {
   const { httpsActive, port } = getLanRuntime();
   return httpsActive
@@ -232,13 +227,10 @@ export function requireLanToken(req: Request, res: Response, next: NextFunction)
     /* … or an individually-revocable per-device token (srv-33). */
     if (isValidDeviceToken(provided)) return next();
   }
-  // #2278 review Finding 1 — carries the same port-correct pairing guidance a
-  // 403 from mayStartPairingSession already does, so a caller 401'd here
-  // (e.g. the LAN-access card's own listDevices call) can render actionable,
-  // live-port text straight from the response instead of a client-side
-  // fetch of its own — GET /api/lan/cert/status sits behind this exact same
-  // guard, so a 401 here always implies a 401 there too; that route could
-  // never actually serve as the port source on the one branch it mattered.
+  // #2278 — the body carries the same port-correct guidance a pairing 403
+  // does, so a 401'd caller can render live-port text straight from the
+  // response. It cannot fetch the port instead: GET /api/lan/cert/status sits
+  // behind this same guard, so a 401 here always implies a 401 there.
   res.status(401).json({
     error: `Missing or invalid LAN access token. ${pairingOriginHint()}`,
   });

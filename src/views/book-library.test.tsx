@@ -929,11 +929,23 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
+  /* #2278 review round 4, Finding 3 — re-pointed at the shape realGetLibrary
+     actually emits. It used to assert against
+     `Library scan failed (401): Missing or invalid LAN access token.`, a
+     concatenation apiErrorFromResponse no longer produces at all: a parsed
+     body yields the server's prose with fromServer TRUE, and an unparseable
+     one yields the bare `Library scan failed (401)`. The invariant worth
+     keeping is the second one — a synthetic developer string must not become
+     the user's explanation. `fromServer` is left ABSENT here (not `false`)
+     because the store types it optional, so undefined is a real shape. */
   it('renders a recovery pointer on a 401 library error', () => {
-    renderWithLibraryError({ message: 'Library scan failed (401): Missing or invalid LAN access token.', status: 401 });
+    renderWithLibraryError({ message: 'Library scan failed (401)', status: 401 });
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/authorize this browser/i)).toBeInTheDocument();
-    // The raw server text must not reach the user.
-    expect(screen.queryByText(/Missing or invalid LAN access token/)).not.toBeInTheDocument();
+    // The synthetic developer string must not reach the user.
+    expect(screen.queryByText(/Library scan failed/)).not.toBeInTheDocument();
   });
 
   it('still shows the raw message for a non-401 error', () => {
@@ -942,12 +954,14 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
     expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });
 
-  // #2278 review round 3, Finding 3 — /api/library's 401 body now carries
-  // pairingOriginHint()'s port-correct guidance (same guard as listDevices);
-  // when the error genuinely came from the server (ApiError.fromServer,
-  // threaded through as `fromServer` on the store's error), prefer it over
-  // recoveryHint()'s own composed pointer.
-  it('prefers the server\'s own message on a 401 when it is genuinely from the server', () => {
+  /* #2278 review round 4, Finding 2 — the two are COMPOSED, not alternatives.
+     There is exactly one 401 producer on the server (lan-auth.ts's
+     requireLanToken) and it always emits JSON, so fromServer is true on every
+     real lapsed-authorization 401 — an either/or would have deleted #2247
+     Task 6's sentence from production entirely while leaving its tests green
+     on the unreachable arm. The app supplies what happened; the server
+     supplies where to go, with the live port. */
+  it('composes the app\'s own framing WITH the server\'s port-bearing guidance on a genuine 401', () => {
     renderWithLibraryError({
       message:
         'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
@@ -955,9 +969,21 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
       fromServer: true,
     });
     expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
     ).toBeInTheDocument();
-    // recoveryHint()'s own composed pointer must NOT also render.
+    // Both parts live in ONE paragraph, so this also pins that they are not
+    // rendered as mutually exclusive branches.
+    expect(
+      screen.getByText(
+        /This browser is no longer authorized for Castwright on your network\. Missing or invalid LAN access token\. Start pairing from https:\/\/localhost:9443/,
+      ),
+    ).toBeInTheDocument();
+    // recoveryHint()'s own composed pointer must NOT also render — the server
+    // sentence already says where to go, and two of those read as duplicated
+    // instructions.
     expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });
 
@@ -970,6 +996,11 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
       status: 401,
       fromServer: false,
     });
+    // The app's own sentence renders on BOTH arms (round 4, Finding 2) — only
+    // the pointer that follows it varies.
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/authorize this browser/i)).toBeInTheDocument();
     expect(screen.queryByText(/library scan failed/i)).not.toBeInTheDocument();
   });
@@ -1005,6 +1036,9 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
     fireEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(
       await screen.findByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });

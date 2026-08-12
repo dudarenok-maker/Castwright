@@ -11,41 +11,48 @@ import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
 
-// #2278 — optimistic starting point (matches the pre-#2278 hardcoded value)
-// for the revoke hint below: assumed until <LanCertStatus>'s onStatus
-// callback reports the actually-bound port, and — if that fetch never
-// succeeds — kept PERMANENTLY, not just "until" the first response. On a
-// cert-less box degraded to loopback HTTP, that means this can briefly (or,
-// on a failed fetch, indefinitely) compose an https:// URL against a plain
-// HTTP listener. Accepted tradeoff: a dead link during that window vs. no
-// address at all during the common case where LAN HTTPS is actually up.
-const DEFAULT_HTTPS_PORT = 8443;
+// #2278 — optimistic starting point for the revoke hint below, held until
+// <LanCertStatus>'s onStatus reports the actually-bound port, and kept
+// permanently if that fetch never succeeds. Accepted tradeoff: a dead link
+// in that window vs. no address at all in the common case where LAN HTTPS is
+// up. Named for the wire field it seeds, not "https" — see boundPort below.
+const DEFAULT_BOUND_PORT = 8443;
 
-// The `https://localhost:<port>` fragment REVOKE_LOOPBACK_ONLY_HINT builds
-// its sentence around, or null when LAN HTTPS isn't actually bound
-// (httpsActive: false — cert-less, degraded to loopback HTTP). Naming a
-// specific https address in that state would be a dead link of a new kind
-// (wrong protocol, not just a stale port), so the caller falls back to
-// hostname-only wording instead of composing a guaranteed-dead URL.
+// The `https://localhost:<port>` fragment revokeLoopbackOnlyHint builds its
+// sentence around, or null when there is no https address worth naming:
+// LAN HTTPS isn't bound (cert-less box degraded to loopback HTTP), or the
+// port isn't a real port (a cert-status body missing `boundPort` types as
+// `number` but reads `undefined`, which would compose `localhost:undefined`).
+// Either way the caller falls back to hostname-only wording rather than a
+// guaranteed-dead URL.
 function loopbackHttpsOrigin(active: boolean, port: number): string | null {
-  return active ? `https://localhost:${port}` : null;
+  if (!active || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  return `https://localhost:${port}`;
 }
 
-// #2278 review round 3, Finding 1 — shown on a 403 from createDevicePairSession
-// when the response wasn't genuine JSON `{error}` prose (ApiError.fromServer
-// false — an HTML 403 from an interposed proxy or the :443 forwarder, say),
-// so the raw synthetic "pair-session failed (403)" string never reaches the
-// user. Same copy PairDeviceModal falls back to, for one consistent voice.
+// Shown on a 403 from createDevicePairSession whose body wasn't genuine JSON
+// `{error}` prose (ApiError.fromServer false — an HTML 403 from an interposed
+// proxy or the :443 forwarder), so the synthetic "pair-session failed (403)"
+// developer string never becomes the user's whole explanation. Same copy
+// PairDeviceModal falls back to, for one consistent voice.
 const PAIRING_RESTRICTED_FALLBACK = 'Pairing can only be started from the computer running Castwright.';
+
+// #2278 review round 4, Finding 1 — the same gate for the 401 from
+// listDevices, which renders as this card's ENTIRE content. Port-free by
+// necessity: this fallback exists precisely because the server's live-port
+// sentence didn't arrive, and on `main` this branch showed a hardcoded
+// (often wrong) `https://localhost:8443`, so it must stay actionable without
+// promising an address.
+const PAIRING_UNAUTHORIZED_FALLBACK =
+  'Start pairing on the computer running Castwright — open Admin → LAN access there and use “Authorize a device”.';
 
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
-  // #2278 review Finding 1 — the SERVER's own 401 message (already
-  // port-correct — requireLanToken in server/src/lan-auth.ts builds it from
-  // pairingOriginHint()), not a client-composed hint: this card can't learn
-  // the port from GET /api/lan/cert/status itself, because that route sits
-  // behind the exact same requireLanToken guard as listDevices, so a 401 on
-  // one always means a 401 on the other. null until a 401 lands.
+  // The SERVER's own 401 message, already port-correct (requireLanToken
+  // builds it from pairingOriginHint()) — not a client-composed hint: this
+  // card can't learn the port from GET /api/lan/cert/status, which sits
+  // behind the same guard, so a 401 on one always means a 401 on the other.
+  // null until a 401 lands.
   const [manageHint, setManageHint] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [session, setSession] = useState<
@@ -53,24 +60,19 @@ export function LanAccessCard() {
   >(null);
   const [err, setErr] = useState<string | null>(null);
   const [selfErr, setSelfErr] = useState<string | null>(null);
-  // #2278 review Finding 5 (nit) — optimistic default: assumes LAN HTTPS is
-  // active until onCertStatus below says otherwise (see DEFAULT_HTTPS_PORT's
-  // comment for the tradeoff this makes on a degraded/never-resolved fetch).
+  // Optimistic default (see DEFAULT_BOUND_PORT) until onCertStatus says
+  // otherwise.
   const [httpsActive, setHttpsActive] = useState(true);
-  // #2278 review round 3 (nit) — named boundPort, not httpsPort: the wire
-  // field (server/src/routes/lan-cert.ts's LanCertStatus.boundPort) was
-  // renamed for exactly this reason — it's whatever the server bound, HTTP
-  // or HTTPS, not necessarily an HTTPS port. Reintroducing "https" into this
-  // state's own name one layer in would undo that.
-  const [boundPort, setBoundPort] = useState(DEFAULT_HTTPS_PORT);
+  // boundPort, not httpsPort: it mirrors the wire field of the same name and
+  // is whatever the server bound, HTTP or HTTPS — reintroducing "https" here
+  // would invite composing an https:// URL from it without checking `active`.
+  const [boundPort, setBoundPort] = useState(DEFAULT_BOUND_PORT);
 
-  // #2278 review Finding 1/6 — fed by <LanCertStatus> below (rendered only
-  // in the !manageHint branch) via its existing onStatus callback, instead
-  // of this card issuing its own second, independent GET
-  // /api/lan/cert/status: that duplicate fetch could never actually resolve
-  // on the one branch (401/manageHint) it would have mattered for (see the
-  // manageHint comment above), and left two copies of the same state free to
-  // drift — e.g. never refreshing here after "Regenerate certificate".
+  // Fed by <LanCertStatus> below via its existing onStatus callback rather
+  // than a second, independent GET /api/lan/cert/status from this card: that
+  // duplicate fetch could never resolve on the one branch (401/manageHint) it
+  // mattered for, and left two copies of one state free to drift — e.g. never
+  // refreshing here after "Regenerate certificate".
   const onCertStatus = useCallback((s: CertStatus) => {
     setHttpsActive(s.active);
     setBoundPort(s.boundPort);
@@ -91,9 +93,12 @@ export function LanAccessCard() {
     api.listDevices()
       .then((r) => setDevices(r.devices))
       .catch((e) => {
-        // #2278 review Finding 1 — render the server's own message verbatim;
-        // it already names the live port (see the manageHint comment above).
-        if (e instanceof ApiError && e.status === 401) setManageHint(e.message);
+        // Render the server's own message verbatim — it already names the live
+        // port — but only when it genuinely IS the server's (round 4,
+        // Finding 1). This becomes the card's entire content, so a synthetic
+        // "list devices failed (401)" must never land here.
+        if (e instanceof ApiError && e.status === 401)
+          setManageHint(e.fromServer ? e.message : PAIRING_UNAUTHORIZED_FALLBACK);
         else setErr(String(e));
       });
   };
@@ -104,13 +109,9 @@ export function LanAccessCard() {
     try { setSession(await api.createDevicePairSession({ label: label.trim() || 'Device' })); }
     catch (e) {
       // A 403 here means this browser reached the server from a bare LAN IP
-      // (not loopback or the friendly hostname) — the server's own message
-      // (pairingOriginHint(), #2278 review Finding 1) already names the
-      // actual bound port, so render it as-is. But only when it's genuinely
-      // from the server (round 3, Finding 1): a non-JSON 403 body (an
-      // interposed proxy, the :443 forwarder) falls back to a bare
-      // "pair-session failed (403)" developer string, which must not become
-      // the user's entire explanation.
+      // (not loopback or the friendly hostname). The server's own message
+      // (pairingOriginHint()) already names the actual bound port, so render
+      // it as-is — but only when it genuinely parsed as the server's.
       if (e instanceof ApiError && e.status === 403)
         setErr(e.fromServer ? e.message : PAIRING_RESTRICTED_FALLBACK);
       else setErr(e instanceof Error ? e.message : String(e));
@@ -129,8 +130,7 @@ export function LanAccessCard() {
       if (e instanceof ApiError && e.status === 409) {
         setSelfErr('LAN mode is not active on this server, so there is nothing to authorize against.');
       } else if (e instanceof ApiError && e.status === 403) {
-        // Same cause + server-provided copy (with the same fromServer gate)
-        // as the 403 branch in authorize() above.
+        // Same cause + copy + gate as authorize()'s 403 branch above.
         setSelfErr(e.fromServer ? e.message : PAIRING_RESTRICTED_FALLBACK);
       } else {
         setSelfErr(e instanceof Error ? e.message : String(e));
