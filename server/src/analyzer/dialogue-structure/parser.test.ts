@@ -401,6 +401,11 @@ describe('parser — #2288 a rule may move a run boundary, never delete a run', 
   // length check alone would still pass on a wrongly-promoted nested run
   // (same speaker-changed silently, same run count) — see the two tests
   // above, which is exactly why that shape is asserted there instead.
+  // Two similarly-shaped candidates were tried and rejected here: `‘’Twas
+  // raining hard…` and `‘’Cause nobody asked…`. Both have their sole `’`
+  // immediately after the opener, so the run interior is empty and the
+  // span-builder drops it — they return `[]` with AND without the Step 3
+  // fallback, discriminating nothing between the two.
   it.each([
     ['‘She wouldn’t say why.', ['She wouldn']],
     ['‘That is Sam’s coat.', ['That is Sam']],
