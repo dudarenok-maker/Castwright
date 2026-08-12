@@ -13,6 +13,7 @@ import {
   _resetOllamaBootstraps,
   warmOllamaModel,
 } from './ollama-health.js';
+import { ANALYZER_DISPATCHER } from '../analyzer/ollama.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { InstallBootstrap } from '../ollama/install-bootstrap.js';
 import { PullBootstrap } from '../ollama/pull-bootstrap.js';
@@ -276,17 +277,25 @@ describe('warmOllamaModel — the warm POST must outlive undici\'s hidden 300s c
       if (String(url).endsWith('/api/tags')) {
         return Promise.resolve({ ok: true, json: async () => ({ models: [{ name: 'qwen3.5:9b' }] }) });
       }
-      return Promise.resolve({ ok: true, json: async () => ({}) });
+      /* A real Response, not a bare `{ ok, json }` literal: production drains
+         Ollama's NDJSON tail with `upstream.text()`, so a fixture without it
+         throws inside the try and this test would silently be exercising the
+         FAILURE path while its assertions still passed. */
+      return Promise.resolve(new Response('', { status: 200 }));
     });
 
-    await warmOllamaModel('qwen3.5:9b');
+    const res = await warmOllamaModel('qwen3.5:9b');
+    /* Pin the happy path explicitly, so the fixture can't rot back into a
+       failure that the assertions below wouldn't notice. */
+    expect(res.ok).toBe(true);
 
     const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/api/generate'));
     expect(call, 'the warm POST should have been issued').toBeDefined();
     const init = call![1] as { dispatcher?: unknown; signal?: AbortSignal };
-    /* Without a dispatcher undici applies its 300s default and the operator's
-       larger warmTimeoutMs is unreachable. */
-    expect(init.dispatcher, 'warm POST must carry ANALYZER_DISPATCHER').toBeDefined();
+    /* Identity, not mere presence: `toBeDefined()` would also pass for
+       `new Agent({ headersTimeout: 1_000 })`, which reintroduces the exact bug.
+       ANALYZER_DISPATCHER is exported for precisely this assertion. */
+    expect(init.dispatcher, 'warm POST must carry ANALYZER_DISPATCHER').toBe(ANALYZER_DISPATCHER);
     /* And the route's own AbortController must still be the live budget — the
        dispatcher removes the hidden cap, it must not remove cancellation. */
     expect(init.signal).toBeDefined();

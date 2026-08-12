@@ -35,7 +35,20 @@ import {
   _resetUserSettingsCache,
 } from '../workspace/user-settings.js';
 
+/* The phase-evict POST to the sidecar's /unload uses undici's fetch, not the
+   global one — it needs a dispatcher so a legitimate 600s queue behind another
+   book's synth isn't cut off at undici's hidden 300s headersTimeout (see
+   EVICT_DISPATCHER in synthesise-chapter.ts). A global-fetch spy therefore no
+   longer observes it. `importOriginal` keeps the real `Agent`, which the
+   module constructs at import time. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
+
 afterEach(() => {
+  fetchMock.mockReset();
   vi.restoreAllMocks();
   _resetUserSettingsCache();
 });
@@ -338,7 +351,7 @@ describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38
      below now hits `global.fetch`. Mock it here so that new, unrelated
      network call doesn't ECONNREFUSED against a real (absent) sidecar. */
   beforeEach(() => {
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
   });
 
   function designedEntry() {

@@ -8,7 +8,24 @@ import { synthesiseChapter, MissingDesignedVoiceError, type CastCharacter } from
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 
+/* The phase-evict POST to the sidecar's /unload moved from the global fetch to
+   undici's, because it needs a dispatcher: that call deliberately queues behind
+   another book's in-flight synth under a 600s ceiling, and undici's hidden 300s
+   headersTimeout was silently halving it (see EVICT_DISPATCHER in
+   synthesise-chapter.ts). A `fetchMock` therefore no longer
+   observes it — these tests assert on the evict, so they mock undici instead.
+   `importOriginal` keeps the real `Agent`, which the module constructs at
+   import time. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
+
 afterEach(() => {
+  /* The hoisted fetchMock is NOT a spy, so restoreAllMocks() does not clear
+     it — reset explicitly or an implementation leaks into the next test. */
+  fetchMock.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -140,7 +157,7 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
         ? { provider: trackedCoqui, modelKey: 'coqui-xtts-v2' as const }
         : { provider: trackedQwen, modelKey: 'qwen3-tts-0.6b' as const };
 
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
 
     const result = await synthesiseChapter({
       sentences: [sentence(1, 'marlow'), sentence(2, 'wren'), sentence(3, 'marlow')],
@@ -207,7 +224,7 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
        'evict'). The chapter now evicts on BOTH sides of the Coqui phase, and
        an untagged label would let two evicts of the SAME engine satisfy the
        sequence below, which would be a real defect. */
-    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+    fetchMock.mockImplementation(async (_url, init) => {
       const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
         engine?: string;
       };
@@ -302,7 +319,7 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
     /* fetch is only ever hit by evictQwenForCoquiPhase in this test (fully
        mocked providers) — track it in the same callOrder sequence so the
        ordering assertion below can see exactly where the evict happened. */
-    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+    fetchMock.mockImplementation(async () => {
       callOrder.push('evict');
       return new Response(null, { status: 200 });
     });
@@ -387,7 +404,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
 
   it('renders the chapter anyway when the sidecar /unload returns non-ok', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(global, 'fetch').mockImplementation(
+    fetchMock.mockImplementation(
       async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }),
     );
 
@@ -409,7 +426,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
 
   it('renders the chapter anyway when the /unload fetch rejects (dead sidecar socket)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('fetch failed'));
+    fetchMock.mockRejectedValue(new Error('fetch failed'));
 
     const { coqui, promise } = mixedChapter();
     const result = await promise;
@@ -431,7 +448,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
      assertion would stay green even if the rethrow lost that identity. */
   it('does NOT swallow an abort — a paused/cancelled run still stops at the evict', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(global, 'fetch').mockRejectedValue(
+    fetchMock.mockRejectedValue(
       Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }),
     );
 
@@ -449,7 +466,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
        surfaces is a plain TypeError and only `signal.aborted` reveals the
        cancel. Rethrowing that TypeError verbatim would read as a real
        chapter failure upstream. */
-    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+    fetchMock.mockImplementation(async () => {
       ctrl.abort();
       throw new TypeError('fetch failed');
     });
@@ -465,7 +482,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
        it can queue behind ANOTHER book's in-flight synth. Before the fix this
        fetch had no timeout and no signal — the chapter waited forever with no
        way to cancel. */
-    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(() => {}));
+    fetchMock.mockImplementation(() => new Promise(() => {}));
 
     const { coqui, promise } = mixedChapter({ callTimeoutMs: 50 });
     const result = await promise;
