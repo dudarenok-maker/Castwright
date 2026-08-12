@@ -8,9 +8,30 @@
    FallbackAnalyzer in index.ts to retry against Gemini. Everything else —
    HTTP non-2xx, validation failures, mid-stream aborts — surfaces as a plain
    Error and hard-fails. The point: a misbehaving local model should not
-   silently burn Gemini quota; if Ollama is up at all, we trust the error. */
+   silently burn Gemini quota; if Ollama is up at all, we trust the error.
+
+   That classification is only sound if the fetch itself never invents a
+   failure. Node's global fetch (undici) defaults `headersTimeout` to 300s,
+   and Ollama withholds response headers until the FIRST generated token —
+   so on a big prompt the whole prefill counts against that budget. A busy
+   but perfectly healthy daemon therefore dies at exactly 302s with a bare
+   `TypeError: fetch failed`, which classifyConnectError below reads as
+   "unreachable" — the one condition that reroutes to Gemini. So whenever a
+   Gemini key is present AND allowCloudFallback is on (the two gates in
+   selectAnalyzer, index.ts), a slow local call silently completes in the
+   cloud, which is precisely what the paragraph above says must not happen;
+   with either gate off it instead hard-fails with a wrong diagnosis
+   ("start the daemon") about a daemon that is running fine. Observed
+   2026-08-12: two chapters of a 103k-word book failed cast detection this
+   way, both at 302s.
+
+   Hence ANALYZER_DISPATCHER: unlimited header/body timeouts so a busy
+   daemon never aborts mid-call, with a short connectTimeout so a genuinely
+   down daemon still fails fast and still reaches the fallback. Same shape
+   and same rationale as tts/sidecar.ts and tts/embed-client.ts. */
 
 import { writeFile } from 'node:fs/promises';
+import { fetch as undiciFetch, Agent } from 'undici';
 import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
@@ -90,7 +111,33 @@ interface OllamaOptions {
   url: string;
   /** Model tag passed to /api/chat (e.g. `qwen3.5:9b`). */
   model: string;
+  /** Injected undici dispatcher — for testing only. Defaults to the
+      module-level ANALYZER_DISPATCHER singleton. */
+  dispatcher?: Agent;
 }
+
+/* Long-call dispatcher — see the header note. `headersTimeout: 0` is the
+   load-bearing field: Ollama sends no response headers until the first
+   generated token, so prefill on a large prompt otherwise races undici's
+   300s default. `bodyTimeout: 0` covers a long inter-token stall on a
+   loaded GPU. `connectTimeout` stays short so a down daemon still fails
+   fast into LocalUnreachableError, preserving the fallback path.
+   Exported for the regression test, which injects a deliberately tiny
+   `headersTimeout` to prove the dispatcher is actually wired into the
+   fetch — a bare global fetch ignores it. */
+export const ANALYZER_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
+
+/* Absolute ceiling for a one-shot persona generation. Needed because
+   ANALYZER_DISPATCHER removes undici's implicit 300s bound and this call site
+   has no caller-supplied signal to fall back on — see the note in
+   generatePersonaViaOllama. Deliberately generous: the whole point of the
+   dispatcher is that a large model on CPU legitimately takes minutes. Mirrors
+   DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. */
+export const PERSONA_ABSOLUTE_MAX_MS = 600_000;
 
 /* Network-failure error codes that Node's undici fetch surfaces via
    `err.cause.code`. These are the "couldn't connect" cases that warrant
@@ -242,10 +289,12 @@ export function resolveNumPredict(): number {
 export class OllamaAnalyzer implements Analyzer {
   private readonly url: string;
   private readonly model: string;
+  private readonly dispatcher: Agent;
 
   constructor(opts: OllamaOptions) {
     this.url = opts.url;
     this.model = opts.model;
+    this.dispatcher = opts.dispatcher ?? ANALYZER_DISPATCHER;
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
@@ -632,13 +681,14 @@ export class OllamaAnalyzer implements Analyzer {
     const releaseSlot = await acquireAnalyzerSlot(this.model, getLastKnownAnalyzerDevice() === 'cpu');
 
     try {
-      let response: Response;
+      let response: Awaited<ReturnType<typeof undiciFetch>>;
       try {
-        response = await fetch(`${this.url}/api/chat`, {
+        response = await undiciFetch(`${this.url}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
           signal,
+          dispatcher: this.dispatcher,
         });
       } catch (err) {
         if (signal?.aborted) {
@@ -819,7 +869,14 @@ export class OllamaAnalyzer implements Analyzer {
 export async function generatePersonaViaOllama(
   prompt: string,
   model: string,
-  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+  opts: {
+    onCpu?: boolean;
+    keepAlive?: string | number;
+    signal?: AbortSignal;
+    /** Override the absolute ceiling — for testing only, so the bound can be
+        proven to fire without waiting out PERSONA_ABSOLUTE_MAX_MS. */
+    absoluteMaxMs?: number;
+  } = {},
 ): Promise<string> {
   const onCpu = opts.onCpu === true;
   const url = getResolvedOllamaUrl();
@@ -837,14 +894,55 @@ export async function generatePersonaViaOllama(
     },
   };
 
+  /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
+     else must bound this call — and unlike chat() (whose StageCall carries the
+     analysis signal) and warmOllamaModel (which builds its own controller from
+     warmTimeoutMs), nothing upstream of here supplies one: voice-style.ts
+     passes only { onCpu, keepAlive }. Without this, a daemon wedged in the
+     connected-but-never-responding state (mid-/api/pull, hung GPU driver — the
+     listener stays up so connectTimeout never fires) would hang FOREVER, and
+     because the analyzer slot above is released only in the finally below,
+     it would leak a token from a bounded semaphore and silently block every
+     later analyzer call. The hidden 300s cap used to be the only stop; removing
+     it without replacing it would have traded a wrong diagnosis for a deadlock.
+     Ceiling matches design-voice-core.ts's DESIGN_ABSOLUTE_MAX_MS — the same
+     "a big local model on CPU is slow but not infinite" judgement. */
   const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
+  /* Start the clock AFTER the semaphore, not before: AbortSignal.timeout
+     cannot be paused, so building it above the acquire charges FIFO queue
+     time to the request. With K=2 held by two slow chapter calls, a persona
+     request could exhaust its whole budget waiting and then reject without
+     sending a byte — reported as a bare "operation was aborted due to
+     timeout" naming neither daemon nor model, about an Ollama that never saw
+     it. undici's implicit clock started at socket dispatch too, so this also
+     keeps the replacement bound faithful to what it replaced. */
   try {
-    let response: Response;
+    /* Built INSIDE the try: AbortSignal.timeout/any can throw (ERR_OUT_OF_RANGE
+       on a bad ceiling, TypeError on a non-signal), and the slot is already
+       held by this point — anything that throws between the acquire and the
+       try would leak it, which is the exact harm the regression test guards. */
+    const maxMs =
+      opts.absoluteMaxMs && opts.absoluteMaxMs > 0 ? opts.absoluteMaxMs : PERSONA_ABSOLUTE_MAX_MS;
+    const budget = AbortSignal.timeout(maxMs);
+    const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {
-      response = await fetch(`${url}/api/chat`, {
+      /* Same ANALYZER_DISPATCHER as chat(), and this call needs it MORE:
+         `stream: false` above means Ollama withholds response headers until
+         the ENTIRE generation is finished, so undici's 300s default would
+         cover load + prefill + full decode rather than prefill alone. The
+         CPU path (`num_gpu: 0`, set by voice-style.ts for persona
+         generation) blows through that on any large local tag — and there is
+         no Gemini fallback on this path, so the misclassified
+         LocalUnreachableError below surfaces to the user as "Ollama is
+         unreachable, start the daemon" about a daemon that is running fine
+         and still generating. */
+      response = await undiciFetch(`${url}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal,
+        dispatcher: ANALYZER_DISPATCHER,
       });
     } catch (err) {
       throw classifyConnectError(err, url);

@@ -43,11 +43,13 @@ let priorChapterIdFor: typeof PriorChapterIdFor;
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
    chunker derives a finite, num_ctx-bound budget and a large chapter splits);
    it defaults to 'gemini' so the existing single-call tests are unchanged. */
-const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock, selectAnalyzerMock } = vi.hoisted(() => ({
+const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock, unloadResidentOllamaMock, selectAnalyzerMock } = vi.hoisted(() => ({
   runReview: vi.fn(),
   engineState: { engine: 'gemini' as 'gemini' | 'local' },
   selectAnalyzerForPhaseMock: vi.fn(),
   warmOllamaModelMock: vi.fn(),
+  /* Resolves immediately; the real one evicts every resident Ollama model. */
+  unloadResidentOllamaMock: vi.fn(async () => {}),
   selectAnalyzerMock: vi.fn(),
 }));
 
@@ -77,12 +79,23 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
    control the warm outcome without a real Ollama daemon; `selectAnalyzer`
    (the RE-selection `switchToFallback` performs) is mocked too so the
    post-fallback analyzer instance is the SAME fake analyzer wired to
-   `runReview`, not a real GeminiAnalyzer that would attempt a network call. */
+   `runReview`, not a real GeminiAnalyzer that would attempt a network call.
+
+   `unloadResidentOllama` MUST be mocked too. This factory spreads
+   `importOriginal`, so overriding only `warmOllamaModel` left the real one in
+   place — and script-review.ts's teardown (`pinnedLocal` →
+   `!isAnyAnalyzerRunBusy()` → `void unloadResidentOllama()`) calls it. On any
+   box with a live daemon that meant a real /api/tags probe followed by a real
+   `keep_alive: 0` /api/generate against EVERY resident model: running this
+   unit test evicted the developer's analyzer model, and would evict the model
+   out from under a long analysis run in progress. Same leak shape as the one
+   closed in ollama-vram-sample.test.ts. */
 vi.mock('./ollama-health.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ollama-health.js')>();
   return {
     ...actual,
     warmOllamaModel: warmOllamaModelMock,
+    unloadResidentOllama: unloadResidentOllamaMock,
   };
 });
 

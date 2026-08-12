@@ -6,6 +6,7 @@
    chapter output. This dramatically cuts the call count vs per-sentence while
    still giving us per-group timing for the future playback slice. */
 
+import { fetch as undiciFetch, Agent } from 'undici';
 import type { Emotion, SentenceOutput } from '../handoff/schemas.js';
 import {
   pickVoiceForEngine,
@@ -992,13 +993,33 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
    queue behind ANOTHER book's in-flight synth. Without a signal it was
    uncancellable and could stall a chapter forever. Every call site must
    forward the chapter's signal AND bound the call — see the callers. */
+/* The sidecar's /unload takes `_synth_lock` and sends no response headers
+   until it has it, so this call can legitimately queue behind ANOTHER book's
+   in-flight synth — the callers deliberately allow that, bounding it with
+   `withCallTimeout` at SYNTH_CALL_TIMEOUT_MS (600_000 ms, raisable via
+   SIDECAR_CALL_TIMEOUT_MS). On the global fetch, undici's hidden 300s
+   `headersTimeout` silently halves that chosen ceiling, and the resulting
+   bare TypeError is NOT an abort — so the catch below fails soft and warns,
+   leaving the engine RESIDENT while the next one loads on top of it. On an
+   8 GB card that is an OOM. Same local-Agent shape as sidecar.ts,
+   embed-client.ts and transcribe-client.ts: unlimited header/body timeouts
+   (the caller's signal is the real budget), short connectTimeout so a
+   genuinely-down sidecar still fails fast. Must be undici's OWN fetch — an
+   Agent from the npm package is rejected by Node's built-in fetch. */
+const EVICT_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
+
 async function evictEngineForPhase(engine: CloneEngine, signal?: AbortSignal): Promise<void> {
   const url = getResolvedSidecarUrl();
-  const res = await fetch(`${url}/unload`, {
+  const res = await undiciFetch(`${url}/unload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ engine }),
     signal,
+    dispatcher: EVICT_DISPATCHER,
   });
   if (!res.ok) {
     throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
