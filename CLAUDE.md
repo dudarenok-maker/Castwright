@@ -510,17 +510,25 @@ Design rationale:
   diagnostic, **not** a licence to violate the order — the budget is per
   acquisition, so a nested path's worst case is depth × 10s, and ORDINARY
   contention behind a long holder reaches the same error, so a firing timeout
-  means "look at the holder first, then the rules". Best-effort `catch` blocks
-  around identity writes let that one class through rather than swallowing it
-  (`isLockAcquisitionTimeout`); swallowing it would report success with
-  `cast.json` written and the retirement lost. **Letting it through is not the
+  means "look at the holder first, then the rules". The six best-effort `catch`
+  blocks around identity writes let that one class through rather than
+  swallowing it (`isLockAcquisitionTimeout`); swallowing it would report success
+  with `cast.json` written and the retirement lost. One handler is a deliberate
+  exception and still swallows it — `reconcileRejectEdgesOnDisk`
+  (`server/src/routes/analysis.ts`), which runs after every retirement has
+  landed and writes only cosmetic `notLinkedTo` edges the next persist re-heals;
+  see its own comment. **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
   throwing on the spot skips the writes that follow and lands in an enclosing
   best-effort handler that reports success anyway, which is worse than
   swallowing: loud nowhere, and now with a half-written book. Those sites park
   the error in a local and rethrow it after the remaining writes have
-  completed, so the terminal outcome is an error AND disk is whole.
+  completed, so the terminal outcome is an error AND disk is whole. **A
+  deferred rethrow binds the CALLER too**: by the time it escapes, the work is
+  applied, so a caller with follow-up writes of its own must finish them before
+  letting it surface (`cast-merge-suggestions.ts`'s accept route and its
+  `dismissSuggestion`) — otherwise the skipped write just moves up one frame.
   `server/src/workspace/cast-lock.guard.test.ts`
   fails the build on a new unlocked site. Two allowlisted exceptions, each
   keyed on file **and** count so a further unlocked write in either still
