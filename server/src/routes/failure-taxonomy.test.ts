@@ -408,6 +408,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'cuda-poisoned',
         'disk-full',
         'gpu-acceleration-unavailable',
+        'lock-contention',
         'model-not-loaded',
         'oom',
         'recycle-storm',
@@ -499,5 +500,88 @@ describe('classifyAnalysisFailure (run-level, ports describeError verbatim — s
     const r = classifyAnalysisFailure(new Error('some novel failure'), 'm');
     expect(r.code).toBe('unknown');
     expect(r.userMessage).toContain('some novel failure');
+  });
+});
+
+/* #2260 FINAL ROUND (B2) — the classifier is the seam where a lock-acquisition
+ * timeout stops being a raw diagnostic and becomes something safe to broadcast.
+ *
+ * Both analysis jobs pass this function's `userMessage` straight to
+ * `endJob(job, {kind:'error', message})`, which fans out over SSE to every
+ * subscriber including a paired phone on the LAN. Before this branch the class
+ * fell through to `withCopy('unknown', raw)`, so what went out was
+ * `withKeyLock: timed out … "<ABSOLUTE WORKSPACE PATH>" — either a cast-lock.ts
+ * rule 1 …` — six of the eight fail-loud sites in `analysis.ts` reach here.
+ *
+ * Two-directional on purpose: the second half is what reddens if the fix is
+ * over-applied into "curate everything", which would throw away the only
+ * diagnostic an unmapped analyzer failure has.
+ */
+describe('classifyAnalysisFailure — a lock timeout is curated, everything else is not (#2260)', () => {
+  /* The real key shape: `withCastLock` keys on `castJsonPath(bookDir)`, so the
+     lock key IS an absolute path into the user's library. */
+  const KEY = 'C:\\Users\\someone\\Castwright\\books\\Della Renwick\\Hollow Tide\\.audiobook\\cast.json';
+
+  it('a lock-acquisition timeout gets the shared curated sentence and leaks nothing', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    const r = classifyAnalysisFailure(
+      new LockAcquisitionTimeoutError(KEY, 10_000),
+      'Gemini (gemma-4-31b-it)',
+    );
+
+    expect(r.code).toBe('lock-contention');
+    /* By value, so a reword has to move the constant and this line together. */
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(r.userMessage).not.toContain(KEY);
+    expect(r.userMessage).not.toContain('withKeyLock');
+    expect(r.userMessage).not.toContain('rule 4');
+    /* `detail` renders in the UI's collapsible, so populating it would put the
+       leak back one fold down. */
+    expect(r.detail).toBeUndefined();
+    /* And the model label is deliberately NOT prefixed: the analyzer model had
+       nothing to do with it. */
+    expect(r.userMessage).not.toContain('gemma-4-31b-it');
+  });
+
+  it('discriminates on the stable `code` string, not the class or the name', async () => {
+    const { LOCK_ACQUISITION_TIMEOUT_CODE, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    /* The same reasoning `isLockAcquisitionTimeout`'s own comment records: an
+       `instanceof` (or an `err.name`) check fails OPEN across two module
+       instances, i.e. straight back to broadcasting the key. A duck-typed
+       object carrying only the code must still classify. */
+    const ducked = Object.assign(new Error(`withKeyLock: timed out … "${KEY}" … rule 4`), {
+      code: LOCK_ACQUISITION_TIMEOUT_CODE,
+      name: 'SomeOtherError',
+    });
+    expect(classifyAnalysisFailure(ducked, 'm').userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  });
+
+  it('a NON-timeout error that happens to name a file is unchanged', () => {
+    /* The over-application direction. An EPERM keeps its own message — that is
+       the only diagnostic an unmapped analysis failure has, it is not the class
+       #2260 made reachable by ordinary contention, and nothing about this
+       change is meant to touch it. */
+    const eperm = Object.assign(
+      new Error("EPERM: operation not permitted, rename 'cast.json'"),
+      { code: 'EPERM' },
+    );
+    const r = classifyAnalysisFailure(eperm, 'm');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toContain('EPERM');
+    expect(r.userMessage).toContain('cast.json');
+  });
+
+  it('the other classified families still win their own errors', () => {
+    /* Placed FIRST in the function, so this pair is the guard that the new
+       branch did not shadow the envelope/typed-error paths below it. */
+    const env = new Error('got status: 503. {"error":{"code":503,"message":"boom","status":"UNAVAILABLE"}}');
+    expect(classifyAnalysisFailure(env, 'm').code).toBe('analyzer-unreachable');
+    expect(classifyAnalysisFailure(new Error('connect ECONNREFUSED 127.0.0.1:11434'), 'm').code).toBe(
+      'analyzer-unreachable',
+    );
   });
 });

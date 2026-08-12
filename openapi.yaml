@@ -4194,8 +4194,10 @@ components:
             within the ride-out budget) / `gpu_contention` (same, for
             GPU-busy contention) / `unsupported_language` (the book's
             language has no sidecar mapping — checked before the stream
-            produces any progress) / `unknown` (defensive catch-all for an
-            unexpected throw escaping the design loop).
+            produces any progress) / `lock-contention` (a cast-lock
+            acquisition on this backstop's own path timed out — #2260) /
+            `unknown` (defensive catch-all for any other unexpected throw
+            escaping the design loop).
         total: { type: integer }
         done: { type: integer }
         skipped:
@@ -4229,7 +4231,7 @@ components:
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
           type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, unknown]
+          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, unknown]
           description: error only — machine-readable whole-run abort reason.
         message: { type: string, description: error only — human-readable abort message. }
 
@@ -4282,7 +4284,9 @@ components:
             design) run — the result is already persisted by the time this
             fires. `error` is the terminal event for a failed run: `code`
             `not_found` (character deleted mid-run), `design_failed` (the
-            design call itself threw), or `unsupported_language`.
+            design call itself threw), `unsupported_language`, or
+            `lock-contention` (a cast-lock acquisition on this route's own
+            path timed out — #2260).
         characterId: { type: string }
         name: { type: string, description: 'resume_from / preview_ready / designed only.' }
         mode: { type: string, enum: [first, redesign], description: resume_from only. }
@@ -4298,7 +4302,7 @@ components:
         url: { type: string, description: designed only. }
         code:
           type: string
-          enum: [not_found, design_failed, unsupported_language]
+          enum: [not_found, design_failed, unsupported_language, lock-contention]
           description: error only.
         message: { type: string, description: error only. }
 
@@ -6847,6 +6851,7 @@ components:
         - gpu-acceleration-unavailable
         - voice-not-designed
         - cloned-voice-broken
+        - lock-contention
 
     ChapterQaVerdict:
       type: object

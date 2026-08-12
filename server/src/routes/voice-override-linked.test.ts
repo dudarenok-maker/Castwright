@@ -8,7 +8,7 @@
    Same lazy-import pattern as the sibling route tests so WORKSPACE_DIR is set
    before paths.ts binds BOOKS_ROOT. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -664,5 +664,69 @@ describe('#1981 — two applyToBook calls for one book overlap', () => {
     expect((marlow?.overrideTtsVoices as Record<string, { name: string }>)?.gemini?.name).toBe(
       'Marlow Voice Y',
     );
+  });
+});
+
+/* #2292 (owner decision) — a lock timeout on ONE series-mate's write reports
+ * contention, not a broken cast.
+ *
+ * Same decision, same shape and same two directions as the sibling
+ * `cast-series-patch` fixtures: the per-book `failed` entry stays (the other
+ * books' writes must still land), and only the REASON changes, because a
+ * `LockAcquisitionTimeoutError` says nothing about the book it is reported
+ * against. The second test is the half that reddens if the route rewrote every
+ * failure reason instead of just this class.
+ *
+ * `withCastLock` is the seam (`applyToBook` takes it per book) rather than a
+ * genuinely contended lock — the real budget is 10s, vitest's testTimeout 15s.
+ */
+describe('voice-override-linked — per-item reason on a lock timeout (#2292)', () => {
+  async function assignWithThrowOnBookC(toThrow: unknown) {
+    const castLock = await import('../workspace/cast-lock.js');
+    const original = castLock.withCastLock;
+    const spy = vi
+      .spyOn(castLock, 'withCastLock')
+      .mockImplementation(async <T,>(dir: string, fn: () => Promise<T>): Promise<T> => {
+        if (dir.includes(BOOK_C)) throw toThrow;
+        return original(dir, fn) as Promise<T>;
+      });
+    try {
+      return await callLinked(bookA, 'wren', {
+        override: { engine: 'qwen', name: 'wren-designed' },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('reports contention for the contended book and still writes the others', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const res = await assignWithThrowOnBookC(
+      new LockAcquisitionTimeoutError('cast:/w/book-c', 10_000),
+    );
+
+    expect(res.status).toBe(207);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].bookId).toBe(bookC);
+    expect(res.body.failed[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(res.body.failed[0].error).not.toContain('withKeyLock');
+
+    /* Not escalated: the other two books took the override. */
+    expect(
+      (res.body.updated as Array<{ bookId: string }>).map((u) => u.bookId).sort(),
+    ).toEqual([bookA, bookB].sort());
+    expect(
+      (findChar(BOOK_A, 'wren')?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name,
+    ).toBe('wren-designed');
+  });
+
+  it('an ordinary error at the same site keeps its own message', async () => {
+    const res = await assignWithThrowOnBookC(new Error('simulated disk-full'));
+
+    expect(res.status).toBe(207);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].error).toBe('simulated disk-full');
   });
 });

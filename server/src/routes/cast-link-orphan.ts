@@ -308,12 +308,53 @@ castLinkOrphanRouter.post(
       });
     }
 
+    /* #2260 review round 3 (C3) — two genuinely different failures now reach
+       the handler below, and they need different words. `retireCharacterId`
+       throwing means the alias never landed ("failed to record the link" —
+       true, and what this route has always said). But since #2260 the
+       follow-up `clearNotLinkedEdgesForDroppedRejections` can throw too (it
+       rethrows a lock-acquisition timeout instead of swallowing it), and by
+       then the alias IS durably on disk — telling the user it failed and to
+       retry describes the opposite of what happened. This flag is the
+       discriminator: it flips the moment the durable write returns. */
+    let aliasRecorded = false;
     try {
       const result = await retireCharacterId(bookDir, orphanedId, characterId);
+      aliasRecorded = true;
       if (result.droppedSelfLoopRejections.length) {
         await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
       }
     } catch (retireErr) {
+      if (aliasRecorded) {
+        console.error(
+          '[cast-link-orphan] the alias WAS recorded; clearing the stale not-linked edge for it failed',
+          retireErr,
+        );
+        /* #2260 round 4 (C2) — this copy must NOT ask for a retry. Round 3
+           wrote "retry to complete the cleanup; the write is idempotent",
+           which is the same defect class it was fixing one line up: a
+           remediation that silently does nothing. A retry re-enters
+           `retireCharacterId`, which hits its own idempotence short-circuit
+           (`alreadyRecorded && !history.rejectedPairs?.some(p => p.to ===
+           from)`) — the governing `rejectedPairs` entry was CONSUMED by the
+           first call — and returns `droppedSelfLoopRejections: []`. The
+           `if (result.droppedSelfLoopRejections.length)` guard below is then
+           false, the cleanup never runs, and the route answers 200: the stale
+           edge is still there and the user is told it worked.
+
+           What actually clears it is `reconcileRejectEdgesOnDisk` (#2166) at
+           the next analysis persist — a `notLinkedTo` edge with no matching
+           `rejectedPairs` entry is exactly the stranded shape its removal pass
+           exists to heal. So: say the link is durable, say no retry is owed,
+           and name the thing that does the cleaning. */
+        return res.status(500).json({
+          error:
+            'The link was recorded and is durable — no retry is needed. What did not finish is ' +
+            'clearing the stale "not the same character" note that used to block it; retrying this ' +
+            'action will not clear it. Until the next analysis of this book clears it automatically, ' +
+            'the link may still read as blocked.',
+        });
+      }
       console.error(
         '[cast-link-orphan] failed to record the alias in cast-id-history.json — surfacing as a failure',
         retireErr,

@@ -23,6 +23,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { retireCharacterId } from '../store/cast-id-history.js';
@@ -57,6 +58,50 @@ export interface CastMergeResult {
       must record one (this is what `retireCharacterId` is called with,
       alongside `targetId`). */
   sourceId: string;
+}
+
+/* #2260 FINAL ROUND (B1) — the marker that tells the two origins of a
+   `LockAcquisitionTimeoutError` out of `performCastMerge` apart.
+
+   `performCastMerge`'s whole body is `withCastLock(bookDir, …)`, so this class
+   escapes it from TWO places, and the disk state at each is the exact opposite
+   of the other:
+
+     - the OUTER acquisition (`withCastLock` itself, before the `readJson` on
+       the first line of the callback) — the callback never ran, NOTHING was
+       written; and
+     - the DEFERRED rethrow at the very end — the merge is fully applied.
+
+   Round 4's accept route discriminated on the error CLASS alone and dismissed
+   the suggestion on both, which destroys the suggestion for a merge that never
+   happened (`dismissSuggestion` is a load-filter-write; only a fresh dedup pass
+   can put it back). Contention on `cast:<bookDir>` — the very condition #2260
+   exists to surface — was enough to reach it.
+
+   Stamped as an own property on the parked error rather than returned in the
+   result: `performCastMerge` must keep THROWING (round 4's own decision — a
+   returned timeout makes the loud path opt-in, so a future caller that forgets
+   to check it silently converts a timeout back into a 200), and the caller
+   needs one more bit than the class carries. Non-enumerable so it never shows
+   up in a `JSON.stringify` of the error in a log line.
+
+   `didCastMergeApply` FAILS CLOSED, and that direction is deliberate: an
+   unmarked escape means "no follow-up write", so a future rethrow added
+   somewhere in the middle of this function (or a marker that fails to survive
+   some wrapper) leaves the suggestion in place — recoverable by pressing Accept
+   again — rather than deleting it. */
+const CAST_MERGE_APPLIED = 'castMergeApplied';
+
+/** True only for the DEFERRED lock-timeout rethrow out of `performCastMerge`,
+ *  i.e. the case where the merge IS fully applied on disk. False for an outer
+ *  `withCastLock` acquisition expiry, where nothing was written. See the
+ *  comment above for why this is an own property and why it fails closed. */
+export function didCastMergeApply(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as Record<string, unknown>)[CAST_MERGE_APPLIED] === true
+  );
 }
 
 /** Shared merge parameters — passed by both the manual-merge route and the
@@ -227,6 +272,9 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        for identity (spec §4.1), so losing an entry degrades to today's
        behaviour while losing the merge does not. Mirrors the six analysis-path
        sites. */
+    /* #2260 review round 3 (C2) — parked, not thrown at the catch below. See
+       that handler's own comment. */
+    let identityLockTimeout: unknown;
     try {
       const historyResult = await retireCharacterId(bookDir, sourceId, targetId);
       /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
@@ -260,7 +308,32 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
         }
       }
     } catch (historyErr) {
-      console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+      /* #2260 round 2 — the reasoning above ("the side-table is never
+         authoritative for identity, so losing an entry degrades to today's
+         behaviour") is sound for a disk fault and WRONG for a withKeyLock
+         acquisition timeout on `cast-id-history:<bookDir>`, which ordinary
+         contention can reach. Swallowing that returns 200 with cast.json
+         already missing sourceId and the retirement never recorded — the
+         identity-of-record divergence #2040 exists to prevent, silently, and
+         strictly worse than the hang the timeout replaced. Let exactly that
+         one class through; EPERM/ENOSPC/AV-lock are swallowed exactly as
+         before. See `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
+
+         Round 3 (C2) — let it through, but not from HERE. Thrown at this
+         point it aborts before the analysis-cache reconciliation and the
+         cast-merges journal entry below, which recreates exactly the
+         half-applied state the wrap at the top of this block exists to
+         prevent: cast.json has sourceId folded into targetId, while the
+         cache still lists sourceId and still attributes sentences to it (so
+         the merged-away character reappears on the next resume — see the
+         cache comment immediately below) and no journal entry exists (so the
+         unlink-alias route can never undo the merge). Park it, finish both,
+         then rethrow. */
+      if (isLockAcquisitionTimeout(historyErr)) {
+        identityLockTimeout = historyErr;
+      } else {
+        console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+      }
     }
 
     /* Analysis cache update — stage1.characters AND per-chapter sentences.
@@ -331,6 +404,56 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
         (cacheTouched ? ' (rewrote cache)' : ''),
     );
 
+    /* #2260 round 3 (C2) — the deferred rethrow. AFTER the journal, not after
+       the cache: both are part of "the merge is fully applied". Rethrowing
+       between them would leave a merge that resumes correctly but can never
+       be unlinked, which is still half-applied — the thing the wrap exists to
+       avoid. Placed after the log line too, so the operator breadcrumb still
+       records what actually reached disk before the request fails.
+
+       Round 4 (C1) — nothing below this point writes anything IN THIS
+       FUNCTION, and an earlier version of this comment stopped there and
+       reasoned only about `POST /cast/merge`, whose route body is a bare
+       `return res.json(result)`. That is not the whole caller set. THE
+       CONTRACT THIS THROW IMPOSES ON CALLERS: by the time it fires the merge
+       is fully applied on disk, so a caller with follow-up writes of its own
+       must perform them BEFORE letting it escape — otherwise the deferred
+       rethrow just moves the skipped-write bug up one frame, which is exactly
+       what it happened to do at the second caller,
+       `cast-merge-suggestions.ts`'s accept route (its `dismissSuggestion`
+       never ran, so the merged-away character kept a live suggestion that
+       404'd on every subsequent Accept). Both callers turn this into a 500
+       carrying the curated `LOCK_CONTENTION_REQUEST_ERROR` (round 5 — NOT the
+       error's own message, which names the lock key and hence the absolute
+       workspace path); see that route's own handler for the accept flow's
+       extra step.
+
+       FINAL ROUND (B1) — the contract above is only safe for a caller that can
+       tell this rethrow apart from an OUTER `withCastLock` expiry, which
+       escapes the same function with the same class and NOTHING written. Stamp
+       it, so "the merge is fully applied" is a fact the caller can test rather
+       than an assumption it has to make. See `CAST_MERGE_APPLIED` above. */
+    if (identityLockTimeout !== undefined) {
+      if (typeof identityLockTimeout === 'object' && identityLockTimeout !== null) {
+        try {
+          Object.defineProperty(identityLockTimeout, CAST_MERGE_APPLIED, {
+            value: true,
+            enumerable: false,
+            configurable: true,
+            writable: true,
+          });
+        } catch {
+          /* Defensive — a non-extensible/frozen error here would throw a
+             TypeError that REPLACES identityLockTimeout, losing the deferred
+             rethrow's whole contract: the route would answer the generic body
+             and skip the dismiss for a merge that DID land. Unreachable today
+             (these errors are freshly constructed, never frozen); swallowing
+             keeps the original throw below intact either way. */
+        }
+      }
+      throw identityLockTimeout;
+    }
+
     return { characters: nextCharacters, sourceId };
   });
 }
@@ -360,7 +483,40 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
     if (e.status && e.error) {
       return res.status(e.status).json({ error: e.error });
     }
-    throw err;
+    /* #2292 (owner decision), CORRECTED in review round 5 — the rationale
+       recorded here through round 4 was false, and the code it justified was a
+       leak. Both are retracted.
+
+       THE FALSE CLAIM: "this used to `throw err`; anything without
+       `{status, error}` then reached Express 5's DEFAULT handler, which answers
+       `500 text/html`, so the user got a blank failure." That never happened in
+       production. `app.ts:350` registers `errorHandler` (`error-handler.ts`)
+       last, and it ends `res.status(500).json({ error: 'Internal server
+       error.' })` — so a bare `throw err` out of this route has ALWAYS come
+       back as JSON, just wordless. The `text/html` was an artefact of this
+       route's own fixtures, which mount a bare `express()` + router with no
+       `errorHandler`; no server test mounted the assembled app, so the
+       mutation proofs measured the harness. `cast-merge.lock-timeout.test.ts`
+       now mounts the real `app.ts` for exactly that reason.
+
+       WHAT THE CHANGE ACTUALLY DOES, therefore, is choose the WORDS — and
+       round 4 chose `err.message`, which is the leak: a
+       `LockAcquisitionTimeoutError` message embeds the lock key, i.e. the
+       absolute path of the user's workspace, and #2260 made this class
+       reachable by ORDINARY CONTENTION over a LAN the app serves by design.
+       Any other unstructured throw (an `EACCES`, an `ENOSPC` naming a temp
+       path) round-tripped verbatim too.
+
+       So: the one class a user can act on gets a curated body; everything else
+       gets the same generic body `errorHandler` would have produced. Returned
+       explicitly rather than rethrown so this route's contract does not depend
+       on app-level middleware wiring — which is precisely what went unchecked
+       here. The full error, key and all, still goes to the server log. */
+    console.error('[cast-merge] merge failed', err);
+    if (isLockAcquisitionTimeout(err)) {
+      return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    }
+    return res.status(500).json({ error: 'Internal server error.' });
   }
 });
 

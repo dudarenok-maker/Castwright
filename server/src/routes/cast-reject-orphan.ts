@@ -126,11 +126,16 @@
    report success to the user while the reject stayed purely cosmetic at
    render time, the exact silent-wrong-outcome shape #2040 exists to
    eliminate. Its failure is surfaced as a 500. `forgetSupersededId` stays
-   non-fatal (mirroring cast-merge.ts's `retireCharacterId` precedent: the
-   side-table is never authoritative for identity, and the pair-scoped
-   `rejectedPairs` write already durably blocks resolution regardless of
-   whether the now-redundant `supersededBy` entry ever actually gets
-   cleared).
+   non-fatal FOR A DISK FAULT (mirroring cast-merge.ts's `retireCharacterId`
+   precedent: the side-table is never authoritative for identity, and the
+   pair-scoped `rejectedPairs` write already durably blocks resolution
+   regardless of whether the now-redundant `supersededBy` entry ever actually
+   gets cleared) — but NOT for a `LockAcquisitionTimeoutError` (#2292, owner
+   decision), which is now a 500. That one exception exists because the
+   leftover DOES NOT SELF-HEAL: no analysis pass prunes a `supersededBy` entry
+   whose key is a non-live orphan and whose target is live. See the handler's
+   own comment for the trace and for why re-POSTing (not a later analysis) is
+   the remediation.
 
    I1 (fix round 1): the ORIGINAL order was forget-then-reject, which made
    this module's own "POST is safe to retry on that 500" claim FALSE for
@@ -231,6 +236,7 @@ import {
   loadCastIdHistory,
 } from '../store/cast-id-history.js';
 import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 export const castRejectOrphanRouter = Router();
@@ -429,15 +435,81 @@ castRejectOrphanRouter.post(
          and an unconditional delete would discard THAT instead of the value
          actually stashed on the pair — forget only fires when the value
          hasn't moved since the read. */
+      /* #2292 (owner decision) — a `LockAcquisitionTimeoutError` on the forget
+         is NOT non-fatal, because the leftover it leaves behind DOES NOT SELF-
+         HEAL. Traced, not assumed: the entry it fails to delete is
+         `supersededBy[orphanedId] = characterId`, and the only two passes that
+         ever prune `supersededBy` key on the opposite conditions —
+         `dropSupersededIdsReclaimedByLiveCast` drops an entry whose KEY became
+         live (an orphaned id is by definition not a cast row) and
+         `dropSupersededTargetsNoLongerLive` drops one whose TARGET died
+         (`characterId` is the live row this route just validated). Neither
+         fires. `reconcileRejectEdgesOnDisk` — what heals `cast-link-orphan`'s
+         stale `notLinkedTo` edge, and the reason THAT route can answer "the
+         next analysis clears it" — READS this file (`analysis.ts:386`, via
+         `loadCastIdHistoryWithStatus`) but only ever REWRITES cast.json's
+         edges, so it never removes a `supersededBy` entry either. (An earlier
+         version of this said it "never opens this file", which is simply
+         false; the load-bearing half is the write, not the read.) So the entry
+         survives every future analysis, and saying nothing would be promising
+         a cleanup that never comes.
+
+         Deferred, in the shape the six identity sites use: parked in a `let`
+         so nothing after it is skipped, acted on once the handler has closed.
+         There happens to be no write after it today; the shape is what keeps
+         that true if one is ever added between.
+
+         A disk fault keeps its old best-effort treatment exactly — an EPERM
+         here is transient and the entry is redundant for RESOLUTION anyway
+         (`rejectedPairs`, already durably written above, blocks the alias
+         regardless), so failing the request over one would be the regression
+         this discrimination exists to avoid. */
+      let forgetLockTimeout: unknown;
       if (forgotSupersededTo !== undefined) {
         try {
           await forgetSupersededId(bookDir, orphanedId, forgotSupersededTo);
         } catch (forgetErr) {
-          console.warn(
-            '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
-            forgetErr,
-          );
+          if (isLockAcquisitionTimeout(forgetErr)) {
+            forgetLockTimeout = forgetErr;
+          } else {
+            console.warn(
+              '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
+              forgetErr,
+            );
+          }
         }
+      }
+      if (forgetLockTimeout !== undefined) {
+        console.error(
+          '[cast-reject-orphan] the rejection WAS recorded; clearing the stale supersededBy entry timed out',
+          forgetLockTimeout,
+        );
+        /* The remediation named here is the one that actually works, which is
+           the trap `cast-link-orphan`'s message fell into twice. Re-POSTing
+           this exact request re-reads the stash from disk (`forgotSupersededTo`
+           is still `characterId`, because the forget never landed),
+           `rejectOrphanedPair` returns early on the pair it already wrote —
+           no duplicate, and the stash on it is untouched — and the forget is
+           attempted again. So "retry this same action" ends with the entry
+           gone and a 200, which is exactly what it promises.
+
+           Round 5 scoping — the closing clause used to read "no later analysis
+           will clear it for you", which is stronger than the trace supports.
+           Two later-analysis paths CAN clear this entry, both off the ordinary
+           track: `dropSupersededIdsReclaimedByLiveCast` fires if a later
+           analysis re-mints `orphanedId` as a LIVE cast row (not exotic —
+           analyzer `characterId`s are LLM free text, so an id can come back),
+           and `dropSupersededTargetsNoLongerLive` fires if `characterId` later
+           leaves the roster. Neither is something a user can rely on or ask
+           for, so the remediation is unchanged and the 500 is still right;
+           only the promise is scoped down to what is actually true. */
+        return res.status(500).json({
+          error:
+            'The rejection was recorded and is durable — the chip will render and Undo still works. ' +
+            'What did not finish is clearing the stale alias that pointed this id at the character, ' +
+            'because another operation held the lock too long. Retry this same action to finish it — ' +
+            'a later analysis almost certainly will not.',
+        });
       }
 
       const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
