@@ -4890,7 +4890,8 @@ export async function runMainAnalyzerJob(
             1,
             `Chapter ${i + 1}/${totalChapters} — the same attribution failure reproduced exactly on ` +
               `attempt ${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
-              `deterministically, so further re-analysis cannot help. Stopping early and flagging it.`,
+              `deterministically, so re-running the same prompt cannot help — re-attributing it in ` +
+              `smaller sections instead.`,
           ),
       });
       if (stage2ChunkCount > 1) {
@@ -6547,7 +6548,8 @@ export async function runSubsetAnalyzerJob(
               1,
               `Chapter ${ch.id} — the same attribution failure reproduced exactly on attempt ` +
                 `${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
-                `deterministically, so further re-analysis cannot help. Stopping early and flagging it.`,
+                `deterministically, so re-running the same prompt cannot help — re-attributing it in ` +
+                `smaller sections instead.`,
             ),
         });
       if (subsetChunkCount > 1) {

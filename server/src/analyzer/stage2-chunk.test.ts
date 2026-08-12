@@ -284,6 +284,42 @@ describe('runStage2ChapterChunked', () => {
     expect(out.coverage.ok).toBe(true);
   });
 
+  /* #2304 — the point of the fix, and the reason stopping early is not enough
+     on its own. A repeat-loop is degeneration just like a truncation, and the
+     span split was the remedy for it all along — it was simply wired only to
+     the THROWING path. Without the escalation the chapter keeps a known-bad
+     take and is flagged "for retry", advice that is false for a deterministic
+     failure: the user-triggered retry re-runs the same prompt, fails
+     identically, and the book can never be generated correctly. */
+  it('re-splits a span whose coverage fails DETERMINISTICALLY, and recovers', async () => {
+    const body = makeBody(6);
+    let deterministicFailures = 0;
+    /* Any span over 60 chars always returns the same badly-truncated take — a
+       repeat-loop stand-in: identical failure every attempt, so retrying the
+       same prompt can never clear it. Smaller spans attribute cleanly. */
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => {
+      if (subBody.length > 60) {
+        deterministicFailures += 1;
+        const full = fakeAttribute(subBody);
+        return { ...full, sentences: full.sentences.slice(0, 1) };
+      }
+      return fakeAttribute(subBody);
+    });
+
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 80,
+      coverageRetries: 1,
+      callForBody: call,
+    });
+
+    expect(deterministicFailures).toBeGreaterThan(0); // the bad path was hit
+    /* Recovered via smaller sections: every sentence present, contiguous ids,
+       and a PASSING verdict — not a "best take" salvage. */
+    expect(out.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(out.coverage.ok).toBe(true);
+  });
+
   it('re-splits an UNDER-budget body that still truncates on the single call', async () => {
     /* A dense chapter whose char count fits the budget but whose per-sentence
        JSON output overflows the model cap (output scales with sentence count,

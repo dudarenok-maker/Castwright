@@ -331,8 +331,26 @@ export async function runStage2ChapterChunked(
        context instead and the guard's zero-word source loops forever (2026-06-19
        Ночной дозор ch7). */
     if (!hasAttributableContent(span)) return [];
+    /* Re-attribute this span as two smaller ones. The ONLY lever that can move
+       a deterministic model failure is a different prompt, and halving the span
+       is exactly that. Returns null when the span cannot be divided further. */
+    const splitAndRetry = async (): Promise<SentenceOutput[] | null> => {
+      const sub = splitSpanForRetry(span);
+      if (sub.length <= 1) return null;
+      const out: SentenceOutput[] = [];
+      let prev = preceding;
+      let seed = lastSpeakerId;
+      for (const piece of sub) {
+        const part = await attributeSpan(piece, depth + 1, prev, seed);
+        out.push(...part);
+        prev = tailParagraphs(piece, contextParagraphs);
+        seed = lastSpokenSpeaker(part, seed);
+      }
+      return out;
+    };
+
     try {
-      const { result } = await runStage2WithCoverageGuard({
+      const { result, deterministicFailure } = await runStage2WithCoverageGuard({
         body: span,
         maxRetries: opts.coverageRetries,
         call: () => opts.callForBody(span, preceding, lastSpeakerId),
@@ -340,22 +358,26 @@ export async function runStage2ChapterChunked(
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });
+      /* A coverage failure that reproduces EXACTLY is degeneration, the same
+         family as the truncation handled below — and it had the same remedy
+         available all along, just wired only to the throwing path. Retrying an
+         identical prompt cannot clear it; re-attributing in smaller sections
+         can. Without this the chapter keeps a known-bad take and is flagged
+         "for retry", advice that is false for a deterministic failure: a
+         user-triggered retry re-runs the same prompt and fails identically, so
+         the book can never be generated correctly from that chapter.
+         Depth-guarded, and falls back to the best take when the span will not
+         divide — so a genuinely irreducible failure is still reported, never
+         silently accepted. */
+      if (deterministicFailure && depth < maxSplitDepth) {
+        const split = await splitAndRetry();
+        if (split) return split;
+      }
       return result.sentences;
     } catch (err) {
       if (err instanceof AnalyzerTruncatedError && depth < maxSplitDepth) {
-        const sub = splitSpanForRetry(span);
-        if (sub.length > 1) {
-          const out: SentenceOutput[] = [];
-          let prev = preceding;
-          let seed = lastSpeakerId;
-          for (const s of sub) {
-            const part = await attributeSpan(s, depth + 1, prev, seed);
-            out.push(...part);
-            prev = tailParagraphs(s, contextParagraphs);
-            seed = lastSpokenSpeaker(part, seed);
-          }
-          return out;
-        }
+        const split = await splitAndRetry();
+        if (split) return split;
       }
       throw err;
     }
