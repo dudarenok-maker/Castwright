@@ -35,7 +35,8 @@ export interface BuildMp3ZipOptions {
       0..1 ratio. The route uses this to update the job's `progress`. */
   onProgress?: (ratio: number) => void;
   /** Optional cancellation signal. Checked between chapters; when aborted
-      mid-build the zip stream is destroyed and an AbortError is thrown.
+      mid-build the WRITE stream is destroyed (the zip/read side is NOT —
+      see this file's class docstring above) and an AbortError is thrown.
       The route's cancel handler is the only producer today. */
   signal?: AbortSignal;
 }
@@ -121,22 +122,33 @@ export function createZipWritePipeline(outPath: string, zip: ZipFile): ZipWriteP
   });
   donePromise.catch(() => {});
 
+  const onData = (chunk: Buffer): void => {
+    bytes += chunk.length;
+  };
+
   const rejectBuild = (reason?: unknown): void => {
     if (settled) return;
     settled = true;
     rejectDone(reason ?? new Error('zip write failed'));
-    /* Stop the pipeline doing any further I/O now that we've decided to
-       fail: unpipe so no already-buffered zip bytes reach the write
-       stream, and destroy the write stream to release its fd and cut off
-       any write still in flight. */
+    /* Stop the WRITE side doing any further I/O now that we've decided to
+       fail — this does NOT stop source-side reads already in flight; see
+       this file's class docstring above for why that gap is accepted
+       rather than chased further. Three things: detach the byte-counting
+       'data' listener (N3, independent review — previously left attached,
+       so after rejectBuild the unpiped outputStream stayed in flowing mode
+       with a live consumer, letting yazl's pump run at full speed with no
+       backpressure through every already-registered chapter, into a
+       counter nobody would ever read — mirrors build-portable-book.ts's
+       onData teardown); unpipe so no already-buffered zip bytes reach the
+       write stream; and destroy the write stream to release its fd and
+       cut off any write still in flight. */
+    zip.outputStream.off('data', onData);
     zip.outputStream.unpipe(ws);
     ws.destroy();
   };
 
   ws.on('error', rejectBuild);
-  zip.outputStream.on('data', (chunk: Buffer) => {
-    bytes += chunk.length;
-  });
+  zip.outputStream.on('data', onData);
   zip.outputStream.on('error', rejectBuild);
   /* yazl's ZipFile emits several of its OWN internal validation failures
      (e.g. "file data stream has unexpected number of bytes") via

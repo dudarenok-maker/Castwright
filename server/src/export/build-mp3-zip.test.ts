@@ -51,17 +51,36 @@ vi.mock('node:fs', async (importOriginal) => {
    Scheduling via `process.nextTick` moves the emit outside that frame —
    same as yazl's real internal error sites — so an absent
    `zip.on('error', rejectBuild)` reproduces the real bug: zero listeners,
-   an `uncaughtException`, and the pipeline's promise never settling. */
+   an `uncaughtException`, and the pipeline's promise never settling.
+
+   `triggerOutputStreamError` is the SAME mechanism aimed at a different
+   emitter: real yazl also emits `'error'` on `zip.outputStream` itself for
+   a bad write (distinct from the ZipFile-level validation failures above),
+   and `zip.outputStream.on('error', rejectBuild)` is its own separate
+   forwarding line in createZipWritePipeline — mutation testing found it had
+   no test of its own (deleting it left every test in this file green).
+   `lastZipFile` captures the constructed instance so a test can also
+   inspect its `outputStream`'s listener count after rejection (N3). */
 let triggerZipFileError: Error | null = null;
+let triggerOutputStreamError: Error | null = null;
+let lastZipFile: InstanceType<typeof import('yazl').ZipFile> | null = null;
 vi.mock('yazl', async (importOriginal) => {
   const real = await importOriginal<typeof import('yazl')>();
   class TestZipFile extends real.ZipFile {
     constructor() {
       super();
+      // eslint-disable-next-line @typescript-eslint/no-this-alias -- test-only capture of the constructed instance, see comment above.
+      lastZipFile = this;
       if (triggerZipFileError) {
         const err = triggerZipFileError;
         process.nextTick(() => {
           this.emit('error', err);
+        });
+      }
+      if (triggerOutputStreamError) {
+        const err = triggerOutputStreamError;
+        process.nextTick(() => {
+          this.outputStream.emit('error', err);
         });
       }
     }
@@ -401,6 +420,145 @@ describeIfFfmpeg('buildMp3Zip', () => {
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
   }, 10_000);
+
+  /* Mutation-testing finding (fourth review pass): `zip.outputStream.on(
+     'error', rejectBuild)` inside createZipWritePipeline — the OTHER of the
+     three error forwarders the class docstring lists, distinct from the
+     ZipFile-level one just above — had no test of its own. Deleting that
+     one line left all existing tests (this file included) green, and this
+     pipeline is now shared by buildMp3Zip, buildCodecZip, and buildCaptions
+     via createZipWritePipeline, so a regression here silently affects all
+     three builders at once.
+
+     Same timing trap as the ZipFile-level test above: emitting synchronously
+     during the ZipFile constructor would "pass" even with the fix line
+     deleted, because `new Promise(executor)`'s auto-catch of a synchronous
+     executor throw would settle the promise for JS's reasons, not this
+     pipeline's own forwarding. `process.nextTick` moves the emit outside
+     that frame, matching yazl's real internal error sites.
+
+     The failure SHAPE here differs from the ZipFile-level test above, and
+     that difference is itself informative, not a mistake: with the
+     ZipFile-level listener removed, the pipeline's promise never settles
+     (the 'timeout' branch below) because the ZipFile's own internal write
+     bookkeeping depends on that emit. With THIS listener removed, the
+     zero-listener 'error' on `outputStream` still throws synchronously
+     (confirmed with instrumentation during development: the throw
+     interrupts the scheduled nextTick callback), but that throw lands on a
+     call stack disconnected from the already-wired `outputStream.pipe(ws)`
+     data flow, so yazl's pump keeps running, the archive finishes writing,
+     and `buildMp3Zip`'s promise RESOLVES as if nothing failed — arguably a
+     worse outcome than a hang, since the caller would believe the export
+     succeeded despite the injected write failure never surfacing anywhere.
+     That is the distinguishing assertion below: `raced.kind` is 'rejected'
+     with the fix line present, 'resolved' (not 'timeout') without it. */
+  it('forwards an outputStream-level write error to the rejection instead of silently succeeding', async () => {
+    const injected = new Error('mock yazl write failure (outputStream-level)');
+    triggerOutputStreamError = injected;
+    const localOutPath = join(tmpRoot, 'outputstream-level-error-test.zip');
+    try {
+      const raced = await Promise.race([
+        buildMp3Zip({ bookDir, state: makeState(), outPath: localOutPath }).then(
+          (r) => ({ kind: 'resolved' as const, value: r }),
+          (e) => ({ kind: 'rejected' as const, value: e }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+        ),
+      ]);
+      // With the listener wired, the injected error rejects buildMp3Zip's
+      // own promise with the SAME error object. Without it (see the block
+      // comment above for why), the build resolves successfully instead —
+      // either way this settles well inside the race's 1s timeout, so a
+      // 'timeout' result here would itself indicate something else broke.
+      expect(raced.kind).toBe('rejected');
+      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+    } finally {
+      triggerOutputStreamError = null;
+    }
+  }, 10_000);
+
+  /* N3 (fourth review pass, found in passing while chasing the mutation
+     gaps above): the byte-counting 'data' listener on `zip.outputStream`
+     was never detached on reject — build-portable-book.ts's equivalent
+     (`onData`, its own N6 fix) explicitly `.off('data', onData)`s for
+     exactly this reason. Left attached, an unpiped-but-still-flowing
+     outputStream after rejectBuild keeps a live 'data' consumer, so yazl's
+     internal pump keeps running at full speed with no backpressure through
+     every already-registered chapter, into a counter nobody will ever read.
+
+     Reuses the ZipFile-level error injection (`triggerZipFileError`) so the
+     pipeline rejects deterministically, then inspects the captured ZipFile
+     instance's `outputStream` — a listener count of 0 for 'data' is the
+     direct, black-box-observable signal that the counter stopped
+     consuming; deleting the `.off('data', onData)` call in
+     build-mp3-zip.ts leaves this at 1 (never removed) and reddens this
+     test without needing to observe `bytes` itself, which isn't exposed
+     outside the module. */
+  it('stops consuming outputStream data once the pipeline has already rejected (N3)', async () => {
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level, N3)');
+    triggerZipFileError = injected;
+    const localOutPath = join(tmpRoot, 'n3-data-leak-test.zip');
+    try {
+      await expect(
+        buildMp3Zip({ bookDir, state: makeState(), outPath: localOutPath }),
+      ).rejects.toBe(injected);
+    } finally {
+      triggerZipFileError = null;
+    }
+
+    expect(lastZipFile).not.toBeNull();
+    expect(lastZipFile!.outputStream.listenerCount('data')).toBe(0);
+  }, 10_000);
+
+  /* Mutation-testing finding (fourth review pass): `pipeline.rejectBuild(e)`
+     in buildMp3Zip's own catch block (the one wrapping the per-chapter
+     loop) had no test — build-codec-zip.ts's equivalent IS covered (its
+     "an abort actually stops the write" test), mp3-zip's was not.
+
+     This is a DIFFERENT call site than every other test above: those cover
+     the readStream/ws/zip/outputStream 'error' forwarders, all of which
+     also route through `rejectBuild`, but none of which exercises THIS
+     particular catch — the one that fires when `signal?.throwIfAborted()`
+     itself throws a plain AbortError with no 'error' event involved at
+     all. A naive "does the build reject with AbortError" assertion would
+     NOT catch this mutant: `throw e;` on the very next line re-throws
+     regardless of whether `pipeline.rejectBuild(e)` ran, so the OUTER
+     promise's rejection value is identical either way. The actual,
+     mutation-sensitive side effect is what `rejectBuild` does to the write
+     pipeline — unpipe `zip.outputStream` from `ws` and `ws.destroy()` —
+     which is directly observable via `lastWriteStream` (the same
+     `createWriteStream` wrapper the nit (f) test above uses) without
+     needing a large fixture or a real-time growth window: with the catch's
+     `pipeline.rejectBuild(e)` deleted, nothing ever destroys `ws` on this
+     path (the loop never reaches `zip.end()`, so there's no natural
+     'finish'/'close' either), so `lastWriteStream.destroyed` stays `false`
+     even though `buildMp3Zip` has already rejected. */
+  it('destroys the write stream when the build aborts mid-loop (pipeline.rejectBuild in the catch)', async () => {
+    const controller = new AbortController();
+    lastWriteStream = null;
+    const localOutPath = join(tmpRoot, 'abort-catch-rejectbuild-test.zip');
+    let rejection: unknown = null;
+    try {
+      await buildMp3Zip({
+        bookDir,
+        state: makeState(),
+        outPath: localOutPath,
+        signal: controller.signal,
+        // Abort partway through the first chapter, mirroring build-codec-
+        // zip.test.ts's "abort from the first onProgress" repro — the NEXT
+        // iteration's `signal?.throwIfAborted()` is what actually throws.
+        onProgress: () => {
+          controller.abort();
+        },
+      });
+    } catch (e) {
+      rejection = e;
+    }
+    expect((rejection as Error)?.name).toBe('AbortError');
+    expect(lastWriteStream).not.toBeNull();
+    expect(lastWriteStream!.destroyed).toBe(true);
+  }, 10_000);
 });
 
 describe('createZipWritePipeline', () => {
@@ -441,19 +599,39 @@ describe('createZipWritePipeline', () => {
     }
   });
 
+  /* Placebo fix (fourth review pass): this test's name claims it resolves
+     only once the write stream is "genuinely closed, not merely flushed",
+     but the body only ever asserted `existsSync(outPath)` — which `finish`
+     satisfies exactly as well as `close` does (the file exists, and its
+     bytes are on disk, well before the fd is actually released). Changing
+     `ws.on('close', ...)` to `ws.on('finish', ...)` in createZipWritePipeline
+     left this test green, silently defeating the whole point of the nit
+     (f)/N1 fix history above.
+
+     `ws.closed` is the direct, platform-independent signal this test was
+     supposed to check: confirmed empirically (see this PR's dev notes) that
+     a plain `fs.WriteStream` reports `.closed === false` at the moment
+     `'finish'` fires and only flips to `true` once `'close'` actually
+     fires — `finish` means bytes are flushed to the OS, `close` means the
+     fd itself has been released via the async autoClose `fs.close()`
+     round-trip, which is a genuinely later tick. Reading `lastWriteStream`
+     via the `createWriteStream` wrapper at the top of this file (same
+     mechanism nit (f)'s test above uses) makes that flag observable from
+     outside the pipeline's own API. */
   it('resolves only once the write stream is genuinely closed, not merely flushed', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-close-'));
     try {
       const outPath = join(dir, 'out.zip');
       const zip = new ZipFile();
+      lastWriteStream = null;
       const pipeline = createZipWritePipeline(outPath, zip);
+      expect(lastWriteStream).not.toBeNull();
       zip.end();
       await pipeline.donePromise;
-      // If the promise resolved on 'finish' rather than 'close', the fd
-      // could still be open here — assert the file is at least readable
-      // with its final byte count settled (a `close`d stream guarantees
-      // this; a merely-`finish`ed one does not, on every platform, since
-      // autoClose can still be pending).
+      // The direct signal that the fd itself was released — `finish` alone
+      // (bytes flushed, fd possibly still open) would NOT satisfy this;
+      // only the `'close'` event flips it.
+      expect(lastWriteStream!.closed).toBe(true);
       expect(existsSync(outPath)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
