@@ -32,6 +32,9 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  /* Reset here, not in the test body: a second test added to this file would
+     otherwise silently inherit the first's mockImplementation. */
+  fetchMock.mockReset();
   // Clear any previous sample file so each test starts clean.
   await rm(stats.vramStatsFilePath(), { force: true });
   // Ensure the handoff protocol dirs exist (protocol.ts writes prompts here).
@@ -40,6 +43,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  /* restoreAllMocks only undoes vi.spyOn mocks — the vi.stubGlobal('fetch')
+     below needs its own teardown, matching ollama.test.ts. */
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -122,7 +128,6 @@ vi.mock('undici', async (importOriginal) => {
 
 describe('OllamaAnalyzer — VRAM sampling (CASTWRIGHT_VRAM_SAMPLE=1)', () => {
   it('records an analyzer VRAM sample after a successful chat', async () => {
-    fetchMock.mockReset();
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).endsWith('/api/ps')) {
         return {

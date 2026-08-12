@@ -25,7 +25,18 @@ function makeApp() {
   return app;
 }
 
-const fetchMock = vi.fn();
+/* This router uses BOTH fetches: the warm POST to /api/generate goes through
+   undici's (it carries ANALYZER_DISPATCHER so a long cold load isn't cut off
+   at undici's hidden 300s headersTimeout), while the /api/ps and /api/tags
+   probes stay on the global one — they run on 2s budgets where the cap can
+   never bite. One shared mock serves both so every existing assertion on
+   `fetchMock.mock.calls` keeps working regardless of which transport a given
+   call used. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -248,6 +259,39 @@ function generateCallBody(): Record<string, unknown> | undefined {
   const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/api/generate'));
   return call ? JSON.parse(call[1].body) : undefined;
 }
+
+describe('warmOllamaModel — the warm POST must outlive undici\'s hidden 300s cap', () => {
+  /* The warm call is `stream: false` against /api/generate, so Ollama sends no
+     response headers until the model is fully resident. Left on a
+     dispatcher-less fetch it inherits undici's 300s `headersTimeout`, which
+     silently preempts analyzer.ollama.warmTimeoutMs — a knob whose own help
+     text invites raising it past 300s for a large model on a slow disk, and
+     which registry.ts caps with `min: 1000` and NO max. The resulting
+     `TypeError: fetch failed` is not an AbortError, so the route reports
+     `connError` → "Can't reach Ollama … Is the daemon running?" about a
+     daemon that is running and still loading, defeating the
+     load_timeout-vs-unreachable split this function exists to make. */
+  it('passes a dispatcher on the /api/generate warm POST, so the configured timeout is the only budget', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve({ ok: true, json: async () => ({ models: [{ name: 'qwen3.5:9b' }] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await warmOllamaModel('qwen3.5:9b');
+
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/api/generate'));
+    expect(call, 'the warm POST should have been issued').toBeDefined();
+    const init = call![1] as { dispatcher?: unknown; signal?: AbortSignal };
+    /* Without a dispatcher undici applies its 300s default and the operator's
+       larger warmTimeoutMs is unreachable. */
+    expect(init.dispatcher, 'warm POST must carry ANALYZER_DISPATCHER').toBeDefined();
+    /* And the route's own AbortController must still be the live budget — the
+       dispatcher removes the hidden cap, it must not remove cancellation. */
+    expect(init.signal).toBeDefined();
+  });
+});
 
 describe('warmOllamaModel (Part 2 — patient warm)', () => {
   it('connection refusal → unreachable, reported fast (warm POST skipped)', async () => {
