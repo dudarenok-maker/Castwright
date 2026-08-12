@@ -66,6 +66,7 @@ import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
 /* #1951 — the clone's own manifest language, from the reference clip. */
@@ -1861,7 +1862,18 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
+    /* #2260 FINAL ROUND (B2) — this route is TWO locks deep
+       (`library-voice:<uuid>` → `withCastLock(bookDir)`), and since #2260 either
+       acquisition can expire on ordinary contention where it previously hung.
+       `(e as Error).message` then handed the client
+       `withKeyLock: timed out … "<ABSOLUTE PATH>\.audiobook\cast.json" — either
+       a cast-lock.ts rule 1 …`, over a LAN this app serves by design. The leak
+       is NEW to #2260: before it, that request hung and there was no error to
+       serialise. `requestFailureMessage` curates that one class and leaves every
+       other body exactly as it was; the raw error still goes to the log above. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Voice library assign failed.'),
+    });
   }
 });
 
@@ -1961,7 +1973,11 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
     });
   } catch (e) {
     console.error('[voice-library] unassign failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library unassign failed.' });
+    /* #2260 FINAL ROUND (B2) — the third of this file's three lock-taking
+       handlers: the unassign's own `withCastLock` above. Same curation. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Voice library unassign failed.'),
+    });
   }
 });
 
@@ -2112,9 +2128,12 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: 
    worst-case acquisition budget is (N + 1) × 10s for N books. It is also the
    longest holder of `library-voice:<uuid>` (see file-lock.ts's budget note),
    so on a large library a concurrent `/assign` on the same uuid is the most
-   likely way a user ever meets that error WITHOUT any rule having been broken
-   — and `/assign`'s catch surfaces `(e as Error).message` verbatim in its 500,
-   so what they see is the raw lock-timeout string. */
+   likely way a user ever meets that error WITHOUT any rule having been broken.
+   Both catches — `/assign`'s and this one — used to answer with
+   `(e as Error).message` verbatim, so what a user saw for that entirely normal
+   contention was the raw lock-timeout string, absolute workspace path and all;
+   both now return the curated `LOCK_CONTENTION_REQUEST_ERROR` instead (see each
+   handler). */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
   const { voiceUuid } = req.params;
   try {
@@ -2151,7 +2170,13 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
     });
   } catch (e) {
     console.error('[voice-library] delete failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Voice library delete failed.' });
+    /* #2260 FINAL ROUND (B2) — the deepest lock nesting in the codebase (N+1
+       acquisitions for N confirmed books, see the route comment above), so this
+       is the site MOST likely to produce the class, and it leaked the cast-lock
+       key — an absolute workspace path — the same way `/assign` did. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Voice library delete failed.'),
+    });
   }
 });
 

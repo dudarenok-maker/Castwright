@@ -38,6 +38,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
@@ -688,9 +689,13 @@ qwenVoiceRouter.post(
       if (e instanceof GpuBusyError) {
         return res.status(409).json({ error: e.message, code: 'gpu_busy' });
       }
-      return res
-        .status(httpStatusForSidecarError(e))
-        .json({ error: (e as Error).message || 'Voice design failed.' });
+      /* #2260 FINAL ROUND (B2) — `ensureCharacterVoiceUuid` and
+         `persistEmotionVariant` both take cast locks on this path (the design
+         lock itself is a different, un-timed mutex and cannot produce the
+         class). Same curation as every other whole-request site. */
+      return res.status(httpStatusForSidecarError(e)).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Voice design failed.'),
+      });
     }
   },
 );

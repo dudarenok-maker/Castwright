@@ -199,7 +199,39 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
-const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
+const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+  '../workspace/file-lock.js'
+);
+
+/* #2260 FINAL ROUND (B2) — the bar every terminal `error` event in this file
+ * now has to clear, in one place.
+ *
+ * WHAT CHANGED AND WHY. These fixtures used to assert the OPPOSITE: that the
+ * terminal message CONTAINED the lock key and the phrase `rule 4`, on the
+ * reasoning that "the message that names the lock key and both cast-lock rules
+ * rides through the classifier intact — that is what makes it diagnosable".
+ * The diagnosis is real, but the CHANNEL was wrong. `endJob(job, {kind:
+ * 'error', message})` fans that string out over SSE to every subscriber of the
+ * analysis stream, including a phone paired over the LAN — and every key this
+ * class can carry embeds an absolute path inside the user's workspace
+ * (`withCastLock` keys on `castJsonPath(bookDir)` outright). So the fixtures
+ * were pinning a leak in place. The raw error still reaches the SERVER LOG at
+ * both jobs, which is where it was ever useful; the client gets the curated
+ * sentence and a `lock-contention` code it can look up in Help.
+ *
+ * Deliberately asserts the constant BY VALUE, not by phrase: a reword has to
+ * move `LOCK_CONTENTION_REQUEST_ERROR` and these assertions together, and
+ * cannot quietly reintroduce `err.message`. */
+function expectCuratedContentionTerminal(
+  terminal: { code?: string; message?: string } | undefined,
+  leakedKey: string,
+): void {
+  expect(terminal?.code).toBe('lock-contention');
+  expect(terminal?.message).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  expect(terminal?.message).not.toContain(leakedKey);
+  expect(terminal?.message).not.toContain('withKeyLock');
+  expect(terminal?.message).not.toContain('rule 4');
+}
 const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
 type AnalysisJob = import('./analysis.js').AnalysisJob;
 
@@ -498,10 +530,10 @@ describe('runMainAnalyzerJob persist block — lock timeout vs disk fault (#2260
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
-        // The message that names the lock key and both cast-lock rules rides
-        // through the classifier intact — that is what makes it diagnosable.
-        expect(terminal?.message).toContain('cast-id-history:/w/book');
-        expect(terminal?.message).toContain('rule 4');
+        /* (3) AND NOTHING ABOUT THE FILESYSTEM WENT OUT WITH IT. See
+           `expectCuratedContentionTerminal` — this pair of lines used to assert
+           the exact opposite. */
+        expectCuratedContentionTerminal(terminal, 'cast-id-history:/w/book');
       } finally {
         await run.cleanup();
       }
@@ -625,12 +657,11 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
         expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
         expect(run.cast.characters.map((c) => c.id)).toContain('nova');
 
-        // (2) And the job failed loudly, with the diagnosable message intact.
+        // (2) And the job failed loudly, with a body that leaks nothing.
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
-        expect(terminal?.message).toContain('cast-id-history:/w/subset');
-        expect(terminal?.message).toContain('rule 4');
+        expectCuratedContentionTerminal(terminal, 'cast-id-history:/w/subset');
       } finally {
         await run.cleanup();
       }
@@ -740,7 +771,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
-        expect(terminal?.message).toContain('cast:/w/authoritative');
+        expectCuratedContentionTerminal(terminal, 'cast:/w/authoritative');
       } finally {
         await run.cleanup();
       }
@@ -827,7 +858,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
-        expect(terminal?.message).toContain('cast:/w/subset-authoritative');
+        expectCuratedContentionTerminal(terminal, 'cast:/w/subset-authoritative');
       } finally {
         await run.cleanup();
       }

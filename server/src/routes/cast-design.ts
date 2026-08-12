@@ -37,7 +37,7 @@ import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { itemFailureReason } from '../workspace/file-lock.js';
+import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
@@ -798,11 +798,16 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
   });
 
   void runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
-    /* Defensive — the loop catches per-character; a throw here is unexpected. */
+    /* Defensive — the loop catches per-character; a throw here is unexpected.
+       #2260 FINAL ROUND (B2) — curated all the same. The REACHABLE contention
+       path in this route is per-character and already reports
+       `LOCK_CONTENTION_ITEM_REASON`; this outer handler is the backstop, and a
+       backstop that leaks is still a leak. No fixture drives it (nothing is
+       known to reach it), so this is consistency, not a covered fix. */
     endJob(job, {
       type: 'error',
       code: 'unknown',
-      message: (e as Error).message || 'Cast design failed.',
+      message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
     });
   });
 });

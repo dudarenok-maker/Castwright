@@ -21,7 +21,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
-import { itemFailureReason } from '../workspace/file-lock.js';
+import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
 import { readJson } from '../workspace/state-io.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
@@ -93,7 +93,16 @@ voiceStyleRouter.post(
       console.error('[voice-style] generate failed', e);
       return res
         .status(500)
-        .json({ error: (e as Error).message || 'Voice-style generation failed.' });
+        .json({
+          error: requestFailureMessage(
+            e,
+            /* #2260 FINAL ROUND (B2) — `writeVoiceStylePersona` takes a cast
+               lock. The BATCH sibling reports contention per item through
+               `itemFailureReason`; this single-character route fails the whole
+               request, so it takes the whole-request counterpart. */
+            (e as Error).message || 'Voice-style generation failed.',
+          ),
+        });
     }
   },
 );

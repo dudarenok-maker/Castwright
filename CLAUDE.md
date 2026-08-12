@@ -531,18 +531,34 @@ Design rationale:
   diverges nothing (#2292). A NINTH site fails loud in a different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
-  because its leftover, uniquely, does NOT self-heal — no `supersededBy` prune
-  pass matches its shape — so the body names a retry rather than a later
-  analysis. Only the five batch routes (`script-review`, `cast-design`,
+  because its leftover is not something a user can rely on anything else
+  clearing — the two `supersededBy` prune passes key on conditions an orphaned
+  id does not ordinarily meet (they fire only if a later analysis re-mints that
+  id as a live cast row, or if the target leaves the roster), so the body names
+  a retry rather than a later analysis. Only the five batch routes
+  (`script-review`, `cast-design`,
   `voice-style`, `cast-series-patch`, `voice-override-linked`) are neither
   swallowed nor escalated: they keep their per-item failure shape inside an
   otherwise-successful 200/207 and report contention through `itemFailureReason`
-  (`workspace/file-lock.ts`). **A failure body that escalates never carries the
-  error's own message** — a `LockAcquisitionTimeoutError` names the lock key,
+  (`workspace/file-lock.ts`). **No client-facing failure ever carries a lock
+  timeout's own message** — not an escalating body, not a per-item reason, and
+  not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
   which embeds the absolute workspace path, and this app is served over LAN
-  HTTPS; the curated `LOCK_CONTENTION_REQUEST_ERROR` /
-  `LOCK_CONTENTION_ITEM_REASON` go to the client and the raw error goes to the
-  log (#2292 round 5). See each site's own comment.
+  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  needs exactly one of them: **per-item** failures inside a 200/207 use
+  `itemFailureReason` (the five batch routes); a handler that fails the
+  **whole request** uses `requestFailureMessage`, which curates this one class
+  and leaves every other body verbatim — `git grep requestFailureMessage`
+  enumerates all eleven sites (`book-state` ×3, `voice-library` ×3, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `cast-design`'s defensive
+  outer), alongside the two merge routes' own explicit
+  `LOCK_CONTENTION_REQUEST_ERROR` branch; and
+  both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
+  class to `code: 'lock-contention'` with the same curated sentence and no
+  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  to the log at every one of them. A new handler downstream of any lock is
+  wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
+  final round). See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

@@ -28,6 +28,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -190,7 +191,12 @@ async function runSingleDesign(
       voiceUuid: characterForDesign.voiceUuid,
     });
   } catch (e) {
-    const message = (e as Error).message || 'Voice design failed.';
+    /* #2260 FINAL ROUND (B2) — this try encloses `ensureCharacterVoiceUuid` and
+       `applyOverrideToCastFiles`, both of which take cast locks, so the raw
+       message here could be the absolute path of the book's cast.json, sent
+       over SSE. Curated like every other whole-request site; a non-timeout
+       failure keeps its own message. */
+    const message = requestFailureMessage(e, (e as Error).message || 'Voice design failed.');
     endJob(job, { type: 'error', code: 'design_failed', message });
   } finally {
     clearInterval(heartbeat);

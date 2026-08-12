@@ -55,6 +55,33 @@ vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   };
 });
 
+/* #2260 FINAL ROUND (B1) — the OTHER origin of a `LockAcquisitionTimeoutError`
+   out of `performCastMerge`, and the one no fixture in this file reached:
+   `performCastMerge`'s whole body is `withCastLock(bookDir, …)`, so the OUTER
+   acquisition can expire before the callback runs at all. Every timeout fixture
+   above injects at `retire.toThrow`, which is INSIDE that callback and
+   therefore only ever produces the merge-landed state — so the accept route's
+   "dismiss on the error class" branch was only ever measured against the half
+   of its input where dismissing is correct.
+
+   The mock reproduces the real expiry exactly: `fn` is NEVER called (that is
+   `withKeyLock`'s own hard rule — falling through to `fn()` on expiry would run
+   the critical section unlocked), so nothing is read and nothing is written.
+   Mocked rather than genuinely contended for the same reason the header gives
+   for `retire`: the real budget is 10s and vitest's testTimeout is 15s. */
+const outerLock = vi.hoisted(() => ({ toThrow: null as unknown }));
+
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
+  return {
+    ...actual,
+    withCastLock: async <T>(bookDir: string, fn: () => Promise<T>): Promise<T> => {
+      if (outerLock.toThrow) throw outerLock.toThrow;
+      return actual.withCastLock(bookDir, fn);
+    },
+  };
+});
+
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
   return {
@@ -229,6 +256,7 @@ beforeAll(async () => {
 beforeEach(() => {
   retire.toThrow = null;
   cacheLoad.toThrow = null;
+  outerLock.toThrow = null;
   seedDisk();
 });
 
@@ -368,6 +396,170 @@ describe('POST merge-suggestions/accept — a deferred timeout still dismisses (
     const ok = await callAccept();
     expect(ok.status).toBe(200);
     expect(readSuggestions()).toHaveLength(0);
+  });
+});
+
+/* #2260 FINAL ROUND (B1) — the origin the describe above never reached, and
+ * the bug that hid behind the gap.
+ *
+ * THE GAP. Every accept-route timeout fixture above injects at
+ * `retire.toThrow`, i.e. inside `performCastMerge`'s `withCastLock` callback,
+ * after cast.json is written. That is the merge-LANDED state and the only one
+ * they measure. `performCastMerge` is itself `withCastLock(bookDir, …)`, so the
+ * SAME error class also escapes it from the OUTER acquisition, where the
+ * callback never ran and nothing whatsoever was written.
+ *
+ * THE BUG. Round 4's accept route discriminated on `isLockAcquisitionTimeout`
+ * alone, and its own comment stated the assumption out loud ("Dismissing here
+ * is correct precisely BECAUSE the merge landed"). True of one origin, false of
+ * the other. `dismissSuggestion` is a plain load-filter-`writeJsonAtomic`, so
+ * contention on `cast:<bookDir>` — the exact condition #2260 exists to surface
+ * — meant: user presses Accept, the outer lock expires at 10s, NOTHING is
+ * written, the suggestion is dismissed anyway, and the curated body tells them
+ * to "reload to see whether the change landed, and retry if it did not". They
+ * reload: it did not land, and there is nothing left to retry. Only a manual
+ * merge or a re-analysis recovers it.
+ *
+ * THE SHAPE OF THE FIX, and what these fixtures pin: `performCastMerge` stamps
+ * a marker on the parked error at the deferred rethrow and nowhere else, and
+ * the route requires the MARKER, not the class. So the pair below asserts the
+ * two origins produce opposite suggestion outcomes while producing the SAME
+ * curated 500 — the discrimination is about which write is owed, not about what
+ * the user is told.
+ */
+describe('merge routes — an OUTER cast-lock timeout wrote nothing (#2260 final round, B1)', () => {
+  function readSuggestions(): Array<{ sourceId: string; targetId: string }> {
+    const path = join(bookDir, '.audiobook', 'cast-merge-suggestions.json');
+    if (!existsSync(path)) return [];
+    return (
+      (JSON.parse(readFileSync(path, 'utf8')) as {
+        suggestions?: Array<{ sourceId: string; targetId: string }>;
+      }).suggestions ?? []
+    );
+  }
+
+  /** The inverse of `expectMergeFullyApplied` — every fact that says the merge
+   *  never happened. The outer acquisition throws before the first `readJson`,
+   *  so disk is byte-for-byte the seed. */
+  function expectMergeNeverHappened(): void {
+    const cast = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string }> };
+    expect(cast.characters.map((c) => c.id)).toContain(SOURCE_ID);
+    expect((readCache().stage1?.characters ?? []).map((c) => c.id)).toContain(SOURCE_ID);
+    expect(readJournal()).toBeNull();
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('POST merge-suggestions/accept — the suggestion SURVIVES, because the merge never ran', async () => {
+    outerLock.toThrow = new LockAcquisitionTimeoutError(
+      join(bookDir, '.audiobook', 'cast.json'),
+      10_000,
+    );
+
+    const res = await request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    /* Same curated 500 the deferred case gets — the user-facing half does not
+       discriminate, and must not start to. */
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(res.body.error).not.toContain(bookDir);
+
+    /* Nothing was written... */
+    expectMergeNeverHappened();
+    /* ...INCLUDING the dismiss. This is the assertion the bug reddens: with the
+       round-4 class-only branch the file comes back empty here, and the user is
+       told to retry something that no longer exists. */
+    expect(readSuggestions()).toHaveLength(1);
+  });
+
+  it('POST merge-suggestions/accept — a second Accept therefore still works', async () => {
+    outerLock.toThrow = new LockAcquisitionTimeoutError(
+      join(bookDir, '.audiobook', 'cast.json'),
+      10_000,
+    );
+    const first = await request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+    expect(first.status).toBe(500);
+    /* The precondition for a retry existing at all — asserted HERE too, not
+       only in the test above, so this fixture is a discriminator rather than a
+       narration of the happy path: with the class-only branch the file is
+       already empty at this point and the rest of this test is vacuous. */
+    expect(readSuggestions()).toHaveLength(1);
+
+    /* The contention clears — the point of "retry if it did not". Without the
+       surviving suggestion there is no button to press, which is why the
+       assertion above is about the FILE and not only about the response. */
+    outerLock.toThrow = null;
+    const second = await request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expect(second.status).toBe(200);
+    expectMergeFullyApplied();
+    expect(readSuggestions()).toHaveLength(0);
+  });
+
+  it('POST /cast/merge — the same origin curates identically and writes nothing', async () => {
+    outerLock.toThrow = new LockAcquisitionTimeoutError(
+      join(bookDir, '.audiobook', 'cast.json'),
+      10_000,
+    );
+
+    const res = await request(mergeApp)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    /* The key here IS the absolute cast.json path (that is literally what
+       `withCastLock` keys on), so the no-leak bar is at its most load-bearing
+       on this origin. */
+    expect(res.body.error).not.toContain(bookDir);
+    expect(res.body.error).not.toContain('withKeyLock');
+    expectMergeNeverHappened();
+  });
+
+  it('the marker is not something any other escape carries', async () => {
+    /* The fail-closed direction, asserted directly on `performCastMerge`
+       rather than through a route: only the DEFERRED rethrow is marked, so a
+       future caller that gains a follow-up write cannot be fooled by an outer
+       expiry, and the two cases stay distinguishable even if both routes are
+       rewritten. */
+    const { didCastMergeApply } = await import('./cast-merge.js');
+    const { isLockAcquisitionTimeout } = await import('../workspace/file-lock.js');
+
+    outerLock.toThrow = new LockAcquisitionTimeoutError(
+      join(bookDir, '.audiobook', 'cast.json'),
+      10_000,
+    );
+    let outerErr: unknown = null;
+    await runMerge().catch((e: unknown) => {
+      outerErr = e;
+    });
+    expect(isLockAcquisitionTimeout(outerErr)).toBe(true);
+    expect(didCastMergeApply(outerErr)).toBe(false);
+
+    outerLock.toThrow = null;
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+    let deferredErr: unknown = null;
+    await runMerge().catch((e: unknown) => {
+      deferredErr = e;
+    });
+    expect(isLockAcquisitionTimeout(deferredErr)).toBe(true);
+    expect(didCastMergeApply(deferredErr)).toBe(true);
   });
 });
 

@@ -7,6 +7,8 @@ import {
   isLockAcquisitionTimeout,
   itemFailureReason,
   LOCK_CONTENTION_ITEM_REASON,
+  requestFailureMessage,
+  LOCK_CONTENTION_REQUEST_ERROR,
 } from './file-lock.js';
 
 /* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
@@ -310,5 +312,51 @@ describe('itemFailureReason (#2292)', () => {
   it('never leaks the raw lock message, which is what read as a broken item', () => {
     expect(LOCK_CONTENTION_ITEM_REASON).not.toContain('withKeyLock');
     expect(LOCK_CONTENTION_ITEM_REASON).toContain('contention');
+  });
+});
+
+/* #2260 FINAL ROUND (B2) — the WHOLE-REQUEST counterpart, same three
+ * directions. Route-level coverage lives in
+ * `routes/lock-timeout-response-bodies.test.ts`, which drives six real routes
+ * through a real lock seam; this describe pins the decision itself, including
+ * the non-Error inputs a route test cannot easily produce.
+ */
+describe('requestFailureMessage (#2260 final round)', () => {
+  it('curates a lock-acquisition expiry, whatever produced it', () => {
+    expect(
+      requestFailureMessage(
+        new LockAcquisitionTimeoutError('C:\Users\me\books\B\cast.json', 10_000),
+        'Voice library assign failed.',
+      ),
+    ).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    /* `code`, not `instanceof` — a foreign copy of the class still
+       discriminates, because an `instanceof` miss fails OPEN straight back to
+       returning the key. */
+    expect(
+      requestFailureMessage(
+        Object.assign(new Error('withKeyLock: timed out'), { code: LOCK_ACQUISITION_TIMEOUT_CODE }),
+        'boom',
+      ),
+    ).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  });
+
+  it('passes an ordinary failure through untouched', () => {
+    /* The half that reddens if the fix is over-applied into "stop returning
+       e.message". These handlers have always surfaced an ordinary error's own
+       message and this change is not the one that revisits that. */
+    expect(
+      requestFailureMessage(Object.assign(new Error('nope'), { code: 'EPERM' }), 'nope'),
+    ).toBe('nope');
+    expect(requestFailureMessage(null, 'Failed to write book state.')).toBe(
+      'Failed to write book state.',
+    );
+    expect(requestFailureMessage('ELOCKACQUIRETIMEOUT', 'fallback')).toBe('fallback');
+  });
+
+  it('the curated body names no key, no path and no internal vocabulary', () => {
+    expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('withKeyLock');
+    expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('cast.json');
+    expect(LOCK_CONTENTION_REQUEST_ERROR).not.toContain('rule');
+    expect(LOCK_CONTENTION_REQUEST_ERROR).toContain('contention');
   });
 });

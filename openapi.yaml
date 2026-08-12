@@ -6847,6 +6847,7 @@ components:
         - gpu-acceleration-unavailable
         - voice-not-designed
         - cloned-voice-broken
+        - lock-contention
 
     ChapterQaVerdict:
       type: object

@@ -120,9 +120,18 @@ export function isLockAcquisitionTimeout(err: unknown): boolean {
    phrase their ordinary fallbacks differently and five copies of this one
    would drift apart the first time it was reworded. Deliberately says nothing
    about which file or key: the five sites contend on TWO lock classes
-   (`cast:` — cast-design, cast-series-patch, voice-override-linked, and
-   voice-style's per-character locks — and `script-review-ledger:`), and the
-   thrown error's own message already names the key for the server log.
+   (`cast:` — cast-design, cast-series-patch, voice-override-linked and
+   voice-style — and `script-review-ledger:`), and the thrown error's own
+   message already names the key for the server log.
+
+   Final-round correction: this list previously read "voice-style's
+   per-character locks". There is no such class. `writeVoiceStylePersona`
+   (`routes/cast-design.ts`) takes `withCastLock(bookDir)` — a per-BOOK lock,
+   acquired once per character as that route iterates. The conclusion is
+   unaffected (it is a `cast:` key either way, and book-scoped, which is what
+   makes the "another operation on this book" wording below accurate), but a
+   paragraph whose whole job is correcting a lock-class claim should not
+   introduce one of its own.
 
    Round 5 correction: an earlier version of this paragraph said THREE classes
    and listed `library-voice:` as the third. It is not reachable from any of
@@ -173,6 +182,32 @@ export const LOCK_CONTENTION_REQUEST_ERROR =
  *  the words that go in it. */
 export function itemFailureReason(err: unknown, fallback: string): string {
   return isLockAcquisitionTimeout(err) ? LOCK_CONTENTION_ITEM_REASON : fallback;
+}
+
+/** The WHOLE-REQUEST counterpart of `itemFailureReason`: the body a
+ *  client-facing 500 should carry — `LOCK_CONTENTION_REQUEST_ERROR` for a
+ *  lock-acquisition expiry, `fallback` (usually the route's existing
+ *  `err.message || '<route wording>'`) for everything else.
+ *
+ *  #2260 FINAL ROUND (B2) — exists because the leak was NOT confined to the two
+ *  merge routes the round-5 convention was written against. Ten handlers ended
+ *  with `res.status(500).json({ error: (e as Error).message || '…' })` on a path
+ *  that takes a lock, and #2260 is what made that reachable: before it, a
+ *  contended lock HUNG, so there was no error to serialise. Every one of those
+ *  keys on a path — `withCastLock` keys on `castJsonPath(bookDir)` outright —
+ *  and this app is served over LAN HTTPS by design.
+ *
+ *  ONE helper rather than ten hand-written branches, for the same anti-drift
+ *  reason `itemFailureReason` exists, plus a second: a single call is what makes
+ *  the convention greppable. `git grep 'requestFailureMessage'` enumerates every
+ *  curated whole-request site; a hand-rolled `if` at each would not.
+ *
+ *  Deliberately preserves the fallback verbatim: this is not a decision to stop
+ *  returning an ordinary error's own message, which is a separate judgement
+ *  about a separate class. Only the class ordinary contention can now produce
+ *  is replaced. */
+export function requestFailureMessage(err: unknown, fallback: string): string {
+  return isLockAcquisitionTimeout(err) ? LOCK_CONTENTION_REQUEST_ERROR : fallback;
 }
 
 export async function withKeyLock<T>(

@@ -60,6 +60,50 @@ export interface CastMergeResult {
   sourceId: string;
 }
 
+/* #2260 FINAL ROUND (B1) — the marker that tells the two origins of a
+   `LockAcquisitionTimeoutError` out of `performCastMerge` apart.
+
+   `performCastMerge`'s whole body is `withCastLock(bookDir, …)`, so this class
+   escapes it from TWO places, and the disk state at each is the exact opposite
+   of the other:
+
+     - the OUTER acquisition (`withCastLock` itself, before the `readJson` on
+       the first line of the callback) — the callback never ran, NOTHING was
+       written; and
+     - the DEFERRED rethrow at the very end — the merge is fully applied.
+
+   Round 4's accept route discriminated on the error CLASS alone and dismissed
+   the suggestion on both, which destroys the suggestion for a merge that never
+   happened (`dismissSuggestion` is a load-filter-write; only a fresh dedup pass
+   can put it back). Contention on `cast:<bookDir>` — the very condition #2260
+   exists to surface — was enough to reach it.
+
+   Stamped as an own property on the parked error rather than returned in the
+   result: `performCastMerge` must keep THROWING (round 4's own decision — a
+   returned timeout makes the loud path opt-in, so a future caller that forgets
+   to check it silently converts a timeout back into a 200), and the caller
+   needs one more bit than the class carries. Non-enumerable so it never shows
+   up in a `JSON.stringify` of the error in a log line.
+
+   `didCastMergeApply` FAILS CLOSED, and that direction is deliberate: an
+   unmarked escape means "no follow-up write", so a future rethrow added
+   somewhere in the middle of this function (or a marker that fails to survive
+   some wrapper) leaves the suggestion in place — recoverable by pressing Accept
+   again — rather than deleting it. */
+const CAST_MERGE_APPLIED = 'castMergeApplied';
+
+/** True only for the DEFERRED lock-timeout rethrow out of `performCastMerge`,
+ *  i.e. the case where the merge IS fully applied on disk. False for an outer
+ *  `withCastLock` acquisition expiry, where nothing was written. See the
+ *  comment above for why this is an own property and why it fails closed. */
+export function didCastMergeApply(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as Record<string, unknown>)[CAST_MERGE_APPLIED] === true
+  );
+}
+
 /** Shared merge parameters — passed by both the manual-merge route and the
     accept-suggestion route so the logic lives in exactly one place. */
 export interface CastMergeArgs {
@@ -379,9 +423,27 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        `cast-merge-suggestions.ts`'s accept route (its `dismissSuggestion`
        never ran, so the merged-away character kept a live suggestion that
        404'd on every subsequent Accept). Both callers turn this into a 500
-       carrying the message that names the lock key and both cast-lock rules;
-       see that route's own handler for the accept flow's extra step. */
-    if (identityLockTimeout !== undefined) throw identityLockTimeout;
+       carrying the curated `LOCK_CONTENTION_REQUEST_ERROR` (round 5 — NOT the
+       error's own message, which names the lock key and hence the absolute
+       workspace path); see that route's own handler for the accept flow's
+       extra step.
+
+       FINAL ROUND (B1) — the contract above is only safe for a caller that can
+       tell this rethrow apart from an OUTER `withCastLock` expiry, which
+       escapes the same function with the same class and NOTHING written. Stamp
+       it, so "the merge is fully applied" is a fact the caller can test rather
+       than an assumption it has to make. See `CAST_MERGE_APPLIED` above. */
+    if (identityLockTimeout !== undefined) {
+      if (typeof identityLockTimeout === 'object' && identityLockTimeout !== null) {
+        Object.defineProperty(identityLockTimeout, CAST_MERGE_APPLIED, {
+          value: true,
+          enumerable: false,
+          configurable: true,
+          writable: true,
+        });
+      }
+      throw identityLockTimeout;
+    }
 
     return { characters: nextCharacters, sourceId };
   });
