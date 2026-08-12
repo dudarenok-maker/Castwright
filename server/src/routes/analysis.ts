@@ -2099,6 +2099,9 @@ export async function attributeChapterStage2(opts: {
      when omitted. */
   engine?: 'gemini' | 'local';
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
+  /** Fired when the coverage retry stopped early because the failure was
+      reproduced exactly — deterministic, so more attempts cannot help. */
+  onCoverageExhausted?: (attempts: number, verdict: { issues: string[] }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
   onSectionDone?: (index: number, sentenceCount: number) => void;
   /* srv-59 Task 9b — per-BOOK escalation-window budget, shared/mutable
@@ -2178,6 +2181,7 @@ export async function attributeChapterStage2(opts: {
     coverageRetries: resolveStage2CoverageRetries(),
     callForBody,
     onRetry: opts.onCoverageRetry,
+    onExhausted: opts.onCoverageExhausted,
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
@@ -4881,6 +4885,13 @@ export async function runMainAnalyzerJob(
               verdict.issues[0] ?? 'coverage'
             }); re-analysing (attempt ${attempt}).`,
           ),
+        onCoverageExhausted: (attempts, verdict) =>
+          log(
+            1,
+            `Chapter ${i + 1}/${totalChapters} — the same attribution failure reproduced exactly on ` +
+              `attempt ${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
+              `deterministically, so further re-analysis cannot help. Stopping early and flagging it.`,
+          ),
       });
       if (stage2ChunkCount > 1) {
         log(
@@ -6530,6 +6541,13 @@ export async function runSubsetAnalyzerJob(
               `Chapter ${ch.id} — attribution coverage check failed (${
                 verdict.issues[0] ?? 'coverage'
               }); re-analysing (attempt ${attempt}).`,
+            ),
+          onCoverageExhausted: (attempts, verdict) =>
+            log(
+              1,
+              `Chapter ${ch.id} — the same attribution failure reproduced exactly on attempt ` +
+                `${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
+                `deterministically, so further re-analysis cannot help. Stopping early and flagging it.`,
             ),
         });
       if (subsetChunkCount > 1) {

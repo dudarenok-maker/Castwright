@@ -252,6 +252,54 @@ describe('runStage2WithCoverageGuard', () => {
     expect(out.attempts).toBe(2);
   });
 
+  /* #2287-adjacent, found on the Ночной дозор C2/C3 acceptance run: the retry's
+     whole premise is that the loop-and-truncate defect is stochastic. On ch8 it
+     was not — five attempts across two server lifetimes all failed with the same
+     rule at the same offset. The loop burned its entire budget re-running a call
+     that provably could not succeed, then reported it as a soft "SUSPECT after
+     retries" as though it had been transient. */
+  it('stops early when a retry reproduces the previous failure EXACTLY (deterministic)', async () => {
+    const identicalFailure = () => ({ sentences: bodyOf(12).sentences.slice(0, 2) });
+    const call = vi.fn(async () => identicalFailure());
+    const onRetry = vi.fn();
+    const onExhausted = vi.fn();
+
+    const out = await runStage2WithCoverageGuard({
+      body,
+      maxRetries: 5,
+      call,
+      onRetry,
+      onExhausted,
+    });
+
+    /* Two calls, not six: the first attempt plus ONE retry that proved the
+       failure reproduces. Without the early stop this is 6. */
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(out.attempts).toBe(2);
+    expect(out.deterministicFailure).toBe(true);
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    expect(onExhausted.mock.calls[0][0]).toBe(2);
+    expect(out.coverage.ok).toBe(false); // still reported as failing, never silently accepted
+  });
+
+  it('keeps retrying while the failure signature CHANGES (a genuinely stochastic defect)', async () => {
+    /* The control for the test above: differing failures must NOT trip the
+       early stop, or the fix would defeat the retry it is protecting. */
+    const call = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ sentences: bodyOf(12).sentences.slice(0, 2) }))
+      .mockImplementationOnce(async () => ({ sentences: bodyOf(12).sentences.slice(0, 4) }))
+      .mockImplementationOnce(async () => ({ sentences: bodyOf(12).sentences }));
+    const onExhausted = vi.fn();
+
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 5, call, onExhausted });
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(out.coverage.ok).toBe(true);
+    expect(out.deterministicFailure).toBe(false);
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
+
   it('exhausts retries and returns the best (least-bad) take, still flagged', async () => {
     // attempt1: 3/12 (worse), attempt2: 8/12 (better but still <0.6? 0.67>0.6 ok) → use a clearer bad
     const veryShort = () => ({ sentences: bodyOf(12).sentences.slice(0, 2) }); // 0.17

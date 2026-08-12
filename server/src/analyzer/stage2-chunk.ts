@@ -287,6 +287,9 @@ export interface Stage2ChunkRunOptions {
   maxSplitDepth?: number;
   coverageThresholds?: Stage2CoverageThresholds;
   onRetry?: (attempt: number, verdict: Stage2CoverageVerdict) => void;
+  /** Fired when a chunk's coverage retry stopped early because the failure
+      reproduced exactly — deterministic, so the remaining budget cannot help. */
+  onExhausted?: (attempts: number, verdict: Stage2CoverageVerdict) => void;
   /** Fired once per chunk before it runs (large-chapter progress). */
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
   /** Fired AFTER a section's sentences are parsed, with the section index and
@@ -335,6 +338,7 @@ export async function runStage2ChapterChunked(
         call: () => opts.callForBody(span, preceding, lastSpeakerId),
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
+        onExhausted: opts.onExhausted,
       });
       return result.sentences;
     } catch (err) {
@@ -399,6 +403,7 @@ export async function runStage2ChapterChunked(
         call: () => opts.callForBody(opts.body, null, null),
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
+        onExhausted: opts.onExhausted,
       });
       opts.onSectionDone?.(0, result.sentences.length);
       return { sentences: result.sentences, coverage, chunkCount: 1 };
