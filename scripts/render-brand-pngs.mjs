@@ -11,9 +11,9 @@
 // rule). The script deliberately does NOT render them, so a re-run can never
 // clobber the designer's files. The render-script test pins this invariant.
 import { chromium } from '@playwright/test';
-import { readFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const ICON = resolve(root, 'brand/identity/logo/castwright-icon.svg');
@@ -96,8 +96,7 @@ export async function renderAll() {
 }
 
 // Only render when invoked directly — so the test can import JOBS without
-// launching chromium. realpath both sides to survive symlinked temp dirs.
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+// launching chromium. See scripts/lib/is-main-module.mjs (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   await renderAll();
 }

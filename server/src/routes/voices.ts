@@ -39,6 +39,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   resolveVoiceAssignment,
@@ -739,7 +740,12 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
     res.status(204).end();
   } catch (e) {
     console.error('[voices] override failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Override update failed.' });
+    /* #2260 FINAL ROUND (B2) — `applyOverrideToCastFiles` →
+       `forEachMatchingCastCharacter` takes one `withCastLock` per matching book,
+       so this handler can receive the class. Same curation. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Override update failed.'),
+    });
   }
 });
 

@@ -8,14 +8,27 @@
    needs an MP3 on disk. */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { ZipFile } from 'yazl';
-import { buildMp3Zip, createZipWritePipeline, ExportIncompleteError, sanitiseForZip } from './build-mp3-zip.js';
+import {
+  buildMp3Zip,
+  createZipWritePipeline,
+  ExportIncompleteError,
+  sanitiseForZip,
+} from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 /* Nit (f) regression (below, in the `createZipWritePipeline` describe
@@ -53,16 +66,14 @@ vi.mock('node:fs', async (importOriginal) => {
    `zip.on('error', rejectBuild)` reproduces the real bug: zero listeners,
    an `uncaughtException`, and the pipeline's promise never settling.
 
-   `triggerOutputStreamError` is the SAME mechanism aimed at a different
-   emitter: real yazl also emits `'error'` on `zip.outputStream` itself for
-   a bad write (distinct from the ZipFile-level validation failures above),
-   and `zip.outputStream.on('error', rejectBuild)` is its own separate
-   forwarding line in createZipWritePipeline — mutation testing found it had
-   no test of its own (deleting it left every test in this file green).
    `lastZipFile` captures the constructed instance so a test can also
-   inspect its `outputStream`'s listener count after rejection (N3). */
+   inspect its `outputStream`'s listener count after rejection (N3). The
+   sibling `zip.outputStream.on('error', rejectBuild)` forwarding line is
+   NOT exercised via this same constructor-time nextTick mechanism — see the
+   `createZipWritePipeline` describe block below for that test and why it's
+   injected differently (a full-`buildMp3Zip()` version through this
+   mechanism was flaky under load; see that test's own comment for why). */
 let triggerZipFileError: Error | null = null;
-let triggerOutputStreamError: Error | null = null;
 let lastZipFile: InstanceType<typeof import('yazl').ZipFile> | null = null;
 vi.mock('yazl', async (importOriginal) => {
   const real = await importOriginal<typeof import('yazl')>();
@@ -75,12 +86,6 @@ vi.mock('yazl', async (importOriginal) => {
         const err = triggerZipFileError;
         process.nextTick(() => {
           this.emit('error', err);
-        });
-      }
-      if (triggerOutputStreamError) {
-        const err = triggerOutputStreamError;
-        process.nextTick(() => {
-          this.outputStream.emit('error', err);
         });
       }
     }
@@ -396,22 +401,20 @@ describeIfFfmpeg('buildMp3Zip', () => {
     triggerZipFileError = injected;
     const localOutPath = join(tmpRoot, 'zipfile-level-error-test.zip');
     try {
-      const raced = await Promise.race([
-        buildMp3Zip({ bookDir, state: makeState(), outPath: localOutPath }).then(
-          (r) => ({ kind: 'resolved' as const, value: r }),
-          (e) => ({ kind: 'rejected' as const, value: e }),
-        ),
-        new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
-        ),
-      ]);
-      // With the listener wired, the injected error rejects buildMp3Zip's
-      // own promise with the SAME error object. Without it, the promise
-      // never settles at all — that's the 'timeout' branch, a deliberate,
-      // fast, diagnosable failure instead of waiting on vitest's own test
-      // timeout.
-      expect(raced.kind).toBe('rejected');
-      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+      // De-raced (see the `createZipWritePipeline` describe block's
+      // "outputStream-level" test comment below for the full history): no
+      // more `Promise.race` against a hand-rolled timer. That raced the
+      // per-chapter loop's real ffmpeg-tagging I/O, which is unrelated
+      // work this test doesn't control — under contention it can outrun
+      // any fixed timer even when the forwarding line is correct. With the
+      // listener wired, the injected error rejects buildMp3Zip's own
+      // promise with the SAME error object; without it, the promise never
+      // settles, and this assertion fails by vitest's own (generous,
+      // centrally configured via testTimeout in vitest.config.ts) test
+      // timeout instead — the correct red for "never settles".
+      await expect(
+        buildMp3Zip({ bookDir, state: makeState(), outPath: localOutPath }),
+      ).rejects.toBe(injected);
     } finally {
       process.off('uncaughtException', onUncaught);
       triggerZipFileError = null;
@@ -419,64 +422,7 @@ describeIfFfmpeg('buildMp3Zip', () => {
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
-  }, 10_000);
-
-  /* Mutation-testing finding (fourth review pass): `zip.outputStream.on(
-     'error', rejectBuild)` inside createZipWritePipeline — the OTHER of the
-     three error forwarders the class docstring lists, distinct from the
-     ZipFile-level one just above — had no test of its own. Deleting that
-     one line left all existing tests (this file included) green, and this
-     pipeline is now shared by buildMp3Zip, buildCodecZip, and buildCaptions
-     via createZipWritePipeline, so a regression here silently affects all
-     three builders at once.
-
-     Same timing trap as the ZipFile-level test above: emitting synchronously
-     during the ZipFile constructor would "pass" even with the fix line
-     deleted, because `new Promise(executor)`'s auto-catch of a synchronous
-     executor throw would settle the promise for JS's reasons, not this
-     pipeline's own forwarding. `process.nextTick` moves the emit outside
-     that frame, matching yazl's real internal error sites.
-
-     The failure SHAPE here differs from the ZipFile-level test above, and
-     that difference is itself informative, not a mistake: with the
-     ZipFile-level listener removed, the pipeline's promise never settles
-     (the 'timeout' branch below) because the ZipFile's own internal write
-     bookkeeping depends on that emit. With THIS listener removed, the
-     zero-listener 'error' on `outputStream` still throws synchronously
-     (confirmed with instrumentation during development: the throw
-     interrupts the scheduled nextTick callback), but that throw lands on a
-     call stack disconnected from the already-wired `outputStream.pipe(ws)`
-     data flow, so yazl's pump keeps running, the archive finishes writing,
-     and `buildMp3Zip`'s promise RESOLVES as if nothing failed — arguably a
-     worse outcome than a hang, since the caller would believe the export
-     succeeded despite the injected write failure never surfacing anywhere.
-     That is the distinguishing assertion below: `raced.kind` is 'rejected'
-     with the fix line present, 'resolved' (not 'timeout') without it. */
-  it('forwards an outputStream-level write error to the rejection instead of silently succeeding', async () => {
-    const injected = new Error('mock yazl write failure (outputStream-level)');
-    triggerOutputStreamError = injected;
-    const localOutPath = join(tmpRoot, 'outputstream-level-error-test.zip');
-    try {
-      const raced = await Promise.race([
-        buildMp3Zip({ bookDir, state: makeState(), outPath: localOutPath }).then(
-          (r) => ({ kind: 'resolved' as const, value: r }),
-          (e) => ({ kind: 'rejected' as const, value: e }),
-        ),
-        new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
-        ),
-      ]);
-      // With the listener wired, the injected error rejects buildMp3Zip's
-      // own promise with the SAME error object. Without it (see the block
-      // comment above for why), the build resolves successfully instead —
-      // either way this settles well inside the race's 1s timeout, so a
-      // 'timeout' result here would itself indicate something else broke.
-      expect(raced.kind).toBe('rejected');
-      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
-    } finally {
-      triggerOutputStreamError = null;
-    }
-  }, 10_000);
+  });
 
   /* N3 (fourth review pass, found in passing while chasing the mutation
      gaps above): the byte-counting 'data' listener on `zip.outputStream`
@@ -633,6 +579,104 @@ describe('createZipWritePipeline', () => {
       // only the `'close'` event flips it.
       expect(lastWriteStream!.closed).toBe(true);
       expect(existsSync(outPath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /* Mutation-testing finding (fourth review pass): `zip.outputStream.on(
+     'error', rejectBuild)` inside createZipWritePipeline — the OTHER of the
+     three error forwarders the class docstring above lists, distinct from
+     the ZipFile-level one covered by the `buildMp3Zip` describe block above
+     — had no test of its own. Deleting that one line left all existing
+     tests (this file included) green, and this pipeline is shared by
+     buildMp3Zip, buildCodecZip, and buildCaptions via createZipWritePipeline,
+     so a regression here silently affects all three builders at once.
+
+     FIRST VERSION of this test lived in the `buildMp3Zip` describe block
+     above and injected the error via a `process.nextTick`-scheduled emit on
+     the mocked ZipFile's constructor, racing it against a full
+     `buildMp3Zip()` call over that block's real 3-chapter ffmpeg-tagged
+     fixture (same shape as the ZipFile-level test still there). That was
+     flaky under load: the forwarding line settles `pipeline.donePromise`
+     correctly and near-instantly, but `buildMp3Zip`'s OUTER promise doesn't
+     observe that settlement until control flow reaches `await
+     pipeline.donePromise` — which is only reached once the per-chapter loop
+     finishes tagging all 3 real chapters via `applyId3v24Tags` (real ffmpeg
+     spawns + disk I/O). Under contention that unrelated real work can itself
+     outrun an arbitrary race timeout, failing the test even when the
+     forwarding line is correct — a race against the fixture's own I/O, not
+     against the bug this test exists to catch. (The ZipFile-level test above
+     doesn't share this exposure the same way: its injected error sets
+     yazl's own `self.errored`, which halts `pumpEntries` — but the per-
+     chapter loop's real ffmpeg work still has to finish before `await
+     pipeline.donePromise` is reached either way, so it wasn't actually
+     exempt; it wasn't observed flaking, but the mechanism was identical.
+     Since fixed the same way as this test — dropped its own `Promise.race`
+     against a hard-coded timer, so a mutant now fails by vitest's own test
+     timeout instead — rather than left carrying the same latent exposure.)
+
+     Rewritten below to exercise `createZipWritePipeline` directly, same as
+     nit (f)/N1 above: no chapters, no ffmpeg, nothing real to wait on.
+     `zip.outputStream.emit('error', ...)` is called SYNCHRONOUSLY — not via
+     nextTick. There's no Promise-executor auto-catch trap to dodge here the
+     way there was for the mocked-constructor version: by this point
+     `createZipWritePipeline` has already returned and its executor has
+     already run to completion, so settling `donePromise` from a later emit
+     is no different than nit (f)'s direct `pipeline.rejectBuild(...)` call.
+     With the fix line present, the emit's own listener dispatch settles
+     `donePromise` before `.emit()` returns — no race, no timeout. Without it
+     (mutant), `.emit()` itself throws: `zip.outputStream` genuinely has zero
+     'error' listeners at that point (confirmed empirically — `.pipe()` does
+     NOT install one on its source stream in this Node version, unlike a
+     common misconception), and that throw happens synchronously inside this
+     test's own call, failing it immediately and unmistakably. The outcome
+     no longer depends on which of two async paths wins.
+
+     PRODUCTION CONSEQUENCE (why the line matters — not what this unit test
+     itself exercises, since it deliberately no longer drives the async
+     mutant shape): an earlier version of this comment claimed the mutant
+     made `buildMp3Zip` "resolve as if nothing failed", calling that
+     "arguably worse than a hang". Verified FALSE. A standalone Node repro of
+     the real async shape — a piped PassThrough, the error emitted via
+     `process.nextTick` (matching yazl's own real internal error timing,
+     mid-pump) with zero listeners on the source — shows the throw ALSO
+     escapes as an `uncaughtException`, on top of the pipeline eventually
+     resolving on its own once the rest of the (now-orphaned) pump finishes:
+       uncaughtException(s): ["INJECTED"]
+       donePromise RESOLVED: true
+     In production, `installCrashHandlers()` (server/src/crash-logging.ts)
+     answers `uncaughtException` with `exit(1)` — so the mutant's real shape
+     is the SAME server-killing crash class this PR exists to fix, plus a
+     bogus success for anyone watching only the API response and not the
+     process log. Not "worse than a hang" — the ordinary crash, with a
+     false-positive success as an added twist.
+
+     No uncaughtException probe below (unlike the ZipFile-level test above):
+     with the injection now synchronous rather than nextTick-scheduled, the
+     mutant surfaces as a direct throw inside THIS test's own call stack —
+     there's no escape to `process` left for a probe to observe. A
+     standalone nextTick-based probe, built to match this file's exact mock
+     harness, DID fire reliably when tried in isolation — so the earlier
+     discrepancy (a test-installed handler reportedly not observing this
+     specific throw, despite a positive control confirming such handlers
+     fire under this vitest setup) was not reproduced here. Left unresolved
+     rather than asserted on faith, and moot for this version of the test
+     regardless. */
+  it('forwards an outputStream-level write error to the rejection instead of crashing the process', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-outputstream-'));
+    try {
+      const outPath = join(dir, 'out.zip');
+      const zip = new ZipFile();
+      lastWriteStream = null;
+      const pipeline = createZipWritePipeline(outPath, zip);
+      expect(lastWriteStream).not.toBeNull();
+
+      const injected = new Error('mock yazl write failure (outputStream-level)');
+      zip.outputStream.emit('error', injected);
+
+      await expect(pipeline.donePromise).rejects.toBe(injected);
+      expect(lastWriteStream!.destroyed).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

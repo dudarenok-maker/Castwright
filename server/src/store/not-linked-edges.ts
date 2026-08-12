@@ -10,8 +10,10 @@
    takes its OWN `withCastLock` for `bookDir` and MUST NOT be called by
    anything that already holds the cast lock for that book — per CLAUDE.md's
    cast-lock rule 1 ("a locked function must not call another locked function
-   on the same book"), doing so hangs forever, with no timeout and no
-   diagnostic. This supersedes the file-scoped reasoning this helper carried
+   on the same book"), doing so deadlocks — since #2260 surfacing as a
+   `LockAcquisitionTimeoutError` after 10s (workspace/file-lock.ts) rather than
+   hanging forever, but the call still fails and the rule stands. This
+   supersedes the file-scoped reasoning this helper carried
    while it lived in `routes/analysis.ts` ("none of `recordRetirements`'
    callers *in this file* hold one for this book already") — that claim
    stopped covering every caller the moment #2238 exported the helper into a
@@ -50,6 +52,7 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 
 /** Lock-free half — the caller must already hold `withCastLock(bookDir, …)`.
  *  Mutates `characters` in place (matching the locked variant's own
@@ -93,6 +96,15 @@ export async function clearNotLinkedEdgesForDroppedRejections(
       }
     });
   } catch (err) {
+    /* #2260 round 2 — the file header's "best-effort" contract is scoped to a
+       disk fault (EPERM/ENOSPC/AV-lock), where a surviving stale edge merely
+       re-suppresses one future §4.4 name-match. A withKeyLock ACQUISITION
+       timeout on `cast:<bookDir>` is a different animal: it is the shape a
+       rule-1/rule-4 violation OR ordinary contention produces, and swallowing
+       it hands the caller a silent success on work that never happened. Let
+       exactly that one class through — the callers above
+       (`recordRetirements`, cast-link-orphan.ts) decide what it means. */
+    if (isLockAcquisitionTimeout(err)) throw err;
     console.warn(
       '[not-linked-edges] failed to clear a dropped-rejection notLinkedTo edge (non-fatal)',
       err,

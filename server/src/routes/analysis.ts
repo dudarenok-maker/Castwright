@@ -106,6 +106,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
   describeFingerprintForLog,
@@ -424,6 +425,29 @@ export async function reconcileRejectEdgesOnDisk(
       }
     });
   } catch (err) {
+    /* #2260 round 4 (owner decision) — the FIRST deliberate exception. Every
+       IDENTITY handler #2260 touched lets a withKeyLock ACQUISITION timeout
+       through (`isLockAcquisitionTimeout`, workspace/file-lock.ts); this one
+       swallows it along with everything else, and does so on purpose. (#2292
+       later added three more deliberate swallows on the same kind of
+       reasoning — the interim cast.json snapshots, which a final write in the
+       same run clobbers — so this is no longer the ONLY one, as this comment
+       used to say. It is still the only one in the identity path.)
+
+       Round 2 added a rethrow here on the same reasoning it used at the six
+       identity sites — "cast.json is already written and the identity record
+       never updated". That reasoning does not describe THIS site. It was
+       copy-pasted from handlers where the caught error can come out of
+       `retireCharacterId` itself; here no identity record is at risk, because
+       this call runs LAST in the persist — after every `recordRetirements`
+       and both `dropSuperseded*` calls have already landed — and the only
+       thing it writes is a set of cosmetic `notLinkedTo` edges. A failure
+       here is exactly what this function's own doc comment above says it is:
+       a surviving stale edge re-suppresses ONE future §4.4 name-match until
+       the next persist tries again, and this pass is itself the self-healing
+       mechanism. Failing an entire completed analysis run over that is
+       disproportionate, so the whole handler stays best-effort — a lock
+       timeout included. */
     console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
   }
 }
@@ -3260,6 +3284,25 @@ export async function runMainAnalyzerJob(
           log,
         );
       } catch (historyErr) {
+        /* #2260 — THE CANONICAL "why" for the four rethrow sites in this file;
+           the other three point here. A withKeyLock ACQUISITION timeout is not
+           the disk fault this handler is scoped for. It is the shape a
+           cast-lock rule-1/rule-4 violation OR ordinary contention produces,
+           and swallowing it reports a clean run with the identity record never
+           updated — the divergence #2040 exists to prevent, silently, and
+           strictly worse than the hang the timeout replaced. Let exactly that
+           one class through; everything else (EPERM/ENOSPC/AV-lock,
+           CastIdHistoryUnreadableError) is swallowed exactly as before. See
+           `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
+
+           Round 4 — `reconcileRejectEdgesOnDisk`'s own handler is the ONE
+           deliberate exception and swallows it; see that handler for why it is
+           not in this class. Nothing else in this file is exempt.
+
+           Nothing follows this call in the surrounding block, so this site
+           throws where it catches. The two PERSIST sites cannot — see their
+           own comments for the deferred rethrow. */
+        if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
     }
@@ -4024,6 +4067,17 @@ export async function runMainAnalyzerJob(
                 reportCastConflict('interim'),
               );
             } catch (persistErr) {
+              /* #2292 (owner decision) — a `LockAcquisitionTimeoutError` is
+                 SWALLOWED here deliberately, NOT parked like the authoritative
+                 final write in the persist block below (#2295, `writeChecked`
+                 wrapped at `reportCastConflict('final')`). Tell the two apart
+                 by what follows the write, not by the handler's wording: this
+                 is a PROGRESS SNAPSHOT, and the authoritative write later in
+                 the same run clobbers whatever it managed to put on disk, so a
+                 timeout here leaves nothing diverged. Failing a multi-minute
+                 analysis because one mid-run checkpoint could not take the
+                 lock is disproportionate — the same reasoning that makes
+                 `reconcileRejectEdgesOnDisk` the other deliberate swallow. */
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
           }
@@ -4237,6 +4291,11 @@ export async function runMainAnalyzerJob(
               reportCastConflict('stage1'),
             );
           } catch (persistErr) {
+            /* #2292 (owner decision) — deliberate swallow, including a
+               `LockAcquisitionTimeoutError`. Same reasoning as the per-chapter
+               interim write above: this is the Phase-0b snapshot, the
+               authoritative end-of-run write clobbers it, and the run's own
+               loud failure lives at that write (#2295), not here. */
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
         }
@@ -5261,6 +5320,25 @@ export async function runMainAnalyzerJob(
     // against a corrupted run. The user sees the `attribution_drift`
     // error in the analysing view and can retry.
     if (record.bookDir) {
+      /* #2260 review round 3 (C1) — a lock-acquisition timeout out of the
+         identity block below must fail the JOB, but it must NOT be thrown
+         from inside this persist: doing that skipped
+         `logCarriedForwardCharacters` and the whole state.json rewrite, and
+         then landed in `catch (persistErr)` — which logs "non-fatal" and
+         falls through to `send({kind:'result'})`. Net effect of throwing
+         early was strictly worse than swallowing: the job still reported
+         SUCCESS, and state.json now kept the PREVIOUS run's chapter list,
+         durations, analysisProvenance and updatedAt. So the timeout is
+         parked here and rethrown after this try/catch has closed — the
+         writes all complete, and the throw then escapes `catch (persistErr)`
+         into the job's top-level catch, which ends the job via
+         `endJob(…, {kind:'error'})`.
+
+         #2295 — this slot now has TWO producers, hence the name: the identity
+         block below, and the AUTHORITATIVE cast.json write above it. Which
+         WRITE timed out is what decides; which HANDLER caught it is not (see
+         the wrap on `writeChecked` below). */
+      let persistLockTimeout: unknown;
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: reconciled.sentences,
@@ -5275,6 +5353,14 @@ export async function runMainAnalyzerJob(
             stage1.characters,
           );
         } catch (journalErr) {
+          /* #2295 — a lock-acquisition timeout is swallowed HERE, on purpose,
+             and this handler is why the discrimination is by WRITE SITE rather
+             than by handler: `catch (persistErr)` below covers this call too,
+             so parking from there would fail a whole completed analysis over a
+             lineage file. The journal is lineage, not identity — losing it
+             degrades the merge-undo affordance, it cannot diverge cast.json
+             from the identity record. The AUTHORITATIVE cast.json write below
+             is the one that parks and fails the run. */
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
         /* srv-1 — record this run's dedup lineage + persist diminutive
@@ -5291,6 +5377,9 @@ export async function runMainAnalyzerJob(
           // or every suggestion fails both id checks and the list empties.
           await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
         } catch (dedupErr) {
+          /* #2295 — same deliberate swallow as the fold journal above, same
+             reason: dedup lineage + diminutive suggestions are advisory, and a
+             lock timeout on either must not fail a completed analysis. */
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
         if (phase1DriftExceeded) {
@@ -5311,14 +5400,50 @@ export async function runMainAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
-          await castBase!.writeChecked(
-            { characters: mergedFinal.characters },
-            reportCastConflict('final'),
-          );
+          /* #2295 — the AUTHORITATIVE cast.json write, and the only write
+             reaching `catch (persistErr)` below that takes a lock at all
+             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85).
+             A concurrent `performCastMerge` holding `cast:<bookDir>` made this
+             throw a `LockAcquisitionTimeoutError`, which `catch (persistErr)`
+             swallowed: cast.json AND state.json unwritten, `result` emitted
+             anyway. That is the silent success #2260 exists to remove, one
+             level up from the identity block below.
+
+             DISCRIMINATED BY WHICH WRITE TIMED OUT, not by which handler
+             caught it — discriminating by handler is what produced this bug in
+             the first place. The same `catch (persistErr)` also covers the
+             fold/dedup/suggestions journals (their own handlers above keep
+             swallowing, deliberately), so parking from there would escalate a
+             best-effort lineage write into a failed run. The state.json write
+             further down is authoritative too, but it is a bare
+             `writeJsonAtomic` with no lock of its own, so it cannot produce
+             this class and needs no wrapper.
+
+             Rethrown immediately, not deferred: unlike the identity block
+             below there is nothing left to finish here — cast.json did NOT
+             land, so recording retirements against a roster that was never
+             persisted would be worse than skipping them. Control flow is
+             therefore byte-for-byte what it was (the persist aborts,
+             `catch (persistErr)` logs); the only change is that the parked
+             value makes the job's terminal an error instead of a result. */
+          try {
+            await castBase!.writeChecked(
+              { characters: mergedFinal.characters },
+              reportCastConflict('final'),
+            );
+          } catch (castWriteErr) {
+            if (isLockAcquisitionTimeout(castWriteErr)) persistLockTimeout = castWriteErr;
+            throw castWriteErr;
+          }
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write, and never let a throwing history
              write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
-             state.json. Mirrors writeFoldJournal/writeDedupJournal above. */
+             state.json. Mirrors writeFoldJournal/writeDedupJournal above.
+             #2260 round 3 (C1) — still true for the one class this handler
+             no longer swallows: a lock-acquisition timeout DEFERS out of
+             this block (parked in `persistLockTimeout`, rethrown once the
+             persist's own try/catch has closed) rather than skipping the
+             writes below. */
           try {
             /* Wave 2 final-review finding 1(b) — every retirement recorded
                at this final write is filtered against the roster that was
@@ -5412,15 +5537,26 @@ export async function runMainAnalyzerJob(
                rewrote, not the one the persist started with. */
             await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
-            /* #2214/#2201 — a degraded cast-id-history.json now makes the
-               unconditional `dropSupersededIdsReclaimedByLiveCast` call above
-               throw before `reconcileRejectEdgesOnDisk` is ever reached, so
-               its own degraded-read log line never fires on this path. Emit
-               the same user-facing wording here so a run against a damaged
-               file still shows something in the in-app log instead of
-               reading as clean. */
-            logIfDegradedCastIdHistory(historyErr, log);
+            /* #2260 round 2 — see the dedup site near the top of this job for
+               why a lock-acquisition timeout must NOT be swallowed here.
+               Round 3 (C1) — but nor may it be thrown from HERE: that skipped
+               logCarriedForwardCharacters + the state.json rewrite below and
+               was then caught by `catch (persistErr)`, which reports the job
+               as a SUCCESS anyway. Park it; the rethrow is after this
+               persist's own catch. */
+            if (isLockAcquisitionTimeout(historyErr)) {
+              persistLockTimeout = historyErr;
+            } else {
+              console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+              /* #2214/#2201 — a degraded cast-id-history.json now makes the
+                 unconditional `dropSupersededIdsReclaimedByLiveCast` call
+                 above throw before `reconcileRejectEdgesOnDisk` is ever
+                 reached, so its own degraded-read log line never fires on
+                 this path. Emit the same user-facing wording here so a run
+                 against a damaged file still shows something in the in-app
+                 log instead of reading as clean. */
+              logIfDegradedCastIdHistory(historyErr, log);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -5482,6 +5618,16 @@ export async function runMainAnalyzerJob(
         console.error('[analysis] failed to persist .audiobook/* for', record.bookDir, persistErr);
         // Non-fatal — the analysis result still streams back to the client.
       }
+      /* #2260 round 3 (C1) — the deferred rethrow. OUTSIDE the try/catch
+         above on purpose: from in there it would be caught by
+         `catch (persistErr)` and the job would still end via
+         `send({kind:'result'})`. From here it reaches this job's top-level
+         catch, which classifies it and calls `endJob(job, {kind:'error', …})`
+         — the loud outcome the timeout exists to produce — while every write
+         in the persist has already completed. (#2295 — "every write" is the
+         identity-block producer's property; the authoritative-write producer
+         aborts the persist by design, since its own write did not land.) */
+      if (persistLockTimeout !== undefined) throw persistLockTimeout;
     }
 
     if (phase1DriftExceeded) {
@@ -5942,6 +6088,10 @@ export async function runSubsetAnalyzerJob(
         log,
       );
     } catch (historyErr) {
+      // #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
+      // lock-acquisition timeout must NOT be swallowed here (the canonical
+      // "why" for this file's four rethrow sites).
+      if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
@@ -6133,6 +6283,10 @@ export async function runSubsetAnalyzerJob(
                 reportCastConflict('subset-interim'),
               );
             } catch (persistErr) {
+              /* #2292 (owner decision) — deliberate swallow, including a lock
+                 timeout; mirrors the main route's interim handler. Progress
+                 snapshot, clobbered by the authoritative write below, which is
+                 where a timeout DOES fail the run (#2295). */
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
           }
@@ -6648,6 +6802,13 @@ export async function runSubsetAnalyzerJob(
        exceeded the threshold — same reasoning as the main route's
        persist block. */
     if (record.bookDir && !isAborted()) {
+      /* #2260 round 3 (C1) — see the main job's persist block for why a lock-
+         acquisition timeout is parked rather than thrown from inside this
+         try: thrown here it skips state.json and is then swallowed by
+         `catch (persistErr)`, leaving the job reporting success.
+         #2295 — and for why the slot has two producers (the identity block,
+         and the authoritative cast.json write above it). */
+      let persistLockTimeout: unknown;
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: subsetReconciled.sentences,
@@ -6662,6 +6823,8 @@ export async function runSubsetAnalyzerJob(
             stage1.characters,
           );
         } catch (journalErr) {
+          // #2295 — deliberate swallow; see the main job's matching handler
+          // for why the discrimination is by write site, not by handler.
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
         /* srv-1 — record this run's dedup lineage + persist diminutive
@@ -6678,6 +6841,7 @@ export async function runSubsetAnalyzerJob(
           // every suggestion fails both id checks and the list empties.
           await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
         } catch (dedupErr) {
+          // #2295 — deliberate swallow, mirroring the main job's handler.
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
         if (subsetDriftExceeded) {
@@ -6697,13 +6861,25 @@ export async function runSubsetAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
-          await castBase!.writeChecked(
-            { characters: mergedFinal.characters },
-            reportCastConflict('subset-final'),
-          );
+          /* #2295 — the authoritative cast.json write; mirrors the main job's
+             same-named wrap, including WHY it is wrapped at the write rather
+             than at `catch (persistErr)` (which also covers the journals) and
+             why it rethrows immediately rather than deferring. */
+          try {
+            await castBase!.writeChecked(
+              { characters: mergedFinal.characters },
+              reportCastConflict('subset-final'),
+            );
+          } catch (castWriteErr) {
+            if (isLockAcquisitionTimeout(castWriteErr)) persistLockTimeout = castWriteErr;
+            throw castWriteErr;
+          }
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write; wrapped so a throwing history
-             write can't skip cast.json / state.json. */
+             write can't skip cast.json / state.json. #2260 round 3 (C1) —
+             the one class this handler no longer swallows DEFERS out of the
+             block instead of skipping those writes; see the main job's
+             matching comment. */
           try {
             /* Wave 2 final-review finding 1(b) — every retirement recorded
                at this final write is filtered against the roster that was
@@ -6773,9 +6949,21 @@ export async function runSubsetAnalyzerJob(
             // the pre-rewrite verdict captured at the top of this block.
             await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
-            // #2214/#2201 — mirrors the main path's same-named handler above.
-            logIfDegradedCastIdHistory(historyErr, log);
+            /* #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
+               lock-acquisition timeout must NOT be swallowed here.
+               Round 3 (C1) — and nor thrown from here; mirrors the main
+               job's same-named handler. */
+            if (isLockAcquisitionTimeout(historyErr)) {
+              persistLockTimeout = historyErr;
+            } else {
+              /* Kept on ONE line deliberately: analysis-reject-edge-reconcile
+                 .test.ts's [C13] source scan matches this exact call text to
+                 prove each catch handler reaches `logIfDegradedCastIdHistory`,
+                 and a wrapped call is invisible to it. */
+              console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+              // #2214/#2201 — mirrors the main path's same-named handler above.
+              logIfDegradedCastIdHistory(historyErr, log);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -6831,6 +7019,11 @@ export async function runSubsetAnalyzerJob(
           persistErr,
         );
       }
+      /* #2260 round 3 (C1) — the deferred rethrow, outside the try/catch so
+         it escapes `catch (persistErr)` and reaches this job's top-level
+         catch, which ends the job via `endJob(job, {kind:'error', …})`.
+         Mirrors the main job. */
+      if (persistLockTimeout !== undefined) throw persistLockTimeout;
     }
 
     if (subsetDriftExceeded) {

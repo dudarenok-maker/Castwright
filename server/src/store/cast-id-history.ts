@@ -1204,8 +1204,10 @@ function applyUnrejectOrphanedPair(
  *
  *  MUST NOT call `restoreSupersededId`/`unrejectOrphanedPair` — both take
  *  `withKeyLock('cast-id-history:' + bookDir)` themselves, and this function
- *  already holds that same lock for the whole batch. Re-entering it would
- *  hang forever, with no timeout and no diagnostic. `applyRestoreSupersededId`
+ *  already holds that same lock for the whole batch. Re-entering it deadlocks:
+ *  since #2260 that surfaces as a `LockAcquisitionTimeoutError` after 10s
+ *  (workspace/file-lock.ts) rather than hanging forever, but the batch still
+ *  fails and the rule stands. `applyRestoreSupersededId`
  *  / `applyUnrejectOrphanedPair` are the shared, lock-free appliers this
  *  function and the two single-pair primitives both mutate `history` through.
  *

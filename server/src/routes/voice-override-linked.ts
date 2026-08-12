@@ -34,6 +34,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { itemFailureReason } from '../workspace/file-lock.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -162,10 +163,14 @@ voiceOverrideLinkedRouter.post(
           updated.push({ bookId: w.bookId, bookTitle: w.bookTitle, characterId: id });
         }
       } catch (err) {
+        /* #2292 (owner decision) — `applyToBook` writes inside that book's
+           cast lock, so contention on one series-mate lands here. Per-book
+           `failed` entry as before (the other books' writes stand), with a
+           reason that names contention rather than that book's cast. */
         failed.push({
           bookId: w.bookId,
           bookTitle: w.bookTitle,
-          error: err instanceof Error ? err.message : String(err),
+          error: itemFailureReason(err, err instanceof Error ? err.message : String(err)),
         });
       }
     }

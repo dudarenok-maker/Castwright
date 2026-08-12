@@ -38,7 +38,7 @@
 // stripping the GIT_*-family keys from it, not merging the two on top of
 // `process.env`; an omitted `env` scrubs `process.env` itself (same
 // replace-then-scrub contract execGit documents at
-// bump-version.mjs:213-217) — and default `cwd` to `repoRoot`,
+// bump-version.mjs:222-224) — and default `cwd` to `repoRoot`,
 // so a caller that forgets `cwd` (five of the eleven scripts migrated onto
 // this wrapper did) still resolves `gh` against THIS repository rather than
 // wherever the process happened to be invoked from. A caller may still pass

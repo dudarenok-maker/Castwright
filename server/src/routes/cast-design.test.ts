@@ -1278,3 +1278,86 @@ describe('#1981 — cross-writer race: cast-design write helper vs cast-aliases 
     expect(cast.characters.find((c) => c.id === 'brann')?.aliases).toContain('Race Alias');
   });
 });
+
+/* #2292 (owner decision) — a lock timeout on ONE character's persist reports
+ * contention, not a failed design.
+ *
+ * The bulk-design loop's per-character `catch` covers real synthesis failures
+ * AND the persist steps that follow them — `applyOverrideToCastFiles`,
+ * `persistEmotionVariant`, `ensureCharacterVoiceUuid`, all of which take the
+ * cast lock. On a timeout the voice WAS designed and only the write was
+ * blocked, so "Voice design failed" described the opposite of what happened.
+ *
+ * The per-character shape is unchanged (one contended character must not fail
+ * the other N, and the loop continuing is what the existing "a per-character
+ * failure is recorded and the loop continues" test pins), and the same string
+ * has to reach BOTH surfaces — the live `character_failed` broadcast and the
+ * terminal `idle` event's `failures` list — or the toast and the summary
+ * disagree.
+ *
+ * Two-directional: an ordinary synthesis failure at the same site keeps its
+ * own message.
+ */
+describe('cast-design — per-character reason on a lock timeout (#2292)', () => {
+  async function designWithThrowOnAria(toThrow: unknown) {
+    const voices = await import('./voices.js');
+    const original = voices.applyOverrideToCastFiles;
+    const spy = vi
+      .spyOn(voices, 'applyOverrideToCastFiles')
+      .mockImplementation(
+        async (
+          matchKey: Parameters<typeof original>[0],
+          override: Parameters<typeof original>[1],
+          seriesFilter: Parameters<typeof original>[2],
+          dir: Parameters<typeof original>[3],
+        ) => {
+          if (matchKey === 'v_aria') throw toThrow;
+          return original(matchKey, override, seriesFilter, dir);
+        },
+      );
+    try {
+      return await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('reports contention on both surfaces and still designs the other character', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const res = await designWithThrowOnAria(
+      new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000),
+    );
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    /* The live broadcast the user sees first... */
+    const failedEvent = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.errorReason).toBe(LOCK_CONTENTION_ITEM_REASON);
+
+    /* ...and the terminal summary, which must agree with it. */
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('aria');
+    expect(idle?.failures?.[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(idle?.failures?.[0].error).not.toContain('withKeyLock');
+
+    /* Not escalated: the loop carried on and the other character landed. */
+    expect(idle?.done).toBe(1);
+    expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
+  });
+
+  it('an ordinary failure at the same site keeps its own message', async () => {
+    const res = await designWithThrowOnAria(new Error('model exploded'));
+
+    const events = parseSse(res.text);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].error).toBe('model exploded');
+  });
+});

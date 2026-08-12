@@ -67,6 +67,20 @@ vi.mock('node:fs', async (importOriginal) => {
    `zip.on('error', reject)` reproduces the real bug: zero listeners, an
    `uncaughtException`, and the bundle promise never settling. */
 let triggerZipFileError: Error | null = null;
+/* Same mechanism aimed at a different emitter: real yazl also emits
+   `'error'` on `zip.outputStream` itself for a bad write (distinct from the
+   ZipFile-level validation failures above), and
+   `zip.outputStream.on('error', rejectBuild)` (~build-portable-book.ts:307)
+   is its own separate forwarding line — the only one of the pipeline's
+   three error forwarders left uncovered by this file's tests (see the test
+   below). Unlike build-mp3-zip.test.ts's equivalent, this one stays safe to
+   drive through the full nextTick/Promise.race shape: buildPortableBundle's
+   audio loop has no `await` between entries (see the ZipFile-level test's
+   own comment above), so `await done` is reached synchronously right after
+   `zip.end()` regardless of how much real per-chapter work happened —
+   there's no "wait for N real ffmpeg spawns" gate for contention to stretch
+   past the race's timeout. */
+let triggerOutputStreamError: Error | null = null;
 /* N6 regression (found in passing while reviewing this PR): captures the
    most recently constructed ZipFile instance so a test can inspect its
    `outputStream` after a build has rejected — see the test near the
@@ -83,6 +97,12 @@ vi.mock('yazl', async (importOriginal) => {
         const err = triggerZipFileError;
         process.nextTick(() => {
           this.emit('error', err);
+        });
+      }
+      if (triggerOutputStreamError) {
+        const err = triggerOutputStreamError;
+        process.nextTick(() => {
+          this.outputStream.emit('error', err);
         });
       }
     }
@@ -436,6 +456,62 @@ describe('buildPortableBundle', () => {
     } finally {
       process.off('uncaughtException', onUncaught);
       triggerZipFileError = null;
+    }
+    // The other half of the regression: the injected error must have been
+    // forwarded to the rejection, NOT escaped as a raw uncaught exception.
+    expect(escaped).toBeNull();
+  }, 10_000);
+
+  /* The last uncovered `'error'` forwarder in server/src/export/: unlike
+     build-mp3-zip.ts / build-codec-zip.ts (createZipWritePipeline), which
+     pipe `zip.outputStream` into a real write stream, buildPortableBundle
+     consumes it directly via 'data'/'end' — so nothing else in this module
+     ever attaches an 'error' listener to it either. Drop
+     `zip.outputStream.on('error', rejectBuild)` here and a bad write has
+     zero listeners: the same uncaughtException → exit(1) crash class this
+     module exists to avoid, with no test to notice (all 122 export tests
+     stay green without it).
+
+     Same injection + assertion shape as the ZipFile-level test above,
+     aimed at `outputStream` instead of the ZipFile object itself — see this
+     describe block's `triggerOutputStreamError` mock comment (top of file)
+     for why this one stays safe to race with a fixed 1s timeout even though
+     build-mp3-zip.ts's identically-shaped test was not (no real per-chapter
+     I/O gates `await done` here). */
+  it('forwards an outputStream-level write error to the rejection instead of crashing the process', async () => {
+    const errDir = join(tmpRoot, 'outputstreamerr');
+    mkdirSync(join(errDir, 'audio'), { recursive: true });
+    const errState = { ...makeFixtureState(), bookId: 'demo__standalones__outputstreamerr' };
+    writeFileSync(join(errDir, 'manuscript.txt'), manuscriptBytes);
+    writeFileSync(join(errDir, 'audio', '01-chapter-1.mp3'), chapter1Mp3);
+
+    const injected = new Error('mock yazl write failure (outputStream-level)');
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    triggerOutputStreamError = injected;
+    try {
+      const raced = await Promise.race([
+        buildPortableBundle(errDir, errState).then(
+          (r) => ({ kind: 'resolved' as const, value: r }),
+          (e) => ({ kind: 'rejected' as const, value: e }),
+        ),
+        new Promise<{ kind: 'timeout' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
+        ),
+      ]);
+      // With the listener wired, the injected error rejects
+      // buildPortableBundle's own promise with the SAME error object.
+      // Without it, the promise never settles at all — that's the
+      // 'timeout' branch, a deliberate, fast, diagnosable failure instead
+      // of waiting on vitest's own test timeout.
+      expect(raced.kind).toBe('rejected');
+      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      triggerOutputStreamError = null;
     }
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.

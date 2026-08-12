@@ -37,8 +37,23 @@
 import { readdir, rename, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const APPLY = process.argv.includes('--apply');
+
+// process.exit() truncates pending async stdout writes on POSIX pipes (sync
+// on Windows, async on Linux/macOS — see build-release-zip.mjs's fix for
+// #2297/the same defect class). This script's Pass 3 loop can print many
+// `rename`/`cast` lines before an error partway through would otherwise call
+// process.exit(1) and cut that output off. CliError carries the intended
+// exit code so the single catch at the bottom can set process.exitCode
+// without calling process.exit() anywhere.
+class CliError extends Error {
+  constructor(msg, code = 1) {
+    super(msg);
+    this.code = code;
+  }
+}
 
 /* ── Pure helpers (unit-tested in scripts/tests/) ──────────────────────────── */
 
@@ -135,10 +150,10 @@ function resolveWorkspace() {
   const flag = process.argv.find((a) => a.startsWith('--workspace='));
   if (flag) return flag.slice('--workspace='.length);
   if (process.env.WORKSPACE_DIR) return process.env.WORKSPACE_DIR;
-  console.error(
-    'Set the workspace: WORKSPACE_DIR=<path> or --workspace=<path> (the dir that contains books/ and voices/).',
-  );
-  process.exit(2);
+  const msg =
+    'Set the workspace: WORKSPACE_DIR=<path> or --workspace=<path> (the dir that contains books/ and voices/).';
+  console.error(msg);
+  throw new CliError(msg, 2);
 }
 
 async function listCastJsons(booksRoot) {
@@ -167,7 +182,7 @@ async function main() {
   console.log(`Mode:      ${APPLY ? 'APPLY (will rename files + rewrite cast.json)' : 'DRY RUN (no writes)'}`);
   if (!existsSync(voicesDir)) {
     console.error(`No voices dir at ${voicesDir} — nothing to do.`);
-    process.exit(0);
+    return;
   }
 
   const voiceFiles = (await readdir(voicesDir, { withFileTypes: true }))
@@ -273,10 +288,19 @@ async function main() {
     console.log(`\nReview the plan above, back up ${voicesDir}, stop the server, then re-run with --apply.`);
 }
 
-// Only run when invoked directly (not when imported by the test).
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('repair-qwen-voice-uuid-keys.mjs')) {
+// Only run when invoked directly (not when imported by the test). See
+// scripts/lib/is-main-module.mjs — replaces the naive `file://${argv[1]}`
+// form (always false on Windows) and the basename fallback with the
+// shared, junction-safe check (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main().catch((e) => {
-    console.error(e);
-    process.exit(1);
+    // resolveWorkspace()'s CliError already printed its own message before
+    // throwing; only print here for a genuinely unexpected error.
+    if (e instanceof CliError) {
+      process.exitCode = e.code;
+    } else {
+      console.error(e);
+      process.exitCode = 1;
+    }
   });
 }

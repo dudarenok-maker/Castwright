@@ -365,22 +365,19 @@ describe('buildCodecZip', () => {
     triggerZipFileError = injected;
     const outPath = join(tmpRoot, 'zipfile-level-error-test.m4a.zip');
     try {
-      const raced = await Promise.race([
-        buildCodecZip({ bookDir, state: makeState(), outPath, format: 'aac-m4a' }).then(
-          (r) => ({ kind: 'resolved' as const, value: r }),
-          (e) => ({ kind: 'rejected' as const, value: e }),
-        ),
-        new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
-        ),
-      ]);
+      // De-raced (see build-mp3-zip.test.ts's identical sibling test for the
+      // full history): no more `Promise.race` against a hand-rolled timer.
+      // That raced the per-chapter loop's real addReadStream I/O, which is
+      // unrelated work this test doesn't control — under contention it can
+      // outrun any fixed timer even when the forwarding line is correct.
       // With the listener wired, the injected error rejects buildCodecZip's
-      // own promise with the SAME error object. Without it, the promise
-      // never settles at all — that's the 'timeout' branch, a deliberate,
-      // fast, diagnosable failure instead of waiting on vitest's own test
-      // timeout.
-      expect(raced.kind).toBe('rejected');
-      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+      // own promise with the SAME error object; without it, the promise
+      // never settles, and this assertion fails by vitest's own (generous,
+      // centrally configured via testTimeout in vitest.config.ts) test
+      // timeout instead — the correct red for "never settles".
+      await expect(
+        buildCodecZip({ bookDir, state: makeState(), outPath, format: 'aac-m4a' }),
+      ).rejects.toBe(injected);
     } finally {
       process.off('uncaughtException', onUncaught);
       triggerZipFileError = null;
@@ -388,5 +385,5 @@ describe('buildCodecZip', () => {
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
-  }, 10_000);
+  });
 });

@@ -7,9 +7,18 @@
 // Usage:
 //   node scripts/build-release-zip.mjs --version v1.2.3 [--out path] [--dry-run]
 
-import { createWriteStream, mkdirSync, statSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  createWriteStream,
+  mkdirSync,
+  statSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  unlinkSync,
+} from 'node:fs';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -57,6 +66,23 @@ export const MANIFEST = {
     // fs-1 — stable launcher for the versioned-dir install. Ships inside every
     // release; setup-versioned-install.mjs copies it to the install root once.
     'launch.mjs',
+
+    // #2291 — the shared direct-execution-guard helper. Several already-shipped
+    // scripts/*.mjs runtime entry points (start-app-prod, restart-after-upgrade,
+    // setup-versioned-install) and server/tts-sidecar/scripts/*.mjs installers
+    // (accelerator-profile, install-ort, install-torch, and others) import this
+    // at the top level, so it MUST ship or those scripts crash at import time in
+    // a real install. (launch.mjs deliberately does NOT import it — see the
+    // comment by its own isDirectlyInvoked for why — so it is not one of these.)
+    // The stake is higher than "four CLIs fail to run": server/src/index.ts:82,
+    // server/src/tts/spawn-sidecar.ts:33, and server/src/upgrade/apply.ts:24-30
+    // statically import several of those same sidecar .mjs installers directly
+    // into the server bundle, so a missing manifest entry here fails the
+    // SERVER at boot, not just a standalone installer CLI invocation. Pinned
+    // by scripts/tests/entry-point-guard-convention.test.mjs's "shared helper
+    // ships in the release zip" assertion — do not remove this entry without
+    // removing that assertion first.
+    'scripts/lib/is-main-module.mjs',
 
     // Frontend source + pre-built bundle
     'src/**',
@@ -254,7 +280,7 @@ function globMatch(p, pattern) {
 }
 
 function parseArgs(argv) {
-  const out = { version: null, out: null, dryRun: false, notesFile: null };
+  const out = { version: null, out: null, dryRun: false, notesFile: null, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--version') out.version = argv[++i];
@@ -262,18 +288,38 @@ function parseArgs(argv) {
     else if (a === '--notes-file') out.notesFile = argv[++i];
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--help' || a === '-h') {
-      process.stdout.write(
-        'Usage: node scripts/build-release-zip.mjs --version vX.Y.Z [--out path] [--dry-run]\n',
-      );
-      process.exit(0);
+      // Defer the actual print + exit to main() — see the note by
+      // CliError/die below on why this file no longer calls process.exit()
+      // directly at all.
+      out.help = true;
+      break;
     } else die(`Unknown argument: ${a}`);
   }
   return out;
 }
 
+// process.exit() terminates before Node flushes pending async stdout writes
+// (stdout to a pipe is synchronous on Windows but ASYNC on Linux/macOS — see
+// https://nodejs.org/api/process.html#a-note-on-process-io). That silently
+// truncated this script's --dry-run output on GitHub's ubuntu-latest (PR
+// #2297) while looking fine on every Windows dev box. Fixed by never calling
+// process.exit() here: die() sets process.exitCode and throws a CliError
+// instead, so the call stack unwinds back to the single catch at the bottom
+// of this file and the process exits naturally once the event loop drains.
+// Every die() path holds no open handle by that point (no server/timer/child
+// process), so nothing keeps it alive past that. The ZIP path is the one
+// exception: while `archive.pipe(output)` is live and files are still
+// queued, an `archive.on('error', …)` there is NOT a die() call and does not
+// throw a CliError — it rejects the archiver Promise directly, and that
+// Promise's own error handler is responsible for aborting the archive
+// stream (rather than letting it drain) and removing the partial output
+// file. See that handler, below, for the reasoning.
+class CliError extends Error {}
+
 function die(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
-  process.exit(1);
+  process.exitCode = 1;
+  throw new CliError(msg);
 }
 
 function info(msg) {
@@ -304,6 +350,12 @@ async function walkRepo() {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(
+      'Usage: node scripts/build-release-zip.mjs --version vX.Y.Z [--out path] [--dry-run]\n',
+    );
+    return;
+  }
   if (!args.version) die('--version is required (e.g. --version v1.2.3)');
   if (!/^v\d+\.\d+\.\d+(-[\w.-]+)?$/.test(args.version)) {
     die(`--version must look like vMAJOR.MINOR.PATCH[-suffix], got "${args.version}"`);
@@ -361,51 +413,135 @@ async function main() {
       info(`  ${companionApkZipEntry(args.version)}  (${statSync(apkSrc).size} bytes)`);
     }
     info('[DRY-RUN] No zip written.');
-    process.exit(0);
+    return;
   }
 
   info(`[ZIP] writing ${outPath}`);
+  await writeReleaseZip({ outPath, matched, apkSrc, apkExists, version: args.version });
+
+  const finalSize = statSync(outPath).size;
+  info(`[OK] ${outPath}  (${Math.round(finalSize / 1024)} KB)`);
+}
+
+/**
+ * Streams `matched` (plus the companion APK, when present) into a zip at
+ * `outPath` via archiver's ZipArchive. Exported (and `loadArchiver`
+ * injectable) so the regression test can drive the exact error-handling
+ * wiring below without needing to reproduce a real archiver-internal race —
+ * scripts/tests/archiver-zip.test.mjs separately pins that the real
+ * .pipe/.file/.finalize/warning/error surface behaves as this code assumes.
+ *
+ * On a mid-archive error (a queued file becomes unreadable, e.g. EACCES/
+ * EMFILE/ENOENT after the initial stat), aborts the archiver — stopping it
+ * from draining the remaining queue — destroys the output stream, and
+ * removes the partial outPath: a failed build must never leave a larger,
+ * complete-looking but INVALID zip behind. See the comment by
+ * CliError/die above for why this function's own Promise, not a thrown
+ * CliError, is what carries that failure back to main()'s catch.
+ */
+export async function writeReleaseZip({
+  outPath,
+  matched,
+  apkSrc,
+  apkExists,
+  version,
+  loadArchiver = () => import('archiver'),
+}) {
   /* Lazy-load archiver — v8 is pure ESM and exposes only named class
      exports (Archiver / ZipArchive / …), with NO callable default
      factory (the v7 `archiver('zip', …)` signature is gone). Dynamic
      `import()` keeps the dep out of the module graph so the MANIFEST
      unit test (scripts/tests/release-manifest.test.mjs) imports this
      file without needing archiver installed. */
-  const { ZipArchive } = await import('archiver');
+  const { ZipArchive } = await loadArchiver();
   await new Promise((resolveZip, rejectZip) => {
     const output = createWriteStream(outPath);
     const archive = new ZipArchive({ zlib: { level: 9 } });
     output.on('close', resolveZip);
+
+    // A write already queued in libuv against `output` can complete AFTER
+    // output.destroy() (below) and surface as output's OWN 'error' event —
+    // Node's ERR_STREAM_DESTROYED. Without a listener registered on `output`
+    // itself, `archive.pipe(output)`'s internal error-forwarding listener on
+    // `output` handles that event, unpipes, removes itself, finds zero
+    // remaining 'error' listeners, and re-emits — an unhandled 'error' event
+    // that crashes the whole process (reproduced 4/6 runs against the real
+    // archiver: 403 real files, an error injected mid-archive). Registering
+    // `onFailure` on `output` here — before anything can call destroy() —
+    // means that re-emit always finds a listener. It also doubles as the
+    // handler for a genuine write failure on `output` itself (e.g. ENOSPC),
+    // which archiver's own 'error'/'warning' events never see.
+    //
+    // `settled` guards against running this twice: archive.abort() +
+    // output.destroy() below can themselves trigger output's 'error' a
+    // second time, and archiver can also emit 'warning' then 'error' for the
+    // same underlying failure.
+    let settled = false;
+    const onFailure = (err) => {
+      if (settled) return;
+      settled = true;
+      archive.abort();
+      // `output.on('close', resolveZip)` above is still armed — a failed
+      // build's `output.destroy()` (below) still ends in a 'close' event,
+      // which would otherwise resolve this Promise successfully a moment
+      // before our own 'close' listener gets to reject it (both are
+      // listeners on the same event; first-registered runs first, and only
+      // the FIRST resolveZip/rejectZip call of a Promise has any effect).
+      // Removing it here is what makes this a failure, not a race.
+      output.off('close', resolveZip);
+      // Wait for `output`'s own 'close' — guaranteed to fire once its fd is
+      // actually closed — before unlinking. Node emits 'error' (if any)
+      // before 'close' in both the path below (our own destroy() call) and
+      // an independent auto-destroy on `output`'s own write failure, so this
+      // ordering holds either way. Unlinking immediately after destroy()
+      // instead (the previous shape) raced the fd close on Windows —
+      // EBUSY/EPERM — which the bare catch below already swallowed safely,
+      // but silently left the partial zip behind, violating this function's
+      // own "must never leave a partial outPath" contract.
+      output.once('close', () => {
+        try {
+          unlinkSync(outPath);
+        } catch {
+          // ENOENT — outPath was never created (the failure hit before
+          // `output` finished opening), or it's already gone; either way
+          // fine. `err`, not this catch, is what reaches rejectZip below, so
+          // an unlink failure here can never mask the real failure.
+        }
+        rejectZip(err);
+      });
+      if (!output.destroyed) output.destroy();
+    };
+    output.on('error', onFailure);
     archive.on('warning', (err) => {
       if (err.code === 'ENOENT') return;
-      rejectZip(err);
+      onFailure(err);
     });
-    archive.on('error', rejectZip);
+    archive.on('error', onFailure);
     archive.pipe(output);
     for (const { rel, abs } of matched) {
       // Use POSIX separators in the zip entries for cross-platform extract.
-      archive.file(abs, { name: posix.join(releaseInternalPrefix(args.version), toPosix(rel)) });
+      archive.file(abs, { name: posix.join(releaseInternalPrefix(version), toPosix(rel)) });
     }
     // Interim companion-app distribution — bundle the APK at its served path.
     if (apkExists) {
-      archive.file(apkSrc, { name: companionApkZipEntry(args.version) });
+      archive.file(apkSrc, { name: companionApkZipEntry(version) });
     }
     archive.finalize();
   });
-
-  const finalSize = statSync(outPath).size;
-  info(`[OK] ${outPath}  (${Math.round(finalSize / 1024)} KB)`);
-  process.exit(0);
 }
 
-// Only run the CLI if invoked directly (not when imported by tests).
-const invokedAsCli = (() => {
-  try {
-    return resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
-  } catch {
-    return false;
-  }
-})();
+// Only run the CLI if invoked directly (not when imported by tests). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+const invokedAsCli = isDirectlyInvoked(import.meta.url);
 if (invokedAsCli) {
-  main().catch((err) => die(err.stack ?? String(err)));
+  main().catch((err) => {
+    // die() already wrote its own [FAIL] line and set exitCode before
+    // throwing a CliError; only print here for a genuinely unexpected error
+    // (e.g. a rejected archiver promise) that never went through die().
+    if (!(err instanceof CliError)) {
+      process.stderr.write(`[FAIL] ${err.stack ?? String(err)}\n`);
+    }
+    process.exitCode = 1;
+  });
 }

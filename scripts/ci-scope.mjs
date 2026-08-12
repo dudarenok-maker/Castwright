@@ -10,8 +10,8 @@
 // string, silently disabling a leg while both wiring directions still pass.
 // One json output makes that map a single static line.
 
-import { pathToFileURL } from 'node:url';
 import { STEPS, stepTouchedByDiff, computeShared } from './verify-cache.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 export function slugFor(stepName) {
   return `step_${stepName.replace(/[:-]/g, '_')}`;
@@ -76,12 +76,10 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   return 0;
 }
 
-// See run-sidecar-tests.mjs — the naive `file://${process.argv[1]}` form is
-// ALWAYS false on Windows (two slashes vs three). Here the consequence is
-// worse than silence: the detect job would emit nothing, every `if:` would be
-// false, and only the `ok` sentinel (Task 9) would catch it — as a confusing
-// red rather than a clear one.
-const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+// See scripts/lib/is-main-module.mjs. Here the consequence of a guard miss
+// is worse than silence: the detect job would emit nothing, every `if:`
+// would be false, and only the `ok` sentinel (Task 9) would catch it — as a
+// confusing red rather than a clear one.
+if (isDirectlyInvoked(import.meta.url)) {
   process.exit(main());
 }

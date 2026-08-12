@@ -266,7 +266,19 @@ describeIfFfmpeg('buildCaptions', () => {
     triggerZipFileError = injected;
     const outPath = join(bookDir, 'zipfile-level-error-test.zip');
     try {
-      const raced = await Promise.race([
+      // De-raced (see build-mp3-zip.test.ts's identical sibling test for
+      // the full history): no more `Promise.race` against a hand-rolled
+      // timer — this one previously raced an 8s timer, itself bumped up
+      // from 1s with no recorded incident explaining the specific value
+      // (git history shows only the bump, not a measured prior flake).
+      // Racing unrelated real work under contention is exactly the shape
+      // that ever needed a bump in the first place. With the listener
+      // wired, the injected error rejects buildCaptions's own promise with
+      // the SAME error object; without it, the promise never settles, and
+      // this assertion fails by vitest's own (generous, centrally
+      // configured via testTimeout in vitest.config.ts) test timeout
+      // instead — the correct red for "never settles".
+      await expect(
         buildCaptions({
           bookDir,
           state,
@@ -274,21 +286,8 @@ describeIfFfmpeg('buildCaptions', () => {
           captionGranularity: 'sentence',
           captionScope: 'per-chapter',
           outPath,
-        }).then(
-          (r) => ({ kind: 'resolved' as const, value: r }),
-          (e) => ({ kind: 'rejected' as const, value: e }),
-        ),
-        new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 8000),
-        ),
-      ]);
-      // With the listener wired, the injected error rejects buildCaptions's
-      // own promise with the SAME error object. Without it, the promise
-      // never settles at all (nothing ever calls reject) — that's the
-      // 'timeout' branch, a deliberate, fast, diagnosable failure instead of
-      // waiting on vitest's own test timeout.
-      expect(raced.kind).toBe('rejected');
-      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+        }),
+      ).rejects.toBe(injected);
     } finally {
       process.off('uncaughtException', onUncaught);
       triggerZipFileError = null;
@@ -298,7 +297,7 @@ describeIfFfmpeg('buildCaptions', () => {
     // If this is non-null, an error on the ZipFile object crashed the
     // process instead of being caught by the error listener.
     expect(escaped).toBeNull();
-  }, 20_000);
+  });
 
   it('throws ExportIncompleteError when a chapter has no audio file', async () => {
     const brokenState = {

@@ -28,9 +28,9 @@ installCrashHandlers();
 
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { app } from './app.js';
 import { lanExposureWarning } from './lan-safety.js';
 import { ensureLanAuthToken } from './lan-auth.js';
@@ -80,6 +80,8 @@ import {
 import { resolveSidecarVenvDir } from './diagnostics/venv.js';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 import { ensureOrtMarker } from '../tts-sidecar/scripts/install-ort.mjs';
+// @ts-expect-error — shared helper ships no .d.ts; see its own header (#2291).
+import { isDirectlyInvoked } from '../../scripts/lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -514,12 +516,13 @@ function shutdown(signal: NodeJS.Signals): void {
 }
 
 /* Guarded so a test can import this module (e.g. for `runShutdownSequence`)
-   without executing the real boot sequence — mirrors the identical guard in
-   scripts/bump-version.mjs. `process.argv[1]` is resolved through
-   realpathSync before the compare for the same reason documented there
-   (symlinked temp dirs on macOS would otherwise make the hrefs unequal). */
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+   without executing the real boot sequence. Routed through the shared
+   scripts/lib/is-main-module.mjs helper (#2291) rather than a hand-rolled
+   realpath compare — see that file's header for why BOTH sides (not just
+   the raw invoked-path argument) must be realpathed, or the guard silently
+   misses across a symlink/junction and the server exits 0 having never
+   booted. */
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));

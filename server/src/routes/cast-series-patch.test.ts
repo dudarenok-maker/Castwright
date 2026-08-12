@@ -368,3 +368,72 @@ describe('#1981 — two series-patch calls for different characters in one book 
     expect((byId['race-b'] as { ageRange?: string }).ageRange).toBe('elderly');
   });
 });
+
+/* #2292 (owner decision) — a lock timeout on ONE series-mate reports
+ * contention, not a broken cast.
+ *
+ * The shape does not change: this stays a per-book `failed` entry inside a 207
+ * and the other books' writes still land, because failing a whole propagation
+ * because one book hit contention is worse than reporting the one. What
+ * changes is the REASON — a `LockAcquisitionTimeoutError` says nothing about
+ * that book's cast, and the user was previously shown the raw lock message as
+ * if their book were at fault.
+ *
+ * Two-directional, like every other #2260/#2292 pair: an ordinary error at the
+ * same site must keep reporting ITS OWN message verbatim. A route that
+ * rewrote every failure reason would pass a timeout-only test.
+ *
+ * The throw is aimed at `withCastLock` (which `applyPatchToCastFile` takes per
+ * book) rather than at a genuinely contended lock: the real budget is 10s and
+ * vitest's testTimeout is 15s.
+ */
+describe('series-patch — per-item reason on a lock timeout (#2292)', () => {
+  const TIDEWATCHER_DIR_MARK = TIDEWATCHER_BOOK;
+
+  async function patchWithThrowOnTidewatcher(toThrow: unknown) {
+    const castLock = await import('../workspace/cast-lock.js');
+    const original = castLock.withCastLock;
+    const spy = vi
+      .spyOn(castLock, 'withCastLock')
+      .mockImplementation(async <T,>(dir: string, fn: () => Promise<T>): Promise<T> => {
+        if (dir.includes(TIDEWATCHER_DIR_MARK)) throw toThrow;
+        return original(dir, fn) as Promise<T>;
+      });
+    try {
+      return await callPatch(keeperBookId, 'wren', { gender: 'female' });
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('reports contention for the contended book and still patches the others', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const res = await patchWithThrowOnTidewatcher(
+      new LockAcquisitionTimeoutError('cast:/w/tidewatcher', 10_000),
+    );
+
+    expect(res.status).toBe(207);
+    /* The site really ran: exactly one book failed, and it is the one the
+       spy aimed at. */
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].bookId).toBe(tidewatcherBookId);
+    expect(res.body.failed[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+    /* Never the raw lock text — that is what read as "this book's cast is
+       broken". */
+    expect(res.body.failed[0].error).not.toContain('withKeyLock');
+
+    /* And the batch was not escalated: the source book took the patch. */
+    expect(res.body.updated.some((u: { bookId: string }) => u.bookId === keeperBookId)).toBe(true);
+    expect(readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters[0].gender).toBe('female');
+  });
+
+  it('an ordinary error at the same site keeps its own message', async () => {
+    const res = await patchWithThrowOnTidewatcher(new Error('simulated disk-full'));
+
+    expect(res.status).toBe(207);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].error).toBe('simulated disk-full');
+  });
+});
