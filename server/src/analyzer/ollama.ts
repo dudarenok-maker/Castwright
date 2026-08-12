@@ -16,10 +16,14 @@
    so on a big prompt the whole prefill counts against that budget. A busy
    but perfectly healthy daemon therefore dies at exactly 302s with a bare
    `TypeError: fetch failed`, which classifyConnectError below reads as
-   "unreachable" — the one condition that reroutes to Gemini. A slow local
-   call thus silently completes in the cloud, which is precisely what the
-   paragraph above says must not happen (observed 2026-08-12: two chapters
-   of a 103k-word book failed cast detection this way, both at 302s).
+   "unreachable" — the one condition that reroutes to Gemini. So whenever a
+   Gemini key is present AND allowCloudFallback is on (the two gates in
+   selectAnalyzer, index.ts), a slow local call silently completes in the
+   cloud, which is precisely what the paragraph above says must not happen;
+   with either gate off it instead hard-fails with a wrong diagnosis
+   ("start the daemon") about a daemon that is running fine. Observed
+   2026-08-12: two chapters of a 103k-word book failed cast detection this
+   way, both at 302s.
 
    Hence ANALYZER_DISPATCHER: unlimited header/body timeouts so a busy
    daemon never aborts mid-call, with a short connectTimeout so a genuinely
@@ -877,12 +881,23 @@ export async function generatePersonaViaOllama(
 
   const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
   try {
-    let response: Response;
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {
-      response = await fetch(`${url}/api/chat`, {
+      /* Same ANALYZER_DISPATCHER as chat(), and this call needs it MORE:
+         `stream: false` above means Ollama withholds response headers until
+         the ENTIRE generation is finished, so undici's 300s default would
+         cover load + prefill + full decode rather than prefill alone. The
+         CPU path (`num_gpu: 0`, set by voice-style.ts for persona
+         generation) blows through that on any large local tag — and there is
+         no Gemini fallback on this path, so the misclassified
+         LocalUnreachableError below surfaces to the user as "Ollama is
+         unreachable, start the daemon" about a daemon that is running fine
+         and still generating. */
+      response = await undiciFetch(`${url}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        dispatcher: ANALYZER_DISPATCHER,
       });
     } catch (err) {
       throw classifyConnectError(err, url);

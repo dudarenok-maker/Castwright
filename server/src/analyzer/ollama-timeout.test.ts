@@ -22,8 +22,16 @@
 
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
+import { rm } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Agent } from 'undici';
 import { OllamaAnalyzer, LocalUnreachableError } from './ollama.js';
+
+/* protocol.ts resolves the handoff dirs relative to its own __dirname
+   (server/src/handoff/), so HANDOFF_ROOT is server/handoff/. */
+const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'handoff');
+const HANDOFF_IDS = ['m_ollama_timeout_control', 'm_ollama_timeout_fix', 'm_ollama_timeout_abort'];
 
 /* A valid stage-1 chapter response, same shape as ollama.test.ts's. */
 const VALID_RESPONSE = JSON.stringify({
@@ -71,12 +79,25 @@ function startSlowOllama(delayMs: number): Promise<string> {
 beforeAll(() => {
   process.env.CASTWRIGHT_VRAM_SAMPLE = '0';
 });
-afterAll(() => {
+afterAll(async () => {
   delete process.env.CASTWRIGHT_VRAM_SAMPLE;
+  /* Same courtesy as ollama.test.ts — don't leave prompt traces behind in the
+     (git-ignored, but shared) handoff dirs. */
+  await Promise.all(
+    HANDOFF_IDS.flatMap((id) => [
+      rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stage1-ch1.md`), { force: true }),
+      rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`), { force: true }),
+    ]),
+  );
 });
 
 afterEach(async () => {
   if (server) {
+    /* Drop keep-alive sockets first: the FIX and ABORT cases run through the
+       module-singleton ANALYZER_DISPATCHER, whose pooled socket would
+       otherwise hold `close()` open for undici's keepAliveTimeout (~4s) on
+       every test. */
+    server.closeAllConnections();
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
   }
@@ -92,16 +113,20 @@ describe('OllamaAnalyzer fetch timeout', () => {
       dispatcher: shortAgent,
     });
 
-    const err = await analyzer.runStage1Chapter('m_ollama_timeout_control', 1, '# p', {}).then(
-      () => null,
-      (e) => e,
-    );
+    try {
+      const err = await analyzer.runStage1Chapter('m_ollama_timeout_control', 1, '# p', {}).then(
+        () => null,
+        (e) => e,
+      );
 
-    /* This is the whole point of the fix: a healthy-but-slow daemon is
-       reported as UNREACHABLE, and LocalUnreachableError is the sole trigger
-       that reroutes analysis to Gemini. */
-    expect(err).toBeInstanceOf(LocalUnreachableError);
-    await shortAgent.close();
+      /* This is the whole point of the fix: a healthy-but-slow daemon is
+         reported as UNREACHABLE, and LocalUnreachableError is the sole trigger
+         that reroutes analysis to Gemini. */
+      expect(err).toBeInstanceOf(LocalUnreachableError);
+    } finally {
+      /* In a finally so a failing assertion above doesn't leak the Agent. */
+      await shortAgent.close();
+    }
   });
 
   it('FIX: the analyzer tolerates a slow-prefill daemon (no timeout abort, no bogus unreachable)', async () => {

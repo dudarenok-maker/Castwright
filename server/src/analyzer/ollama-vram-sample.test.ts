@@ -104,11 +104,26 @@ function chatResponse(): Response {
   return okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32)));
 }
 
+/* This file needs BOTH fetches mocked, because the two halves it exercises use
+   different ones: `runStage1Chapter` → chat() goes through undici's fetch (see
+   ANALYZER_DISPATCHER in ollama.ts — the dispatcher and the fetch must come
+   from the same undici copy), while sampleAndRecordVram's /api/ps probe in
+   model-vram-stats.ts still uses the global one. Stubbing only the global left
+   the chat half UNMOCKED and firing a real generation at the live daemon,
+   while the test stayed green off the fabricated /api/ps payload — green for
+   entirely the wrong reason. `vi.hoisted` shares one mock across both. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
+
 /* ── Tests ───────────────────────────────────────────────────────────────── */
 
 describe('OllamaAnalyzer — VRAM sampling (CASTWRIGHT_VRAM_SAMPLE=1)', () => {
   it('records an analyzer VRAM sample after a successful chat', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (url: string) => {
       if (String(url).endsWith('/api/ps')) {
         return {
           ok: true,
@@ -126,6 +141,17 @@ describe('OllamaAnalyzer — VRAM sampling (CASTWRIGHT_VRAM_SAMPLE=1)', () => {
       model: 'qwen3.5:9b',
     });
     await analyzer.runStage1Chapter('m_id', 1, '# stage1 prompt', {});
+
+    /* Assert the CHAT half actually went through the mock. Without this the
+       test can pass on a fabricated /api/ps payload while the real generation
+       goes to a live daemon over the network — which is exactly what happened
+       once chat() moved to undici's fetch and only the global one was stubbed
+       (a real `{"characters": []}` reply landed in the handoff outbox). On a
+       CI runner with no daemon that failure mode is a hard red; on a dev box
+       it silently loads a competing model onto a busy GPU. */
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/chat')),
+    ).toBe(true);
 
     const recs = await stats.readAllVramRecords();
     expect(recs.some((r) => r.key === 'qwen3.5:9b@32768')).toBe(true);

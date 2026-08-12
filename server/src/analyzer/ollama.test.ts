@@ -863,7 +863,7 @@ describe('OllamaAnalyzer — onEvalTiming sink (analyzer-eval-telemetry)', () =>
    runStage: no schema-constrained retry loop, and an empty/malformed reply
    must resolve to `null` rather than throw. These tests pin that contract
    at the wire level, mirroring the mocking style of the describe blocks
-   above (fetchMock over global.fetch, NDJSON streams via ndjsonStream). */
+   above (fetchMock over undici's fetch, NDJSON streams via ndjsonStream). */
 describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
   const VALID_ESCALATION_RESPONSE = JSON.stringify({
     assignments: [
@@ -976,15 +976,19 @@ function mockChatResponse(text: string) {
   });
 }
 
+/* generatePersonaViaOllama shares chat()'s transport: it is the second
+   /api/chat call site and also carries ANALYZER_DISPATCHER (its `stream:false`
+   makes the 300s default even tighter — headers wait for the WHOLE
+   generation). So these drive the same undici fetchMock, not a global spy. */
 describe('generatePersonaViaOllama', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('GPU path: sends the caller keep_alive and leaves num_gpu unset', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A warm voice.'));
+    fetchMock.mockResolvedValue(mockChatResponse('A warm voice.'));
     const { generatePersonaViaOllama } = await import('./ollama.js');
     const out = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
     expect(out).toBe('A warm voice.');
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.keep_alive).toBe('5m');
     expect(body.stream).toBe(false);
     expect(body.format).toBeUndefined();
@@ -993,17 +997,17 @@ describe('generatePersonaViaOllama', () => {
   });
 
   it('CPU path: num_gpu:0, keep_alive:0', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A cool voice.'));
+    fetchMock.mockResolvedValue(mockChatResponse('A cool voice.'));
     const { generatePersonaViaOllama } = await import('./ollama.js');
     const out = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: true });
     expect(out).toBe('A cool voice.');
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.options.num_gpu).toBe(0);
     expect(body.keep_alive).toBe(0);
   });
 
   it('connection refusal surfaces LocalUnreachableError', async () => {
-    vi.spyOn(global, 'fetch').mockRejectedValue(
+    fetchMock.mockRejectedValue(
       Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }),
     );
     const { generatePersonaViaOllama, LocalUnreachableError } = await import('./ollama.js');
@@ -1014,7 +1018,7 @@ describe('generatePersonaViaOllama', () => {
 
   it('persona gen goes through the analyzer slot, keyed on its model (GPU path)', async () => {
     const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
-    vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A warm voice.'));
+    fetchMock.mockResolvedValue(mockChatResponse('A warm voice.'));
     const { generatePersonaViaOllama } = await import('./ollama.js');
     await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
     expect(spy).toHaveBeenCalledWith('qwen3.5:9b', false);
@@ -1024,7 +1028,7 @@ describe('generatePersonaViaOllama', () => {
 
   it('persona gen on CPU takes the limiter but no GPU slot', async () => {
     const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
-    vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A cool voice.'));
+    fetchMock.mockResolvedValue(mockChatResponse('A cool voice.'));
     const { generatePersonaViaOllama } = await import('./ollama.js');
     await generatePersonaViaOllama('PROMPT', 'qwen3.5:4b', { onCpu: true });
     expect(spy).toHaveBeenCalledWith('qwen3.5:4b', true); // onCpu forwarded → lease no-ops
