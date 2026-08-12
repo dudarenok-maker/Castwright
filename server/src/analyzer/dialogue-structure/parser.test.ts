@@ -395,15 +395,20 @@ describe('parser — #2288 a rule may move a run boundary, never delete a run', 
     expect(speechOf('‘He said “hi” ’cause he was late.')).toEqual(['He said “hi” ']);
   });
 
-  it('every paragraph with at least one run keeps at least one run', () => {
-    const bodies = [
-      '‘I don’t know,’ she said.',
-      '‘’Tis nothing,’ he said.',
-      '‘Give ’em back,’ she said.',
-      '‘He said “hi” to O’Brien.',
-      '“ ‘Ping Wing, the Pieman’s son,',
-    ];
-    for (const body of bodies) expect(speechOf(body).length).toBeGreaterThan(0);
+  // Each body's every `’` is a contraction/possessive/dialect-elision — no
+  // later `’` sits after punctuation — so each individually goes to `[]`
+  // under the Step 3 mutation. Asserted as exact arrays, not lengths: a
+  // length check alone would still pass on a wrongly-promoted nested run
+  // (same speaker-changed silently, same run count) — see the two tests
+  // above, which is exactly why that shape is asserted there instead.
+  it.each([
+    ['‘She wouldn’t say why.', ['She wouldn']],
+    ['‘That is Sam’s coat.', ['That is Sam']],
+    ['‘We shall ne’er surrender.', ['We shall ne']],
+    ['‘Don’t you dare say it.', ['Don']],
+    ['‘It wasn’t my fault, he claimed.', ['It wasn']],
+  ] as const)('a paragraph whose only closer is rejected keeps its truncated turn: %s', (body, expected) => {
+    expect(speechOf(body)).toEqual(expected);
   });
 });
 
