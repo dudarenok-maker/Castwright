@@ -46,7 +46,6 @@
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 /* The dialogue-tag verbs we look for. Pattern: <Name> <verb> at the start of a
