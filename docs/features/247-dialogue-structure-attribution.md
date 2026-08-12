@@ -49,8 +49,12 @@ owner: null
   - `LanguageConventions` table per language (`dialogue-structure/lang/{en,es,fr,de,ru}.ts`),
     keyed off the book's already-resolved `opts.stageCall.language` — no new opts field. An
     unsupported/unknown language resolves to an empty table, so the parser emits no evidence and
-    the cross-examiner falls back to exactly current behaviour (narrator-default only, model
-    confidence passed through) — **byte-identical to pre-engine output**.
+    the cross-examiner falls back to the narrator-default path (model confidence passed through).
+    **Since #2245 that fallback is a pass-through — with no table there is no basis to judge, so
+    nothing is demoted — which is the OPPOSITE of pre-engine output, not byte-identical to it**
+    (pre-engine demoted every non-spoken line). This is a default-path change: the
+    `structure.enabled && conventions` guard fails on the null table whatever the knob says. See
+    invariant 4.
   - Four new registry knobs under a new `analyzer-structure` group (`server/src/config/registry.ts`
     lines 1062-1103) — see "Registry knobs" below.
   - `state.json` gains an optional `analysisProvenance` block (`server/src/workspace/scan.ts`) —

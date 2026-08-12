@@ -104,9 +104,10 @@ describe('isSpokenLine', () => {
      `analyzer.structure.enabled` OFF these lines now go to the narrator. Zero
      occurrences in the live 20-book corpus — which holds ONE book each of
      de/es/fr/zh/ja and therefore cannot produce a counter-example either way,
-     so that zero is not evidence of safety. #2279 carries the same table and
-     the measurement it needs; these two blocks are its executable copy — keep
-     the three in step. */
+     so that zero is not evidence of safety. #2279 carries the row-by-row
+     enumeration and the measurement it needs; blocks (a) and (b) below are its
+     executable copy, so a row added to either belongs in the other and in
+     #2279's table. */
   it('#2279 (a): a leading dash is not dialogue where dialogueOpen is null — en, de, zh, ja', () => {
     expect(EN.dialogueOpen).toBeNull(); // the four below are a consequence of the tables,
     expect(DE.dialogueOpen).toBeNull(); // not four independent facts — if a table ever
@@ -120,6 +121,7 @@ describe('isSpokenLine', () => {
   });
   it('#2279 (b): a quote pair absent from the language table is not dialogue', () => {
     expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false); // fully-ASCII; de carries „…" but not "…"
+    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(false); // “ is German's CLOSER, never an opener
     expect(isSpokenLine('«Lass das.»', DE)).toBe(false); // Swiss order; de carries »…« only
     expect(isSpokenLine('"Hola", dijo.', ES)).toBe(false); // es carries «» and “” only
     expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(false); // fr.quotePairs is «» only
