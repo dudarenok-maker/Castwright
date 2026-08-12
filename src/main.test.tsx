@@ -64,12 +64,26 @@ describe('main.tsx router wiring (fe-56)', () => {
        billed against testTimeout rather than against a hook. That is the whole
        reason this test needs its own budget.
 
-       Measured cost is ~2.6-2.9s (7 runs across two sessions, `tests` from
+       Measured cost is ~2.6-3.1s on a lightly-loaded box (`tests`, from
        vitest's own summary), NOT the ~5s an earlier revision of this comment
-       claimed. #2276 read `tests 5.00s` off a run that was either loaded or had
-       already timed out at the 5000ms default, and that figure was never
-       reproduced — so the "zero timing margin" premise in the issue is wrong
-       too; the real margin against the default was ~1.8x.
+       claimed. But quote that with its conditions, because the number moves a
+       lot: ~3.6-4.3s with an unrelated CPU-heavy process resident and NO
+       concurrent test battery, and higher still under the concurrent battery
+       #2276 actually documents. So the margin against the 5000ms default is
+       ~1.8x idle, ~1.2x under moderate load, and under 1.0x -- i.e. a failure --
+       under the condition that produced the bug. The issue's "zero timing
+       margin" framing is wrong about an idle box and substantially right about
+       a busy one.
+
+       Where #2276's `tests 5.00s` came from, mechanically: `retry: 1` is set in
+       vitest.config.ts, and vitest captures a test's start ONCE before its
+       retry loop and computes `duration` after it -- so duration is CUMULATIVE
+       across attempts. Attempt 1 timing out at 5000ms plus a near-free retry
+       (the module graph is already in the worker's cache, so the second
+       `import('./main')` does no transform) reports a PASSING test at ~5.00s
+       with a ~7.6s wall total, which is exactly the `duration 7.62s total /
+       tests 5.00s` pair the issue recorded. It was never a measurement of what
+       this test costs.
 
        30s is therefore deliberate headroom for a loaded box (this repo runs
        concurrent batteries across worktrees), NOT an estimate of what the test
