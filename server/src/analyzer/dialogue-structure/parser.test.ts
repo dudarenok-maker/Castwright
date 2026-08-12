@@ -294,12 +294,6 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
       .filter((s) => s.kind === 'speech')
       .map((s) => body.slice(s.start, s.end));
 
-  it('de: curly “…” forms a quote run in embedded position', () => {
-    expect(spoken('Er sagte “Komm her” und ging.', 'de')).toEqual(['Komm her']);
-  });
-  it('de: Swiss «…» forms a quote run in embedded position', () => {
-    expect(spoken('Er sagte «Komm her» und ging.', 'de')).toEqual(['Komm her']);
-  });
   it('es: straight "…" forms a quote run in embedded position', () => {
     expect(spoken('Él dijo "Ven aquí" y se fue.', 'es')).toEqual(['Ven aquí']);
   });
@@ -317,22 +311,56 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
     expect(spoken('他说 "你好" 然后走了。', 'zh')).toEqual(['你好']);
     expect(spoken('他说 ‘你好’ 然后走了。', 'zh')).toEqual(['你好']);
   });
-  it('ja: curly “…” and straight "…" both form quote runs — the zh/ja asymmetry is closed', () => {
+  it('ja/zh: curly “…” and straight "…" both form quote runs — the zh/ja asymmetry is closed', () => {
     expect(spoken('彼は “おはよう” と言った。', 'ja')).toEqual(['おはよう']);
     expect(spoken('彼は "おはよう" と言った。', 'ja')).toEqual(['おはよう']);
     expect(spoken('他说 “你好” 然后走了。', 'zh')).toEqual(['你好']); // same line, same answer now
   });
 
-  /* #2288 — the regression this file exists to prevent. German's own dialogue
-     CLOSER is the ASCII quote, so adding ['"','"'] to `de` lets findQuoteRuns
-     re-pair a paragraph's " glyphs sequentially and swallow the second turn,
-     synthesising `. „` as speech. Measured on the real path before the pair was
-     dropped. If someone adds it back, this reddens. */
-  it('#2288: a German turn pair around an ASCII-quoted sign keeps BOTH turns intact', () => {
+  /* Multi-run interaction, the hazard class this block exists for. A single
+     quoted run per paragraph cannot see it — #1601 and #2288 are both about a
+     run extending past the NEXT turn's opener — so every added pair gets a
+     two-turn case with a quoted term between the turns. */
+  it('es: two turns around a quoted term stay three separate runs', () => {
+    const body = '"Hola", dijo. El cartel decía "Cerrado". "Adiós", dijo ella.';
+    expect(spoken(body, 'es')).toEqual(['Hola', 'Cerrado', 'Adiós']);
+  });
+  it('fr: two turns around a quoted term stay three separate runs', () => {
+    const body = '«Bonjour», dit-il. Le panneau disait “Fermé”. «Au revoir», dit-elle.';
+    expect(spoken(body, 'fr')).toEqual(['Bonjour', 'Fermé', 'Au revoir']);
+  });
+  it('ru: two turns around a quoted term stay three separate runs', () => {
+    const body = '«Privet», skazal on. Znak glasil ‘Zakryto’. «Poka», skazala ona.';
+    expect(spoken(body, 'ru')).toEqual(['Privet', 'Zakryto', 'Poka']);
+  });
+  it('zh: two turns around a quoted term stay three separate runs', () => {
+    const body = '「你好」他说。牌子写着‘停’。「再见」她说。';
+    expect(spoken(body, 'zh')).toEqual(['你好', '停', '再见']);
+  });
+  it('ja: two turns around a quoted term stay three separate runs', () => {
+    const body = '「おはよう」彼は言った。看板には “Closed” とあった。「さようなら」彼女は言った。';
+    expect(spoken(body, 'ja')).toEqual(['おはよう', 'Closed', 'さようなら']);
+  });
+
+  /* #2288 — the regressions this block exists to prevent, and the reason `de`
+     gains NOTHING from #2279. Each of the three candidates was measured on this
+     path: every one destroys the second turn and synthesises punctuation as
+     speech, because German pairs `„` with three closers while any new opener
+     carries one, so its run runs on past the next turn's opener. If someone
+     adds any of them back, these redden. */
+  it('#2288: de + ["”,"”"] — a turn pair around an ASCII-quoted sign keeps BOTH turns', () => {
     const body = '„Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.';
     expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
   });
-  it('#2288: `de` does not carry the same-glyph ASCII pair — the exclusion is the fix', () => {
-    expect(conventionsFor('de')!.quotePairs.some(([o, c]) => o === '"' && c === '"')).toBe(false);
+  it('#2288: de + curly — a `„…”` turn pair around a `“`-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag”, sagte er. Das Schild sagte “Zu". „Und du?”, fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + Swiss — a `„…“` / `»…«` turn pair around a `«`-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag“, sagte er. Das Schild sagte «Zu". »Und du?«, fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: `de` carries no opener beyond `„` and `»` — the exclusion IS the fix', () => {
+    expect(new Set(conventionsFor('de')!.quotePairs.map(([o]) => o))).toEqual(new Set(['„', '»']));
   });
 });

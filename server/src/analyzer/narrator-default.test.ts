@@ -121,8 +121,6 @@ describe('isSpokenLine', () => {
     // the structure engine. The structure-engine half is pinned separately, on
     // the real path, in dialogue-structure/parser.test.ts — these assertions
     // only exercise `isSpokenLine`, which is unreachable at default settings.
-    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(true); // “ was CLOSER-only before
-    expect(isSpokenLine('«Lass das.»', DE)).toBe(true); // Swiss order, mirror of »…«
     expect(isSpokenLine('"Hola", dijo.', ES)).toBe(true);
     expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(true);
     expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(true);
@@ -145,12 +143,15 @@ describe('isSpokenLine', () => {
     }
     expect(isSpokenLine("'I'm lost,' she said.", EN)).toBe(false);
     expect(isSpokenLine("'Komm her' sagte er.", DE)).toBe(false);
-    // #2288 — the same-glyph ASCII pair stays out of `de` SPECIFICALLY, and
-    // this is the one exclusion that costs real dialogue: a German book
-    // typeset entirely with ASCII quotes has none recognised. Adding the pair
-    // destroys a turn instead, because German's own closer IS that glyph —
-    // see the counter-example in de.ts and parser.test.ts's regression case.
+    // #2288 — `de` gains NO new opener, and this is the exclusion that costs
+    // real dialogue: a German book typeset with anything but `„` or `»` has
+    // none of it recognised. Every candidate destroys a turn instead, because
+    // German pairs `„` with three closers while any new opener carries one, so
+    // its run runs on past the next turn's opener. The three counter-examples
+    // are in de.ts and pinned on the engine path in parser.test.ts.
     expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false);
+    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(false);
+    expect(isSpokenLine('«Lass das.»', DE)).toBe(false);
     // A convention belonging to a DIFFERENT language stays out: German „…“
     // inside a Spanish or Japanese book is not Spanish or Japanese typography.
     expect(isSpokenLine('„Ven aquí“ dijo él.', ES)).toBe(false);
