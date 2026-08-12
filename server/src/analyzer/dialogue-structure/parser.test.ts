@@ -278,3 +278,32 @@ describe('applyTag — addressee/bystander gate (opt-in languages)', () => {
     expect(sp?.speaker).toEqual({ characterId: 'valkyrie', source: 'tag-name' });
   });
 });
+
+describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 1)', () => {
+  const enIdx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
+  const zhIdx = buildNameIndex([{ id: 'li', name: '李' }], conventionsFor('zh')!);
+  const speechOf = (body: string, idx: ReturnType<typeof buildNameIndex>) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('de: a `„` run ends at the NEAREST of its closers, per turn (#1601)', () => {
+    expect(speechOf('„Hallo", rief sie. „Nein", sagte er.', deIdx)).toEqual(['Hallo', 'Nein']);
+  });
+  it('de: a differently-classed nested run stays inside its outer run', () => {
+    expect(speechOf('„Er sagte »hallo« zu mir“, berichtete sie.', deIdx)).toEqual([
+      'Er sagte »hallo« zu mir',
+    ]);
+  });
+  it('en: nesting resolves to the OUTER run', () => {
+    expect(speechOf('“He said ‘hi’ to me,” she reported.', enIdx)).toEqual(['He said ‘hi’ to me,']);
+  });
+  it('en: a same-glyph pair still pairs', () => {
+    expect(speechOf('He said "nothing at all" and left.', enIdx)).toEqual(['nothing at all']);
+  });
+  it('zh: nesting resolves to the OUTER run', () => {
+    expect(speechOf('“他说‘你好’然后走了”', zhIdx)).toEqual(['他说‘你好’然后走了']);
+  });
+});

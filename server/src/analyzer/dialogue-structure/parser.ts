@@ -165,10 +165,6 @@ function parseDashParagraph(
   return { start: base, end: base + line.length, kind: 'dialogue', spans };
 }
 
-function escapeRegExp(ch: string): string {
-  return ch.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-}
-
 interface QuoteRun {
   start: number;
   end: number;
@@ -182,13 +178,15 @@ interface QuoteRun {
     glyph that pairs with its opener — not at a same-glyph closer sitting past
     a nearer, different-glyph one. Without this, German (the only language
     whose `„` opener maps to several closers — `“`/`”`/`"`) over-merges a
-    mixed-closer paragraph: the per-pair `„…"` regex would lazily run the first
-    `„` past an intervening `“` to a later ASCII `"`, swallowing the beat and
-    the next turn (#1601). The run ends at the nearest closer POSITION; a run's
+    mixed-closer paragraph: scanning the first `„` all the way to a later ASCII
+    `"` while skipping past an intervening `“` would swallow the beat and the
+    next turn (#1601). For each opener occurrence, the run ends at the NEAREST
+    closer position across that opener's whole closer set; on a tie (two
+    closers found at the same position) the earlier entry in the opener's
+    closer list wins — so if a future language ever pairs prefix-related
+    multi-char closers with one opener, order them longest-first there. A run's
     `closeLen` is the actually-matched closer's length (all current closers are
-    one code unit). NOTE: alternation matches the leftmost alternative, not the
-    longest — if a future language ever pairs prefix-related multi-char closers
-    with one opener, order them longest-first here. */
+    one code unit). */
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
@@ -198,10 +196,36 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
   }
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
-    const closerClass = closers.map(escapeRegExp).join('|');
-    const re = new RegExp(`${escapeRegExp(open)}[\\s\\S]*?(${closerClass})`, 'gu');
-    for (const m of line.matchAll(re)) {
-      candidates.push({ start: m.index!, end: m.index! + m[0].length, openLen: open.length, closeLen: m[1].length });
+    let pos = 0;
+    for (;;) {
+      const start = line.indexOf(open, pos);
+      if (start < 0) break;
+      /* Nearest closer POSITION across the opener's closer set; ties go to the
+         earlier entry in `closers`, matching the old alternation's
+         leftmost-alternative rule. */
+      let end: { at: number; glyph: string } | null = null;
+      for (const closer of closers) {
+        const at = line.indexOf(closer, start + open.length);
+        if (at >= 0 && (end === null || at < end.at)) end = { at, glyph: closer };
+      }
+      if (end === null) {
+        /* No closer after this opener. The old regex failed to match here and
+           `lastIndex` advanced by one, so the rest of the line was NOT
+           consumed and the next opener of this class still got its chance. */
+        pos = start + open.length;
+        continue;
+      }
+      candidates.push({
+        start,
+        end: end.at + end.glyph.length,
+        openLen: open.length,
+        closeLen: end.glyph.length,
+      });
+      /* Scanning resumes at the END of the accepted run: a second opener of
+         the same class INSIDE a run yields no candidate. (Task 2 may move that
+         end LATER than the old regex would have — the resume point follows the
+         run, not the regex.) */
+      pos = end.at + end.glyph.length;
     }
   }
   candidates.sort((a, b) => a.start - b.start || b.end - a.end);
