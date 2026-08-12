@@ -14,6 +14,7 @@ import {
   resolveBaselineText,
   CANNOT_VERIFY_BASELINE_ERROR,
 } from '../check-onbox-register.mjs';
+import { readNormalized } from '../lib/read-normalized.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-onbox-register.mjs');
@@ -1982,7 +1983,10 @@ test('#2199 review (B3): the generic cannot-verify message does not prescribe gi
 // the entire point there, and it's engineered (via an unreachable proxy) to
 // fail deterministically rather than depending on ambient network state.
 const REAL_LIVE_VIEW_HTML = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
-const REAL_REGISTER_TEXT = readFileSync(REAL_REGISTER_PATH, 'utf8');
+// readNormalized, not a bare readFileSync: buildAheadBaselineText below scans
+// this text for literal '\n---\n' / '\n## ' delimiters, which miss on a
+// CRLF checkout (#2291) — see scripts/lib/read-normalized.mjs.
+const REAL_REGISTER_TEXT = readNormalized(REAL_REGISTER_PATH);
 
 function withTempCopy(html, fn) {
   const dir = mkdtempSync(join(tmpdir(), 'onbox-published-'));
