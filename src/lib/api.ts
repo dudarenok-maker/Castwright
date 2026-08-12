@@ -1944,8 +1944,13 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
 
 async function realGetLibrary(): Promise<LibraryResponse> {
   const res = await fetch('/api/library');
-  if (!res.ok)
-    throw new ApiError(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`, res.status);
+  // #2278 review round 3, Finding 3 — /api/library sits behind the same
+  // requireLanToken guard as listDevices, so its 401 body now carries
+  // pairingOriginHint()'s port-correct guidance too; parse it via
+  // apiErrorFromResponse (and its `fromServer` flag) instead of the raw
+  // response text, so book-library.tsx can prefer it over recoveryHint()'s
+  // own composed pointer when it's genuinely available.
+  if (!res.ok) throw await apiErrorFromResponse(res, `Library scan failed (${res.status})`);
   return res.json();
 }
 
@@ -7316,46 +7321,108 @@ async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(trimmed ? { label: trimmed } : {}),
   });
-  if (!res.ok)
-    throw new ApiError(
-      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
-      res.status,
-    );
+  // #2278 review Finding 2 — parses the server's JSON `{ error }` body (see
+  // apiErrorFromResponse below) rather than embedding the raw response text:
+  // a 403 here now carries port-correct pairing guidance (pairingOriginHint()
+  // on the server) that PairDeviceModal renders verbatim instead of its own
+  // hardcoded copy.
+  if (!res.ok) throw await apiErrorFromResponse(res, `pair session failed (${res.status})`);
   return res.json();
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
+  constructor(
+    message: string,
+    readonly status: number,
+    /** True when `message` came from the server's own JSON `{ error }` body
+     *  (#2278 review round 3, Finding 1) — false when apiErrorFromResponse
+     *  fell back to a synthetic "<action> failed (<status>)" string because
+     *  the body was absent, not JSON, or had no `error` field (e.g. an HTML
+     *  403 from an interposed proxy or the :443 forwarder). A caller that
+     *  renders `message` as the user's ENTIRE explanation — not just logs it
+     *  — MUST gate on this rather than on `message` being non-empty: the
+     *  synthetic fallback is always non-empty too, so an emptiness check
+     *  can't tell a real server sentence from a bare developer string.
+     *  Defaults false — every direct `new ApiError(...)` call that bypasses
+     *  apiErrorFromResponse is, by construction, not a confirmed server
+     *  message. */
+    readonly fromServer: boolean = false,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/** Build an ApiError from a non-ok Response, preferring the server's own
+ *  JSON `{ error }` body over a synthetic `fallback` string (#2278). Several
+ *  LAN-guard 401/403 bodies carry actionable, port-correct guidance (e.g.
+ *  `pairingOriginHint()` on the server) that the UI renders verbatim —
+ *  discarding it here would silently regress that. Falls back to `fallback`
+ *  (with `fromServer: false`) when the body is absent, not JSON, or has no
+ *  non-empty string `error` field.
+ *
+ *  The rendered `message` deliberately stays short in the fallback case — a
+ *  reverse proxy's HTML error page is not a sentence to show a reader — so
+ *  the raw body is logged instead (#2278 review round 4, Finding 9). Without
+ *  it a gateway/proxy fault surfaces as a bare status code with no diagnostic
+ *  anywhere, including devtools. */
+async function apiErrorFromResponse(res: Response, fallback: string): Promise<ApiError> {
+  const text = await res.text().catch(() => '');
+  let parsed: { error?: unknown } | null = null;
+  try {
+    parsed = JSON.parse(text) as { error?: unknown };
+  } catch {
+    /* not JSON — the fallback path below owns this case */
+  }
+  if (typeof parsed?.error === 'string' && parsed.error.length > 0) {
+    return new ApiError(parsed.error, res.status, true);
+  }
+  console.error(`${fallback}${text ? `: ${text.slice(0, 500)}` : ` ${res.statusText}`}`);
+  return new ApiError(fallback, res.status, false);
 }
 
 async function realCreateDevicePairSession(body: { label: string; selfBind?: boolean }) {
   const res = await fetch('/api/devices/pair-session', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(`pair-session failed (${res.status})`, res.status);
+  if (!res.ok) throw await apiErrorFromResponse(res, `pair-session failed (${res.status})`);
   return res.json() as Promise<{ url: string; code: string; expiresAt: number; friendlyUrl?: string }>;
 }
 async function realListDevices() {
   const res = await fetch('/api/devices');
-  if (!res.ok) throw new ApiError(`list devices failed (${res.status})`, res.status);
+  if (!res.ok) throw await apiErrorFromResponse(res, `list devices failed (${res.status})`);
   return res.json() as Promise<{ devices: PublicDevice[] }>;
 }
 async function realRevokeDevice(id: string) {
   const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  // Deliberately NOT apiErrorFromResponse (#2278 review round 3, nit): the
+  // card's own revokeLoopbackOnlyHint substitutes for this on 403 regardless
+  // of what the server said (the server's message here is a generic, non-
+  // port "Devices can only be revoked from the host UI.", not the guidance
+  // the card needs), so parsing the body would only cost a fetch-body read
+  // with no caller ever reading the result. The 404 ("Unknown device.") is
+  // collateral loss from the same choice, not a separate oversight — revoke
+  // has no UI path that renders a 404 message differently from any other.
   if (!res.ok) throw new ApiError(`revoke failed (${res.status})`, res.status);
   return res.json() as Promise<{ ok: true }>;
 }
 async function realRegenerateLanCert() {
   const res = await fetch('/api/lan/cert/regenerate', { method: 'POST' });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new ApiError(body?.error ?? `regenerate cert failed (${res.status})`, res.status);
-  }
+  if (!res.ok) throw await apiErrorFromResponse(res, `regenerate cert failed (${res.status})`);
   return res.json() as Promise<{ hosts: string[] }>;
 }
 export interface LanCertStatus {
   requested: boolean;
   active: boolean;
+  /** The port the server actually bound (#2278) — read this instead of
+      hardcoding 8443: window.location.port is empty on the castwright.local
+      and :443-forwarder paths, exactly when the real port is unknowable
+      client-side. NOT necessarily an HTTPS port — this is whatever the server
+      bound, HTTP or HTTPS; check `active` before composing an `https://` URL
+      from it. The response is an unchecked cast, so a body missing this field
+      types as `number` but reads `undefined`: composition sites must also
+      check it is a real port (see lan-access-card.tsx's loopbackHttpsOrigin). */
+  boundPort: number;
   health: 'healthy' | 'missing' | 'expired';
   certHosts: string[];
   currentLanIps: string[];
@@ -7390,6 +7457,7 @@ const mockRegenerateLanCert = async () => ({
 const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
   requested: true,
   active: false,
+  boundPort: 8443,
   health: 'missing',
   certHosts: [],
   currentLanIps: ['192.168.1.42'],

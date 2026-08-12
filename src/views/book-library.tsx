@@ -247,6 +247,7 @@ export function BookLibraryView({
         dispatch(libraryActions.hydrateError({
           message: e instanceof Error ? e.message : String(e),
           status: e instanceof ApiError ? e.status : undefined,
+          fromServer: e instanceof ApiError ? e.fromServer : false,
         })),
       );
   };
@@ -402,7 +403,20 @@ export function BookLibraryView({
           <h3 className="font-serif text-2xl font-bold text-ink">Couldn&apos;t load your library</h3>
           <p className="mt-2 text-sm text-ink/60">
             {error.status === 401
-              ? <>This browser is no longer authorized for Castwright on your network. {recoveryHint()}</>
+              ? // #2278 review round 4, Finding 2 — COMPOSED, not chosen. The
+                // first sentence is this app's own plain-language account of
+                // what happened (#2247 Task 6) and always renders; only the
+                // pointer that follows it varies. /api/library sits behind the
+                // same requireLanToken guard as listDevices, so its 401 body
+                // carries pairingOriginHint()'s live-port guidance — prefer
+                // that when the body genuinely parsed, since recoveryHint()
+                // cannot know the port on the :443-forwarder path this issue
+                // exists for. The app's sentence deliberately stops before
+                // "where to go", which whichever pointer wins then supplies.
+                <>
+                  This browser is no longer authorized for Castwright on your network.{' '}
+                  {error.fromServer ? error.message : recoveryHint()}
+                </>
               : error.message}
           </p>
           <div className="mt-6">

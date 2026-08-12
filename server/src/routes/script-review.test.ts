@@ -1599,18 +1599,21 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
       Promise.resolve({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] }),
     );
     const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    // Stays wall-clock, like the rejoin test above: the retry either starts a
-    // genuinely new analyzer call or (in the buggy case) JOINS the doomed
-    // first job and never calls runReview a second time at all — which of
-    // those happens is exactly what this test is checking, so there is no
-    // single mocked-call-entered condition to gate on here; a regression
-    // would make that signal dead by construction, turning a red assertion
-    // into a 15s timeout instead of a crisp failure.
-    await new Promise((r) => setTimeout(r, 20));
+    /* #2262 — this was a bare 20ms sleep, which is the whole budget for the
+       second request to travel supertest -> handler -> fs writes -> runReview,
+       and not enough under contention. Wait for the condition instead of at it.
+       vi.waitFor rejects with the CALLBACK's own error, so a genuine regression
+       still fails on `expected 2, got 1` rather than a polling message — no
+       swallow-and-reassert needed. Same idiom as gemini.test.ts:696.
 
-    // A genuinely new analyzer call was made — the second request did NOT
-    // join the doomed first job.
-    expect(runReview).toHaveBeenCalledTimes(2);
+       Asserting the PRESENCE of the second call is what makes this pollable;
+       the sibling rejoin test above asserts its ABSENCE and stays wall-clock
+       for that reason — the two are not interchangeable.
+
+       Note both causes print the same text: a genuine rejoin regression and a
+       box slow enough to blow 2000ms are indistinguishable here. If this ever
+       reddens, re-run it in isolation before hunting a registry bug. */
+    await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(2), { timeout: 2000, interval: 5 });
 
     firstCall.release({ ops: [] });
     const secondRes = await second.done;
