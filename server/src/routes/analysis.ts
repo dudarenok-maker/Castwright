@@ -425,22 +425,26 @@ export async function reconcileRejectEdgesOnDisk(
       }
     });
   } catch (err) {
-    /* #2260 round 2 — a withKeyLock ACQUISITION timeout is not the disk fault
-       this handler is scoped for, and swallowing it is strictly worse than the
-       hang it replaced: cast.json is already written and the identity record
-       never updated, which is the divergence #2040 exists to prevent,
-       silently. Let exactly that one class through; everything else
-       (EPERM/ENOSPC/AV-lock, CastIdHistoryUnreadableError) is swallowed
-       exactly as before. See `LockAcquisitionTimeoutError` in
-       workspace/file-lock.ts.
+    /* #2260 round 4 (owner decision) — THE ONE DELIBERATE EXCEPTION. Every
+       other best-effort handler #2260 touched lets a withKeyLock ACQUISITION
+       timeout through (`isLockAcquisitionTimeout`, workspace/file-lock.ts);
+       this one swallows it along with everything else, and does so on
+       purpose.
 
-       Round 3 — this function's only two production callers are the main and
-       subset analysis persist blocks, both of which have ALREADY responded
-       (these are fire-and-forget SSE jobs), so there is no 200 to return
-       here; an earlier version of this comment said there was. What the
-       rethrow buys instead is that each persist block parks the timeout and
-       ends its JOB with an SSE `error` event rather than a `result`. */
-    if (isLockAcquisitionTimeout(err)) throw err;
+       Round 2 added a rethrow here on the same reasoning it used at the six
+       identity sites — "cast.json is already written and the identity record
+       never updated". That reasoning does not describe THIS site. It was
+       copy-pasted from handlers where the caught error can come out of
+       `retireCharacterId` itself; here no identity record is at risk, because
+       this call runs LAST in the persist — after every `recordRetirements`
+       and both `dropSuperseded*` calls have already landed — and the only
+       thing it writes is a set of cosmetic `notLinkedTo` edges. A failure
+       here is exactly what this function's own doc comment above says it is:
+       a surviving stale edge re-suppresses ONE future §4.4 name-match until
+       the next persist tries again, and this pass is itself the self-healing
+       mechanism. Failing an entire completed analysis run over that is
+       disproportionate, so the whole handler stays best-effort — a lock
+       timeout included. */
     console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
   }
 }
@@ -3274,8 +3278,24 @@ export async function runMainAnalyzerJob(
           log,
         );
       } catch (historyErr) {
-        // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above for
-        // why a lock-acquisition timeout must NOT be swallowed here.
+        /* #2260 — THE CANONICAL "why" for the four rethrow sites in this file;
+           the other three point here. A withKeyLock ACQUISITION timeout is not
+           the disk fault this handler is scoped for. It is the shape a
+           cast-lock rule-1/rule-4 violation OR ordinary contention produces,
+           and swallowing it reports a clean run with the identity record never
+           updated — the divergence #2040 exists to prevent, silently, and
+           strictly worse than the hang the timeout replaced. Let exactly that
+           one class through; everything else (EPERM/ENOSPC/AV-lock,
+           CastIdHistoryUnreadableError) is swallowed exactly as before. See
+           `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
+
+           Round 4 — `reconcileRejectEdgesOnDisk`'s own handler is the ONE
+           deliberate exception and swallows it; see that handler for why it is
+           not in this class. Nothing else in this file is exempt.
+
+           Nothing follows this call in the surrounding block, so this site
+           throws where it catches. The two PERSIST sites cannot — see their
+           own comments for the deferred rethrow. */
         if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
@@ -5448,8 +5468,8 @@ export async function runMainAnalyzerJob(
                rewrote, not the one the persist started with. */
             await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            /* #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
-               for why a lock-acquisition timeout must NOT be swallowed here.
+            /* #2260 round 2 — see the dedup site near the top of this job for
+               why a lock-acquisition timeout must NOT be swallowed here.
                Round 3 (C1) — but nor may it be thrown from HERE: that skipped
                logCarriedForwardCharacters + the state.json rewrite below and
                was then caught by `catch (persistErr)`, which reports the job
@@ -5997,8 +6017,9 @@ export async function runSubsetAnalyzerJob(
         log,
       );
     } catch (historyErr) {
-      // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above for why
-      // a lock-acquisition timeout must NOT be swallowed here.
+      // #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
+      // lock-acquisition timeout must NOT be swallowed here (the canonical
+      // "why" for this file's four rethrow sites).
       if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
@@ -6839,8 +6860,8 @@ export async function runSubsetAnalyzerJob(
             // the pre-rewrite verdict captured at the top of this block.
             await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            /* #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
-               for why a lock-acquisition timeout must NOT be swallowed here.
+            /* #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
+               lock-acquisition timeout must NOT be swallowed here.
                Round 3 (C1) — and nor thrown from here; mirrors the main
                job's same-named handler. */
             if (isLockAcquisitionTimeout(historyErr)) {

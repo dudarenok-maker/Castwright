@@ -330,11 +330,29 @@ castLinkOrphanRouter.post(
           '[cast-link-orphan] the alias WAS recorded; clearing the stale not-linked edge for it failed',
           retireErr,
         );
+        /* #2260 round 4 (C2) — this copy must NOT ask for a retry. Round 3
+           wrote "retry to complete the cleanup; the write is idempotent",
+           which is the same defect class it was fixing one line up: a
+           remediation that silently does nothing. A retry re-enters
+           `retireCharacterId`, which hits its own idempotence short-circuit
+           (`alreadyRecorded && !history.rejectedPairs?.some(p => p.to ===
+           from)`) — the governing `rejectedPairs` entry was CONSUMED by the
+           first call — and returns `droppedSelfLoopRejections: []`. The
+           `if (result.droppedSelfLoopRejections.length)` guard below is then
+           false, the cleanup never runs, and the route answers 200: the stale
+           edge is still there and the user is told it worked.
+
+           What actually clears it is `reconcileRejectEdgesOnDisk` (#2166) at
+           the next analysis persist — a `notLinkedTo` edge with no matching
+           `rejectedPairs` entry is exactly the stranded shape its removal pass
+           exists to heal. So: say the link is durable, say no retry is owed,
+           and name the thing that does the cleaning. */
         return res.status(500).json({
           error:
-            'The link was recorded, but clearing the stale "not the same character" note for it did ' +
-            'not finish. The link itself is durable — retry to complete the cleanup; the write is ' +
-            'idempotent.',
+            'The link was recorded and is durable — no retry is needed. What did not finish is ' +
+            'clearing the stale "not the same character" note that used to block it; retrying this ' +
+            'action will not clear it. Until the next analysis of this book clears it automatically, ' +
+            'the link may still read as blocked.',
         });
       }
       console.error(

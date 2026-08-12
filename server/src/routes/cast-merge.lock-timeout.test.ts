@@ -32,6 +32,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import express, { type Express } from 'express';
+import request from 'supertest';
 
 const retire = vi.hoisted(() => ({ toThrow: null as unknown }));
 
@@ -59,6 +61,8 @@ let bookDir: string;
 let bookId: string;
 let cachePath: string;
 let performCastMerge: typeof import('./cast-merge.js').performCastMerge;
+let suggestionsApp: Express;
+let LockAcquisitionTimeoutError: typeof import('../workspace/file-lock.js').LockAcquisitionTimeoutError;
 
 const characters = [
   { id: TARGET_ID, name: 'Wren Sparrow', role: 'protagonist', color: 'eliza', lines: 12, scenes: 4 },
@@ -99,6 +103,12 @@ function seedDisk(): void {
   writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({ sentences }));
   rmSync(join(bookDir, '.audiobook', 'cast-merges.json'), { force: true });
   rmSync(join(bookDir, '.audiobook', 'cast-id-history.json'), { force: true });
+  writeFileSync(
+    join(bookDir, '.audiobook', 'cast-merge-suggestions.json'),
+    JSON.stringify({
+      suggestions: [{ sourceId: SOURCE_ID, targetId: TARGET_ID, reason: 'diminutive' }],
+    }),
+  );
 
   writeFileSync(
     cachePath,
@@ -167,13 +177,20 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-merge-lock-timeout-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [castMerge, { makeBookId }] = await Promise.all([
+  const [castMerge, { makeBookId }, suggestionsRoute, fileLock] = await Promise.all([
     import('./cast-merge.js'),
     import('../workspace/paths.js'),
+    import('./cast-merge-suggestions.js'),
+    import('../workspace/file-lock.js'),
   ]);
   performCastMerge = castMerge.performCastMerge;
+  LockAcquisitionTimeoutError = fileLock.LockAcquisitionTimeoutError;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
+
+  suggestionsApp = express();
+  suggestionsApp.use(express.json());
+  suggestionsApp.use('/api/books', suggestionsRoute.castMergeSuggestionsRouter);
 
   /* Same fixed-relative cache path cast-merge.test.ts computes. */
   const testFileDir = dirname(fileURLToPath(import.meta.url));
@@ -232,5 +249,95 @@ describe('performCastMerge — lock timeout vs disk fault (#2260 C2)', () => {
     /* Identical disk outcome to the timeout case above — the discrimination
        is about the RETURN, not about what got written. */
     expectMergeFullyApplied();
+  });
+});
+
+/* #2260 round 4 (C1) — `performCastMerge` has TWO production callers, and the
+ * deferred rethrow above is only half a fix if the SECOND one's own follow-up
+ * write is skipped on the way out.
+ *
+ * `POST /:bookId/cast/merge-suggestions/accept` does
+ * `try { performCastMerge() } catch (err) { …; throw err }` and then
+ * `await dismissSuggestion(...)`. The round-3 rethrow fires with the merge
+ * FULLY APPLIED — so the dismiss is skipped for a merge that landed,
+ * `loadSuggestions` does no roster filtering, and the suggestion survives
+ * naming a character that is no longer in cast.json. Pressing Accept again
+ * then 404s on `performCastMerge`'s own `if (!source)` guard and skips the
+ * dismiss AGAIN: stuck until the user hits Dismiss or re-analyses.
+ *
+ * Two-directional, like every other pair in this file: the timeout dismisses,
+ * a genuine merge FAILURE must not (its suggestion is still valid, and
+ * dismissing it would silently discard a real one).
+ */
+describe('POST merge-suggestions/accept — a deferred timeout still dismisses (#2260 C1)', () => {
+  function callAccept(source = SOURCE_ID, target = TARGET_ID) {
+    return request(suggestionsApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: source, targetId: target });
+  }
+
+  function readSuggestions(): Array<{ sourceId: string; targetId: string }> {
+    const path = join(bookDir, '.audiobook', 'cast-merge-suggestions.json');
+    if (!existsSync(path)) return [];
+    return (JSON.parse(readFileSync(path, 'utf8')) as { suggestions?: Array<{ sourceId: string; targetId: string }> })
+      .suggestions ?? [];
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('the accept flow drops the suggestion even though the merge rejects with a lock timeout', async () => {
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+
+    const res = await callAccept();
+    /* Still loud — dismissing must not turn the timeout into a 200. */
+    expect(res.status).toBe(500);
+
+    /* The merge really did land, which is WHY dismissing is correct here. */
+    expectMergeFullyApplied();
+
+    /* The half the deferred rethrow skipped. Without the fix this is still
+       [{wren -> wren-sparrow}] — a suggestion for a character no longer in
+       cast.json. */
+    expect(readSuggestions()).toHaveLength(0);
+  });
+
+  it('a second Accept is no longer possible — without the dismiss it 404s forever', async () => {
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+    await callAccept();
+
+    /* The stuck loop, if the dismiss had been skipped: sourceId is gone from
+       cast.json, so `performCastMerge` 404s and the dismiss is skipped again.
+       That 404 still happens — the merge genuinely cannot be repeated — but it
+       no longer leaves anything behind for the user to press. */
+    const second = await callAccept();
+    expect(second.status).toBe(404);
+    expect(readSuggestions()).toHaveLength(0);
+  });
+
+  it('a merge that genuinely FAILED keeps its suggestion', async () => {
+    /* An unknown sourceId — `performCastMerge` throws its `{status:404,error}`
+       shape before writing anything. Dismissing here would silently discard a
+       still-valid suggestion, so the discrimination has to be on the error
+       class, not on "the merge threw". */
+    const res = await callAccept('no-such-id', TARGET_ID);
+    expect(res.status).toBe(404);
+    expect(readSuggestions()).toHaveLength(1);
+
+    /* And an EPERM out of the retirement — swallowed by `performCastMerge`, so
+       this is the ordinary success path and the dismiss runs as it always
+       has. Pinned here so the new branch can't be mistaken for the only route
+       to a dismissed suggestion. */
+    retire.toThrow = Object.assign(
+      new Error("EPERM: operation not permitted, rename 'cast-id-history.json'"),
+      { code: 'EPERM' },
+    );
+    const ok = await callAccept();
+    expect(ok.status).toBe(200);
+    expect(readSuggestions()).toHaveLength(0);
   });
 });

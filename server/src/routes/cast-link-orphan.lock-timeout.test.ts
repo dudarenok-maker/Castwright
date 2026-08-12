@@ -19,10 +19,23 @@
  *   2. the cleanup fails afterwards  -> a message that says the link landed.
  * Each also asserts the response does NOT carry the other's wording, so the
  * two cannot collapse back into one.
+ *
+ * ROUND 4 (C2) — round 3's copy for case 2 told the user to "retry to complete
+ * the cleanup; the write is idempotent". It isn't, and the retry doesn't: the
+ * SECOND call hits `retireCharacterId`'s idempotence short-circuit (the
+ * governing `rejectedPairs` entry was consumed by the FIRST call), returns an
+ * empty `droppedSelfLoopRejections`, so the route's
+ * `if (result.droppedSelfLoopRejections.length)` guard is false, the cleanup is
+ * never attempted, and the route answers 200. The stale edge is still on disk
+ * and the user has been told it worked — the same "remediation that silently
+ * does nothing" defect this file was created to fix, one line down.
+ *
+ * The third test below is therefore about the RETRY, not the first response,
+ * which is exactly why the two tests above missed it: they never called twice.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -30,7 +43,10 @@ import request from 'supertest';
 
 const seam = vi.hoisted(() => ({
   retireThrows: null as unknown,
-  droppedSelfLoopRejections: [] as Array<{ from: string; to: string }>,
+  /* `null` = pass the REAL result through untouched, which the retry test
+     needs: its whole subject is what `retireCharacterId` returns on the SECOND
+     call, and forcing the value would paper over exactly that. */
+  droppedSelfLoopRejections: null as null | Array<{ from: string; to: string }>,
   clearThrows: null as unknown,
 }));
 
@@ -41,6 +57,7 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
     retireCharacterId: async (bookDir: string, from: string, to: string) => {
       if (seam.retireThrows) throw seam.retireThrows;
       const result = await actual.retireCharacterId(bookDir, from, to);
+      if (seam.droppedSelfLoopRejections === null) return result;
       return { ...result, droppedSelfLoopRejections: seam.droppedSelfLoopRejections };
     },
   };
@@ -80,7 +97,11 @@ const CAST = [
    substring-guessed in the assertions so a future reword has one place to
    land and cannot silently make both tests match the same string. */
 const RECORD_FAILED = 'Failed to durably record the link.';
-const CLEANUP_FAILED = 'The link was recorded, but clearing the stale';
+/* Deliberately only the part BOTH the round-3 and round-4 wordings share, so
+   this constant discriminates which BRANCH answered and nothing else. The
+   round-4 claim ("no retry is needed") is asserted separately, in the retry
+   test, where reverting the copy reddens that assertion alone. */
+const CLEANUP_FAILED = 'The link was recorded';
 
 function seedDisk(): void {
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -135,7 +156,7 @@ beforeAll(async () => {
 beforeEach(() => {
   seam.retireThrows = null;
   seam.clearThrows = null;
-  seam.droppedSelfLoopRejections = [];
+  seam.droppedSelfLoopRejections = null;
   seedDisk();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -180,5 +201,76 @@ describe('POST link-orphan-match — which write failed decides the 500 copy (#2
     const { loadCastIdHistory } = await import('../store/cast-id-history.js');
     const history = (await loadCastIdHistory(bookDir)) as { supersededBy?: Record<string, string> };
     expect(history.supersededBy?.mayrin).toBe('mairin');
+  });
+
+  /* #2260 round 4 (C2). Everything above stops at the FIRST response, which is
+     how round 3's "retry to complete the cleanup" survived review: the claim it
+     makes is about the SECOND call, and nothing called twice.
+
+     The fixture assembles the two conditions the production join actually
+     needs — a `rejectedPairs` entry this retirement turns into a self-loop
+     (`{from:'mairin', to:'mayrin'}` repointed through mayrin -> mairin) and a
+     same-book `notLinkedTo` edge naming that pair's `from` — rather than
+     replaying the multi-run history that produces them, which is not what is
+     under test. No forced `droppedSelfLoopRejections`: the real one is the
+     subject. */
+  it('the retry does NOT complete the cleanup — it 200s with the stale edge still on disk', async () => {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          CAST[0],
+          { ...CAST[1], notLinkedTo: [{ bookId, characterId: 'mairin' }] },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mairin', to: 'mayrin' }],
+      }),
+    );
+    seam.clearThrows = new LockAcquisitionTimeoutError(`cast:${bookDir}`, 10_000);
+
+    /* Call 1 — the real retirement lands, consumes the rejectedPairs entry,
+       reports the dropped self-loop, and the cleanup then times out. */
+    const first = await callLink();
+    expect(first.status).toBe(500);
+    expect(first.body.error).toContain(CLEANUP_FAILED);
+
+    /* The consumed half: the pair is gone, so nothing will ever report this
+       drop again. This is the mechanism the retry copy got wrong. */
+    const historyAfterFirst = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), 'utf8'),
+    ) as { rejectedPairs?: unknown[]; supersededBy?: Record<string, string> };
+    expect(historyAfterFirst.supersededBy?.mayrin).toBe('mairin');
+    expect(historyAfterFirst.rejectedPairs ?? []).toHaveLength(0);
+
+    /* Call 2 — the retry the OLD copy told the user to perform. The lock is
+       still unavailable, so a retry that genuinely re-attempted the cleanup
+       would 500 again. It does not: it never reaches the cleanup at all. */
+    const second = await callLink();
+    expect(second.status).toBe(200);
+
+    /* ...and the edge the retry was supposed to clear is still there. Both
+       halves matter: a 200 alone could be a real success, and a surviving edge
+       alone could be a failed-but-honest retry. Together they are the exact
+       shape "retry to complete the cleanup" promised and did not deliver. */
+    const castAfter = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; notLinkedTo?: Array<{ characterId: string }> }> };
+    const mairin = castAfter.characters.find((c) => c.id === 'mairin');
+    expect((mairin?.notLinkedTo ?? []).map((e) => e.characterId)).toContain('mairin');
+
+    /* So the copy must not send them there. Asserted against the RESPONSE
+       BODY, not a comment: this is the half that reddens if the branch is
+       collapsed back to the old wording. */
+    expect(first.body.error).toContain('no retry is needed');
+    expect(first.body.error).not.toMatch(/retry to complete/i);
+    expect(first.body.error).not.toMatch(/the write is idempotent/i);
+    /* And it names what DOES clear it, so the user has somewhere to go. */
+    expect(first.body.error).toContain('next analysis');
   });
 });

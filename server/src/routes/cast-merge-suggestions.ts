@@ -16,6 +16,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { loadSuggestions, dismissSuggestion } from '../store/cast-merge-suggestions.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { performCastMerge } from './cast-merge.js';
 
 export const castMergeSuggestionsRouter = Router();
@@ -91,6 +92,39 @@ castMergeSuggestionsRouter.post(
     try {
       await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
     } catch (err) {
+      /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
+         `performCastMerge` is DEFERRED, not aborting: it is parked at the
+         retirement site and rethrown only once cast.json, manuscript-edits
+         .json, the analysis cache and the `cast-merges` journal have all been
+         written (see that function's own deferred-rethrow comment, which
+         states this as a contract on its callers). So at THIS point the merge
+         is fully applied and `sourceId` is gone from cast.json — but the
+         `dismissSuggestion` below is skipped, and `loadSuggestions` does no
+         roster filtering, so the suggestion survives for a character that no
+         longer exists. Pressing Accept again then 404s on
+         `performCastMerge`'s own `if (!source)` guard and skips the dismiss
+         again: stuck until the user hits Dismiss or re-analyses.
+
+         Dismissing here is correct precisely BECAUSE the merge landed — this
+         is the same "finish the writes, then let it surface" shape
+         `performCastMerge` uses internally, applied at the frame that owns
+         this write. Discriminated on the error class rather than run
+         unconditionally: a merge that genuinely failed (404 on an unknown
+         id, an EPERM out of the cast.json write) must keep its suggestion.
+
+         Its own failure is swallowed deliberately — the timeout is the more
+         informative error and must be what the user sees, and a failed
+         dismiss is no worse than not attempting one. */
+      if (isLockAcquisitionTimeout(err)) {
+        try {
+          await dismissSuggestion(bookDir, sourceId, targetId);
+        } catch (dismissErr) {
+          console.warn(
+            '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
+            dismissErr,
+          );
+        }
+      }
       const e = err as { status?: number; error?: string };
       if (e.status && e.error) {
         return res.status(e.status).json({ error: e.error });

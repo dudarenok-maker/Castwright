@@ -365,9 +365,22 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        between them would leave a merge that resumes correctly but can never
        be unlinked, which is still half-applied — the thing the wrap exists to
        avoid. Placed after the log line too, so the operator breadcrumb still
-       records what actually reached disk before the request fails. Nothing
-       below this point writes anything; the caller turns this into a 500 with
-       the message that names the lock key and both cast-lock rules. */
+       records what actually reached disk before the request fails.
+
+       Round 4 (C1) — nothing below this point writes anything IN THIS
+       FUNCTION, and an earlier version of this comment stopped there and
+       reasoned only about `POST /cast/merge`, whose route body is a bare
+       `return res.json(result)`. That is not the whole caller set. THE
+       CONTRACT THIS THROW IMPOSES ON CALLERS: by the time it fires the merge
+       is fully applied on disk, so a caller with follow-up writes of its own
+       must perform them BEFORE letting it escape — otherwise the deferred
+       rethrow just moves the skipped-write bug up one frame, which is exactly
+       what it happened to do at the second caller,
+       `cast-merge-suggestions.ts`'s accept route (its `dismissSuggestion`
+       never ran, so the merged-away character kept a live suggestion that
+       404'd on every subsequent Accept). Both callers turn this into a 500
+       carrying the message that names the lock key and both cast-lock rules;
+       see that route's own handler for the accept flow's extra step. */
     if (identityLockTimeout !== undefined) throw identityLockTimeout;
 
     return { characters: nextCharacters, sourceId };
