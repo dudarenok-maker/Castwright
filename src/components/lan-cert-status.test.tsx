@@ -9,7 +9,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 });
 
 const status = (over: Partial<import('../lib/api').LanCertStatus> = {}) => ({
-  requested: true, active: false, health: 'healthy' as const,
+  requested: true, active: false, httpsPort: 8443, health: 'healthy' as const,
   certHosts: ['127.0.0.1', '192.168.1.42'], currentLanIps: ['192.168.1.42'],
   uncoveredIps: [], expiresAt: '2099-01-01T00:00:00.000Z', ...over,
 });

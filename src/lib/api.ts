@@ -7356,6 +7356,11 @@ async function realRegenerateLanCert() {
 export interface LanCertStatus {
   requested: boolean;
   active: boolean;
+  /** The port the server actually bound (#2278) — read this instead of
+      hardcoding 8443: window.location.port is empty on the castwright.local
+      and :443-forwarder paths, exactly when the real port is unknowable
+      client-side. */
+  httpsPort: number;
   health: 'healthy' | 'missing' | 'expired';
   certHosts: string[];
   currentLanIps: string[];
@@ -7390,6 +7395,7 @@ const mockRegenerateLanCert = async () => ({
 const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
   requested: true,
   active: false,
+  httpsPort: 8443,
   health: 'missing',
   certHosts: [],
   currentLanIps: ['192.168.1.42'],

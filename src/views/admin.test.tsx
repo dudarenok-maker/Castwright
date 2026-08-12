@@ -23,7 +23,7 @@ vi.mock('../lib/api', () => ({
     listDevices: vi.fn().mockResolvedValue({ devices: [] }),
     // LanAccessCard now renders <LanCertStatus>, which fetches on mount (ops-28).
     getLanCertStatus: vi.fn().mockResolvedValue({
-      requested: true, active: true, health: 'healthy',
+      requested: true, active: true, httpsPort: 8443, health: 'healthy',
       certHosts: ['192.168.1.42'], currentLanIps: ['192.168.1.42'],
       uncoveredIps: [], expiresAt: '2099-01-01T00:00:00.000Z',
     }),

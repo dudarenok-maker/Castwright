@@ -28,6 +28,12 @@ export const lanCertRouter = Router();
 export interface LanCertStatus {
   requested: boolean;
   active: boolean;
+  /** The port the server actually bound (getLanRuntime().port) — #2278: the
+      client can't derive this itself (window.location.port is empty on the
+      castwright.local / :443-forwarder paths, exactly when the answer
+      matters), so the LAN-access card's hint copy reads it from here instead
+      of hardcoding 8443. */
+  httpsPort: number;
   health: CertHealth;
   certHosts: string[];
   currentLanIps: string[];
@@ -134,9 +140,11 @@ lanCertRouter.get('/cert/status', (_req: Request, res: Response) => {
     now: new Date(),
   });
 
+  const { httpsActive, port } = getLanRuntime();
   const body: LanCertStatus = {
     requested: isLanHttpsEnabled(),
-    active: getLanRuntime().httpsActive,
+    active: httpsActive,
+    httpsPort: port,
     health,
     certHosts: parsed?.ips ?? [],
     currentLanIps,

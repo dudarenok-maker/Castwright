@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
+import type { LanCertStatus as CertStatus } from '../lib/api';
 import { isLoopbackHost } from '../lib/lan-recovery-hint';
 import type { PublicDevice } from '../lib/types';
 import { PairingQr } from './pairing/pairing-qr';
@@ -10,14 +11,21 @@ import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
 
-// Revoke is loopback-only with no castwright.local fallback (#2269) —
-// narrower than Authorize, which does admit the friendly hostname. Shared by
-// the 403 catch below (a caller whose hostname reads as loopback but was
-// actually relayed through the :443 forwarder, peer 127.0.0.2) and the
-// hidden-button case (a caller whose hostname genuinely isn't loopback) —
-// one string so the two can't drift apart and disagree about the fix.
-const REVOKE_LOOPBACK_ONLY_HINT =
-  "Revoking only works from https://localhost:8443 on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.";
+// #2278 — optimistic starting point (matches the pre-#2278 hardcoded value)
+// for the hints below, used only until GET /api/lan/cert/status's first
+// response reports the actually-bound port. A LAN_HTTPS_PORT override would
+// otherwise leave these hints pointing at a dead address.
+const DEFAULT_HTTPS_PORT = 8443;
+
+// The `https://localhost:<port>` fragment REVOKE_LOOPBACK_ONLY_HINT and the
+// pairing hint below build their sentence around, or null when LAN HTTPS
+// isn't actually bound (httpsActive: false — cert-less, degraded to loopback
+// HTTP). Naming a specific https address in that state would be a dead link
+// of a new kind (wrong protocol, not just a stale port), so callers fall
+// back to hostname-only wording instead of composing a guaranteed-dead URL.
+function loopbackHttpsOrigin(active: boolean, port: number): string | null {
+  return active ? `https://localhost:${port}` : null;
+}
 
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
@@ -28,6 +36,32 @@ export function LanAccessCard() {
   >(null);
   const [err, setErr] = useState<string | null>(null);
   const [selfErr, setSelfErr] = useState<string | null>(null);
+  const [httpsActive, setHttpsActive] = useState(true);
+  const [httpsPort, setHttpsPort] = useState(DEFAULT_HTTPS_PORT);
+
+  // #2278 — fetched independently of <LanCertStatus> below (which only
+  // mounts in the !manageHint branch): the manageHint (401, viewed from a
+  // phone) branch needs this same port for its own hint text, so it can't
+  // rely solely on that child's onStatus callback.
+  useEffect(() => {
+    api.getLanCertStatus()
+      .then((s: CertStatus) => { setHttpsActive(s.active); setHttpsPort(s.httpsPort); })
+      .catch(() => {}); // best-effort — hints keep the optimistic default on failure
+  }, []);
+
+  // Revoke is loopback-only with no castwright.local fallback (#2269) —
+  // narrower than Authorize, which does admit the friendly hostname. Shared by
+  // the 403 catch below (a caller whose hostname reads as loopback but was
+  // actually relayed through the :443 forwarder, peer 127.0.0.2) and the
+  // hidden-button case (a caller whose hostname genuinely isn't loopback) —
+  // one string so the two can't drift apart and disagree about the fix.
+  const loopbackOrigin = loopbackHttpsOrigin(httpsActive, httpsPort);
+  const revokeLoopbackOnlyHint = loopbackOrigin
+    ? `Revoking only works from ${loopbackOrigin} on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.`
+    : "Revoking only works on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.";
+  const pairingHint = loopbackOrigin
+    ? `Start pairing from ${loopbackOrigin} or https://castwright.local on the computer running Castwright.`
+    : 'Start pairing on the computer running Castwright.';
 
   const refresh = () => {
     api.listDevices()
@@ -43,7 +77,7 @@ export function LanAccessCard() {
       // A 403 here means this browser reached the server from a bare LAN IP (not
       // loopback or the friendly hostname) — actionable guidance beats the raw code.
       if (e instanceof ApiError && e.status === 403)
-        setErr('Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.');
+        setErr(pairingHint);
       else setErr(e instanceof Error ? e.message : String(e));
     }
   };
@@ -62,7 +96,7 @@ export function LanAccessCard() {
       } else if (e instanceof ApiError && e.status === 403) {
         // Same cause + copy as the 403 branch in authorize() above — reached
         // from a bare LAN IP (not loopback or the friendly hostname).
-        setSelfErr('Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.');
+        setSelfErr(pairingHint);
       } else {
         setSelfErr(e instanceof Error ? e.message : String(e));
       }
@@ -78,7 +112,7 @@ export function LanAccessCard() {
       // button (isLoopbackHost() is a hostname-only, client-side heuristic
       // that can't see the forwarder) and gets refused here.
       if (e instanceof ApiError && e.status === 403) {
-        setErr(REVOKE_LOOPBACK_ONLY_HINT);
+        setErr(revokeLoopbackOnlyHint);
       } else {
         setErr(e instanceof Error ? e.message : String(e));
       }
@@ -96,7 +130,7 @@ export function LanAccessCard() {
       </div>
       {manageHint ? (
         <p className="mt-2 text-sm text-ink/60">
-          Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.
+          {pairingHint}
         </p>
       ) : (
         <>
@@ -158,7 +192,7 @@ export function LanAccessCard() {
             // navigates TO castwright.local and back — useless (an unbreakable loop) for
             // a caller who is already on castwright.local trying to revoke, so it needs
             // this route's own hint, not the 401/lapsed-auth one.
-            <p className="mt-2 text-xs text-ink/45">{REVOKE_LOOPBACK_ONLY_HINT}</p>
+            <p className="mt-2 text-xs text-ink/45">{revokeLoopbackOnlyHint}</p>
           )}
           <div className="mt-5">
             <LanCertStatus variant="admin" />
