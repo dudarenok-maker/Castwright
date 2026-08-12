@@ -30,6 +30,7 @@ import {
 } from './voice-sample-cache.js';
 import type { TtsModelKey } from './model-keys.js';
 import { sidecarLanguageName } from './language.js';
+import { fetch as undiciFetch, Agent } from 'undici';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export class SidecarDesignError extends Error {
@@ -51,6 +52,24 @@ export class SidecarDesignError extends Error {
 const DESIGN_LIVENESS_INTERVAL_MS = 180_000;
 /* Hard ceiling so a genuinely hung-but-pingable sidecar still fails eventually. */
 const DESIGN_ABSOLUTE_MAX_MS = 600_000;
+
+/* A voice design cold-loads Qwen VoiceDesign 1.7B and generates, which the
+   ceiling above deliberately allows 600s for — and the liveness watchdog
+   exists precisely to EXTEND past a slow design while /health still answers.
+   On the global fetch, undici's hidden 300s headersTimeout destroyed the
+   socket at t=300s regardless: the rejection is a bare `TypeError: fetch
+   failed`, not an AbortError, so every abort branch below is skipped and the
+   user is told the sidecar is "unreachable" about a sidecar that is healthy
+   and still generating — while it keeps the 1.7B model resident doing
+   orphaned GPU work. Everything between 300s and the 600s ceiling, including
+   the extension logic, was unreachable. The controller above remains the real
+   budget; this only stops undici preempting it. Same shape as sidecar.ts,
+   embed-client.ts and transcribe-client.ts. */
+const DESIGN_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
 
 export type DesignLivenessResult =
   | { action: 'continue' }
@@ -150,16 +169,21 @@ export async function postDesignAndCacheAudition(
     else signal.addEventListener('abort', onExternalAbort, { once: true });
   }
   try {
-    let upstream: Awaited<ReturnType<typeof fetch>>;
+    let upstream: Response;
     try {
       upstream = await withCapacityRetry(
+        /* undici's Response is structurally identical for everything either
+           withCapacityRetry (`.ok`, `.clone()`, `.status`, `.text()`) or the
+           code below uses; the cast keeps that shared helper — which several
+           other callers hand a global Response — untouched. */
         (s) =>
-          fetch(target, {
+          undiciFetch(target, {
             method: 'POST',
             signal: s,
             headers: { 'Content-Type': 'application/json' },
             body: fetchBody,
-          }),
+            dispatcher: DESIGN_DISPATCHER,
+          }) as unknown as Promise<Response>,
         {
           engine: 'qwen',
           signal: controller.signal,

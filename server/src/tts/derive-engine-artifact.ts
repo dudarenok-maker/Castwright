@@ -21,6 +21,7 @@ import { NoCapacityError } from './tts-errors.js';
 import { SidecarDesignError } from './design-voice-core.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { CLONE_CAPABLE_ENGINES, cloneStorageKey, manifestSlotFor, type CloneEngine } from './clone-engines.js';
+import { fetch as undiciFetch, Agent } from 'undici';
 
 export interface DeriveArtifactInput {
   masterPcm: Buffer;
@@ -59,6 +60,28 @@ export interface DeriveArtifactResult {
   modelId?: string;
 }
 
+/* The sidecar's clone_voice takes `_synth_lock` and holds it across distil +
+   persist + audition (tts-sidecar/main.py), so this POST can legitimately queue
+   behind ANOTHER book's in-flight synth — the same property that justifies
+   EVICT_DISPATCHER in synthesise-chapter.ts, and a wide Qwen batch under that
+   lock can exceed 5 minutes of GPU decode. On the global fetch, undici's hidden
+   300s headersTimeout killed it first, and the bare TypeError is not a
+   NoCapacityError, so the catch below rethrows SidecarDesignError("… is
+   unreachable — fetch failed.") and a cloned-voice self-heal aborts the
+   chapter LOUDLY while both sidecar and GPU are fine.
+
+   `opts.signal` is optional here, so simply disabling the cap would trade a
+   wrong diagnosis for an unbounded hang. DERIVE_ABSOLUTE_MAX_MS is therefore
+   the replacement ceiling — the caller's signal still wins when supplied.
+   600_000 matches SYNTH_CALL_TIMEOUT_MS, DESIGN_ABSOLUTE_MAX_MS and
+   PERSONA_ABSOLUTE_MAX_MS: the same "slow but not infinite" judgement. */
+const DERIVE_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
+const DERIVE_ABSOLUTE_MAX_MS = 600_000;
+
 export async function deriveEngineArtifact(
   voiceUuid: string,
   engine: CloneEngine,
@@ -92,11 +115,26 @@ export async function deriveEngineArtifact(
     headers['X-Language'] = input.language;
   }
 
-  let upstream: Awaited<ReturnType<typeof fetch>>;
+  /* Bound the call even when the caller supplied no signal — see the note on
+     DERIVE_DISPATCHER. */
+  const budget = AbortSignal.timeout(DERIVE_ABSOLUTE_MAX_MS);
+  const bounded = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
+
+  let upstream: Response;
   try {
     upstream = await withCapacityRetry(
-      (s) => fetch(target, { method: 'POST', signal: s ?? opts.signal, headers, body: input.masterPcm }),
-      { engine, signal: opts.signal },
+      /* undici's Response is structurally identical for everything
+         withCapacityRetry and the code below use; the cast keeps that shared
+         helper, which other callers hand a global Response, untouched. */
+      (s) =>
+        undiciFetch(target, {
+          method: 'POST',
+          signal: s ?? bounded,
+          headers,
+          body: input.masterPcm,
+          dispatcher: DERIVE_DISPATCHER,
+        }) as unknown as Promise<Response>,
+      { engine, signal: bounded },
     );
   } catch (e) {
     if (e instanceof NoCapacityError) {

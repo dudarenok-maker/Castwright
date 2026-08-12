@@ -26,7 +26,11 @@ import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from 'undici';
-import { OllamaAnalyzer, LocalUnreachableError } from './ollama.js';
+import {
+  OllamaAnalyzer,
+  LocalUnreachableError,
+  generatePersonaViaOllama,
+} from './ollama.js';
 
 /* protocol.ts resolves the handoff dirs relative to its own __dirname
    (server/src/handoff/), so HANDOFF_ROOT is server/handoff/. */
@@ -139,6 +143,41 @@ describe('OllamaAnalyzer fetch timeout', () => {
     const result = await analyzer.runStage1Chapter('m_ollama_timeout_fix', 1, '# p', {});
 
     expect(result.characters.map((c) => c.id)).toContain('narrator');
+  });
+
+  it('REGRESSION: generatePersonaViaOllama stays bounded — the dispatcher must not make it hang forever', async () => {
+    /* This call site passes NO caller signal (voice-style.ts hands it only
+       { onCpu, keepAlive }), so undici's hidden 300s cap was the ONLY thing
+       stopping it. ANALYZER_DISPATCHER removes that, and the analyzer slot it
+       holds is released only in a `finally` AFTER the await — so an unbounded
+       hang leaks a token from a bounded semaphore and silently blocks every
+       later analyzer call. PERSONA_ABSOLUTE_MAX_MS is the replacement bound;
+       absoluteMaxMs proves it FIRES without waiting out ten minutes.
+
+       OLLAMA_URL is pointed at the local slow server: generatePersonaViaOllama
+       resolves its own URL, and without this the call would go to the real
+       daemon on :11434. */
+    const url = await startSlowOllama(5_000);
+    const prevUrl = process.env.OLLAMA_URL;
+    process.env.OLLAMA_URL = url;
+    try {
+      const err = await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', {
+        onCpu: true,
+        absoluteMaxMs: 250,
+      }).then(
+        () => null,
+        (e: Error) => e,
+      );
+
+      expect(err, 'the call must terminate, not hang').not.toBeNull();
+      /* Terminated by the budget, NOT by undici inventing a failure — and
+         crucially not swallowed into LocalUnreachableError, which would
+         reroute a healthy local daemon to the cloud. */
+      expect(err).not.toBeInstanceOf(LocalUnreachableError);
+    } finally {
+      if (prevUrl === undefined) delete process.env.OLLAMA_URL;
+      else process.env.OLLAMA_URL = prevUrl;
+    }
   });
 
   it('still honours a caller AbortSignal (cancellation is not disabled)', async () => {

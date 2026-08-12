@@ -21,6 +21,22 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* Some calls this suite exercises moved to undici's fetch (they need a
+   dispatcher so a legitimate multi-minute wait isn't cut off at undici's
+   hidden 300s headersTimeout — see DERIVE_DISPATCHER / DESIGN_DISPATCHER),
+   while others legitimately stay on the global one. Delegating undici's fetch
+   to whatever this file stubs globally keeps every existing mock and
+   assertion working across both transports, with no per-test changes. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) =>
+      (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
+
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK = 'The Hollow Tide';

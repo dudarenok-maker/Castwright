@@ -131,6 +131,14 @@ export const ANALYZER_DISPATCHER = new Agent({
   connectTimeout: 10_000,
 });
 
+/* Absolute ceiling for a one-shot persona generation. Needed because
+   ANALYZER_DISPATCHER removes undici's implicit 300s bound and this call site
+   has no caller-supplied signal to fall back on — see the note in
+   generatePersonaViaOllama. Deliberately generous: the whole point of the
+   dispatcher is that a large model on CPU legitimately takes minutes. Mirrors
+   DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. */
+export const PERSONA_ABSOLUTE_MAX_MS = 600_000;
+
 /* Network-failure error codes that Node's undici fetch surfaces via
    `err.cause.code`. These are the "couldn't connect" cases that warrant
    fallback to Gemini. Anything else (HTTP 5xx, malformed body, validation
@@ -861,7 +869,14 @@ export class OllamaAnalyzer implements Analyzer {
 export async function generatePersonaViaOllama(
   prompt: string,
   model: string,
-  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+  opts: {
+    onCpu?: boolean;
+    keepAlive?: string | number;
+    signal?: AbortSignal;
+    /** Override the absolute ceiling — for testing only, so the bound can be
+        proven to fire without waiting out PERSONA_ABSOLUTE_MAX_MS. */
+    absoluteMaxMs?: number;
+  } = {},
 ): Promise<string> {
   const onCpu = opts.onCpu === true;
   const url = getResolvedOllamaUrl();
@@ -878,6 +893,22 @@ export async function generatePersonaViaOllama(
       ...(onCpu ? { num_gpu: 0 } : {}),
     },
   };
+
+  /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
+     else must bound this call — and unlike chat() (whose StageCall carries the
+     analysis signal) and warmOllamaModel (which builds its own controller from
+     warmTimeoutMs), nothing upstream of here supplies one: voice-style.ts
+     passes only { onCpu, keepAlive }. Without this, a daemon wedged in the
+     connected-but-never-responding state (mid-/api/pull, hung GPU driver — the
+     listener stays up so connectTimeout never fires) would hang FOREVER, and
+     because the analyzer slot above is released only in the finally below,
+     it would leak a token from a bounded semaphore and silently block every
+     later analyzer call. The hidden 300s cap used to be the only stop; removing
+     it without replacing it would have traded a wrong diagnosis for a deadlock.
+     Ceiling matches design-voice-core.ts's DESIGN_ABSOLUTE_MAX_MS — the same
+     "a big local model on CPU is slow but not infinite" judgement. */
+  const budget = AbortSignal.timeout(opts.absoluteMaxMs ?? PERSONA_ABSOLUTE_MAX_MS);
+  const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
 
   const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
   try {
@@ -897,6 +928,7 @@ export async function generatePersonaViaOllama(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal,
         dispatcher: ANALYZER_DISPATCHER,
       });
     } catch (err) {
