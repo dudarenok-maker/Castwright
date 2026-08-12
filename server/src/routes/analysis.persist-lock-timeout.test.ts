@@ -52,10 +52,14 @@ import type { Response } from '../http.js';
    real implementation; every test installs its own thrower.
 
    `toThrow` fires from `dropSupersededIdsReclaimedByLiveCast` — a step INSIDE
-   the persist's `catch (historyErr)`, i.e. one of the six sites that rethrow.
+   the persist's `catch (historyErr)`, i.e. one of the eight sites that fail
+   loud (six identity handlers plus, since #2295, the two authoritative
+   `writeChecked` calls the last two describes below drive).
 
-   `reconcileThrow` fires from inside `reconcileRejectEdgesOnDisk` — the ONE
-   site that does not (round 4, owner decision). There is no way to mock that
+   `reconcileThrow` fires from inside `reconcileRejectEdgesOnDisk` — the one
+   IDENTITY-path site that does not (round 4, owner decision; #2292 added
+   three more deliberate swallows outside that path, the interim snapshots
+   the last describe in this file drives). There is no way to mock that
    function itself (it lives in the module under test), so the throw is aimed
    at `loadCastIdHistoryWithStatus`, which it calls inside its own
    `withCastLock`. That function is ALSO called once at the top of the persist,
@@ -541,9 +545,11 @@ describe('runMainAnalyzerJob persist block — lock timeout vs disk fault (#2260
     60_000,
   );
 
-  /* #2260 round 4, owner decision — `reconcileRejectEdgesOnDisk` is the ONE
-     handler that keeps swallowing a lock timeout, so it needs a test that
-     reddens if someone "restores consistency" by adding the rethrow back.
+  /* #2260 round 4, owner decision — `reconcileRejectEdgesOnDisk` is the one
+     handler in the IDENTITY path that keeps swallowing a lock timeout (the
+     three interim snapshots below are #2292's separate decision), so it needs
+     a test that reddens if someone "restores consistency" by adding the
+     rethrow back.
      Round 2 DID add it there, on a rationale copy-pasted from the six identity
      sites ("the identity record never updated"), which does not describe this
      site: it runs last in the persist, after every retirement is already

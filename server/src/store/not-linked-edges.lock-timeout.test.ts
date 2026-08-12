@@ -1,8 +1,12 @@
 /* #2260 review round 2 — the swallow-vs-rethrow discrimination.
  *
- * `clearNotLinkedEdgesForDroppedRejections`'s `catch` is one of seven
- * best-effort handlers in the cast-identity path (see the report on PR #2284).
- * All seven were scoped for a DISK fault — EPERM/ENOSPC/an AV lock — on the
+ * `clearNotLinkedEdgesForDroppedRejections`'s `catch` is one of the
+ * best-effort handlers in the cast-identity path (see the report on PR #2284
+ * for the current tally — round 2 called it seven, round 4 demoted
+ * `reconcileRejectEdgesOnDisk` to a deliberate swallow, and #2295 added the
+ * two authoritative `writeChecked` calls, so it is eight and this file's
+ * handler is one of them). All of them were scoped for a DISK fault —
+ * EPERM/ENOSPC/an AV lock — on the
  * reasoning that "the side-table is never authoritative for identity, so
  * losing an entry degrades to today's behaviour". That reasoning is sound for
  * a disk fault and wrong for a `withKeyLock` acquisition timeout, which

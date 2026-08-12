@@ -425,11 +425,14 @@ export async function reconcileRejectEdgesOnDisk(
       }
     });
   } catch (err) {
-    /* #2260 round 4 (owner decision) — THE ONE DELIBERATE EXCEPTION. Every
-       other best-effort handler #2260 touched lets a withKeyLock ACQUISITION
-       timeout through (`isLockAcquisitionTimeout`, workspace/file-lock.ts);
-       this one swallows it along with everything else, and does so on
-       purpose.
+    /* #2260 round 4 (owner decision) — the FIRST deliberate exception. Every
+       IDENTITY handler #2260 touched lets a withKeyLock ACQUISITION timeout
+       through (`isLockAcquisitionTimeout`, workspace/file-lock.ts); this one
+       swallows it along with everything else, and does so on purpose. (#2292
+       later added three more deliberate swallows on the same kind of
+       reasoning — the interim cast.json snapshots, which a final write in the
+       same run clobbers — so this is no longer the ONLY one, as this comment
+       used to say. It is still the only one in the identity path.)
 
        Round 2 added a rethrow here on the same reasoning it used at the six
        identity sites — "cast.json is already written and the identity record
