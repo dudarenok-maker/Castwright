@@ -75,20 +75,14 @@ const IMPORTS_HELPER_FILE = /from\s+['"][^'"]*is-main-module\.mjs['"]/;
 // guard's allowlist (server/src/workspace/cast-lock.guard.test.ts): each
 // entry is keyed on an exact relative path, not a directory or a pattern,
 // so a NEW unmigrated file is never silently swept in by name proximity.
-const ALLOWLIST = new Map([
-  [
-    'run-sidecar-tests.mjs',
-    'Fixed independently on a separate, unmerged branch (issue #2291, PR ' +
-      '#2293) with the identical double-realpath mechanism, hand-rolled ' +
-      'rather than via this shared helper. This entry is temporary — will be ' +
-      'removed once that PR merges and this branch picks it up.',
-  ],
-]);
+const ALLOWLIST = new Map([]);
 
-// The 43 sites this branch has migrated to date (22 from the original
+// The 44 sites this branch has migrated to date (22 from the original
 // #2291 sweep + 14 from the resolve()/fileURLToPath equality shape + 5
 // from the `file://${argv[1]}` template-literal shape + 2 from the
-// basename/suffix-match shape originally allowlisted as immune) — used below
+// basename/suffix-match shape originally allowlisted as immune + 1,
+// run-sidecar-tests.mjs, migrated off its own hand-rolled double-realpath
+// fix once PR #2293 merged and this branch picked it up) — used below
 // to assert the migration is actually complete, not just that nothing NEW
 // regresses. Keeping this list literal (rather than deriving it from the
 // scan) means a file silently falling OUT of the scan's view (e.g. an edit
@@ -148,6 +142,10 @@ const MIGRATED_SITES = [
   // mechanism across all scripts, not multiple fallback patterns.
   'check-onbox-register.mjs',
   'repair-missing-book-language.mts',
+  // The formerly-allowlisted site: fixed independently on PR #2293 with its
+  // own hand-rolled double-realpath copy, migrated onto the shared helper
+  // now that #2293 has merged and this branch picked it up.
+  'run-sidecar-tests.mjs',
 ];
 
 function walk(dir) {
@@ -199,7 +197,7 @@ test('no scripts/*.mjs|*.mts file hand-rolls a direct-invocation check outside t
   );
 });
 
-test('every one of this branch\'s 41 migrated sites actually imports and uses the helper', () => {
+test('every one of this branch\'s 44 migrated sites actually imports and uses the helper', () => {
   const missing = [];
   for (const rel of MIGRATED_SITES) {
     const source = readFileSync(join(SCRIPTS_DIR, rel), 'utf8');
@@ -221,11 +219,29 @@ test('every one of this branch\'s 41 migrated sites actually imports and uses th
   assert.deepEqual(missing, [], `not fully migrated: ${missing.join(', ')}`);
 });
 
+// Expected size of ALLOWLIST once the #2291 migration is complete. A literal
+// count rather than an unconstrained loop: with ALLOWLIST empty, the "every
+// allowlist entry still exists..." check below iterates zero times and would
+// otherwise pass having asserted nothing at all -- an empty allowlist proving
+// the migration is complete only if that emptiness is itself checked for,
+// not just assumed by omission. Bumping ALLOWLIST without also bumping this
+// constant (and documenting why in the new entry's value) fails the test
+// below, so a new exception can't land silently.
+const EXPECTED_ALLOWLIST_SIZE = 0;
+
 // Not-vacuous check: the allowlist itself must still describe files that
 // actually exist and still match the shape it excuses. An allowlist entry
 // for a file that was since fixed for real (or deleted) would silently
 // stop proving anything about that file.
 test('every allowlist entry still exists and still references both direct-invocation ingredients', () => {
+  assert.equal(
+    ALLOWLIST.size,
+    EXPECTED_ALLOWLIST_SIZE,
+    `ALLOWLIST has ${ALLOWLIST.size} entrie(s) but EXPECTED_ALLOWLIST_SIZE is ` +
+      `${EXPECTED_ALLOWLIST_SIZE} -- if you intentionally added or removed an ` +
+      `entry, update EXPECTED_ALLOWLIST_SIZE to match (a new entry also needs ` +
+      `its own documented reason, same as the existing ones did).`,
+  );
   for (const rel of ALLOWLIST.keys()) {
     const full = join(SCRIPTS_DIR, rel);
     let source;

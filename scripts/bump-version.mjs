@@ -783,9 +783,9 @@ async function main() {
 }
 
 // Guarded so tests can import the pure helpers (semverBump, pickWorkflowRun)
-// without executing the release procedure (matches install-qwen3.mjs). See
-// scripts/lib/is-main-module.mjs (#2291) for the symlink/junction mechanism
-// this guards against — first found here via a macOS symlinked tmpdir.
+// without executing the release procedure. See scripts/lib/is-main-module.mjs
+// (#2291) for the symlink/junction mechanism this guards against — first found
+// here via a macOS symlinked tmpdir.
 if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }
