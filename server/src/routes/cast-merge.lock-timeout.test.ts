@@ -82,6 +82,10 @@ let performCastMerge: typeof import('./cast-merge.js').performCastMerge;
 let suggestionsApp: Express;
 let mergeApp: Express;
 let LockAcquisitionTimeoutError: typeof import('../workspace/file-lock.js').LockAcquisitionTimeoutError;
+/* The curated body both routes now return for this class — asserted by value
+   rather than by phrase, so a reword has to move the constant and the
+   assertion together and cannot silently reintroduce `err.message`. */
+let LOCK_CONTENTION_REQUEST_ERROR: string;
 
 const characters = [
   { id: TARGET_ID, name: 'Wren Sparrow', role: 'protagonist', color: 'eliza', lines: 12, scenes: 4 },
@@ -204,6 +208,7 @@ beforeAll(async () => {
   ]);
   performCastMerge = castMerge.performCastMerge;
   LockAcquisitionTimeoutError = fileLock.LockAcquisitionTimeoutError;
+  LOCK_CONTENTION_REQUEST_ERROR = fileLock.LOCK_CONTENTION_REQUEST_ERROR;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
 
@@ -366,28 +371,47 @@ describe('POST merge-suggestions/accept — a deferred timeout still dismisses (
   });
 });
 
-/* #2292 (owner decision) — the ROUTE-level shape of a merge failure.
+/* #2292 (owner decision), REWRITTEN in review round 5 — the ROUTE-level body
+ * of a merge failure, and specifically what must NOT be in it.
  *
- * Both callers of `performCastMerge` used to end their `catch` with a bare
- * `throw err` for anything that did not carry `{status, error}`. Express 5
- * forwards that to its DEFAULT handler, which answers `500 text/html` — not
- * the JSON `{ error }` shape these routes return everywhere else and the only
- * shape the frontend parses, so the user got a failure with no words in it.
+ * WHAT ROUND 4 GOT WRONG. These fixtures were written to prove that a bare
+ * `throw err` came back as `500 text/html` from Express 5's default handler,
+ * and that the fix made it JSON. The premise was false: `app.ts:350` registers
+ * `errorHandler` (`error-handler.ts`) last, and it answers
+ * `500 {"error":"Internal server error."}`. Production has never served an
+ * HTML error page from these routes. The `text/html` these fixtures observed
+ * came from the fixtures THEMSELVES — `express()` + `express.json()` + the
+ * router, with no `errorHandler` — so the mutation proofs measured the harness
+ * and not the code under test. The `describe` below closes that gap by
+ * driving the same two routes through the REAL assembled app.
  *
- * Pre-existing for any such throw (an EACCES on the cast.json write did the
- * same), but #2260's deferred rethrow made it reachable by ORDINARY
- * CONTENTION, which is why it is fixed here. The status was already 500 in
- * both directions and still is; what changed is that the body is now readable.
+ * WHAT THAT MADE THE FIX. Not html→json but
+ * `{"error":"Internal server error."}` → `{"error": err.message}` — and for
+ * the class #2260 made reachable by ordinary contention, `err.message` is
+ * `withKeyLock: timed out … waiting to acquire "cast-id-history:<ABSOLUTE
+ * WORKSPACE PATH>" — either a cast-lock.ts rule 1 …`. This app is served over
+ * LAN HTTPS by design, so that is the user's filesystem layout handed to any
+ * paired phone that pressed Accept during an analysis. Generic, too: an
+ * `EACCES` or an `ENOSPC` naming a temp path round-tripped verbatim.
  *
- * Three fixtures per route, not two, because the interesting regression is the
- * third: a blanket `return res.status(500)` that also swallowed the
- * `{status, error}` shapes would turn every 404 into a 500. That path is
- * pinned alongside the two error classes.
+ * So these fixtures now assert the ABSENCE of the leak rather than its
+ * presence — no workspace path, no `withKeyLock:` diagnostics — alongside the
+ * curated wording that replaced it. The `{status, error}` case is still pinned
+ * per route: a blanket `return res.status(500)` that ate those shapes would
+ * turn every 404 into a 500, which is a worse regression than the bug.
  */
-describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
-  /* A seam for a NON-lock failure that genuinely escapes `performCastMerge`.
-     `retire.toThrow` cannot serve: an EPERM there is swallowed by design (the
-     fixtures above pin exactly that), so it never reaches the route. */
+describe('merge routes curate the failure body and leak nothing (#2292 round 5)', () => {
+  /* Everything a body must NOT contain, in one place so both routes and the
+     real-app fixtures below assert the identical bar. `bookDir` is an absolute
+     path under the OS tmpdir, which is what the lock key embeds. */
+  function expectNoLeak(body: { error?: string }): void {
+    const error = body.error ?? '';
+    expect(error).not.toContain(bookDir);
+    expect(error).not.toContain('withKeyLock');
+    expect(error).not.toContain('cast-id-history:');
+    expect(error).not.toContain('rule 4');
+  }
+
   function expectJsonError(res: { status: number; type: string; body: { error?: string } }): void {
     expect(res.status).toBe(500);
     expect(res.type).toBe('application/json');
@@ -401,7 +425,7 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  it('POST /cast/merge — a lock timeout comes back as JSON naming the lock key', async () => {
+  it('POST /cast/merge — a lock timeout is curated, actionable, and leaks no path', async () => {
     retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
 
     const res = await request(mergeApp)
@@ -410,20 +434,22 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
       .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
 
     expectJsonError(res);
-    /* The diagnosable half: the message that names the key and both cast-lock
-       rules survives into the body the client can actually read. Before the
-       fix this body was an HTML error page. */
-    expect(res.body.error).toContain(`cast-id-history:${bookDir}`);
-    expect(res.body.error).toContain('rule 4');
-    /* And the merge really did land — the deferred rethrow's contract. */
+    /* The half round 4 inverted. Restoring `err.message` reddens here. */
+    expectNoLeak(res.body);
+    /* And the half that makes the 500 worth reading: the shared contention
+       sentence, so this matches what the five per-item routes already say. */
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(res.body.error).toContain('another operation on this book');
+    /* The merge really did land — the deferred rethrow's contract, and the
+       reason the copy says "reload to see" rather than "nothing happened". */
     expectMergeFullyApplied();
   });
 
-  it('POST /cast/merge — an EPERM-shaped escape comes back as JSON too', async () => {
+  it('POST /cast/merge — a NON-lock escape gets the generic body, not the raw error', async () => {
     /* Aimed at `loadAnalysisCache`, which runs inside `performCastMerge` after
        the retirement block and has no handler of its own, so a plain Error
-       there escapes exactly the way a cast.json EACCES would. Same 500 as
-       before; the body is the part that was unreadable. */
+       there escapes exactly the way a cast.json EACCES would. Its message
+       names a file; the client must not be told which. */
     cacheLoad.toThrow = Object.assign(
       new Error("EPERM: operation not permitted, open 'analysis-cache.json'"),
       { code: 'EPERM' },
@@ -435,12 +461,14 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
       .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
 
     expectJsonError(res);
-    expect(res.body.error).toContain('EPERM');
+    expect(res.body.error).toBe('Internal server error.');
+    expect(res.body.error).not.toContain('EPERM');
+    expect(res.body.error).not.toContain('analysis-cache.json');
   });
 
   it('POST /cast/merge — a structured {status,error} failure keeps ITS status', async () => {
-    /* The regression this pair exists to prevent: the new 500 must not eat the
-       route's own 404/409 shapes. */
+    /* The regression this pair exists to prevent: the curated 500 must not eat
+       the route's own 404/409 shapes, which ARE meant to be shown verbatim. */
     const res = await request(mergeApp)
       .post(`/api/books/${bookId}/cast/merge`)
       .set('Content-Type', 'application/json')
@@ -448,10 +476,10 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
 
     expect(res.status).toBe(404);
     expect(res.type).toBe('application/json');
-    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error).toContain('no-such-id');
   });
 
-  it('POST merge-suggestions/accept — the second caller answers JSON as well', async () => {
+  it('POST merge-suggestions/accept — the second caller curates identically', async () => {
     retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
 
     const res = await request(suggestionsApp)
@@ -460,9 +488,10 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
       .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
 
     expectJsonError(res);
-    expect(res.body.error).toContain(`cast-id-history:${bookDir}`);
-    /* Still dismissed (round 4's C1 fix) — the JSON body is additive to that,
-       not a replacement for it. */
+    expectNoLeak(res.body);
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    /* Still dismissed (round 4's C1 fix) — the curated body is additive to
+       that, not a replacement for it. */
     expect(
       (JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast-merge-suggestions.json'), 'utf8')) as {
         suggestions?: unknown[];
@@ -470,7 +499,7 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
     ).toHaveLength(0);
   });
 
-  it('POST merge-suggestions/accept — an EPERM-shaped escape is JSON too', async () => {
+  it('POST merge-suggestions/accept — a NON-lock escape gets the generic body too', async () => {
     cacheLoad.toThrow = Object.assign(
       new Error("EPERM: operation not permitted, open 'analysis-cache.json'"),
       { code: 'EPERM' },
@@ -482,7 +511,8 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
       .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
 
     expectJsonError(res);
-    expect(res.body.error).toContain('EPERM');
+    expect(res.body.error).toBe('Internal server error.');
+    expect(res.body.error).not.toContain('EPERM');
   });
 
   it('POST merge-suggestions/accept — a structured failure keeps ITS status', async () => {
@@ -493,5 +523,98 @@ describe('merge routes answer JSON on an unstructured failure (#2292)', () => {
 
     expect(res.status).toBe(404);
     expect(res.type).toBe('application/json');
+  });
+});
+
+/* #2292 review round 5 — the same two routes, driven through the REAL
+ * assembled app (`server/src/app.ts`) instead of a bare router.
+ *
+ * WHY THIS EXISTS AND WHAT IT IS FOR. Every other fixture in this file mounts
+ * `express()` + `express.json()` + the router under test. That harness is
+ * missing exactly one thing production has — the global `errorHandler`
+ * registered at `app.ts:350` — and that one omission is what let round 4
+ * record, and mutation-"prove", a claim about Express's default HTML handler
+ * that production could never reach. The proofs were real; they were just
+ * proofs about the harness. Nothing in the router-level fixtures can ever
+ * catch that class of divergence, because the divergence IS the harness.
+ *
+ * So this block asserts the leak bar against the wired app, where the fallback
+ * that would have served an unstructured throw is actually present. If someone
+ * deletes the route's own `catch` entirely and lets the error escape, these
+ * still hold — `errorHandler` answers `{"error":"Internal server error."}`,
+ * which leaks nothing — while the router-level ones above would go red on
+ * `text/html`. That asymmetry is the point: the invariant under test is "no
+ * path in production returns the lock key to a client", not "this route's
+ * catch block is shaped a particular way".
+ *
+ * `app.js` is imported in `beforeAll` after `WORKSPACE_DIR` is set, the same
+ * way `app.workspace-static.test.ts` and `lan-cookie-integration.test.ts` do
+ * it. The `vi.mock`s at the top of this file are file-scoped and apply to the
+ * whole module graph, so the app's own `cast-merge` router picks up the same
+ * `retire.toThrow` seam. The LAN guard is inert here (`isLanTokenEnforced()`
+ * is false without `LAN_HTTPS`, and supertest is loopback regardless).
+ */
+describe('the REAL app returns no lock key to a client (#2292 round 5)', () => {
+  let realApp: Express;
+
+  beforeAll(async () => {
+    ({ app: realApp } = await import('../app.js'));
+  });
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('POST /cast/merge through the wired app — curated body, no workspace path', async () => {
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+
+    const res = await request(realApp)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expect(res.status).toBe(500);
+    expect(res.type).toBe('application/json');
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(res.body.error).not.toContain(bookDir);
+    expect(res.body.error).not.toContain('withKeyLock');
+    expectMergeFullyApplied();
+  });
+
+  it('POST merge-suggestions/accept through the wired app — same bar', async () => {
+    retire.toThrow = new LockAcquisitionTimeoutError(`cast-id-history:${bookDir}`, 10_000);
+
+    const res = await request(realApp)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expect(res.status).toBe(500);
+    expect(res.type).toBe('application/json');
+    expect(res.body.error).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(res.body.error).not.toContain(bookDir);
+  });
+
+  it('an unstructured escape through the wired app is JSON, not an HTML page', async () => {
+    /* The claim round 4 recorded, finally measured where it was claimed. The
+       route's own catch answers first; `errorHandler` is the backstop behind
+       it. Either way the client gets JSON with no filesystem detail — which is
+       why "the user got a blank failure with no words in it" was never true of
+       production, only of the bare-router harness. */
+    cacheLoad.toThrow = Object.assign(
+      new Error("EPERM: operation not permitted, open 'analysis-cache.json'"),
+      { code: 'EPERM' },
+    );
+
+    const res = await request(realApp)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: SOURCE_ID, targetId: TARGET_ID });
+
+    expect(res.status).toBe(500);
+    expect(res.type).toBe('application/json');
+    expect(res.body.error).toBe('Internal server error.');
   });
 });

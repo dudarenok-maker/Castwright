@@ -197,10 +197,12 @@ describe('the leftover this handler can produce does NOT self-heal (#2292)', () 
        `dropSupersededTargetsNoLongerLive` prunes an entry whose TARGET died;
        the target here is the live row the route just validated. The leftover
        sits exactly in the gap between them. The third healer,
-       `reconcileRejectEdgesOnDisk`, only ever rewrites cast.json's
-       `notLinkedTo` edges and never opens this file's `supersededBy` at all —
-       which is why `cast-link-orphan` can honestly say "the next analysis
-       clears it" and this route cannot. */
+       `reconcileRejectEdgesOnDisk`, READS this file (`analysis.ts:386`) but
+       only ever REWRITES cast.json's `notLinkedTo` edges, so it never removes
+       a `supersededBy` entry — which is why `cast-link-orphan` can honestly
+       say "the next analysis clears it" and this route cannot. (An earlier
+       version of this comment said it "never opens this file", which is false
+       — the read is real; the write is the part that matters.) */
     const liveIds = cast.map((c) => c.id);
     expect(liveIds).not.toContain(ORPHANED_ID); // the premise, not an assumption
     expect(liveIds).toContain(CHARACTER_ID);
@@ -228,7 +230,7 @@ describe('POST reject-orphan-match — forget lock timeout vs disk fault (#2292)
        later analysis — is what finishes it. */
     expect(res.body.error).toContain('recorded and is durable');
     expect(res.body.error).toContain('Retry this same action');
-    expect(res.body.error).toContain('no later analysis will clear it');
+    expect(res.body.error).toContain('a later analysis almost certainly will not');
 
     expectRejectDurable();
     expect(readHistory().supersededBy[ORPHANED_ID]).toBe(CHARACTER_ID);

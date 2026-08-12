@@ -514,7 +514,8 @@ Design rationale:
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
   cover an authoritative write and a best-effort one at once). EIGHT sites fail
-  loud: the six best-effort `catch` blocks around identity writes, plus the two
+  loud *by rethrowing into their job's or request's terminal outcome*: the six
+  best-effort `catch` blocks around identity writes, plus the two
   AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
@@ -527,14 +528,21 @@ Design rationale:
   landed and writes only cosmetic `notLinkedTo` edges the next persist
   re-heals; and the three interim cast.json snapshots (per-chapter, stage-1,
   subset), which a final write in the same run clobbers, so a timeout there
-  diverges nothing (#2292). Elsewhere it is neither swallowed nor escalated:
-  the five batch routes (`script-review`, `cast-design`, `voice-style`,
-  `cast-series-patch`, `voice-override-linked`) keep their per-item failure
-  shape but report contention through `itemFailureReason`
-  (`workspace/file-lock.ts`), and `cast-reject-orphan`'s `forgetSupersededId`
-  handler is fatal for this one class because its leftover, uniquely, does NOT
-  self-heal — no `supersededBy` prune pass matches its shape, so its 500 names
-  a retry rather than a later analysis. See each site's own comment.
+  diverges nothing (#2292). A NINTH site fails loud in a different shape and is
+  counted separately for that reason: `cast-reject-orphan`'s
+  `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
+  because its leftover, uniquely, does NOT self-heal — no `supersededBy` prune
+  pass matches its shape — so the body names a retry rather than a later
+  analysis. Only the five batch routes (`script-review`, `cast-design`,
+  `voice-style`, `cast-series-patch`, `voice-override-linked`) are neither
+  swallowed nor escalated: they keep their per-item failure shape inside an
+  otherwise-successful 200/207 and report contention through `itemFailureReason`
+  (`workspace/file-lock.ts`). **A failure body that escalates never carries the
+  error's own message** — a `LockAcquisitionTimeoutError` names the lock key,
+  which embeds the absolute workspace path, and this app is served over LAN
+  HTTPS; the curated `LOCK_CONTENTION_REQUEST_ERROR` /
+  `LOCK_CONTENTION_ITEM_REASON` go to the client and the raw error goes to the
+  log (#2292 round 5). See each site's own comment.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),

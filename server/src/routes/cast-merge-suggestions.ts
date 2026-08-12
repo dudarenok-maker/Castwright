@@ -16,7 +16,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { loadSuggestions, dismissSuggestion } from '../store/cast-merge-suggestions.js';
-import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { performCastMerge } from './cast-merge.js';
 
 export const castMergeSuggestionsRouter = Router();
@@ -129,15 +129,24 @@ castMergeSuggestionsRouter.post(
       if (e.status && e.error) {
         return res.status(e.status).json({ error: e.error });
       }
-      /* #2292 (owner decision) — mirrors the sibling `POST /cast/merge`
-         handler: a throw without `{status, error}` used to reach Express 5's
-         default handler and come back as `500 text/html` instead of this
-         route's JSON `{ error }`. The status was already 500 either way; what
-         the frontend could not read was the body. */
+      /* #2292 (owner decision), CORRECTED in review round 5 — mirrors the
+         sibling `POST /cast/merge` handler, including the retraction. The
+         claim recorded here through round 4 ("a throw without `{status,
+         error}` used to reach Express 5's default handler and come back as
+         `500 text/html`") was FALSE: `app.ts:350` registers `errorHandler`
+         last, so such a throw has always answered `500 {"error":"Internal
+         server error."}`. The `text/html` came from the fixtures' bare router.
+
+         The real delta was the words, and `err.message` was the wrong ones —
+         it hands a LAN client the lock key, hence the absolute path of the
+         user's workspace. Curated body for the lock-timeout class, generic
+         body for everything else; the full error still goes to the log. See
+         `cast-merge.ts`'s handler for the long version. */
       console.error('[cast-merge-suggestions] accept failed', err);
-      return res.status(500).json({
-        error: err instanceof Error ? err.message : String(err),
-      });
+      if (isLockAcquisitionTimeout(err)) {
+        return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+      }
+      return res.status(500).json({ error: 'Internal server error.' });
     }
 
     /* Drop the suggestion only after a successful merge. */

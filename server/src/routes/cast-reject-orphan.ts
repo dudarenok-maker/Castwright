@@ -446,9 +446,13 @@ castRejectOrphanRouter.post(
          (`characterId` is the live row this route just validated). Neither
          fires. `reconcileRejectEdgesOnDisk` — what heals `cast-link-orphan`'s
          stale `notLinkedTo` edge, and the reason THAT route can answer "the
-         next analysis clears it" — only ever touches cast.json's edges, never
-         this file. So the entry survives every future analysis, and saying
-         nothing would be promising a cleanup that never comes.
+         next analysis clears it" — READS this file (`analysis.ts:386`, via
+         `loadCastIdHistoryWithStatus`) but only ever REWRITES cast.json's
+         edges, so it never removes a `supersededBy` entry either. (An earlier
+         version of this said it "never opens this file", which is simply
+         false; the load-bearing half is the write, not the read.) So the entry
+         survives every future analysis, and saying nothing would be promising
+         a cleanup that never comes.
 
          Deferred, in the shape the six identity sites use: parked in a `let`
          so nothing after it is skipped, acted on once the handler has closed.
@@ -487,13 +491,24 @@ castRejectOrphanRouter.post(
            `rejectOrphanedPair` returns early on the pair it already wrote —
            no duplicate, and the stash on it is untouched — and the forget is
            attempted again. So "retry this same action" ends with the entry
-           gone and a 200, which is exactly what it promises. */
+           gone and a 200, which is exactly what it promises.
+
+           Round 5 scoping — the closing clause used to read "no later analysis
+           will clear it for you", which is stronger than the trace supports.
+           Two later-analysis paths CAN clear this entry, both off the ordinary
+           track: `dropSupersededIdsReclaimedByLiveCast` fires if a later
+           analysis re-mints `orphanedId` as a LIVE cast row (not exotic —
+           analyzer `characterId`s are LLM free text, so an id can come back),
+           and `dropSupersededTargetsNoLongerLive` fires if `characterId` later
+           leaves the roster. Neither is something a user can rely on or ask
+           for, so the remediation is unchanged and the 500 is still right;
+           only the promise is scoped down to what is actually true. */
         return res.status(500).json({
           error:
             'The rejection was recorded and is durable — the chip will render and Undo still works. ' +
             'What did not finish is clearing the stale alias that pointed this id at the character, ' +
-            'because another operation held the lock too long. Retry this same action to finish it; ' +
-            'no later analysis will clear it for you.',
+            'because another operation held the lock too long. Retry this same action to finish it — ' +
+            'a later analysis almost certainly will not.',
         });
       }
 

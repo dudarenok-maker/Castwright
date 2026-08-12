@@ -23,7 +23,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { retireCharacterId } from '../store/cast-id-history.js';
@@ -412,18 +412,40 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
     if (e.status && e.error) {
       return res.status(e.status).json({ error: e.error });
     }
-    /* #2292 (owner decision) — this used to `throw err`. Anything without
-       `{status, error}` then reached Express 5's DEFAULT handler, which
-       answers `500 text/html` — not this route's JSON `{ error }` shape, which
-       is the only thing the frontend parses, so the user got a blank failure.
-       Pre-existing for any such throw (an EACCES on the cast.json write did it
-       too), but #2260's deferred rethrow made it reachable by ordinary
-       contention, so it is fixed here rather than left to the default handler.
-       Every exit from this route is now JSON. */
+    /* #2292 (owner decision), CORRECTED in review round 5 — the rationale
+       recorded here through round 4 was false, and the code it justified was a
+       leak. Both are retracted.
+
+       THE FALSE CLAIM: "this used to `throw err`; anything without
+       `{status, error}` then reached Express 5's DEFAULT handler, which answers
+       `500 text/html`, so the user got a blank failure." That never happened in
+       production. `app.ts:350` registers `errorHandler` (`error-handler.ts`)
+       last, and it ends `res.status(500).json({ error: 'Internal server
+       error.' })` — so a bare `throw err` out of this route has ALWAYS come
+       back as JSON, just wordless. The `text/html` was an artefact of this
+       route's own fixtures, which mount a bare `express()` + router with no
+       `errorHandler`; no server test mounted the assembled app, so the
+       mutation proofs measured the harness. `cast-merge.lock-timeout.test.ts`
+       now mounts the real `app.ts` for exactly that reason.
+
+       WHAT THE CHANGE ACTUALLY DOES, therefore, is choose the WORDS — and
+       round 4 chose `err.message`, which is the leak: a
+       `LockAcquisitionTimeoutError` message embeds the lock key, i.e. the
+       absolute path of the user's workspace, and #2260 made this class
+       reachable by ORDINARY CONTENTION over a LAN the app serves by design.
+       Any other unstructured throw (an `EACCES`, an `ENOSPC` naming a temp
+       path) round-tripped verbatim too.
+
+       So: the one class a user can act on gets a curated body; everything else
+       gets the same generic body `errorHandler` would have produced. Returned
+       explicitly rather than rethrown so this route's contract does not depend
+       on app-level middleware wiring — which is precisely what went unchecked
+       here. The full error, key and all, still goes to the server log. */
     console.error('[cast-merge] merge failed', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : String(err),
-    });
+    if (isLockAcquisitionTimeout(err)) {
+      return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    }
+    return res.status(500).json({ error: 'Internal server error.' });
   }
 });
 

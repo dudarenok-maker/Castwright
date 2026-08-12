@@ -119,12 +119,53 @@ export function isLockAcquisitionTimeout(err: unknown): boolean {
    ONE shared constant rather than five hand-written strings: the five routes
    phrase their ordinary fallbacks differently and five copies of this one
    would drift apart the first time it was reworded. Deliberately says nothing
-   about which file or key: the five sites contend on three different lock
-   classes (`cast:`, `script-review-ledger:`, `library-voice:`), and the
-   thrown error's own message already names the key for the server log. */
+   about which file or key: the five sites contend on TWO lock classes
+   (`cast:` — cast-design, cast-series-patch, voice-override-linked, and
+   voice-style's per-character locks — and `script-review-ledger:`), and the
+   thrown error's own message already names the key for the server log.
+
+   Round 5 correction: an earlier version of this paragraph said THREE classes
+   and listed `library-voice:` as the third. It is not reachable from any of
+   the five — `withLibraryVoiceLock` has exactly two callers, both in
+   `voice-library.ts` (:1556 `/assign`, :2121 the DELETE). That mattered, and
+   not only for tidiness: `library-voice:` is keyed on a voice UUID rather than
+   a book, so if it WERE reachable here the "another operation on this book"
+   wording below would be wrong. It is accurate precisely because both
+   reachable classes are book-scoped. */
+
+/* The contention FACT, as one sentence. Both public strings below open with
+   it, so the wording is written once and the two stay recognisably the same
+   message — the same anti-drift reasoning as the paragraph above, applied one
+   level up now that there are two shapes rather than one. */
+const LOCK_CONTENTION_FACT =
+  'Timed out waiting for another operation on this book to release its file lock';
+
 export const LOCK_CONTENTION_ITEM_REASON =
-  'Timed out waiting for another operation on this book to release its file lock — that is ' +
+  `${LOCK_CONTENTION_FACT} — that is ` +
   'contention, not a problem with this item. Retry once the other operation has finished.';
+
+/* #2292 review round 5 — the WHOLE-REQUEST counterpart, for a route that fails
+   the entire call rather than reporting a failed item inside a 200/207 body
+   (both `performCastMerge` callers).
+
+   Why a curated string at all, rather than the thrown error's own message:
+   `LockAcquisitionTimeoutError`'s message embeds the lock KEY, and every key
+   this class can carry embeds an absolute workspace path
+   (`cast-id-history:C:\\Users\\<user>\\…\\books\\<Author>\\<Series>\\<Title>`).
+   This app is served over LAN HTTPS by design, so returning that verbatim
+   hands any paired phone the filesystem layout of the user's library plus the
+   internal locking vocabulary. The key still reaches the SERVER LOG at every
+   one of these sites, which is where it is actually useful.
+
+   Why it does not promise that nothing was written: the two routes that use it
+   can reach this class from two different places — the outer `withCastLock`
+   acquisition, where nothing has happened yet, and the DEFERRED rethrow at the
+   end of `performCastMerge`, where the merge is fully applied on disk. A body
+   claiming either would be false in the other case, so it says "reload to see"
+   instead, which is true in both and is what the frontend does anyway. */
+export const LOCK_CONTENTION_REQUEST_ERROR =
+  `${LOCK_CONTENTION_FACT} — that is contention, not a problem with this book or with the ` +
+  'change you asked for. Reload to see whether the change landed, and retry if it did not.';
 
 /** The reason string a per-item failure should report: `fallback` for an
  *  ordinary error, `LOCK_CONTENTION_ITEM_REASON` for a lock-acquisition
