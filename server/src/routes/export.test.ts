@@ -137,14 +137,28 @@ afterAll(async () => {
   delete process.env.WORKSPACE_DIR;
 });
 
+/* Poll the MANIFEST ON DISK, not the in-memory `jobs` map — same fix as
+   export-backstop.test.ts's waitForTerminal, and the same defect shape:
+   runExportJob flips job.status to 'done'/'failed' in memory (which a GET
+   reflects immediately) well before its own `finally` gets to `await
+   writeJsonAtomic(...)`, so a caller that treats a terminal GET as proof
+   the manifest is on disk can read stale/missing manifest state in that
+   window. Proven with an artificial delay inserted before that
+   writeJsonAtomic call: the in-memory-poll version of this helper failed
+   deterministically ("different-format re-exports DO NOT revoke each
+   other" — its second manifest existsSync check went false); this
+   disk-polling version keeps passing with that same delay in place. */
 async function waitForDone(
   exportId: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  const manifestFile = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
   for (let i = 0; i < 50; i++) {
-    const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
-    const body = res.body as { status?: string };
-    if (body.status === 'done' || body.status === 'failed') {
-      return { status: res.status, body: res.body as Record<string, unknown> };
+    if (existsSync(manifestFile)) {
+      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as { status?: string };
+      if (manifest.status === 'done' || manifest.status === 'failed') {
+        const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+        return { status: res.status, body: res.body as Record<string, unknown> };
+      }
     }
     await new Promise((r) => setTimeout(r, 100));
   }

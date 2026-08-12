@@ -19,10 +19,12 @@ import type { BookStateJson } from '../workspace/scan.js';
 vi.mock('./build-m4b.js', () => ({ probeDurationSec: vi.fn(async () => 0) }));
 vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment: vi.fn() }));
 
-/* Behavioral regression for the ZipFile-level `zip.on('error', reject)`
-   listener in build-captions.ts's per-chapter branch (~line 206). Real
-   yazl never routes an addBuffer-path failure through ZipFile's own
-   'error' event (only addFile/addReadStream's read-stream-error and
+/* Behavioral regression for the ZipFile-level `zip.on('error', rejectBuild)`
+   listener that build-captions.ts's per-chapter branch picks up via
+   `createZipWritePipeline` (build-mp3-zip.ts:159) — shared with buildMp3Zip
+   and buildCodecZip, not a build-captions.ts-local listener. Real yazl
+   never routes an addBuffer-path failure through ZipFile's own 'error'
+   event (only addFile/addReadStream's read-stream-error and
    byte-count-mismatch paths do — see node_modules/yazl/index.js), so there
    is no code-path-only way to provoke a genuine internal yazl error here.
    Instead we intercept the `ZipFile` export itself and give it a

@@ -73,13 +73,13 @@ let triggerZipFileError: Error | null = null;
    `zip.outputStream.on('error', rejectBuild)` (~build-portable-book.ts:307)
    is its own separate forwarding line — the only one of the pipeline's
    three error forwarders left uncovered by this file's tests (see the test
-   below). Unlike build-mp3-zip.test.ts's equivalent, this one stays safe to
-   drive through the full nextTick/Promise.race shape: buildPortableBundle's
-   audio loop has no `await` between entries (see the ZipFile-level test's
-   own comment above), so `await done` is reached synchronously right after
-   `zip.end()` regardless of how much real per-chapter work happened —
-   there's no "wait for N real ffmpeg spawns" gate for contention to stretch
-   past the race's timeout. */
+   below). buildPortableBundle's audio loop has no `await` between entries
+   (see the ZipFile-level test's own comment above), so `await done` is
+   reached synchronously right after `zip.end()` regardless of how much real
+   per-chapter work happened — de-racing this test (see its own comment) is
+   therefore just as safe as the ZipFile-level one: nothing here needs to
+   "wait for N real ffmpeg spawns" the way build-mp3-zip.test.ts's
+   equivalent once did. */
 let triggerOutputStreamError: Error | null = null;
 /* N6 regression (found in passing while reviewing this PR): captures the
    most recently constructed ZipFile instance so a test can inspect its
@@ -420,8 +420,8 @@ describe('buildPortableBundle', () => {
      forwarding rather than exposing it. At least one REAL `addReadStream`
      audio entry (a genuine async fs read, same as build-mp3-zip.ts /
      build-codec-zip.ts) is what actually gives the disruption something in
-     flight to interrupt — confirmed empirically: this test hangs to the 1s
-     race timeout without the fix, and resolves instantly with it. */
+     flight to interrupt — confirmed empirically: without the fix this test
+     hangs until vitest's own testTimeout, and resolves instantly with it. */
   it('forwards a ZipFile-level internal error to the rejection instead of crashing the process', async () => {
     const errDir = join(tmpRoot, 'ziperr');
     mkdirSync(join(errDir, 'audio'), { recursive: true });
@@ -437,22 +437,15 @@ describe('buildPortableBundle', () => {
     process.on('uncaughtException', onUncaught);
     triggerZipFileError = injected;
     try {
-      const raced = await Promise.race([
-        buildPortableBundle(errDir, errState).then(
-          (r) => ({ kind: 'resolved' as const, value: r }),
-          (e) => ({ kind: 'rejected' as const, value: e }),
-        ),
-        new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
-        ),
-      ]);
-      // With the listener wired, the injected error rejects
-      // buildPortableBundle's own promise with the SAME error object.
-      // Without it, the promise never settles at all — that's the
-      // 'timeout' branch, a deliberate, fast, diagnosable failure instead
-      // of waiting on vitest's own test timeout.
-      expect(raced.kind).toBe('rejected');
-      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+      // De-raced (see build-mp3-zip.test.ts's identical sibling test for
+      // the full history): no more `Promise.race` against a hand-rolled
+      // timer. With the listener wired, the injected error rejects
+      // buildPortableBundle's own promise with the SAME error object;
+      // without it, the promise never settles, and this assertion fails
+      // by vitest's own (generous, centrally configured via testTimeout in
+      // vitest.config.ts) test timeout instead — the correct red for
+      // "never settles".
+      await expect(buildPortableBundle(errDir, errState)).rejects.toBe(injected);
     } finally {
       process.off('uncaughtException', onUncaught);
       triggerZipFileError = null;
@@ -460,7 +453,7 @@ describe('buildPortableBundle', () => {
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
-  }, 10_000);
+  });
 
   /* The last uncovered `'error'` forwarder in server/src/export/: unlike
      build-mp3-zip.ts / build-codec-zip.ts (createZipWritePipeline), which
@@ -493,22 +486,14 @@ describe('buildPortableBundle', () => {
     process.on('uncaughtException', onUncaught);
     triggerOutputStreamError = injected;
     try {
-      const raced = await Promise.race([
-        buildPortableBundle(errDir, errState).then(
-          (r) => ({ kind: 'resolved' as const, value: r }),
-          (e) => ({ kind: 'rejected' as const, value: e }),
-        ),
-        new Promise<{ kind: 'timeout' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'timeout' }), 1000),
-        ),
-      ]);
-      // With the listener wired, the injected error rejects
-      // buildPortableBundle's own promise with the SAME error object.
-      // Without it, the promise never settles at all — that's the
-      // 'timeout' branch, a deliberate, fast, diagnosable failure instead
-      // of waiting on vitest's own test timeout.
-      expect(raced.kind).toBe('rejected');
-      expect((raced as { kind: 'rejected'; value: unknown }).value).toBe(injected);
+      // De-raced — same fix, same rationale as the ZipFile-level test
+      // above: no more `Promise.race` against a hand-rolled timer. With
+      // the listener wired, the injected error rejects buildPortableBundle's
+      // own promise with the SAME error object; without it, the promise
+      // never settles, and this assertion fails by vitest's own (generous,
+      // centrally configured via testTimeout in vitest.config.ts) test
+      // timeout instead — the correct red for "never settles".
+      await expect(buildPortableBundle(errDir, errState)).rejects.toBe(injected);
     } finally {
       process.off('uncaughtException', onUncaught);
       triggerOutputStreamError = null;
@@ -516,7 +501,7 @@ describe('buildPortableBundle', () => {
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
-  }, 10_000);
+  });
 
   /* N6 (found in passing, independent review — not the subject of this
      PR's original crash fix): before errors here rejected instead of
