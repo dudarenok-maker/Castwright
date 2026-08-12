@@ -2035,6 +2035,24 @@ function runCli(args, envOverrides) {
   });
 }
 
+// Forces the real `git fetch origin main` inside `resolveBaselineText` to
+// fail deterministically, for the two real-git-binary tests further down
+// that need a genuine (not gitRunner-injected) fetch failure. The original
+// mechanism here was `HTTPS_PROXY`/`https_proxy` pointed at an unreachable
+// port — that only forces a failure when `origin` is an http(s) remote: an
+// agent running this suite from a fresh clone whose `origin` was a local
+// filesystem path saw 2 failures, because a proxy env var has no effect on
+// a non-HTTP transport and the fetch just succeeded against the local path.
+// `GIT_ALLOW_PROTOCOL` is git's own transport allowlist (see
+// git-remote-ext(1)/gitremote-helpers(1)): a value that names no real
+// transport rejects whatever transport `origin` actually uses — https, ssh,
+// a bare local path, anything — with no network I/O and no assumption about
+// `origin`'s URL scheme at all. Also faster (git refuses before attempting
+// any connection at all, instead of waiting out a refused TCP connect).
+const FORCE_GIT_FETCH_FAILURE_ENV = {
+  GIT_ALLOW_PROTOCOL: 'no-transport-named-this-for-hermetic-test',
+};
+
 // The highest row number Group `letter` has in `registerText`, computed from
 // the register's OWN `### <Letter><N>` body headings — the authoritative
 // source, not the live view — so a fixture built from it is correct by
@@ -2249,10 +2267,7 @@ test('--against-published does NOT print the ONBOX_TEST_BASELINE_FILE warning on
   // proving the warning's absence here isn't just because this run never
   // reached that code.
   withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
-    const r = runCli(['--against-published', filePath], {
-      HTTPS_PROXY: 'http://127.0.0.1:1',
-      https_proxy: 'http://127.0.0.1:1',
-    });
+    const r = runCli(['--against-published', filePath], FORCE_GIT_FETCH_FAILURE_ENV);
     assert.doesNotMatch(
       r.stderr,
       /ONBOX_TEST_BASELINE_FILE/,
@@ -2381,17 +2396,16 @@ test('--against-published exits 1 and shows the register is BEHIND when the (her
 // #2199 review round 2: end-to-end proof (real CLI process, real `git`
 // binary) that a genuinely failing `git fetch origin main` fails closed —
 // not just the injected-runner unit tests above, which pin the
-// orchestration but stub git out entirely. `HTTPS_PROXY` pointed at a port
-// nothing listens on makes git's own fetch attempt fail fast (connection
-// refused, no DNS/network dependency either way) without touching this
-// repo's git config, remotes, or any tracked state — scoped to this one
-// child process's environment only.
+// orchestration but stub git out entirely. See
+// `FORCE_GIT_FETCH_FAILURE_ENV`'s own comment for why this forces the
+// failure via `GIT_ALLOW_PROTOCOL` rather than an unreachable proxy: the
+// proxy trick only works when `origin` is an http(s) remote, and this test
+// must fail closed regardless of what transport `origin` actually uses.
+// Scoped to this one child process's environment only — touches no repo
+// git config, remotes, or tracked state.
 test('--against-published fails closed with a NON-ZERO exit when `git fetch origin main` itself fails, and the message names the fetch', () => {
   withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
-    const r = runCli(['--against-published', filePath], {
-      HTTPS_PROXY: 'http://127.0.0.1:1',
-      https_proxy: 'http://127.0.0.1:1',
-    });
+    const r = runCli(['--against-published', filePath], FORCE_GIT_FETCH_FAILURE_ENV);
     assert.equal(
       r.status,
       1,

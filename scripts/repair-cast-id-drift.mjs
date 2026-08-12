@@ -306,6 +306,7 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2875,7 +2876,9 @@ async function main() {
   if (stamped) console.log(`\nstamped cast-id-history recordedAtSeq on ${stamped} book(s) (#2128 one-shot)`);
 }
 
-const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+// See scripts/lib/is-main-module.mjs — a resolve()-only comparison misses
+// when the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) {
   main().catch((err) => {
     console.error(err.stack || String(err));

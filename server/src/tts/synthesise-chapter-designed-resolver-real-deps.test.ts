@@ -24,6 +24,19 @@ import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js'
 import type { CastCharacter } from './synthesise-chapter.js';
 import type { ResolveDesignedVoiceDeps } from './clone-voice-resolver.js';
 
+/* The phase-evict POST to the sidecar's /unload uses undici's fetch, not the
+   global one — it needs a dispatcher so a legitimate 600s queue behind another
+   book's synth isn't cut off at undici's hidden 300s headersTimeout (see
+   EVICT_DISPATCHER in synthesise-chapter.ts). A global-fetch spy therefore no
+   longer observes it. `importOriginal` keeps the real `Agent`, which the
+   module constructs at import time. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
+
+
 /* Mock node:child_process at module level so ffmpeg (spawned inside
    decodeAudioToPcm) always "fails" — exits non-zero — regardless of the
    bytes fed to it. Same vi.hoisted convention as mp3-spawn-args.test.ts. */
@@ -136,6 +149,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  fetchMock.mockReset();
   vi.restoreAllMocks(); // fs-38 Wave 3c, Task 22 — undo the per-test `global.fetch` spy below.
   delete process.env.WORKSPACE_DIR;
   rmSync(dir, { recursive: true, force: true });
@@ -228,7 +242,7 @@ describe('synthesise-chapter designed-voice self-heal — REAL readDesignedMaste
        BEFORE the resolver runs — see synthesise-chapter.ts's Task 22
        comment. Mock `global.fetch` so that call doesn't ECONNREFUSED
        against a real (absent) sidecar. */
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
 
     const provider = makeProvider();
     const entry = designedEntry(COQUI_UUID);
@@ -307,7 +321,7 @@ describe('synthesise-chapter designed-voice self-heal — REAL readDesignedMaste
     );
     writeFileSync(paths.qwenVoiceWavPath(`${storageKey}__master`), Buffer.from('not really a wav'));
     spawnMock.mockImplementation(() => fakeSucceedingFfmpegChild());
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
 
     const provider = makeProvider();
     const entry = designedEntry(COQUI_UUID);

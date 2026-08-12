@@ -5,7 +5,8 @@
 //   DEMO_COVERS_SRC=/path node scripts/build-demo-covers.mjs
 import { mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const BOOK_IDS = ['hollow-tide-1', 'hollow-tide-2', 'hollow-tide-3', 'coalfall-commission'];
 
@@ -38,4 +39,4 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isDirectlyInvoked(import.meta.url)) main();

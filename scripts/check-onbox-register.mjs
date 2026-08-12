@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -1065,13 +1066,33 @@ export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCo
   return { text: showResult.stdout, failedStep: null };
 }
 
-// CLI mode: `node scripts/check-onbox-register.mjs`
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/check-onbox-register.mjs');
+// process.exit() terminates before Node flushes pending async stdout/stderr
+// writes (synchronous on Windows, ASYNCHRONOUS on Linux/macOS — see
+// scripts/build-release-zip.mjs's own die()/CliError comment for the fuller
+// account and the incident that motivated it, PR #2297). This CLI's own
+// output was measured as tiny on its OK path — see the "extend the guard fix
+// beyond scripts/" commit — but that measurement never covered the FAILURE
+// path: onbox-register-check.yml runs this on ubuntu with stdout/stderr on a
+// pipe, and a register with many mismatches can queue well more than a
+// trivial number of console.error writes before exiting, which is exactly
+// the shape that truncates on POSIX. Every process.exit() call below is
+// replaced with `throw new CliExitError(code)`; the whole CLI body runs
+// inside runCheckOnboxRegisterCli(), invoked from a try/catch that turns a
+// caught CliExitError into `process.exitCode` instead of an instant kill, and
+// re-throws anything else (an unexpected error crashes exactly as it did
+// before — there was no top-level catch here previously either). This is a
+// control-flow extraction, not a rewrite: every exit code is unchanged, only
+// WHEN the process actually terminates (after the event loop drains, not
+// mid-write) is different.
+class CliExitError extends Error {
+  constructor(code) {
+    super(`CLI exit ${code}`);
+    this.code = code;
+  }
+}
 
-if (invokedAsCli) {
+// CLI mode: `node scripts/check-onbox-register.mjs`
+function runCheckOnboxRegisterCli() {
   const REGISTER = 'docs/testing/onbox-acceptance-register.md';
   const LIVE_VIEW = 'docs/testing/onbox-acceptance-register-live-view.html';
 
@@ -1086,7 +1107,7 @@ if (invokedAsCli) {
         console.error(
           `Not found: ${relPath} — if it moved, update scripts/check-onbox-register.mjs and .github/workflows/onbox-register-check.yml`,
         );
-        process.exit(1);
+        throw new CliExitError(1);
       }
       throw err;
     }
@@ -1144,7 +1165,7 @@ if (invokedAsCli) {
         '--discharging was passed more than once — pass every ID in ONE comma-separated ' +
           'value instead, e.g. --discharging E10,E11.',
       );
-      process.exit(1);
+      throw new CliExitError(1);
     }
     // #2280 review (nit 5): checked before the missing-value check just
     // below, so a bare `--discharging` with no `--against-published` reports
@@ -1157,7 +1178,7 @@ if (invokedAsCli) {
           'deliberately discharged by the change about to publish, and there is nothing ' +
           'for it to suppress outside that comparison.',
       );
-      process.exit(1);
+      throw new CliExitError(1);
     }
     const dischargingArg = process.argv[dischargingIdx + 1];
     if (!dischargingArg) {
@@ -1165,7 +1186,7 @@ if (invokedAsCli) {
         '--discharging requires a value: one row ID, or a comma-separated list, e.g. ' +
           '--discharging E10 or --discharging E10,E11.',
       );
-      process.exit(1);
+      throw new CliExitError(1);
     }
     dischargingIds = dischargingArg
       .split(',')
@@ -1182,7 +1203,7 @@ if (invokedAsCli) {
         `--discharging ${dischargingArg} has no usable row ID in it after splitting on ` +
           'commas — pass at least one, e.g. --discharging E10 or --discharging E10,E11.',
       );
-      process.exit(1);
+      throw new CliExitError(1);
     }
   }
 
@@ -1193,7 +1214,7 @@ if (invokedAsCli) {
         '--against-published requires a file path: a locally saved copy of the page ' +
           'fetched from the published URL just now.',
       );
-      process.exit(1);
+      throw new CliExitError(1);
     }
     let publishedHtml;
     try {
@@ -1204,7 +1225,7 @@ if (invokedAsCli) {
           `Not found: ${publishedPath} — pass the path to a locally saved copy of the ` +
             'fetched published page.',
         );
-        process.exit(1);
+        throw new CliExitError(1);
       }
       // A directory (EISDIR) or a permissions failure (EACCES) is also a
       // "can't read this" case, not just ENOENT — report it the same way
@@ -1212,7 +1233,7 @@ if (invokedAsCli) {
       // message. Still fails closed either way.
       if (err.code === 'EISDIR' || err.code === 'EACCES') {
         console.error(`Cannot read ${publishedPath} (${err.code}) — pass a readable file path.`);
-        process.exit(1);
+        throw new CliExitError(1);
       }
       throw err;
     }
@@ -1387,7 +1408,8 @@ if (invokedAsCli) {
     // ends with "Do not publish until this passes." on its own (#2199
     // review round 5, nit 2: this line used to print that exact sentence a
     // second time).
-    process.exit(publishedFailed ? 1 : 0);
+    if (publishedFailed) throw new CliExitError(1);
+    return;
   }
 
   const liveViewHtml = read(LIVE_VIEW);
@@ -1409,5 +1431,17 @@ if (invokedAsCli) {
     console.log(`check:onbox-register: OK — ${REGISTER} and ${LIVE_VIEW} agree.`);
   }
 
-  process.exit(registerFailed || liveViewFailed ? 1 : 0);
+  if (registerFailed || liveViewFailed) throw new CliExitError(1);
+}
+
+if (isDirectlyInvoked(import.meta.url)) {
+  try {
+    runCheckOnboxRegisterCli();
+  } catch (err) {
+    if (err instanceof CliExitError) {
+      process.exitCode = err.code;
+    } else {
+      throw err;
+    }
+  }
 }
