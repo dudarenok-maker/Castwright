@@ -8337,66 +8337,19 @@ async function mockRestoreBookBackup(_bookId: string, _backupFile: string): Prom
 
 /* ── Advanced config (/api/config + /api/config/prompts) ──────────────── */
 
-/* Legacy mock-only descriptors — no registry equivalent (KOKORO_SAMPLE_RATE
-   predates the real registry; ANALYZER_STAGE1_PROMPT predates the six real
-   isPrompt knobs at registry.ts:1198-1248, none of which is this key).
-   Retiring them cascades into mockGetPrompt/mockPutPrompt and roughly a
-   dozen tests in api.config.test.ts — tracked as a follow-up, kept for now
-   (#2259). Every other descriptor is projected straight from the server
-   registry so the mock catalogue can't drift out of parity with it again. */
-const UI_ONLY_MOCK_DESCRIPTORS: import('./types').KnobDescriptor[] = [
-  {
-    key: 'KOKORO_SAMPLE_RATE',
-    group: 'tts',
-    label: 'Kokoro sample rate',
-    help: 'Sample rate (Hz) for Kokoro synthesis output.',
-    type: 'integer',
-    min: 8000,
-    max: 48000,
-    step: 1000,
-    apply: 'restart-sidecar',
-    risk: 'low',
-    isPrompt: false,
-    default: 24000,
-  },
-  {
-    key: 'ANALYZER_STAGE1_PROMPT',
-    group: 'analyzer',
-    label: 'Stage-1 attribution prompt',
-    help: 'System prompt template used for per-sentence speaker attribution.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: true,
-    default: 'Attribute each sentence to its speaker.',
-  },
-];
+/* #2270 — the mock catalogue is now projected straight from the server
+   registry with no hand-written exceptions: retiring the last two UI-only
+   descriptors (one with no registry equivalent at all, the other
+   superseded by the six real isPrompt knobs at registry.ts:1198-1248)
+   also removed the two legacy groups ('tts', 'analyzer') that existed
+   solely to host them. */
+const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = allKnobDescriptors();
 
-const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
-  ...UI_ONLY_MOCK_DESCRIPTORS,
-  ...allKnobDescriptors(),
-];
-
-/* The two legacy UI-only descriptors above live in groups the real registry
-   doesn't have ('tts', 'analyzer') — kept alongside REGISTRY_GROUPS so their
-   `group` still resolves to something mockGetConfig() returns. */
-const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
-  {
-    id: 'tts',
-    label: 'Text-to-speech',
-    help: 'Synthesis engine settings.',
-    risk: 'low',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'analyzer',
-    label: 'Analyzer',
-    help: 'Analysis prompt templates and tuning.',
-    risk: 'medium',
-    collapsedByDefault: true,
-  },
-  ...REGISTRY_GROUPS,
-];
+/* #2270 review nit — copy rather than alias REGISTRY_GROUPS: no caller
+   mutates MOCK_CONFIG_GROUPS today, but handing out the server registry's
+   own array by reference means a future in-place mutation here would
+   corrupt the real registry's GROUPS for every other consumer. */
+const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [...REGISTRY_GROUPS];
 
 /* In-memory mock config store. Starts with default values; PUT/reset mutate it.
    Every knob's `effective` is derived from MOCK_CONFIG_DESCRIPTORS' `default`
@@ -8412,15 +8365,20 @@ function deriveMockConfigDefaults(): import('./types').ConfigValues {
 
 const MOCK_CONFIG_VALUES: import('./types').ConfigValues = deriveMockConfigDefaults();
 
-/* In-memory prompt store keyed by id. */
+/* In-memory prompt store keyed by id. #2270 — seeded with a real registry
+   isPrompt knob (prompt.castDetection, one of the six at
+   registry.ts:1198-1248) rather than a retired UI-only fiction;
+   text/defaultText stand in for the real prompt file's content (the
+   registry's own `default` for this key is the skill file's path, not
+   its content). */
 const MOCK_PROMPTS = new Map<string, PromptState>([
   [
-    'ANALYZER_STAGE1_PROMPT',
+    'prompt.castDetection',
     {
-      id: 'ANALYZER_STAGE1_PROMPT',
-      text: 'Attribute each sentence to its speaker.',
+      id: 'prompt.castDetection',
+      text: 'Detect every speaking character introduced or recurring in this chapter.',
       isForked: false,
-      defaultText: 'Attribute each sentence to its speaker.',
+      defaultText: 'Detect every speaking character introduced or recurring in this chapter.',
     },
   ],
 ]);
@@ -8656,11 +8614,11 @@ export async function mockRestartSidecar(): Promise<{ ok: boolean; error?: strin
 /* Test helper — reset the mock config store to its initial defaults. */
 export function _resetMockConfig(): void {
   Object.assign(MOCK_CONFIG_VALUES, deriveMockConfigDefaults());
-  MOCK_PROMPTS.set('ANALYZER_STAGE1_PROMPT', {
-    id: 'ANALYZER_STAGE1_PROMPT',
-    text: 'Attribute each sentence to its speaker.',
+  MOCK_PROMPTS.set('prompt.castDetection', {
+    id: 'prompt.castDetection',
+    text: 'Detect every speaking character introduced or recurring in this chapter.',
     isForked: false,
-    defaultText: 'Attribute each sentence to its speaker.',
+    defaultText: 'Detect every speaking character introduced or recurring in this chapter.',
   });
 }
 

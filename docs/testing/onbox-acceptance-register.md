@@ -128,13 +128,74 @@ comparison, see the edge list above). The merge step that closes this, run
    complete step 4 either.
 3. **If it fails**, do NOT publish. There are two distinct failure shapes,
    named in the error text:
-   - **A row/group named as already live and BEHIND** — your register is
-     genuinely behind. Pull the latest `main` (the row that's already live
-     should already be merged there via its own PR), confirm
-     `npm run check:onbox-register` (no flag) is green, and re-run step 2
-     against the SAME saved copy from step 1 to confirm it now passes. It
-     should — main pulling in the missing row is what resolves this, not
-     another fetch of the live page.
+   - **A row/group named as already live and BEHIND** — this message has TWO
+     different causes, and they need opposite fixes; check which one applies
+     before you act:
+     - **Another lane's row, already merged into `main`.** Pull the latest
+       `main` (the row that's already live should already be merged there
+       via its own PR), confirm `npm run check:onbox-register` (no flag) is
+       green, and re-run step 2 against the SAME saved copy from step 1 to
+       confirm it now passes. It should — `main` pulling in the missing row
+       is what resolves this, not another fetch of the live page.
+     - **Your OWN change discharged this row, and it just hasn't merged
+       yet.** Publishing (step 4) happens BEFORE this PR merges to `main` —
+       that is the normal order, not a mistake — so `origin/main` cannot yet
+       know your branch removed the row: the baseline can only recognise a
+       discharge that has already landed there. Every pre-merge discharge
+       therefore trips this exact same message, and pulling `main` will not
+       help (there's nothing to pull yet). Instead, re-run step 2 with
+       `--discharging <ID>[,<ID>...]` naming the row(s) you deliberately
+       removed, e.g. `npm run check:onbox-register -- --against-published
+       <saved-file> --discharging E10` or `--discharging E10,E11` for more
+       than one.
+
+       **The rule for which IDs to name is arithmetic, never trial-and-error:
+       name exactly as many IDs from a group as rows you actually discharged
+       from that group — never "whichever IDs the error message lists," and
+       never "keep adding IDs until the command goes green."** Padding
+       `--discharging` until the check passes is the exact failure mode this
+       check exists to catch (the #1931/A44 incident this whole mechanism was
+       built to close): a group with one genuine competing-lane addition on
+       top of your own discharge will always leave one leftover ID after you
+       have named your true count, and appeasing that leftover — naming it
+       too, just because the check is still red — silently deletes another
+       lane's live row at publish time. **If, after naming your true count
+       for a group, the check still reports a leftover for that group, STOP.
+       Do not name that ID too.** It is not yours to discharge: another lane
+       published a row into that same group, and the fix is to merge it in
+       (see "Another lane's row, already merged into `main`," above) before
+       you publish — not to add its ID to `--discharging`. The tool's own
+       error text already says this ("merge it in before publishing"); when
+       the doc and the tool disagree, trust the tool, not the instinct to
+       make it stop complaining.
+
+       Two shapes, both governed by that same count rule — knowing which one
+       you're in tells you how the IDs will be spelled, not how many to name:
+       - **A middle row of a group that still has survivors (the
+         renumbering wrinkle).** Rows renumber contiguously within a group,
+         so discharging a MIDDLE row does NOT make that row the one
+         reported — every row after it shifts down to fill the gap, so it's
+         the group's HIGHEST id that vanishes from the live page instead. If
+         your true count for this group is 1, the single ID the error names
+         is correct — but it's correct *because your true count is 1*, not
+         because the error said so. If your true count is N, expect to name
+         N ids this way (the shifted id can change each time you re-run);
+         never name an (N+1)th id just because the check is still red after N.
+       - **A whole group with NO survivors left** — e.g. discharging a
+         single-row group's only row (Group F's sole row, F1, is a real,
+         live example of exactly this shape). There is nothing left to
+         renumber, so every row the group's live-page section still lists
+         reads as live-only. Name exactly the rows you discharged — for a
+         one-row group, that's one ID, not "every ID the error currently
+         lists for this group." A second live-only ID surviving after you've
+         named your one is proof another lane independently published into
+         the same now-otherwise-empty group, not evidence you actually
+         discharged two rows.
+
+       Either way, naming an ID that turns out not to be live-only at all (a
+       typo, or copied from the wrong discharge) is itself a refusal, not a
+       silent no-op — the point is to keep a genuinely competing-lane row
+       from slipping through unreported, not to mute the check wholesale.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine
@@ -232,13 +293,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2811,6 +2872,45 @@ than taking some code path only the server-mediated call exercises.
 profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
 §On-box acceptance item 4; run sheet §6 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
+
+### E10 · revoke is loopback-only — the forwarder boundary and the copy that replaces the button ([#2269](https://github.com/dudarenok-maker/Castwright/issues/2269), PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280), plan [225](../features/225-lan-browser-device-auth.md)) · **group with E2/E3**
+
+`DELETE /api/devices/:id` is now gated to true loopback. Nothing automated reaches
+the real boundary: the server test **fabricates** a request object with
+`req.ip = '127.0.0.2'`, and the frontend test **stubs** `window.location`. Both are
+correct unit tests and neither has ever seen the actual `:443` forwarder, which is
+what makes the host's own browser non-loopback in the first place
+(`lan-port-forwarder.ts` dials upstream with `localAddress: '127.0.0.2'`, and it is
+host-blind, so a phone on `castwright.local` is indistinguishable from the desktop
+there). The narrowing is also user-visible, and the replacement copy is the only
+thing standing between an owner and "the button vanished with no explanation."
+
+- From **`https://localhost:<port>`** (the direct port, NOT the `:443` shortcut):
+  Revoke a device — it succeeds and the row drops out of the list. This is the one
+  address the feature leaves working; if it fails, the gate is too tight.
+- From **`https://localhost/`** (port 443, through the forwarder): the Revoke
+  button still **renders** — `isLoopbackHost()` is a hostname-only client-side
+  heuristic that cannot see the forwarder — and pressing it returns 403. Confirm
+  the error shown is the actionable sentence naming the direct-port address, **not**
+  a raw `revoke failed (403)`.
+- From **`https://castwright.local` on a phone**: no Revoke control on any row, and
+  the explanation renders **once below the device list, not once per row**. Check
+  this with **at least 3 paired devices** — per-row rendering was the shape caught
+  in review, and with one device the bug is invisible. Confirm it is legible at
+  phone width and does not crush the label/date columns.
+- **The security half, and the reason the row exists:** from a paired phone (or any
+  LAN device holding a valid credential), call `DELETE /api/devices/<the host's own
+  record id>` directly — the id is in `GET /api/devices`, which that device can
+  read. Expect **403**, and confirm afterwards via the host UI that the host's
+  record is **still live, not revoked**. Before #2269 this succeeded and locked the
+  owner out of their own install.
+
+*Needs:* the LAN HTTPS server running with the `:443` forwarder actually bound
+(`npm run start:lan`; no elevation required on Windows — see plan 283's ship
+notes), plus a phone or second machine paired over `castwright.local`. *Cost:*
+15–20 minutes; shares its whole setup with E2 and E3, so run the three together.
+*Criteria:* PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280)
+body; plan 225 §Invariants item 6.
 
 ## Group F — a real Android device
 

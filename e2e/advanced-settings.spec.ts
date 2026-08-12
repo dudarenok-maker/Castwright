@@ -4,15 +4,21 @@
  * round-trips edit → overridden → revert → default, and a
  * restart-sidecar knob shows the amber banner after edit.
  *
- * All assertions run in mock mode (VITE_USE_MOCKS=true) against the
- * canned descriptors in src/lib/api.ts:
- *   group "tts"      collapsedByDefault:false  (open on load)
- *     KOKORO_SAMPLE_RATE   integer  apply:restart-sidecar  default:24000
- *   group "analyzer" collapsedByDefault:true   (closed on load)
- *     ANALYZER_STAGE1_PROMPT  string  isPrompt:true
- *   group "qa-gates" collapsedByDefault:false  (open on load) — mirrors the
- *   real server/src/config/registry.ts KNOBS entries (#1360):
- *     qa.seg.maxRerecords integer  apply:live  default:2
+ * #2270 — the mock catalogue is now projected straight from the real
+ * server registry (server/src/config/registry.ts's GROUPS/KNOBS) with no
+ * hand-authored exceptions, so every group/knob referenced below is a
+ * REAL registry entry, and the group ORDER is the registry's own GROUPS
+ * array order:
+ *   group "analyzer-sampling" ("LLM sampling parameters")
+ *     collapsedByDefault:false, risk:medium → open on load, renders FIRST
+ *     analyzer.ollama.temperature ("Ollama temperature")  number  apply:live
+ *   group "tts-engine" ("Voice engine & device")
+ *     collapsedByDefault:true, risk:high → closed on load, must be expanded
+ *     tts.qwen.codecChunkSize ("Qwen codec chunk size")  integer
+ *       apply:restart-sidecar  default:300
+ *   group "qa-gates" ("Per-sentence QA gates")
+ *     collapsedByDefault:false, risk:low → open on load
+ *     qa.seg.maxRerecords ("Signal QA max re-records")  integer  apply:live  default:2
  *     qa.asr.enabled      boolean  apply:live  default:false
  *
  * The spec does NOT need a route stub — the mock api.getConfig() +
@@ -42,21 +48,25 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     });
   });
 
-  test('TTS section is open and renders the knob rows on load', async ({ page }) => {
+  test('LLM sampling parameters section is open and renders the knob rows on load', async ({
+    page,
+  }) => {
     await page.goto('/#/advanced');
     await waitForRouteReady(page);
 
-    /* The "Text-to-speech" accordion section starts open
-       (collapsedByDefault: false on the mock tts group). Target the SECTION
-       HEADER button specifically (it carries aria-label + aria-expanded) — the
-       label also appears as a jump-link in the nav rail, so a plain
-       getByRole('button', { name }) is now ambiguous. */
-    const ttsButton = page.locator('button[aria-label="Text-to-speech"]');
-    await expect(ttsButton).toBeVisible({ timeout: 10_000 });
-    await expect(ttsButton).toHaveAttribute('aria-expanded', 'true');
+    /* "LLM sampling parameters" (analyzer-sampling) starts open — it's
+       collapsedByDefault:false/risk:medium AND the FIRST group in the real
+       registry's GROUPS array, which the mock catalogue now projects
+       directly (#2270). Target the SECTION HEADER button specifically (it
+       carries aria-label + aria-expanded) — the label also appears as a
+       jump-link in the nav rail, so a plain getByRole('button', { name })
+       is ambiguous. */
+    const sectionButton = page.locator('button[aria-label="LLM sampling parameters"]');
+    await expect(sectionButton).toBeVisible({ timeout: 10_000 });
+    await expect(sectionButton).toHaveAttribute('aria-expanded', 'true');
 
     /* At least one knob label is rendered inside the open section. */
-    await expect(page.getByText('Kokoro sample rate')).toBeVisible();
+    await expect(page.getByText('Ollama temperature')).toBeVisible();
   });
 
   test('can reach the view via the Admin entry card', async ({ page }) => {
@@ -120,15 +130,24 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     await page.goto('/#/advanced');
     await waitForRouteReady(page);
 
-    /* KOKORO_SAMPLE_RATE is the only knob in the TTS section and has
-       apply:restart-sidecar. It's also the first number input on the page
-       (the "tts" group renders first). */
-    const firstInput = page.locator('input[type="number"]').first();
-    await expect(firstInput).toBeVisible({ timeout: 10_000 });
+    /* tts.qwen.codecChunkSize ("Qwen codec chunk size") is a real numeric
+       apply:restart-sidecar knob, but it lives in "Voice engine & device"
+       (tts-engine), which is collapsedByDefault:true/risk:high — expand
+       that section first. Locate the input by its own aria-label (every
+       OverrideRow input carries aria-label={descriptor.label}) rather than
+       input[type="number"].first(), so a future registry group-reorder
+       can't silently point this test at the wrong knob again. */
+    const sectionButton = page.locator('button[aria-label="Voice engine & device"]');
+    await expect(sectionButton).toBeVisible({ timeout: 10_000 });
+    await sectionButton.click();
+    await expect(sectionButton).toHaveAttribute('aria-expanded', 'true');
 
-    await firstInput.click({ clickCount: 3 });
-    await firstInput.fill('16000');
-    await firstInput.press('Tab');
+    const input = page.getByLabel('Qwen codec chunk size');
+    await expect(input).toBeVisible({ timeout: 10_000 });
+
+    await input.click({ clickCount: 3 });
+    await input.fill('16000');
+    await input.press('Tab');
 
     /* After committing a restart-sidecar knob the RestartSidecarBanner
        should appear with the sidecar restart prompt text. */

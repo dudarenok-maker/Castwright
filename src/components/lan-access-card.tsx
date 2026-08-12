@@ -10,6 +10,15 @@ import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
 
+// Revoke is loopback-only with no castwright.local fallback (#2269) —
+// narrower than Authorize, which does admit the friendly hostname. Shared by
+// the 403 catch below (a caller whose hostname reads as loopback but was
+// actually relayed through the :443 forwarder, peer 127.0.0.2) and the
+// hidden-button case (a caller whose hostname genuinely isn't loopback) —
+// one string so the two can't drift apart and disagree about the fix.
+const REVOKE_LOOPBACK_ONLY_HINT =
+  "Revoking only works from https://localhost:8443 on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.";
+
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   const [manageHint, setManageHint] = useState(false); // true on 401 (viewing from a phone)
@@ -64,10 +73,20 @@ export function LanAccessCard() {
     try {
       await api.revokeDevice(id);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      // A caller viewing this page at `localhost` but reached through the
+      // :443 forwarder (peer 127.0.0.2, never loopback) still sees the
+      // button (isLoopbackHost() is a hostname-only, client-side heuristic
+      // that can't see the forwarder) and gets refused here.
+      if (e instanceof ApiError && e.status === 403) {
+        setErr(REVOKE_LOOPBACK_ONLY_HINT);
+      } else {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
     }
     refresh(); // re-read: a revoked device drops out of the list below
   };
+
+  const visibleDevices = (devices ?? []).filter((d) => !d.revoked);
 
   return (
     <section className="bg-white rounded-3xl border border-ink/10 shadow-card p-6">
@@ -116,19 +135,31 @@ export function LanAccessCard() {
             </div>
           )}
           <ul className="mt-6 divide-y divide-ink/8">
-            {(devices ?? []).filter((d) => !d.revoked).map((d) => (
+            {visibleDevices.map((d) => (
               <li key={d.id} className="py-3 flex items-center justify-between gap-3 text-sm">
                 <span className="text-ink">
                   <span className="font-medium">{d.label}</span>
                   <span className="text-ink/55"> · added {fmt(d.createdAt)} · last seen {fmt(d.lastSeenAt)} · expires {fmt(d.expiresAt)}</span>
                 </span>
-                <button
-                  type="button" onClick={() => revoke(d.id)}
-                  className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0"
-                >Revoke</button>
+                {isLoopbackHost() && (
+                  <button
+                    type="button" onClick={() => revoke(d.id)}
+                    className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0"
+                  >Revoke</button>
+                )}
+                {/* Revoke removed rather than left disabled-and-failing (#2269) — the row's
+                    action cell is left empty; the explanation renders once, below the list
+                    (review round 2, Finding 4), not repeated on every row. */}
               </li>
             ))}
           </ul>
+          {!isLoopbackHost() && visibleDevices.length > 0 && (
+            // NOT recoveryHint(): that helper points at "Authorize this browser", which
+            // navigates TO castwright.local and back — useless (an unbreakable loop) for
+            // a caller who is already on castwright.local trying to revoke, so it needs
+            // this route's own hint, not the 401/lapsed-auth one.
+            <p className="mt-2 text-xs text-ink/45">{REVOKE_LOOPBACK_ONLY_HINT}</p>
+          )}
           <div className="mt-5">
             <LanCertStatus variant="admin" />
           </div>

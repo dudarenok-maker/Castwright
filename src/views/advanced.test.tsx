@@ -42,7 +42,15 @@ const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
 };
 
 /* Small fixture: two groups, three knobs — a live number knob, a
-   restart-sidecar boolean knob, and a prompt knob. */
+   restart-sidecar boolean knob, and a prompt knob. The GROUP shape ('tts'/
+   'analyzer-prompts' ids, collapsedByDefault, risk) is fixture-local and
+   deliberately does NOT mirror the real registry's tts-engine group (which
+   is risk:'high' and therefore starts collapsed, per SettingsSection) — the
+   tests below need the section open on render without an extra expand
+   step. The two real descriptor KEYS below (tts.qwen.codecChunkSize,
+   prompt.castDetection) do carry their real per-key registry metadata
+   (apply/risk/default) so a reader can't copy a wrong fact off them; only
+   their `group` placement is fixture-local. */
 const FIXTURE_CONFIG: ConfigResponse = {
   groups: [
     {
@@ -62,18 +70,16 @@ const FIXTURE_CONFIG: ConfigResponse = {
   ],
   descriptors: [
     {
-      key: 'KOKORO_SAMPLE_RATE',
+      key: 'tts.qwen.codecChunkSize',
       group: 'tts',
-      label: 'Kokoro sample rate',
-      help: 'PCM output sample rate in Hz.',
+      label: 'Qwen codec chunk size',
+      help: 'Codec decode chunk size (time-axis frames).',
       type: 'integer',
-      min: 8000,
-      max: 48000,
-      step: 1000,
-      apply: 'live',
-      risk: 'low',
+      min: 1,
+      apply: 'restart-sidecar',
+      risk: 'high',
       isPrompt: false,
-      default: 24000,
+      default: 300,
     },
     {
       key: 'SEG_ASR_ENABLED',
@@ -87,15 +93,15 @@ const FIXTURE_CONFIG: ConfigResponse = {
       default: false,
     },
     {
-      key: 'ANALYZER_STAGE1_PROMPT',
+      key: 'prompt.castDetection',
       group: 'analyzer-prompts',
-      label: 'Stage 1 prompt',
-      help: 'Prompt used for stage-1 analysis.',
+      label: 'Cast detection prompt',
+      help: 'Prompt used for per-chapter cast detection.',
       type: 'string',
       apply: 'live',
-      risk: 'medium',
+      risk: 'high',
       isPrompt: true,
-      default: 'Attribute each sentence to its speaker.',
+      default: 'skills/audiobook-character-detection-per-chapter.md',
     },
     {
       key: 'QWEN_DEVICE',
@@ -110,9 +116,9 @@ const FIXTURE_CONFIG: ConfigResponse = {
     },
   ],
   values: {
-    KOKORO_SAMPLE_RATE: {
-      key: 'KOKORO_SAMPLE_RATE',
-      effective: 24000,
+    'tts.qwen.codecChunkSize': {
+      key: 'tts.qwen.codecChunkSize',
+      effective: 300,
       source: 'default',
       locked: false,
       overridden: false,
@@ -124,9 +130,9 @@ const FIXTURE_CONFIG: ConfigResponse = {
       locked: false,
       overridden: false,
     },
-    ANALYZER_STAGE1_PROMPT: {
-      key: 'ANALYZER_STAGE1_PROMPT',
-      effective: 'Attribute each sentence to its speaker.',
+    'prompt.castDetection': {
+      key: 'prompt.castDetection',
+      effective: 'skills/audiobook-character-detection-per-chapter.md',
       source: 'default',
       locked: false,
       overridden: false,
@@ -163,10 +169,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetConfig.mockResolvedValue(FIXTURE_CONFIG);
   vi.mocked(api.getPrompt).mockResolvedValue({
-    id: 'ANALYZER_STAGE1_PROMPT',
-    text: 'Attribute each sentence to its speaker.',
+    id: 'prompt.castDetection',
+    text: 'Detect every speaking character introduced or recurring in this chapter.',
     isForked: false,
-    defaultText: 'Attribute each sentence to its speaker.',
+    defaultText: 'Detect every speaking character introduced or recurring in this chapter.',
   });
   vi.mocked(api.restartSidecar).mockResolvedValue({ ok: true });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
@@ -187,7 +193,7 @@ describe('AdvancedView — group headers', () => {
   it('renders a knob label inside the tts section', async () => {
     renderView();
     /* The section is open by default (collapsedByDefault: false for tts) */
-    expect(await screen.findByText('Kokoro sample rate')).toBeInTheDocument();
+    expect(await screen.findByText('Qwen codec chunk size')).toBeInTheDocument();
   });
 
   it('shows the heading and subtitle', async () => {
@@ -204,11 +210,11 @@ describe('AdvancedView — OverrideRow dispatch', () => {
   it('dispatches saveOverride with the right key+value when a number input changes', async () => {
     mockPutConfig.mockResolvedValue({
       ok: true,
-      applied: ['KOKORO_SAMPLE_RATE'],
+      applied: ['tts.qwen.codecChunkSize'],
       values: {
         ...FIXTURE_CONFIG.values,
-        KOKORO_SAMPLE_RATE: {
-          key: 'KOKORO_SAMPLE_RATE',
+        'tts.qwen.codecChunkSize': {
+          key: 'tts.qwen.codecChunkSize',
           effective: 16000,
           source: 'override',
           locked: false,
@@ -231,7 +237,7 @@ describe('AdvancedView — OverrideRow dispatch', () => {
     expect(input.value).toBe('16000');
 
     await waitFor(() =>
-      expect(mockPutConfig).toHaveBeenCalledWith({ KOKORO_SAMPLE_RATE: 16000 }),
+      expect(mockPutConfig).toHaveBeenCalledWith({ 'tts.qwen.codecChunkSize': 16000 }),
     );
   });
 });
@@ -649,8 +655,8 @@ describe('AdvancedView — unattributable-failure toast (#2209)', () => {
       ...FIXTURE_CONFIG,
       values: {
         ...FIXTURE_CONFIG.values,
-        KOKORO_SAMPLE_RATE: {
-          key: 'KOKORO_SAMPLE_RATE',
+        'tts.qwen.codecChunkSize': {
+          key: 'tts.qwen.codecChunkSize',
           effective: 16000,
           source: 'override',
           locked: false,
@@ -688,8 +694,8 @@ describe('AdvancedView — Revert seam, advanced.tsx → OverrideRow (#2209 revi
       ...FIXTURE_CONFIG,
       values: {
         ...FIXTURE_CONFIG.values,
-        KOKORO_SAMPLE_RATE: {
-          key: 'KOKORO_SAMPLE_RATE',
+        'tts.qwen.codecChunkSize': {
+          key: 'tts.qwen.codecChunkSize',
           effective: 16000,
           source: 'override',
           locked: false,
@@ -705,8 +711,8 @@ describe('AdvancedView — Revert seam, advanced.tsx → OverrideRow (#2209 revi
     const revertButton = await screen.findByRole('button', { name: /^revert$/i });
     fireEvent.click(revertButton);
 
-    expect(await screen.findByTestId('knob-save-error-KOKORO_SAMPLE_RATE')).toHaveTextContent(
-      'reset blocked: bad combo',
-    );
+    expect(
+      await screen.findByTestId('knob-save-error-tts.qwen.codecChunkSize'),
+    ).toHaveTextContent('reset blocked: bad combo');
   });
 });

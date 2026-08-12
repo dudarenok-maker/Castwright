@@ -52,6 +52,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('LanAccessCard', () => {
   it('renders device label, added date, expires date, and Revoke calls revokeDevice', async () => {
+    // Revoke is loopback-only (#2269) — stub a loopback host explicitly so
+    // this assertion doesn't ride jsdom's default location incidentally.
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
     vi.mocked(api.revokeDevice).mockResolvedValue({ ok: true });
 
@@ -81,7 +84,58 @@ describe('LanAccessCard', () => {
     expect(screen.queryByText('Mike phone')).not.toBeInTheDocument();
   });
 
+  // #2269 — revoke is loopback-only server-side now; the control must not be
+  // presented to a caller who would only get a 403 for pressing it. The
+  // empty action cell that leaves also gets an explanation (review round 2,
+  // Finding 4) rather than sitting there with no way to tell why it's gone.
+  // Pins the ACTUAL guidance, not just "some text is present": recoveryHint()
+  // (the 401/lapsed-auth helper) would also satisfy a looser assertion here,
+  // but its "Authorize this browser" instruction is a dead end from
+  // castwright.local — that button always navigates back to
+  // castwright.local, so following it can never bring the hostname back to
+  // loopback. The right message names the loopback address revoke needs.
+  it('hides the Revoke control for a non-loopback caller (castwright.local), and explains the loopback-only fix in its place — not the unrelated 401 recovery hint', async () => {
+    vi.stubGlobal('location', { hostname: 'castwright.local', port: '' });
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
+
+    render(<LanAccessCard />);
+
+    await waitFor(() => screen.getByText('Mike phone'));
+    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/revoking only works from https:\/\/localhost:8443/i),
+    ).toBeInTheDocument();
+    // recoveryHint()'s wording must NOT be what renders here — it points at
+    // "Authorize this browser", which is not the fix for a hidden Revoke button.
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+  });
+
+  // #2269 review round 2, Finding 1 — isLoopbackHost() is a hostname-only,
+  // client-side heuristic: on `https://localhost/` reached through the :443
+  // forwarder (or via castwright.local while the hostname still happens to
+  // read as loopback), the button renders but the server's peer is 127.0.0.2,
+  // never loopback, so the click still 403s. revoke() must not let that come
+  // back as the raw `revoke failed (403)` string the way it used to.
+  it('shows actionable guidance instead of the raw code on a 403 from revokeDevice', async () => {
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [DEVICE] });
+    vi.mocked(api.revokeDevice).mockRejectedValue(new ApiError('revoke failed (403)', 403));
+
+    render(<LanAccessCard />);
+    await waitFor(() => screen.getByText('Mike phone'));
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/revoking only works from https:\/\/localhost:8443/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
   it('Revoke removes the row (the re-fetch returns it revoked)', async () => {
+    // Revoke is loopback-only (#2269) — stub a loopback host explicitly so
+    // this assertion doesn't ride jsdom's default location incidentally.
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443' });
     vi.mocked(api.listDevices)
       .mockResolvedValueOnce({ devices: [DEVICE] })
       .mockResolvedValueOnce({ devices: [{ ...DEVICE, revoked: true }] });

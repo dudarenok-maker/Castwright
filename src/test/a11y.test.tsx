@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { MemoryRouter } from 'react-router';
 
@@ -78,33 +78,31 @@ vi.mock('../lib/api', () => ({
       Promise.resolve({
         groups: [
           {
-            id: 'tts',
-            label: 'Text-to-speech',
-            help: 'TTS settings.',
-            risk: 'low',
-            collapsedByDefault: false,
+            id: 'tts-engine',
+            label: 'Voice engine & device',
+            help: 'Voice engine device, language, and preload behaviour.',
+            risk: 'high',
+            collapsedByDefault: true,
           },
         ],
         descriptors: [
           {
-            key: 'KOKORO_SAMPLE_RATE',
-            group: 'tts',
-            label: 'Kokoro sample rate',
-            help: 'PCM output sample rate in Hz.',
+            key: 'tts.qwen.codecChunkSize',
+            group: 'tts-engine',
+            label: 'Qwen codec chunk size',
+            help: 'Codec decode chunk size (time-axis frames).',
             type: 'integer',
-            min: 8000,
-            max: 48000,
-            step: 1000,
-            apply: 'live',
-            risk: 'low',
+            min: 1,
+            apply: 'restart-sidecar',
+            risk: 'high',
             isPrompt: false,
-            default: 24000,
+            default: 300,
           },
         ],
         values: {
-          KOKORO_SAMPLE_RATE: {
-            key: 'KOKORO_SAMPLE_RATE',
-            effective: 24000,
+          'tts.qwen.codecChunkSize': {
+            key: 'tts.qwen.codecChunkSize',
+            effective: 300,
             source: 'default',
             locked: false,
             overridden: false,
@@ -366,9 +364,18 @@ describe('a11y — advanced configuration view', () => {
         <AdvancedView />
       </Provider>,
     );
-    // Wait for fetchConfig to hydrate so axe scans real content, not the
-    // loading state.
-    await screen.findByText('Kokoro sample rate');
+    // Wait for fetchConfig to hydrate, then expand the section — it's
+    // risk:'high' (matches the real tts-engine registry group), so
+    // SettingsSection starts it collapsed regardless of collapsedByDefault
+    // — so axe scans real row content, not the loading/collapsed state.
+    // Both the nav rail AND the section header render a "Voice engine &
+    // device"-named button; only the section header carries aria-expanded
+    // (mirrors advanced.test.tsx's openVoiceEngineSection helper).
+    const toggles = await screen.findAllByRole('button', { name: 'Voice engine & device' });
+    const toggle = toggles.find((el) => el.hasAttribute('aria-expanded'));
+    if (!toggle) throw new Error('Voice engine & device section toggle not found');
+    fireEvent.click(toggle);
+    await screen.findByText('Qwen codec chunk size');
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });
