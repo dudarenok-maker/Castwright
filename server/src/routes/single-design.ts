@@ -28,7 +28,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -197,7 +197,20 @@ async function runSingleDesign(
        over SSE. Curated like every other whole-request site; a non-timeout
        failure keeps its own message. */
     const message = requestFailureMessage(e, (e as Error).message || 'Voice design failed.');
-    endJob(job, { type: 'error', code: 'design_failed', message });
+    /* #2260 FINAL ROUND (B2) nit — 'design_failed' left this event unable to
+       reach the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links
+       for a lock-contention failure, same as the analysis path's own
+       `classifyAnalysisFailure` (failure-taxonomy.ts) already does.
+       Two literal branches, not a `code` variable — `openapi-design-parity.
+       test.ts` extracts SingleDesignEvent's documented codes by regex-matching
+       the literal `type: 'error', code: '<literal>'` pair, so a variable here
+       would be invisible to that guard (its own header calls this out as a
+       known blind spot, finding F6). */
+    if (isLockAcquisitionTimeout(e)) {
+      endJob(job, { type: 'error', code: 'lock-contention', message });
+    } else {
+      endJob(job, { type: 'error', code: 'design_failed', message });
+    }
   } finally {
     clearInterval(heartbeat);
   }

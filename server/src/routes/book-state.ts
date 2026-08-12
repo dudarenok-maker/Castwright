@@ -1292,9 +1292,15 @@ bookStateRouter.post(
       res.json(payload);
     } catch (e) {
       console.error('[book-state] replace-manuscript failed', e);
-      res
-        .status(500)
-        .json({ error: (e as Error).message || 'Failed to replace manuscript.' });
+      /* #2260 FINAL ROUND (B2) — replace-manuscript reaches the same
+         `withCastLock` cast.json read+delete arm through the shared
+         applyReparse() core as reparse above. Same curation. */
+      res.status(500).json({
+        error: requestFailureMessage(
+          e,
+          (e as Error).message || 'Failed to replace manuscript.',
+        ),
+      });
     }
   },
 );

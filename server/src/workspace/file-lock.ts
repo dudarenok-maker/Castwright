@@ -190,14 +190,19 @@ export function itemFailureReason(err: unknown, fallback: string): string {
  *  `err.message || '<route wording>'`) for everything else.
  *
  *  #2260 FINAL ROUND (B2) — exists because the leak was NOT confined to the two
- *  merge routes the round-5 convention was written against. Ten handlers ended
- *  with `res.status(500).json({ error: (e as Error).message || '…' })` on a path
- *  that takes a lock, and #2260 is what made that reachable: before it, a
- *  contended lock HUNG, so there was no error to serialise. Every one of those
- *  keys on a path — `withCastLock` keys on `castJsonPath(bookDir)` outright —
- *  and this app is served over LAN HTTPS by design.
+ *  merge routes the round-5 convention was written against. Twelve handlers
+ *  take a lock on a path that can now surface `LockAcquisitionTimeoutError`,
+ *  and #2260 is what made that reachable: before it, a contended lock HUNG, so
+ *  there was no error to serialise. Every one of those keys on a path —
+ *  `withCastLock` keys on `castJsonPath(bookDir)` outright — and this app is
+ *  served over LAN HTTPS by design. Nine of the twelve share the literal shape
+ *  `res.status(500).json({ error: (e as Error).message || '…' })`; the other
+ *  three curate the same message through a different response shape —
+ *  `cast-design.ts` and `single-design.ts` are `endJob` SSE terminals, and
+ *  `qwen-voice.ts` maps its status through `httpStatusForSidecarError` rather
+ *  than a bare 500.
  *
- *  ONE helper rather than ten hand-written branches, for the same anti-drift
+ *  ONE helper rather than twelve hand-written branches, for the same anti-drift
  *  reason `itemFailureReason` exists, plus a second: a single call is what makes
  *  the convention greppable. `git grep 'requestFailureMessage'` enumerates every
  *  curated whole-request site; a hand-rolled `if` at each would not.

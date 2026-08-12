@@ -2979,8 +2979,10 @@ export interface components {
              *     within the ride-out budget) / `gpu_contention` (same, for
              *     GPU-busy contention) / `unsupported_language` (the book's
              *     language has no sidecar mapping — checked before the stream
-             *     produces any progress) / `unknown` (defensive catch-all for an
-             *     unexpected throw escaping the design loop).
+             *     produces any progress) / `lock-contention` (a cast-lock
+             *     acquisition on this backstop's own path timed out — #2260) /
+             *     `unknown` (defensive catch-all for any other unexpected throw
+             *     escaping the design loop).
              * @enum {string}
              */
             type: "resume_from" | "idle" | "progress" | "heartbeat" | "character_skipped" | "character_designed" | "variant_designed" | "character_failed" | "error";
@@ -3016,7 +3018,7 @@ export interface components {
              * @description error only — machine-readable whole-run abort reason.
              * @enum {string}
              */
-            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "unknown";
+            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "unknown";
             /** @description error only — human-readable abort message. */
             message?: string;
         };
@@ -3058,7 +3060,9 @@ export interface components {
              *     design) run — the result is already persisted by the time this
              *     fires. `error` is the terminal event for a failed run: `code`
              *     `not_found` (character deleted mid-run), `design_failed` (the
-             *     design call itself threw), or `unsupported_language`.
+             *     design call itself threw), `unsupported_language`, or
+             *     `lock-contention` (a cast-lock acquisition on this route's own
+             *     path timed out — #2260).
              * @enum {string}
              */
             type: "resume_from" | "idle" | "heartbeat" | "phase" | "preview_ready" | "designed" | "error";
@@ -3091,7 +3095,7 @@ export interface components {
              * @description error only.
              * @enum {string}
              */
-            code?: "not_found" | "design_failed" | "unsupported_language";
+            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention";
             /** @description error only. */
             message?: string;
         };

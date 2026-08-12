@@ -435,12 +435,21 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        than an assumption it has to make. See `CAST_MERGE_APPLIED` above. */
     if (identityLockTimeout !== undefined) {
       if (typeof identityLockTimeout === 'object' && identityLockTimeout !== null) {
-        Object.defineProperty(identityLockTimeout, CAST_MERGE_APPLIED, {
-          value: true,
-          enumerable: false,
-          configurable: true,
-          writable: true,
-        });
+        try {
+          Object.defineProperty(identityLockTimeout, CAST_MERGE_APPLIED, {
+            value: true,
+            enumerable: false,
+            configurable: true,
+            writable: true,
+          });
+        } catch {
+          /* Defensive — a non-extensible/frozen error here would throw a
+             TypeError that REPLACES identityLockTimeout, losing the deferred
+             rethrow's whole contract: the route would answer the generic body
+             and skip the dismiss for a merge that DID land. Unreachable today
+             (these errors are freshly constructed, never frozen); swallowing
+             keeps the original throw below intact either way. */
+        }
       }
       throw identityLockTimeout;
     }

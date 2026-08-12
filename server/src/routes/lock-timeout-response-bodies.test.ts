@@ -1,15 +1,18 @@
 /* #2260 FINAL ROUND (B2) — what a client is told when a lock acquisition
  * expires, across every route that can produce one and fails the WHOLE request.
  *
- * THE LEAK, AND WHY IT IS NEW TO #2260. Ten handlers ended with
- * `res.status(500).json({ error: (e as Error).message || '<wording>' })` on a
- * path that takes a lock. Before this change a contended lock HUNG, so there
- * was no error to serialise and the branch was unreachable for this class.
- * Bounding acquisition made it reachable by ORDINARY CONTENTION — and
- * `LockAcquisitionTimeoutError`'s message embeds the lock key, which for a cast
- * lock is `castJsonPath(bookDir)`, i.e. the absolute path of the user's library.
- * This app is served over LAN HTTPS by design, so that is the filesystem layout
- * handed to any paired phone.
+ * THE LEAK, AND WHY IT IS NEW TO #2260. Twelve handlers take a lock on a path
+ * that can surface `LockAcquisitionTimeoutError`; nine of them share the
+ * literal shape `res.status(500).json({ error: (e as Error).message ||
+ * '<wording>' })`, and the other three curate the same message through a
+ * different response shape (see `workspace/file-lock.ts`'s
+ * `requestFailureMessage` doc comment). Before this change a contended lock
+ * HUNG, so there was no error to serialise and the branch was unreachable for
+ * this class. Bounding acquisition made it reachable by ORDINARY CONTENTION —
+ * and `LockAcquisitionTimeoutError`'s message embeds the lock key, which for a
+ * cast lock is `castJsonPath(bookDir)`, i.e. the absolute path of the user's
+ * library. This app is served over LAN HTTPS by design, so that is the
+ * filesystem layout handed to any paired phone.
  *
  * The round-5 convention ("a failure body that escalates never carries the
  * error's own message") was recorded against the two merge routes and was false
@@ -248,6 +251,14 @@ const CASES: Case[] = [
     name: 'POST /api/books/:bookId/reparse',
     lock: 'cast',
     call: () => request(app).post(`/api/books/${BOOK_ID}/reparse`).send({}),
+  },
+  {
+    name: 'POST /api/books/:bookId/replace-manuscript',
+    lock: 'cast — same applyReparse() core as reparse above',
+    call: () =>
+      request(app)
+        .post(`/api/books/${BOOK_ID}/replace-manuscript`)
+        .attach('file', Buffer.from('placeholder replacement'), 'revised.txt'),
   },
   {
     name: 'PUT /api/voices/:voiceId/override',

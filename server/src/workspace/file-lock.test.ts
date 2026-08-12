@@ -317,9 +317,14 @@ describe('itemFailureReason (#2292)', () => {
 
 /* #2260 FINAL ROUND (B2) — the WHOLE-REQUEST counterpart, same three
  * directions. Route-level coverage lives in
- * `routes/lock-timeout-response-bodies.test.ts`, which drives six real routes
- * through a real lock seam; this describe pins the decision itself, including
- * the non-Error inputs a route test cannot easily produce.
+ * `routes/lock-timeout-response-bodies.test.ts`, which drives eight of the
+ * twelve curated routes through a real lock seam. Of the other four,
+ * `cast-design.ts` and `single-design.ts` are `endJob` SSE terminals and
+ * `qwen-voice.ts` maps its status through `httpStatusForSidecarError` — none
+ * of the three is cheap to drive end to end; `voice-style.ts` shares the
+ * ordinary shape but isn't wired into that file's `CASES` either. This
+ * describe pins the decision itself, including the non-Error inputs a route
+ * test cannot easily produce.
  */
 describe('requestFailureMessage (#2260 final round)', () => {
   it('curates a lock-acquisition expiry, whatever produced it', () => {

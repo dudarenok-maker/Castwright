@@ -38,7 +38,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
@@ -692,8 +692,17 @@ qwenVoiceRouter.post(
       /* #2260 FINAL ROUND (B2) — `ensureCharacterVoiceUuid` and
          `persistEmotionVariant` both take cast locks on this path (the design
          lock itself is a different, un-timed mutex and cannot produce the
-         class). Same curation as every other whole-request site. */
-      return res.status(httpStatusForSidecarError(e)).json({
+         class). Same curation as every other whole-request site.
+
+         Status, not just body: `LockAcquisitionTimeoutError` carries no
+         `.status`, so routing it through `httpStatusForSidecarError` folded it
+         into that function's generic 502 default — "Bad Gateway" paired with a
+         body about book-level contention, which is not a sidecar/gateway
+         failure at all. Every other curated whole-request site in this file
+         answers 500 for its own failures; matching that here instead of
+         inheriting the sidecar-error mapping's default. */
+      const status = isLockAcquisitionTimeout(e) ? 500 : httpStatusForSidecarError(e);
+      return res.status(status).json({
         error: requestFailureMessage(e, (e as Error).message || 'Voice design failed.'),
       });
     }
