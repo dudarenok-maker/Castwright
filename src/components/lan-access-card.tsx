@@ -31,6 +31,13 @@ function loopbackHttpsOrigin(active: boolean, port: number): string | null {
   return active ? `https://localhost:${port}` : null;
 }
 
+// #2278 review round 3, Finding 1 — shown on a 403 from createDevicePairSession
+// when the response wasn't genuine JSON `{error}` prose (ApiError.fromServer
+// false — an HTML 403 from an interposed proxy or the :443 forwarder, say),
+// so the raw synthetic "pair-session failed (403)" string never reaches the
+// user. Same copy PairDeviceModal falls back to, for one consistent voice.
+const PAIRING_RESTRICTED_FALLBACK = 'Pairing can only be started from the computer running Castwright.';
+
 export function LanAccessCard() {
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   // #2278 review Finding 1 — the SERVER's own 401 message (already
@@ -50,7 +57,12 @@ export function LanAccessCard() {
   // active until onCertStatus below says otherwise (see DEFAULT_HTTPS_PORT's
   // comment for the tradeoff this makes on a degraded/never-resolved fetch).
   const [httpsActive, setHttpsActive] = useState(true);
-  const [httpsPort, setHttpsPort] = useState(DEFAULT_HTTPS_PORT);
+  // #2278 review round 3 (nit) — named boundPort, not httpsPort: the wire
+  // field (server/src/routes/lan-cert.ts's LanCertStatus.boundPort) was
+  // renamed for exactly this reason — it's whatever the server bound, HTTP
+  // or HTTPS, not necessarily an HTTPS port. Reintroducing "https" into this
+  // state's own name one layer in would undo that.
+  const [boundPort, setBoundPort] = useState(DEFAULT_HTTPS_PORT);
 
   // #2278 review Finding 1/6 — fed by <LanCertStatus> below (rendered only
   // in the !manageHint branch) via its existing onStatus callback, instead
@@ -61,7 +73,7 @@ export function LanAccessCard() {
   // drift — e.g. never refreshing here after "Regenerate certificate".
   const onCertStatus = useCallback((s: CertStatus) => {
     setHttpsActive(s.active);
-    setHttpsPort(s.boundPort);
+    setBoundPort(s.boundPort);
   }, []);
 
   // Revoke is loopback-only with no castwright.local fallback (#2269) —
@@ -70,7 +82,7 @@ export function LanAccessCard() {
   // actually relayed through the :443 forwarder, peer 127.0.0.2) and the
   // hidden-button case (a caller whose hostname genuinely isn't loopback) —
   // one string so the two can't drift apart and disagree about the fix.
-  const loopbackOrigin = loopbackHttpsOrigin(httpsActive, httpsPort);
+  const loopbackOrigin = loopbackHttpsOrigin(httpsActive, boundPort);
   const revokeLoopbackOnlyHint = loopbackOrigin
     ? `Revoking only works from ${loopbackOrigin} on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.`
     : "Revoking only works on the computer running Castwright — castwright.local and the :443 shortcut can't be used for this.";
@@ -94,9 +106,13 @@ export function LanAccessCard() {
       // A 403 here means this browser reached the server from a bare LAN IP
       // (not loopback or the friendly hostname) — the server's own message
       // (pairingOriginHint(), #2278 review Finding 1) already names the
-      // actual bound port, so render it as-is rather than composing our own.
+      // actual bound port, so render it as-is. But only when it's genuinely
+      // from the server (round 3, Finding 1): a non-JSON 403 body (an
+      // interposed proxy, the :443 forwarder) falls back to a bare
+      // "pair-session failed (403)" developer string, which must not become
+      // the user's entire explanation.
       if (e instanceof ApiError && e.status === 403)
-        setErr(e.message);
+        setErr(e.fromServer ? e.message : PAIRING_RESTRICTED_FALLBACK);
       else setErr(e instanceof Error ? e.message : String(e));
     }
   };
@@ -113,8 +129,9 @@ export function LanAccessCard() {
       if (e instanceof ApiError && e.status === 409) {
         setSelfErr('LAN mode is not active on this server, so there is nothing to authorize against.');
       } else if (e instanceof ApiError && e.status === 403) {
-        // Same cause + server-provided copy as the 403 branch in authorize() above.
-        setSelfErr(e.message);
+        // Same cause + server-provided copy (with the same fromServer gate)
+        // as the 403 branch in authorize() above.
+        setSelfErr(e.fromServer ? e.message : PAIRING_RESTRICTED_FALLBACK);
       } else {
         setSelfErr(e instanceof Error ? e.message : String(e));
       }

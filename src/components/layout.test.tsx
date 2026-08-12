@@ -460,7 +460,10 @@ describe('Layout — first-load library hydrate carries the ApiError status (tas
     );
 
     await waitFor(() => {
-      expect(store.getState().library.error).toEqual({ message: 'nope', status: 401 });
+      // fromServer: false — #2278 review round 3, Finding 3 threaded a third
+      // field through this same dispatch; `new ApiError('nope', 401)` above
+      // never went through apiErrorFromResponse, so it defaults false.
+      expect(store.getState().library.error).toEqual({ message: 'nope', status: 401, fromServer: false });
     });
   });
 });

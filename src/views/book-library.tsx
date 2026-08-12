@@ -247,6 +247,7 @@ export function BookLibraryView({
         dispatch(libraryActions.hydrateError({
           message: e instanceof Error ? e.message : String(e),
           status: e instanceof ApiError ? e.status : undefined,
+          fromServer: e instanceof ApiError ? e.fromServer : false,
         })),
       );
   };
@@ -402,7 +403,16 @@ export function BookLibraryView({
           <h3 className="font-serif text-2xl font-bold text-ink">Couldn&apos;t load your library</h3>
           <p className="mt-2 text-sm text-ink/60">
             {error.status === 401
-              ? <>This browser is no longer authorized for Castwright on your network. {recoveryHint()}</>
+              ? // #2278 review round 3, Finding 3 — /api/library sits behind the
+                // same requireLanToken guard as listDevices, so its 401 body now
+                // carries pairingOriginHint()'s port-correct guidance too;
+                // prefer it when it's genuinely from the server. recoveryHint()
+                // stays the fallback for a synthetic/unparseable body — it
+                // already correctly declines to promise a port it doesn't
+                // know (the :443-forwarder case this issue exists for).
+                error.fromServer
+                ? error.message
+                : <>This browser is no longer authorized for Castwright on your network. {recoveryHint()}</>
               : error.message}
           </p>
           <div className="mt-6">

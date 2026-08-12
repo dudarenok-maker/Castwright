@@ -1944,8 +1944,13 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
 
 async function realGetLibrary(): Promise<LibraryResponse> {
   const res = await fetch('/api/library');
-  if (!res.ok)
-    throw new ApiError(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`, res.status);
+  // #2278 review round 3, Finding 3 — /api/library sits behind the same
+  // requireLanToken guard as listDevices, so its 401 body now carries
+  // pairingOriginHint()'s port-correct guidance too; parse it via
+  // apiErrorFromResponse (and its `fromServer` flag) instead of the raw
+  // response text, so book-library.tsx can prefer it over recoveryHint()'s
+  // own composed pointer when it's genuinely available.
+  if (!res.ok) throw await apiErrorFromResponse(res, `Library scan failed (${res.status})`);
   return res.json();
 }
 
@@ -7326,7 +7331,26 @@ async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
+  constructor(
+    message: string,
+    readonly status: number,
+    /** True when `message` came from the server's own JSON `{ error }` body
+     *  (#2278 review round 3, Finding 1) — false when apiErrorFromResponse
+     *  fell back to a synthetic "<action> failed (<status>)" string because
+     *  the body was absent, not JSON, or had no `error` field (e.g. an HTML
+     *  403 from an interposed proxy or the :443 forwarder). A caller that
+     *  renders `message` as the user's ENTIRE explanation — not just logs it
+     *  — MUST gate on this rather than on `message` being non-empty: the
+     *  synthetic fallback is always non-empty too, so an emptiness check
+     *  can't tell a real server sentence from a bare developer string.
+     *  Defaults false — every direct `new ApiError(...)` call that bypasses
+     *  apiErrorFromResponse is, by construction, not a confirmed server
+     *  message. */
+    readonly fromServer: boolean = false,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
 }
 
 /** Build an ApiError from a non-ok Response, preferring the server's own
@@ -7334,12 +7358,14 @@ export class ApiError extends Error {
  *  Finding 1). Several LAN-guard 401/403 bodies now carry actionable,
  *  port-correct guidance (e.g. `pairingOriginHint()` on the server) that the
  *  UI renders verbatim — discarding it here would silently regress that fix.
- *  Falls back to `fallback` when the body is absent, not JSON, or has no
- *  non-empty string `error` field. */
+ *  Falls back to `fallback` (with `fromServer: false`) when the body is
+ *  absent, not JSON, or has no non-empty string `error` field. */
 async function apiErrorFromResponse(res: Response, fallback: string): Promise<ApiError> {
   const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  const message = typeof body?.error === 'string' && body.error.length > 0 ? body.error : fallback;
-  return new ApiError(message, res.status);
+  if (typeof body?.error === 'string' && body.error.length > 0) {
+    return new ApiError(body.error, res.status, true);
+  }
+  return new ApiError(fallback, res.status, false);
 }
 
 async function realCreateDevicePairSession(body: { label: string; selfBind?: boolean }) {
@@ -7356,6 +7382,14 @@ async function realListDevices() {
 }
 async function realRevokeDevice(id: string) {
   const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  // Deliberately NOT apiErrorFromResponse (#2278 review round 3, nit): the
+  // card's own revokeLoopbackOnlyHint substitutes for this on 403 regardless
+  // of what the server said (the server's message here is a generic, non-
+  // port "Devices can only be revoked from the host UI.", not the guidance
+  // the card needs), so parsing the body would only cost a fetch-body read
+  // with no caller ever reading the result. The 404 ("Unknown device.") is
+  // collateral loss from the same choice, not a separate oversight — revoke
+  // has no UI path that renders a 404 message differently from any other.
   if (!res.ok) throw new ApiError(`revoke failed (${res.status})`, res.status);
   return res.json() as Promise<{ ok: true }>;
 }

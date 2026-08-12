@@ -208,10 +208,12 @@ describe('LanAccessCard', () => {
     // #2278 review Finding 1 — the card renders the server's own message
     // verbatim now (see src/lib/api.ts's apiErrorFromResponse), so the mock
     // carries the actual guidance text rather than a synthetic placeholder.
+    // fromServer: true (round 3, Finding 1) — this IS a genuine parsed body.
     vi.mocked(api.createDevicePairSession).mockRejectedValue(
       new ApiError(
         'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
         403,
+        true,
       ),
     );
 
@@ -225,6 +227,30 @@ describe('LanAccessCard', () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByTestId('mock-qr')).not.toBeInTheDocument();
+  });
+
+  // #2278 review round 3, Finding 1 — a 403 whose body wasn't genuine JSON
+  // `{error}` prose (an HTML 403 from an interposed proxy, or the :443
+  // forwarder) falls back to the synthetic "pair-session failed (403)"
+  // developer string in ApiError.message, with fromServer left at its
+  // default false. That raw string must never reach the user — the card
+  // must show the generic fallback instead.
+  it('falls back to generic guidance on a 403 whose body was not genuine server prose (ApiError.fromServer false)', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError('pair-session failed (403)', 403), // fromServer defaults false
+    );
+
+    render(<LanAccessCard />);
+    fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Pairing can only be started from the computer running Castwright.'),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/pair-session failed/i)).not.toBeInTheDocument();
   });
 
   it('navigates to the friendly URL with self=1 when authorizing this browser', async () => {
@@ -280,6 +306,7 @@ describe('LanAccessCard', () => {
       new ApiError(
         'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
         403,
+        true, // fromServer — a genuine parsed body (round 3, Finding 1)
       ),
     );
     const assign = vi.fn();
@@ -289,6 +316,22 @@ describe('LanAccessCard', () => {
     expect(
       await screen.findByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
     ).toBeInTheDocument();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('falls back to generic guidance on a 403 from createDevicePairSession (self-bind) whose body was not genuine server prose', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(
+      new ApiError('pair-session failed (403)', 403), // fromServer defaults false
+    );
+    const assign = vi.fn();
+    vi.stubGlobal('location', { hostname: 'localhost', port: '8443', assign });
+    render(<LanAccessCard />);
+    fireEvent.click(await screen.findByRole('button', { name: /authorize this browser/i }));
+    expect(
+      await screen.findByText('Pairing can only be started from the computer running Castwright.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/pair-session failed/i)).not.toBeInTheDocument();
     expect(assign).not.toHaveBeenCalled();
   });
 
@@ -430,6 +473,7 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
       new ApiError(
         'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
         403,
+        true, // fromServer — a genuine parsed body (round 3, Finding 1)
       ),
     );
 
@@ -521,7 +565,7 @@ describe('LanAccessCard — #2278 LAN HTTPS port copy', () => {
   it('drops the https:// address (rather than pointing at a dead http-only port) when LAN HTTPS is not active — the server already decided this, the card just renders it', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
     vi.mocked(api.createDevicePairSession).mockRejectedValue(
-      new ApiError('Start pairing on the computer running Castwright.', 403),
+      new ApiError('Start pairing on the computer running Castwright.', 403, true),
     );
 
     render(<LanAccessCard />);

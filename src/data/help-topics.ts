@@ -238,8 +238,9 @@ export const HELP_TOPICS: HelpTopic[] = [
       'address — `https://localhost:<port>` — skips pairing, and it is the quickest fix for ' +
       'same-machine testing. The port is not always `8443`: `LAN_HTTPS_PORT` sets the requested ' +
       'port, but a production install auto-rebinds to the next free one when that port is already ' +
-      'taken, so the value it actually bound can differ from either. Admin → LAN access doesn\'t ' +
-      "show the port on this happy path (only in its two error states) — the reliable source is " +
+      'taken, so the value it actually bound can differ from either. Admin → LAN access only shows ' +
+      "the port in two specific spots — the \"no longer authorized\" message, and the note next to " +
+      'a hidden Revoke button — not on a normal visit to that screen. The reliable source is ' +
       'the server\'s own startup log line, `[server] listening on https://localhost:<port>`, ' +
       'printed wherever `npm start` / `npm run dev:lan` / `npm run start:lan` runs. To authorize an actual phone or ' +
       'tablet, open Admin → LAN access and click "Authorize a device" for a pairing QR, then scan it ' +

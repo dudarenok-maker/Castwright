@@ -43,9 +43,13 @@ vi.mock('../lan-auth.js', () => ({
   readCwLanCookie: vi.fn(() => undefined),
   // #2278 review Finding 1/7 — pairing.ts's 403 branch calls this; without a
   // mock here it would be undefined and throw (masking the 403 as a 500).
+  // #2278 review round 3, Finding 4 — a NON-default port (9443, not 8443):
+  // the earlier 8443 return coupled this test to a hand-copied string that
+  // proves the route emits the mock's return value, but nothing about the
+  // port actually being dynamic (lan-auth.test.ts covers that directly).
   pairingOriginHint: vi.fn(
     () =>
-      'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
   ),
 }));
 vi.mock('./export-lan.js', async (orig) => {
@@ -216,7 +220,7 @@ describe('pairing routes', () => {
     // #2278 review Finding 1 — the 403 body is pairingOriginHint()'s
     // port-correct guidance, not a hardcoded string.
     expect(res.body.error).toBe(
-      'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
     );
   });
 

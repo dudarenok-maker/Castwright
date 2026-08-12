@@ -56,7 +56,11 @@ describe('lan-auth (srv-20)', () => {
     else process.env.LAN_HTTPS = origHttps;
     if (origToken === undefined) delete process.env.LAN_AUTH_TOKEN;
     else process.env.LAN_AUTH_TOKEN = origToken;
-    setLanRuntime({ httpsActive: false, port: 8080 }); // restore the module default
+    // #2278 review round 3 (nit) — resets to a fixed, known baseline for the
+    // NEXT test in this file, not literally "the module default": that
+    // default is `Number(process.env.PORT ?? 8080)` (lan-runtime.ts), which
+    // only happens to equal 8080 when PORT is unset.
+    setLanRuntime({ httpsActive: false, port: 8080 });
   });
 
   // #2278 review Finding 1/7 — PAIRING_ORIGIN_HINT used to be a hardcoded

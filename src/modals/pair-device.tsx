@@ -26,9 +26,10 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
   // #2278 review Finding 2 — the server's own 403 message (pairingOriginHint()
   // on the server, already port-correct), rendered verbatim in the
   // 'restricted' state below instead of this modal's own hardcoded
-  // https://localhost:8443 copy. Falls back to generic wording only if a
-  // caller somehow lands on 'restricted' without a message (defensive; the
-  // real 403 always carries one).
+  // https://localhost:8443 copy. Falls back to generic wording (no address
+  // promised) when the 403 body wasn't genuine JSON `{error}` prose — an
+  // HTML 403 from an interposed proxy or the :443 forwarder, say — see
+  // ApiError.fromServer and the catch below (round 3, Finding 1).
   const [restrictedMessage, setRestrictedMessage] = useState('');
   const [label, setLabel] = useState('');
   /* Bumped on every open and every generate(); an in-flight createPairSession
@@ -65,13 +66,26 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
         if (reqToken.current !== token) return;
         const code = e instanceof ApiError ? e.status : undefined;
         const msg = e instanceof Error ? e.message : '';
-        if (code === 409 || /\b409\b/.test(msg)) {
+        // #2278 review round 3, Finding 2 — a real ApiError already carries
+        // its status; consult the /\bNNN\b/ regex fallback only when `code`
+        // is undefined (e is a plain Error, e.g. from an older test/caller).
+        // Once the message can be arbitrary server prose (pairingOriginHint()
+        // now embeds the bound port), a live `code` and a regex hit on that
+        // same prose's digits can disagree — e.g. LAN_HTTPS_PORT=409 would
+        // make `/\b409\b/.test(msg)` true on a genuine 403's message.
+        const is409 = code !== undefined ? code === 409 : /\b409\b/.test(msg);
+        const is403 = code !== undefined ? code === 403 : /\b403\b/.test(msg);
+        if (is409) {
           setStatus('unavailable');
-        } else if (code === 403 || /\b403\b/.test(msg)) {
-          // #2278 review Finding 2 — the server's message already names the
-          // actual bound port; render it as-is.
+        } else if (is403) {
+          // #2278 review round 3, Finding 1 — only trust the server's own
+          // message when apiErrorFromResponse actually parsed a JSON
+          // `{error}` body (ApiError.fromServer); otherwise it's the
+          // synthetic "pair session failed (403)" developer string, which
+          // must not become the entire restricted panel.
+          const fromServer = e instanceof ApiError && e.fromServer;
           setRestrictedMessage(
-            msg || 'Pairing can only be started from the computer running Castwright.',
+            fromServer ? msg : 'Pairing can only be started from the computer running Castwright.',
           );
           setStatus('restricted');
         } else {

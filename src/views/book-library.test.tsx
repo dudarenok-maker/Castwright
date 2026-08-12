@@ -96,7 +96,9 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
   };
 }
 
-function renderWithLibraryError(error: { message: string; status?: number } | null) {
+function renderWithLibraryError(
+  error: { message: string; status?: number; fromServer?: boolean } | null,
+) {
   const store = configureStore({
     reducer: {
       account: accountSlice.reducer,
@@ -940,6 +942,38 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
     expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });
 
+  // #2278 review round 3, Finding 3 — /api/library's 401 body now carries
+  // pairingOriginHint()'s port-correct guidance (same guard as listDevices);
+  // when the error genuinely came from the server (ApiError.fromServer,
+  // threaded through as `fromServer` on the store's error), prefer it over
+  // recoveryHint()'s own composed pointer.
+  it('prefers the server\'s own message on a 401 when it is genuinely from the server', () => {
+    renderWithLibraryError({
+      message:
+        'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+      status: 401,
+      fromServer: true,
+    });
+    expect(
+      screen.getByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
+    ).toBeInTheDocument();
+    // recoveryHint()'s own composed pointer must NOT also render.
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+  });
+
+  // recoveryHint()'s discipline (never promise a port it doesn't know, e.g.
+  // the :443-forwarder path) must stay the fallback when the server said
+  // nothing useful — fromServer: false/absent is the untouched round-2 path.
+  it('falls back to recoveryHint() on a 401 whose message was not genuinely from the server', () => {
+    renderWithLibraryError({
+      message: 'Library scan failed (401)',
+      status: 401,
+      fromServer: false,
+    });
+    expect(screen.getByText(/authorize this browser/i)).toBeInTheDocument();
+    expect(screen.queryByText(/library scan failed/i)).not.toBeInTheDocument();
+  });
+
   it('shows the recovery pointer after Retry fails with 401 (a real state transition, not a preload)', async () => {
     /* Preload a NON-401 error so the recovery pointer is provably absent
        before the click — a 401 preload here would make this test pass even
@@ -952,6 +986,27 @@ describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
     expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(await screen.findByText(/authorize this browser/i)).toBeInTheDocument();
+  });
+
+  // #2278 review round 3, Finding 3 — Retry's own dispatch (book-library.tsx,
+  // not layout.tsx's first-load effect) must thread ApiError.fromServer
+  // through too, or a retry that hits the real 401 body would silently drop
+  // back to recoveryHint() instead of the server's own message.
+  it('threads fromServer through Retry\'s own dispatch, so a genuine server message wins after a retry too', async () => {
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.getLibrary).mockRejectedValue(
+      new ApiError(
+        'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+        401,
+        true,
+      ),
+    );
+    renderWithLibraryError({ message: 'boom', status: 500 });
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    expect(
+      await screen.findByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
   });
 
   it.each([
