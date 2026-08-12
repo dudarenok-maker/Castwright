@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withKeyLock } from './file-lock.js';
+import { withKeyLock, __chainsSizeForTest } from './file-lock.js';
 
 /* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
    is module-level mutable state keyed by a fixed string — exactly the shape
@@ -168,5 +168,31 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
 
     expect(order).toEqual(['a-start', 'a-end', 'd-start', 'd-end']);
     expect(order).not.toContain('b-ran');
+  });
+
+  it('leaves exactly one inert chains entry after a timeout, reclaimed by the next completed caller', async () => {
+    /* PR #2284 review C3. The timeout path deliberately does NOT delete its
+       `chains` entry -- deleting it is what breaks mutual exclusion. The cost
+       is that the entry outlives the timeout, and nothing pinned that before:
+       the holder ahead will not remove it (its `finally` guards on its OWN
+       `mine`, and the map now holds the waiter's). Pin both halves -- the
+       entry that stays, and the later caller that reclaims it -- so a future
+       change cannot quietly reintroduce the delete without this going red. */
+    const key = 'chains-accounting-key';
+    const before = __chainsSizeForTest();
+
+    const holder = withKeyLock(key, async () => {
+      await new Promise((r) => setTimeout(r, 150));
+    });
+    await expect(withKeyLock(key, async () => 'never', 20)).rejects.toThrow(/chains-accounting-key/);
+    await holder;
+
+    /* The holder has finished and still did not reclaim the timed-out
+       waiter's entry -- this is the accepted, bounded leak. */
+    expect(__chainsSizeForTest()).toBe(before + 1);
+
+    /* ...and the next caller to run fn() to completion does reclaim it. */
+    await withKeyLock(key, async () => 'ok');
+    expect(__chainsSizeForTest()).toBe(before);
   });
 });

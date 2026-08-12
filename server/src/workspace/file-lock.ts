@@ -9,13 +9,30 @@ const chains = new Map<string, Promise<unknown>>();
    re-entering a locked function on the same key) and rule 4 (acquiring an
    earlier lock class while holding a later one -- an AB/BA cycle across
    design -> library-voice -> cast). Either way the request just hangs
-   forever. Bound the wait instead. A cast.json read-modify-write is
-   sub-second, and clearLibraryVoiceReferences takes one cast lock per book,
-   serially, each also sub-second -- 15s is generous headroom above the
-   longest legitimate critical section in this codebase while still firing
-   long before anyone watching a hung request would give up and go looking
-   for a log line. */
-const DEFAULT_ACQUIRE_TIMEOUT_MS = 15_000;
+   forever. Bound the wait instead.
+
+   WHAT THE BUDGET BOUNDS: queue wait, not the length of any one critical
+   section -- everything ahead of you on this key, plus your own turn. The
+   longest known holder is NOT a cast.json read-modify-write (sub-second): it
+   is voice-library.ts's DELETE, which holds `library-voice:<uuid>` across
+   scanLibraryVoiceUsage + clearLibraryVoiceReferences, i.e. two full walks of
+   every confirmed book, O(N books x file I/O). A large enough library makes
+   that the thing a concurrent /assign on the same uuid is queued behind. If
+   this timeout ever starts firing on a healthy install, that is the call site
+   to look at first -- raise the budget or shorten that critical section; do
+   not assume a lock-rule violation.
+
+   WHY 10s AND NOT 15s: vitest's testTimeout is 15_000 in BOTH server configs.
+   At 15s the two deadlines race in the same event-loop turn, and when vitest
+   wins, the failure reads `Test timed out in 15000ms` -- no key, no rule
+   pointer, i.e. exactly the diagnostic-free hang this change exists to
+   remove, delivered in the first place a maintainer would meet it. 10s breaks
+   the tie so the lock's own error always wins.
+
+   NOTE the nesting asymmetry: withCastLocks chains one withKeyLock per book,
+   so a two-book route's effective acquisition budget is 2x this, a one-book
+   route's is 1x. */
+const DEFAULT_ACQUIRE_TIMEOUT_MS = 10_000;
 
 export async function withKeyLock<T>(
   key: string,
@@ -38,13 +55,21 @@ export async function withKeyLock<T>(
     timer = setTimeout(() => {
       reject(new Error(
         `withKeyLock: timed out after ${timeoutMs}ms waiting to acquire "${key}" -- ` +
-          'likely a cast-lock.ts rule 1 (locked fn re-entering a locked fn on the ' +
-          'same key) or rule 4 (lock-order cycle across design/library-voice/cast) violation',
+          'either a cast-lock.ts rule 1 (locked fn re-entering a locked fn on the ' +
+          'same key) or rule 4 (lock-order cycle across design/library-voice/cast) ' +
+          'violation, OR ordinary contention behind a legitimately long holder on ' +
+          'this key (see the budget note above). Check for a long holder before ' +
+          'hunting a rule violation -- both reach here',
       ));
     }, timeoutMs);
     /* A pending timer keeps the event loop (and vitest) alive; unref so a
        cleared-on-happy-path timer is never the reason a process hangs at
-       teardown (this repo already fights `Worker exited unexpectedly`). */
+       teardown (this repo already fights `Worker exited unexpectedly`).
+       The other direction is worth knowing too: this is a real setTimeout, so
+       it IS faked under vi.useFakeTimers(). A test that fakes timers, contends
+       a lock and advances past the budget will now see the waiter reject where
+       it previously just waited. Nothing does that today (cast-design.test.ts
+       advances 7000ms, under the budget). */
     timer.unref();
   });
 
@@ -62,11 +87,22 @@ export async function withKeyLock<T>(
        with whoever is still inside `fn()` -- the exact unlocked-write race
        this mutex exists to prevent (cast-lock.race.test.ts). A late waiter
        just chains onto `mine` the same way it would have chained onto us;
-       once the actual holder finishes, the chain still resolves through us
+       IF the actual holder finishes, the chain still resolves through us
        (our `gate` is already released) and everyone downstream proceeds
-       normally. The entry is not a permanent leak either: the next caller
-       to actually run `fn()` to completion deletes it in the `finally`
-       below, same as always. */
+       normally. If it never finishes, everyone downstream now waits their
+       own budget and throws -- one key degraded loudly, which is the trade
+       this change is making against a permanent silent hang.
+
+       On the map entry, precisely (it is NOT self-cleaning, and an earlier
+       version of this comment claimed it was): the holder ahead of us will
+       NOT remove our entry when it finishes, because its own `finally`
+       guards on `chains.get(key) === its mine` and the map now holds ours.
+       So `mine` stays until some later caller overwrites it and runs `fn()`
+       to completion. If no later caller ever takes this key, it stays for
+       the process lifetime -- one resolved, inert entry per timed-out key.
+       That is a bounded cost we accept; deleting it is what breaks the
+       mutex, and the two are not both available. Pinned by the
+       `__chainsSizeForTest` case in file-lock.test.ts. */
     clearTimeout(timer);
     release();
     throw err;
