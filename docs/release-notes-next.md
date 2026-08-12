@@ -272,9 +272,9 @@ Two chains land together. The first stops a refusal being issued against a pessi
   never be deleted. A rejected closer's search for a later occurrence of the
   same glyph is bounded to the next opener of any class, so a stray
   apostrophe between turns can no longer swallow the turns that follow.
-  Measured over 331 public-domain books: the unbounded rule merged 8
+  Measured over the 140-book English corpus arm: the unbounded rule merged 8
   paragraphs and swallowed 18 turns; bounding the skip brings both to 0,
-  leaving 936 clean repairs. (#2288)
+  leaving 936 clean repairs. (#2288, PR #2300)
 
 ---
 

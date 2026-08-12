@@ -238,8 +238,8 @@ never in its scope.
 
 ## Invariants preserved
 
-- **Runs stay disjoint** — acceptance unchanged (`parser.ts:223` slices
-  sequentially).
+- **Runs stay disjoint** — acceptance unchanged (`parser.ts:389-397`'s
+  leftmost-wins cursor loop slices sequentially).
 - **Nesting resolves to the OUTER run** in `en`, `zh`, `de` — contingent, per
   above; pinned by the sweep's `nest` family at both table sets.
 - **#1601 stays fixed.** A `„` run still ends at the NEAREST of its closers.
