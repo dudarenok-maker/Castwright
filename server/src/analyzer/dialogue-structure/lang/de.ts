@@ -12,19 +12,34 @@ export const de: LanguageConventions = {
   // paragraph mixing closer glyphs across turns still splits per turn (#1601);
   // array order does NOT set precedence. »…« is the alternate form.
   // #2279 — the closer-drift above has an opener-side twin: a manuscript run
-  // through English-typeset tooling loses the „ as well, leaving "…" or “…”.
-  // Both are added as same-glyph/Western pairs. That makes " BOTH a closer for
-  // „ and an opener in its own right, which is safe only because
-  // findQuoteRuns' leftmost-wins overlap rule (parser.ts:207-214) discards the
-  // "-opener candidate whenever a „ run starts earlier — measured over the
-  // live German book, which uses „…" 128 times: 0 of 3 chapters change.
-  // «…» is the Swiss order, the mirror of the German »…«.
+  // through English-typeset tooling loses the „ too, leaving "…" or “…".
+  // `“…”` and the Swiss `«…»` are added; **the same-glyph `"…"` is NOT, and
+  // must not be.** German is the one language whose own dialogue CLOSER is the
+  // ASCII quote, so making that glyph an opener as well lets `findQuoteRuns`
+  // re-pair a paragraph's " glyphs sequentially (1↔2, 3↔4) and swallow a real
+  // turn — the #1601 mixed-glyph hazard, one level up:
+  //
+  //   „Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.
+  //     without: speech „Guten Tag" · tag · speech „Und du?"          <- right
+  //     with:    speech „Guten Tag" · tag · speech `. „Und du?`       <- WRONG
+  //
+  // The second turn's run is discarded and punctuation is synthesised as
+  // speech, because the "-opener candidate starts at the SIGN's closer — after
+  // turn 1's run ends and before turn 2's begins — so leftmost-wins never sees
+  // it. The earlier claim that the overlap rule protects this was measured
+  // only against the live German book, which is canonically typeset and cannot
+  // produce the shape. Found by the PR #2286 review gate; the German
+  // ASCII-only manuscript it leaves unfixed needs an engine change, not a
+  // table entry — see #2288.
+  //
+  // `“…”` is safe by comparison: its closer is a DISTINCT glyph, so it can add
+  // a spurious run over a quoted sign but never swallows the following turn —
+  // the same documented false positive `en` has carried since plan 221.
   quotePairs: [
     ['„', '“'],
     ['„', '”'],
     ['„', '"'],
     ['»', '«'],
-    ['"', '"'],
     ['“', '”'],
     ['«', '»'],
   ],

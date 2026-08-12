@@ -118,10 +118,9 @@ describe('isSpokenLine', () => {
   });
   it('#2279 (b): the conventions the tables gained ARE dialogue', () => {
     // Every row here read as narration before #2279, in both the fallback and
-    // the structure engine. Measured over the 22 real manuscripts: adding
-    // these changes 0 of 738 chapters' parseChapterStructure output, on a
-    // harness whose control (blank quotePairs) moves 568.
-    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(true); // fully-ASCII German
+    // the structure engine. The structure-engine half is pinned separately, on
+    // the real path, in dialogue-structure/parser.test.ts — these assertions
+    // only exercise `isSpokenLine`, which is unreachable at default settings.
     expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(true); // “ was CLOSER-only before
     expect(isSpokenLine('«Lass das.»', DE)).toBe(true); // Swiss order, mirror of »…«
     expect(isSpokenLine('"Hola", dijo.', ES)).toBe(true);
@@ -138,10 +137,20 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('"おはよう"', JA)).toBe(true);
   });
   it('#2279 (c): what is still excluded, and why', () => {
-    // Straight-single stays out of EVERY table: ' is the apostrophe, so a
-    // same-glyph pair opens a run on don't / she'd / the dogs'.
+    // Straight-single stays out of EVERY table — asserted for all seven, not a
+    // sample: `'` is the apostrophe, so a same-glyph pair opens a run on
+    // don't / she'd / the dogs'.
+    for (const c of [EN, DE, RU, ES, FR, ZH, JA]) {
+      expect(c.quotePairs.some(([o, x]) => o === "'" && x === "'")).toBe(false);
+    }
     expect(isSpokenLine("'I'm lost,' she said.", EN)).toBe(false);
     expect(isSpokenLine("'Komm her' sagte er.", DE)).toBe(false);
+    // #2288 — the same-glyph ASCII pair stays out of `de` SPECIFICALLY, and
+    // this is the one exclusion that costs real dialogue: a German book
+    // typeset entirely with ASCII quotes has none recognised. Adding the pair
+    // destroys a turn instead, because German's own closer IS that glyph —
+    // see the counter-example in de.ts and parser.test.ts's regression case.
+    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false);
     // A convention belonging to a DIFFERENT language stays out: German „…“
     // inside a Spanish or Japanese book is not Spanish or Japanese typography.
     expect(isSpokenLine('„Ven aquí“ dijo él.', ES)).toBe(false);
@@ -150,7 +159,7 @@ describe('isSpokenLine', () => {
     // es/fr dialogueOpen carry &mdash; but not &ndash; (ru carries both) —
     // a dialogueOpen change moves parser.ts:99's paragraph split, a different
     // mechanism from quotePairs, and the corpus control for it is vacuous on
-    // the es/fr books (neither has a dash-opened paragraph). Left to #2279.
+    // the es/fr books (neither has a dash-opened paragraph). Carved out as #2289.
     expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false);
     expect(isSpokenLine('&ndash; Un instant', FR)).toBe(false);
     expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that IS carried, as the control

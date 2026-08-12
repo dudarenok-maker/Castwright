@@ -278,3 +278,61 @@ describe('applyTag — addressee/bystander gate (opt-in languages)', () => {
     expect(sp?.speaker).toEqual({ characterId: 'valkyrie', source: 'tag-name' });
   });
 });
+
+/* #2279 — the added quote pairs, on the STRUCTURE-ENGINE path.
+
+   `narrator-default.test.ts`'s #2279 blocks exercise `isSpokenLine`, which is
+   unreachable at default settings, and every one of its positive assertions is
+   satisfied by the leading-opener check alone. `findQuoteRuns` is entirely
+   CLOSER-driven, so these cases put each added pair in embedded position —
+   opener mid-paragraph, closer required — which is the only shape that can
+   catch a wrong closer glyph. Missing coverage here is what let #2288 through
+   the first time. */
+describe('parser — #2279 added quote pairs (closer-driven)', () => {
+  const spoken = (body: string, lang: string) =>
+    spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor(lang)!)))
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('de: curly “…” forms a quote run in embedded position', () => {
+    expect(spoken('Er sagte “Komm her” und ging.', 'de')).toEqual(['Komm her']);
+  });
+  it('de: Swiss «…» forms a quote run in embedded position', () => {
+    expect(spoken('Er sagte «Komm her» und ging.', 'de')).toEqual(['Komm her']);
+  });
+  it('es: straight "…" forms a quote run in embedded position', () => {
+    expect(spoken('Él dijo "Ven aquí" y se fue.', 'es')).toEqual(['Ven aquí']);
+  });
+  it('fr: straight "…" and curly “…” both form quote runs', () => {
+    expect(spoken('Il a dit "Viens ici" et il est parti.', 'fr')).toEqual(['Viens ici']);
+    expect(spoken('Il a dit “Viens ici” et il est parti.', 'fr')).toEqual(['Viens ici']);
+  });
+  it('ru: smart-single ‘…’ forms a quote run in embedded position', () => {
+    expect(spoken('Он сказал ‘Иди сюда’ и ушёл.', 'ru')).toEqual(['Иди сюда']);
+  });
+  it('en: guillemets «…» form a quote run in embedded position', () => {
+    expect(spoken('He said «come here» and left.', 'en')).toEqual(['come here']);
+  });
+  it('zh: straight "…" and nested ‘…’ both form quote runs', () => {
+    expect(spoken('他说 "你好" 然后走了。', 'zh')).toEqual(['你好']);
+    expect(spoken('他说 ‘你好’ 然后走了。', 'zh')).toEqual(['你好']);
+  });
+  it('ja: curly “…” and straight "…" both form quote runs — the zh/ja asymmetry is closed', () => {
+    expect(spoken('彼は “おはよう” と言った。', 'ja')).toEqual(['おはよう']);
+    expect(spoken('彼は "おはよう" と言った。', 'ja')).toEqual(['おはよう']);
+    expect(spoken('他说 “你好” 然后走了。', 'zh')).toEqual(['你好']); // same line, same answer now
+  });
+
+  /* #2288 — the regression this file exists to prevent. German's own dialogue
+     CLOSER is the ASCII quote, so adding ['"','"'] to `de` lets findQuoteRuns
+     re-pair a paragraph's " glyphs sequentially and swallow the second turn,
+     synthesising `. „` as speech. Measured on the real path before the pair was
+     dropped. If someone adds it back, this reddens. */
+  it('#2288: a German turn pair around an ASCII-quoted sign keeps BOTH turns intact', () => {
+    const body = '„Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: `de` does not carry the same-glyph ASCII pair — the exclusion is the fix', () => {
+    expect(conventionsFor('de')!.quotePairs.some(([o, c]) => o === '"' && c === '"')).toBe(false);
+  });
+});

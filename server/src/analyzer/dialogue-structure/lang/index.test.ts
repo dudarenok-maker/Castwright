@@ -3,6 +3,9 @@ import { conventionsFor } from './index.js';
 
 describe('conventionsFor', () => {
   it('returns a populated table for each supported language', () => {
+    // zh/ja are deliberately NOT in this loop: their speechVerbStems are single
+    // CJK characters, so the >10 bar below does not apply to them (ja has 9).
+    // The duplicate-pair guard further down DOES cover them, since #2279.
     for (const lang of ['ru', 'en', 'es', 'fr', 'de']) {
       const c = conventionsFor(lang);
       expect(c, lang).not.toBeNull();
@@ -28,7 +31,9 @@ describe('conventionsFor', () => {
     expect(en.nameStemmer('halloran')).toBe('halloran');
   });
   it('quotePairs has no collapsed duplicate pairs for any supported language', () => {
-    for (const lang of ['ru', 'en', 'es', 'fr', 'de']) {
+    // zh/ja joined this loop in #2279 — the release that first gave them pairs
+    // beyond their two CJK brackets, i.e. the first time collapsing was possible.
+    for (const lang of ['ru', 'en', 'es', 'fr', 'de', 'zh', 'ja']) {
       const c = conventionsFor(lang)!;
       const seen = new Set<string>();
       for (const [open, close] of c.quotePairs) {
