@@ -146,9 +146,9 @@ describe('nit (b) — _resetExportJobs() must not destroy the drain handle', () 
     const elapsed = Date.now() - t0;
 
     // If jobPromises survived the reset, this genuinely waited out the
-    // mocked builder's artificial delay (minus whatever abort raced it —
-    // the mocked builder doesn't check the signal, so it always runs the
-    // full delay). If it didn't survive, this returns near-instantly.
+    // mocked builder's artificial delay (`_awaitInFlightExportJobs` only
+    // waits, it doesn't abort — see its own doc comment). If jobPromises
+    // didn't survive, this returns near-instantly.
     expect(elapsed).toBeGreaterThanOrEqual(BUILD_DELAY_MS - 20);
   });
 });

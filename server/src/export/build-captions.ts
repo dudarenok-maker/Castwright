@@ -189,13 +189,15 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
   // per-chapter: zip of one caption file per chapter, each zero-based.
   const zip = new ZipFile();
   /* createZipWritePipeline (build-mp3-zip.ts) — shared with buildMp3Zip
-     and buildCodecZip. Finding 1 (independent review): this branch
-     accepted a `signal` option but never consulted it at all — an abort
-     mid-build did nothing. The pipeline destroys the write stream the
-     instant `signal` aborts and resolves only once it's genuinely closed;
-     the loop below also now checks `throwIfAborted()` between chapters,
-     matching the other two zip builders. */
-  const pipeline = createZipWritePipeline(outPath, zip, signal);
+     and buildCodecZip. Finding 1 (independent review of the original
+     crash fix): this branch accepted a `signal` option but never
+     consulted it at all — an abort mid-build did nothing. The loop below
+     now checks `throwIfAborted()` between chapters, matching the other
+     two zip builders, which stops the loop from packing any more chapters
+     once a signal trips. The pipeline itself forwards every yazl/write-
+     stream error into one rejection that also tears down the write
+     stream, and resolves only once it's genuinely closed. */
+  const pipeline = createZipWritePipeline(outPath, zip);
   try {
     for (let i = 0; i < resolved.length; i++) {
       signal?.throwIfAborted();

@@ -67,11 +67,18 @@ vi.mock('node:fs', async (importOriginal) => {
    `zip.on('error', reject)` reproduces the real bug: zero listeners, an
    `uncaughtException`, and the bundle promise never settling. */
 let triggerZipFileError: Error | null = null;
+/* N6 regression (found in passing while reviewing this PR): captures the
+   most recently constructed ZipFile instance so a test can inspect its
+   `outputStream` after a build has rejected — see the test near the
+   bottom of this file. */
+let lastZipFile: InstanceType<typeof import('yazl').ZipFile> | null = null;
 vi.mock('yazl', async (importOriginal) => {
   const real = await importOriginal<typeof import('yazl')>();
   class TestZipFile extends real.ZipFile {
     constructor() {
       super();
+      // eslint-disable-next-line @typescript-eslint/no-this-alias -- test-only capture of the constructed instance, see comment above.
+      lastZipFile = this;
       if (triggerZipFileError) {
         const err = triggerZipFileError;
         process.nextTick(() => {
@@ -433,5 +440,41 @@ describe('buildPortableBundle', () => {
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
+  }, 10_000);
+
+  /* N6 (found in passing, independent review — not the subject of this
+     PR's original crash fix): before errors here rejected instead of
+     crashing the process, nothing downstream of an 'error' event ever ran.
+     Once rejection became the normal failure path, `zip.outputStream`'s
+     'data' listener kept accumulating `chunks` after the promise had
+     already settled — an unbounded (well, bounded by the rest of the
+     bundle) memory cost for a Buffer nobody would ever read. Fixed by
+     detaching the listener the instant the promise settles.
+
+     Reuses the same ZipFile-level-error injection as the test above
+     (`triggerZipFileError`) so the promise rejects deterministically, then
+     inspects the captured ZipFile instance's `outputStream` — a listener
+     count of 0 for 'data' is the direct, black-box-observable signal that
+     the accumulation stopped; deleting the `.off('data', onData)` call in
+     build-portable-book.ts leaves this at 1 (it was never removed) and
+     reddens this test without needing to observe `chunks` itself, which
+     isn't exposed outside the module. */
+  it('stops accumulating output chunks once the build has already rejected (N6)', async () => {
+    const errDir = join(tmpRoot, 'n6-leak');
+    mkdirSync(join(errDir, 'audio'), { recursive: true });
+    const errState = { ...makeFixtureState(), bookId: 'demo__standalones__n6leak' };
+    writeFileSync(join(errDir, 'manuscript.txt'), manuscriptBytes);
+    writeFileSync(join(errDir, 'audio', '01-chapter-1.mp3'), chapter1Mp3);
+
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level, N6)');
+    triggerZipFileError = injected;
+    try {
+      await expect(buildPortableBundle(errDir, errState)).rejects.toBe(injected);
+    } finally {
+      triggerZipFileError = null;
+    }
+
+    expect(lastZipFile).not.toBeNull();
+    expect(lastZipFile!.outputStream.listenerCount('data')).toBe(0);
   }, 10_000);
 });

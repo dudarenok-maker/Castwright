@@ -277,18 +277,39 @@ export async function buildPortableBundle(
      `addReadStream` calls, so `await done` is reached synchronously right
      after `zip.end()` — before any async fs error could possibly fire —
      and `await` itself attaches a consumer, closing the unhandled-
-     rejection window before it can open. */
+     rejection window before it can open.
+
+     N6 (newly reachable once a build failure no longer crashes the
+     process — found in passing while reviewing this PR): `onData` below
+     is detached the instant the promise settles, not left running. Before
+     this PR, an unforwarded 'error' terminated the process immediately,
+     so nothing after it ever ran. Once errors started rejecting instead
+     of crashing, a rejection here left `zip.outputStream` still flowing —
+     `chunks.push` kept accumulating the rest of the bundle's bytes into
+     memory for a Buffer nobody would ever read, so peak memory on a
+     failed build was the same as a fully successful one. */
+  let settled = false;
   let rejectBuild: (reason?: unknown) => void = () => {};
   const done = new Promise<Buffer>((resolve, reject) => {
-    rejectBuild = reject;
-    zip.outputStream.on('data', (c: Buffer) => chunks.push(c));
-    zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
-    zip.outputStream.on('error', reject);
+    const onData = (c: Buffer) => chunks.push(c);
+    rejectBuild = (reason?: unknown) => {
+      if (settled) return;
+      settled = true;
+      zip.outputStream.off('data', onData);
+      reject(reason);
+    };
+    zip.outputStream.on('data', onData);
+    zip.outputStream.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
+    zip.outputStream.on('error', rejectBuild);
     /* yazl's ZipFile also emits its own internal validation failures
        (e.g. "file data stream has unexpected number of bytes") via
        `self.emit('error', ...)` on the ZipFile object itself, not on
        `outputStream` — same zero-listener/uncaught-exception gap. */
-    zip.on('error', reject);
+    zip.on('error', rejectBuild);
   });
 
   const entries: string[] = [];

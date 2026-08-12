@@ -88,19 +88,17 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
   try {
     const zip = new ZipFile();
     /* createZipWritePipeline (build-mp3-zip.ts) — shared with buildMp3Zip
-       and buildCaptions's per-chapter branch. Findings 1+2 (independent
-       review): the plain `writePromise` shape this replaced only checked
-       `signal.throwIfAborted()` at the top of this loop, which can't stop
-       a slow/stuck write mid-flight and, even when it DID land, did
-       nothing to stop yazl's internal pump — bytes kept landing on disk
-       well after the builder's promise had settled. The pipeline
-       destroys the write stream + whichever chapter read stream is open
-       the instant `signal` aborts, and resolves only once the write
-       stream is genuinely closed. Also fixes nit (f): previously `ws` was
-       never destroyed on ANY rejection (not just abort), leaking the
-       write fd + open read handle for the process's lifetime — masked
-       before this PR by the crash itself. */
-    const pipeline = createZipWritePipeline(outPath, zip, signal);
+       and buildCaptions's per-chapter branch. Forwards every yazl/write-
+       stream error into one rejection that also tears down the write
+       stream (nit (f): previously `ws` was never destroyed on ANY
+       rejection, leaking the write fd for the process's lifetime — masked
+       before this PR by the crash itself), and resolves only once the
+       write stream is genuinely closed. `signal?.throwIfAborted()` below
+       is what stops a cancelled build from registering any more chapters
+       — see the pipeline's own doc comment for why an earlier version's
+       attempt to also destroy the in-flight read stream on abort didn't
+       hold up and was removed. */
+    const pipeline = createZipWritePipeline(outPath, zip);
 
     try {
       for (let i = 0; i < resolved.length; i++) {
@@ -109,7 +107,6 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
         const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${meta.entryExt}`;
         const st = await stat(path);
         const readStream = createReadStream(path);
-        pipeline.trackReadStream(readStream);
         readStream.on('error', pipeline.rejectBuild);
         zip.addReadStream(readStream, entryName, {
           size: st.size,
@@ -125,7 +122,8 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
     } catch (e) {
       /* Covers any throw the pipeline's own listeners didn't already
          catch (e.g. `signal.throwIfAborted()` itself) — idempotent if
-         `rejectBuild` already fired via the abort listener. */
+         `rejectBuild` already fired for some other reason (a ws/zip/
+         readStream error). */
       pipeline.rejectBuild(e);
       throw e;
     }

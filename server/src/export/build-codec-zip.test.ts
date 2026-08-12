@@ -256,13 +256,22 @@ describe('buildCodecZip', () => {
      promise settled while bytes kept landing on disk well after. Reviewer
      measurement on this exact builder (3x40MB chapters, abort from the
      first onProgress): settled at 65584 bytes, grew to 41943104 bytes 200ms
-     later — a fully-completed build despite the "abort". createZipWritePipeline
-     (build-mp3-zip.ts) now destroys the write stream + open read stream the
-     instant `signal` aborts, so nothing can write another byte after the
-     builder's promise settles. Large-ish (2 MB) fixtures + a real 150ms
-     settle window make growth observable if the fix regresses — a fixture
-     too small could pass vacuously (already fully flushed before either
-     sample). */
+     later — a fully-completed build despite the "abort".
+
+     What actually stops the growth today: `signal?.throwIfAborted()`
+     throwing on the NEXT loop iteration reaches `createZipWritePipeline`'s
+     `rejectBuild`, which unpipes `zip.outputStream` from the write stream
+     and destroys it — bytes stop reaching disk immediately, which is what
+     this test measures. (A third review pass found and removed a SEPARATE
+     mechanism that used to also destroy whichever chapter read stream was
+     most recently tracked, on abort — it didn't hold up: the loop
+     registers entries far faster than yazl's pump consumes them, so the
+     tracked stream was typically the wrong one and destroying it was a
+     no-op for the pump. That removal doesn't affect this test — the write
+     side, not the read side, is what keeps the file's size flat.) Large-ish
+     (2 MB) fixtures + a real 150ms settle window make growth observable if
+     the write-side teardown regresses — a fixture too small could pass
+     vacuously (already fully flushed before either sample). */
   it('an abort actually stops the write — output size does not grow after the promise settles', async () => {
     const abortDir = join(tmpRoot, 'abort-codec');
     mkdirSync(join(abortDir, 'audio'), { recursive: true });

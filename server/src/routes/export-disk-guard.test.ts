@@ -115,9 +115,9 @@ beforeAll(async () => {
    flips inside runExportJob's try block, well before its `finally` (the
    manifest write) has run. Same defect class as the crash this whole PR
    fixes — a teardown that doesn't actually wait for a job's tail-end fs
-   work can race it. `_awaitInFlightExportJobs()` (which also aborts, so
-   it can't hang on a stuck build — see its own doc comment) replaces both
-   the ad-hoc drain and the un-awaited reset/rmSync calls below. */
+   work can race it. `_awaitInFlightExportJobs()` (see its own doc comment
+   for what it does and doesn't guarantee) replaces both the ad-hoc drain
+   and the un-awaited reset/rmSync calls below. */
 beforeEach(async () => {
   await awaitInFlightJobs?.();
   resetJobs?.();

@@ -843,20 +843,20 @@ async function runExportJob(
     its job settles (see the map's own comment), so leaving it alone here
     is a no-op for the correctly-ordered case and a safety net for the
     misordered one: a drain called after a misordered reset still finds
-    the promise and still waits for it to genuinely finish — it just can't
-    abort it anymore, since `jobControllers` (cleared here, as intended)
-    is what `_awaitInFlightExportJobs` aborts through. Waiting longer than
-    ideal beats not waiting at all. */
+    the promise and still waits for it to genuinely finish. Clearing
+    `jobControllers` here doesn't threaten that wait — `_awaitInFlightExportJobs`
+    no longer aborts through it (see that function's own doc comment for
+    why); it only waits on `jobPromises`. */
 export function _resetExportJobs(): void {
   jobs.clear();
   jobControllers.clear();
 }
 
-/** Test-only: abort every export job currently in flight, then wait for
-    each to fully settle — including its own `finally` (the manifest
-    write) — before returning. `_resetExportJobs()` alone only clears this
-    module's in-memory bookkeeping; it does not stop a runExportJob call
-    that's still mid-build from touching disk. A teardown that deletes the
+/** Test-only: wait for every export job currently in flight to fully
+    settle — including its own `finally` (the manifest write) — before
+    returning. `_resetExportJobs()` alone only clears this module's
+    in-memory bookkeeping; it does not stop a runExportJob call that's
+    still mid-build from touching disk. A teardown that deletes the
     workspace right after resetting jobs (but without draining them first)
     can race a job that's still writing into it — on a loaded CI runner
     (macOS cross-os.yml, run 31588267496) that lost race surfaced as an
@@ -870,25 +870,33 @@ export function _resetExportJobs(): void {
     called has, by the time the snapshot happens, either responded with no
     job created or registered one.
 
-    Aborts (not just waits) so a slow/stuck build can't hang the drain
-    forever — every build's dominant cost now genuinely honours
-    AbortSignal on the same path DELETE /exports/:id already exercises:
-    buildM4b SIGTERMs its ffmpeg mux child, and the zip builders
-    (buildMp3Zip / buildCodecZip / buildCaptions's per-chapter branch)
-    destroy their write stream + whichever chapter read stream is open the
-    instant the signal fires, via the shared createZipWritePipeline
-    (build-mp3-zip.ts) — findings 1+2 on an earlier version of this fix,
-    which checked `signal.throwIfAborted()` only between chapters and left
-    yazl's internal pump running regardless, so an abort neither stopped a
-    stuck write NOR stopped bytes still landing on disk after the
-    builder's own promise had already settled. One residual gap: a
-    per-chapter SUBPROCESS already spawned when abort lands — buildMp3Zip's
-    per-chapter ffmpeg ID3 retag (`applyId3v24Tags`), buildM4b's/
-    buildCaptions's ffprobe duration probes — still runs to completion
-    before the next loop iteration notices, bounded to one chapter's
-    processing time rather than the whole export, not truly unbounded. */
+    WAITS ONLY — it does not abort in-flight jobs. An earlier version
+    called `controller.abort()` on every job first, on the theory that a
+    slow/stuck build could otherwise hang the drain forever. That theory
+    didn't survive a third review pass: the zip builders' abort path
+    (createZipWritePipeline in build-mp3-zip.ts) tracked "the most
+    recently added read stream" and destroyed it on abort, but the
+    per-chapter loop registers entries far faster than yazl's pump
+    consumes them — by the time abort landed, the tracked stream was
+    typically one yazl hadn't even started, while the pump was still on an
+    earlier chapter. Destroying it was a no-op for whatever was actually
+    in flight. Measured on a real buildCodecZip: the promise settled as
+    AbortError in 137ms, then burned another 250ms user / 47ms sys CPU
+    with `outputStreamCursor` still climbing — an abort that stopped
+    nothing. Calling `controller.abort()` here bought the appearance of a
+    bounded drain, not the fact of one, so it's gone.
+
+    The actual guarantee this function makes: it waits for in-flight jobs
+    to finish writing before teardown touches the workspace. The actual
+    risk: a genuinely stuck build blocks this drain, bounded only by
+    whatever timeout the calling test itself runs under — there is no
+    independent ceiling anymore. This is unchanged for buildM4b, whose
+    ffmpeg-SIGTERM cancel path is a separate mechanism from the zip
+    pipeline above and was never shown to be broken — DELETE
+    /exports/:id still calls `controller.abort()` in production and
+    buildM4b still honours it; this function simply no longer relies on
+    that to keep its own wait bounded. */
 export async function _awaitInFlightExportJobs(): Promise<void> {
   await Promise.allSettled([...pendingPostCreations]);
-  for (const controller of jobControllers.values()) controller.abort();
   await Promise.allSettled([...jobPromises.values()]);
 }

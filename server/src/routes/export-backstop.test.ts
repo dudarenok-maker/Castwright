@@ -105,27 +105,41 @@ afterAll(async () => {
 });
 
 /* Poll instead of `_awaitInFlightExportJobs()` for the assertion itself —
-   that helper ABORTS every in-flight controller before waiting (it's a
-   teardown primitive, not a neutral "wait until done"), and aborting this
-   job races runExportJob's own catch into taking the CANCELLATION branch
-   (it only checks `signal.aborted`, not why) instead of the non-Error
-   failure path this test means to exercise. Confirmed empirically: using
-   `_awaitInFlightExportJobs()` here made the job land 'cancelled' instead
-   of 'failed'. */
-/* Poll for `errorReason` specifically, not just a terminal `status` — the
-   in-memory `jobs` map already flips to `status: 'failed'` inside
-   runExportJob's OWN `finally` (which runs, and persists ITS OWN manifest
-   snapshot, before the backstop below ever gets a turn), with
-   `errorReason` still null at that point in exactly this non-Error-throw
-   scenario. Only the backstop's fix-up sets a real `errorReason`. Polling
-   on bare `status` raced ahead of the backstop and read the job before it
-   had run — confirmed empirically (this test failed against the FIXED
-   code with a bare-status poll, for that exact reason). */
+   that helper is a teardown primitive scoped to this module's own
+   bookkeeping (`jobPromises`/`pendingPostCreations`), not a neutral
+   "wait until this specific job is visibly terminal" — using it here
+   would just be an indirect, harder-to-read way of waiting for the same
+   settle this function already polls for directly. */
+/* Poll the MANIFEST ON DISK, not the in-memory `jobs` map (C3 — a flake a
+   suite-wide retry was hiding). The backstop (export.ts's POST `.catch`)
+   sets `job.status`/`job.errorReason` in memory and calls `jobs.set(...)`
+   BEFORE its own `await writeJsonAtomic(...)` finishes — so a GET can
+   already report a terminal `errorReason` while the manifest on disk still
+   holds the STALE snapshot runExportJob's own `finally` wrote earlier
+   (status 'failed' but `errorReason: null`, in exactly this non-Error-throw
+   scenario). A version of this helper that polled the in-memory job via
+   GET returned as soon as `errorReason != null`, then this test's very next
+   line read the manifest file synchronously — a real, if narrow, window
+   where that read could still see the pre-backstop manifest. Proven:
+   inserting a 300ms delay before the backstop's `writeJsonAtomic` call
+   reproduced the failure on every run; this fixed version, polling the
+   manifest itself, kept passing with that same delay in place. Reading the
+   manifest first (rather than adding a delay/retry around the GET) closes
+   the window structurally: by the time this function returns, the terminal
+   state is provably ON DISK, not merely visible in memory. */
 async function waitForTerminal(exportId: string): Promise<Record<string, unknown>> {
+  const manifestFile = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
   for (let i = 0; i < 50; i++) {
-    const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
-    const body = res.body as { status?: string; errorReason?: string | null };
-    if (body.status === 'done' || body.errorReason != null) return res.body;
+    if (existsSync(manifestFile)) {
+      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as {
+        status?: string;
+        errorReason?: string | null;
+      };
+      if (manifest.status === 'done' || manifest.errorReason != null) {
+        const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+        return res.body;
+      }
+    }
     await new Promise((r) => setTimeout(r, 20));
   }
   throw new Error(`Export ${exportId} did not reach a terminal state within timeout.`);

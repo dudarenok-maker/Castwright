@@ -105,8 +105,8 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  /* Drain (abort + await) any job still in flight from the PREVIOUS test
-     BEFORE resetting the table and rm'ing exportsDir below. A test that
+  /* Drain (await) any job still in flight from the PREVIOUS test BEFORE
+     resetting the table and rm'ing exportsDir below. A test that
      fires a job without awaiting it to completion (e.g. "returns the
      book's jobs newest-first") used to leave it running fire-and-forget
      right through this rmSync — a real race, not just a theoretical one:
@@ -260,9 +260,10 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
      disk. Teardown (afterAll's rmSync of the whole workspace, and every
      beforeEach's rmSync of exportsDir) could therefore race a job that
      was still mid-write, which is exactly what _awaitInFlightExportJobs
-     now closes: it aborts every in-flight job's controller AND waits for
-     each job's own promise (including its `finally`, where the manifest
-     is written) to settle before returning.
+     now closes: it waits for each job's own promise (including its
+     `finally`, where the manifest is written) to settle before returning
+     — see that function's own doc comment for why it waits rather than
+     also aborting.
 
      This test proves the SECOND half specifically: that awaiting really
      does wait for the job's own tail-end fs work, not just for

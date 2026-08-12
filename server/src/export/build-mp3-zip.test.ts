@@ -9,6 +9,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import type { WriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
@@ -16,6 +17,26 @@ import { encodePcmToAudio } from '../tts/mp3.js';
 import { ZipFile } from 'yazl';
 import { buildMp3Zip, createZipWritePipeline, ExportIncompleteError, sanitiseForZip } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
+
+/* Nit (f) regression (below, in the `createZipWritePipeline` describe
+   block) needs a handle on the REAL `fs.WriteStream` createZipWritePipeline
+   constructs internally — it isn't exposed on the pipeline's own public
+   API. Wrapping `createWriteStream` (everything else passed through to the
+   real implementation via `importOriginal`, same pattern as the `yazl`
+   mock above) captures it without changing behavior for any other test in
+   this file. */
+let lastWriteStream: WriteStream | null = null;
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...real,
+    createWriteStream: (...args: Parameters<typeof real.createWriteStream>) => {
+      const ws = real.createWriteStream(...args);
+      lastWriteStream = ws;
+      return ws;
+    },
+  };
+});
 
 /* Behavioral regression for the ZipFile-level `zip.on('error', rejectBuild)`
    listener inside createZipWritePipeline (this file) — shared by both
@@ -383,29 +404,35 @@ describeIfFfmpeg('buildMp3Zip', () => {
 });
 
 describe('createZipWritePipeline', () => {
-  /* Nit (f) (independent review): on ANY rejection of the write pipeline —
-     not just abort — `ws` (the output write stream) was never destroyed,
-     leaking the write fd plus any open chapter read stream for the
-     process's lifetime. Previously masked by the crash itself. Verified
-     directly against the exported helper (rather than through a full
-     builder + real fs race, whose success/failure of an `rmSync` proved
-     unreliable as a leak signal on this box — Windows opens via libuv
-     default to share flags that let a file be unlinked while still open,
-     so "did the delete succeed" doesn't actually distinguish a released
-     fd from a leaked one). `.destroyed` is the direct, platform-independent
-     signal that Node itself has released the stream. */
-  it('destroys the write stream and the tracked read stream when rejectBuild fires on a plain error', () => {
+  /* Nit (f) (independent review): on ANY rejection of the write pipeline,
+     `ws` (the output write stream) was never destroyed, leaking the write
+     fd for the process's lifetime. Previously masked by the crash itself.
+     `.destroyed` is the direct, platform-independent signal that Node
+     itself has released the stream.
+
+     N1 (third review pass — found in passing while reviewing THIS PR's own
+     fix): the original version of this test named itself "destroys the
+     write stream and the tracked read stream" but only ever asserted on a
+     fake READ stream's `.destroyed` flag — deleting `ws.destroy()` from
+     `rejectBuild` left this test green. `trackReadStream` (the mechanism
+     the fake read stream exercised) has since been removed entirely — see
+     `createZipWritePipeline`'s own doc comment for why — so this test now
+     asserts on the one thing `rejectBuild` actually still tears down:
+     `ws` itself, captured via the `createWriteStream` wrapper at the top
+     of this file (the pipeline doesn't expose `ws` on its own public
+     API). */
+  it('destroys the write stream when rejectBuild fires on a plain error (nit (f))', () => {
     const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-'));
     try {
       const outPath = join(dir, 'out.zip');
       const zip = new ZipFile();
+      lastWriteStream = null;
       const pipeline = createZipWritePipeline(outPath, zip);
-      const fakeReadStream = { destroyed: false, destroy(this: { destroyed: boolean }) { this.destroyed = true; } };
-      pipeline.trackReadStream(fakeReadStream);
+      expect(lastWriteStream).not.toBeNull();
 
       pipeline.rejectBuild(new Error('boom'));
 
-      expect(fakeReadStream.destroyed).toBe(true);
+      expect(lastWriteStream!.destroyed).toBe(true);
       return pipeline.donePromise.catch((e: unknown) => {
         expect((e as Error).message).toBe('boom');
       });

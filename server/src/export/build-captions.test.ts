@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -209,7 +209,9 @@ describeIfFfmpeg('buildCaptions', () => {
      cues into the zip) accepted a `signal` option in BuildCaptionsOptions
      but never consulted it anywhere in its own write path — an abort
      landing after cue computation but before/during the zip write did
-     nothing; the build ran to completion regardless.
+     nothing; the build ran to completion regardless. Fixed by adding the
+     same `signal?.throwIfAborted()` check between chapters that the other
+     two zip builders already had.
 
      Aborting from `onProgress` — fired once per chapter by the FIRST loop
      (cue computation), which already called `throwIfAborted()` even
@@ -219,7 +221,18 @@ describeIfFfmpeg('buildCaptions', () => {
      longer catch it because that loop has already exited. This isolates
      the SECOND loop's gap specifically. Confirmed: reverting the fix
      makes this pass with a COMPLETED zip instead of rejecting — this is
-     not a vacuous abort-before-anything-runs test. */
+     not a vacuous abort-before-anything-runs test.
+
+     N4 (third review pass): an earlier version of this test also asserted
+     `existsSync(outPath)` was `false` — dropped here. That assertion was
+     weak, not a genuine "the write stopped mid-flight" proof: this abort
+     lands before the per-chapter branch has added a single zip entry, in
+     the same synchronous window as `createZipWritePipeline`'s own
+     `createWriteStream` call, so Node's async `fs.open()` behind the write
+     stream never got far enough to matter either way — the file's absence
+     said nothing about whether teardown actually worked. The rejection
+     itself, asserted above, is what Finding 1's fix is actually
+     responsible for. */
   it('rejects instead of completing when the signal aborts between cue computation and the zip write (per-chapter scope)', async () => {
     const controller = new AbortController();
     const outPath = join(bookDir, 'aborted-per-chapter.zip');
@@ -235,7 +248,6 @@ describeIfFfmpeg('buildCaptions', () => {
         onProgress: () => controller.abort(),
       }),
     ).rejects.toMatchObject({ name: 'AbortError' });
-    expect(existsSync(outPath)).toBe(false);
   });
 
   it('forwards a ZipFile-level internal error to the rejection instead of crashing the process (per-chapter scope)', async () => {
