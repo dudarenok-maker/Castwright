@@ -458,22 +458,65 @@ export async function writeReleaseZip({
     const output = createWriteStream(outPath);
     const archive = new ZipArchive({ zlib: { level: 9 } });
     output.on('close', resolveZip);
-    const onArchiveError = (err) => {
+
+    // A write already queued in libuv against `output` can complete AFTER
+    // output.destroy() (below) and surface as output's OWN 'error' event —
+    // Node's ERR_STREAM_DESTROYED. Without a listener registered on `output`
+    // itself, `archive.pipe(output)`'s internal error-forwarding listener on
+    // `output` handles that event, unpipes, removes itself, finds zero
+    // remaining 'error' listeners, and re-emits — an unhandled 'error' event
+    // that crashes the whole process (reproduced 4/6 runs against the real
+    // archiver: 403 real files, an error injected mid-archive). Registering
+    // `onFailure` on `output` here — before anything can call destroy() —
+    // means that re-emit always finds a listener. It also doubles as the
+    // handler for a genuine write failure on `output` itself (e.g. ENOSPC),
+    // which archiver's own 'error'/'warning' events never see.
+    //
+    // `settled` guards against running this twice: archive.abort() +
+    // output.destroy() below can themselves trigger output's 'error' a
+    // second time, and archiver can also emit 'warning' then 'error' for the
+    // same underlying failure.
+    let settled = false;
+    const onFailure = (err) => {
+      if (settled) return;
+      settled = true;
       archive.abort();
-      output.destroy();
-      try {
-        unlinkSync(outPath);
-      } catch {
-        // Nothing (yet) written to outPath, or it's already gone — fine
-        // either way; the goal is just that it not survive with content.
-      }
-      rejectZip(err);
+      // `output.on('close', resolveZip)` above is still armed — a failed
+      // build's `output.destroy()` (below) still ends in a 'close' event,
+      // which would otherwise resolve this Promise successfully a moment
+      // before our own 'close' listener gets to reject it (both are
+      // listeners on the same event; first-registered runs first, and only
+      // the FIRST resolveZip/rejectZip call of a Promise has any effect).
+      // Removing it here is what makes this a failure, not a race.
+      output.off('close', resolveZip);
+      // Wait for `output`'s own 'close' — guaranteed to fire once its fd is
+      // actually closed — before unlinking. Node emits 'error' (if any)
+      // before 'close' in both the path below (our own destroy() call) and
+      // an independent auto-destroy on `output`'s own write failure, so this
+      // ordering holds either way. Unlinking immediately after destroy()
+      // instead (the previous shape) raced the fd close on Windows —
+      // EBUSY/EPERM — which the bare catch below already swallowed safely,
+      // but silently left the partial zip behind, violating this function's
+      // own "must never leave a partial outPath" contract.
+      output.once('close', () => {
+        try {
+          unlinkSync(outPath);
+        } catch {
+          // ENOENT — outPath was never created (the failure hit before
+          // `output` finished opening), or it's already gone; either way
+          // fine. `err`, not this catch, is what reaches rejectZip below, so
+          // an unlink failure here can never mask the real failure.
+        }
+        rejectZip(err);
+      });
+      if (!output.destroyed) output.destroy();
     };
+    output.on('error', onFailure);
     archive.on('warning', (err) => {
       if (err.code === 'ENOENT') return;
-      onArchiveError(err);
+      onFailure(err);
     });
-    archive.on('error', onArchiveError);
+    archive.on('error', onFailure);
     archive.pipe(output);
     for (const { rel, abs } of matched) {
       // Use POSIX separators in the zip entries for cross-platform extract.

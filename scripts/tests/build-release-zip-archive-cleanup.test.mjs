@@ -7,13 +7,24 @@
 // the zip-writing Promise while archive.pipe(output) kept draining every
 // already-queued file: the build sat for the full archive duration and left
 // a larger, complete-looking but INVALID zip at outPath. writeReleaseZip's
-// `onArchiveError` handler now aborts the archiver, destroys the output
-// stream, and removes the partial file on any archive error or non-ENOENT
-// warning.
+// `onFailure` handler now aborts the archiver, destroys the output stream,
+// and removes the partial file on any archive error or non-ENOENT warning.
 //
-// This drives that exact handler via an injected `loadArchiver` — a real
-// archiver-internal race (a file vanishing between its lstat and its read)
-// is possible but not reliably reproducible cross-platform on demand.
+// Second review pass (finding 1): the FIRST version of this suite's
+// FakeZipArchive.pipe() stored `output` but never actually wrote to it, so
+// there was never an in-flight libuv write for output.destroy() (inside
+// onFailure) to race — both assertions below passed while the REAL wiring
+// crashed the process with an unhandled ERR_STREAM_DESTROYED (reproduced
+// against the real archiver: 403 real files, an error injected mid-archive,
+// 4/6 runs). `pipeRealBytes` below closes that gap: it does a real
+// `output.write()` and, in the SAME synchronous tick — no setImmediate, no
+// await — emits the 'error'/'warning' that drives onFailure's
+// `output.destroy()`. A libuv write can never complete within the same
+// synchronous tick it was issued in (it always round-trips through the
+// thread pool), so this reproduces "a write already queued in libuv
+// completes after the destroy" deterministically on every run, rather than
+// depending on a timing window the way the original real-archiver repro did.
+//
 // scripts/tests/archiver-zip.test.mjs separately pins that archiver's real
 // .pipe/.file/.finalize/warning/error surface behaves the way this code
 // assumes, so faking just the emission of an 'error'/'warning' here tests
@@ -45,9 +56,12 @@ class FakeZipArchive extends EventEmitter {
     return this;
   }
   file() {
-    // No-op: this fake never writes real zip bytes. archiver-zip.test.mjs
-    // already proves the real .file()/.finalize() path produces valid
-    // zip content; this suite only exercises the error-handling wiring.
+    // No-op: this fake never queues real zip *entries*. archiver-zip.test.mjs
+    // already proves the real .file()/.finalize() path produces valid zip
+    // content; this suite only exercises the error-handling wiring. Actual
+    // bytes onto `output` (to reproduce the in-flight-write race) are
+    // written explicitly by each test via pipeRealBytes below, not by this
+    // no-op.
   }
   abort() {
     this.aborted = true;
@@ -56,6 +70,16 @@ class FakeZipArchive extends EventEmitter {
     this.finalized = true;
     this._onFinalize(this);
   }
+}
+
+// Writes a real, sizeable buffer to `archive.output` and — in the SAME
+// synchronous call, no setImmediate/await in between — emits `event` on the
+// archive. See the file header for why this makes the underlying libuv
+// write provably still in-flight at the moment writeReleaseZip's onFailure
+// handler calls output.destroy().
+function pipeRealBytesThenFail(archive, event, err) {
+  archive.output.write(Buffer.alloc(64 * 1024, 1));
+  archive.emit(event, err);
 }
 
 function loaderFor(fake) {
@@ -74,8 +98,10 @@ test('writeReleaseZip aborts the archiver and removes the partial zip on a mid-a
   try {
     const outPath = join(dir, 'castwright-v9.9.9.zip');
     const fake = new FakeZipArchive((archive) => {
-      setImmediate(() =>
-        archive.emit('error', Object.assign(new Error('EACCES: fake mid-archive failure'), { code: 'EACCES' })),
+      pipeRealBytesThenFail(
+        archive,
+        'error',
+        Object.assign(new Error('EACCES: fake mid-archive failure'), { code: 'EACCES' }),
       );
     });
 
@@ -107,8 +133,10 @@ test('writeReleaseZip treats a non-ENOENT archive warning the same as an error (
   try {
     const outPath = join(dir, 'castwright-v9.9.9.zip');
     const fake = new FakeZipArchive((archive) => {
-      setImmediate(() =>
-        archive.emit('warning', Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })),
+      pipeRealBytesThenFail(
+        archive,
+        'warning',
+        Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
       );
     });
 

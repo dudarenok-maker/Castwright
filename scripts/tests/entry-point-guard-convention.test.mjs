@@ -25,6 +25,20 @@
 //      trigger — a doc comment quoting `process.argv[1]` as prose, not an
 //      actual guard — which was fixed by rewording the comment rather than
 //      allowlisting it. See MIGRATED_SITES_SERVER_SRC below.
+//      ASYMMETRY vs. roots 1 and 3: those exclude their tests/ SUBDIRECTORY,
+//      because that's where scripts/ and server/tts-sidecar/scripts/ keep
+//      their tests. server/src has no tests/ subdirectory to exclude — its
+//      own tests are COLOCATED `*.test.ts` files sitting right next to the
+//      production code (server/src/foo.ts, server/src/foo.test.ts) — so
+//      walkServerSrcTree does NOT filter them out, and they ARE scanned as
+//      production files. Nothing in server/src today trips this (verified:
+//      no `*.test.ts` file there references both HAS_URL_TOKEN and
+//      HAS_ARGV1_TOKEN), but a future server/src test that spawns a CLI and
+//      hand-rolls the same argv[1]/import.meta.url comparison to detect
+//      direct invocation would be flagged as a violation here, same as a
+//      production file would be — that's a false positive this scan cannot
+//      distinguish from a real one without a tests/-style exclusion this
+//      root doesn't have.
 // A file in ANY of the four roots is checked against the same positive
 // invariant below; violations from all four are reported together.
 //
@@ -86,14 +100,28 @@
 //    attribution-eval/run-eval-cli.ts) were found and migrated by a repo-
 //    wide sweep before the scan itself could see that directory at all; a
 //    new hand-rolled guard landing there today IS now caught, by
-//    `walkServerSrcTree` and MIGRATED_SITES_SERVER_SRC below.
+//    `walkServerSrcTree` and MIGRATED_SITES_SERVER_SRC below. Two other
+//    CLI-shaped directories sit outside all four roots RIGHT NOW, named
+//    here rather than left as a hypothetical "a future folder" case:
+//      - `server/scripts/` (`sync-env-example.ts`, `qa-gate-dryrun.ts`) —
+//        neither references `process.argv[1]` today (only ordinary
+//        `.slice(2)`-style flag parsing plus `import.meta.url` for
+//        `__dirname`), so there is nothing to migrate, but a direct-
+//        invocation guard added to either would be invisible to this scan.
+//      - `pinokio-scripts/lib/*.js` (`resolve-release.js`, `write-env.js`)
+//        — CommonJS, using `require.main === module`, the same
+//        realpath-mismatch-immune idiom as `scripts/preflight-ffmpeg.cjs`
+//        below — correctly out of scope, not a gap, same reasoning as that
+//        bullet.
 //  - An indirect argv[1] access where "1" isn't textually adjacent to
 //    `argv` — e.g. `const IDX = 1; process.argv[IDX]`. HAS_ARGV1_TOKEN
 //    matches four textual shapes (`argv[1]`, `argv.at(1)`, `argv.slice(1)`,
 //    and the `[, x] = process.argv` destructure that skips argv[0] to bind
-//    argv[1] as `x`) — chosen because between them they cover every
-//    concrete spelling found in this repo (including the reviewer-supplied
-//    fixtures pinned by the "detector envelope" tests below) while a
+//    argv[1] as `x`) — the literal subscript is the only one any file in
+//    this repo actually uses today; the other three are FORWARD-LOOKING,
+//    chosen (and pinned, fixture-only, by the "detector envelope" tests
+//    below) so a future file written in one of those shapes doesn't slip
+//    past silently, not because any current file needed them — while a
 //    fully-unbounded `/process\.argv\b/` was tried and rejected: simulated
 //    against this repo it flags 9 files whose only argv/import.meta.url
 //    usage is ordinary CLI-flag parsing (`.slice(2)`, `.includes('--x')`,
@@ -153,16 +181,24 @@ const SERVER_SRC_DIR = resolve(REPO_ROOT, 'server', 'src');
 // invariant rather than a list of known-bad equality spellings.
 const HAS_URL_TOKEN = /import\.meta\.url/;
 // Four textual shapes of "this file reads argv[1]", not just the literal
-// `argv[1]` subscript — a reviewer audit found three working, real guards
-// this narrower form couldn't see: `process.argv.at(1)`,
+// `argv[1]` subscript — a reviewer audit constructed three working guard
+// shapes this narrower form couldn't see: `process.argv.at(1)`,
 // `process.argv.slice(1)[0]`, and `const [, entry] = process.argv;`
-// (destructuring that skips argv[0] to bind argv[1] as `entry`). See the
-// "WHAT THIS CANNOT CATCH" section above for why this stops short of a
-// fully-unbounded `/process\.argv\b/` (it would drown in false positives
-// from ordinary `.slice(2)`/`.includes('--x')` CLI-flag parsing) and for
-// the one indirection shape (`const IDX = 1; argv[IDX]`) even this widened
-// form still can't see. The four alternatives pinned by the "detector
-// envelope" fixture tests below.
+// (destructuring that skips argv[0] to bind argv[1] as `entry`). This is
+// FORWARD-LOOKING, not a fix for a scan result that was wrong today: none of
+// the three shapes exist anywhere in the four scanned roots as of this
+// writing (verified directly — every file under them was grepped for the
+// three widened alternatives with the literal `argv[1]` subscript excluded,
+// and none matched), so widening the regex changes zero outcomes on this
+// repo's CURRENT files. What it buys is that a FUTURE file written in one of
+// these three shapes gets caught instead of silently passing as "doesn't
+// reference argv[1] at all". See the "WHAT THIS CANNOT CATCH" section above
+// for why this stops short of a fully-unbounded `/process\.argv\b/` (it
+// would drown in false positives from ordinary `.slice(2)`/`.includes('--x')`
+// CLI-flag parsing) and for the one indirection shape
+// (`const IDX = 1; argv[IDX]`) even this widened form still can't see. The
+// four alternatives are pinned directly — independent of any real file in
+// the repo — by the "detector envelope" fixture tests below.
 const HAS_ARGV1_TOKEN =
   /process\.argv\[1\]|process\.argv\.at\(1\)|process\.argv\.slice\(1\)|\[\s*,\s*\w+\s*\]\s*=\s*process\.argv\b/;
 

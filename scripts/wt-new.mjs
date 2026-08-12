@@ -248,6 +248,19 @@ export async function main(argv) {
 }
 
 // CLI entry — only runs when invoked directly, not when imported by tests.
+//
+// process.exit() truncates pending async stdout writes on POSIX pipes
+// (synchronous on Windows, ASYNCHRONOUS on Linux/macOS) — see the comment by
+// scripts/lib/is-main-module.mjs's own isDirectlyInvoked for why that shape
+// is unsafe for anything but provably-tiny output. main() prints the
+// worktree-creation log, the npm-install output (stdio: 'inherit', so
+// unaffected either way), and the multi-line launch block, so it doesn't
+// qualify; setting exitCode and letting the process exit naturally once the
+// event loop drains avoids the truncation instead. main() is `async` only in
+// signature — every git/npm call inside it is spawnSync — so nothing keeps
+// the event loop alive once its promise settles.
 if (isDirectlyInvoked(import.meta.url)) {
-  main(process.argv.slice(2)).then((code) => process.exit(code));
+  main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
 }

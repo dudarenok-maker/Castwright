@@ -100,6 +100,14 @@ export function main() {
   return 0;
 }
 
+// process.exit() truncates pending async stdout writes on POSIX pipes
+// (synchronous on Windows, ASYNCHRONOUS on Linux/macOS) — see the comment by
+// scripts/lib/is-main-module.mjs's own isDirectlyInvoked for why the
+// process.exit(main()) shape is unsafe for anything but provably-tiny
+// output. main()'s table can run to one row per worktree, so it doesn't
+// qualify; setting exitCode and letting the process exit naturally once the
+// event loop drains (main() is fully synchronous — no open handle survives
+// its return) avoids the truncation instead.
 if (isDirectlyInvoked(import.meta.url)) {
-  process.exit(main());
+  process.exitCode = main();
 }
