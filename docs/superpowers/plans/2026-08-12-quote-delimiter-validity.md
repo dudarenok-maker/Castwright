@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (Node, ESM), Vitest. Server suite only.
 
-**Design of record:** `docs/superpowers/specs/2026-08-12-quote-delimiter-validity-design.md` (revision 2, commit `9fedd158`). Read it before Task 2 — the "Rejected" section explains why two other clauses are deliberately absent, and the metric section explains why the never-delete invariant exists.
+**Design of record:** `docs/superpowers/specs/2026-08-12-quote-delimiter-validity-design.md` (revision 3 — see the "Round 2" section at the end of this plan for what changed after Tasks 1–6 below were implemented). Read it before Task 2 — the "Rejected" section explains why two other clauses are deliberately absent, and the metric section explains why the never-delete invariant exists.
 
 ## Global Constraints
 
@@ -617,3 +617,71 @@ Single-scope `fix(server)` → **medium** effort, per the model-routing ladder. 
 **Placeholders:** none — every step has the literal code or the literal command.
 
 **Type consistency:** `isRealCloser(line, k, closer, openers)` is defined in Task 2 Step 3 and called in Task 2 Step 4 with those four arguments in that order. `end` and `nearestAny` share the shape `{ at: number; glyph: string }` across Tasks 1 and 2. `speechOf` is redeclared inside each `describe` rather than shared, matching the existing file's style, so tasks stay independently applicable.
+
+---
+
+## Round 2 — what changed after Tasks 1–6, and why
+
+Tasks 1–6 above were implemented and pushed as PR #2300 exactly as written; the
+six tasks and their steps are the unmodified record of what was done and are
+not rewritten here. An independent PR review then found a **Critical**: when
+`isRealCloser` rejects a closer, the scan's resumed search for a *later*
+occurrence of the same glyph had no stop condition, so a stray `’` sitting
+between two turns could walk straight through one of them and merge both into
+whatever closed the search. Two corpus-measurement gaps let this ship in round
+1 undetected — the containment metric scores a swallowing run as a repair
+(`LOST = 0`), and the generated sweep's `gap` and `apostrophes` families are
+separate, so neither alone can generate the cross-product that triggers the
+bug. Both gaps, and the full corrected measurement, are written up in the
+design doc's revision-3 banner and "What the corpus cannot say" — this section
+only records what changed in the branch and where.
+
+**Commits, in order:**
+
+- `4504adbd` — `fix(server): bound the rejected-closer skip to the next opener (#2288)`.
+  The production fix: a resumed skip past a rejected closer now stops at the
+  nearest following opener glyph of any class; a closer's first occurrence
+  stays unbounded. Folds in three smaller review findings landed in the same
+  file: `isSpacedLetter` widened to match `\p{M}` alongside `\p{L}` (an
+  NFD-decomposed manuscript was defeating clause 1); `UNSPACED_SCRIPT` drops
+  Hangul (modern Korean is spaced, so a Hangul-flanked `’` is the bug shape,
+  not ordinary unspaced text); the `findQuoteRuns` doc comment moved back
+  adjacent to the function it documents.
+- `83647cc0` — `test(server): pin the bounded rejected-closer skip and its NFD case (#2288)`.
+  Adds the `describe('parser — #2288 round 2: a rejected closer's skip is
+  bounded to the next opener (Critical)')` block asserting both known-bug
+  fixtures against measured (not predicted) output, with a neutralisation
+  check (bound forced to `line.length`, confirmed both target tests fail for
+  the right reason). Adds an NFD regression for the `\p{M}` widening. Updates
+  the pre-existing "known limits" same-glyph-nesting pin, whose current output
+  changed under the new bound (one merged turn → two truncated fragments,
+  still no turn destroyed).
+- `3b3309b3` — `docs(docs): correct the #2288 quote-delimiter release notes numbers`.
+  `docs/release-notes-next.md` had claimed "949 repaired / none regressed" for
+  the unbounded rule; corrected to state the unbounded rule merged 8
+  paragraphs / swallowed 18 turns, the bound brings both to 0, leaving 936
+  clean repairs — "none regressed" dropped, since the original containment
+  metric never actually established that. `RELEASE_NOTES.md`'s illustrating
+  example was double-quoted for a single-quote bug; corrected to a
+  single-quoted example (ASCII apostrophes kept, per that file's house style).
+- `6b8149bf` — `test(server): pin the dash-preceded under-repair as a #2288 known limit`.
+  Round 3 (this round): the hand-adjudication that verified the bound's safety
+  turned up six paragraphs where the new boundary lands early — one
+  dash-preceded, five dialect-final. A widened elision clause was built and
+  measured to fix the dash case and rejected (corpus-clean but reproduces the
+  same merge mechanism on a synthetic dash-preceded interrupted turn). This
+  commit pins the dash case as a known limit in
+  `server/src/analyzer/dialogue-structure/parser.test.ts`'s existing `#2288
+  known limits` block, per the design doc's revision-3 "Rejected" section.
+- This docs commit (spec → revision 3, this plan section) records the above;
+  no production code changes.
+
+**Suite state after `83647cc0`:** `parser.test.ts` + `lang/index.test.ts` 73/73
+passed (including the never-delete block's 10 tests and Task 1's
+characterisation block); `npm run typecheck` clean. No changes were needed to
+`lang/index.test.ts`.
+
+**Constraints honoured, same as Tasks 1–6:** no changes under
+`server/src/analyzer/dialogue-structure/lang/*.ts`; no `--no-verify`; each
+commit run in the foreground; production code and test/doc changes kept in
+separate commits per the branching workflow's commit-convention rules.
