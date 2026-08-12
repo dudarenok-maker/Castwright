@@ -183,7 +183,10 @@ interface QuoteRun {
     dead code. Hangul is deliberately absent: modern Korean uses inter-word
     spacing like English, so a `’` with Hangul on both sides is not ordinary
     unspaced text — it's exactly the mis-read-apostrophe shape the first
-    clause exists to catch. */
+    clause exists to catch. See `isSpacedLetter`'s comment for a gap this
+    exclusion does NOT close: a decomposed combining mark's own script reads
+    as `Inherited`, not the base character's script, so it can slip past this
+    regex regardless of how far this set is widened. */
 const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Thai}]/u;
 /** Only `’` is reachable today: `en` is the sole table pairing an
     apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
@@ -198,7 +201,20 @@ const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
     `\p{L}` alone misses the mark, so the character immediately before a
     closer reads as "not a letter" and the contraction clause in
     `isRealCloser` never fires for decomposed input — the #2288 bug,
-    unfixed, whenever the manuscript arrives NFD. */
+    unfixed, whenever the manuscript arrives NFD.
+
+    Known gap this widening opens in `UNSPACED_SCRIPT` above: `\p{M}` matches
+    a combining mark's OWN script property, which for a great many marks
+    (including the kana voicing mark U+3099 in decomposed が, and variation
+    selectors like U+FE0F) is `Inherited` — not the script of whatever base
+    character it's attached to. `UNSPACED_SCRIPT` tests the mark itself, so it
+    cannot see the base character's script and cannot exclude these marks no
+    matter how it's widened; a decomposed CJK sequence's combining mark reads
+    as a "spaced letter" here. Unreachable today for the same reason
+    `UNSPACED_SCRIPT` itself is (`en`, the only table this function's caller
+    matters for today, has no CJK content to decompose) — a documented gap,
+    not a live bug. Do not close it by narrowing `\p{M}` without re-verifying
+    the `André`-shaped NFD case above stays covered. */
 function isSpacedLetter(ch: string | undefined): boolean {
   return ch !== undefined && /[\p{L}\p{M}]/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
 }
@@ -252,7 +268,43 @@ function isRealCloser(line: string, k: number, closer: string, openers: Set<stri
     for another `’` straight through Mary's whole turn, landing on the
     "boys’" apostrophe and destroying "I agree," on the way there. The bound
     applies only to that resumed skip — a closer's FIRST occurrence is always
-    eligible, unbounded, exactly as it was before #2288. */
+    eligible, unbounded, exactly as it was before #2288. This property is
+    COMMENT-ENFORCED, not test-enforced: it cannot be pinned through
+    `parseChapterStructure` alone. `nearestAny` (which feeds the never-delete
+    fallback) is recorded on the first occurrence BEFORE any `limit` is
+    consulted, so even a mutant that bounded the first occurrence too would
+    still restore the identical position through the fallback whenever that
+    first occurrence is the one actually accepted — every nesting/repair test
+    below stays green. Catching such a leak needs a double mutation (bound the
+    first occurrence AND disable the never-delete fallback in the same build)
+    to force a difference through to the public surface.
+
+    The bound is anchored at the REJECTED closer's own index, and recomputed
+    at every rejection — not anchored once at the opening quote's interior
+    start. An opener INSIDE the turn (a legitimately nested one, e.g. the “
+    in `‘He said “yes,” but I don’t believe him,’`) must not cap the search;
+    only an opener strictly after the point the scan is still hunting from can
+    belong to a different turn. This is provably safe, not merely measured: a
+    following turn always begins at an opener, so after a rejection at index k
+    the bound sits at the nearest opener at index >= k, and an accepted closer
+    must land strictly before it — half-open intervals, so a run ending at the
+    bound never overlaps a run starting there. No `main` run can start inside
+    the extension either: by construction there is no opener glyph between the
+    rejection and the bound, so the extension can only ever reclaim text
+    `main` classified as narration, never swallow a turn. And the
+    recomputation cannot walk the bound forward: the next occurrence of this
+    glyph, if any, sits in `[k, bound)` — there is no opener in that range by
+    definition of the bound — so recomputing from it returns the identical
+    index. */
+function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>): number {
+  let best = line.length;
+  for (const o of openers) {
+    const at = line.indexOf(o, from);
+    if (at >= 0 && at < best) best = at;
+  }
+  return best;
+}
+
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
@@ -268,15 +320,6 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
       const start = line.indexOf(open, pos);
       if (start < 0) break;
       const interiorStart = start + open.length;
-      /* Bound for a REJECTED closer's resumed skip only (see the doc comment
-         above): the nearest occurrence of ANY opener glyph — including this
-         opener's own — at or after the interior start, or the line's length
-         if none follows. Does not bound a closer's first occurrence. */
-      let limit = line.length;
-      for (const o of openers) {
-        const at = line.indexOf(o, interiorStart);
-        if (at >= 0 && at < limit) limit = at;
-      }
       /* Nearest closer POSITION across the opener's closer set; ties go to the
          earlier entry in `closers`, matching the old alternation's
          leftmost-alternative rule. */
@@ -285,6 +328,12 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
       for (const closer of closers) {
         let from = interiorStart;
         let firstOfGlyph = true;
+        /* Bound for a REJECTED closer's resumed skip only (see the doc
+           comment above): starts unbounded — a closer's first occurrence is
+           never bounded — and is REPLACED (not narrowed) at each rejection
+           with the nearest opener glyph at or after that rejection's own
+           index. */
+        let limit = line.length;
         for (;;) {
           const at = line.indexOf(closer, from);
           if (at < 0) break;
@@ -293,15 +342,17 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
             firstOfGlyph = false;
           } else if (at >= limit) {
             /* A later occurrence, reached only because an earlier one of the
-               same glyph was rejected: past the limit it belongs to a
-               different turn. Positions only increase from here, so no
-               later occurrence of this closer is eligible either. */
+               same glyph was rejected: at or past the current bound it
+               belongs to a different turn. Positions only increase from
+               here, so no later occurrence of this closer is eligible
+               either. */
             break;
           }
           if (isRealCloser(line, at, closer, openers)) {
             if (end === null || at < end.at) end = { at, glyph: closer };
             break;
           }
+          limit = nearestOpenerAtOrAfter(line, at, openers);
           from = at + closer.length;
         }
       }
