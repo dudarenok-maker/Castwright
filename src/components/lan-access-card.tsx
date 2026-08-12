@@ -86,6 +86,8 @@ export function LanAccessCard() {
     refresh(); // re-read: a revoked device drops out of the list below
   };
 
+  const visibleDevices = (devices ?? []).filter((d) => !d.revoked);
+
   return (
     <section className="bg-white rounded-3xl border border-ink/10 shadow-card p-6">
       <div className="flex items-center gap-2">
@@ -133,30 +135,31 @@ export function LanAccessCard() {
             </div>
           )}
           <ul className="mt-6 divide-y divide-ink/8">
-            {(devices ?? []).filter((d) => !d.revoked).map((d) => (
+            {visibleDevices.map((d) => (
               <li key={d.id} className="py-3 flex items-center justify-between gap-3 text-sm">
                 <span className="text-ink">
                   <span className="font-medium">{d.label}</span>
                   <span className="text-ink/55"> · added {fmt(d.createdAt)} · last seen {fmt(d.lastSeenAt)} · expires {fmt(d.expiresAt)}</span>
                 </span>
-                {isLoopbackHost() ? (
+                {isLoopbackHost() && (
                   <button
                     type="button" onClick={() => revoke(d.id)}
                     className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0"
                   >Revoke</button>
-                ) : (
-                  // Revoke removed rather than left disabled-and-failing (#2269) —
-                  // don't leave the row's action cell empty with no explanation.
-                  // NOT recoveryHint(): that helper points at "Authorize this
-                  // browser", which navigates TO castwright.local and back —
-                  // useless (an unbreakable loop) for a caller who is already
-                  // on castwright.local trying to revoke, so it needs this
-                  // route's own hint, not the 401/lapsed-auth one.
-                  <span className="text-xs text-ink/45 text-right">{REVOKE_LOOPBACK_ONLY_HINT}</span>
                 )}
+                {/* Revoke removed rather than left disabled-and-failing (#2269) — the row's
+                    action cell is left empty; the explanation renders once, below the list
+                    (review round 2, Finding 4), not repeated on every row. */}
               </li>
             ))}
           </ul>
+          {!isLoopbackHost() && visibleDevices.length > 0 && (
+            // NOT recoveryHint(): that helper points at "Authorize this browser", which
+            // navigates TO castwright.local and back — useless (an unbreakable loop) for
+            // a caller who is already on castwright.local trying to revoke, so it needs
+            // this route's own hint, not the 401/lapsed-auth one.
+            <p className="mt-2 text-xs text-ink/45">{REVOKE_LOOPBACK_ONLY_HINT}</p>
+          )}
           <div className="mt-5">
             <LanCertStatus variant="admin" />
           </div>
