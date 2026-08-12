@@ -20,10 +20,46 @@
    ship inside every release zip and sit harmlessly in a developer checkout. */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir as osHomedir } from 'node:os';
+
+// Deliberately NOT `import { isDirectlyInvoked } from './scripts/lib/is-main-module.mjs'`
+// (#2291's shared helper — every other scripts/*.mjs entry point uses it).
+// This file is the ONE file in the repo that ships OUTSIDE the versioned
+// release directory: per the install layout above, launch.mjs sits at
+// <install>/launch.mjs while everything else — including scripts/lib/ — only
+// ever exists under <install>/releases/vX.Y.Z/. There is no <install>/scripts/
+// directory, so a relative import of the shared helper resolves to a path
+// that is never there and crashes at import time with ERR_MODULE_NOT_FOUND —
+// invisibly, because restart-after-upgrade.mjs spawns this file detached
+// with stdio: 'ignore', so the upgrade reports success and the app just
+// never comes back. launch.mjs is also NEVER replaced by an upgrade (see the
+// header above) — that is the whole point of a stable bootstrapper — so it
+// must not depend on anything an upgrade could leave stale or absent either.
+// A few duplicated lines here is a far better trade than adding a copy step
+// to scripts/setup-versioned-install.mjs to keep a second moving part in
+// sync with the shared helper forever. Keep this in sync with
+// scripts/lib/is-main-module.mjs's realpath logic if that ever changes —
+// see its header comment for the full reasoning (Windows two-vs-three-slash
+// URL shape, and why BOTH sides must be realpathed, not just one).
+function realpathWithFallback(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function isDirectlyInvoked(importMetaUrl) {
+  const invokedRaw = process.argv[1];
+  if (!invokedRaw) return false;
+  const invokedHref = pathToFileURL(realpathWithFallback(invokedRaw)).href;
+  const scriptPath = fileURLToPath(importMetaUrl);
+  const scriptHref = pathToFileURL(realpathWithFallback(scriptPath)).href;
+  return scriptHref === invokedHref;
+}
 
 const SEMVER_DIR = /^v(\d+)\.(\d+)\.(\d+)$/;
 
@@ -161,6 +197,10 @@ function main() {
 }
 
 // CLI guard — only run main() when invoked directly, not when imported by tests.
-const invokedDirectly =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+// Uses the inline isDirectlyInvoked() defined above, NOT the shared
+// scripts/lib/is-main-module.mjs helper — see the comment by that function
+// for why this one file deliberately duplicates it. An un-realpathed
+// comparison misses whenever the invocation path crosses a symlink/junction
+// (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) main();

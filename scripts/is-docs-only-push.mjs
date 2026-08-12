@@ -21,6 +21,7 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const isZeroSha = (sha) => /^0+$/.test(sha ?? '');
 
@@ -81,12 +82,7 @@ function gitChangedFiles(remoteSha, localSha) {
     .filter(Boolean);
 }
 
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  Array.isArray(process.argv) &&
-  /is-docs-only-push\.mjs$/.test(process.argv[1] ?? '');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   let stdinText = '';
   try {
     stdinText = readFileSync(0, 'utf8');

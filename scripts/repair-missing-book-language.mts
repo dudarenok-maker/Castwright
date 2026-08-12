@@ -97,6 +97,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 import {
   detectManuscriptLanguage,
@@ -559,9 +560,6 @@ export async function main(argv: string[] = process.argv.slice(2), booksRootOver
 }
 
 // Run when executed directly (not imported in tests).
-if (
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('repair-missing-book-language.mts')
-) {
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

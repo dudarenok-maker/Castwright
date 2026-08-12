@@ -233,10 +233,20 @@ const LINK_SKIP_REASON = probeLinkSupport();
 // Builds <tmp>/scripts/run-sidecar-tests.mjs as a byte-for-byte copy of the
 // real script. Its own SIDECAR_DIR resolution then lands on
 // <tmp>/server/tts-sidecar, matching what makeFakeVenv() below builds there.
+//
+// #2291 — run-sidecar-tests.mjs now imports ./lib/is-main-module.mjs (the
+// shared direct-execution guard); mirror it too, or the throwaway script
+// crashes on module resolution (same technique bump-version.test.mjs's
+// setupRepo() uses for the same reason).
 function makeFixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), 'sidecar-e2e-'));
   mkdirSync(join(root, 'scripts'), { recursive: true });
   writeFileSync(join(root, 'scripts', 'run-sidecar-tests.mjs'), readFileSync(runnerScript, 'utf8'));
+  mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+  writeFileSync(
+    join(root, 'scripts', 'lib', 'is-main-module.mjs'),
+    readFileSync(resolve(here, '..', 'lib', 'is-main-module.mjs'), 'utf8'),
+  );
   return root;
 }
 

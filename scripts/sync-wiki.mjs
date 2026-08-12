@@ -10,9 +10,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { runCommand } from './lib/run-command.mjs';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_REMOTE = 'https://github.com/dudarenok-maker/Castwright.wiki.git';
@@ -141,7 +141,7 @@ async function main() {
   process.stdout.write(`sync-wiki: pushed docs/wiki -> ${WIKI_REMOTE}\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   main().catch((err) => {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);

@@ -37,6 +37,7 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -231,15 +232,8 @@ function main() {
   if (missing > 0 || failed > 0) process.exitCode = 1;
 }
 
-// Only run when invoked directly (not when imported by tests) — comparing
-// resolved filesystem paths rather than raw URL strings so this works on
-// Windows too (`file://${process.argv[1]}` never matches a Windows path),
-// mirroring the same guard already used in build-release-zip.mjs.
-const invokedAsCli = (() => {
-  try {
-    return path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
-  } catch {
-    return false;
-  }
-})();
+// Only run when invoked directly (not when imported by tests). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+const invokedAsCli = isDirectlyInvoked(import.meta.url);
 if (invokedAsCli) main();

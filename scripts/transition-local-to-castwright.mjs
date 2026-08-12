@@ -7,6 +7,7 @@ import { existsSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const PAIRS = [
   { oldRel: '../audiobook-workspace', newRel: '../castwright-workspace', base: 'repo' },
@@ -42,6 +43,9 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('transition-local-to-castwright.mjs')) {
+// See scripts/lib/is-main-module.mjs — replaces the naive
+// `file://${argv[1]}` form (always false on Windows) and the basename
+// fallback with the shared, junction-safe check (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

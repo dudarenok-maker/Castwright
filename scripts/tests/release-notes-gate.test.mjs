@@ -41,6 +41,14 @@ function setupGateFixture() {
   const dir = mkdtempSync(resolve(tmpdir(), 'release-notes-gate-test-'));
   mkdirSync(resolve(dir, 'scripts'));
   writeFileSync(resolve(dir, 'scripts', 'release-notes-gate.mjs'), readFileSync(gateScript, 'utf8'));
+  // #2291 — release-notes-gate.mjs now imports ./lib/is-main-module.mjs (the
+  // shared direct-execution guard); mirror it too, or the spawned CLI
+  // crashes on module resolution.
+  mkdirSync(resolve(dir, 'scripts', 'lib'));
+  writeFileSync(
+    resolve(dir, 'scripts', 'lib', 'is-main-module.mjs'),
+    readFileSync(resolve(here, '..', 'lib', 'is-main-module.mjs'), 'utf8'),
+  );
   mkdirSync(resolve(dir, 'docs'));
   return dir;
 }
