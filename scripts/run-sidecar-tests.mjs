@@ -11,7 +11,7 @@
 // same condition into a hard failure, because on CI a missing venv means the
 // bootstrap broke, not that the developer hasn't run it yet.
 
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -84,7 +84,39 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
 // (file://C:/...) where import.meta.url has three (file:///C:/...), so it is
 // ALWAYS false there — the script would silently do nothing and exit 0.
 // Every other script in scripts/ uses this form; see bump-version.mjs:654.
-const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+//
+// argv[1] and import.meta.url are BOTH realpath'd before comparison (#2291).
+// process.argv[1] is always the path exactly as invoked; import.meta.url is
+// not, and which one it holds depends on a flag. Measured, invoking through a
+// junction at <tmp>/link -> <tmp>/real:
+//   default:                   argv[1] = .../link/p.mjs, import.meta.url = .../real/p.mjs
+//   --preserve-symlinks-main:  argv[1] = .../link/p.mjs, import.meta.url = .../link/p.mjs
+// So the loader realpaths the main entry by default and stops doing so under
+// the flag. Realpath'ing only argv[1] therefore fixes the default case and
+// BREAKS the flagged one; realpath'ing both sides collapses all four
+// combinations to the real path. Without that, the guard misses whenever the
+// invocation runs through a symlink (POSIX) or junction (Windows) and the
+// script silently does nothing and exits 0 — the #2291 failure, which turned
+// `npm run test:sidecar` into a vacuous green on GitHub's macos-latest runner
+// (tmpdir() under /var, itself a symlink to /private/var). realpathSync throws
+// for a path that doesn't exist; fall back to the unresolved value rather than
+// crashing, since a guard that throws is worse than one that merely misses.
+function realpathWithFallback(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    // Return the path as-is if realpath fails (e.g. path doesn't exist).
+    return path;
+  }
+}
+
+let invokedPath = process.argv[1] ?? '';
+if (invokedPath) {
+  invokedPath = realpathWithFallback(invokedPath);
+}
+const invokedHref = invokedPath ? pathToFileURL(invokedPath).href : '';
+const scriptPath = fileURLToPath(import.meta.url);
+const scriptHref = pathToFileURL(realpathWithFallback(scriptPath)).href;
+if (invokedHref && scriptHref === invokedHref) {
   process.exit(main());
 }
