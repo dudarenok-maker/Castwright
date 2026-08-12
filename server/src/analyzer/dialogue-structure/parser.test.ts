@@ -477,12 +477,11 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
   });
 
   it('NOT FIXED (under-repair, not regression): a dash-preceded elision apostrophe still ends the turn early', () => {
-    // Real corpus paragraph, `se/joseph-conrad_chance.epub` (#2288's
-    // hand-adjudication of the bound, `2288-overrun-adjudication.md` §4,
-    // "nearest miss"). `’pon`'s apostrophe is preceded by an em dash, which
-    // is neither a cased letter (clause 1) nor whitespace/bracket (clause 2),
-    // so `isRealCloser` accepts it as a genuine closer and the scan stops
-    // there — one apostrophe short of the turn's real end.
+    // Real corpus paragraph, `se/joseph-conrad_chance.epub`, hand-adjudicated
+    // as the bound's nearest miss. `’pon`'s apostrophe is preceded by an em
+    // dash, which is neither a cased letter (clause 1) nor whitespace/bracket
+    // (clause 2), so `isRealCloser` accepts it as a genuine closer and the
+    // scan stops there — one apostrophe short of the turn's real end.
     //
     // This is an UNDER-repair, not a regression: `main` truncates this
     // paragraph to ['It'], this rule gives ['It’s like being in jail—'] —
@@ -493,10 +492,10 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
     //
     // A widened elision clause (treating a dash before the apostrophe the
     // same as whitespace) was implemented and measured against this exact
-    // shape (`2288-dash-variant.md`): corpus-identical apart from repairing
-    // this one paragraph, but a synthetic interrupted-turn probe reproduces
-    // the same narration-swallowing over-run through a dash-preceded glued
-    // closer, and well-typeset public-domain prose systematically lacks the
+    // shape: corpus-identical apart from repairing this one paragraph, but a
+    // synthetic interrupted-turn probe reproduces the same
+    // narration-swallowing over-run through a dash-preceded glued closer, and
+    // well-typeset public-domain prose systematically lacks the
     // missing-space-after-closer defect that would exercise the new
     // rejection branch — so a corpus zero cannot clear it. Rejected.
     expect(
@@ -504,6 +503,19 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
         '‘It’s like being in jail—’pon my word. I suppose that man is out there waiting for you. Head jailer! Ough!’',
       ),
     ).toEqual(['It’s like being in jail—']);
+  });
+
+  it('NOT FIXED: an inch mark between the elided contraction and the closer still caps the scan', () => {
+    // Neither anchor (round 2's interior-start bound or round 3's
+    // at-rejection bound) fixes this: the bound is computed from the raw
+    // OPENER GLYPH TABLE, not from `openerValid` — and `MAIN_TABLES.en`
+    // carries `"` as an opener (it pairs with itself), so the `"` in `6"`
+    // caps the search exactly like a real opener would, regardless of where
+    // the bound is anchored. Desired output is ["It’s 6" long,"]; flip this
+    // test when that is fixed. A unit-mark opener rule (rejecting `"`/`'`/`’`
+    // as an opener when digit-preceded) was measured and rejected earlier in
+    // this design: 0 repairs, 4 losses.
+    expect(speechOf('‘It’s 6" long,’ he said.')).toEqual(['It']);
   });
 });
 
@@ -537,6 +549,47 @@ describe('parser — #2288 round 2: a rejected closer\'s skip is bounded to the 
     // would skip all the way to the later "Maybe,’" closer, merging three
     // turns (and two speakers) into one.
     expect(speechOf(body)).toEqual(['Yes', 'No,', 'Maybe,']);
+  });
+});
+
+describe('parser — #2288 round 3: the bound is anchored at the rejection, not the interior start', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }, { id: 'tom', name: 'Tom' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // Expected arrays below are MEASURED (`parseChapterStructure` run against
+  // these exact bodies), not predicted.
+  it('the standard British shape — a single-quoted turn nesting a double-quoted one — is now repaired', () => {
+    const body = '‘He said “yes,” but I don’t believe him,’ she said.';
+    // Anchoring at the opening quote's INTERIOR START (the round-2 bound)
+    // caps the search at the nested “ — which belongs to THIS turn, not a
+    // following one — leaving this identical to `main`: ["He said “yes,”
+    // but I don"]. Anchoring at the REJECTED closer's own index instead lets
+    // the search pass that nested opener, because nothing after it is a
+    // different turn's opener either.
+    expect(speechOf(body)).toEqual(['He said “yes,” but I don’t believe him,']);
+  });
+
+  // Both bodies are round 2's known-bug fixtures, re-asserted here because
+  // moving the anchor is exactly the kind of change that could silently
+  // re-open them — see the round-2 describe block above for what the
+  // un-bounded scan does to each.
+  it('known-bug 1 stays identical under the new anchor', () => {
+    const body =
+      'Tom said the ‘phone wasn’t working. “I agree,” said Mary. It was the boys’ fault.';
+    expect(speechOf(body)).toEqual(['phone wasn', 'I agree,']);
+  });
+
+  it('known-bug 2 stays identical under the new anchor', () => {
+    const body = '‘Yes’said Tom. “No,” said Mary. ‘Maybe,’ said Tom.';
+    expect(speechOf(body)).toEqual(['Yes', 'No,', 'Maybe,']);
+  });
+
+  it('nesting stays unharmed (no rejection occurs, so the anchor never comes into play)', () => {
+    expect(speechOf('“He said ‘hi’ to me,” she reported.')).toEqual(['He said ‘hi’ to me,']);
   });
 });
 
