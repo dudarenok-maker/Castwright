@@ -308,12 +308,35 @@ castLinkOrphanRouter.post(
       });
     }
 
+    /* #2260 review round 3 (C3) — two genuinely different failures now reach
+       the handler below, and they need different words. `retireCharacterId`
+       throwing means the alias never landed ("failed to record the link" —
+       true, and what this route has always said). But since #2260 the
+       follow-up `clearNotLinkedEdgesForDroppedRejections` can throw too (it
+       rethrows a lock-acquisition timeout instead of swallowing it), and by
+       then the alias IS durably on disk — telling the user it failed and to
+       retry describes the opposite of what happened. This flag is the
+       discriminator: it flips the moment the durable write returns. */
+    let aliasRecorded = false;
     try {
       const result = await retireCharacterId(bookDir, orphanedId, characterId);
+      aliasRecorded = true;
       if (result.droppedSelfLoopRejections.length) {
         await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
       }
     } catch (retireErr) {
+      if (aliasRecorded) {
+        console.error(
+          '[cast-link-orphan] the alias WAS recorded; clearing the stale not-linked edge for it failed',
+          retireErr,
+        );
+        return res.status(500).json({
+          error:
+            'The link was recorded, but clearing the stale "not the same character" note for it did ' +
+            'not finish. The link itself is durable — retry to complete the cleanup; the write is ' +
+            'idempotent.',
+        });
+      }
       console.error(
         '[cast-link-orphan] failed to record the alias in cast-id-history.json — surfacing as a failure',
         retireErr,

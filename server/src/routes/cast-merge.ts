@@ -228,6 +228,9 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        for identity (spec §4.1), so losing an entry degrades to today's
        behaviour while losing the merge does not. Mirrors the six analysis-path
        sites. */
+    /* #2260 review round 3 (C2) — parked, not thrown at the catch below. See
+       that handler's own comment. */
+    let identityLockTimeout: unknown;
     try {
       const historyResult = await retireCharacterId(bookDir, sourceId, targetId);
       /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
@@ -270,9 +273,23 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
          identity-of-record divergence #2040 exists to prevent, silently, and
          strictly worse than the hang the timeout replaced. Let exactly that
          one class through; EPERM/ENOSPC/AV-lock are swallowed exactly as
-         before. See `LockAcquisitionTimeoutError` in workspace/file-lock.ts. */
-      if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
-      console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+         before. See `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
+
+         Round 3 (C2) — let it through, but not from HERE. Thrown at this
+         point it aborts before the analysis-cache reconciliation and the
+         cast-merges journal entry below, which recreates exactly the
+         half-applied state the wrap at the top of this block exists to
+         prevent: cast.json has sourceId folded into targetId, while the
+         cache still lists sourceId and still attributes sentences to it (so
+         the merged-away character reappears on the next resume — see the
+         cache comment immediately below) and no journal entry exists (so the
+         unlink-alias route can never undo the merge). Park it, finish both,
+         then rethrow. */
+      if (isLockAcquisitionTimeout(historyErr)) {
+        identityLockTimeout = historyErr;
+      } else {
+        console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+      }
     }
 
     /* Analysis cache update — stage1.characters AND per-chapter sentences.
@@ -342,6 +359,16 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
         (editsTouched ? ' (remapped sentences)' : '') +
         (cacheTouched ? ' (rewrote cache)' : ''),
     );
+
+    /* #2260 round 3 (C2) — the deferred rethrow. AFTER the journal, not after
+       the cache: both are part of "the merge is fully applied". Rethrowing
+       between them would leave a merge that resumes correctly but can never
+       be unlinked, which is still half-applied — the thing the wrap exists to
+       avoid. Placed after the log line too, so the operator breadcrumb still
+       records what actually reached disk before the request fails. Nothing
+       below this point writes anything; the caller turns this into a 500 with
+       the message that names the lock key and both cast-lock rules. */
+    if (identityLockTimeout !== undefined) throw identityLockTimeout;
 
     return { characters: nextCharacters, sourceId };
   });

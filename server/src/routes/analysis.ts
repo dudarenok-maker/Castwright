@@ -427,12 +427,19 @@ export async function reconcileRejectEdgesOnDisk(
   } catch (err) {
     /* #2260 round 2 — a withKeyLock ACQUISITION timeout is not the disk fault
        this handler is scoped for, and swallowing it is strictly worse than the
-       hang it replaced: the route returns 200 with cast.json already written
-       and the identity record never updated, which is the divergence #2040
-       exists to prevent, silently. Let exactly that one class through;
-       everything else (EPERM/ENOSPC/AV-lock, CastIdHistoryUnreadableError) is
-       swallowed exactly as before. See `LockAcquisitionTimeoutError` in
-       workspace/file-lock.ts. */
+       hang it replaced: cast.json is already written and the identity record
+       never updated, which is the divergence #2040 exists to prevent,
+       silently. Let exactly that one class through; everything else
+       (EPERM/ENOSPC/AV-lock, CastIdHistoryUnreadableError) is swallowed
+       exactly as before. See `LockAcquisitionTimeoutError` in
+       workspace/file-lock.ts.
+
+       Round 3 — this function's only two production callers are the main and
+       subset analysis persist blocks, both of which have ALREADY responded
+       (these are fire-and-forget SSE jobs), so there is no 200 to return
+       here; an earlier version of this comment said there was. What the
+       rethrow buys instead is that each persist block parks the timeout and
+       ends its JOB with an SSE `error` event rather than a `result`. */
     if (isLockAcquisitionTimeout(err)) throw err;
     console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
   }
@@ -5271,6 +5278,20 @@ export async function runMainAnalyzerJob(
     // against a corrupted run. The user sees the `attribution_drift`
     // error in the analysing view and can retry.
     if (record.bookDir) {
+      /* #2260 review round 3 (C1) — a lock-acquisition timeout out of the
+         identity block below must fail the JOB, but it must NOT be thrown
+         from inside this persist: doing that skipped
+         `logCarriedForwardCharacters` and the whole state.json rewrite, and
+         then landed in `catch (persistErr)` — which logs "non-fatal" and
+         falls through to `send({kind:'result'})`. Net effect of throwing
+         early was strictly worse than swallowing: the job still reported
+         SUCCESS, and state.json now kept the PREVIOUS run's chapter list,
+         durations, analysisProvenance and updatedAt. So the timeout is
+         parked here and rethrown after this try/catch has closed — the
+         writes all complete, and the throw then escapes `catch (persistErr)`
+         into the job's top-level catch, which ends the job via
+         `endJob(…, {kind:'error'})`. */
+      let identityLockTimeout: unknown;
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: reconciled.sentences,
@@ -5328,7 +5349,12 @@ export async function runMainAnalyzerJob(
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write, and never let a throwing history
              write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
-             state.json. Mirrors writeFoldJournal/writeDedupJournal above. */
+             state.json. Mirrors writeFoldJournal/writeDedupJournal above.
+             #2260 round 3 (C1) — still true for the one class this handler
+             no longer swallows: a lock-acquisition timeout DEFERS out of
+             this block (parked in `identityLockTimeout`, rethrown once the
+             persist's own try/catch has closed) rather than skipping the
+             writes below. */
           try {
             /* Wave 2 final-review finding 1(b) — every retirement recorded
                at this final write is filtered against the roster that was
@@ -5422,18 +5448,26 @@ export async function runMainAnalyzerJob(
                rewrote, not the one the persist started with. */
             await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
-            // for why a lock-acquisition timeout must NOT be swallowed here.
-            if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
-            console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
-            /* #2214/#2201 — a degraded cast-id-history.json now makes the
-               unconditional `dropSupersededIdsReclaimedByLiveCast` call above
-               throw before `reconcileRejectEdgesOnDisk` is ever reached, so
-               its own degraded-read log line never fires on this path. Emit
-               the same user-facing wording here so a run against a damaged
-               file still shows something in the in-app log instead of
-               reading as clean. */
-            logIfDegradedCastIdHistory(historyErr, log);
+            /* #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
+               for why a lock-acquisition timeout must NOT be swallowed here.
+               Round 3 (C1) — but nor may it be thrown from HERE: that skipped
+               logCarriedForwardCharacters + the state.json rewrite below and
+               was then caught by `catch (persistErr)`, which reports the job
+               as a SUCCESS anyway. Park it; the rethrow is after this
+               persist's own catch. */
+            if (isLockAcquisitionTimeout(historyErr)) {
+              identityLockTimeout = historyErr;
+            } else {
+              console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+              /* #2214/#2201 — a degraded cast-id-history.json now makes the
+                 unconditional `dropSupersededIdsReclaimedByLiveCast` call
+                 above throw before `reconcileRejectEdgesOnDisk` is ever
+                 reached, so its own degraded-read log line never fires on
+                 this path. Emit the same user-facing wording here so a run
+                 against a damaged file still shows something in the in-app
+                 log instead of reading as clean. */
+              logIfDegradedCastIdHistory(historyErr, log);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -5495,6 +5529,14 @@ export async function runMainAnalyzerJob(
         console.error('[analysis] failed to persist .audiobook/* for', record.bookDir, persistErr);
         // Non-fatal — the analysis result still streams back to the client.
       }
+      /* #2260 round 3 (C1) — the deferred rethrow. OUTSIDE the try/catch
+         above on purpose: from in there it would be caught by
+         `catch (persistErr)` and the job would still end via
+         `send({kind:'result'})`. From here it reaches this job's top-level
+         catch, which classifies it and calls `endJob(job, {kind:'error', …})`
+         — the loud outcome the timeout exists to produce — while every write
+         in the persist has already completed. */
+      if (identityLockTimeout !== undefined) throw identityLockTimeout;
     }
 
     if (phase1DriftExceeded) {
@@ -6664,6 +6706,11 @@ export async function runSubsetAnalyzerJob(
        exceeded the threshold — same reasoning as the main route's
        persist block. */
     if (record.bookDir && !isAborted()) {
+      /* #2260 round 3 (C1) — see the main job's persist block for why a lock-
+         acquisition timeout is parked rather than thrown from inside this
+         try: thrown here it skips state.json and is then swallowed by
+         `catch (persistErr)`, leaving the job reporting success. */
+      let identityLockTimeout: unknown;
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: subsetReconciled.sentences,
@@ -6719,7 +6766,10 @@ export async function runSubsetAnalyzerJob(
           );
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write; wrapped so a throwing history
-             write can't skip cast.json / state.json. */
+             write can't skip cast.json / state.json. #2260 round 3 (C1) —
+             the one class this handler no longer swallows DEFERS out of the
+             block instead of skipping those writes; see the main job's
+             matching comment. */
           try {
             /* Wave 2 final-review finding 1(b) — every retirement recorded
                at this final write is filtered against the roster that was
@@ -6789,12 +6839,21 @@ export async function runSubsetAnalyzerJob(
             // the pre-rewrite verdict captured at the top of this block.
             await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            // #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
-            // for why a lock-acquisition timeout must NOT be swallowed here.
-            if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
-            console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
-            // #2214/#2201 — mirrors the main path's same-named handler above.
-            logIfDegradedCastIdHistory(historyErr, log);
+            /* #2260 round 2 — see reconcileRejectEdgesOnDisk's handler above
+               for why a lock-acquisition timeout must NOT be swallowed here.
+               Round 3 (C1) — and nor thrown from here; mirrors the main
+               job's same-named handler. */
+            if (isLockAcquisitionTimeout(historyErr)) {
+              identityLockTimeout = historyErr;
+            } else {
+              /* Kept on ONE line deliberately: analysis-reject-edge-reconcile
+                 .test.ts's [C13] source scan matches this exact call text to
+                 prove each catch handler reaches `logIfDegradedCastIdHistory`,
+                 and a wrapped call is invisible to it. */
+              console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+              // #2214/#2201 — mirrors the main path's same-named handler above.
+              logIfDegradedCastIdHistory(historyErr, log);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -6850,6 +6909,11 @@ export async function runSubsetAnalyzerJob(
           persistErr,
         );
       }
+      /* #2260 round 3 (C1) — the deferred rethrow, outside the try/catch so
+         it escapes `catch (persistErr)` and reaches this job's top-level
+         catch, which ends the job via `endJob(job, {kind:'error', …})`.
+         Mirrors the main job. */
+      if (identityLockTimeout !== undefined) throw identityLockTimeout;
     }
 
     if (subsetDriftExceeded) {

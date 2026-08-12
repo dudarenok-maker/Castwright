@@ -512,8 +512,15 @@ Design rationale:
   contention behind a long holder reaches the same error, so a firing timeout
   means "look at the holder first, then the rules". Best-effort `catch` blocks
   around identity writes let that one class through rather than swallowing it
-  (`isLockAcquisitionTimeout`); swallowing it would return 200 with `cast.json`
-  written and the retirement lost.
+  (`isLockAcquisitionTimeout`); swallowing it would report success with
+  `cast.json` written and the retirement lost. **Letting it through is not the
+  same as throwing where it was caught** — at a handler that sits mid-way
+  through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
+  throwing on the spot skips the writes that follow and lands in an enclosing
+  best-effort handler that reports success anyway, which is worse than
+  swallowing: loud nowhere, and now with a half-written book. Those sites park
+  the error in a local and rethrow it after the remaining writes have
+  completed, so the terminal outcome is an error AND disk is whole.
   `server/src/workspace/cast-lock.guard.test.ts`
   fails the build on a new unlocked site. Two allowlisted exceptions, each
   keyed on file **and** count so a further unlocked write in either still
