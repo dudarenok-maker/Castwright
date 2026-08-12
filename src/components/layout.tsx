@@ -581,6 +581,7 @@ export function Layout() {
         dispatch(libraryActions.hydrateError({
           message: err instanceof Error ? err.message : String(err),
           status: err instanceof ApiError ? err.status : undefined,
+          fromServer: err instanceof ApiError ? err.fromServer : false,
         }));
       });
     return () => {

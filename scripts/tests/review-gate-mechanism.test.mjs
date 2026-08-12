@@ -35,6 +35,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join } from 'node:path';
+import { readNormalized } from '../lib/read-normalized.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -44,7 +45,9 @@ const CLAUDE_MD_PATH = join(REPO_ROOT, 'CLAUDE.md');
 
 test('pr-review-gate/SKILL.md exists and does not disable model invocation', () => {
   assert.ok(existsSync(GATE_SKILL_PATH), `missing ${GATE_SKILL_PATH}`);
-  const src = readFileSync(GATE_SKILL_PATH, 'utf8');
+  // readNormalized, not a bare readFileSync: the frontmatter regex below
+  // requires a literal '\n---', which misses on a CRLF checkout (#2291).
+  const src = readNormalized(GATE_SKILL_PATH);
   const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(src);
   assert.ok(frontmatterMatch, 'pr-review-gate/SKILL.md has no --- frontmatter block');
   const frontmatter = frontmatterMatch[1];
@@ -67,7 +70,8 @@ test("pr-review-gate/SKILL.md's frontmatter name: matches its directory", () => 
   // frontmatter half, deriving the expected value from the directory itself
   // rather than a hardcoded literal.
   const expectedName = basename(dirname(GATE_SKILL_PATH));
-  const src = readFileSync(GATE_SKILL_PATH, 'utf8');
+  // readNormalized: see the comment on the same read above.
+  const src = readNormalized(GATE_SKILL_PATH);
   const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(src);
   assert.ok(frontmatterMatch, 'pr-review-gate/SKILL.md has no --- frontmatter block');
   const frontmatter = frontmatterMatch[1];
@@ -82,7 +86,9 @@ test("pr-review-gate/SKILL.md's frontmatter name: matches its directory", () => 
 });
 
 test("model-routing/SKILL.md's PR-review Mechanism bullet references pr-review-gate", () => {
-  const src = readFileSync(ROUTING_SKILL_PATH, 'utf8');
+  // readNormalized: the section regex below requires a literal '\n## ',
+  // which misses on a CRLF checkout (#2291).
+  const src = readNormalized(ROUTING_SKILL_PATH);
   // The file has TWO "- **Mechanism**:" bullets (the spec/plan review's
   // assumption-checker one, and the PR review's one) — scope to the section
   // heading first so a naive first-match regex can't silently grab the wrong

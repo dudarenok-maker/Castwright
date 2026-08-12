@@ -399,11 +399,146 @@ describe('devices route (srv-33)', () => {
     if (result.ok) expect(result.selfBind).toBe(false);
   });
 
+  // #2278 review round 3, Finding 4 — devices.ts:82's 403 body
+  // (`{ error: pairingOriginHint() }`) had NO assertion anywhere in this
+  // file. mayStartPairingSession's own internal isLoopbackRequest /
+  // isFriendlyHostnameRequest checks resolve lexically inside lan-auth.ts
+  // (same reason the mock above can't move its verdict — see the comment on
+  // the friendly-hostname test above), and supertest's connection is always
+  // loopback, so genuinely tripping this branch needs the same
+  // drive-the-router-directly technique with a fabricated non-loopback,
+  // non-friendly-hostname request.
+  it('pair-session 403s a genuinely non-loopback, non-friendly-hostname caller, with pairingOriginHint()\'s port-correct body', async () => {
+    // #2278 review round 4, Finding 5 — a NON-default port. Asserted against
+    // the file-level 8443 mock, this test passed unchanged against the
+    // pre-#2278 hardcoded const and so proved nothing about the port being
+    // dynamic. mayStartPairingSession runs first and reads no runtime, so
+    // pairingOriginHint() is the first (and only) consumer of this Once.
+    const { getLanRuntime } = await import('../lan-runtime.js');
+    vi.mocked(getLanRuntime).mockReturnValueOnce({ httpsActive: true, port: 9443 });
+    const req = {
+      method: 'POST',
+      url: '/devices/pair-session',
+      ip: '203.0.113.5',
+      socket: { remoteAddress: '203.0.113.5' },
+      headers: { host: '203.0.113.5' },
+      body: { label: 'x' },
+      app: { get: () => undefined },
+      query: {},
+    } as never;
+    let status = 200;
+    let body: { error?: string } = {};
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload as { error?: string };
+        return this;
+      },
+    } as never;
+    let nextErr: unknown;
+    devicesRouter(req, res, (err?: unknown) => {
+      nextErr = err;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (nextErr) throw nextErr;
+
+    expect(status).toBe(403);
+    expect(body.error).toBe(
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+    );
+  });
+
   it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {
     // Under supertest req.ip is loopback, so mock the gate to simulate a LAN client.
     vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);
     const res = await request(app).post('/api/devices').send({ label: 'x' });
     expect(res.status).toBe(403);
+  });
+
+  // #2269 — revoke is loopback-only, symmetric with mint: a non-loopback
+  // caller must be refused, and the record must survive the attempt (a 403
+  // with the write already done would pass a status-only assertion).
+  it('DELETE /api/devices/:id is loopback-only (403 from a non-loopback request, record stays live)', async () => {
+    const mk = await request(app).post('/api/devices').send({ label: 'Phone' });
+    const id = mk.body.id as string;
+
+    vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);
+    const res = await request(app).delete(`/api/devices/${id}`);
+    expect(res.status).toBe(403);
+
+    const list = await request(app).get('/api/devices');
+    const device = list.body.devices.find((d: { id: string }) => d.id === id);
+    expect(device).toBeTruthy();
+    expect(device.revoked).toBe(false);
+  });
+
+  // #2269 (real attacker case, review round 2) — the test above only proves the
+  // handler CONSULTS isLoopbackRequest; it mocks the verdict, so it stays green
+  // even if a future "fix" widened LOOPBACK (server/src/lan-auth.ts) to admit
+  // the :443 forwarder's peer 127.0.0.2 — which would re-open exactly the hole
+  // #2269 closed, since a LAN device reaching the app via castwright.local or
+  // the bare :443 forwarder presents that same peer IP. This drives the REAL
+  // isLoopbackRequest against a fabricated request carrying that peer + Host,
+  // the same shape as the pair-session security case above (#2257) and
+  // lan-auth.pairing.test.ts's `mkReq` — supertest's real TCP connection can't
+  // be made to present that peer IP. Asserts the 403 BODY too, not just the
+  // status, since openapi.yaml now promises a specific message shape.
+  it('DELETE reached via the friendly hostname (peer 127.0.0.2, Host castwright.local) is refused, with the record surviving and the 403 body intact (#2269 security case)', async () => {
+    const mk = await request(app).post('/api/devices').send({ label: 'Phone' });
+    const id = mk.body.id as string;
+
+    const req = {
+      method: 'DELETE',
+      url: `/devices/${id}`,
+      ip: '127.0.0.2',
+      socket: { remoteAddress: '127.0.0.2' },
+      headers: { host: 'castwright.local' },
+      app: { get: () => undefined },
+      query: {},
+    } as never;
+    let status = 200;
+    let body: { error?: string } = {};
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload as { error?: string };
+        return this;
+      },
+    } as never;
+    let nextErr: unknown;
+    devicesRouter(req, res, (err?: unknown) => {
+      nextErr = err;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (nextErr) throw nextErr;
+
+    expect(status).toBe(403);
+    expect(body.error).toBe('Devices can only be revoked from the host UI.');
+
+    const list = await request(app).get('/api/devices');
+    const device = list.body.devices.find((d: { id: string }) => d.id === id);
+    expect(device).toBeTruthy();
+    expect(device.revoked).toBe(false);
+  });
+
+  // Sanity counterpart — a genuinely loopback caller can still revoke.
+  // isLoopbackRequest's mock forwards to the real implementation by default,
+  // and supertest requests are loopback.
+  it('DELETE /api/devices/:id still succeeds from a loopback caller', async () => {
+    const mk = await request(app).post('/api/devices').send({ label: 'Phone' });
+    const id = mk.body.id as string;
+
+    const res = await request(app).delete(`/api/devices/${id}`);
+    expect(res.status).toBe(200);
+
+    const list = await request(app).get('/api/devices');
+    expect(list.body.devices.find((d: { id: string }) => d.id === id).revoked).toBe(true);
   });
 
   it('caps an over-long device label at 64 chars', async () => {

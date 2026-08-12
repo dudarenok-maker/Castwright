@@ -287,6 +287,7 @@ forwarder-down URL (#2258). Both are things unit tests provably cannot reach.
 Two new follow-ups came out of it —
 [#2269](https://github.com/dudarenok-maker/Castwright/issues/2269)
 (`DELETE /api/devices/:id` has no loopback gate, pre-existing, found by the
-review attacking the self-bind trust boundary) and
+review attacking the self-bind trust boundary — filed as #2269, delivered by
+PR #2280) and
 [#2270](https://github.com/dudarenok-maker/Castwright/issues/2270) (retire the
 last two mock-only descriptor fictions).

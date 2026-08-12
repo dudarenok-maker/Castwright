@@ -2256,7 +2256,9 @@ export interface paths {
          * Mint a new per-device token (returned once) (srv-33)
          * @description Generates a fresh, individually-revocable device token. The raw token is
          *     returned ONCE in this response (only its SHA-256 is persisted) — the
-         *     caller must surface it to the user immediately.
+         *     caller must surface it to the user immediately. LOOPBACK-ONLY (defense
+         *     in depth: a stolen browser cookie that could mint a fresh, durable
+         *     device token would survive revoking the stolen one).
          */
         post: operations["createDevice"];
         delete?: never;
@@ -2275,7 +2277,12 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Revoke a paired device (srv-33) */
+        /**
+         * Revoke a paired device (srv-33)
+         * @description LOOPBACK-ONLY (#2269), symmetric with `POST /api/devices`: a stolen
+         *     browser cookie that cannot mint a fresh token must equally not be
+         *     able to revoke the legitimate owner's.
+         */
         delete: operations["revokeDevice"];
         options?: never;
         head?: never;
@@ -9779,6 +9786,28 @@ export interface operations {
                     };
                 };
             };
+            /** @description Devices can only be minted from the host UI */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+            /** @description Device token store is degraded (unreadable/unwritable) — see error for the reason */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     revokeDevice: {
@@ -9803,12 +9832,34 @@ export interface operations {
                     };
                 };
             };
+            /** @description Devices can only be revoked from the host UI */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
             /** @description Unknown device */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Device token store is degraded (unreadable/unwritable) — see error for the reason */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };

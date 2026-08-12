@@ -5,8 +5,8 @@
    a loopback caller (the local admin UI), can mint/list/revoke devices.
 
      GET    /api/devices        — list paired devices (no secrets)
-     POST   /api/devices        — mint a new per-device token (returned ONCE)
-     DELETE /api/devices/:id     — revoke a device
+     POST   /api/devices        — mint a new per-device token (returned ONCE) (loopback-only)
+     DELETE /api/devices/:id     — revoke a device (loopback-only)
      POST   /api/devices/pair-session — create a QR pairing session (loopback-only)
 
    Reconcile, not absorb: the srv-20 shared secret keeps working; this is the
@@ -27,7 +27,7 @@ import {
   isLanTokenEnforced,
   isLoopbackRequest,
   mayStartPairingSession,
-  PAIRING_ORIGIN_HINT,
+  pairingOriginHint,
 } from '../lan-auth.js';
 import { enumerateLanUrls } from './export-lan.js';
 import { getLanRuntime } from '../lan-runtime.js';
@@ -79,7 +79,7 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
 // the cookie is meaningful + HTTPS. Bare-LAN-IP access stays loopback-only.
 devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   if (!mayStartPairingSession(req)) {
-    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
+    res.status(403).json({ error: pairingOriginHint() });
     return;
   }
   if (!isLanTokenEnforced()) {
@@ -125,7 +125,15 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   res.json({ url: `https://${host}/#/pair?c=${code}`, code, expiresAt, friendlyUrl });
 });
 
+// revoke — LOOPBACK-ONLY, symmetric with the mint route above (#2269): a
+// stolen browser cookie that cannot mint a fresh token must equally not be
+// able to revoke the legitimate owner's, which is the denial-of-service half
+// of the same threat model the mint comment names.
 devicesRouter.delete('/devices/:id', async (req: Request, res: Response) => {
+  if (!isLoopbackRequest(req)) {
+    res.status(403).json({ error: 'Devices can only be revoked from the host UI.' });
+    return;
+  }
   try {
     const ok = await revokeDevice(req.params.id);
     if (!ok) {
