@@ -59,8 +59,25 @@ describe('main.tsx router wiring (fe-56)', () => {
       expect(domRouterProviderMock).toHaveBeenCalled();
       expect(bareRouterProviderMock).not.toHaveBeenCalled();
     },
-    // Importing main.tsx pulls the entire application dependency graph into jsdom (~5s on an idle box).
-    // This is genuine work required to verify the real RouterProvider import, not a bug to optimize away.
+    /* #2276 — the `await import('./main')` above sits INSIDE the test body, so
+       transforming and loading the app's whole dependency graph into jsdom is
+       billed against testTimeout rather than against a hook. That is the whole
+       reason this test needs its own budget.
+
+       Measured cost is ~2.6-2.9s (7 runs across two sessions, `tests` from
+       vitest's own summary), NOT the ~5s an earlier revision of this comment
+       claimed. #2276 read `tests 5.00s` off a run that was either loaded or had
+       already timed out at the 5000ms default, and that figure was never
+       reproduced — so the "zero timing margin" premise in the issue is wrong
+       too; the real margin against the default was ~1.8x.
+
+       30s is therefore deliberate headroom for a loaded box (this repo runs
+       concurrent batteries across worktrees), NOT an estimate of what the test
+       costs. Do not tune it down toward the measured cost — that would restore
+       the failure mode #2276 was filed for.
+
+       Whether the ~2.7s is reducible is untested: the issue listed "find out
+       why and reduce it" as an option and nobody ran it. Unknown, not refuted. */
     30_000
   );
 });
