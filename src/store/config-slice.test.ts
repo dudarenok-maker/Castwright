@@ -30,7 +30,10 @@ import { api } from '../lib/api';
    fiction this fixture used to use (this fixture is otherwise
    self-contained and unconnected to the real registry — see
    api.config.test.ts for the tests that actually exercise mock/registry
-   parity). */
+   parity). Per advanced.test.tsx's stated policy for this same key: a real
+   descriptor KEY carries its real per-key registry metadata (label/apply/
+   risk/default), so a reader can't copy a wrong fact off it — only `group`
+   below is fixture-local. */
 const NUM_KEY = 'tts.qwen.codecChunkSize';
 
 /* ── fixtures ───────────────────────────────────────────────────────────── */
@@ -43,12 +46,12 @@ const MOCK_DESCRIPTORS: KnobDescriptor[] = [
   {
     key: NUM_KEY,
     group: 'tts',
-    label: 'Codec chunk size',
+    label: 'Qwen codec chunk size',
     help: 'Frames.',
     type: 'integer',
     min: 1,
     apply: 'restart-sidecar',
-    risk: 'low',
+    risk: 'high',
     isPrompt: false,
     default: 300,
   },
