@@ -399,6 +399,58 @@ describe('devices route (srv-33)', () => {
     if (result.ok) expect(result.selfBind).toBe(false);
   });
 
+  // #2278 review round 3, Finding 4 — devices.ts:82's 403 body
+  // (`{ error: pairingOriginHint() }`) had NO assertion anywhere in this
+  // file. mayStartPairingSession's own internal isLoopbackRequest /
+  // isFriendlyHostnameRequest checks resolve lexically inside lan-auth.ts
+  // (same reason the mock above can't move its verdict — see the comment on
+  // the friendly-hostname test above), and supertest's connection is always
+  // loopback, so genuinely tripping this branch needs the same
+  // drive-the-router-directly technique with a fabricated non-loopback,
+  // non-friendly-hostname request.
+  it('pair-session 403s a genuinely non-loopback, non-friendly-hostname caller, with pairingOriginHint()\'s port-correct body', async () => {
+    // #2278 review round 4, Finding 5 — a NON-default port. Asserted against
+    // the file-level 8443 mock, this test passed unchanged against the
+    // pre-#2278 hardcoded const and so proved nothing about the port being
+    // dynamic. mayStartPairingSession runs first and reads no runtime, so
+    // pairingOriginHint() is the first (and only) consumer of this Once.
+    const { getLanRuntime } = await import('../lan-runtime.js');
+    vi.mocked(getLanRuntime).mockReturnValueOnce({ httpsActive: true, port: 9443 });
+    const req = {
+      method: 'POST',
+      url: '/devices/pair-session',
+      ip: '203.0.113.5',
+      socket: { remoteAddress: '203.0.113.5' },
+      headers: { host: '203.0.113.5' },
+      body: { label: 'x' },
+      app: { get: () => undefined },
+      query: {},
+    } as never;
+    let status = 200;
+    let body: { error?: string } = {};
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload as { error?: string };
+        return this;
+      },
+    } as never;
+    let nextErr: unknown;
+    devicesRouter(req, res, (err?: unknown) => {
+      nextErr = err;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (nextErr) throw nextErr;
+
+    expect(status).toBe(403);
+    expect(body.error).toBe(
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+    );
+  });
+
   it('admin mint POST /api/devices is loopback-only (403 from a non-loopback request)', async () => {
     // Under supertest req.ip is loopback, so mock the gate to simulate a LAN client.
     vi.mocked(lanAuth.isLoopbackRequest).mockReturnValueOnce(false);

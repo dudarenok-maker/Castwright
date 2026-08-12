@@ -27,7 +27,7 @@ import {
   isLanTokenEnforced,
   isLoopbackRequest,
   mayStartPairingSession,
-  PAIRING_ORIGIN_HINT,
+  pairingOriginHint,
 } from '../lan-auth.js';
 import { enumerateLanUrls } from './export-lan.js';
 import { getLanRuntime } from '../lan-runtime.js';
@@ -79,7 +79,7 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
 // the cookie is meaningful + HTTPS. Bare-LAN-IP access stays loopback-only.
 devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
   if (!mayStartPairingSession(req)) {
-    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
+    res.status(403).json({ error: pairingOriginHint() });
     return;
   }
   if (!isLanTokenEnforced()) {
