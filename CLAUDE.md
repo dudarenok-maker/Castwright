@@ -503,8 +503,18 @@ Design rationale:
   derived from it — wrapping only the write buys nothing at all; (3) two or
   more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
   order is **`design` → `library-voice` → `cast`** — never acquire an earlier
-  class while holding a later one, or two requests hang forever with no
-  timeout and no diagnostic. `server/src/workspace/cast-lock.guard.test.ts`
+  class while holding a later one, or two requests deadlock. Since #2260 that
+  no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
+  throws a `LockAcquisitionTimeoutError`
+  (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
+  diagnostic, **not** a licence to violate the order — the budget is per
+  acquisition, so a nested path's worst case is depth × 10s, and ORDINARY
+  contention behind a long holder reaches the same error, so a firing timeout
+  means "look at the holder first, then the rules". Best-effort `catch` blocks
+  around identity writes let that one class through rather than swallowing it
+  (`isLockAcquisitionTimeout`); swallowing it would return 200 with `cast.json`
+  written and the retirement lost.
+  `server/src/workspace/cast-lock.guard.test.ts`
   fails the build on a new unlocked site. Two allowlisted exceptions, each
   keyed on file **and** count so a further unlocked write in either still
   fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and

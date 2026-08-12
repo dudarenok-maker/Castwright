@@ -2109,10 +2109,12 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: 
    permanent hang (see cast-lock.ts's header). NOTE this path is the deepest
    nesting in the codebase: it holds `library-voice:<uuid>` while
    `clearLibraryVoiceReferences` takes a cast lock per confirmed book, so its
-   worst-case acquisition budget is (N + 1) × 10s for N books — and on a large
-   library ordinary contention here is the most likely way a user ever meets
-   that error, which is why `/assign`'s 500 handler is where the raw message
-   surfaces. */
+   worst-case acquisition budget is (N + 1) × 10s for N books. It is also the
+   longest holder of `library-voice:<uuid>` (see file-lock.ts's budget note),
+   so on a large library a concurrent `/assign` on the same uuid is the most
+   likely way a user ever meets that error WITHOUT any rule having been broken
+   — and `/assign`'s catch surfaces `(e as Error).message` verbatim in its 500,
+   so what they see is the raw lock-timeout string. */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
   const { voiceUuid } = req.params;
   try {

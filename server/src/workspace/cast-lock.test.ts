@@ -52,10 +52,11 @@ describe('withCastLocks', () => {
     /* THE test for .sort(). Both hold their first lock across an await before
        asking for the second — the classic AB/BA setup. Without sorting this
        deadlocks. Since #2260 withKeyLock bounds each acquisition at 10s and
-       throws, so the unsorted version would fail rather than hang forever —
-       but 10s is still well past this file's own settle()-based race below,
-       and past vitest's 15s testTimeout once the two acquisitions nest, so the
-       observable pre-sort symptom here is still a stuck test. */
+       throws, so the unsorted version fails rather than hangs forever — but
+       this test never gets that far: the 2000ms `DEADLOCK` sentinel below wins
+       the race long before either waiter's 10s budget expires, so the
+       observable pre-sort symptom here is unchanged (`'DEADLOCK'`), and the
+       timeout is not what this test proves. */
     const hold = async () => {
       await settle();
       return 'ok';

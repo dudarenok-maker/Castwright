@@ -35,8 +35,11 @@ const chains = new Map<string, Promise<unknown>>();
    rather than share a deadline. A 2-deep path whose outer acquisition takes
    9s reaches its inner deadline at ~19s, past vitest's 15s, and the
    diagnostic-free `Test timed out in 15000ms` wins after all. That is a known,
-   accepted gap in the tie-break, NOT a reason to raise or lower the budget:
-   no value fixes it, because the depth is unbounded (see below).
+   accepted gap in the tie-break, NOT a reason to raise or lower the budget. A
+   SMALLER budget would not close it either, only move the crossover to a
+   deeper nesting: the deepest path here is voice-library.ts's DELETE at N+1
+   acquisitions for N confirmed books (see below), so no fixed value clears
+   vitest's 15s at every library size.
 
    NOTE the nesting rule (review round 2, N2 -- this is general, not a
    withCastLocks quirk): every nested acquisition adds one full budget, so the
