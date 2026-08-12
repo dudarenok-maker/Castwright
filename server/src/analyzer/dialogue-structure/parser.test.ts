@@ -344,11 +344,65 @@ describe('parser — #2288 an apostrophe is not a closing quote (en)', () => {
     expect(speechOf('‘’Tis nothing,’ he said.')).toEqual(['’Tis nothing,']);
   });
 
-  // controls — these already pass on main and must keep passing
+  // controls — each input has exactly one closer-glyph occurrence per
+  // opener, so the never-delete fallback restores that same closer even if
+  // isRealCloser were mutated to reject unconditionally: these two tests
+  // pass either way and do NOT discriminate accept from reject. What they
+  // DO guard: a broken opener set, a broken sort/cursor loop, or the wrong
+  // glyphs entering APOSTROPHE_SHAPED. The five tests above are the ones
+  // that actually distinguish "closer accepted" from "closer rejected".
   it('CONTROL: single-quoted turns with no apostrophe are unchanged', () => {
     expect(speechOf('‘Hello,’ he said. ‘Goodbye,’ she said.')).toEqual(['Hello,', 'Goodbye,']);
   });
   it('CONTROL: a double-quoted turn containing a contraction is unchanged', () => {
     expect(speechOf('“I don’t know,” she said.')).toEqual(['I don’t know,']);
+  });
+});
+
+describe('parser — #2288 a rule may move a run boundary, never delete a run', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // All three bodies below are REAL corpus paragraphs from
+  // se/anne-parrish_the-perennial-bachelor.epub. Each is an inner quotation
+  // whose ONLY `’` is a contraction, so every closer is rejected and the run
+  // vanishes unless the fallback restores it. Verified: each returns [] under
+  // the Step 3 mutation.
+  it('a quotation whose only closer is a contraction keeps its (truncated) turn', () => {
+    expect(speechOf('“ ‘Shoo fly! Don’t bother me!')).toEqual(['Shoo fly! Don']);
+  });
+
+  it('the same, for a possessive', () => {
+    expect(speechOf('“ ‘Ping Wing, the Pieman’s son,')).toEqual(['Ping Wing, the Pieman']);
+  });
+
+  it('the same, for a dialect elision', () => {
+    expect(speechOf('“ ‘The strife is o’er, the battle done;')).toEqual(['The strife is o']);
+  });
+
+  it('a turn whose only closer is an apostrophe is truncated, never dropped', () => {
+    // `’` in O’Brien is the sole `’`; the fallback restores it as the closer.
+    // Without the fallback the outer run vanishes and the NESTED “hi” is
+    // promoted to a top-level turn — a silent, wrong speaker change.
+    expect(speechOf('‘He said “hi” to O’Brien.')).toEqual(['He said “hi” to O']);
+  });
+
+  it('the same, for a leading-elision-only paragraph', () => {
+    expect(speechOf('‘He said “hi” ’cause he was late.')).toEqual(['He said “hi” ']);
+  });
+
+  it('every paragraph with at least one run keeps at least one run', () => {
+    const bodies = [
+      '‘I don’t know,’ she said.',
+      '‘’Tis nothing,’ he said.',
+      '‘Give ’em back,’ she said.',
+      '‘He said “hi” to O’Brien.',
+      '“ ‘Ping Wing, the Pieman’s son,',
+    ];
+    for (const body of bodies) expect(speechOf(body).length).toBeGreaterThan(0);
   });
 });
