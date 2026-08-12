@@ -33,6 +33,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const SERVER_ROOT = join(REPO_ROOT, 'server');
 
+// process.exit() truncates pending async stdout writes on POSIX pipes (sync
+// on Windows, async on Linux/macOS — see build-release-zip.mjs's fix for
+// #2297/the same defect class). main()'s per-chapter loop can print many
+// lines before the invocation guard at the bottom used to call
+// process.exit() on completion. CliError carries the intended exit code so
+// that guard can set process.exitCode instead, without calling
+// process.exit() anywhere.
+class CliError extends Error {
+  constructor(msg, code = 1) {
+    super(msg);
+    this.code = code;
+  }
+}
+
 function parseArgs(argv) {
   const opts = { dryRun: false, workspace: null, filter: null };
   for (let i = 0; i < argv.length; i += 1) {
@@ -48,7 +62,7 @@ function parseArgs(argv) {
       printHelpAndExit(0);
     } else {
       console.error(`relufs-existing: unknown flag "${a}". Pass --help for usage.`);
-      process.exit(2);
+      throw new CliError(`unknown flag "${a}"`, 2);
     }
   }
   return opts;
@@ -67,7 +81,7 @@ Options:
                     or ../audiobook-workspace relative to the repo root)
   --filter <sub>    only chapters whose relative path contains <sub>
   --help, -h        print this help and exit`);
-  process.exit(code);
+  throw new CliError('help', code);
 }
 
 /* Resolve the workspace root the same way server/src/workspace/paths.ts does
@@ -330,14 +344,25 @@ export async function main(cliOpts = {}) {
 // the invocation crosses a symlink/junction (#2291).
 const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) {
-  const opts = parseArgs(process.argv.slice(2));
-  main(opts).then(
-    (result) => {
-      process.exit(result.failed > 0 ? 1 : 0);
-    },
-    (err) => {
+  try {
+    const opts = parseArgs(process.argv.slice(2));
+    main(opts).then(
+      (result) => {
+        process.exitCode = result.failed > 0 ? 1 : 0;
+      },
+      (err) => {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+      },
+    );
+  } catch (err) {
+    // parseArgs()'s CliError (--help or an unknown flag) already printed its
+    // own message before throwing; only print here for something unexpected.
+    if (err instanceof CliError) {
+      process.exitCode = err.code;
+    } else {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
-    },
-  );
+      process.exitCode = 1;
+    }
+  }
 }

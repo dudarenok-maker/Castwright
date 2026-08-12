@@ -59,6 +59,15 @@ export const MANIFEST = {
     // release; setup-versioned-install.mjs copies it to the install root once.
     'launch.mjs',
 
+    // #2291 — the shared direct-execution-guard helper. launch.mjs (above) and
+    // several already-shipped scripts/*.mjs runtime entry points (start-app-prod,
+    // restart-after-upgrade, setup-versioned-install) import this at the top
+    // level, so it MUST ship or those scripts crash at import time in a real
+    // install. Pinned by scripts/tests/entry-point-guard-convention.test.mjs's
+    // "shared helper ships in the release zip" assertion — do not remove this
+    // entry without removing that assertion first.
+    'scripts/lib/is-main-module.mjs',
+
     // Frontend source + pre-built bundle
     'src/**',
     'dist/**',
@@ -255,7 +264,7 @@ function globMatch(p, pattern) {
 }
 
 function parseArgs(argv) {
-  const out = { version: null, out: null, dryRun: false, notesFile: null };
+  const out = { version: null, out: null, dryRun: false, notesFile: null, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--version') out.version = argv[++i];
@@ -263,18 +272,32 @@ function parseArgs(argv) {
     else if (a === '--notes-file') out.notesFile = argv[++i];
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--help' || a === '-h') {
-      process.stdout.write(
-        'Usage: node scripts/build-release-zip.mjs --version vX.Y.Z [--out path] [--dry-run]\n',
-      );
-      process.exit(0);
+      // Defer the actual print + exit to main() — see the note by
+      // CliError/die below on why this file no longer calls process.exit()
+      // directly at all.
+      out.help = true;
+      break;
     } else die(`Unknown argument: ${a}`);
   }
   return out;
 }
 
+// process.exit() terminates before Node flushes pending async stdout writes
+// (stdout to a pipe is synchronous on Windows but ASYNC on Linux/macOS — see
+// https://nodejs.org/api/process.html#a-note-on-process-io). That silently
+// truncated this script's --dry-run output on GitHub's ubuntu-latest (PR
+// #2297) while looking fine on every Windows dev box. Fixed by never calling
+// process.exit() here: die() sets process.exitCode and throws a CliError
+// instead, so the call stack unwinds back to the single catch at the bottom
+// of this file and the process exits naturally once the event loop drains —
+// this script holds no open handles (no server/timer/child process), so
+// nothing keeps it alive past that.
+class CliError extends Error {}
+
 function die(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
-  process.exit(1);
+  process.exitCode = 1;
+  throw new CliError(msg);
 }
 
 function info(msg) {
@@ -305,6 +328,12 @@ async function walkRepo() {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(
+      'Usage: node scripts/build-release-zip.mjs --version vX.Y.Z [--out path] [--dry-run]\n',
+    );
+    return;
+  }
   if (!args.version) die('--version is required (e.g. --version v1.2.3)');
   if (!/^v\d+\.\d+\.\d+(-[\w.-]+)?$/.test(args.version)) {
     die(`--version must look like vMAJOR.MINOR.PATCH[-suffix], got "${args.version}"`);
@@ -362,7 +391,7 @@ async function main() {
       info(`  ${companionApkZipEntry(args.version)}  (${statSync(apkSrc).size} bytes)`);
     }
     info('[DRY-RUN] No zip written.');
-    process.exit(0);
+    return;
   }
 
   info(`[ZIP] writing ${outPath}`);
@@ -396,7 +425,6 @@ async function main() {
 
   const finalSize = statSync(outPath).size;
   info(`[OK] ${outPath}  (${Math.round(finalSize / 1024)} KB)`);
-  process.exit(0);
 }
 
 // Only run the CLI if invoked directly (not when imported by tests). See
@@ -404,5 +432,13 @@ async function main() {
 // the invocation crosses a symlink/junction (#2291).
 const invokedAsCli = isDirectlyInvoked(import.meta.url);
 if (invokedAsCli) {
-  main().catch((err) => die(err.stack ?? String(err)));
+  main().catch((err) => {
+    // die() already wrote its own [FAIL] line and set exitCode before
+    // throwing a CliError; only print here for a genuinely unexpected error
+    // (e.g. a rejected archiver promise) that never went through die().
+    if (!(err instanceof CliError)) {
+      process.stderr.write(`[FAIL] ${err.stack ?? String(err)}\n`);
+    }
+    process.exitCode = 1;
+  });
 }

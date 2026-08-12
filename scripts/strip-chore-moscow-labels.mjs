@@ -26,7 +26,13 @@ const MOSCOW_TIERS = ['moscow:must', 'moscow:should', 'moscow:could'];
 const OPS_17_NUMBER = 790;
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
-function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exit(1); }
+// process.exit() truncates pending async stdout writes on POSIX pipes (sync
+// on Windows, async on Linux/macOS — see build-release-zip.mjs's fix for
+// #2297/the same defect class). die() throws instead of exiting directly so
+// the process only ever exits naturally, once the event loop drains; see the
+// entry guard at the bottom of this file for the single catch.
+class CliError extends Error {}
+function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exitCode = 1; throw new CliError(msg); }
 function ghAvailable() {
   const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
@@ -45,12 +51,13 @@ function listTrackingChores() {
 }
 
 function parseArgs(argv) {
-  const out = { apply: false };
+  const out = { apply: false, help: false };
   for (const a of argv) {
     if (a === '--apply') out.apply = true;
     else if (a === '--help' || a === '-h') {
-      info('Usage: node scripts/strip-chore-moscow-labels.mjs [--apply]');
-      process.exit(0);
+      // Defer the print + exit to main() — see the CliError/die note above.
+      out.help = true;
+      break;
     } else die(`Unknown argument: ${a}`);
   }
   return out;
@@ -58,6 +65,10 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    info('Usage: node scripts/strip-chore-moscow-labels.mjs [--apply]');
+    return;
+  }
   if (!ghAvailable()) die('`gh` not found. Install the GitHub CLI + `gh auth login`.');
 
   const byTier = {};
@@ -80,7 +91,7 @@ async function main() {
 
   if (!args.apply) {
     info('\n[DRY-RUN] Nothing changed. Re-run with --apply to strip labels + add tracking + set board Status.');
-    process.exit(0);
+    return;
   }
   if (!existsSync(CONFIG_PATH)) die(`Not found: ${CONFIG_PATH} — run the Task 1 board setup first.`);
   const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -125,5 +136,12 @@ async function main() {
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
-  await main();
+  main().catch((err) => {
+    // die() already wrote its own [FAIL] line and set exitCode before
+    // throwing a CliError; only print here for a genuinely unexpected error.
+    if (!(err instanceof CliError)) {
+      process.stderr.write(`[FAIL] ${err.stack ?? String(err)}\n`);
+    }
+    process.exitCode = 1;
+  });
 }

@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir as osHomedir } from 'node:os';
+import { isDirectlyInvoked } from './scripts/lib/is-main-module.mjs';
 
 const SEMVER_DIR = /^v(\d+)\.(\d+)\.(\d+)$/;
 
@@ -161,6 +162,7 @@ function main() {
 }
 
 // CLI guard — only run main() when invoked directly, not when imported by tests.
-const invokedDirectly =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) main();

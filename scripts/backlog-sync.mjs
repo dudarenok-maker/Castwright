@@ -220,9 +220,17 @@ const LEADING_ID = /^(fe|srv|side|ops|fs|app)-(\d+)\s*—\s*(.*)$/;
 function info(msg) {
   process.stdout.write(`${msg}\n`);
 }
+// process.exit() truncates pending async stdout writes on POSIX pipes (sync
+// on Windows, async on Linux/macOS — see build-release-zip.mjs's fix for
+// #2297/the same defect class). die() throws instead of exiting directly so
+// the process only ever exits naturally, once the event loop drains; see the
+// entry guard at the bottom of this file for the single catch.
+class CliError extends Error {}
+
 function die(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
-  process.exit(1);
+  process.exitCode = 1;
+  throw new CliError(msg);
 }
 function ghAvailable() {
   const r = ghSpawn(['--version'], { stdio: 'ignore' });
@@ -368,12 +376,13 @@ function printUnifiedDiff(original, proposed) {
 }
 
 function parseArgs(argv) {
-  const out = { apply: false };
+  const out = { apply: false, help: false };
   for (const a of argv) {
     if (a === '--apply') out.apply = true;
     else if (a === '--help' || a === '-h') {
-      info('Usage: node scripts/backlog-sync.mjs [--apply]');
-      process.exit(0);
+      // Defer the print + exit to main() — see the CliError/die note above.
+      out.help = true;
+      break;
     } else die(`Unknown argument: ${a}`);
   }
   return out;
@@ -381,6 +390,10 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    info('Usage: node scripts/backlog-sync.mjs [--apply]');
+    return;
+  }
   if (!existsSync(CONFIG_PATH)) die(`Not found: ${CONFIG_PATH} — run the Task 1 board setup first.`);
   if (!ghAvailable()) die('`gh` not found. Install the GitHub CLI + `gh auth login`.');
 
@@ -397,7 +410,7 @@ async function main() {
   if (!args.apply) {
     printUnifiedDiff(original, proposed);
     info('\n[DRY-RUN] docs/BACKLOG.md not modified. Re-run with --apply to write it.');
-    process.exit(0);
+    return;
   }
 
   writeFileSync(BACKLOG_PATH, proposed, 'utf8');
@@ -405,5 +418,12 @@ async function main() {
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
-  await main();
+  main().catch((err) => {
+    // die() already wrote its own [FAIL] line and set exitCode before
+    // throwing a CliError; only print here for a genuinely unexpected error.
+    if (!(err instanceof CliError)) {
+      process.stderr.write(`[FAIL] ${err.stack ?? String(err)}\n`);
+    }
+    process.exitCode = 1;
+  });
 }

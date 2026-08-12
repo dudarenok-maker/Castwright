@@ -37,7 +37,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, rmdirSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, rmdirSync, unlinkSync, writeFileSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -74,16 +74,24 @@ function probeLinkSupport() {
 
 const LINK_SKIP_REASON = probeLinkSupport();
 
-function withRepoLink(fn) {
+// Generalized over withRepoLink's original hardcoded REPO_ROOT so
+// start-app-prod.mjs's fixture (below) can be junctioned too — same
+// container/link/cleanup shape, just parameterized on which real directory
+// the link points at.
+function withLinkTo(realRoot, fn) {
   const container = mkdtempSync(join(tmpdir(), 'entry-point-guards-link-'));
   const linkPath = join(container, 'repo-link');
   try {
-    symlinkSync(REPO_ROOT, linkPath, IS_WIN ? 'junction' : 'dir');
+    symlinkSync(realRoot, linkPath, IS_WIN ? 'junction' : 'dir');
     return fn(linkPath);
   } finally {
     removeLink(linkPath);
     rmSync(container, { recursive: true, force: true });
   }
+}
+
+function withRepoLink(fn) {
+  return withLinkTo(REPO_ROOT, fn);
 }
 
 // --- ci-scope.mjs ---
@@ -200,45 +208,74 @@ test('build-release-zip.mjs imported as a module does not execute main() (no arg
 //
 // main() spawns a real production server once past its dist/server bundle
 // checks — not something a unit test should risk triggering for real. The
-// "dist/index.html missing" failure path is deterministic, side-effect-free
-// (no port probe, no spawn — it returns before either), and reliably true
-// in an un-built checkout (dist/ is gitignored). Skip loudly rather than
-// risk spawning a real server if this checkout happens to have a build.
-const DIST_INDEX = join(REPO_ROOT, 'dist', 'index.html');
-const START_APP_PROD_SKIP_REASON = existsSync(DIST_INDEX)
-  ? `dist/index.html exists in this checkout (a build was run) — the deterministic ` +
-    `"Frontend bundle missing" failure path this test relies on no longer applies; ` +
-    `skipping rather than risk spawning a real production server as a side effect`
-  : false;
+// "dist/index.html missing" failure path is deterministic and side-effect-free
+// (no port probe, no spawn — it returns before either), so it's used as the
+// observable proof that main() ran through the junction.
+//
+// Previously this test SKIPPED whenever the real checkout's dist/index.html
+// existed (i.e. after `npm run build`) — which is essentially every developer
+// box, so the coverage evaporated everywhere but a pristine clone. Node's ESM
+// loader realpaths the main entry module before computing import.meta.url
+// (see scripts/lib/is-main-module.mjs's own comment on this), so
+// start-app-prod.mjs's own __dirname — and therefore its repoRoot and its
+// dist/index.html check — always resolves to the REAL location of the
+// invoked file, not the junction path. Junctioning only a *container* around
+// the real script can't relocate that. So instead this builds a standalone
+// fixture: a real copy of start-app-prod.mjs plus its one relative import
+// (lib/is-main-module.mjs) and a minimal package.json, at a fresh temp root
+// that provably has no dist/ folder — then junctions TO that fixture root.
+// This still exercises the #2291 guard through a real junction exactly like
+// the other four tests in this file; it just no longer depends on whether
+// this checkout happens to have been built.
+function buildStartAppProdFixture() {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'start-app-prod-fixture-'));
+  mkdirSync(join(fixtureRoot, 'scripts', 'lib'), { recursive: true });
+  cpSync(
+    join(REPO_ROOT, 'scripts', 'start-app-prod.mjs'),
+    join(fixtureRoot, 'scripts', 'start-app-prod.mjs'),
+  );
+  cpSync(
+    join(REPO_ROOT, 'scripts', 'lib', 'is-main-module.mjs'),
+    join(fixtureRoot, 'scripts', 'lib', 'is-main-module.mjs'),
+  );
+  // start-app-prod.mjs reads package.json's version at import time.
+  writeFileSync(join(fixtureRoot, 'package.json'), JSON.stringify({ version: '0.0.0-test' }));
+  return fixtureRoot;
+}
 
 test(
   'start-app-prod.mjs invoked through a junction/symlink still runs main() (#2291)',
-  { skip: LINK_SKIP_REASON ?? START_APP_PROD_SKIP_REASON },
+  { skip: LINK_SKIP_REASON ?? false },
   () => {
-    withRepoLink((linkPath) => {
-      const target = join(linkPath, 'scripts', 'start-app-prod.mjs');
-      const runDir = mkdtempSync(join(tmpdir(), 'start-app-prod-run-'));
-      const logDir = mkdtempSync(join(tmpdir(), 'start-app-prod-log-'));
-      try {
-        const r = spawnSync(process.execPath, [target], {
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            LAN_HTTPS: '0', // opt out of mkcert provisioning — no system side effects
-            APP_RUN_DIR: runDir,
-            APP_LOG_DIR: logDir,
-          },
-        });
-        // The pre-fix bug through a junction was exit 0 with zero output — a
-        // launcher that silently does nothing, which is worse than a crash.
-        assert.equal(r.status, 1, `expected the deterministic dist-missing failure; stdout: ${r.stdout} stderr: ${r.stderr}`);
-        assert.notEqual(r.stderr.length, 0, 'expected non-empty stderr; got 0 bytes (the #2291 silent no-op)');
-        assert.match(r.stderr, /\[FAIL\] Frontend bundle missing at dist\/index\.html/);
-      } finally {
-        rmSync(runDir, { recursive: true, force: true });
-        rmSync(logDir, { recursive: true, force: true });
-      }
-    });
+    const fixtureRoot = buildStartAppProdFixture();
+    try {
+      withLinkTo(fixtureRoot, (linkPath) => {
+        const target = join(linkPath, 'scripts', 'start-app-prod.mjs');
+        const runDir = mkdtempSync(join(tmpdir(), 'start-app-prod-run-'));
+        const logDir = mkdtempSync(join(tmpdir(), 'start-app-prod-log-'));
+        try {
+          const r = spawnSync(process.execPath, [target], {
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              LAN_HTTPS: '0', // opt out of mkcert provisioning — no system side effects
+              APP_RUN_DIR: runDir,
+              APP_LOG_DIR: logDir,
+            },
+          });
+          // The pre-fix bug through a junction was exit 0 with zero output — a
+          // launcher that silently does nothing, which is worse than a crash.
+          assert.equal(r.status, 1, `expected the deterministic dist-missing failure; stdout: ${r.stdout} stderr: ${r.stderr}`);
+          assert.notEqual(r.stderr.length, 0, 'expected non-empty stderr; got 0 bytes (the #2291 silent no-op)');
+          assert.match(r.stderr, /\[FAIL\] Frontend bundle missing at dist\/index\.html/);
+        } finally {
+          rmSync(runDir, { recursive: true, force: true });
+          rmSync(logDir, { recursive: true, force: true });
+        }
+      });
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   },
 );
 
