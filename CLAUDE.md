@@ -510,14 +510,32 @@ Design rationale:
   diagnostic, **not** a licence to violate the order — the budget is per
   acquisition, so a nested path's worst case is depth × 10s, and ORDINARY
   contention behind a long holder reaches the same error, so a firing timeout
-  means "look at the holder first, then the rules". The six best-effort `catch`
-  blocks around identity writes let that one class through rather than
-  swallowing it (`isLockAcquisitionTimeout`); swallowing it would report success
-  with `cast.json` written and the retirement lost. One handler is a deliberate
-  exception and still swallows it — `reconcileRejectEdgesOnDisk`
+  means "look at the holder first, then the rules". **WHICH WRITE the timeout
+  came out of decides the outcome — never which handler caught it** (#2295:
+  discriminating by handler is what produced that bug, since one handler can
+  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  loud: the six best-effort `catch` blocks around identity writes, plus the two
+  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
+  each wrapped at its own call rather than at the enclosing
+  `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
+  journals, which are lineage and must stay best-effort. Swallowing at an
+  identity site would report success with `cast.json` written and the
+  retirement lost; swallowing at an authoritative write reported success with
+  `cast.json` and `state.json` never written at all. FOUR handlers swallow it
+  deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
-  landed and writes only cosmetic `notLinkedTo` edges the next persist re-heals;
-  see its own comment. **Letting it through is not the
+  landed and writes only cosmetic `notLinkedTo` edges the next persist
+  re-heals; and the three interim cast.json snapshots (per-chapter, stage-1,
+  subset), which a final write in the same run clobbers, so a timeout there
+  diverges nothing (#2292). Elsewhere it is neither swallowed nor escalated:
+  the five batch routes (`script-review`, `cast-design`, `voice-style`,
+  `cast-series-patch`, `voice-override-linked`) keep their per-item failure
+  shape but report contention through `itemFailureReason`
+  (`workspace/file-lock.ts`), and `cast-reject-orphan`'s `forgetSupersededId`
+  handler is fatal for this one class because its leftover, uniquely, does NOT
+  self-heal — no `supersededBy` prune pass matches its shape, so its 500 names
+  a retry rather than a later analysis. See each site's own comment.
+  **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
   throwing on the spot skips the writes that follow and lands in an enclosing
