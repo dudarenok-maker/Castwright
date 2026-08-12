@@ -172,6 +172,62 @@ interface QuoteRun {
   closeLen: number;
 }
 
+/** Scripts with no inter-word spacing, where a delimiter with letters on both
+    sides is ordinary text rather than a mis-read apostrophe.
+    FORWARD-COVER, not live protection: `en` is the only shipped table pairing
+    an apostrophe-shaped glyph as a closer, so today this branch is never
+    reached and removing it leaves 725,066 corpus paragraphs byte-identical.
+    It matters when #2286 adds ['‘','’'] to `zh` and `ru`, at which point the
+    inner `’` of `“他说‘你好’然后走了”` becomes exactly the both-sides shape the
+    first clause rejects. No test can make this fail yet; do not delete it as
+    dead code. Hangul is deliberately absent: modern Korean uses inter-word
+    spacing like English, so a `’` with Hangul on both sides is not ordinary
+    unspaced text — it's exactly the mis-read-apostrophe shape the first
+    clause exists to catch. */
+const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Thai}]/u;
+/** Only `’` is reachable today: `en` is the sole table pairing an
+    apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
+    nothing stops a future table pairing them, and because this is the exact
+    set the corpus and the sweep were measured against. Do not narrow it
+    without re-measuring. */
+const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
+
+/** `\p{M}` alongside `\p{L}`: this path has no NFC-normalisation guarantee,
+    and in decomposed (NFD) form a base letter and its combining mark are two
+    separate code points — `André` decomposes to `Andr` + `e` + U+0301. Testing
+    `\p{L}` alone misses the mark, so the character immediately before a
+    closer reads as "not a letter" and the contraction clause in
+    `isRealCloser` never fires for decomposed input — the #2288 bug,
+    unfixed, whenever the manuscript arrives NFD. */
+function isSpacedLetter(ch: string | undefined): boolean {
+  return ch !== undefined && /[\p{L}\p{M}]/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
+}
+
+/** Is `line[k]` really a closing delimiter, or an apostrophe? English writes
+    both `’`, and `en`'s table carries ['‘','’'], so without this every
+    contraction ends the run early: `‘I don’t know,’ she said.` yields the
+    speech "I don" (#2288). Three shapes, all local to the glyph's neighbours:
+      don’t / O’Brien   a letter on both sides
+      ’em / ’cause      whitespace (or a bracket) then a letter, MID-LINE — a
+                        real closer is never preceded by whitespace, it closes
+                        onto the last character of the speech it terminates
+      ‘’Tis             its own opener, then a letter — accepting it would
+                        close on an empty interior and yield NO speech span,
+                        destroying the turn rather than truncating it
+    The `before === undefined` arm can't fire at the only call site (`k` is
+    always `>= start + open.length >= 1`, so `line[k - 1]` always exists) —
+    it's kept so the function stays total if that ever changes, not as a
+    stand-in for a line-initial `’em`, which isn't reachable either. */
+function isRealCloser(line: string, k: number, closer: string, openers: Set<string>): boolean {
+  if (!APOSTROPHE_SHAPED.has(closer)) return true;
+  const before = line[k - 1];
+  const after = line[k + 1];
+  if (isSpacedLetter(before) && isSpacedLetter(after)) return false;
+  if ((before === undefined || /[\s([{]/u.test(before)) && isSpacedLetter(after)) return false;
+  if (before !== undefined && openers.has(before) && isSpacedLetter(after)) return false;
+  return true;
+}
+
 /** Find non-overlapping quoted runs for any of the language's quote pairs,
     leftmost-match-wins on overlap (conservative: never double-count a run).
     Closers are grouped BY OPENER so a run ends at the nearest closer of ANY
@@ -186,49 +242,17 @@ interface QuoteRun {
     closer list wins — so if a future language ever pairs prefix-related
     multi-char closers with one opener, order them longest-first there. A run's
     `closeLen` is the actually-matched closer's length (all current closers are
-    one code unit). */
-/** Scripts with no inter-word spacing, where a delimiter with letters on both
-    sides is ordinary text rather than a mis-read apostrophe.
-    FORWARD-COVER, not live protection: `en` is the only shipped table pairing
-    an apostrophe-shaped glyph as a closer, so today this branch is never
-    reached and removing it leaves 725,066 corpus paragraphs byte-identical.
-    It matters when #2286 adds ['‘','’'] to `zh` and `ru`, at which point the
-    inner `’` of `“他说‘你好’然后走了”` becomes exactly the both-sides shape the
-    first clause rejects. No test can make this fail yet; do not delete it as
-    dead code. */
-const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}]/u;
-/** Only `’` is reachable today: `en` is the sole table pairing an
-    apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
-    nothing stops a future table pairing them, and because this is the exact
-    set the corpus and the sweep were measured against. Do not narrow it
-    without re-measuring. */
-const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
-
-function isSpacedLetter(ch: string | undefined): boolean {
-  return ch !== undefined && /\p{L}/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
-}
-
-/** Is `line[k]` really a closing delimiter, or an apostrophe? English writes
-    both `’`, and `en`'s table carries ['‘','’'], so without this every
-    contraction ends the run early: `‘I don’t know,’ she said.` yields the
-    speech "I don" (#2288). Three shapes, all local to the glyph's neighbours:
-      don’t / O’Brien   a letter on both sides
-      ’em / ’cause      whitespace or a bracket, then a letter — a real closer
-                        is never preceded by whitespace, it closes onto the
-                        last character of the speech it terminates
-      ‘’Tis             its own opener, then a letter — accepting it would
-                        close on an empty interior and yield NO speech span,
-                        destroying the turn rather than truncating it */
-function isRealCloser(line: string, k: number, closer: string, openers: Set<string>): boolean {
-  if (!APOSTROPHE_SHAPED.has(closer)) return true;
-  const before = line[k - 1];
-  const after = line[k + 1];
-  if (isSpacedLetter(before) && isSpacedLetter(after)) return false;
-  if ((before === undefined || /[\s([{]/u.test(before)) && isSpacedLetter(after)) return false;
-  if (before !== undefined && openers.has(before) && isSpacedLetter(after)) return false;
-  return true;
-}
-
+    one code unit).
+    Rejecting an apostrophe-shaped closer (#2288) means the scan may resume
+    looking for a LATER occurrence of that same glyph — and that resumed skip
+    is bounded to the nearest following opener of ANY class, never crossing
+    into a different turn. Without the bound, `Tom said the ‘phone wasn’t
+    working. “I agree,” said Mary. It was the boys’ fault.` rejects the
+    apostrophe in "wasn't", and with nothing to stop the skip it keeps hunting
+    for another `’` straight through Mary's whole turn, landing on the
+    "boys’" apostrophe and destroying "I agree," on the way there. The bound
+    applies only to that resumed skip — a closer's FIRST occurrence is always
+    eligible, unbounded, exactly as it was before #2288. */
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
@@ -243,13 +267,23 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
     for (;;) {
       const start = line.indexOf(open, pos);
       if (start < 0) break;
+      const interiorStart = start + open.length;
+      /* Bound for a REJECTED closer's resumed skip only (see the doc comment
+         above): the nearest occurrence of ANY opener glyph — including this
+         opener's own — at or after the interior start, or the line's length
+         if none follows. Does not bound a closer's first occurrence. */
+      let limit = line.length;
+      for (const o of openers) {
+        const at = line.indexOf(o, interiorStart);
+        if (at >= 0 && at < limit) limit = at;
+      }
       /* Nearest closer POSITION across the opener's closer set; ties go to the
          earlier entry in `closers`, matching the old alternation's
          leftmost-alternative rule. */
       let end: { at: number; glyph: string } | null = null;
       let nearestAny: { at: number; glyph: string } | null = null;
       for (const closer of closers) {
-        let from = start + open.length;
+        let from = interiorStart;
         let firstOfGlyph = true;
         for (;;) {
           const at = line.indexOf(closer, from);
@@ -257,6 +291,12 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
           if (firstOfGlyph) {
             if (nearestAny === null || at < nearestAny.at) nearestAny = { at, glyph: closer };
             firstOfGlyph = false;
+          } else if (at >= limit) {
+            /* A later occurrence, reached only because an earlier one of the
+               same glyph was rejected: past the limit it belongs to a
+               different turn. Positions only increase from here, so no
+               later occurrence of this closer is eligible either. */
+            break;
           }
           if (isRealCloser(line, at, closer, openers)) {
             if (end === null || at < end.at) end = { at, glyph: closer };
