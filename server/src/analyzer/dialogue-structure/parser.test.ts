@@ -406,3 +406,48 @@ describe('parser — #2288 a rule may move a run boundary, never delete a run', 
     for (const body of bodies) expect(speechOf(body).length).toBeGreaterThan(0);
   });
 });
+
+describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desired)', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('NOT FIXED: a possessive-plural apostrophe still ends the turn early', () => {
+    // `boys’` has a letter before and a SPACE after, so none of the three
+    // shapes in isRealCloser fires. Locally indistinguishable from a real
+    // closer. Desired output is ['It was the boys’ fault,']; flip this test
+    // when that is fixed.
+    expect(speechOf('‘It was the boys’ fault,’ she said.')).toEqual(['It was the boys']);
+  });
+
+  it('NOT FIXED: German »…« emphasis glued to a word still forms a run', () => {
+    // `»` immediately followed by `Frühstücks` and closed by `«` glued to
+    // `schiff` reads as one quote run around the emphasised compound.
+    // Desired output is [] (no speech span at all — this is emphasis, not
+    // dialogue); flip this test when that is fixed.
+    const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
+    const body = 'Woher aber der Name »Frühstücks«schiff?';
+    const speech = parseChapterStructure(body, deIdx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+    expect(speech).toEqual(['Frühstücks']);
+  });
+
+  it('NOT FIXED: same-glyph nesting lets an inner closer end the outer turn early', () => {
+    // The inner closing `’` of nested `‘dare’` has a letter before it ('e')
+    // and a space after it — none of isRealCloser's three clauses fires, so
+    // it is accepted as the OUTER run's closer, truncating the turn before
+    // "leave,". The scan is single-glyph and non-stacking, so it cannot
+    // disambiguate an inner same-glyph pair from the outer one regardless of
+    // the rule. Pre-existing, and STRICTLY IMPROVED by Task 2: the old code
+    // stopped at the very first `’` (the one in "Don’t"), an even shorter
+    // capture — this is not a regression. Desired output is
+    // ['Don’t you ‘dare’ leave,']; flip this test if nested nesting is ever
+    // disambiguated (would need a stacking scan, out of scope for #2288).
+    expect(speechOf('‘Don’t you ‘dare’ leave,’ she said.')).toEqual(['Don’t you ‘dare']);
+  });
+});
