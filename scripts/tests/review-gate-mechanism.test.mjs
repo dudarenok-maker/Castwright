@@ -8,12 +8,7 @@
 // Four assertions, each independently falsifiable:
 //   1. .claude/skills/pr-review-gate/SKILL.md exists and does NOT disable
 //      model invocation (the entire point of routing the gate through it).
-//   2. model-routing/SKILL.md's Mechanism bullet actually references
-//      pr-review-gate, rather than silently drifting back to naming
-//      code-review directly.
-//   3. CLAUDE.md's before-shipping step 10 references pr-review-gate too,
-//      so the checklist entry point agrees with the routing spec.
-//   4. pr-review-gate/SKILL.md's frontmatter `name:` matches its directory
+//   2. pr-review-gate/SKILL.md's frontmatter `name:` matches its directory
 //      basename (`pr-review-gate`) — the convention is that the directory is
 //      the skill's identifier and `name:` must agree with it. Assertion 1
 //      above only checks the path exists and reads its frontmatter for
@@ -21,6 +16,15 @@
 //      something else; assertion 1 catches half of the "stays resolvable"
 //      invariant (the path), this assertion catches the other half (the
 //      frontmatter agreeing with it).
+//   3. model-routing/SKILL.md's Mechanism bullet actually references
+//      pr-review-gate, rather than silently drifting back to naming
+//      code-review directly.
+//   4. CLAUDE.md's before-shipping step 10 references pr-review-gate too,
+//      so the checklist entry point agrees with the routing spec.
+//
+//   Assertions are referred to elsewhere BY NAME, never by number — this
+//   header and the test() order disagreed until 2026-08-13, and a plan that
+//   said "retarget assertion 3" was ambiguous between two different tests.
 //
 // Run via `npm run test:hooks` (node --test). All three source files are
 // `extraFiles` on the `test:hooks` step in scripts/verify-cache.mjs — none
@@ -131,4 +135,25 @@ test("CLAUDE.md's before-shipping step 10 references pr-review-gate", () => {
     'before-shipping step 10 no longer references pr-review-gate — the entry ' +
       'point maintainers actually follow must name the model-invocable skill',
   );
+});
+
+test('pr-review-gate/SKILL.md names both reference files, and they exist', () => {
+  // The dispatch prompt points the reviewer at references/reviewer-brief.md BY
+  // PATH. This layout's new failure mode is that path not resolving: the
+  // reviewer is handed no rubric at all and reviews from generic instinct,
+  // silently. Checking existence alone is not enough — a file nobody names is
+  // just as unreachable as one that isn't there.
+  const src = readNormalized(GATE_SKILL_PATH);
+  const skillDir = dirname(GATE_SKILL_PATH);
+  for (const rel of ['references/reviewer-brief.md', 'references/findings-triage.md']) {
+    assert.ok(existsSync(join(skillDir, rel)), `missing ${rel} under ${skillDir}`);
+    const literal = rel.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+    assert.match(
+      src,
+      new RegExp(literal),
+      `pr-review-gate/SKILL.md never names ${rel} — a reviewer would never be ` +
+        `told to read it, so the rubric reaches it only as well as the ` +
+        `dispatching session happens to retype it`,
+    );
+  }
 });

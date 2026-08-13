@@ -40,6 +40,10 @@ push. Except a docs-only PR, which is exempt entirely — see
 - **Never auto-apply.** The subagent edits nothing. It returns a findings
   report, triaged by hand per `model-routing`'s "Findings handling". (If the
   user runs `/code-review` themselves instead, the same bar holds: no `--fix`.)
+- **The reviewer reads the rubric itself.** The dispatch prompt instructs it to
+  read `.claude/skills/pr-review-gate/references/reviewer-brief.md` in full
+  before it starts. Triage rules for what comes back are in
+  `.claude/skills/pr-review-gate/references/findings-triage.md`.
 
 ## The brief to carry into the subagent prompt
 
