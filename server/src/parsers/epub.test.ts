@@ -58,6 +58,16 @@ describe('parseEpub', () => {
     expect(decodeEntities('&amp;amp;lt;')).toBe('&amp;lt;');
   });
 
+  it('#2310: decodeEntities decodes the full named set (titles carry them too)', () => {
+    expect(decodeEntities('L&rsquo;&Eacute;t&eacute; &mdash; Tome I')).toBe('L’Été — Tome I');
+  });
+  it('#2310: decodeEntities decodes hex numeric refs (the Coalfall gap, never fixed here)', () => {
+    expect(decodeEntities("Oduvan&#x27;s Forge")).toBe("Oduvan's Forge");
+  });
+  it('#2310: decodeEntities leaves a bare ampersand alone', () => {
+    expect(decodeEntities('Smith &amp; Sons, AT&T')).toBe('Smith & Sons, AT&T');
+  });
+
   it('uses dc:title from the OPF metadata', async () => {
     const buf = await readFile(fixturePath);
     const out = await parseEpub(buf, { fileName: 'sample.epub' });

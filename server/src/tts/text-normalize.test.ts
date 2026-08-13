@@ -189,6 +189,10 @@ describe('stripUnsafeForTts', () => {
     expect(stripUnsafeForTts(clean)).toBe(clean);
     expect(stripUnsafeForTts(stripUnsafeForTts(clean))).toBe(clean);
   });
+
+  it('#2310: strips U+00AD soft hyphen (reachable from EPUB &shy; since #2310)', () => {
+    expect(stripUnsafeForTts('soft\u00adhyphen')).toBe('softhyphen');
+  });
 });
 
 describe('normaliseForTts (composed)', () => {
