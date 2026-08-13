@@ -36,12 +36,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
-import { buildMirrorContent } from '../sync-agent-skills.mjs';
+import { buildMirrorContent, syncOneFile } from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -155,30 +155,42 @@ test('pr-review-gate/SKILL.md names both reference files, and they exist', () =>
   }
 });
 
-// Markdown links of the form ](some/relative/path.md#anchor) — http(s) links
-// are skipped, and so are bare #anchor links (no file part to resolve).
-const INTRA_REPO_ANCHOR_LINK = /\]\((?!https?:)([^)#\s]+\.md)#([^)\s]+)\)/g;
+// Markdown links of the form ](some/relative/path.md) or
+// ](some/relative/path.md#anchor) — http(s) links are skipped, and so are
+// bare #anchor links (no file part to resolve). The anchor group is optional:
+// a plain .md link with no `#` still needs its target file checked for
+// existence, it just skips the heading check.
+const INTRA_REPO_MD_LINK = /\]\((?!https?:)([^)#\s]+\.md)(?:#([^)\s]+))?\)/g;
 
 /**
- * GitHub's heading-anchor slug: strip backticks, lowercase, drop everything
- * that is not a word char / space / hyphen, trim the ends, then replace each
- * REMAINING SPACE WITH ONE HYPHEN.
+ * GitHub's heading-anchor slug: lowercase, drop everything that is not a
+ * letter, digit, underscore, hyphen, or space — keeping letters/digits from
+ * ANY script, not just ASCII — then replace each REMAINING SPACE WITH ONE
+ * HYPHEN. Nothing is trimmed.
  *
- * The one-for-one replacement is the whole subtlety, and an earlier draft of
- * this helper got it wrong with `.replace(/ +/g, '-')`. GitHub does not
- * collapse runs of spaces: `### Scope discipline > merge magic` drops the `>`
- * and leaves TWO spaces, which slug to the DOUBLE hyphen in
- * CONTRIBUTING.md#scope-discipline--merge-magic. A collapsing version reports
- * that correct, live link as broken — a guard that fails on valid input, which
- * is worse than no guard: it trains its reader to "fix" correct documents.
- * The unit test below pins exactly that case GREEN.
+ * Two subtleties, both load-bearing:
+ *
+ * 1. The one-for-one space replacement, not a collapse. An earlier draft of
+ *    this helper got it wrong with `.replace(/ +/g, '-')`. GitHub does not
+ *    collapse runs of spaces: `### Scope discipline > merge magic` drops the
+ *    `>` and leaves TWO spaces, which slug to the DOUBLE hyphen in
+ *    CONTRIBUTING.md#scope-discipline--merge-magic. A collapsing version
+ *    reports that correct, live link as broken — a guard that fails on valid
+ *    input, which is worse than no guard: it trains its reader to "fix"
+ *    correct documents.
+ * 2. No trimming, and non-ASCII letters survive. A still-earlier draft used
+ *    `\w` (ASCII-only) and trimmed the ends, which mishandles both a leading
+ *    symbol (`✅ What is solid` should slug to `-what-is-solid` — the emoji
+ *    drops out, but the space after it survives untrimmed and becomes a
+ *    leading hyphen) and any non-ASCII letter (`Café & bar` should slug to
+ *    `café--bar`, keeping the `é`, not `caf--bar`).
+ *
+ * The unit test below pins all of these cases GREEN.
  */
 function githubAnchor(heading) {
   return heading
-    .replace(/`/g, '')
     .toLowerCase()
-    .replace(/[^\w\- ]+/g, '')
-    .replace(/^ +| +$/g, '')
+    .replace(/[^\p{L}\p{N}_ -]/gu, '')
     .replace(/ /g, '-');
 }
 
@@ -200,7 +212,13 @@ function stripFencedBlocks(text) {
 
 function headingAnchors(file) {
   const anchors = new Set();
-  for (const line of readNormalized(file).split('\n')) {
+  // stripFencedBlocks: a heading-shaped line inside a ```fence (e.g. the
+  // PR-comment template in pr-review-gate/SKILL.md, which contains literal
+  // "### Verdict" / "### Minor" lines as FORMAT to copy, not real headings)
+  // is not a real anchor. Without this, the SOURCE side of a link (which
+  // already strips fences before matching) and the TARGET side disagree, and
+  // the guard accepts a link that resolves only to a fenced example.
+  for (const line of stripFencedBlocks(readNormalized(file)).split('\n')) {
     const m = /^#{1,6} +(.+?)\s*$/.exec(line);
     if (m) anchors.add(githubAnchor(m[1]));
   }
@@ -222,7 +240,7 @@ function linkScanSet() {
   return [join(REPO_ROOT, 'CLAUDE.md'), join(REPO_ROOT, 'CONTRIBUTING.md'), ...skillDocs];
 }
 
-test('githubAnchor matches GitHub slugging, including runs of spaces', () => {
+test('githubAnchor matches GitHub slugging, including runs of spaces and non-ASCII', () => {
   // The green-on-awkward-input case. Without it, the collapsing bug that this
   // helper shipped with in draft is invisible: every OTHER assertion here is a
   // true-positive check, and a helper that over-reports passes all of them.
@@ -232,6 +250,10 @@ test('githubAnchor matches GitHub slugging, including runs of spaces', () => {
     githubAnchor('Incidental findings: report, fix, record'),
     'incidental-findings-report-fix-record',
   );
+  // Non-ASCII cases: a leading symbol drops but its trailing space survives
+  // untrimmed (leading hyphen), and a non-ASCII letter is kept, not stripped.
+  assert.equal(githubAnchor('✅ What is solid'), '-what-is-solid');
+  assert.equal(githubAnchor('Café & bar'), 'café--bar');
 });
 
 test('model-routing/SKILL.md no longer carries the moved PR-review sections', () => {
@@ -258,27 +280,49 @@ test('model-routing/SKILL.md no longer carries the moved PR-review sections', ()
   );
 });
 
-test('intra-repo anchor links in the governance docs and skills resolve to real headings', () => {
+test('headingAnchors ignores heading-shaped lines inside fenced code blocks', () => {
+  // pr-review-gate/SKILL.md's PR-comment template (a ```fence around lines
+  // like "### Verdict" / "### 🟡 Minor" / "### ✅ What is solid") is FORMAT to
+  // copy, not a real heading — GitHub does not render it as one, so no real
+  // link can legitimately target it. Without stripFencedBlocks on this
+  // (target) side, those lines register as anchors anyway: the guard fails
+  // open on the very file it ships, exactly as the source side already
+  // strips fences before matching link text.
+  const anchors = headingAnchors(GATE_SKILL_PATH);
+  for (const fake of ['verdict', 'minor', '-what-is-solid', 'blocking-claim', 'significant-claim']) {
+    assert.ok(
+      !anchors.has(fake),
+      `headingAnchors(pr-review-gate/SKILL.md) reports "${fake}" as a real anchor — ` +
+        'it only exists inside the ```fenced PR-comment template',
+    );
+  }
+});
+
+test('intra-repo .md links in the governance docs and skills resolve to real files and headings', () => {
   // CLAUDE.md:716 links model-routing/SKILL.md#mandatory-independent-review-prs.
   // Moving that section breaks the anchor while the existing string-match
   // assertion ("step 10 references pr-review-gate") stays GREEN — the guard
   // would certify the very line it broke. Presence of a word is not integrity
-  // of a link.
+  // of a link. A plain .md link with no `#` gets the same file-existence
+  // check, minus the heading lookup — CONTRIBUTING.md:414-415 link
+  // `superpowers/specs/...` and `features/archive/...` with no `docs/`
+  // prefix, which only a file-existence check (not the old anchor-only regex)
+  // catches, since neither link carries a `#`.
   const broken = [];
   for (const source of linkScanSet()) {
     const text = stripFencedBlocks(readNormalized(source));
-    for (const [, relPath, anchor] of text.matchAll(INTRA_REPO_ANCHOR_LINK)) {
+    for (const [, relPath, anchor] of text.matchAll(INTRA_REPO_MD_LINK)) {
       const target = resolve(dirname(source), relPath);
       if (!existsSync(target)) {
-        broken.push(`${basename(source)} -> ${relPath} (file does not exist)`);
+        broken.push(`${basename(source)} -> ${relPath}${anchor ? '#' + anchor : ''} (file does not exist)`);
         continue;
       }
-      if (!headingAnchors(target).has(anchor.toLowerCase())) {
+      if (anchor && !headingAnchors(target).has(anchor.toLowerCase())) {
         broken.push(`${basename(source)} -> ${relPath}#${anchor} (no such heading)`);
       }
     }
   }
-  assert.deepEqual(broken, [], `dangling intra-repo anchor links:\n  ${broken.join('\n  ')}`);
+  assert.deepEqual(broken, [], `dangling intra-repo .md links:\n  ${broken.join('\n  ')}`);
 });
 
 // The mirror lives OUTSIDE the repo, in the cross-agent store at
@@ -319,4 +363,69 @@ test('the agent-store mirror matches its canonical source, when it exists', () =
       `${rel} has drifted from its canonical copy — run npm run skills:sync`,
     );
   }
+});
+
+test('syncOneFile throws when the CANONICAL SOURCE has a UTF-8 BOM, and writes no mirror', () => {
+  // The BOM check must look at the source, not the written mirror: the
+  // mirror always begins with either '---' (frontmatter) or '<!--' (the
+  // provenance header on a non-frontmatter file), so a BOM landing on the
+  // canonical source would otherwise be silently relocated into the middle
+  // of the mirrored file rather than caught. This never touches the real
+  // $HOME mirror — both paths are fixtures under a throwaway tmpdir.
+  const tmpDir = mkdtempSync(join(tmpdir(), 'skills-sync-bom-'));
+  try {
+    const srcPath = join(tmpDir, 'SKILL.md');
+    const destPath = join(tmpDir, 'mirror', 'SKILL.md');
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    const body = Buffer.from('---\nname: pr-review-gate\n---\nBody text.\n', 'utf8');
+    writeFileSync(srcPath, Buffer.concat([bom, body]));
+
+    assert.throws(
+      () => syncOneFile(srcPath, destPath, 'SKILL.md'),
+      /has a UTF-8 BOM/,
+      'syncOneFile did not throw for a BOM-poisoned canonical source',
+    );
+    assert.ok(
+      !existsSync(destPath),
+      'a BOM-poisoned canonical source must not produce a mirrored file at all',
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// buildMirrorContent is a pure function — it needs no filesystem and runs on
+// every machine, unlike the mirror-drift test above which fails open when
+// $HOME has no mirror. These assertions are its only coverage that isn't
+// conditional on that mirror existing.
+test('buildMirrorContent: frontmatter-bearing input keeps frontmatter as the literal first line', () => {
+  const input = '---\nname: pr-review-gate\n---\nBody text.\n';
+  const out = buildMirrorContent(input, 'SKILL.md');
+  assert.ok(out.startsWith('---\n'), `expected output to start with '---\\n', got: ${JSON.stringify(out.slice(0, 20))}`);
+});
+
+test('buildMirrorContent: the header is inserted exactly once, after the frontmatter close', () => {
+  const input = '---\nname: pr-review-gate\n---\nBody text.\n';
+  const out = buildMirrorContent(input, 'SKILL.md');
+  const marker = 'MIRRORED COPY — do not edit here.';
+  const firstIdx = out.indexOf(marker);
+  assert.notEqual(firstIdx, -1, 'header must be present');
+  assert.equal(out.indexOf(marker, firstIdx + 1), -1, 'header must appear exactly once');
+  const frontmatterEnd = out.indexOf('\n---\n', 4) + '\n---\n'.length;
+  assert.ok(firstIdx > frontmatterEnd, 'header must land after the closing frontmatter delimiter, not before/inside it');
+});
+
+test('buildMirrorContent: a non-frontmatter input gets the header at the top', () => {
+  const input = 'Just a plain reference doc, no frontmatter.\n';
+  const out = buildMirrorContent(input, 'references/reviewer-brief.md');
+  assert.ok(out.startsWith('<!-- MIRRORED COPY'), 'header must lead a file with no frontmatter block');
+});
+
+test('buildMirrorContent: the canonical body appears exactly once, not duplicated', () => {
+  const input = '---\nname: pr-review-gate\n---\nUnique body marker XYZZY appears here.\n';
+  const out = buildMirrorContent(input, 'SKILL.md');
+  const marker = 'Unique body marker XYZZY appears here.';
+  const firstIdx = out.indexOf(marker);
+  assert.notEqual(firstIdx, -1, 'canonical body text must be present');
+  assert.equal(out.indexOf(marker, firstIdx + 1), -1, 'canonical body text must not be duplicated');
 });

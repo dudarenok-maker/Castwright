@@ -87,10 +87,39 @@ export function buildMirrorContent(canonicalContent, rel) {
   return h + canonicalContent;
 }
 
+// Checks the CANONICAL SOURCE, not the mirrored output: the output always
+// begins with either the frontmatter delimiter '---' or the provenance
+// header's '<!--', so a check against the written file can never fire — a
+// BOM on the source is silently relocated into the middle of the mirrored
+// file (still there, just no longer at byte 0, and now past the point where
+// a frontmatter parser looks for it) rather than caught.
 function assertNoBom(buf, path) {
   if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-    throw new Error(`${path}: wrote a BOM — this breaks frontmatter parsing`);
+    throw new Error(
+      `${path}: canonical source has a UTF-8 BOM — syncing would relocate it into ` +
+        'the middle of the mirrored file instead of removing it, breaking frontmatter parsing there',
+    );
   }
+}
+
+/** Syncs a single canonical file to its mirrored destination. Exported (in
+ *  addition to syncAgentSkills) so tests can exercise the real read/check/
+ *  write path against fixture paths, without touching the actual $HOME
+ *  mirror. */
+export function syncOneFile(srcPath, destPath, rel) {
+  assertNoBom(readFileSync(srcPath), srcPath);
+  const canonicalContent = readFileSync(srcPath, 'utf8');
+  const mirrored = buildMirrorContent(canonicalContent, rel);
+
+  mkdirSync(dirname(destPath), { recursive: true });
+  writeFileSync(destPath, mirrored, 'utf8');
+
+  if (rel === 'SKILL.md' && !mirrored.startsWith('---\n')) {
+    throw new Error(`${destPath}: frontmatter is not the first line`);
+  }
+
+  console.log(`wrote ${destPath}`);
+  return destPath;
 }
 
 export function syncAgentSkills() {
@@ -98,20 +127,7 @@ export function syncAgentSkills() {
   for (const rel of FILES) {
     const srcPath = join(CANONICAL_ROOT, rel);
     const destPath = join(MIRROR_ROOT, rel);
-    const canonicalContent = readFileSync(srcPath, 'utf8');
-    const mirrored = buildMirrorContent(canonicalContent, rel);
-
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, mirrored, 'utf8');
-
-    const rawBytes = readFileSync(destPath);
-    assertNoBom(rawBytes, destPath);
-    if (rel === 'SKILL.md' && !rawBytes.toString('utf8').startsWith('---\n')) {
-      throw new Error(`${destPath}: frontmatter is not the first line`);
-    }
-
-    console.log(`wrote ${destPath}`);
-    written.push(destPath);
+    written.push(syncOneFile(srcPath, destPath, rel));
   }
   return written;
 }
