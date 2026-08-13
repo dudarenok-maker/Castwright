@@ -698,6 +698,31 @@ have.
 
 ## The decisions for the owner, and their price
 
+### ✅ Decided, 2026-08-13 — all three as recommended
+
+| | decision | what it supersedes |
+|---|---|---|
+| **A** | **Text-preserving splits are accepted.** Tasks 1–7 proceed. | The stated `0 SPLIT` acceptance item, which no correct rule can meet — un-swallowing a turn *is* a split to an overlap classifier. Bind to text preservation (0 characters, 0 mid-word) plus the adjudication that 85 % of the 4,732 fresh spans sit next to a speech tag. |
+| **B** | **172 accepted as a partial fix** (396 → 172), 20 `ru` regressions in M2's families accepted with it; the 2.20 % residual (5,267 of 239,725) is pinned, not chased. | "The 579 goes to 0." **`579` has no referent** — it is a *corruption* count on a shape set defined by the **widened** table, whose destroyed count is 1,704. Measured as the ticket describes, each language's own `quotePairs`, the figure is **396 of 805**. |
+| **C** | **The tag-cut criterion binds to the attribution-aware family** — 0 of 42 speakers lost, positive control 42/42, firing control 21 lost. The corpus proxy is reported as scale and adjudicated residual. | "265/92 re-measured to 0", set by the coordinating thread before this pass measured it. The proxy **cannot decide 257 of its own 265** cases (CJK has no case distinction), and its 156 residual is quoted titles and foreign phrases inside verb-bearing narration — **not** tag clauses naming a speaker. |
+
+**Why B does not get chased further.** The only measured rule below 172 that
+keeps nesting is `R4`, whose price is the suppression class; below that is `R2`,
+which loses **601,392 characters of real speech**. Both prices are invariants the
+owner has already protected, so 172 is the floor that respects them.
+
+**Do not reinstate `TEXT-LOSING` as a substitute for `0 SPLIT`.** The adversarial
+pass showed a truncate-and-resume rule cannot fail it — it is a criterion with no
+discriminating power, which is why it was withdrawn rather than adopted.
+
+**The reading of record is untouched.** A rule must never destroy a turn; these
+answers accept *splits that preserve every character* and a *measured, pinned*
+residual, neither of which is a destroyed turn.
+
+---
+
+*Original framing, retained because it is the evidence behind the answers:*
+
 All three are Task 0 of the plan; nothing else starts until they are answered.
 None reopens the reading of record, and this design sits on the same side of it.
 

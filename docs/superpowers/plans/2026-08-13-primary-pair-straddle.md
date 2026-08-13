@@ -2,7 +2,39 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> ## ⛔ Task 0 — THREE OWNER DECISIONS ARE OWED BEFORE ANY CODE IS WRITTEN
+> ## ✅ Task 0 — ANSWERED by the repo owner, 2026-08-13. All three as recommended.
+>
+> **A — text-preserving splits are ACCEPTED.** Tasks 1–7 proceed. **B — 172 is
+> accepted as a partial fix** (396 → 172, at the cost of 20 `ru` regressions in
+> M2's families); the 2.20 % residual is pinned, not chased. **C — the tag-cut
+> criterion binds to the ATTRIBUTION-AWARE family** (0 of 42 speakers lost,
+> positive control 42/42, firing control 21 lost); the corpus proxy is reported
+> as scale and adjudicated residual, **never as a gate**.
+>
+> **Task 0 is closed. Every task below is dispatchable.** Three things to carry
+> rather than re-derive:
+>
+> 1. **Do not re-impose "the 579 goes to 0" or "265/92 → 0."** Both were written
+>    by the coordinating thread before this pass measured them; A's and C's
+>    answers supersede them. `579` has no referent (it is a corruption count on a
+>    **widened**-table shape set, whose destroyed count is 1,704). The corpus
+>    proxy **cannot decide 257 of its own 265** cases because CJK has no case
+>    distinction.
+> 2. **Do not chase below 172.** The only measured rule that gets there while
+>    keeping nesting is `R4`, whose price is the suppression class; below that is
+>    `R2`, which loses 601,392 characters of real speech. Both prices are
+>    invariants the owner has already protected.
+> 3. **`SPLIT` is not a failure signal for Tasks 1–7.** Un-swallowing a turn *is*
+>    a split to an overlap classifier, so `0 SPLIT` against the pre-#2288 baseline
+>    is unachievable by any correct rule. Bind to **text preservation** (0
+>    characters, 0 mid-word) plus the adjudication that 85 % of fresh spans sit
+>    next to a speech tag. Note the withdrawn `TEXT-LOSING` restatement: the
+>    adversarial pass showed a truncate-and-resume rule cannot fail it, so it is
+>    not a substitute criterion.
+>
+> *Original framing, retained because it is why the plan is shaped this way:*
+>
+> ## ⛔ (superseded) Task 0 — THREE OWNER DECISIONS ARE OWED BEFORE ANY CODE IS WRITTEN
 >
 > This plan does **not** start at Task 1. The design pass reached two rules it
 > recommends and, in reaching them, found that **three stated acceptance items
