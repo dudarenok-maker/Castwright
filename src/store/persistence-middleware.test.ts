@@ -687,4 +687,48 @@ describe('bookMeta/commitDraft persist failure (#2230)', () => {
     /* …and no rollback: commitDraft nulled the draft and nothing restored it. */
     expect(state.bookMeta.draft).toBeNull();
   });
+
+  it('does NOT let an older in-flight save prune/roll back over a newer one (#2230 race)', async () => {
+    /* Two saves whose debounced PUTs OVERLAP in flight: the older PUT resolving
+       after a newer one is scheduled must NOT prune the shared rollback
+       snapshot, and the newer PUT's failure must still recover the newest edit.
+       Before the generation-token gate, the older flush's onSuccess would wipe
+       the snapshot the newer flush's rollback needs → the newer edit was lost. */
+    const deferred: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    putBookState.mockImplementation(
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          deferred.push({ resolve, reject });
+        }),
+    );
+    const store = makeBookMetaStore();
+
+    /* Save A → the first debounced flush fires and its PUT stays in-flight. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Edit A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+
+    /* Save B before PUT_A resolves → a second flush fires, PUT_B in-flight. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Edit B' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(2);
+
+    /* The OLDER flush (A) succeeds first — it must NOT prune the snapshot that
+       the still-in-flight newer flush (B) depends on. */
+    deferred[0].resolve(undefined);
+    await vi.runAllTimersAsync();
+    expect((store.getState() as { bookMeta: { lastCommitted?: Record<string, unknown> } }).bookMeta.lastCommitted?.['b1']).toBeDefined();
+
+    /* The NEWER flush (B) now fails — its rollback must still run, restoring the
+       accepted title and preserving the newest edit for retry. */
+    deferred[1].reject(new Error('Book state PUT failed (409): analysis is running'));
+    await vi.runAllTimersAsync();
+    const after = store.getState() as {
+      bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null };
+    };
+    expect(after.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(after.bookMeta.draft?.title).toBe('Edit B');
+  });
 });

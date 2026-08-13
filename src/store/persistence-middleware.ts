@@ -362,6 +362,14 @@ export const persistenceMiddleware: Middleware = (store) => {
      so the toast text can be per-action (bulk-reassign copy vs the server's own
      refused-rename sentence) and any rollback can fire. */
   const toastPending = new Map<StateSlice, PersistFailureHandler>();
+  /* #2230 — monotonically-increasing counter per slice, bumped every time a
+     write is (re)scheduled. A flush captures the counter at fire time; its
+     success/failure effects (snapshot prune / rollback / toast) only run if it
+     is still the LATEST flush for the slice. This prevents an OLDER in-flight
+     PUT from prematurely pruning or rolling back the shared rollback snapshot
+     that a NEWER in-flight PUT (started while the first was still pending) still
+     needs — closing the overlapping-in-flight-PUT data-loss race. */
+  const generation = new Map<StateSlice, number>();
 
   const flush = (bookId: string, slice: StateSlice) => {
     const patch = pending.get(slice);
@@ -369,18 +377,26 @@ export const persistenceMiddleware: Middleware = (store) => {
     timers.delete(slice);
     const handler = toastPending.get(slice);
     toastPending.delete(slice);
+    const gen = generation.get(slice) ?? 0;
     if (patch === undefined) return;
     api
       .putBookState(bookId, { slice, patch })
       .then(() => {
-        /* #2230 — a confirmed PUT makes any rollback snapshot for this slice
-           moot (e.g. prune the bookMeta lastCommitted so the next commit snaps
-           a fresh accepted baseline). No-op when the slice has no handler. */
-        if (handler?.onSuccess) store.dispatch(handler.onSuccess(bookId));
+        /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
+           newer write has since been scheduled (gen advanced), a fresh snapshot
+           belongs to it and must not be cleared by this older, superseded
+           flush. */
+        if (handler?.onSuccess && gen === (generation.get(slice) ?? 0)) {
+          store.dispatch(handler.onSuccess(bookId));
+        }
       })
       .catch((err) => {
         console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
-        if (handler) {
+        /* #2230 — only act on a failure of the LATEST write. An older flush's
+           failure is superseded by a newer in-flight write (which owns the
+           snapshot and the user's current draft), so don't toast/roll back for
+           it — that would wrongly revert the newer edit. */
+        if (handler && gen === (generation.get(slice) ?? 0)) {
           store.dispatch(
             notificationsActions.pushToast({
               kind: 'error',
@@ -409,6 +425,10 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (!bookId) return result;
 
     pending.set(rule.slice, rule.build(after, bookId));
+    /* #2230 — bump the per-slice generation so this becomes the LATEST write;
+       in-flight older flushes keep their captured (lower) generation and are
+       therefore gated out of prune/rollback in flush. */
+    generation.set(rule.slice, (generation.get(rule.slice) ?? 0) + 1);
     const failHandler = TOAST_ON_PERSIST_FAILURE[type];
     if (failHandler) {
       toastPending.set(rule.slice, failHandler);
