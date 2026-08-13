@@ -26,7 +26,7 @@ owner: null
 
 ## Acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`). Use the Redux DevTools panel to assert `ui.stage` after each step.
+Run in mock mode (`npm run dev:mock`). Use the Redux DevTools panel to assert `ui.stage` after each step.
 
 1. **Cold boot at `#/`** → `stage = { kind: 'books' }`.
 2. **Click "New book"** → dispatches `startNewBook`; `stage = { kind: 'upload' }`; URL becomes `#/new`.

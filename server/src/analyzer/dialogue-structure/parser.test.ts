@@ -1008,34 +1008,381 @@ describe('parser — #2288 M2: residuals accepted with rule B (design doc § Res
       .filter((s) => s.kind === 'speech')
       .map((s) => body.slice(s.start, s.end));
 
-  it("residual 1: the straddle inside a language's own PRIMARY pairs is untouched (design residual 1)", () => {
-    // M2 only adds a tier BELOW primary; Task 3 never touched scanQuoteRuns or
-    // the leftmost-accept loop. es's primary quotePairs leads with «»; an
-    // unclosed « (no » after "Hola") makes the primary scan skip past the
-    // beat straight to the NEXT » — the one closing the second turn's own
-    // quote — merging beat + second turn's opening tag into one run. This is
-    // exactly `main`'s behaviour today (design doc's own worked example) —
-    // 579 of 2,456 well-formed straddle shapes corrupt this way, and M2
-    // moves none of that.
+  it("residual 1: the straddle inside a language's own PRIMARY pairs is REPAIRED (#2315's own regression test; design doc M2 residual 1, INVERTED by the #2315 re-open bound)", () => {
+    // M2 only added a tier BELOW primary; it never touched scanQuoteRuns or
+    // the leftmost-accept loop, so this shape stayed merged under M2 alone.
+    // #2315's re-open bound lives IN scanQuoteRuns: the unclosed « (no » after
+    // "Hola") now ends the run at the re-open rather than swallowing turn 2's
+    // own opening tag, so both turns come back clean. This inverts what this
+    // test pinned before #2315 (a genuine two-run MERGE) — it now pins the
+    // fix instead. Cross-referenced from #2315's own "the re-open bound"
+    // describe block above (the 'es' worked example).
     const es = conventionsFor('es')!;
-    const merged = speechOf('«Hola, dijo él. «Adiós», dijo ella.', es);
-    expect(merged).toEqual(['Hola, dijo él. «Adiós']);
-    // Prove it's a genuine MERGE, not an absence of runs or two clean turns:
-    // the single run's text must contain both halves.
-    expect(merged).toHaveLength(1);
-    expect(merged[0]).toContain('dijo él');
-    expect(merged[0]).toContain('Adiós');
+    const spoken = speechOf('«Hola, dijo él. «Adiós», dijo ella.', es);
+    expect(spoken).toEqual(['Hola, dijo él. ', 'Adiós']);
   });
 
-  it("residual 2: a spurious secondary run over narration survives, with BOTH real turns intact (design residual 2, F1's 284)", () => {
+  it("residual 2: a spurious secondary run over VERB-BEARING narration is DECLINED by the #2315 tag-clause guard; both real turns stay intact (design doc M2 residual 2, REVISED by #2315 defect 2)", () => {
     // "Stop" sits in the gap between two real turns, framed by the secondary
-    // «» pair. It contains no primary opener, so the gap tier accepts it as
-    // a (spurious) third run — narration read as speech — but BOTH real
-    // turns ("Hi" and "Bye") survive untouched. That's the residual the
-    // owner decision (rule B) accepted: audible, attributable, recoverable —
-    // never a lost turn.
+    // «» pair, and contains no primary opener — the M2 gap tier alone would
+    // accept it as a (spurious) third run, narration read as speech. But
+    // "The sign said «Stop»." is a VERB-BEARING clause with no sentence break
+    // before the candidate ("said" + no '.' before "«"), which is exactly the
+    // shape the #2315 tag-clause guard cannot tell apart from a genuine tag
+    // (design doc § "Defect 2 — the tag-cut cut", the 156-case residual: verb-
+    // bearing narration the guard declines even though it names no speaker).
+    // The guard has no roster to check "Stop" isn't a name, by design (design
+    // doc's rejected-rules list: roster-aware admission fails on a bare-name
+    // turn). What still matters — and is still true — is that BOTH real turns
+    // ("Hi" and "Bye") survive untouched; only the spurious third run is gone.
     const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
     const spans = speechOf('“Hi”, he said. The sign said «Stop». “Bye”, she said.', enTier);
-    expect(spans).toEqual(['Hi', 'Stop', 'Bye']);
+    expect(spans).toEqual(['Hi', 'Bye']);
+  });
+});
+
+describe('parser — #2315: the re-open bound', () => {
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  /* Case 1 — same-glyph re-open. `fr` has a single quote pair, so turn 2's
+     opener is the same glyph as the stray. The per-opener scan resumes at the
+     END of the accepted run, so turn 2 produces NO CANDIDATE AT ALL: no
+     acceptance-order rule can reach this, which is why the fix is in the scan.
+     Design § "Defect 1 — the mechanism", case 1. */
+  it('fr: an unterminated « does not swallow the next turn', () => {
+    expect(
+      speechOf('«Bonjour», dit-il, regardant le «panneau de Faust. «Et toi», demanda-t-elle.', conventionsFor('fr')!),
+    ).toEqual(['Bonjour', 'panneau de Faust. ', 'Et toi']);
+  });
+  // es: the design's worked example is pinned by "residual 1" in the M2
+  // residuals describe block above — same input, same output, kept there
+  // per the plan's explicit "do not delete" on that test (PR #2340 review
+  // nit 3: this was a byte-for-byte duplicate of that assertion).
+  /* The shape a real book produces when a CLOSING quote is typed as an OPENING
+     one. `toEqual`, not `toContain`: a superset assertion cannot see a rule
+     that ADDS a span, which is how an earlier candidate rule passed every
+     anchor while inventing a spurious speech span. */
+  it('en: a closing quote typed as an opening one keeps both turns', () => {
+    expect(speechOf('“Hello,“ he said. “Goodbye,” she said.', conventionsFor('en')!)).toEqual([
+      'Hello,', ' he said. ', 'Goodbye,',
+    ]);
+  });
+
+  /* Case 3 — `ru`'s `“` closes turn 1 AND opens a pair, so the scan seeds a run
+     there, that run is discarded for overlapping turn 1, and the cursor has by
+     then passed turn 2's genuine `“`. Surfaced by the family instrument's own
+     no-stray control, which exists to prove it does not cry wolf. */
+  it('ru: turn 1’s own closing „…“ does not consume turn 2’s opener', () => {
+    expect(speechOf('„Привет“, сказал он. “Пока”, сказала она.', conventionsFor('ru')!)).toEqual([
+      'Привет', 'Пока',
+    ]);
+  });
+
+  it('runs stay disjoint when a run is truncated at a re-open', () => {
+    const body = '«Hola, dijo él. «Adiós», dijo ella.';
+    const spans = parseChapterStructure(body, buildNameIndex([], conventionsFor('es')!))
+      .flatMap((p) => p.spans)
+      .sort((a, b) => a.start - b.start);
+    for (let i = 1; i < spans.length; i++) expect(spans[i].start).toBeGreaterThanOrEqual(spans[i - 1].end);
+  });
+
+  it('a truncated run never produces an empty speech span', () => {
+    /* `cut > interiorStart` guarantees this; the degenerate `««` input falls
+       through to the shipped behaviour instead. */
+    expect(speechOf('««Hola», dijo él.', conventionsFor('es')!).every((s) => s.length > 0)).toBe(true);
+  });
+
+  /* DEPTH 3 — the proviso's reason to exist. `main` already mis-parses these;
+     the requirement is only that the fix does not make it worse by promoting a
+     depth-3 quoted word to its own speech span, which the render then
+     attributes and voices separately. Design § "Depth ≥ 3". */
+  it.each([
+    ['en', '“He told me, ‘She said “no” to him,’ and walked off,” Mary explained.', 'no'],
+    ['zh', '「他说『她说「不」了』然后走了」她解释说。', '不'],
+    ['ru', '«Он сказал „она сказала «нет» ему“ мне», объяснил он.', 'нет'],
+    /* straight from the corpus: se/charlotte-perkins-gilman_moving-the-mountain */
+    ['en', '“Mother had an old storybook,” Nellie remarked, “where somebody said, ‘You can’t always have your “druthers” ’—like home.”', 'druthers'],
+  ])('%s: depth-3 nesting is not fragmented into a one-word span', (lang, body, fragment) => {
+    expect(speechOf(body, conventionsFor(lang)!)).not.toContain(fragment);
+  });
+
+});
+
+describe('parser — #2315 defect 2: a gained secondary run must not cut a tag clause', () => {
+  const ru = conventionsFor('ru')!;
+  const tiered = { ...ru, secondaryQuotePairs: [['‘', '’']] as Array<[string, string]> };
+  const roster = [{ id: 'anton', name: 'Антон' }];
+  const speakersOf = (body: string, conv: typeof ru) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  /* POSITIVE CONTROL, and it must come first: without it a zero below could
+     mean "the metric cannot read a speaker at all". */
+  it('control: with no secondary pair the turn is attributed', () => {
+    expect(speakersOf('«Привет», сказал ‘Антон’.', ru)).toEqual([['Привет', 'anton']]);
+  });
+
+  it('the tag keeps its name when the tier is declared', () => {
+    expect(speakersOf('«Привет», сказал ‘Антон’.', tiered)).toEqual([['Привет', 'anton']]);
+  });
+
+  /* MUST STILL WORK: a genuine secondary-convention SECOND TURN, which the
+     guard must admit. The discriminator is the sentence boundary after the
+     tag, not the verb. */
+  it('a genuine secondary-convention second turn is still recovered', () => {
+    expect(speakersOf('«Привет», сказал Антон. ‘Пока’, сказал Антон.', tiered)).toEqual([
+      ['Привет', 'anton'], ['Пока', 'anton'],
+    ]);
+  });
+});
+
+describe('parser — #2315 PR #2340 review, finding 1: the guard is polarity-inverted for verb-before-quote languages', () => {
+  const zhTier: LanguageConventions = { ...conventionsFor('zh')!, secondaryQuotePairs: [['‘', '’'], ['"', '"']] };
+  const jaTier: LanguageConventions = { ...conventionsFor('ja')!, secondaryQuotePairs: [['"', '"']] };
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+  const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  /* CONTROL, comes first: this exact shape has no false-cognate verb-stem
+     substring nearby and already worked before this fix — proves the
+     failures below are specifically about the polarity/substring bug, not
+     about zh/ja parsing generally. */
+  it('zh: control — no stray verb-stem substring nearby, the turn already survived', () => {
+    expect(speechOf('他走在马路上，‘再见’，安东说。', zhTier)).toContain('再见');
+  });
+
+  /* zh/ja's canonical dialogue-tag order is VERB then quote ("他说，'你好'"),
+     the mirror image of the Latin trailing-tag shape ("'Hi,' he said") the
+     guard's clause-before-candidate model was built for. With NO primary run
+     anywhere in the paragraph, there is no already-captured turn for a tag to
+     be attributing — the candidate IS the turn, and the guard's verb check
+     should never even run. Compounding: zh/ja verb stems are single
+     characters with no word-boundary to stop a false match — 道 inside 道路
+     ("road"), 道 inside 知道 ("know"), 笑 inside 微笑 ("smile", a genuine BEAT
+     verb, but narration describing action BEFORE the quote, not a trailing
+     name-tag AFTER it). Reproduced from PR #2340 review finding 1. */
+  it.each([
+    ['zh: 道 substring inside 道路 ("road")', '他走在道路上，‘再见’，安东说。', '再见'],
+    ['zh: 道 substring inside 知道 ("know")', '他不知道，‘再见’，安东说。', '再见'],
+    ['zh: 笑 — a real beat verb, but it is narration before the quote', '她微笑着，‘你好’，安东说。', '你好'],
+  ])('%s: the turn is not swallowed', (_label, body, turn) => {
+    expect(speechOf(body, zhTier)).toContain(turn);
+  });
+
+  it('ja: the mirror shape — 笑 inside 苦笑い ("smile ruefully")', () => {
+    expect(speechOf('彼女は苦笑いして、"こんにちは"、アントンは言った。', jaTier)).toContain('こんにちは');
+  });
+
+  /* GENUINE TURN, END TO END: the leading clause ("安东说，") IS a real tag —
+     it's just BEFORE the turn, not after it. Once the guard stops swallowing
+     the candidate, the existing narration->tag reclassification (below, in
+     parseQuoteParagraph) and anchorSpansFromTags already attribute it
+     correctly; nothing else needs to change for this to work. */
+  it('zh: a genuine leading-tag turn is admitted AND attributed to the name in front of it', () => {
+    expect(speakersOf('安东说，‘你好’。', zhTier, [{ id: 'anton', name: '安东' }])).toEqual([['你好', 'anton']]);
+  });
+
+  /* MUST STILL DECLINE: the Latin-mimicking trailing-name-tag shape in zh
+     glyphs, with a PRIMARY run already captured before the tag. The 42-case
+     attribution family (reopen-sweep.test.ts) already covers this across all
+     six languages including zh/ja; re-asserted narrowly here as the one
+     shape this fix must NOT touch. */
+  it('zh: a trailing name-tag AFTER an already-captured primary turn is still declined', () => {
+    expect(speakersOf('「你好」，说道‘安东’。', zhTier, [{ id: 'anton', name: '安东' }])).toEqual([
+      ['你好', 'anton'],
+    ]);
+  });
+});
+
+describe('parser — #2315 PR #2340 review, finding 2: a non-terminal . or ; must not defeat the guard', () => {
+  const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
+  const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
+  const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  it('ru: a decimal point in the tag clause does not reset the sentence-boundary scan', () => {
+    expect(speakersOf('«Привет», сказал в 3.30 ‘Антон’.', ruTier, [{ id: 'anton', name: 'Антон' }])).toEqual([
+      ['Привет', 'anton'],
+    ]);
+  });
+
+  /* RESIDUAL, accepted (PR #2340 round 2 finding F1): an earlier revision
+     excluded a period preceded by a short capitalised word ("Mr.", "Dr.")
+     from counting as a sentence boundary, to keep this case declining. That
+     exclusion is a NAME filter, not a title filter — a short capitalised
+     name ("Ana.", "Jean.", "Иван.") matches the identical shape, and
+     excluding it lost a genuine SECOND turn entirely in ALL 11 of 11
+     second-turn shapes in the 22-case short-name attribution family (see
+     reopen-sweep.test.ts) — a materially worse harm than this one. Corpus
+     prevalence
+     settled it: 0 of 726,385 real paragraphs exhibit the abbreviation shape
+     at all, so the exclusion bought nothing measured. Pinned here as a
+     known, accepted gap rather than silently reworked to keep passing. */
+  it('en: an abbreviation period ("Mr.") in the tag clause is NOT specially handled — a known, accepted residual (PR #2340 F1)', () => {
+    expect(speakersOf('“Hi,” said Mr. «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Hi,', null], ['Anton', null],
+    ]);
+  });
+
+  it('ru: a semicolon in the tag clause does not terminate it — ; is not a sentence boundary', () => {
+    // "вчера" (yesterday), not "он" — ru's addressee-disambiguation in
+    // findSubjectName treats a subject PRONOUN between the verb and the name
+    // as proof the name isn't the speaker (by design, unrelated to this
+    // fix); an adverb there isn't a pronoun and doesn't trigger it.
+    expect(speakersOf('«Привет», сказал вчера; ‘Антон’ кивнул.', ruTier, [{ id: 'anton', name: 'Антон' }])).toEqual([
+      ['Привет', 'anton'],
+    ]);
+  });
+
+  it('en: a mid-clause ellipsis does not terminate the scan', () => {
+    expect(speakersOf('“Hi,” said… «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Hi,', 'anton'],
+    ]);
+  });
+
+  /* MUST STILL WORK: a genuine sentence-ending period, short word or not
+     ("он.", "Ana.") must still count as a real boundary — already covered by
+     the existing "a genuine secondary-convention second turn is still
+     recovered" test above (`он.`) and by the short-name attribution family
+     in reopen-sweep.test.ts (`Ana.`/`Jean.`/`Иван.`/`Ann.`); not
+     re-duplicated here. */
+});
+
+describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert when no primary run precedes the candidate', () => {
+  /* PR #2340 round 2 finding F2, title corrected in round 3 (finding C2):
+     `precededByPrimaryRun` is set only for a primary run whose
+     `end <= cand.start` — the real condition is "no primary run ENDS BEFORE
+     this candidate", not "no primary run anywhere in the paragraph". A
+     paragraph CAN carry a primary run and still be fully inert for a
+     candidate that sits before it — the third case below (`Said «Anton»,
+     "Hi there."`) is exactly that: `"…"` IS an `en` primary pair, so this
+     paragraph has a primary run, just one that comes AFTER «Anton» rather
+     than before it.
+
+     The obvious repair (check `out`, i.e. primary + already-accepted
+     secondary runs, instead of `primaryRuns` alone) fixes these three cases
+     but re-declines 5,892 genuine spans in one real Chinese book
+     (`pg/zh/23835.txt`) at corpus scale — reinstating round 1's MAJOR
+     finding under a different trigger. The real fix needs a discriminator
+     that separates "the verb belongs to the PRECEDING turn's trailing tag"
+     (decline) from "the verb introduces the FOLLOWING turn" (admit) — a
+     word-order typology question with more than one defensible encoding,
+     which is why this is filed rather than guessed:
+     https://github.com/dudarenok-maker/Castwright/issues/2346.
+
+     Measured exposed population against #2286's actual tables: 2,202 real
+     corpus paragraphs (paragraph-level; a run-level measurement — a primary
+     run exists but doesn't precede — finds 2,221 paragraphs / 8,802 inert
+     runs, confirming the paragraph-level figure is a conservative
+     under-count, not an over-count). A RAW two-secondary-spans-around-a-tag
+     proxy fires on 1,164 of the 2,202 — **but PR #2340 round 3 finding C1
+     found that raw count overstates the harm by ~100×**: it fires on an
+     ordinary correctly-parsed two-turn paragraph just as readily as on the
+     harmful shape, and for 94% of its mass (the same one book) it is the
+     former. Classified (generous upper bound: short, unpunctuated, <=3
+     words / <=5 CJK characters), the true figure is <=21 of 1,164 (1.8%).
+     **Do not target the raw 1,164 for reduction — #2346 has the full
+     breakdown and says this explicitly.** Pinned here as a KNOWN, TRACKED
+     gap — this test is expected to start FAILING the moment #2346 is fixed,
+     at which point it should be deleted, not adjusted to pass again. */
+  const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
+  const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
+  const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  it('ru: a whole paragraph in one secondary pair loses both speakers (#2346)', () => {
+    expect(speakersOf('‘Привет’, сказал ‘Антон’.', ruTier, [{ id: 'anton', name: 'Антон' }])).toEqual([
+      ['Привет', null], ['Антон', null],
+    ]);
+  });
+
+  it('en: a whole paragraph in one secondary pair loses both speakers (#2346)', () => {
+    expect(speakersOf('«Hi», said «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Hi', null], ['Anton', null],
+    ]);
+  });
+
+  it('en: a leading-tag secondary-only turn loses its speaker too (#2346)', () => {
+    expect(speakersOf('Said «Anton», "Hi there."', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Anton', null], ['Hi there.', null],
+    ]);
+  });
+});
+
+describe('parser — #2315 residuals, accepted (design § Residuals)', () => {
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  /* 1a — the CROSS-GLYPH straddle. This interval geometry is byte-for-byte a
+     legitimate nest, and it occurs in 5,267 of 239,725 real corpus paragraphs
+     where it is overwhelmingly correct. Every rule that acts on it was
+     measured: `R2` removes 601,392 characters of real speech; `R4` lets a
+     quoted word in narration change how a later turn parses. */
+  it('residual 1a: a cross-glyph straddle still swallows the next turn', () => {
+    expect(
+      speechOf('«Hola», dijo él, mirando el “cartel de Fausto. «Y tú», preguntó ella, cerca de la galería”.', conventionsFor('es')!),
+    ).toEqual(['Hola', 'cartel de Fausto. «Y tú», preguntó ella, cerca de la galería']);
+  });
+  /* 1b — the SYMMETRIC delimiter. With `"` the opener and the closer are the
+     same character, so an odd count means one is unpaired and nothing local can
+     say which. Irreducible: even `R2`, the ceiling, leaves this class. */
+  it('residual 1b: a stray ASCII " still swallows the next turn', () => {
+    expect(
+      speechOf('“Hi”, he said, passing the "Faust poster. "Bye", she said, near the gallery".', conventionsFor('en')!),
+    ).toEqual(['Hi', 'Faust poster. ', ', she said, near the gallery']);
+  });
+  /* 3 — depth >= 3 nesting is STILL mis-parsed; `main` truncates at the
+     depth-3 closer and this change leaves that untouched. Pinned so the
+     pre-existing defect is visible rather than assumed fixed. */
+  it('residual 3: depth-3 nesting is still truncated at the depth-3 closer', () => {
+    expect(speechOf('“He told me, ‘She said “no” to him,’ and walked off,” Mary explained.', conventionsFor('en')!))
+      .toEqual(['He told me, ‘She said “no']);
+  });
+});
+
+describe('parser — #2315 PR #2340 review finding 3: the re-open bound is not quadratic', () => {
+  /* Pre-fix, an accepted run advanced the scan past its own closer, so each
+     opener occurrence cost one forward closer-scan. The re-open bound alone
+     (`pos = cut`) resumes only two characters past a re-opened glyph, so a
+     paragraph with N consecutive same-glyph re-opens and no real closer
+     until the very end paid a full closer-scan N times: O(n^2). Measured
+     pre-fix on this exact input: len 64,001 took 4,625ms (x10,381 over the
+     pre-#2315 baseline). The REOPEN_CHAIN_LIMIT bound in scanQuoteRuns caps
+     this to O(REOPEN_CHAIN_LIMIT * n) — linear in the input length. Every
+     length gets a generous ceiling (not a tight one, to avoid flaking on a
+     loaded CI runner) — the point is bounding catastrophic quadratic growth,
+     not chasing a specific millisecond figure. */
+  const en = conventionsFor('en')!;
+  const idx = buildNameIndex([], en);
+
+  it.each([8001, 16001, 32001, 64001])('len %i completes in well under a second', (n) => {
+    const line = '“a'.repeat((n - 1) / 2) + '”';
+    expect(line.length).toBe(n);
+    const start = performance.now();
+    parseChapterStructure(line, idx);
+    const ms = performance.now() - start;
+    expect(ms, `took ${ms.toFixed(1)}ms`).toBeLessThan(750);
   });
 });

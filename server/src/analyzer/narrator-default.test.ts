@@ -338,6 +338,21 @@ describe('applyNarratorDefault', () => {
   });
 });
 
+describe('applyNarratorDefault — priorCharacterId (#1984 D18)', () => {
+  it('records the overwritten id on a demotion, and nothing on a spoken line', () => {
+    const ru = [
+      s(1, 'egor', 'Он засунул руки в карманы.'), // narration -> demoted
+      s(2, 'anton', '— Ничего нет,'),              // spoken -> untouched
+      s(3, 'narrator', 'Он ушёл.'),                 // already narrator -> NOT an override
+    ];
+    const out = applyNarratorDefault(ru, RU);
+    expect(out[0].characterId).toBe('narrator');
+    expect(out[0].priorCharacterId).toBe('egor');      // demoted — recorded
+    expect(out[1].priorCharacterId).toBeUndefined();   // spoken — untouched
+    expect(out[2].priorCharacterId).toBeUndefined();   // already narrator — NOT an override
+  });
+});
+
 describe('narrator-default + foldMinorCast interaction', () => {
   it('a speaker with >= minLines real (dashed) dialogue lines survives the fold', () => {
     // egor: 4 narration lines (model mislabeled as egor) + 3 real dashed lines

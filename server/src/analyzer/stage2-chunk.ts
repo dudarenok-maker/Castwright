@@ -275,17 +275,31 @@ export interface Stage2ChunkRunOptions {
   coverageRetries: number;
   /** Build + run the stage-2 model call for a sub-body. `precedingContext` is
       null on the single-call path and the first chunk (preserves byte-identical
-      prompts); non-null on later chunks (prepend it as read-only context). */
+      prompts); non-null on later chunks (prepend it as read-only context).
+
+      `callSeq` (#2324) is the 1-based sequence of this call within the chapter,
+      or `undefined` for the ONE unchunked whole-body call. It exists only so
+      the caller can key the handoff forensics per call — a chunked chapter used
+      to write every section under the same `2-ch{n}` key, each write rm'ing the
+      previous response, so only the last section survived. Undefined on the
+      single-call path keeps that path's filenames byte-identical. */
   callForBody: (
     subBody: string,
     precedingContext: string | null,
     lastSpeakerId: string | null,
+    callSeq: number | undefined,
   ) => Promise<{ sentences: SentenceOutput[] }>;
   /** Preceding-context paragraph count. Default 2. */
   contextParagraphs?: number;
   /** Adaptive re-split recursion bound. Default 3. */
   maxSplitDepth?: number;
   coverageThresholds?: Stage2CoverageThresholds;
+  /** #2325 — the language's dialogue marker (conventionsFor(lang).dialogueOpen).
+      Enables the dialogue-collapse check inside the coverage guard, so a section
+      that hands every spoken line to the narrator is retried instead of
+      persisted. Omitted for a language with no marker, leaving behaviour
+      unchanged. */
+  dialogueOpen?: RegExp;
   onRetry?: (attempt: number, verdict: Stage2CoverageVerdict) => void;
   /** Fired when a chunk's coverage retry stopped early because the failure
       reproduced exactly — deterministic, so the remaining budget cannot help. */
@@ -321,6 +335,21 @@ export async function runStage2ChapterChunked(
 ): Promise<Stage2ChunkRunResult> {
   const contextParagraphs = opts.contextParagraphs ?? 2;
   const maxSplitDepth = opts.maxSplitDepth ?? 3;
+
+  /* #2324 — per-CHAPTER call counter for the handoff forensics. Incremented on
+     every sectioned model call, including each coverage retry and each adaptive
+     re-split, so the failing attempt is preserved next to the one that replaced
+     it rather than deleted by it. Deliberately not the section index: two calls
+     for the same section must not collide, which is the whole defect. */
+  let callSeq = 0;
+  const callSectioned = (
+    span: string,
+    preceding: string | null,
+    lastSpeakerId: string | null,
+  ): Promise<{ sentences: SentenceOutput[] }> => {
+    callSeq += 1;
+    return opts.callForBody(span, preceding, lastSpeakerId, callSeq);
+  };
 
   /* Split an over-cap span for a retry: paragraph boundaries first (lossless),
      then — when the span is a single paragraph that won't divide — sentence
@@ -377,8 +406,9 @@ export async function runStage2ChapterChunked(
       guarded = await runStage2WithCoverageGuard({
         body: span,
         maxRetries: opts.coverageRetries,
-        call: () => opts.callForBody(span, preceding, lastSpeakerId),
+        call: () => callSectioned(span, preceding, lastSpeakerId),
         thresholds: opts.coverageThresholds,
+        dialogueOpen: opts.dialogueOpen,
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });
@@ -428,7 +458,12 @@ export async function runStage2ChapterChunked(
       lastSpeakerId = lastSpokenSpeaker(sectionSentences, lastSpeakerId);
     }
     const sentences = all.map((s, i) => ({ ...s, id: i + 1 }));
-    const coverage = validateStage2Coverage(opts.body, sentences, opts.coverageThresholds);
+    const coverage = validateStage2Coverage(
+      opts.body,
+      sentences,
+      opts.coverageThresholds,
+      opts.dialogueOpen,
+    );
     return { sentences, coverage, chunkCount: chunks.length };
   };
 
@@ -449,8 +484,13 @@ export async function runStage2ChapterChunked(
       const { result, coverage, deterministicFailure } = await runStage2WithCoverageGuard({
         body: opts.body,
         maxRetries: opts.coverageRetries,
-        call: () => opts.callForBody(opts.body, null, null),
+        /* The ONE unchunked call: no sequence, so its forensics keep the
+           historical `2-ch{n}` filenames. If it truncates or fails
+           deterministically, the re-split below runs through `callSectioned`
+           and those attempts DO get numbered. */
+        call: () => opts.callForBody(opts.body, null, null, undefined),
         thresholds: opts.coverageThresholds,
+        dialogueOpen: opts.dialogueOpen,
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });

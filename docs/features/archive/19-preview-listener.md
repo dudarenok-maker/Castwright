@@ -25,7 +25,7 @@ Full-screen listener-POV preview: hides the editor chrome and shows just the cov
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript?chapter=5&profile=p1`.
+Run `npm run dev:mock`, navigate to `#/books/<id>/manuscript?chapter=5&profile=p1`.
 
 1. **Open preview** (toolbar button) → `previewMode = true`; full-screen overlay covers the editor. Cover + chapter list + audiobook metadata visible; editor chrome hidden.
 2. **URL unchanged** — still `#/books/<id>/manuscript?chapter=5&profile=p1`.

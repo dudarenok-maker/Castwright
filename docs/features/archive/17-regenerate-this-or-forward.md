@@ -39,7 +39,7 @@ opt-in preview).
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to a book in `ready` state.
+Run `npm run dev:mock`, navigate to a book in `ready` state.
 
 1. **Click Regenerate on chapter 5** → `setRegenChapter(chapter5)`; modal opens with chapter title.
 2. **Pick scope = "this chapter"**, confirm → chapter 5 re-renders; modal closes.

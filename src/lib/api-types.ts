@@ -5159,6 +5159,8 @@ export interface components {
             excludeFromSynthesis?: boolean;
             /** @description #1679 — read-only editorial flag: true on the first sentence after a word-free scene break (* * *, <hr>) in the source. Display-only; never spoken, never affects attribution. */
             sceneBreakBefore?: boolean;
+            /** @description #1984 D18 — the characterId this sentence carried before a post-stage-2 step DEMOTED it (never written by the model). Written by every known demotion site: reconcileSentenceCharacterIds, applyNarratorDefault, the dialogue-structure engine's correction pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared by steps that re-assign rather than demote (escalation, tagged-line recovery). NOT written by the id-remap/merge paths — dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, remapFreshToPriorIds, performCastMerge — which also overwrite characterId (to another character's id, not narrator); whether a re-assignment should also carry a prior is an open design question, #2331. */
+            priorCharacterId?: string;
         };
         /**
          * @description fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly

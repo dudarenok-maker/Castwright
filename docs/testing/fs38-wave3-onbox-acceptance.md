@@ -207,10 +207,11 @@ this box is dual-GPU).
 | Sidecar alone | `npm run tts:sidecar` | `scripts/launch-sidecar.mjs`. Needed for the "stop just the sidecar" tests. |
 | Production bundle | `npm run start:prod` | `scripts/start-app-prod.mjs`. |
 
-> ⚠️ **Do NOT run in mock mode.** `.env.development` sets `VITE_USE_MOCKS` on for
-> `npm run dev`'s frontend; mock mode exercises only the store/component seams
-> and will fake every result in this sheet. Confirm you are hitting the real
-> server (the wizard must produce a real entry directory on disk — see §3).
+> ⚠️ **Do NOT use `npm run dev:mock`.** Plain `npm run dev` is already
+> real-backend (`.env.development` sets `VITE_USE_MOCKS=false`); `npm run
+> dev:mock` switches to mock mode, which exercises only the store/component
+> seams and will fake every result in this sheet. Confirm you are hitting the
+> real server (the wizard must produce a real entry directory on disk — see §3).
 
 ---
 

@@ -12,7 +12,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI } from '@google/genai';
 import type { z } from 'zod';
-import { writeInbox, outboxPath, errorPath, type HandoffKey } from '../handoff/protocol.js';
+import { writeInbox, outboxPath, errorPath, stage2HandoffKey, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
   stage1ChapterSchema,
@@ -313,7 +313,7 @@ export class GeminiAnalyzer implements Analyzer {
     promptMd: string,
     call: StageCall,
   ): Promise<Stage2ChapterOutput> {
-    const key = `2-ch${chapterId}` as const;
+    const key = stage2HandoffKey(chapterId, call.stage2CallSeq);
     return this.runStage(
       manuscriptId,
       key,

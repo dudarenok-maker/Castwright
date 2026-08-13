@@ -164,13 +164,18 @@ describe('stage1ChunkBudgetForEngine', () => {
 
    RED/GREEN: with the prior 0-token reservation the body filled the full 12k
    cap and this construction estimated ~19.8k tokens (roster=60) — well OVER the
-   16000 guard. With STAGE1_CLOUD_RESERVED_TOKENS=7000 it estimates ~13.2k. */
-describe('#1682 — worst-case Cyrillic stage-1 request clears the Gemma TPM guard', () => {
+   16000 guard. With STAGE1_CLOUD_RESERVED_TOKENS=7000 it estimates ~13.2k.
+
+   #1691: the roster is now LARGE (150 entries — past the old ~130-cast wall
+   where the fixed-only reservation crossed the guard) and is fed into the
+   body-size resolver, so the reservation scales with the whole-book cast. */
+describe('#1682/#1691 — worst-case Cyrillic stage-1 request clears the Gemma TPM guard', () => {
   const GEMMA_TPM = 16000;
   const MARGIN_CEILING = 14500; // 16000 − 1500 safety margin
 
-  /* A conservative running roster for a single book: 60 characters, Cyrillic
-     names, in the compact {id,name,role} shape buildStage1ChapterInbox renders. */
+  /* A conservative running roster for a very large ensemble book: 150 characters,
+     Cyrillic names, in the compact {id,name,role} shape buildStage1ChapterInbox
+     renders. 150 deliberately exceeds the old fixed-reservation wall (~130). */
   const worstCaseRoster = (n: number): CharacterOutput[] =>
     Array.from({ length: n }, (_, i) => ({
       id: `personazh-imya-familiya-${i}`,
@@ -183,15 +188,20 @@ describe('#1682 — worst-case Cyrillic stage-1 request clears the Gemma TPM gua
     const skill = await loadSkill('per_chapter_stage1');
     const systemInstruction = buildSystemInstruction(skill, 'ru', 'per_chapter_stage1');
 
-    // Body sized exactly the way the route sizes it for a huge Cyrillic chapter.
-    const bodyBudget = resolveStage1ChunkCharBudget('gemini', 'а'.repeat(120000));
+    // 150-entry running roster — the whole-book cast of a large ensemble.
+    const roster = worstCaseRoster(150);
+
+    // Body sized exactly the way the route sizes it for a huge Cyrillic chapter,
+    // with the same roster fed into the resolver so the reservation shrinks the
+    // body budget by the roster's injected size (#1691).
+    const bodyBudget = resolveStage1ChunkCharBudget('gemini', 'а'.repeat(120000), roster);
     const body = 'а'.repeat(bodyBudget);
 
     const inbox = buildStage1ChapterInbox(
       'm_1682',
       'Ночной дозор',
       { id: 12, title: 'Глава двенадцатая', body },
-      worstCaseRoster(60),
+      roster,
       [],
       'Сергей Лукьяненко',
     );
@@ -215,5 +225,14 @@ describe('#1682 — worst-case Cyrillic stage-1 request clears the Gemma TPM gua
     // The reservation genuinely shrinks the body budget by ~7000 tokens worth of
     // Cyrillic chars (7000 × 2.5), which is what buys back the TPM headroom.
     expect(reservedBudget).toBe(zeroReserveBudget - STAGE1_CLOUD_RESERVED_TOKENS * 2.5);
+  });
+
+  it('scales the reservation with the running roster — a 150-cast roster shrinks the budget below a 60-cast one (#1691)', () => {
+    // The whole point of #1691: the body budget must SHRINK as the book's cast
+    // grows, else the worst-case request crosses the guard at ~130 cast.
+    const cyr = 'а'.repeat(120000);
+    const budget60 = resolveStage1ChunkCharBudget('gemini', cyr, worstCaseRoster(60));
+    const budget150 = resolveStage1ChunkCharBudget('gemini', cyr, worstCaseRoster(150));
+    expect(budget150).toBeLessThan(budget60);
   });
 });

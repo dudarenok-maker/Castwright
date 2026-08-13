@@ -41,7 +41,7 @@ import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
-import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
+import { writeInbox, errorPath, rawAttemptPath, stage2HandoffKey, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
   stage1ChapterSchema,
@@ -333,7 +333,7 @@ export class OllamaAnalyzer implements Analyzer {
     promptMd: string,
     call: StageCall,
   ): Promise<Stage2ChapterOutput> {
-    const key = `2-ch${chapterId}` as const;
+    const key = stage2HandoffKey(chapterId, call.stage2CallSeq);
     return this.runStage(
       manuscriptId,
       key,

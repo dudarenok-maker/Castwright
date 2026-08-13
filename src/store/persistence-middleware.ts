@@ -20,6 +20,7 @@ import type { BookMetaState } from './book-meta-slice';
 import type { StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 import { notificationsActions } from './notifications-slice';
+import { bookMetaActions } from './book-meta-slice';
 
 /* Locally-typed shape of the store the middleware reads, declared without
    importing RootState to avoid a circular type reference back through the
@@ -40,14 +41,53 @@ interface PersistableRootState {
 const DEFAULT_DEBOUNCE_MS = 500;
 
 /* #1676(c) — action types whose persist failure the user MUST see: a silent
-   swallow would leave redux showing the move applied while disk holds the prior
-   attribution. Scoped to the two bulk actions only — broadening to every
-   manuscript flush (let alone every slice) would change long-standing swallow
-   behaviour for unrelated edits. */
-const TOAST_ON_PERSIST_FAILURE = new Set<string>([
-  'manuscript/setSentencesCharacterBulk',
-  'manuscript/undoBulkReassign',
-]);
+   swallow would leave redux showing the change applied while disk holds the
+   prior value. Scoped to the bulk manuscript reassignment and the Listen-view
+   book-meta save — the edits where the UI promising persistence while disk
+   silently reverts is exactly the failure this sweep exists to close.
+   Each entry carries the toast a persist failure should raise.
+   `bookMeta/commitDraft` (added #2230) surfaces the server's OWN refusal
+   sentence (a 409 rename refused mid-analysis, or a path collision) rather
+   than a hardcoded copy, and rolls its optimistic saved[] update back so the
+   header stops showing a value the server rejected. */
+interface PersistFailureHandler {
+  message: (err: unknown) => string;
+  dedupeKey: string;
+  /** Optional extra dispatch fired on persist failure — e.g. rolling back an
+      optimistic local update. Returns the action to dispatch. */
+  rollback?: (bookId: string) => { type: string };
+  /** Optional dispatch fired on a SUCCESSFUL flush — e.g. pruning a rollback
+      snapshot now that its optimistically-written value is confirmed on disk,
+      so the next commit snapshots a fresh baseline. Returns the action. */
+  onSuccess?: (bookId: string) => { type: string };
+}
+const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
+  'manuscript/setSentencesCharacterBulk': {
+    message: () => 'Line reassignment could not be saved. Check your connection and try again.',
+    dedupeKey: 'bulk-reassign-persist-failed',
+  },
+  'manuscript/undoBulkReassign': {
+    message: () => 'Line reassignment could not be saved. Check your connection and try again.',
+    dedupeKey: 'bulk-reassign-persist-failed',
+  },
+  /* #2230 — a refused rename (409: analysis running; or a folder path
+     collision) must surface the server's sentence and not leave the persisted
+     value claiming a title that never saved. The server message rides on
+     err.message (api.putBookState unwraps `{ error }` from the 409 body);
+     we strip the api.ts envelope so the toast shows only the refusal sentence,
+     degrading gracefully to the raw message if that format ever changes. */
+  'bookMeta/commitDraft': {
+    message: (err) => {
+      const raw = err instanceof Error ? err.message : '';
+      const sentence =
+        raw.replace(/^Book state PUT failed \(\d+\): /, '') || 'an unknown error occurred';
+      return `Book details couldn't be saved: ${sentence}`;
+    },
+    dedupeKey: 'book-meta-persist-failed',
+    rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
+    onSuccess: (bookId) => bookMetaActions.commitDraftSucceeded({ bookId }),
+  },
+};
 
 /* Read the user-tuned autosave debounce (fe-2) at flush-scheduling time so a
    change in the Account → Advanced panel takes effect on the next edit, with no
@@ -315,30 +355,61 @@ export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<StateSlice, ReturnType<typeof setTimeout>>();
   const pending = new Map<StateSlice, unknown>();
   /* Slices whose currently-pending write was (at least once this debounce
-     window) triggered by a toast-worthy bulk action. Last-wins on the patch
-     means the flush persists the latest manuscript state regardless, so if it
-     fails the bulk move didn't land — toasting is correct even if a non-bulk
-     edit also rode along in the same window. */
-  const toastPending = new Set<StateSlice>();
+     window) triggered by a toast-worthy action. Last-wins on the patch means
+     the flush persists the latest slice state regardless, so if it fails that
+     action didn't land — toasting with the matching handler is correct even if
+     an unrelated edit also rode along in the same window. Carries the handler
+     so the toast text can be per-action (bulk-reassign copy vs the server's own
+     refused-rename sentence) and any rollback can fire. */
+  const toastPending = new Map<StateSlice, PersistFailureHandler>();
+  /* #2230 — monotonically-increasing counter per slice, bumped every time a
+     write is (re)scheduled. A flush captures the counter at fire time; its
+     success/failure effects (snapshot prune / rollback / toast) only run if it
+     is still the LATEST flush for the slice. This prevents an OLDER in-flight
+     PUT from prematurely pruning or rolling back the shared rollback snapshot
+     that a NEWER in-flight PUT (started while the first was still pending) still
+     needs — closing the overlapping-in-flight-PUT data-loss race. */
+  const generation = new Map<StateSlice, number>();
 
   const flush = (bookId: string, slice: StateSlice) => {
     const patch = pending.get(slice);
     pending.delete(slice);
     timers.delete(slice);
-    const shouldToast = toastPending.delete(slice);
+    const handler = toastPending.get(slice);
+    toastPending.delete(slice);
+    const gen = generation.get(slice) ?? 0;
     if (patch === undefined) return;
-    api.putBookState(bookId, { slice, patch }).catch((err) => {
-      console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
-      if (shouldToast) {
-        store.dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message: 'Line reassignment could not be saved. Check your connection and try again.',
-            dedupeKey: 'bulk-reassign-persist-failed',
-          }),
-        );
-      }
-    });
+    api
+      .putBookState(bookId, { slice, patch })
+      .then(() => {
+        /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
+           newer write has since been scheduled (gen advanced), a fresh snapshot
+           belongs to it and must not be cleared by this older, superseded
+           flush. */
+        if (handler?.onSuccess && gen === (generation.get(slice) ?? 0)) {
+          store.dispatch(handler.onSuccess(bookId));
+        }
+      })
+      .catch((err) => {
+        console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
+        /* #2230 — only act on a failure of the LATEST write. An older flush's
+           failure is superseded by a newer in-flight write (which owns the
+           snapshot and the user's current draft), so don't toast/roll back for
+           it — that would wrongly revert the newer edit. */
+        if (handler && gen === (generation.get(slice) ?? 0)) {
+          store.dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: handler.message(err),
+              dedupeKey: handler.dedupeKey,
+            }),
+          );
+          /* #2230 — a refused rename must not leave the persisted value claiming
+             a title the server rejected; roll the optimistic saved update back
+             (and restore the draft so the user's text is preserved for retry). */
+          if (handler.rollback) store.dispatch(handler.rollback(bookId));
+        }
+      });
   };
 
   return (next) => (action) => {
@@ -354,7 +425,24 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (!bookId) return result;
 
     pending.set(rule.slice, rule.build(after, bookId));
-    if (TOAST_ON_PERSIST_FAILURE.has(type)) toastPending.add(rule.slice);
+    /* #2230 — bump the per-slice generation so this becomes the LATEST write;
+       in-flight older flushes keep their captured (lower) generation and are
+       therefore gated out of prune/rollback in flush. */
+    generation.set(rule.slice, (generation.get(rule.slice) ?? 0) + 1);
+    const failHandler = TOAST_ON_PERSIST_FAILURE[type];
+    if (failHandler) {
+      toastPending.set(rule.slice, failHandler);
+    } else if (rule.slice === 'state' && type !== 'bookMeta/commitDraft') {
+      /* #2230 — the `state` slice is shared by ui/confirmCast and
+         bookMeta/commitDraft (PERSIST_RULES above). When a non-bookMeta `state`
+         write (confirmCast) lands in the same debounce window it REPLACES the
+         pending patch, so a later failure concerns THAT write, not the
+         superseded book-meta rename. Drop the stale handler so we neither toast
+         nor roll back book-meta for an op that isn't book-meta. (Manuscript's
+         ride-along semantics are intentionally left untouched — only the shared
+         `state` slice has the cross-action mismatch.) */
+      toastPending.delete(rule.slice);
+    }
     const prev = timers.get(rule.slice);
     if (prev) clearTimeout(prev);
     timers.set(

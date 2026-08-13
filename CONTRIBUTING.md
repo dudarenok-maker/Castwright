@@ -411,8 +411,8 @@ see `scripts/link-sub-issues.mjs`).
 (`npm run backlog:sync`, open `type:feature` issues only, Status ≠ `Done`) —
 don't hand-edit it; edit the linked issue and re-run the sync.
 
-Design: [docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md](superpowers/specs/2026-07-05-github-issues-kanban-design.md).
-Regression plan: [docs/features/archive/241-github-projects-kanban-board.md](features/archive/241-github-projects-kanban-board.md).
+Design: [docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md](docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md).
+Regression plan: [docs/features/archive/241-github-projects-kanban-board.md](docs/features/archive/241-github-projects-kanban-board.md).
 
 ### Plan vs. no-plan
 

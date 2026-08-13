@@ -28,7 +28,7 @@ Inline `[tag]` markers like `[whispers]` live inside `sentence.text` strings fro
 
 ## Acceptance walkthrough
 
-Run `npm run dev`, open the manuscript view of any book in mock mode.
+Run `npm run dev:mock`, open the manuscript view of any book in mock mode.
 
 1. **Known tags render as badges** — a sentence reading `"Foo [whispers] bar [laughs] baz"` shows three text spans split by two badge spans coloured per tag.
 2. **Unknown tags pass through** — sentence `"Foo [bracket] bar [unknown] baz"` renders entirely as plain text containing literal `[bracket]` and `[unknown]`. No badge.

@@ -123,6 +123,74 @@ export function attributableWordCount(text: string): number {
    fragment-sized chunk into an adjacent one so it is never attributed alone. */
 export const STAGE2_MIN_EVALUABLE_WORDS = 5;
 
+/* #2325 — dialogue-attribution sanity.
+
+   Every signal above measures whether the source PROSE survived. None measures
+   whether the attribution is usable, so a chapter in which every spoken line
+   was handed to `narrator` re-emits the prose verbatim, scores a coverage ratio
+   of ~1.00, and passes `ok: true`. That is not hypothetical: the 2026-08-12
+   Ночной дозор run persisted a whole book at 95.7% narrator across 15,100
+   sentences (the good run of the same book was 67.9%) and nothing warned,
+   retried, or flagged — it simply shipped a single-voice audiobook.
+
+   For a language whose conventions carry a `dialogueOpen` marker the check is
+   deterministic, because the convention itself says which paragraphs are
+   speech. Only SPEECH HALVES count: `- Ничего нет,` opens with the marker and
+   continues with a capital, whereas the tag half `- сказал Егор.` opens with
+   the same marker but continues lowercase and is CORRECTLY the narrator. Mixing
+   the two would put a legitimately-narrated population in the denominator and
+   move the bar to wherever that book's tag ratio happened to sit. */
+export const STAGE2_MAX_NARRATED_SPEECH_PCT = 60;
+
+/* Below this many speech halves the share is noise, so the span is not judged
+   — a short section near a chunk seam can hold two or three spoken lines. */
+export const STAGE2_MIN_SPEECH_HALVES = 20;
+
+/** Split a dialogue-marked line into `speech` (marker then an UPPERCASE first
+    cased letter — an actual spoken turn) and `tag` (marker then lowercase — a
+    `- сказал Егор.` narration tag, legitimately the narrator). A line with no
+    cased letter at all is `indeterminate` and counted in neither, so it can
+    never be silently folded into the population that decides the verdict. */
+export function classifyDialogueLine(
+  text: string,
+  dialogueOpen: RegExp,
+): 'speech' | 'tag' | 'indeterminate' {
+  const trimmed = (text ?? '').trim();
+  if (!dialogueOpen.test(trimmed)) return 'indeterminate';
+  const after = trimmed.replace(dialogueOpen, '');
+  for (const ch of after) {
+    if (ch.toLowerCase() !== ch.toUpperCase()) return ch === ch.toLowerCase() ? 'tag' : 'speech';
+  }
+  return 'indeterminate';
+}
+
+/** Share of a span's SPEECH HALVES that were attributed to `narrator`.
+    `evaluable` is false when there are too few to judge. */
+export function narratedSpeechShare(
+  sentences: Array<{ text: string; characterId?: string }>,
+  dialogueOpen: RegExp,
+): { speechHalves: number; narrated: number; pct: number; evaluable: boolean } {
+  let speechHalves = 0;
+  let narrated = 0;
+  for (const s of sentences) {
+    /* A sentence with no `characterId` carries no attribution to judge. Counting
+       it would make it read as "not narrator" and drag the share DOWN, so a
+       caller that forgot to pass attributed sentences would get a silent,
+       vacuous pass instead of a breach. Excluded from the population entirely,
+       which leaves such a span un-evaluable rather than falsely clean. */
+    if (typeof s.characterId !== 'string') continue;
+    if (classifyDialogueLine(s.text, dialogueOpen) !== 'speech') continue;
+    speechHalves += 1;
+    if (s.characterId === 'narrator') narrated += 1;
+  }
+  return {
+    speechHalves,
+    narrated,
+    pct: speechHalves ? (100 * narrated) / speechHalves : 0,
+    evaluable: speechHalves >= STAGE2_MIN_SPEECH_HALVES,
+  };
+}
+
 /** Largest contiguous run of sentences whose normalised text repeats an earlier
     sentence's text at a CONSTANT offset (the loop signature). */
 function findDuplicatedBlock(
@@ -163,8 +231,12 @@ function findDuplicatedBlock(
     prose. See the module header for the three signals. */
 export function validateStage2Coverage(
   bodyText: string,
-  sentences: Array<{ text: string }>,
+  sentences: Array<{ text: string; characterId?: string }>,
   thresholds?: Stage2CoverageThresholds,
+  /* #2325 — the language's dialogue marker. Omitted (English and every other
+     language whose conventions define no marker) leaves the attribution check
+     inert and this function byte-identical to before. */
+  dialogueOpen?: RegExp,
 ): Stage2CoverageVerdict {
   const t = resolveThresholds(thresholds);
   const issues: string[] = [];
@@ -233,8 +305,22 @@ export function validateStage2Coverage(
     );
   }
 
+  /* #2325 — dialogue collapse. Gated on an evaluable population so a
+     dialogue-light span is never judged on three lines. */
+  const speech = dialogueOpen ? narratedSpeechShare(sentences, dialogueOpen) : null;
+  const dialogueCollapse = !!(
+    speech &&
+    speech.evaluable &&
+    speech.pct > STAGE2_MAX_NARRATED_SPEECH_PCT
+  );
+  if (dialogueCollapse) {
+    issues.push(
+      `Dialogue collapse — ${speech!.narrated}/${speech!.speechHalves} spoken lines (${speech!.pct.toFixed(1)}%) were attributed to the narrator, above ${STAGE2_MAX_NARRATED_SPEECH_PCT}%; the cast is being ignored.`,
+    );
+  }
+
   return {
-    ok: !noSentences && !truncated && !excess && !duplicatedBlock,
+    ok: !noSentences && !truncated && !excess && !duplicatedBlock && !dialogueCollapse,
     coverageRatio,
     endingPresent,
     duplicatedBlock,
@@ -295,11 +381,16 @@ function verdictSignature(v: Stage2CoverageVerdict): string {
 
     `onExhausted` fires only on that path, so a caller can distinguish "we ran
     out of attempts" from "more attempts are very unlikely to help". */
-export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ text: string }> }>(opts: {
+export async function runStage2WithCoverageGuard<
+  T extends { sentences: Array<{ text: string; characterId?: string }> },
+>(opts: {
   body: string;
   maxRetries: number;
   call: () => Promise<T>;
   thresholds?: Stage2CoverageThresholds;
+  /** #2325 — the language's dialogue marker, enabling the dialogue-collapse
+      check. Omitted leaves the guard's behaviour unchanged. */
+  dialogueOpen?: RegExp;
   onRetry?: (attempt: number, verdict: Stage2CoverageVerdict) => void;
   /** Fired instead of a further retry when an attempt reproduced the previous
       one's failure signature exactly — i.e. the defect is deterministic here
@@ -315,7 +406,7 @@ export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ 
   deterministicFailure: boolean;
 }> {
   let result = await opts.call();
-  let coverage = validateStage2Coverage(opts.body, result.sentences, opts.thresholds);
+  let coverage = validateStage2Coverage(opts.body, result.sentences, opts.thresholds, opts.dialogueOpen);
   let attempts = 1;
   let deterministicFailure = false;
   /* The signature of the attempt JUST MADE — tracked separately from `coverage`,
@@ -335,7 +426,12 @@ export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ 
        attempt 1 followed by "reproduced exactly … (repeat-loop at 19)"). */
     opts.onRetry?.(attempts + 1, lastAttemptVerdict);
     const retryResult = await opts.call();
-    const retryCoverage = validateStage2Coverage(opts.body, retryResult.sentences, opts.thresholds);
+    const retryCoverage = validateStage2Coverage(
+      opts.body,
+      retryResult.sentences,
+      opts.thresholds,
+      opts.dialogueOpen,
+    );
     attempts += 1;
     if (isBetterCoverage(retryCoverage, coverage)) {
       result = retryResult;

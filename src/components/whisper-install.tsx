@@ -10,6 +10,7 @@
    lines). Self-contained — owns its polling loop, no redux. */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { api } from '../lib/api';
 import { PrimaryButton } from './primitives';
 
 export type WhisperInstallState = 'not-installed' | 'model-missing' | 'ready';
@@ -60,11 +61,17 @@ export function WhisperInstall({ onInstalled }: { onInstalled?: () => void } = {
        which the Major-1 fix made outright wrong for anyone who overrides
        qa.asr.model — the installer now fetches the CONFIGURED model, not
        base. Best-effort: a failed/mocked-empty fetch just keeps the
-       registry-default label above instead of erroring the whole card. */
-    void fetch('/api/config')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { values?: Record<string, { effective?: unknown }> } | null) => {
-        const effective = body?.values?.['qa.asr.model']?.effective;
+       registry-default label above instead of erroring the whole card.
+       Routed through api.getConfig() (#2344) rather than a raw fetch — the
+       real implementation THROWS on a non-ok response instead of resolving
+       null, so the swallow now happens in the .catch() below rather than
+       the ternary that used to guard res.json(). Same end result: any
+       failure (or a mocked-empty response with no qa.asr.model key) just
+       keeps the registry-default label above. */
+    void api
+      .getConfig()
+      .then((body) => {
+        const effective = body.values?.['qa.asr.model']?.effective;
         if (typeof effective === 'string' && effective.trim()) setAsrModel(effective);
       })
       .catch(() => {});

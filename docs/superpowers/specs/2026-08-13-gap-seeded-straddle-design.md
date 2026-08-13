@@ -108,6 +108,59 @@ inaudible, and invisible to every instrument built for this ticket, which is
 how it nearly shipped. That asymmetry, not the raw counts, is what the standing
 German answer was actually protecting against.
 
+> ### ⚠ CORRECTION, 2026-08-13 — B's residual as priced above is UNDERSTATED
+>
+> **The sentence above is the pricing the owner approved rule B on, and it is
+> incomplete.** A review gate on PR #2286 — the first consumer to populate a
+> secondary tier — found a third residual that neither this document nor any
+> instrument built for it could see:
+>
+> **A gained secondary run landing inside a TAG CLAUSE truncates it, and the
+> adjacent real turn loses its speaker.** The turn survives, so every
+> turns-destroyed instrument reads 0, and the line is then read **in the wrong
+> voice**:
+>
+> ```
+> input: «Привет», сказал ‘Антон’.
+> main:  speech[anton]="Привет" | tag[-]=", сказал ‘Антон’."
+> tiered: speech[-]="Привет"    | tag[-]=", сказал " | speech[-]="Антон" | narration[-]="."
+> ```
+>
+> Reproduced in `ru`, `es`, `fr` and `en`; the span-structure half was
+> independently re-verified (2 spans on `main`, 4 on the widened tree, all three
+> languages). Measured over the same 291-book corpus: **265 gained runs
+> overlapping a `main` tag span, across 92 paragraphs** (zh 84, es 4, ja 3,
+> fr 1).
+>
+> **A real turn losing its speaker is not "narration spoken aloud."** It is not
+> recoverable by a later rule in the sense that sentence claims, and it is not
+> attributable — it is the attribution that is destroyed. Read against the
+> reading of record, it is closer to A's class than to B's.
+>
+> **Why every instrument here was blind to it:** the corpus comparison builds
+> `buildNameIndex([], conv)` — an **empty roster** — and classifies on speech-run
+> `[start,end)` geometry alone, so speaker fields are never populated and never
+> compared. "0 lost / 0 merged / 0 split" is silent about attribution **by
+> construction, not by measurement**. The generated sweeps and the residual pins
+> compare span strings only. **Any future metric in this loop must be
+> attribution-aware and must ship a positive control proving it can see this
+> class.**
+>
+> Separately, and for the same reason this correction exists: the
+> `sweep-six-langs` "0 destroyed of 51,608" figure is a **constant**. It reads 0
+> with the straddle guard deleted, with the overlap guard deleted, and with the
+> pairs moved back into the primary table; a German positive control confirms
+> the counter itself works. **That family is not evidence about the tier and
+> must not be cited as a gate.**
+>
+> **Disposition:** the decision for B over A stands — this does not make A
+> better, since A destroys turns outright. What changes is that **B is not
+> finished**. The tag-clause truncation is folded into the
+> [#2315](https://github.com/dudarenok-maker/Castwright/issues/2315) design pass,
+> which now covers both it and the primary-pair straddle, and PR #2286 is held in
+> draft until that lands and the corpus is re-measured with an attribution-aware
+> metric.
+
 **This does not reopen #1601 or contradict the standing answer.** German
 answered "drifted input must not corrupt" against a case that *destroyed
 turns*; B destroys none. What the decision settles is the ambiguity nobody had

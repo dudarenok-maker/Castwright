@@ -42,7 +42,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** → stage `{ kind: 'books' }`, library cards visible; footer at the bottom of content reads `v1.4.0 · <sha>[*] · <branch> · <HH:MM>`.
 2. **Open a book and play a chapter** (`ready` stage) → the fixed MiniPlayer appears at the very bottom; scroll to the end of content and confirm the footer is present above the player's reserved gap, not hidden behind it.

@@ -135,7 +135,7 @@ Source spec: [`docs/superpowers/specs/2026-07-24-fs35-per-chapter-detect-emotion
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, the default for `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. Open a book's manuscript view (`#/books/<id>/manuscript`), select a
    chapter with sentences → click **Detect emotions** (the primary button).

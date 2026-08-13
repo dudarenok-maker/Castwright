@@ -737,3 +737,82 @@ describe('lastSpokenSpeaker (#1758)', () => {
     expect(lastSpokenSpeaker(sentences, null)).toBeNull();
   });
 });
+
+/* #2324 — every model call a chapter makes must be distinguishable, so its
+   prompt and response land in their own handoff files. Before this, all of a
+   chapter's calls shared one `2-ch{n}` key and each write deleted the previous
+   response; the #2306 investigation found every recorded prompt on disk was a
+   LAST chunk, which is exactly the chunk that does not fail. */
+describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => {
+  it('passes NO sequence on the single-call path (filenames stay unchanged)', async () => {
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => fakeAttribute(subBody),
+    );
+    await runStage2ChapterChunked({
+      body: makeBody(3),
+      charBudget: 10_000,
+      coverageRetries: 1,
+      callForBody: call,
+    });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][3]).toBeUndefined();
+  });
+
+  it('gives each section of a chunked chapter a distinct 1..N sequence', async () => {
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => fakeAttribute(subBody),
+    );
+    const out = await runStage2ChapterChunked({
+      body: makeBody(10),
+      charBudget: 80,
+      coverageRetries: 1,
+      callForBody: call,
+    });
+    expect(out.chunkCount).toBeGreaterThan(1);
+    const seqs = call.mock.calls.map((c) => c[3]);
+    // One number per call, all defined, all distinct, contiguous from 1.
+    expect(seqs.every((s) => typeof s === 'number')).toBe(true);
+    expect(new Set(seqs).size).toBe(seqs.length);
+    expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+  });
+
+  it('gives a COVERAGE RETRY its own sequence, so the failed attempt survives', async () => {
+    /* The retry re-runs the same span. Keyed by section index it would reuse
+       the section's number and the retry would overwrite the attempt that
+       failed — losing precisely the evidence a retry exists to explain. */
+    let first = true;
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => {
+      if (first) {
+        first = false;
+        return { sentences: [] as SentenceOutput[] }; // fails coverage → retry
+      }
+      return fakeAttribute(subBody);
+    },
+    );
+    await runStage2ChapterChunked({
+      body: makeBody(10),
+      charBudget: 80,
+      coverageRetries: 2,
+      callForBody: call,
+    });
+    const seqs = call.mock.calls.map((c) => c[3]);
+    expect(call.mock.calls.length).toBeGreaterThan(1);
+    expect(new Set(seqs).size).toBe(seqs.length); // no reuse across the retry
+  });
+});

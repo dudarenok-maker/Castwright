@@ -1439,7 +1439,10 @@ export function reconcileSentenceCharacterIds(
     }
     demotedCount += 1;
     demotedByOriginalId.set(s.characterId, (demotedByOriginalId.get(s.characterId) ?? 0) + 1);
-    out.push({ ...s, characterId: fallbackId });
+    // #1984 D18 — record the id this demotion overwrote. This is the site that
+    // matters: it runs by default and knob-independently, and is the #1984
+    // incident's own mechanism (roster-shrink demotion).
+    out.push({ ...s, characterId: fallbackId, priorCharacterId: s.characterId });
     options.onDemote?.({ sentence: s, originalId: s.characterId });
   }
   return { sentences: out, demotedCount, demotedByOriginalId };
@@ -2215,7 +2218,12 @@ export async function attributeChapterStage2(opts: {
   const firstPersonId = fpConventions
     ? findFirstPersonCharacter(stage1.characters, fpConventions)
     : null;
-  const callForBody = (subBody: string, preceding: string | null, lastSpeakerId: string | null) => {
+  const callForBody = (
+    subBody: string,
+    preceding: string | null,
+    lastSpeakerId: string | null,
+    callSeq: number | undefined,
+  ) => {
     const prompt =
       preceding === null && subBody === opts.chapter.body
         ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, stage1, opts.chapter, firstPersonId)
@@ -2233,13 +2241,26 @@ export async function attributeChapterStage2(opts: {
       opts.manuscriptId,
       opts.chapter.id,
       prompt,
-      opts.stageCall,
+      /* #2324 — carry this call's sequence so the analyzer keys its handoff
+         forensics per call. Spread rather than mutate: `stageCall` is created
+         once per chapter and shared across every section, so assigning to it
+         would race the concurrent chapter running in the other analyzer slot.
+         Undefined on the single-call path leaves the object shape unchanged. */
+      callSeq === undefined ? opts.stageCall : { ...opts.stageCall, stage2CallSeq: callSeq },
     );
   };
   const result = await runStage2ChapterChunked({
     body: opts.chapter.body,
     charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),
     coverageRetries: resolveStage2CoverageRetries(),
+    /* #2325 — the language's own dialogue marker, so a section that hands every
+       spoken line to the narrator fails the coverage guard and is retried
+       rather than persisted. Reuses `fpConventions`, already resolved above and
+       independent of the structure-engine knob — the collapse this catches is a
+       stage-2 failure, so the check must not disappear when the deterministic
+       engine is turned off. undefined for a language with no marker (English),
+       leaving the guard byte-identical to before. */
+    dialogueOpen: fpConventions?.dialogueOpen ?? undefined,
     callForBody,
     onRetry: opts.onCoverageRetry,
     onExhausted: opts.onCoverageExhausted,
@@ -3972,7 +3993,15 @@ export async function runMainAnalyzerJob(
                 call: () =>
                   runStage1ChapterChunked({
                     body: ch.body,
-                    charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
+                    charBudget: resolveStage1ChunkCharBudget(
+                      selection.engine,
+                      ch.body,
+                      // #1691 — roster-aware reservation: the running roster
+                      // grows with the whole book's cast, so the body budget must
+                      // shrink by its injected size or the worst-case request
+                      // crosses the Gemma TPM guard (~130 speaking cast).
+                      Array.from(rebuildRoster().values()),
+                    ),
                     mergeRosters: mergeRosterChapter,
                     onChunk: (sec) => {
                       /* Feed section progress into the live ETA so the first
@@ -6302,7 +6331,12 @@ export async function runSubsetAnalyzerJob(
               call: () =>
                 runStage1ChapterChunked({
                   body: ch.body,
-                  charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
+                  charBudget: resolveStage1ChunkCharBudget(
+                    selection.engine,
+                    ch.body,
+                    // #1691 — roster-aware reservation, mirroring the full route.
+                    Array.from(rebuildRoster().values()),
+                  ),
                   mergeRosters: mergeRosterChapter,
                   onChunk: (sec) =>
                     log(

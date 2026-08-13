@@ -33,7 +33,7 @@ surface only.
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`. Open `#/new`.
+Run `npm run dev:mock`. Open `#/new`.
 
 1. **Paste a single paragraph** (e.g. "The morning broke over the cliffs.") → word count "5 words" appears below the textarea. Byte size matches `Blob` length.
 2. **Click Continue with no text and no file** → button stays disabled (or surfaces an inline error). API is not called.

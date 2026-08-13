@@ -1,6 +1,7 @@
-import type { ParagraphEvidence, SpanEvidence } from './types.js';
+import type { LanguageConventions, ParagraphEvidence, SpanEvidence } from './types.js';
 import type { NameIndex } from './name-matcher.js';
 import { findRosterName, findSubjectName } from './name-matcher.js';
+import { splitEvidencedInteriorTurns } from './paragraph-recovery.js';
 
 /* Spec §5.1. Conservative by construction: only two interior-dash patterns
    toggle span state; anything ambiguous degrades to `unanchored` (flag, not
@@ -86,12 +87,28 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
     must not assume `spans[].start`/`end` sum to the paragraph's full
     length; the aligner is overlap-based and tolerant of these
     micro-gaps. */
-export function parseChapterStructure(body: string, index: NameIndex): ParagraphEvidence[] {
+export interface ParseChapterOptions {
+  /** Recovery for degraded manuscripts: run splitEvidencedInteriorTurns first so
+      dialogue turns hidden inside narration-open merges become line-starting
+      dashes. ON BY DEFAULT (length-preserving, offset-safe — see the
+      splitEvidencedInteriorTurns doc). Pass `false` to disable. Quotes-only
+      languages (no dialogueOpen) are a no-op either way. */
+  recoverMidParagraphTurns?: boolean;
+}
+
+export function parseChapterStructure(
+  body: string,
+  index: NameIndex,
+  opts?: ParseChapterOptions,
+): ParagraphEvidence[] {
   const conv = index.conventions;
+  const text = (opts?.recoverMidParagraphTurns ?? true)
+    ? splitEvidencedInteriorTurns(body, index)
+    : body;
   const out: ParagraphEvidence[] = [];
   let offset = 0;
   // Callers pass \n-normalized text; offsets below are absolute into that body.
-  for (const line of body.split('\n')) {
+  for (const line of text.split('\n')) {
     const start = offset;
     offset += line.length + 1; // +1 for the split '\n'
     const trimmed = line.trim();
@@ -338,6 +355,97 @@ function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>
   return best;
 }
 
+/** Sentence-final punctuation for the tag-clause guard, CJK full-width forms
+    included — without them `zh`/`ja` read every tag as one unbounded clause.
+    `;`/`；` are deliberately excluded (PR #2340 review finding 2): a
+    semicolon joins two clauses of ONE sentence, it does not end one. `…` is
+    excluded too: right before this guard's own candidate it is
+    indistinguishable from a mid-clause pause (`said… "Anton"`) and a genuine
+    trailing-off sentence, and treating it as a boundary was measured to
+    defeat the guard on the former — the safer default is to extend the
+    clause, not cut it short (same "never delete, extend instead" bias as the
+    rest of this file). */
+const SENTENCE_END_CHARS = new Set(['.', '!', '?', '。', '！', '？']);
+
+/** Is `line[i]` a genuine sentence terminator, or a decimal point that only
+    LOOKS like one (PR #2340 review finding 2)? `3.30` — a digit on both
+    sides — is never a boundary.
+
+    PR #2340 round 2 finding F1 (fixed): an earlier revision also excluded a
+    period preceded by a short (<=4 char) capitalised run of letters, to stop
+    `Mr.`/`Dr.` resetting the clause. Measured, that exclusion is a name
+    filter, not a title filter: `«Hola», dijo Ana. "Adiós", dijo Ana.` (and
+    the `fr`/`ru` equivalents, `Jean`/`Иван`) lost the SECOND turn entirely —
+    `Ana.` matched the same pattern as `Mr.` and the clause search for the
+    second candidate walked straight through it, back into the first turn's
+    own tag, declining a genuine second turn. A short capitalised name is far
+    more common than a title abbreviation, and corpus prevalence settles it
+    either way: 0 of 726,385 real paragraphs exhibit the abbreviation shape
+    at all, so excluding it bought nothing measured and cost all 11 of the
+    11 second-turn shapes in a 22-case family
+    (`server/src/analyzer/dialogue-structure/reopen-sweep
+    .test.ts`'s short-name attribution family — the 42-case family's own
+    second-turn count is 21; this replica family is smaller, 4 languages not
+    6). Removing it is a residual,
+    not a fix-in-place: `“Hi,” said Mr. «Anton».` (`parser.test.ts`) is
+    re-pinned as a known gap the guard doesn't close, rather than silently
+    reworked to keep passing. */
+function isGuardSentenceEnd(line: string, i: number): boolean {
+  const ch = line[i];
+  if (!SENTENCE_END_CHARS.has(ch)) return false;
+  if (ch !== '.') return true;
+  const before = line[i - 1];
+  const after = line[i + 1];
+  if (before !== undefined && after !== undefined && /\d/.test(before) && /\d/.test(after)) return false;
+  return true;
+}
+
+/** #2315 defect 2. A gained SECONDARY run that lands INSIDE a tag clause
+    truncates it, `findRosterName` never reaches the name, and the adjacent
+    real turn loses its speaker — so it is read in the wrong voice. The turn
+    survives, so every turns-destroyed instrument in this strand reads 0.
+
+    Declining requires an ALREADY-CAPTURED PRIMARY run to be at risk
+    (PR #2340 review finding 1, fixed): the guard's whole premise is that a
+    tag is attributing a turn that already exists as its own run — with no
+    primary run anywhere before the candidate, there is nothing for a tag to
+    be attributing, so the candidate can only be the turn itself. This isn't
+    a per-language exception; it's what the guard's own docstring always
+    claimed and the original implementation never actually checked. Without
+    it, the guard is polarity-inverted for any language whose canonical tag
+    order is VERB then quote (zh/ja: `他说，"你好"`), which the original
+    clause-before-candidate model reads as `verb, no sentence end -> tag
+    clause -> decline` — backwards, because there the verb introduces the
+    turn rather than attributing an already-parsed one. Measured: 93.7% of
+    one real Chinese book's speech spans falsely declined before this gate.
+
+    Once a primary run is confirmed, the discriminator is a SENTENCE
+    BOUNDARY, not a verb alone:
+      `, сказал `      verb, no sentence end -> inside the tag clause -> decline
+      `, сказал он. `  verb, sentence end    -> a new sentence, a turn -> admit
+      ` en la portada. ` no verb             -> narration; M2's suppression
+                                                class                  -> admit
+
+    The window is the CLAUSE, not the whole gap: scoping it to the gap was
+    measured and only moved the corpus figure 265 -> 165, because a long
+    paragraph's gap contains earlier sentence-final punctuation. Secondary-tier
+    only, so it is a measured no-op on every shipped table. */
+function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], conv: LanguageConventions): boolean {
+  let from = 0;
+  let precededByPrimaryRun = false;
+  for (const r of primaryRuns) {
+    if (r.end <= cand.start && r.end > from) {
+      from = r.end;
+      precededByPrimaryRun = true;
+    }
+  }
+  if (!precededByPrimaryRun) return false;
+  for (let i = cand.start - 1; i >= from; i--) {
+    if (isGuardSentenceEnd(line, i)) { from = i + 1; break; }
+  }
+  return hasStem(line.slice(from, cand.start), [...conv.speechVerbStems, ...conv.beatVerbStems]);
+}
+
 /** Two-tier scan (#2288 M2, rule B). Primary-pair runs are found first and
     always win; secondary-pair candidates then fill the gaps BETWEEN them,
     except one whose interior contains a primary OPENER glyph.
@@ -364,6 +472,7 @@ function findQuoteRuns(
   line: string,
   pairs: Array<[string, string]>,
   secondary: Array<[string, string]>,
+  conv: LanguageConventions,
 ): QuoteRun[] {
   const primaryRuns = scanQuoteRuns(line, pairs);
   if (!secondary.length) return primaryRuns;
@@ -382,10 +491,57 @@ function findQuoteRuns(
       }
     }
     if (straddles) continue;
+    if (cutsATagClause(line, c, primaryRuns, conv)) continue;
     out.push(c);
   }
   return out.sort((a, b) => a.start - b.start);
 }
+
+/** #2315. A quotation run may not contain a further occurrence of its OWN
+    opening glyph: a quotation cannot re-open without having closed.
+
+    Why this is not an acceptance rule. The per-opener scan resumes at the end
+    of an accepted run (`pos = end.at + end.glyph.length` below), so a re-opened
+    glyph inside that range never becomes a candidate at all — there is nothing
+    for any ordering, election, or tiering rule to choose. 258 of the 396 shapes
+    in the design's family are this case, and `fr`, whose table has one pair, is
+    entirely this case. */
+function reopenCut(
+  line: string,
+  interiorStart: number,
+  endAt: number,
+  open: string,
+  openers: Set<string>,
+): number | null {
+  const at = line.indexOf(open, interiorStart);
+  if (at < 0 || at >= endAt) return null;
+  /* No language nests a pair inside itself — conventions alternate BY DEPTH, so
+     depth 3 re-uses depth 1's glyph. An opener of any class between this run's
+     own opener and the re-occurrence means a nest is in play, and the
+     re-occurrence is a nesting delimiter rather than a re-open. Refusing to act
+     whenever nesting is anywhere in play costs family shapes (164 -> 172) and
+     no real turns. */
+  for (const o of openers) {
+    const k = line.indexOf(o, interiorStart);
+    if (k >= 0 && k < at) return null;
+  }
+  return at;
+}
+
+/* #2315 perf (PR #2340 review finding 3): bounds how many CONSECUTIVE
+   re-open cuts (below, in `scanQuoteRuns`) one opener class may take before
+   falling back to the pre-#2315 accept-and-resume behaviour for the rest of
+   its chain. Each cut re-scans the remaining line for a closer, and
+   `pos = cut` resumes only two characters past the last one — so a
+   paragraph with N consecutive same-glyph re-opens and no real closer until
+   the very end pays a full closer scan N times, each almost as expensive as
+   the last: O(n^2). Real quote density is ~1 opener per 75 chars; even
+   badly garbled prose measured at ~1 per 75 (400 joined real paragraphs,
+   every closer retyped as an opener) never approaches this bound. It exists
+   for the adversarial case, not the real one — capping it converts an
+   unbounded quadratic blowup on adversarial input into a bounded linear
+   one, without touching the closer-search machinery below at all. */
+const REOPEN_CHAIN_LIMIT = 200;
 
 function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
@@ -398,6 +554,9 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
     let pos = 0;
+    /* Per-opener-class chain counter — reset for each `open` glyph, unlike
+       REOPEN_CHAIN_LIMIT above which is the shared, module-level bound. */
+    let reopenChain = 0;
     for (;;) {
       const start = line.indexOf(open, pos);
       if (start < 0) break;
@@ -473,8 +632,23 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
            still continues rather than stopping outright, so openers of OTHER
            classes still get their turn. */
         pos = start + open.length;
+        reopenChain = 0; // PR #2340 nit 3: consistent with the accept path below
         continue;
       }
+      /* #2315: end the run at a re-open rather than letting it swallow the next
+         turn. The run is still EMITTED, with no closing delimiter — deleting it
+         destroys a turn, the harm this strand refuses; the spurious speech span
+         it can produce is the accepted lesser harm. Resuming at `cut` is what
+         lets the next turn be seen at all. */
+      const cut =
+        reopenChain < REOPEN_CHAIN_LIMIT ? reopenCut(line, interiorStart, end.at, open, openers) : null;
+      if (cut !== null && cut > interiorStart && cut < end.at) {
+        candidates.push({ start, end: cut, openLen: open.length, closeLen: 0 });
+        pos = cut;
+        reopenChain++;
+        continue;
+      }
+      reopenChain = 0;
       candidates.push({
         start,
         end: end.at + end.glyph.length,
@@ -506,7 +680,7 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
     onto adjacent speech spans exactly like the dash path. */
 function parseQuoteParagraph(line: string, base: number, index: NameIndex): ParagraphEvidence {
   const conv = index.conventions;
-  const runs = findQuoteRuns(line, conv.quotePairs, conv.secondaryQuotePairs);
+  const runs = findQuoteRuns(line, conv.quotePairs, conv.secondaryQuotePairs, conv);
   const spans: SpanEvidence[] = [];
   let cursor = 0;
   for (const run of runs) {

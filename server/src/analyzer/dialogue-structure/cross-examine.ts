@@ -390,7 +390,18 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
     }
     report[decision.bucket] += 1;
     if (decision.flagged) flags.push({ index, reason: decision.reason });
-    sentences.push({ ...as.sentence, characterId: decision.characterId, confidence: decision.confidence });
+    // #1984 D18 — the question is whether this decision OVERWROTE the id, not
+    // whether the bucket is 'corrected': decideNarrationOnly can re-affirm a
+    // sentence already narrator (a 'corrected' verdict with no actual change),
+    // and a non-'corrected' bucket is not a guarantee the id is unchanged.
+    const overwritten = decision.characterId !== as.sentence.characterId;
+    const { priorCharacterId: _stalePrior, ...base } = as.sentence;
+    sentences.push({
+      ...base,
+      characterId: decision.characterId,
+      confidence: decision.confidence,
+      ...(overwritten ? { priorCharacterId: as.sentence.characterId } : {}),
+    });
     reasons.push({ index: reasons.length, reason: decision.reason, bucket: decision.bucket });
   });
 

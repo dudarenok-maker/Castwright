@@ -55,7 +55,7 @@ If a surface area is untested, state that explicitly with a follow-up plan item 
 
 ### Manual acceptance walkthrough
 
-Numbered click-through with expected URL hash, redux state, and visible UI after each step. Run in mock mode (`VITE_USE_MOCKS=true`) unless the plan needs the real backend or sidecar.
+Numbered click-through with expected URL hash, redux state, and visible UI after each step. Run in mock mode (`npm run dev:mock`) unless the plan needs the real backend or sidecar.
 
 1. **Cold boot at `#/`** → expected stage = `{ kind: 'books' }`, expected UI = library cards.
 2. …

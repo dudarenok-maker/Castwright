@@ -57,7 +57,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run `npm run dev` in mock mode (`VITE_USE_MOCKS=true`).
+Run `npm run dev:mock` in mock mode (`VITE_USE_MOCKS=true`).
 
 1. Open `http://localhost:5173/#/books/sb/confirm`. Solway Bay's < 40 characters → flat render.
 2. Open `http://localhost:5173/#/books/sb/listen`. Same — flat render.

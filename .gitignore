@@ -30,7 +30,8 @@ dist/
 .idea/
 .vscode/
 *.swp
-.claude/
+.claude/*
+!.claude/skills/
 .claude-*
 # Superpowers brainstorming visual-companion mockups (local-only scratch)
 .superpowers/

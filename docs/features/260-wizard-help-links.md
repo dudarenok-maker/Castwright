@@ -134,7 +134,7 @@ future refactor of `SetupWizard`'s render tree doesn't silently break that guara
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/?setup=notready`, guided mode, step 1 (Environment).** Expected: "Set up
    Castwright" heading, "Need help?" footer with 5 links visible, no "Learn more" link (its

@@ -61,7 +61,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-1. **Boot** `npm run dev` (mock mode on) → URL `#/`, library renders.
+1. **Boot** `npm run dev:mock` → URL `#/`, library renders.
 2. **Open any book** → URL `#/books/:bookId/cast`, cast view renders.
 3. **Click a character card** → drawer slides in from the right, URL gains `&profile=:characterId`.
 4. **Scroll to "Model voice" card** → engine tabs visible, override `<select>` defaults to `Auto`.

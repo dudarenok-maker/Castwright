@@ -2,10 +2,18 @@
    Script pre-pass is authoritative; franc disambiguates Latin; front-matter
    stripped before detecting; es/fr/de detected but not yet `supported`. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters } from './detect-language.js';
+import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters, prepareSample } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
 import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
-import { countProseUnits, PROSE_UNIT_FLOOR } from './prose-units.js';
+import {
+  countProseUnits,
+  PROSE_UNIT_FLOOR,
+  guiraudR,
+  LEXICAL_RICHNESS_FLOOR,
+  digitTokenShare,
+  DIGIT_TOKEN_SHARE_CEILING,
+  joinSamplesForGates,
+} from './prose-units.js';
 
 describe('detectManuscriptLanguage', () => {
   it('detects Russian via the Cyrillic pre-pass (supported)', () => {
@@ -566,5 +574,730 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
       const [first, ...rest] = results;
       for (const r of rest) expect(r).toEqual(first);
     });
+  });
+});
+
+/* #2256 — PROSE_UNIT_FLOOR alone lets PUNCTUATED junk through: a long
+   numbered TOC or a periods-and-page-numbers index racks up enough
+   terminators to clear it purely by having many short, repetitive entries.
+   See prose-units.ts's own header for the corpus this was measured against
+   and the stated margins on both sides. */
+describe('guiraudR / digitTokenShare (#2256 pure helpers)', () => {
+  it('guiraudR is 0 for a token-less sample', () => {
+    expect(guiraudR('12345 000 --- !!! ???')).toBe(0);
+  });
+
+  it('guiraudR rewards a wide vocabulary and punishes verbatim repetition, at the same unit count', () => {
+    const repeated = Array(20).fill('Chapter One.').join(' '); // dedupes to 1 unit, 2 types / 2 tokens
+    const distinctWords = [
+      'apple', 'bridge', 'candle', 'desert', 'ember', 'forest', 'granite', 'harbor', 'island', 'jungle',
+      'kettle', 'lantern', 'meadow', 'nebula', 'orchard', 'pepper', 'quarry', 'river', 'summit', 'tundra',
+    ];
+    const varied = distinctWords.map((w) => `${w} Word.`).join(' '); // 20 distinct units, no dedup collapse
+    expect(guiraudR(varied)).toBeGreaterThan(guiraudR(repeated));
+  });
+
+  it('digitTokenShare ignores punctuation-only tokens and counts a token as "digit" when it is a pure digit run (the scanner splits digits from adjacent letters into separate tokens)', () => {
+    expect(digitTokenShare('Chapter 12. See page 45, note 3.')).toBeGreaterThan(0);
+    expect(digitTokenShare('Chapter Twelve. See the note.')).toBe(0);
+  });
+
+  it('digitTokenShare is 0 for an empty sample', () => {
+    expect(digitTokenShare('')).toBe(0);
+  });
+});
+
+describe('detectManuscriptLanguageFromChapters — #2256 punctuated-junk residual (PROSE_UNIT_FLOOR alone is not enough)', () => {
+  // A numbered TOC — "N. Name." per entry, six cycling character names — is
+  // the exact shape #2251's own review comment measured (1200 units at
+  // scale). Sized here to comfortably clear PROSE_UNIT_FLOOR (80 units, 4x
+  // the floor) so this fixture exercises the NEW gate, not the old one —
+  // the un-punctuated version of this exact TOC (no periods at all, 0 prose
+  // units) already has its own regression above ("symptom 2").
+  function numberedToc(entries: number): string {
+    const names = ['Kaz', 'Inej', 'Nina', 'Matthias', 'Wylan', 'Jesper'];
+    const parts: string[] = [];
+    for (let i = 1; i <= entries; i++) parts.push(`${i}. ${names[i % names.length]}.`);
+    return parts.join(' ');
+  }
+
+  // Periods-and-page-numbers index — "Term, N." per entry, ten distinct head
+  // terms — the second punctuated shape from the same review comment.
+  function periodIndex(entries: number): string {
+    const terms = ['Aardvark', 'Abacus', 'Abandon', 'Abbey', 'Abbot', 'Abdicate', 'Abduct', 'Abeyance', 'Abhor', 'Abide'];
+    const parts: string[] = [];
+    for (let i = 1; i <= entries; i++) parts.push(`${terms[i % terms.length]}, ${i * 3}.`);
+    return parts.join(' ');
+  }
+
+  const repeatedHeadings = (entries: number) => Array(entries).fill('Chapter One.').join(' ');
+
+  it('fixture sanity: all three junk shapes clear PROSE_UNIT_FLOOR on their own — the OLD gate alone would have backfilled every one of them', () => {
+    expect(countProseUnits(numberedToc(40))).toBeGreaterThanOrEqual(PROSE_UNIT_FLOOR);
+    expect(countProseUnits(periodIndex(50))).toBeGreaterThanOrEqual(PROSE_UNIT_FLOOR);
+    expect(countProseUnits(repeatedHeadings(30))).toBeGreaterThanOrEqual(PROSE_UNIT_FLOOR);
+    // And all three clear the NEW gate's own PROSE_UNIT_FLOOR-adjacent input by
+    // enough margin that a passing test here is about the richness/digit
+    // gates, not an accidental floor miss.
+    expect(guiraudR(numberedToc(40))).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+    expect(guiraudR(periodIndex(50))).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+    expect(guiraudR(repeatedHeadings(30))).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+  });
+
+  it('a numbered TOC that franc mis-disambiguates with fallback:false (a repro of the "backfilled \'de\'" residual) still surrenders — never writes the wrong non-English language', () => {
+    const toc = numberedToc(40); // 80 prose units — 4x PROSE_UNIT_FLOOR
+    // Fixture sanity: franc is genuinely fooled here (fallback:false), so a
+    // gate keyed on fallback alone — or on PROSE_UNIT_FLOOR alone — would
+    // have backfilled this book with the WRONG non-English language.
+    const soloDetection = detectManuscriptLanguage(toc);
+    expect(soloDetection.fallback).toBe(false);
+    expect(soloDetection.language).not.toBe('en');
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: toc }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('a periods-and-page-numbers index (50 entries, digit-dense) surrenders via the digit-token-share ceiling', () => {
+    const idx = periodIndex(50);
+    expect(digitTokenShare(idx)).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING);
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: idx }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('repeated "Chapter One." headings (no digits at all) still surrenders via lexical richness alone', () => {
+    const headings = repeatedHeadings(30);
+    expect(digitTokenShare(headings)).toBe(0); // proves this shape needs the RICHNESS gate, not the digit one
+    expect(guiraudR(headings)).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: headings }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('the SAME numbered-TOC junk surrenders identically whether it is 1 chapter or split across many (chapter-count invariance, #2276\'s own guarantee extended to the new gate)', () => {
+    const toc = numberedToc(40);
+    const words = toc.split(' ');
+    const third = Math.ceil(words.length / 3);
+    const asOneChapter = [{ title: 'Chapter One', body: toc }];
+    const asThreeChapters = [
+      { title: 'Chapter One', body: words.slice(0, third).join(' ') },
+      { title: 'Chapter Two', body: words.slice(third, third * 2).join(' ') },
+      { title: 'Chapter Three', body: words.slice(third * 2).join(' ') },
+    ];
+    const oneResult = detectManuscriptLanguageFromChapters(asOneChapter);
+    const threeResult = detectManuscriptLanguageFromChapters(asThreeChapters);
+    expect(oneResult.fallback).toBe(true);
+    expect(threeResult).toEqual(oneResult);
+  });
+
+  /* #2256 independent review round 2, finding 5 — the test this replaces
+     was `Array(25).fill(oneSentence)`, which dedupeProseUnits collapses to
+     ONE sentence: it pinned a constant (does this one sentence's own R clear
+     a fixed floor?), not a metric SHAPE, so it could not go red for a
+     length-dependence, tokenization, or script-asymmetry regression — see
+     this file's own describe block below for the mutation proof. Replaced
+     with a lock parameterised across scripts (en, zh, ja, an all-kana ja
+     variant) AND across two genuinely different sample lengths (not one
+     sentence repeated) built from hand-authored, non-repeating real-shaped
+     sentences — dedup cannot collapse these to a single unit, so the
+     richness/digit gates actually see the SHAPE (script, length) they're
+     meant to guard, not a frozen number. */
+});
+
+/* #2256 independent review round 2 — regression locks for findings 1-5.
+   Each fixture below is hand-authored, non-repeating prose (dedup cannot
+   collapse it to fewer units the way `Array(N).fill(oneSentence)` can), so
+   these tests exercise the actual SHAPE each finding is about rather than a
+   frozen constant — every one is mutation-verified (see the PR/commit
+   history for the exact reverted line and the resulting real failure
+   message for each). */
+describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regression locks', () => {
+  // 30 distinct sentences per script — real-shaped narrative prose, no two
+  // sentences alike, so dedupeProseUnits cannot reduce this to a handful of
+  // units regardless of how many are used. "short" below takes the first 22
+  // (just above PROSE_UNIT_FLOOR=20); "long" takes all 30 — two genuinely
+  // different lengths of genuinely varied content, not a repeat count.
+  const EN_POOL = [
+    'Marcel watched the harbor lights flicker as the last fishing boats came in against the tide.',
+    'Wren scraped the final ribbon of slag from the crucible and set the tongs down to cool.',
+    'Inej counted the rooftops between the belfry and the river before choosing her route down.',
+    'Henri folded the letter twice, unwilling to read the closing line again until he had steadied his hands.',
+    'Rosalind pressed her palm against the cold glass and watched the rain streak sideways across the square.',
+    'Otto measured the beam twice before he trusted the chalk line enough to cut.',
+    'Ilya remembered the smell of the foundry long after he had left the trade behind.',
+    'Beatrix traced the old survey marks on the map until the ink gave out near the ridge.',
+    'Andrzej rebuilt the fence post by post, arguing with himself about the angle each time.',
+    'Suki listened to the kettle climb toward a boil and did not move to take it off.',
+    'Tobias abandoned the draft halfway through the third page and started again from a different year.',
+    'Naledi carried the lantern low so the wind along the causeway would not find the flame.',
+    'Wilhelm questioned the surveyor about the boundary stone and got no answer worth repeating.',
+    'Ingrid trusted the old ferryman more than she trusted the printed schedule nailed to the post.',
+    'Casimir doubted the weather would hold, but he loaded the cart before dawn regardless.',
+    'The orchard smelled of windfall apples fermenting quietly in grass no one had cut that autumn.',
+    'A gull wheeled over the harbor while the fishing boats dragged sideways against their moorings.',
+    'The clocktower struck eleven as the last tram rattled past with fogged, empty windows.',
+    'Rain needled the tin roof all night, and by morning the lane had become a shallow river.',
+    'He counted the coins twice, set them in two unequal piles, and pushed the smaller one across.',
+    'The archive smelled of dust and river damp, and nobody had signed the ledger in a decade.',
+    'A stranger paused at the workshop door, read the sign twice, and walked on without knocking.',
+    'The quarry had been abandoned so long that saplings grew crooked out of the spoil heaps.',
+    'She kept the compass in her coat pocket though it had not pointed true since the crossing.',
+    'The stairwell creaked under weight it had not carried since the old tenants moved out.',
+    'A single ember held in the grate long after the rest of the fire had gone to ash.',
+    'The signal lamp on the point blinked twice, paused, and blinked twice again through the fog.',
+    'Someone had left the courtyard gate open, and the geese had wandered halfway to the well.',
+    'The current pulled harder near the old pilings than the ferryman ever let on to passengers.',
+    'A vessel with no name painted on its bow sat low in the water past the breakwater.',
+  ];
+  const ZH_POOL = [
+    '马塞尔望着港口的灯火在最后几艘渔船归来时轻轻闪烁。',
+    '雷恩刮下坩埚里最后一丝炉渣然后放下钳子让它冷却。',
+    '伊内伊数着钟楼与河流之间的屋顶才选定下去的路线。',
+    '亨利把信折了两次直到用茶稳住双手才敢再读最后一行。',
+    '罗莎琳把手掌贴在冰冷的玻璃上看雨水斜斜地划过广场。',
+    '奥托把横梁量了两遍才敢相信粉线足够准确去下刀。',
+    '伊利亚离开这行很久之后仍然记得铸造厂的气味。',
+    '比阿特丽克斯沿着旧测量标记描摹地图直到墨迹在山脊附近用尽。',
+    '安杰伊一根一根地重建篱笆每次都在角度上和自己争论。',
+    '纪子听着水壶渐渐煮沸却没有伸手把它端离炉火。',
+    '托拜厄斯写到第三页中途放弃又换了一个年份重新开始。',
+    '娜莱迪把灯笼提得很低好让堤道上的风找不到火苗。',
+    '威廉向测量员追问界石的事却没得到一个像样的答案。',
+    '英格丽比起钉在柱子上的时刻表更信任那位老船夫。',
+    '卡西米尔怀疑天气撑不了多久但天不亮就把车装好了。',
+    '果园里弥漫着无人收割的落果在草丛中悄悄发酵的气味。',
+    '海鸥在港口上空盘旋而渔船正被潮水拖向一边的系缆桩。',
+    '钟楼敲响了十一点最后一班电车摇晃着驶过雾蒙蒙的车窗。',
+    '雨水整夜敲打着铁皮屋顶到了早晨小巷已成一条浅浅的河。',
+    '他把硬币数了两遍分成两堆大小不等把较小的那堆推了过去。',
+    '档案室里满是灰尘与河潮的气味账本已经十年没人签过字。',
+    '一个陌生人在作坊门口停下把招牌读了两遍便转身离开。',
+    '采石场荒废太久幼树已从废石堆里歪歪扭扭地长了出来。',
+    '她把罗盘揣在大衣口袋里尽管自那次渡河后它就没再指对过方向。',
+    '楼梯间的木板发出吱呀声承受着旧租户搬走后久未有过的重量。',
+    '炉膛里一块余烬在其余炭火燃尽很久之后依然亮着。',
+    '海角上的信号灯闪了两下停顿一下又在雾中闪了两下。',
+    '有人把庭院的大门开着鹅群已经摇摇摆摆走到了井边。',
+    '老桩附近的水流比船夫愿意告诉乘客的要湍急得多。',
+    '一艘船首没有写名字的船在防波堤外吃水很深地停着。',
+  ];
+  const JA_POOL = [
+    'マルセルは最後の漁船が戻る頃港の灯りが揺れるのを見つめていた。',
+    'レンはるつぼの最後の滓を削り取り火箸を置いて冷ますに任せた。',
+    'イネジは鐘楼と川の間の屋根を数えてから下りる道を選んだ。',
+    'アンリは手紙を二度折りたたみ茶で手を落ち着けるまで最後の一行を読まなかった。',
+    'ロザリンドは冷たい窓ガラスに手のひらを当てて雨が広場を斜めに走るのを見た。',
+    'オットーは梁を二度測ってからようやく墨線を信じて切り始めた。',
+    'イリヤはその仕事を離れて久しくなっても鋳造所の匂いを覚えていた。',
+    'ベアトリクスは古い測量印を地図でたどり尾根近くでインクが尽きるまで続けた。',
+    'アンジェイは杭を一本ずつ立て直しながら毎回角度について自分と言い争った。',
+    '紀子は薬缶が沸くのを聞きながら火から下ろそうとはしなかった。',
+    'トビアスは三ページ目の途中で下書きを諦め別の年から書き直した。',
+    'ナレディは堤道の風に炎を見つけられぬよう灯りを低く掲げた。',
+    'ヴィルヘルムは測量士に境界石のことを尋ねたが答えらしい答えは得られなかった。',
+    'イングリッドは柱に打ち付けられた時刻表よりも老いた渡し守を信じていた。',
+    'カジミールは天気が持たないと疑いながらも夜明け前に荷車へ積み込んだ。',
+    '果樹園には誰も刈らなかった落ち果実が静かに発酵する匂いが漂っていた。',
+    'かもめが港の上を旋回し漁船は潮に流されて係留杭に斜めに引かれていた。',
+    '鐘楼が十一時を打ち最後の路面電車が霧に曇った窓のまま走り去った。',
+    '雨は一晩中トタン屋根を叩き朝には小道が浅い川になっていた。',
+    '彼は硬貨を二度数え大小二つの山に分けて小さい方を押しやった。',
+    '記録室には埃と川の湿気が満ち帳簿には十年も署名がなかった。',
+    '見知らぬ男が工房の戸口で立ち止まり看板を二度読んでから立ち去った。',
+    '採石場は久しく放棄され捨て石の山から若木が曲がりながら伸びていた。',
+    '彼女は渡航以来一度も正しく指したことのない羅針盤を上着の中に入れていた。',
+    '階段室は旧住人が去って以来受けたことのない重みにきしんだ。',
+    'かまどの残り火は他の炭がすべて灰になった後も長く燃えていた。',
+    '岬の信号灯は二度瞬き一拍おいて霧の中でまた二度瞬いた。',
+    '誰かが中庭の門を開けたままにし鵞鳥はよろよろと井戸のそばまで歩いていた。',
+    '古い杭の近くの流れは渡し守が乗客に語る以上に速かった。',
+    '舳先に名のない船が防波堤の外で深く沈み込んで停まっていた。',
+  ];
+  // All-hiragana, no kanji at all — the degenerate shape finding 3 reported
+  // (a children's book, or any furigana-only text). 30 distinct sentences,
+  // real hiragana words/particles.
+  const KANA_POOL = [
+    'あさひがまどからさしこんでねこはまだねむっていた。',
+    'かぜがそよそよとふいてきてことりがちいさくないた。',
+    'おんなのこはにわにでてはなをながめそらをみあげた。',
+    'そらはあおくてくもひとつなかったあさだった。',
+    'おとうさんがげんかんでくつをはいているところだった。',
+    'おかあさんはだいどころでおちゃをいれているところだった。',
+    'いえのなかはとてもしずかであたたかかったゆうがた。',
+    'ゆうがたになるととりたちがうたいはじめていた。',
+    'ちいさなかわがさらさらとおとをたててながれていた。',
+    'みちのわきにたんぽぽがいくつもさいていた。',
+    'かぜにゆれるはなをみておんなのこはわらった。',
+    'よるになるとほしがきらきらとひかりはじめた。',
+    'あさになるとみんながゆっくりとおきてきた。',
+    'いぬがにわのすみでくるりとまるくなってねむった。',
+    'おばあちゃんがえんがわでせんすをつかっていた。',
+    'こどもたちはひろばでたこをあげてあそんでいた。',
+    'せんせいがこくばんにおおきなえをかいてみせた。',
+    'あめがふるとかえるがげんきにうたいだした。',
+    'ゆきがふるとまちじゅうがまっしろになった。',
+    'なつになるとせみがいっせいになきはじめた。',
+    'ふゆのあさはいきがしろくみえるほどさむかった。',
+    'はるになるとさくらのはながひらひらとまいおちた。',
+    'あきになるといちょうのはがきいろにそまった。',
+    'とりがすにかえってくるまでははをひろげてまっていた。',
+    'つきがたかくのぼるころみんなはねむりについた。',
+    'かわのむこうでこどもがてをふっているのがみえた。',
+    'もりのなかでふくろうがしずかにめをひらいていた。',
+    'はたけでおじいさんがくわをふるっていた。',
+    'えきまえのひろばでがっしょうだんがうたっていた。',
+    'ちいさなふねがみずうみをゆっくりとすすんでいった。',
+  ];
+
+  /* Han numerals for the numbered-TOC / dated-chronicle fixtures below.
+     ONE copy (#2256 review round 4, nit N7 — this was pasted into three
+     separate tests, and a fourth pair of near-identical `chronicleChapter`
+     helpers disagreed on their own EVENTS array). Covers 1-99, which is all
+     any fixture here needs. */
+  function toHanNumeral(n: number): string {
+    const digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+    if (n < 10) return digits[n];
+    if (n < 20) return '十' + (n % 10 === 0 ? '' : digits[n % 10]);
+    const tens = Math.floor(n / 10),
+      ones = n % 10;
+    return digits[tens] + '十' + (ones === 0 ? '' : digits[ones]);
+  }
+
+  const cases = [
+    { label: 'en', join: ' ', pool: EN_POOL, expectLanguage: 'en' },
+    { label: 'zh', join: '', pool: ZH_POOL, expectLanguage: 'zh' },
+    { label: 'ja (mixed kanji+kana)', join: '', pool: JA_POOL, expectLanguage: 'ja' },
+    { label: 'ja (all-kana, no kanji)', join: '', pool: KANA_POOL, expectLanguage: 'ja' },
+  ];
+  /* #2256 review round 3, finding N5 (nit) — "short"/"long" here (22 vs 30,
+     the full authored pools) is a general real-content regression net, NOT
+     a length-decay test: finding 3(a)'s windowing mechanism (the reason a
+     bigger length gap would have mattered) was retracted in round 3 (see
+     finding C1 above), so there is no longer a length-dependent code path
+     for this property lock to exercise. The margins here (R comfortably
+     above the floor, digit share comfortably below the ceiling) are
+     intentionally loose — this locks "real content passes with real room
+     to spare", not "real content sits at the edge"; the edge cases live in
+     the dedicated finding-1/2/4/C2 tests above, which use short, digit- or
+     ceiling-adjacent content on purpose. */
+  const lengths = [
+    { label: 'short (22, just above PROSE_UNIT_FLOOR)', count: 22 },
+    { label: 'long (all 30)', count: 30 },
+  ];
+
+  describe.each(cases)('$label', ({ join, pool, expectLanguage }) => {
+    it.each(lengths)('clears the richness/digit gates and resolves confidently — $label', ({ count }) => {
+      const sample = pool.slice(0, count).join(join);
+      expect(guiraudR(sample)).toBeGreaterThanOrEqual(LEXICAL_RICHNESS_FLOOR);
+      expect(digitTokenShare(sample)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+
+      const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: sample }]);
+      expect(r.language).toBe(expectLanguage);
+      expect(r.fallback).toBe(false);
+    });
+  });
+
+  /* Finding 1 — digitTokenShare used to split on WHITESPACE, so an
+     identical single injected digit (e.g. a dated year in one sentence of
+     several) scored far higher for whitespace-less CJK than for equivalent
+     English, because the whole CJK sentence containing it counted as ONE
+     token instead of the ~10-20 word-equivalent tokens the same content
+     produces in English. Repro: a "dated novel" shape — 1 sentence in 4 (of
+     21 total, well above PROSE_UNIT_FLOOR) carries an injected year — dense
+     enough that the OLD whitespace-based tokenizer's per-sentence digit
+     share (6/21 ≈ 0.286) would exceed even the recalibrated
+     DIGIT_TOKEN_SHARE_CEILING (0.2), while the new script-aware tokenizer's
+     share stays well under it. Neither script should be pushed into
+     surrendering by an isolated digit. */
+  it('finding 1 — an isolated injected digit does not disproportionately punish CJK vs EN (dated-novel repro)', () => {
+    const injectEvery = 4;
+    const enSample = EN_POOL.slice(0, 21)
+      .map((s, i) => (i % injectEvery === 0 ? s.replace('watched', 'watched, in 1985,') : s))
+      .join(' ');
+    const zhSample = ZH_POOL.slice(0, 21)
+      .map((s, i) => (i % injectEvery === 0 ? '1985年，' + s : s))
+      .join('');
+
+    const enResult = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: enSample }]);
+    const zhResult = detectManuscriptLanguageFromChapters([{ title: '第一章', body: zhSample }]);
+    expect(enResult).toEqual({ language: 'en', supported: true, fallback: false });
+    expect(zhResult.language).toBe('zh');
+    expect(zhResult.fallback).toBe(false);
+  });
+
+  /* Finding 2 — `/\d/` matches neither fullwidth digits (U+FF10-FF19) nor
+     Han numeral characters (一二三...百千万), so a Han-numeral or
+     fullwidth-digit numbered Chinese TOC scored digitTokenShare=0 and could
+     backfill 'zh' with fallback:false — the exact "never write a language
+     it only guessed" failure #2246 exists to prevent, now for CJK
+     numbering specifically. 60 entries, real Chinese TOC punctuation
+     ("N、Title。"), distinct two-character titles (comfortably above
+     LEXICAL_RICHNESS_FLOOR on richness alone — this must be the DIGIT gate
+     catching it, not the richness one). */
+  it('finding 2 — a Han-numeral OR fullwidth-digit numbered Chinese TOC surrenders, never backfills zh', () => {
+    const titles = [
+      '卷首语','引子','初遇','离别','归途','夜话','旧梦','新生','远行','告白',
+      '暗涌','浮光','孤舟','长夜','清晨','余音','迷雾','归鸿','惊蛰','立秋',
+      '寒露','霜降','小雪','大雪','冬至','小寒','大寒','立春','雨水','惊雷',
+      '春分','清明','谷雨','立夏','小满','芒种','夏至','小暑','大暑','处暑',
+      '白露','秋分','寒露二','霜降二','立冬','小雪二','大雪二','冬至二','小寒二','大寒二',
+      '尾声','后记','附录','番外','终章','别篇','外传','余话','跋','附言',
+    ];
+    const fullwidth = (n: number) =>
+      String(n)
+        .split('')
+        .map((d) => String.fromCharCode(0xff10 + Number(d)))
+        .join('');
+    const hanToc = titles.map((t, i) => `${toHanNumeral(i + 1)}、${t}。`).join('');
+    const fullwidthToc = titles.map((t, i) => `${fullwidth(i + 1)}、${t}。`).join('');
+
+    // Fixture sanity: richness alone clears the floor (60 distinct 2-char
+    // titles) — this test is about the DIGIT gate, confirmed below.
+    expect(guiraudR(hanToc)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+    expect(digitTokenShare(hanToc)).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING);
+    expect(digitTokenShare(fullwidthToc)).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING);
+
+    const hanResult = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: hanToc }]);
+    const fullwidthResult = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: fullwidthToc }]);
+    expect(hanResult).toEqual({ language: 'en', supported: true, fallback: true });
+    expect(fullwidthResult).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  /* #2256 independent review round 3, finding C2 (HIGH, NOT CLOSED — see
+     prose-units.ts's own header and
+     https://github.com/dudarenok-maker/Castwright/issues/2341 for the
+     owner decision owed). The finding-2 test above uses "N、<title>。"
+     numbering; the standard real Chinese TOC/chapter-heading layout is
+     "第N章<title>" ("Chapter N: Title") — "第"/"章" tokenize as ordinary
+     (non-numeral) Han word tokens, diluting digitTokenShare below
+     DIGIT_TOKEN_SHARE_CEILING regardless of entry count. This test PINS
+     the current, imperfect behavior (it backfills) rather than asserting
+     the desired-but-unimplemented behavior, so the gap stays visible in
+     the test suite instead of silently reading as "closed" — flip the
+     expectation once #2341 lands a fix, don't delete this test. */
+  it('finding C2 (KNOWN, TRACKED GAP — issue #2341) — a "第N章<title>" numbered Chinese TOC still backfills zh, not caught by either gate', () => {
+    const titles2 = [
+      '卷首语', '引子', '初遇', '离别', '归途', '夜话', '旧梦', '新生', '远行', '告白',
+      '暗涌', '浮光', '孤舟', '长夜', '清晨', '余音', '迷雾', '归鸿', '惊蛰', '立秋',
+      '寒露', '霜降', '小雪', '大雪', '冬至', '小寒', '大寒', '立春', '雨水', '惊雷',
+      '春分', '清明', '谷雨', '立夏', '小满', '芒种', '夏至', '小暑', '大暑', '处暑',
+      '白露', '秋分', '寒露二', '霜降二', '立冬', '小雪二', '大雪二', '冬至二', '小寒二', '大寒二',
+      '尾声', '后记', '附录', '番外', '终章', '别篇', '外传', '余话', '跋', '附言',
+    ];
+    // 60 distinct titles, MOSTLY 4 characters (pairing adjacent 2-char
+    // titles: 43 are 4 chars, 14 are 5, 2 are 3, 1 is 6 — #2256 review
+    // round 4, nit N3: this used to claim a uniform 4-character length,
+    // which the mechanism argument in prose-units.ts was then stated
+    // against). Roughly the standard Chinese chapter-title length; the
+    // finding-2 fixture's 2-char titles alone do NOT reproduce this gap
+    // (their digit share stays above the ceiling even with "第...章"
+    // markers).
+    const titles4 = titles2.map((t, i) => t + titles2[(i + 7) % titles2.length]);
+    const toc = titles4.map((t, i) => `第${toHanNumeral(i + 1)}章${t}。`).join('');
+
+    // Fixture sanity: neither gate fires. Richness is unremarkable (the
+    // titles are all distinct, so R clears the floor easily) and the digit
+    // share lands at ~0.17 — under the 0.2 ceiling, and well under the
+    // 0.36+ range finding 4 called "evidenced junk". THAT is the gap: this
+    // shape reads as junk to a human and as prose to both gates.
+    expect(digitTokenShare(toc)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+    expect(guiraudR(toc)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+
+    const result = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: toc }]);
+    // KNOWN GAP, tracked by #2341 -- this is the CURRENT (imperfect)
+    // behavior, not the desired one. It backfills instead of surrendering.
+    expect(result).toEqual({ language: 'zh', supported: true, fallback: false });
+  });
+
+  /* #2256 independent review round 3, finding C1 — round 2's
+     RICHNESS_SAMPLE_CHARS prefix cap made the lexical gates see only the
+     FIRST ~20,000 characters of the joined winning sample, which is
+     chapter-ORDER-dependent: a single numeral-dense opening chapter (a
+     dated chronicle, an epistolary frame, a real front-matter-surviving
+     大事记/Zeittafel) could refuse a whole book that reads fine once every
+     chapter is counted, and the SAME chapter set in a DIFFERENT order could
+     reach a DIFFERENT verdict. Retracted — see prose-units.ts's own
+     finding-3(a) retraction. The test below is the real-content-scale
+     regression lock for that: the numeral-dense chapter must not poison the
+     book in EITHER position. The SEPARATE, deeper order dependence round 3
+     missed (dedup glue at the join seam) is locked by the "finding B1" test
+     that follows it. */
+  it('finding C1 (real-content scale) — a legitimate numeral-dense chapter (a dated chronicle) does not poison the whole book, in either chapter order', () => {
+    // A "大事记"-shaped chronicle chapter: real Han-numeral dates, high
+    // digit density (~0.43 alone, well over DIGIT_TOKEN_SHARE_CEILING) --
+    // exactly the shape finding C1 named. 25 entries clears
+    // FRONT_MATTER_WORD_THRESHOLD on its own.
+    const EVENTS = ['筑', '修', '通', '建', '毁', '成', '迁', '并', '立', '废'];
+    const chronicle = Array.from(
+      { length: 25 },
+      (_, k) =>
+        `${toHanNumeral(1 + ((k + 1) % 99))}年${toHanNumeral(1 + ((k + 1) % 12))}月${toHanNumeral(1 + ((k + 1) % 28))}日，${EVENTS[(k + 1) % EVENTS.length]}。`,
+    ).join('');
+    expect(digitTokenShare(chronicle)).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING); // fixture sanity: genuinely digit-dense alone
+    const narrative1 = ZH_POOL.slice(0, 15).join('');
+    const narrative2 = ZH_POOL.slice(15, 30).join('');
+
+    const chronicleFirst = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: chronicle },
+      { title: 'Chapter Two', body: narrative1 },
+      { title: 'Chapter Three', body: narrative2 },
+    ]);
+    const chronicleLast = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: narrative1 },
+      { title: 'Chapter Two', body: narrative2 },
+      { title: 'Chapter Three', body: chronicle },
+    ]);
+    expect(chronicleFirst).toEqual({ language: 'zh', supported: true, fallback: false });
+    expect(chronicleLast).toEqual(chronicleFirst);
+  });
+
+  /* #2256 independent review round 4, finding B1 (HIGH) — round 3 removed
+     the RICHNESS_SAMPLE_CHARS prefix (finding C1 above) and asserted, in a
+     comment, a release note AND a test, that the resulting
+     `winningSamples.join('\n')` was "mathematically ORDER-INVARIANT". It
+     was not. Neither gate tokenizes the join directly: both go through
+     dedupeProseUnits, which segments on SENTENCE_TERMINAL_RE, and '\n' is
+     not a terminator — so a chapter whose prepared sample does not END at a
+     terminal mark GLUES its trailing residue onto the next chapter's first
+     unit, changing that unit's dedup key and therefore which units collapse.
+     The verdict then depends on chapter order, which is the exact defect
+     finding C1 was filed for.
+
+     The round-3 test that replaced the windowing lock could not see this:
+     both its chapters ended in '。' and shared no units, so the glue never
+     fired, and its ONLY assertion was that two results are equal — which two
+     surrenders satisfy just as well as two correct answers (and it WAS two
+     surrenders). This replaces it on both counts: the fixture triggers the
+     glue (asserted below, not assumed) and the assertion names an ACCEPTED
+     verdict, not just agreement.
+
+     Fixture: a chronicle chapter that ends mid-entry (no terminator — the
+     shape prepareSample also produces whenever it cuts a chapter at
+     SAMPLE_CHARS, and that a chapter closing on `…。”` produces in
+     miniature) whose trailing entry is repeated as the opening SENTENCE of
+     the narrative chapter. Chronicle-first, the residue glues onto that
+     opening sentence, so the entry's digit-dense tokens are counted TWICE
+     and digitTokenShare crosses DIGIT_TOKEN_SHARE_CEILING (0.2059);
+     narrative-first, the residue dedupes against the same sentence and the
+     share stays under it (0.1915). Both chapters are real zh prose, and the
+     correct answer in either order is zh. */
+  it('finding B1 (mutation-sensitive) — a chapter whose sample does not end at a sentence terminal cannot change the verdict by its position', () => {
+    const CHRONICLE = [
+      '一八九三年七月十四日筑港。',
+      '一八九四年三月二十日修桥。',
+      '一八九五年十一月五日通渠。',
+      '一八九六年九月八日建仓。',
+      '一八九七年五月十七日毁堤。',
+    ];
+    // The seam: the chronicle's last entry, left UNTERMINATED at the end of
+    // its chapter and repeated as the narrative chapter's opening sentence.
+    const SEAM = '一八九九年六月十二日迁窑';
+    const NARRATIVE = [
+      '海鸥在码头上空盘旋。',
+      '雨点敲打着铁皮屋顶。',
+      '雷恩刮掉了最后的炉渣。',
+      '她再次折起了那封信。',
+      '电车摇晃着驶过广场。',
+    ];
+    // Repeated to clear FRONT_MATTER_WORD_THRESHOLD (150 words) per chapter;
+    // dedup collapses the repeats, which is why the deduped token total
+    // stays small enough for one extra copy of SEAM to matter.
+    const chronicleBody = CHRONICLE.join('').repeat(6) + SEAM;
+    const narrativeBody = SEAM + '。' + NARRATIVE.join('').repeat(6);
+
+    /* Fixture sanity — these are the assertions that keep this test from
+       quietly becoming a no-op the way its predecessor did. (1) The
+       chronicle's prepared sample really does end mid-unit, so the glue
+       path is live; (2) the seam unit really is shared by both chapters, so
+       dedup has something to collapse; and (3) a BARE '\n' join really does
+       give the two orders different digit shares, straddling the ceiling —
+       i.e. the mechanism under test is present in this fixture, not merely
+       hoped for. If a future edit terminates the chronicle or breaks the
+       seam, (1)-(3) fail loudly rather than leaving a green test that
+       proves nothing. */
+    const preparedChronicle = prepareSample(chronicleBody, {});
+    const preparedNarrative = prepareSample(narrativeBody, {});
+    expect(/[.!?…。！？]$/u.test(preparedChronicle)).toBe(false);
+    expect(preparedNarrative.startsWith(SEAM + '。')).toBe(true);
+    const bareChronicleFirst = digitTokenShare([preparedChronicle, preparedNarrative].join('\n'));
+    const bareNarrativeFirst = digitTokenShare([preparedNarrative, preparedChronicle].join('\n'));
+    expect(bareChronicleFirst).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING);
+    expect(bareNarrativeFirst).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+
+    /* The property under test, through the real entry point FIRST: both
+       orders must reach the SAME, ACCEPTED verdict. Two surrenders would
+       satisfy an equality-only assertion, which is exactly how the round-3
+       version of this test stayed green while the defect was live — so the
+       expectation names the verdict rather than comparing the two results
+       to each other. */
+    const chronicleFirst = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: chronicleBody },
+      { title: 'Chapter Two', body: narrativeBody },
+    ]);
+    const chronicleLast = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: narrativeBody },
+      { title: 'Chapter Two', body: chronicleBody },
+    ]);
+    expect(chronicleFirst).toEqual({ language: 'zh', supported: true, fallback: false });
+    expect(chronicleLast).toEqual({ language: 'zh', supported: true, fallback: false });
+
+    // Same property one level down, so a regression says WHY: the sample
+    // joinSamplesForGates builds is the same token population either way,
+    // so both gates read identically off it.
+    expect(digitTokenShare(joinSamplesForGates([preparedChronicle, preparedNarrative]))).toBe(
+      digitTokenShare(joinSamplesForGates([preparedNarrative, preparedChronicle])),
+    );
+    expect(guiraudR(joinSamplesForGates([preparedChronicle, preparedNarrative]))).toBe(
+      guiraudR(joinSamplesForGates([preparedNarrative, preparedChronicle])),
+    );
+  });
+
+  /* #2256 review round 2, finding 3(b) — Hiragana/Katakana are a ~90-glyph
+     syllabary; per-CHARACTER tokenisation caps a kana-only sample's whole
+     vocabulary at that inventory, so Guiraud's R falls below any fixed
+     floor once N passes roughly (floor/90)^2 characters — a few hundred to
+     low thousands, well inside a single real chapter. Fixed by kana
+     trigrams (see prose-units.ts).
+
+     #2256 review round 3, finding C5 — this test's fixture used to claim
+     (falsely) to reuse KANA_POOL above; it actually used a SEPARATE
+     word-level list, and its 6-slot same-modulus index decomposition
+     pinned 4 of 6 word slots constant for every i < 900 (words.length^2),
+     making ~67% of the 36,610-char sample the single repeated word
+     あさひが — the fixture was accidentally testing "does trigram
+     tokenization survive heavy repetition" (yes, uninterestingly, since
+     dedup already handles verbatim runs) rather than "does trigram
+     tokenization sustain genuine variety at length" (the actual finding).
+     Fixed: 3 word-slots (30^3 = 27,000 comfortably exceeds any n used
+     here, so decomposition stays genuinely bijective — see prose-units.ts
+     for why 6 slots over a 30-word pool couldn't). Round 4 (finding B4)
+     then restored the LENGTH the fix had traded away — see the comment on
+     the fixture itself. */
+  it('finding 3(b) (fixed fixture) — a long all-kana (no kanji) chapter with genuinely varied content still resolves to ja', () => {
+    const words = [
+      'あさひが', 'まどから', 'さしこんで', 'いた', 'ねこは', 'まだ', 'ねむって', 'かぜが', 'そよそよと', 'ふいて',
+      'きた', 'ことりが', 'ちいさく', 'ないた', 'おんなのこは', 'にわに', 'でて', 'はなを', 'ながめた', 'そらは',
+      'あおくて', 'くもひとつ', 'なかった', 'おとうさんが', 'げんかんで', 'くつを', 'はいて', 'いる', 'おかあさんは', 'だいどころで',
+    ];
+    function makeSentence(i: number): string {
+      let idx = i;
+      const picked: string[] = [];
+      for (let j = 0; j < 3; j++) {
+        picked.push(words[idx % words.length]);
+        idx = Math.floor(idx / words.length);
+      }
+      return picked.join('') + '。';
+    }
+    /* #2256 review round 4, finding B4 — round 3 shortened this fixture
+       from 1,500 units to 500 while fixing its index decomposition, and in
+       doing so DELETED the regression lock the test exists to be. Measured
+       by re-running this fixture's own tokenization with KANA_NGRAM_SIZE
+       varied, R at 500 units (6,127 chars) is 0.560 / 3.715 / 9.615 for
+       n = 1 / 2 / 3 — so at that size BIGRAMS clear LEXICAL_RICHNESS_FLOOR
+       too, and changing prose-units.ts's `KANA_NGRAM_SIZE` from 3 to 2 left
+       the whole file green. R = V/sqrt(N) decays as N grows once a
+       tokenization's vocabulary saturates, and bigrams saturate far sooner
+       than trigrams, so the separation only appears at length: at 1,500
+       units (18,610 chars, still under prepareSample's 20,000-char cut so
+       the number below IS the number the gate sees) the same fixture
+       measures 0.321 / 2.553 / 7.871. n=2 is now genuinely under the floor
+       and n=3 genuinely over it, which is what makes reverting the trigram
+       fix a RED test rather than a silent no-op. */
+    const units = Array.from({ length: 1500 }, (_, i) => makeSentence(i));
+    // Fixture sanity: 30^3 = 27,000 combinations, so a 3-slot mixed-radix
+    // decomposition of i is injective over this range -- asserted, not
+    // argued, because an aliasing period in exactly this kind of index is
+    // what made two earlier versions of this fixture measure nothing (see
+    // prose-units.ts's own note, and round 4's finding B3).
+    expect(new Set(units).size).toBe(units.length);
+    const sample = units.join('');
+    expect(sample.length).toBeLessThan(20_000); // prepareSample must not truncate: the assertion below measures the gate's real input
+    expect(guiraudR(sample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR); // fixture sanity: genuinely clears the floor, not just non-empty
+
+    const result = detectManuscriptLanguageFromChapters([{ title: '第一章', body: sample }]);
+    expect(result.language).toBe('ja');
+    expect(result.fallback).toBe(false);
+  });
+
+  /* #2256 review round 3, finding C5 (residual, stated plainly rather than
+     implied away) — trigram tokenization is close to INERT for kana beyond
+     what dedupeProseUnits already catches: a repetitive-but-NOT-exact-
+     duplicate kana junk shape (an ordinal-prefixed heading list, cycling
+     through a small set of headings) clears LEXICAL_RICHNESS_FLOOR easily
+     and is NOT refused, while only an EXACT-duplicate heading — which
+     dedup collapses to one occurrence regardless of tokenizer — is
+     refused. This does not produce a wrong-LANGUAGE outcome (the script
+     pre-pass returns 'ja' for all-kana input independent of the richness
+     gate), but the richness gate itself contributes nothing extra for kana
+     beyond dedup. Pinned here rather than left as a comment-only claim. */
+  it('finding C5 (residual) — a repetitive, non-exact-duplicate kana heading list is NOT refused by the richness gate (dedup is the only real backstop for kana)', () => {
+    const HEADINGS = ['だいいっしょう', 'だいにしょう', 'だいさんしょう', 'だいよんしょう', 'だいごしょう', 'だいろくしょう', 'だいななしょう', 'だいはっしょう'];
+    const headingJunk = Array.from({ length: 2000 }, (_, i) => `${HEADINGS[i % HEADINGS.length]}。`).join('');
+    // Fixture sanity: NOT an exact duplicate (8 distinct headings cycling),
+    // so dedupeProseUnits does not collapse it away on its own.
+    expect(new Set(HEADINGS).size).toBeGreaterThan(1);
+    expect(guiraudR(headingJunk)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR); // NOT refused -- the residual
+
+    /* #2256 review round 4, finding B5 — this control used to be
+       `Array(2000).fill(HEADINGS[0]).join('') + '。'`, with NO terminator
+       between the copies: one 14,000-character prose unit that
+       dedupeProseUnits leaves entirely untouched, refused at R=0.0592 by
+       the RICHNESS gate. So the control for "dedup is the only real
+       backstop for kana" was demonstrating the opposite of its own claim.
+       Terminating each copy is what makes dedup the mechanism: 2,000 units
+       collapse to ONE 7-character unit, R=2.2361 — the number
+       prose-units.ts cites. The unit count is asserted so a future edit
+       that drops the terminator again fails here instead of silently
+       swapping the mechanism back. */
+    const exactDuplicateJunk = Array(2000).fill(HEADINGS[0] + '。').join('');
+    expect(countProseUnits(exactDuplicateJunk)).toBe(2000);
+    expect(guiraudR(exactDuplicateJunk)).toBeLessThan(LEXICAL_RICHNESS_FLOOR); // IS refused -- dedup alone does this
+  });
+
+  /* Finding 4 — the digit ceiling's claimed margin was fiction: a real,
+     genuinely short-sentence book (this repo's corpus has one at ~6.8
+     tokens/unit) with verse-style numbering (one digit token per unit)
+     scored close to or above the OLD 0.1 ceiling under the new tokenizer.
+     Both EN and ZH verse-numbered real-shaped short sentences must NOT be
+     refused. */
+  it('finding 4 — verse-numbered real-shaped short sentences (1 digit token per unit) are not wrongly refused', () => {
+    // 25 distinct short sentences per script (not 8 — a small pool would
+    // fail on RICHNESS once verse numbers defeat dedup, which is a
+    // different gate than the one this test is about; sized so richness
+    // clears comfortably and the DIGIT ceiling margin is what's exercised).
+    const shortEn = [
+      'The horn had cooled by dawn.', 'Wren scraped the last slag away.', 'Someone knocked hard at the door.',
+      'The gull wheeled over the pier.', 'Rain drummed on the tin roof.', 'He counted the coins twice more.',
+      'She folded the letter once again.', 'The tram rattled past the square.', 'The kettle hissed on the stove.',
+      'A dog barked twice in the yard.', 'The candle guttered in the draft.', 'She swept the ash from the hearth.',
+      'The gate creaked shut behind him.', 'A crow landed on the fence post.', 'The bread rose slow in the pan.',
+      'He tied the rope in a knot.', 'The lamp flickered and then held.', 'She pinned the note to the door.',
+      'The cart wheel struck a stone.', 'He lit the lantern by the well.', 'The fog rolled in off the marsh.',
+      'She hung the coat by the fire.', 'The bell tolled once at noon.', 'A moth circled the open flame.',
+      'He shut the ledger with a snap.',
+    ];
+    const shortZh = [
+      '号角在黎明前已经冷却', '雷恩刮掉了最后的炉渣', '有人用力敲响了门', '海鸥在码头上盘旋',
+      '雨点敲打着铁皮屋顶', '他又数了两遍硬币', '她再次折起了那封信', '电车摇晃着驶过广场',
+      '水壶在炉子上嘶嘶作响', '院子里的狗叫了两声', '蜡烛在风中摇曳不定', '她把炉灰扫了出去',
+      '大门在他身后吱呀关上', '一只乌鸦落在篱笆上', '面包在锅里慢慢发起', '他把绳子打了个结',
+      '油灯闪了一下又稳住', '她把纸条钉在门上', '车轮压到了一块石头', '他在井边点亮了灯笼',
+      '雾气从沼泽地涌了进来', '她把外套挂在炉火边', '钟声在正午敲了一下', '一只飞蛾绕着火焰打转',
+      '他啪地合上了账本',
+    ];
+    const enVerse = Array.from({ length: 100 }, (_, i) => `${i + 1} ${shortEn[i % shortEn.length]}`).join(' ');
+    const zhVerse = Array.from({ length: 100 }, (_, i) => `${i + 1}、${shortZh[i % shortZh.length]}。`).join('');
+
+    // Fixture sanity: richness clears the floor on its own, so a failure
+    // here would be about the digit ceiling, not an underpowered pool.
+    expect(guiraudR(enVerse)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+    expect(guiraudR(zhVerse)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+    expect(digitTokenShare(enVerse)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+    expect(digitTokenShare(zhVerse)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+
+    const enResult = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: enVerse }]);
+    const zhResult = detectManuscriptLanguageFromChapters([{ title: '第一章', body: zhVerse }]);
+    expect(enResult.fallback).toBe(false);
+    expect(zhResult.fallback).toBe(false);
   });
 });

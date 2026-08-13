@@ -79,7 +79,7 @@ grows.
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`), open a book's Cast view.
+Run in mock mode (`npm run dev:mock`), open a book's Cast view.
 
 1. **Cast view loads** → chip row appears under the search box showing only the
    statuses present in this cast, each with a count matching the visible rows.
