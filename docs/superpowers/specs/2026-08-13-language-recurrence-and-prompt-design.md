@@ -591,9 +591,30 @@ no test plan and no register row.)*
 
 ## Owner decisions
 
+> ### ✅ ANSWERED by the repo owner, 2026-08-13 — both as recommended
+>
+> - **D-1 — "Decide later" ships.** The confirm screen may offer it when detection
+>   surrendered. It writes `null`, and the gate stops the book later rather than
+>   forcing a guess at import time.
+> - **D-2 — uniform hard-fail.** No warn-only carve-out for the three voice-design
+>   sites; every site in the CHANGE set treats an absent language the same way.
+>
+> **D-2 carries a consequence the design already identified — apply it, do not
+> re-derive it: site 15's disposition is coupled to this answer** (see the note above
+> §T-1). Under the uniform hard-fail, site 15 follows the same rule as the rest, and
+> the first draft's "uniform and unarguable" framing — which would have let a book
+> proceed silently — is explicitly rejected.
+>
+> **This does not soften the per-route-shape finding.** *Failure shape* stays
+> per-route: a `409` is unreachable at several sites, most importantly the detached
+> SSE job holding the 25,063-line case, where the assumption-checker found the
+> originally prescribed swap was a literal no-op. Uniform severity means every site
+> refuses; it does not mean every site refuses with the same status code. An
+> implementer that reads D-2 as "return 409 everywhere" has reintroduced that Critical.
+
 **Label key.** **T-1** and **W-1** above are *resolved in this document* — they weigh
 two implementations of one agreed behaviour, which is not a design pass. Only **D-1**
-and **D-2** are genuine owner decisions.
+and **D-2** are genuine owner decisions, and both are now answered above.
 
 **D-1 — May the confirm screen offer "Decide later"?**
 

@@ -17,10 +17,21 @@
 >
 > **`C:\AudiobookWorkspace` is STRICTLY READ-ONLY** for every task in this plan.
 
-> ## ⚠️ Task 0 — TWO OWNER DECISIONS
+> ## ✅ Task 0 — ANSWERED, 2026-08-13. Both accepted as recommended.
 >
-> **D-2 gates Task 6; D-1 gates Task 10.** Every other task proceeds immediately on the
-> recommendation. If the owner accepts both, no further design input is needed.
+> **D-1: "Decide later" ships** (gated Task 10). **D-2: uniform hard-fail** (gated
+> Task 6) — no warn-only carve-out for the three voice-design sites. Task 0 is closed;
+> **no further design input is owed and every task below is dispatchable.**
+>
+> **Two consequences to carry, not re-derive:** site 15 follows the uniform rule under
+> D-2; and *uniform severity is not a uniform status code* — failure shape stays
+> per-route, because a `409` is unreachable at several sites including the detached SSE
+> job holding the 25,063-line case. Reading D-2 as "409 everywhere" reintroduces a
+> Critical the assumption-checker already caught.
+>
+> **Still blocked on `feat/server-1984-wave1`**, which is editing `state.json` write
+> sites including `server/src/routes/analysis.ts`. That is a sequencing constraint, not
+> a design one.
 
 **Goal:** Close [#2246](https://github.com/dudarenok-maker/Castwright/issues/2246) items **3** and **4** — make it impossible for a book to acquire or keep an unstated `language` silently, and give the user a way to set one when detection genuinely cannot decide.
 
