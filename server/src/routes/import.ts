@@ -104,6 +104,20 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
     }
 
     const tempId = 'imp_' + nanoid(10);
+    /* #2263 — the whole-document sample (byte 0 onward) is dominated by
+       front matter (title page, copyright, dedication, TOC, epigraph,
+       foreword) on a book whose front matter isn't in the book's own
+       language, and was silently deciding the wrong language whenever that
+       front matter outweighed the body within the sample window. Detect
+       per chapter and vote instead — see detectManuscriptLanguageFromChapters.
+
+       Computed BEFORE the staging entry (it used to run after `putStaging`)
+       so the result can be stored on it rather than only returned to the
+       client — see StagedImport.detectedLanguage for why that matters. */
+    const detected = detectManuscriptLanguageFromChapters(parsed.chapters, {
+      author: parsed.author,
+      title: parsed.title,
+    });
     const entry: StagedImport = {
       tempId,
       format: parsed.format,
@@ -117,20 +131,11 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       originalFileName,
       byteSize,
       originalBuffer,
+      detectedLanguage: detected.language,
+      detectedLanguageSupported: detected.supported,
       createdAt: Date.now(),
     };
     putStaging(entry);
-
-    /* #2263 — the whole-document sample (byte 0 onward) is dominated by
-       front matter (title page, copyright, dedication, TOC, epigraph,
-       foreword) on a book whose front matter isn't in the book's own
-       language, and was silently deciding the wrong language whenever that
-       front matter outweighed the body within the sample window. Detect
-       per chapter and vote instead — see detectManuscriptLanguageFromChapters. */
-    const detected = detectManuscriptLanguageFromChapters(entry.chapters, {
-      author: entry.author,
-      title: entry.title,
-    });
 
     res.json({
       tempId,
@@ -236,7 +241,32 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        replacement for it). Checked before ensureWorkspace()/mkdir so a
        rejected request writes nothing and leaves the staging entry intact
        for a corrected retry. */
-    const language = normaliseBookLanguage(body.language);
+    /* An OMITTED `language` now falls back to what `/import` detected from the
+       chapter bodies, not to English.
+
+       The confirm screen always sends the field (pre-filled from the detection,
+       user-overridable), so the UI path is unchanged — an explicit value still
+       wins outright, including an explicit 'en' over a Russian detection.
+       What changes is the caller that leaves it out: it used to get English
+       while the server held the correct answer from seconds earlier. Silently
+       guessing the language is not a small wrong: it picks the voices, the
+       pronunciation, the dialogue conventions and the script the cast is
+       spelled in. A Russian book confirmed this way ran for 20 hours as an
+       English one (#2306) — no language preamble, so stage 1 romanised every
+       name and stage 2 read dash-marked dialogue as narration.
+
+       Falls back only to a SUPPORTED detection: an unsupported one would turn
+       a previously-succeeding request into a 400 below, which is a breaking
+       change for a caller that never asked about language at all. Those keep
+       the historical English default, as do staging entries created before
+       this field existed. The guard is on `body.language === undefined`
+       rather than falsiness, so an explicit empty string keeps its existing
+       meaning (normalise, then fail the support check) instead of silently
+       acquiring the detected language. */
+    const language =
+      body.language === undefined && entry.detectedLanguageSupported
+        ? normaliseBookLanguage(entry.detectedLanguage)
+        : normaliseBookLanguage(body.language);
     if (!isSupportedLanguage(language)) {
       return res.status(400).json({
         error: 'unsupported_language',

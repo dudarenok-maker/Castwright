@@ -20,6 +20,11 @@ import { detectManuscriptLanguage } from '../tts/detect-language.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_EPUB = resolve(__dirname, '..', 'parsers', '__fixtures__', 'sample.epub');
+/* The repo's canonical Russian chapter (CLAUDE.md "Canonical end-to-end
+   manuscript"). Ad-hoc Russian prose is NOT usable here: the detector has a
+   text floor and answers 'en' for a handful of sentences, which would make an
+   omitted-language test pass for the wrong reason. */
+const FIXTURE_RU_MD = resolve(__dirname, '..', '__fixtures__', 'the-coalfall-commission.ru.md');
 const FIXTURE_EPUB_NO_CALIBRE = resolve(
   __dirname,
   '..',
@@ -327,7 +332,13 @@ describe('POST /api/books — fs-2 language persistence', () => {
     expect(stateJson.language).toBe('ru');
   });
 
-  it("defaults language to 'en' when the confirm body omits it", async () => {
+  /* Renamed from "defaults language to 'en' when the confirm body omits it".
+     The omitted-language path no longer DEFAULTS to English — it falls back to
+     what /import detected. This book IS English, so the answer is unchanged;
+     the case is kept because it must not regress, but it can no longer be read
+     as evidence that we default to 'en'. The Russian case below is the one
+     that distinguishes the two. */
+  it("keeps 'en' for an ENGLISH book whose confirm body omits the language", async () => {
     const md = '# English Book\n\n## Chapter One\n\nThe story opens here with several sentences.';
     const importRes = await request(app)
       .post('/api/import')
@@ -338,6 +349,60 @@ describe('POST /api/books — fs-2 language persistence', () => {
       title: 'English Book',
       seriesPosition: null,
       isStandalone: true,
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('en');
+  });
+
+  /* #2306 — the defect that cost a 20-hour run. /import detects the language
+     from the chapter bodies and returns it, but POST /books used to read ONLY
+     body.language and default to English, dropping that detection on the floor.
+     A caller that didn't echo the field back got an English book while the
+     server held 'ru' in memory from seconds earlier — so there was no language
+     preamble, stage 1 romanised every name, and stage 2 read dash-marked
+     dialogue as narration (95.7% narrator across 15,100 sentences). */
+  it('uses the DETECTED language when the confirm body omits it (#2306)', async () => {
+    const md = readFileSync(FIXTURE_RU_MD, 'utf8');
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'nochnoy-dozor.md' });
+    // If the detection itself were wrong the fallback would prove nothing.
+    expect(importRes.body.candidate.language).toBe('ru');
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Sergei L',
+      title: 'Nochnoy Dozor',
+      seriesPosition: null,
+      isStandalone: true,
+      // language deliberately omitted — that is the whole case
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('ru');
+  });
+
+  it('lets an EXPLICIT language override the detection', async () => {
+    /* The confirm screen is user-overridable, so an explicit value must still
+       win outright — including an explicit 'en' over a Russian detection. */
+    const md = readFileSync(FIXTURE_RU_MD, 'utf8');
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'override.md' });
+    expect(importRes.body.candidate.language).toBe('ru');
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Someone',
+      title: 'Override Test',
+      seriesPosition: null,
+      isStandalone: true,
+      language: 'en',
     });
     expect(confirmRes.status).toBe(201);
     const stateJson = JSON.parse(

@@ -30,6 +30,20 @@ export interface StagedImport {
       injects audio tags into sourceText, so sourceText is NOT a
       faithful copy of the original. */
   originalBuffer: Buffer;
+  /** The language `/import` detected from the chapter bodies, and whether the
+      registry supports it. Stored — not merely returned to the client — so the
+      confirm step can fall back to it when the caller omits `language`.
+
+      Without this the detection was computed, sent over the wire, and dropped:
+      `POST /books` read only `body.language` and defaulted to English, so a
+      caller that didn't echo the field back got an English book while the
+      server still held the right answer in memory. That is how a Russian book
+      was analysed as English for a full 20-hour run (#2306) — no language
+      preamble, so stage 1 transliterated every name and stage 2 read
+      dash-marked dialogue as narration. `undefined` for a staging entry
+      created before this field existed. */
+  detectedLanguage?: string;
+  detectedLanguageSupported?: boolean;
   createdAt: number;
 }
 
