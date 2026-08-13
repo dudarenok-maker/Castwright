@@ -1679,6 +1679,91 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
   });
 
+  /* #2313 — the script of the returned names was unconstrained, so a Russian
+     book came back with a 59%-Latin roster after a runtime change, with the
+     same weights and the same prompt. These pin the rule that closes it. */
+  it('names the manuscript language when it is known', () => {
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Ночной дозор',
+      { id: 1, title: 'Глава 1', body: 'Тело главы.' },
+      [],
+      [],
+      '',
+      'ru',
+    );
+    expect(inbox).toContain('- Language: ru');
+  });
+
+  it('requires names in the prose\'s own script even when the language is UNKNOWN', () => {
+    /* The rule is anchored on the chapter text, not on the language name, so a
+       book whose language never got detected is still protected. If this ever
+       regresses to rendering only under a known language, the books most likely
+       to drift — the ones detection failed on — lose the guardrail. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Untitled',
+      { id: 1, title: 'Chapter 1', body: 'Body.' },
+      [],
+    );
+    expect(inbox).not.toContain('- Language:');
+    expect(inbox).toMatch(/use the manuscript's own script/i);
+    expect(inbox).toMatch(/exactly as this chapter'?s\s+prose spells them/i);
+    expect(inbox).toMatch(/never\s+transliterate, romanise, or translate/i);
+  });
+
+  it('every production call site actually PASSES the language through', () => {
+    /* #2313 — the unit tests above prove the builder CAN render the rule; they
+       cannot prove production reaches it. `language` has a default, so a call
+       site that omits it compiles and silently renders no language line — the
+       exact shape that made this bug invisible for a week. Precedent for a
+       source-scan guard here: workspace/cast-lock.guard.test.ts. */
+    const src = readFileSync(
+      new URL('./analysis.ts', import.meta.url),
+      'utf8',
+    );
+    const calls: string[] = [];
+    const NEEDLE = 'buildStage1ChapterInbox(';
+    for (let i = src.indexOf(NEEDLE); i >= 0; i = src.indexOf(NEEDLE, i + 1)) {
+      /* skip the declaration itself */
+      if (/export function\s*$/.test(src.slice(Math.max(0, i - 20), i))) continue;
+      let depth = 0;
+      let end = i + NEEDLE.length - 1;
+      for (let j = i + NEEDLE.length - 1; j < src.length; j += 1) {
+        if (src[j] === '(') depth += 1;
+        else if (src[j] === ')') {
+          depth -= 1;
+          if (depth === 0) { end = j; break; }
+        }
+      }
+      calls.push(src.slice(i, end + 1));
+    }
+    /* Fail loudly rather than pass on an empty scan — a renamed function would
+       otherwise silently satisfy a `.every()` over nothing. */
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) {
+      expect(call).toContain('bookLanguage');
+    }
+  });
+
+  it('carves `id` OUT of the script rule so ids stay ASCII kebab-case', () => {
+    /* Regression for the other half of the same defect: the 2026-08-06 run
+       emitted `борис-игнатьевич` as an *id*. A rule that said only "use the
+       book's script" would bless that and break ids as stable join keys. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Ночной дозор',
+      { id: 1, title: 'Глава 1', body: 'Тело главы.' },
+      [],
+      [],
+      '',
+      'ru',
+    );
+    expect(inbox).toMatch(/`id` is the ONE exception/);
+    expect(inbox).toMatch(/stays ASCII kebab-case/i);
+    expect(inbox).toContain('Антон Городецкий` → `anton-gorodetsky');
+  });
+
   it('carries the name-fidelity + no-spurious-merge guardrails (2026-06-16 Russian surname-smear / Игорь↔Илья)', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',

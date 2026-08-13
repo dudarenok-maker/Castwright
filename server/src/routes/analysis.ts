@@ -1681,6 +1681,7 @@ export function buildStage1ChapterInbox(
   runningRoster: CharacterOutput[],
   seriesPrior: SeriesPriorCharacter[] = [],
   author = '',
+  language = '',
 ): string {
   /* Compact roster format — only the identity fields the model needs to
      reuse ids verbatim. Skipping evidence/tone/description keeps each
@@ -1727,6 +1728,39 @@ The user has already confirmed these characters in earlier books in this series.
 \`\`\`json
 ${priorJson}
 \`\`\`
+`;
+
+  /* #2313 — the script of the returned names was never constrained, so it was
+     free to drift. Ночной дозор (ru) came back with a 59%-Latin roster
+     (`anton-gorodovsky "Anton Gorodovsky"`) where an earlier run of the same
+     book, same weights and the same prompt returned `"Антон Городецкий"` — and
+     a controlled 5x replay of the recorded prompt reproduced Latin 5/5. The
+     roster is shown to the user AND embedded verbatim in the stage-2
+     attribution prompt, and `rebuildRoster()` seeds every later chapter from
+     the chapters already done, so one chapter's drift propagates book-wide.
+
+     The rule is anchored on THE PROSE rather than on the language name: the
+     chapter text is in front of the model and is self-evidencing, which also
+     holds up when detection is wrong or the book is mixed-script. The language
+     is stated too, when known, so both signals point the same way.
+
+     `id` is carved out explicitly. "Use the book's script" on its own trades
+     one defect for another — the 2026-08-06 run emitted `борис-игнатьевич` as
+     an *id*, and ids must stay ASCII kebab-case to remain stable join keys. */
+  const languageLine = language.trim() ? `\n- Language: ${language.trim()}` : '';
+  const scriptBlock = `
+## Names — use the manuscript's own script
+
+Write every \`name\` and every entry in \`aliases\` **exactly as this chapter's
+prose spells them** — same script, same letters, same diacritics. Never
+transliterate, romanise, or translate a name: for a Russian chapter that means
+\`Антон Городецкий\`, NOT \`Anton Gorodetsky\`.
+
+A transliterated name cannot be matched against this book's text by the later
+attribution pass, and it is what the reader sees in the cast list.
+
+\`id\` is the ONE exception: it stays ASCII kebab-case, so transliterate for the
+id and only for the id — \`Антон Городецкий\` → \`anton-gorodetsky\`.
 `;
 
   /* #938 — the book's byline author is NOT a character. Rendered only when known. */
@@ -1811,8 +1845,8 @@ Return ONLY a JSON object matching the schema. No prose, no code fences.
 
 - Title: ${title}
 - Manuscript ID: ${manuscriptId}
-- Chapter: ${chapter.id} — ${chapter.title}
-
+- Chapter: ${chapter.id} — ${chapter.title}${languageLine}
+${scriptBlock}
 ## Running roster (from earlier chapters — reuse these ids verbatim)
 
 For any character below who appears in this chapter, use the existing \`id\`
@@ -3947,6 +3981,7 @@ export async function runMainAnalyzerJob(
                           Array.from(rebuildRoster().values()),
                           seriesPrior,
                           bookAuthor,
+                          bookLanguage,
                         ),
                         castCall,
                       ),
@@ -6267,6 +6302,7 @@ export async function runSubsetAnalyzerJob(
                         Array.from(rebuildRoster().values()),
                         subsetSeriesPrior,
                         bookAuthor,
+                        bookLanguage,
                       ),
                       stage1Call,
                     ),
