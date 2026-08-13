@@ -479,6 +479,24 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// #2348 review, finding 1 — dev-mock-command.test.mjs readFileSync's
+// .env.mock and .env.development at RUNTIME (asserting VITE_USE_MOCKS is
+// true / false respectively), no module-graph edge. Without these two
+// extraFiles entries, a diff touching only .env.development — precisely the
+// regression #2343 guards against, flipping mocks back on for `npm run dev`
+// — printed test:hooks [cached] locally, and ci-scope.mjs derives cloud
+// CI's legs from this same STEPS[] entry, so the cloud run skipped it too.
+// Same #1847 trap as bump-version.mjs above.
+test('stepTouchedByDiff: a .env.development diff matches test:hooks via extraFiles (dev-mock-command.test.mjs reads it at runtime)', () => {
+  const diff = ['.env.development'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+test('stepTouchedByDiff: a .env.mock diff matches test:hooks via extraFiles (dev-mock-command.test.mjs reads it at runtime)', () => {
+  const diff = ['.env.mock'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
 // #2216 review round 3 — git-scrub.test.mjs is the first hooks test whose
 // scan surface reaches outside scripts/** (it walks pinokio-scripts/** too),
 // but test:hooks' globs didn't cover that directory: a pinokio-scripts-only

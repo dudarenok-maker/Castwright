@@ -175,6 +175,32 @@ test('renderServerEnv sets an isolated WORKSPACE_DIR (not the primary checkout, 
   );
 });
 
+test('renderServerEnv still carries PORT and WORKSPACE_DIR', () => {
+  const ports = computePorts(2);
+  const serverEnv = parseEnvLocal(renderServerEnv({ slot: 2, branch: 'feat/server-x', ports }));
+  assert.equal(serverEnv.PORT, String(ports.PORT));
+  assert.ok(serverEnv.WORKSPACE_DIR, 'WORKSPACE_DIR must be set');
+});
+
+// #2348 review, finding 2: LOCAL_TTS_PORT must NOT appear in the generated
+// server/.env. The Node side never reads it — spawn-sidecar.ts hardcodes
+// DEFAULT_PORT=9000, sidecar-owner.ts hardcodes SIDECAR_PORT=9000, and every
+// request path resolves through LOCAL_TTS_URL (default localhost:9000) — but
+// start.ps1/start.sh DO read it to choose the sidecar's bind port. Setting it
+// here would make the sidecar bind the slot port while the server keeps
+// polling :9000, breaking TTS in every worktree created after this change.
+test('renderServerEnv does NOT set LOCAL_TTS_PORT (the sidecar bind port and the server poll port would diverge)', () => {
+  const ports = computePorts(1);
+  const env = renderServerEnv({ slot: 1, branch: 'feat/server-x', ports });
+  const parsed = parseEnvLocal(env);
+  assert.equal(
+    parsed.LOCAL_TTS_PORT,
+    undefined,
+    'server/.env must not carry LOCAL_TTS_PORT — the sidecar (start.ps1/start.sh) would bind it as its OWN port while the server keeps polling the hardcoded :9000, breaking TTS',
+  );
+  assert.doesNotMatch(env, /^LOCAL_TTS_PORT=/m);
+});
+
 test('renderServerEnv never carries secret-shaped keys copied from a primary .env', () => {
   const ports = computePorts(0);
   const env = renderServerEnv({ slot: 0, branch: 'feat/server-x', ports });
