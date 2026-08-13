@@ -40,10 +40,23 @@ export interface StagedImport {
       server still held the right answer in memory. That is how a Russian book
       was analysed as English for a full 20-hour run (#2306) — no language
       preamble, so stage 1 transliterated every name and stage 2 read
-      dash-marked dialogue as narration. `undefined` for a staging entry
-      created before this field existed. */
+      dash-marked dialogue as narration.
+
+      Optional only because a `StagedImport` is an in-memory record written by
+      the same process that reads it — there is no persisted or cross-version
+      entry that could lack these, so the optionality is type hygiene, not a
+      compatibility path. */
   detectedLanguage?: string;
   detectedLanguageSupported?: boolean;
+  /** True when the detection SURRENDERED to `'en'` rather than deciding it —
+      no letters to sample, or no match. `supported` cannot distinguish that
+      from a real English decision (`'en'` is itself supported), and
+      DetectionResult.fallback's own doc says a caller that must "never write
+      a language they only guessed" (#2246) needs this field. This route is
+      such a writer, so a surrendered detection is NOT used as the fallback;
+      those keep the historical English default, which is the same value the
+      surrender produced anyway. */
+  detectedLanguageFallback?: boolean;
   createdAt: number;
 }
 

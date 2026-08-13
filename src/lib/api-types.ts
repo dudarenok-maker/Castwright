@@ -3826,8 +3826,19 @@ export interface components {
             isStandalone: boolean;
             /**
              * @description fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected,
-             *     user-overridable). Persisted to `BookStateJson.language`. Defaults
-             *     to `en` when absent.
+             *     user-overridable). Persisted to `BookStateJson.language`.
+             *
+             *     When this field says nothing — absent, `null`, empty or whitespace —
+             *     the server falls back to the language `POST /import` detected from
+             *     the chapter bodies and returned as `candidate.language`, NOT to
+             *     English. It only falls back to `en` when that detection is
+             *     unsupported. An explicit value always wins, in both directions
+             *     (including an explicit `en` over a non-English detection).
+             *
+             *     This used to default to `en` whenever the field was absent, which
+             *     silently analysed a Russian book as English for a full run (#2306):
+             *     no language preamble, so names came back romanised and dash-marked
+             *     dialogue was read as narration.
              */
             language?: string;
             /** @description Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match. */

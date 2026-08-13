@@ -133,6 +133,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       originalBuffer,
       detectedLanguage: detected.language,
       detectedLanguageSupported: detected.supported,
+      detectedLanguageFallback: detected.fallback,
       createdAt: Date.now(),
     };
     putStaging(entry);
@@ -196,7 +197,9 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       title?: string;
       isStandalone?: boolean;
       /* fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected
-         on the frontend, user-overridable). Defaults to 'en' when absent. */
+         on the frontend, user-overridable). Saying nothing here — absent,
+         null, empty or whitespace — falls back to /import's own detection,
+         not to English; see the resolution below. */
       language?: string;
       /* Slugs (matching the server-derived `${id-pad}-${slug(title)}`
          form) for chapters the user pre-excluded from analysis at the
@@ -255,16 +258,28 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        English one (#2306) — no language preamble, so stage 1 romanised every
        name and stage 2 read dash-marked dialogue as narration.
 
-       Falls back only to a SUPPORTED detection: an unsupported one would turn
-       a previously-succeeding request into a 400 below, which is a breaking
-       change for a caller that never asked about language at all. Those keep
-       the historical English default, as do staging entries created before
-       this field existed. The guard is on `body.language === undefined`
-       rather than falsiness, so an explicit empty string keeps its existing
-       meaning (normalise, then fail the support check) instead of silently
-       acquiring the detected language. */
+       Two conditions gate the fallback, and only the second is load-bearing
+       today. SUPPORTED: an unsupported detection would turn a
+       previously-succeeding request into a 400 below — a breaking change for a
+       caller that never asked about language. Every registry entry is
+       currently `supported: true`, so this cannot fire yet; it is defence for
+       the moment one lands unsupported, as es/fr/de/zh/ja each once were.
+       NOT-A-FALLBACK: a detection that surrendered to 'en' is a
+       confidence-floor guess, not a decision, and this route is a writer —
+       see DetectionResult.fallback. Both cases keep the historical English
+       default.
+
+       "No choice" is the CLASS, not one spelling of it: absent, `null`, `''`
+       and whitespace all mean the caller did not pick a language, and
+       `normaliseBookLanguage` maps every one of them to 'en' (see its own
+       doc: "Missing, empty, or whitespace → 'en'"). Testing only `=== undefined`
+       would have left `{"language": ""}` — an unfilled form field, or
+       `detected ?? ''` — silently persisting English over a Russian detection,
+       i.e. this exact defect surviving under a different spelling. */
+    const languageChosen =
+      typeof body.language === 'string' ? body.language.trim() !== '' : body.language != null;
     const language =
-      body.language === undefined && entry.detectedLanguageSupported
+      !languageChosen && entry.detectedLanguageSupported && !entry.detectedLanguageFallback
         ? normaliseBookLanguage(entry.detectedLanguage)
         : normaliseBookLanguage(body.language);
     if (!isSupportedLanguage(language)) {

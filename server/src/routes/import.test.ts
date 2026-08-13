@@ -387,6 +387,39 @@ describe('POST /api/books — fs-2 language persistence', () => {
     expect(stateJson.language).toBe('ru');
   });
 
+  /* #2337 review F1 — "no choice" is a CLASS, not one spelling. Testing only
+     `=== undefined` left `{"language": ""}` (an unfilled form field, or
+     `detected ?? ''`) persisting English over a Russian detection: the same
+     defect under a different spelling. normaliseBookLanguage maps missing,
+     empty AND whitespace to 'en', so each is a way of saying nothing. */
+  it.each([
+    ['empty string', ''],
+    ['whitespace', '   '],
+    ['null', null],
+  ])('treats %s as no choice and uses the detection', async (_label, value) => {
+    const md = readFileSync(FIXTURE_RU_MD, 'utf8');
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'blank-language.md' });
+    expect(importRes.body.candidate.language).toBe('ru');
+
+    const confirmRes = await request(app)
+      .post('/api/books')
+      .send({
+        tempId: importRes.body.tempId,
+        author: 'Sergei L',
+        title: `Blank Language ${JSON.stringify(value)}`,
+        seriesPosition: null,
+        isStandalone: true,
+        language: value,
+      });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('ru');
+  });
+
   it('lets an EXPLICIT language override the detection', async () => {
     /* The confirm screen is user-overridable, so an explicit value must still
        win outright — including an explicit 'en' over a Russian detection. */

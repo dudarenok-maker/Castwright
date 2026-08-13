@@ -2594,20 +2594,39 @@ Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night W
 > segmentation**, so a pass taken before it lands measures a moving target and has to
 > be repeated. Wait for it, then take C2 and C3 in one session.
 >
-> **But a one-chapter local-vs-Gemini A/B is the next step and is not blocked by
-> that.** [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s cause is
-> **not** identified: an offline replay showed that swapping the roster
-> `reconcileSentenceCharacterIds` validates against moves the victim rate 38.0% →
-> 76.3%, but the run's own logs record **zero demotions** on that path — same
-> `log(1, …)` channel as a control message that *does* appear — so the mechanism is a
-> real latent hazard that did not fire here. The dash lines were `narrator` before
-> reconcile, which points at the stage-2 output itself.
+> **#2306's cause IS now identified (2026-08-13): the book was analysed as
+> English.** `POST /api/books` read only `body.language` and defaulted to `'en'`
+> when the field was absent, discarding the `ru` that `POST /api/import` had
+> detected from the chapter bodies seconds earlier. This run was driven over the
+> API and its confirm payload carries no `language` field (`book-req3.json`, still
+> on disk). Marked `en`, the book gets no `languagePreamble` — so stage 1
+> romanises every name (#2313's symptom) and stage 2's rule *"Only words inside
+> quote marks belong to a character"* stands unopposed over dash-marked dialogue —
+> and `conventionsFor('en').dialogueOpen` is `null`, which makes the #2253
+> convention invariant and the #2325 collapse guard both inert.
 >
-> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down the run's
-> checkout.** The 2026-08-12/13 pass's raw stage-2 output — the model's attribution
-> *before* any engine or reconcile — was destroyed with its worktree, and it is the
-> one artifact that would have settled the residual gap in #2306 without a re-run.
-> The analysis cache alone does not carry it: it holds the final, post-demotion ids.
+> Confirmed against the books on disk — same manuscript, same engine,
+> `state.language` the only difference:
+>
+> | book | `state.language` | narrator share |
+> |---|---|---|
+> | `The Night Watch Tetralogy\Ночной дозор` (2026-08-06) | `ru` | 30.3% |
+> | `Standalones\Ночной дозор (C2C3 run 2)` (2026-08-12) | `en` | 95.7% |
+>
+> Fixed in #2335: the detection is stored on the staging entry and used whenever
+> the confirm body says nothing (absent, `null`, empty or whitespace).
+>
+> The earlier hypothesis recorded here — that swapping the roster
+> `reconcileSentenceCharacterIds` validates against moved the victim rate
+> 38.0% → 76.3% — is **withdrawn as the cause**: the run's own logs record zero
+> demotions on that path, and controlled replays of the real chunker with
+> `language: 'ru'` attribute the collapsed chapter at 0.5% against a recorded
+> 94.8%. It remains a latent hazard that did not fire here.
+>
+> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down a run's
+> checkout** — still good practice, though #2324 now numbers each call's forensics
+> so a chunked chapter no longer overwrites its own prompts and responses as it
+> runs (which is why only last chunks survived this one).
 
 ### C1 · Free-tier Gemma cloud pass completes end to end ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
