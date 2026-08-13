@@ -116,8 +116,19 @@ the effect."_
 > Revision 8 deletes what shipped elsewhere, moves the denominator from the
 > model's returned text to the **source prose**, and splits the numerator two
 > ways — speech vs. tag, and model-assigned vs. engine-demoted. §Revision 8
-> rebaseline is the normative account; §Review findings round 8 records the
-> adversarial pass on it.
+> rebaseline is the normative account.
+>
+> **Revision 8 went through the Premium adversarial gate and did not survive its
+> first draft — five Criticals, four of them in the new work.** All five are
+> folded here; §Review findings round 8 records every one. The sharpest is worth
+> naming up front, because it is this document's signature defect arriving in a
+> new place: **D18's origin split was instrumented at two sites that produce
+> nothing on the default configuration**, while the site that actually demotes
+> — `reconcileSentenceCharacterIds` (`analysis.ts:1423`) — is **the motivating
+> incident's own mechanism** and was not instrumented at all. The column added
+> to explain the collapse would have mislabelled the collapse it was added for.
+> Also folded: a sixth state, `unanswered`, because D17's omission signal had no
+> verdict behind it and a wholesale-missing book resolved `ok`.
 
 ## Revision 8 rebaseline
 
@@ -333,6 +344,12 @@ const paras = parseChapterStructure(ch.body, index); // parser.ts:89
 // SpanEvidence.kind is 'speech' | 'tag' | 'narration', with absolute
 // offsets into ch.body (types.ts:3-16).
 ```
+
+**The roster passed to `buildNameIndex` here may be ANY roster, including an
+empty one**, and the recipe should be read that way. It is listed because
+`parseChapterStructure`'s signature demands an index, not because the metric
+needs a roster — see the measurement below. Sourcing it from `stage1.characters`
+is harmless and also unnecessary.
 
 `spokenTotal` is the count of `speech` spans across those paragraphs.
 `tagTotal` is the count of `tag` spans (D15). Both are properties of the
@@ -1066,9 +1083,14 @@ interface AttributionMeasurement {
   // ---- id drift (D9/D13), unchanged in rule, re-based on spans ----
   orphanSpoken: number;          // unresolvable id; reported, NEVER summed in (D9)
   orphanIds: string[];           // the distinct unresolvable ids, for the drift surface
-  attributableSpoken: number;    // spokenTotal - orphanSpoken - unattributedSpeech
-                                 // - splitSpeech — the DENOMINATOR of the share.
-                                 // NOT the same as spokenTotal; see below.
+  attributableSpoken: number;    // the count of speech spans with EXACTLY ONE
+                                 // resolvable attribution — the DENOMINATOR of
+                                 // the share. Counted DIRECTLY. NEVER computed
+                                 // as spokenTotal minus the three columns
+                                 // above: orphanSpoken and splitSpeech OVERLAP
+                                 // (a span with two disagreeing sentences, one
+                                 // unresolvable, is both), so subtraction
+                                 // double-counts and can go NEGATIVE (R-9C5).
 
   // ---- sibling signals ----
   tagNarratorSpan: number;       // tag spans attributed to narrator — SHOULD be
@@ -1381,11 +1403,44 @@ Renumbered from 6 so the five above keep their numbers.
     contradicted by detection over the book's own text resolves there rather than
     to `missing`, proven by the fixture rows and their mutation controls.
 16. **The measurement is invariant under a punctuation-only rewrite of the
-    model's output.** This is criterion 3 stated as a property rather than as a
-    test: strip every leading dash, add a leading dash to every line, or replace
-    `—` with `-` throughout, and `spokenTotal`, `tagTotal`, `narratorIdSpoken`
-    and the share must all be byte-identical. **Anything that varies under that
-    transform is reading model text and is a defect.**
+    model's output — stated in TWO tiers, because one tier is a claim the
+    aligner cannot honour** (R-9C3).
+
+    **Tier A — byte-identical, no tolerance, no exceptions.** `spokenTotal`,
+    `tagTotal`, and every per-chapter denominator field. These never read model
+    text at all (D14), so any variation is a defect, full stop.
+
+    **Tier B — invariant under the LENGTH-PRESERVING transform only.**
+    `narratorIdSpoken`, its three origin columns, `unattributedSpeech`,
+    `splitSpeech`, `attributableSpoken` and the share. The length-preserving
+    transform is `—` → `-`, which `buildNormalizedMap` maps 1:1.
+
+    **Revision 8's first draft demanded byte-identity across all three
+    transforms and that was wrong.** Stripping a leading `— ` removes 2
+    normalised characters and adding one adds 2, while
+    `ANCHOR_MIN_LEN = FUZZY_MIN_NEEDLE = 24` (`aligner.ts:45`) is a **hard
+    threshold on normalised length**. A needle at 24–25 loses anchor status when
+    stripped; one at 22–23 gains it when added. Anchor membership sets the run
+    boundaries in `locateNeedles`, so a lost anchor **merges two runs** and
+    changes the bounded haystack for every neighbour — `aligner.ts`'s own header
+    names that as the chapter-wide propagation mechanism. **A correct
+    implementation can therefore fail the byte-identity criterion**, and the
+    criterion as written told the reader that variation "is reading model text
+    and is a defect" — i.e. it predicted the wrong repair, and the repair it
+    predicted is *weaken the join*.
+
+    So for the two length-changing transforms the assertion is **bounded, not
+    exact**: Tier A must still be byte-identical, and Tier B must move by no
+    more than the number of needles that crossed the 24-character boundary —
+    **a quantity the test computes from the fixture rather than tolerating
+    blindly**, so a drift of any other size still fails. A fixture built
+    entirely away from the boundary asserts exact equality, and the two-tier
+    fixture set (§Testing) exists partly to have one of each.
+
+    **This is the honest version of what `blindSpoken` was for** — a standing
+    signal that the metric's view of dialogue has drifted from the book's — and
+    it is worth naming that revision 8 nearly replaced an invariant that *could
+    not fail* with one that *fails spuriously*, which is not a net gain.
 
 **Criteria 10 and 11 of revision 7 are gone** — `isSpokenLine`'s CJK brackets and
 `blindSpoken`'s corpus replay. Both shipped in #2245; see F7/F8. Their on-box
@@ -1536,8 +1591,14 @@ unacknowledgedOrphanSpoken = orphaned lines whose id is NOT in
   *verdict* narrows. A user who acknowledged an id has said "don't warn me", not
   "pretend it isn't there", and the Wave 1 column must not lose it.
 
-**A separating threshold does exist — that was checked before committing to
-D13**, because a fifth state that cannot be calibrated is worse than the silence
+> **Revision 8: this paragraph is downgraded, not deleted (R-9M1).** What follows
+> was measured with `spokenTotal` as dash-opening CACHED SENTENCES. D14 replaces
+> that unit with source speech spans, so the gap may still be there and nobody
+> has looked at it in the new unit. Read it as motivating evidence, and see
+> §D13 re-gated for the verdict.
+
+**A separating threshold did exist under the OLD unit — that was checked before
+committing to D13**, because a fifth state that cannot be calibrated is worse than the silence
 it replaces. Reconnaissance over the live corpus (2026-08-11, through the real
 `buildCastResolver` with each book's own `cast-id-history.json`) found the orphan
 share **strongly bimodal**: a small group of badly-drifted books, then an order-
@@ -1955,7 +2016,7 @@ there are **five** states and the library shows all five:
 |---|---|---|---|---|
 | `ok` | — (including a book never analysed) | nothing | nothing | no |
 | `collapsed` | `narratorIdSpoken / attributableSpoken` ≥ threshold, book or chapter | warning badge | full notice | yes |
-| `drifted` | `unacknowledgedOrphanSpoken / spokenTotal` ≥ `DRIFT_SHARE_THRESHOLD`, with `unacknowledgedOrphanSpoken` ≥ `MIN_ORPHAN_FOR_VERDICT` (D13) | warning badge | full notice, pointing at the orphan banner | **yes** |
+| `drifted` | `unacknowledgedOrphanSpoken / (spokenTotal - unattributedSpeech - splitSpeech)` ≥ `DRIFT_SHARE_THRESHOLD` (revision 8, R-9M2 — the denominator must exclude spans the metric could not attribute, or an omission suppresses a drift warning), with `unacknowledgedOrphanSpoken` ≥ `MIN_ORPHAN_FOR_VERDICT` (D13) | warning badge | full notice, pointing at the orphan banner | **yes** |
 | `missing` | `castCount > 0 && spokenTotal === 0 && (await readAnalysisState(dir)) === null && languageCorroborated` | warning badge | full notice | **yes** |
 | `unmeasurable` | the book **has been analysed** and the measurement still could not be made: cache corrupt, **the manuscript record absent so there is no source prose to measure against (revision 8, D14)**, the declared language contradicted by detection over the book's own text, detection surrendered, **or** the resolved language has no conventions table | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
@@ -1991,10 +2052,39 @@ The sequence, written once and normatively:
      a. sentences.length === 0                 → missing   (nothing to corroborate)
      b. detection contradicts or surrenders    → unmeasurable
      c. otherwise                              → missing
+4d. unattributedSpeech / spokenTotal ≥ UNANSWERED_SHARE_THRESHOLD
+                                               → unanswered   [revision 8, R-9C4]
 5. orphan share ≥ DRIFT_SHARE_THRESHOLD        → drifted
 6. share ≥ threshold (book or chapter)         → collapsed
 7. otherwise                                   → ok
 ```
+
+**Step 4d is a SIXTH state and it is new in revision 8's fold** (R-9C4). The
+round-8 gate found that a book with heavy stage-2 omission or heavy alignment
+loss resolves **`ok`**: `spokenTotal > 0` so step 4 does not fire, the orphan
+share is low so step 5 does not, and `attributableSpoken` under
+`MIN_SPOKEN_FOR_VERDICT` makes the share `null` so step 6 does not either.
+**D17 was added to make omission visible and it made it visible only in Wave 1's
+script column** — invisible on every Wave 2 surface, generation ungated, a
+wholesale-missing book rendering as a clean bill of health. That is #1984's own
+failure shape, arriving for the fifth time in this document, one level below the
+change that was meant to close it.
+
+`unanswered` badges and gates like `missing` does — the two are the same defect
+at different magnitudes (*"the analyzer did not attribute this book"*), and they
+are kept separate because `missing` means *no dialogue exists in the text* and
+`unanswered` means *dialogue exists and nothing came back for it*, which are
+different repairs to describe. Its notice says so, and its remedy is re-running
+analysis.
+
+**Three things are deliberately not decided here** and are owner question 5:
+whether a sixth state is worth Wave 2's surface at all (the cheaper alternative
+is folding it into `missing` and widening that notice); where
+`UNANSWERED_SHARE_THRESHOLD` sits, which Wave 1 measures like every other; and
+whether the state should distinguish *model omitted* from *aligner could not
+place*, which §The join records as an accepted conflation. **Wave 1 is unaffected
+either way** — it prints the column regardless, and the column is what the
+decision will be made from.
 
 **Step 2b is new in revision 8 and it is a consequence of D14, not an
 afterthought.** The denominator is built from `ChapterHint.body`, so a book whose
@@ -2251,12 +2341,16 @@ fixture, two arms, built from a Russian dash paragraph:
 
 ```ts
 // server/src/store/attribution-health.criteria.test.ts
-const body = '— Ничего нет, — сказал Егор.\n— Значит, ищем дальше.\n';
+const body =
+  '— Ничего нет, — сказал Егор.\n' +
+  '— Значит, ищем дальше.\n' +
+  '— Никого здесь не было.\n';       // R-9M4: a SPEECH span the narrator takes
 
 const withDashes = [
-  { text: '— Ничего нет,',      characterId: 'egor'     },
-  { text: '— сказал Егор.',     characterId: 'narrator' },
-  { text: '— Значит, ищем дальше.', characterId: 'anton' },
+  { text: '— Ничего нет,',           characterId: 'egor'     },
+  { text: '— сказал Егор.',          characterId: 'narrator' },  // TAG span, CORRECT
+  { text: '— Значит, ищем дальше.',  characterId: 'anton'    },
+  { text: '— Никого здесь не было.', characterId: 'narrator' },  // SPEECH span, a DEFECT
 ];
 // The EXACT F1 transform: the model returns the same lines, dashes stripped.
 const stripped = withDashes.map((s) => ({
@@ -2274,14 +2368,29 @@ it('scores identically whether or not the model returned leading dashes', () => 
 });
 ```
 
-**The `unattributedSpeech` assertion is what makes this test able to fail for
-the right reason**, and without it the test is a placebo of a familiar shape: an
-implementation that loses the join entirely scores `narratorIdSpoken: 0` on
-*both* arms and passes the equality. The suite must distinguish "the score did
-not move" from "there is no score".
+**Revision 8's first draft of this fixture could not fail for the right reason,
+and the round-8 gate proved it by executing it** (R-9M4). Without the fourth
+sentence, `'— сказал Егор.'` lands on the **tag** span in both arms — measured,
+not argued — so `narratorIdSpoken` is `0 === 0`, and an implementation that
+never tests `NARRATOR_CHARACTER_IDS` at all passes every assertion. The fourth
+sentence puts a narrator on a **speech** span, so the numerator is `1` in both
+arms and the equality has something to be equal about.
+
+Two further assertions are therefore mandatory, not decorative:
+
+```ts
+expect(a.narratorIdSpoken).toBe(1);   // the numerator EXISTS — without this the
+                                      // "does not move" equality is 0 === 0
+expect(a.tagNarratorSpan).toBe(1);    // and the tag half is NOT inside it (D15)
+```
+
+**The `unattributedSpeech` assertion stays**, for the other half of the same
+problem: an implementation that loses the join entirely also scores
+`narratorIdSpoken: 0` on both arms. The suite must distinguish "the score did
+not move" from "there is no score" **and** from "there is no numerator".
 
 **Criterion 2 — speech and tag reported separately.** The same fixture asserts
-`spokenTotal === 2` and `tagTotal === 1`, and that the correctly-narrated tag
+`spokenTotal === 3` and `tagTotal === 1`, and that the correctly-narrated tag
 half is in `tagNarratorSpan` and **not** in `narratorIdSpoken`. **Mutation:**
 fold tag spans into the denominator and this book's share moves from 0% to 33%
 — the exact impurity §Speech halves and tag halves measured at 12% of a real
@@ -2325,9 +2434,16 @@ it('reports a stage-2 omission as unattributed, not as a smaller denominator', (
 });
 ```
 
-**Mutation:** build the denominator from the sentence list and `spokenTotal`
-drops to 1 while `unattributedSpeech` reads 0 — the "denominator that quietly
-shrank" the criterion names, reproduced exactly.
+**Mutation:** build the denominator from the sentence list. The test goes red
+via `unattributedSpeech` reading `0` — but **not** by `spokenTotal` dropping,
+and revision 8's first draft said it would (R-9m2). Both `'— Ничего нет,'` and
+`'— сказал Егор.'` are separate lines under a sentence-list denominator, both
+match `ru.dialogueOpen`, and neither carries an interior dash-tag toggle, so
+`parseDialogueSpans` yields one speech span each and `spokenTotal` stays put.
+**The unstated tell is `tagTotal`, which silently drops to 0** — the tag half
+stops being a tag half the moment it is read as its own paragraph. Assert both,
+because a mutation whose stated mechanism is wrong is a mutation nobody will
+re-check.
 
 **Criterion 5 — the panel distinguishes the two narrators.** Wave 1's half is
 the measurement (criterion 3's test above); Wave 2's half is the render, and it
@@ -2537,7 +2653,7 @@ kanji-heavy fixture detects `zh` and contradicts the declared `ja`). That
 constraint is about *detection*, not about `isSpokenLine`, so #2245 does not
 touch it.
 
-**Wave 2 — the `drifted` state (D13).** Four fixtures and a mutation apiece:
+**Wave 2 — the `drifted` state (D13).** Seven fixtures and a mutation apiece (revision 7 said "four" and tabled seven — R-9m1):
 
 | # | Fixture | Orphans / spoken | Expected |
 |---|---|---|---|
@@ -2570,7 +2686,7 @@ the *stamp* on the verdict but leaves the *dismissal* on `analysedAt` passes row
 |---|---|
 | `drifted` step (5) deleted | rows 2 and 3 flip to `ok` / `collapsed` — the R-7C4 silence returns |
 | `MIN_ORPHAN_FOR_VERDICT` deleted | row 1 flips to `drifted` — every book with one stray id alarms |
-| **Dismissal/stamp keyed on `cache.updatedAt` alone** | **row 4 fails** — the badge survives a complete repair |
+| **Dismissal/stamp keyed on `cache.updatedAt` alone** | **row 5 fails** — the badge survives a complete repair. (Revision 7 billed this against row 4, which is the drifted-AND-collapsed fixture and contains no repair step; row 5 is the repair fixture, and this document says so two paragraphs below. R-9m1) |
 | **Key computed over resolver *inputs* rather than the verdict** | the reject-only fixture below fails — a verdict-neutral rejection re-arms the warning |
 | `DRIFT_SHARE_THRESHOLD` ignored, verdict on the count floor alone | the long-book fixture flips to `drifted` — a novel with a few dozen stray lines badges |
 | `drifted` tested *after* `collapsed` | row 3 badges `collapsed` and sends the user to re-analysis, which cannot fix it |
@@ -2784,6 +2900,23 @@ defensible answer. Listed in the order they block work.
    Wave 1 is now larger too. This is worth one look before Wave 2 is planned,
    because the cheapest moment to cut it is before Wave 1's plan assumes it.
    *Benefit (technical): a smaller Wave 2 is a Wave 2 that ships.*
+5. **Does `unanswered` become a sixth state, and where does its threshold sit?**
+   (R-9C4, new in the round-8 fold.) A book whose stage-2 output went wholesale
+   missing currently resolves `ok` — no badge, no gate — because `spokenTotal`
+   is fine, the orphan share is low, and the share is `null` under the floor.
+   Three sub-decisions: **(a)** a sixth state, or fold it into `missing` and
+   widen that notice — the second is cheaper on Wave 2's surface and loses the
+   distinction between *no dialogue exists* and *dialogue exists and nothing
+   came back*; **(b)** where `UNANSWERED_SHARE_THRESHOLD` sits, which Wave 1
+   measures like every other; **(c)** whether it should distinguish *the model
+   omitted the line* from *the aligner could not place it*, which §The join
+   records as an accepted conflation and which would need a second column.
+   *Recommendation: take (a) as a sixth state, defer (b) to Wave 1's run, and
+   accept the conflation in (c) until a real book shows it matters.*
+   **Wave 1 is unaffected by all three** — it prints `unattributedSpeech`
+   regardless, and that column is what the decision gets made from.
+   *Benefit (user): a book that lost half its dialogue to a silent model failure
+   stops rendering as a clean bill of health.*
 4. **Is `parseChapterStructure`'s speech/tag split accepted as the D15 rule?**
    The alternative on the table is the case-based heuristic the reconnaissance
    instrument used (a Russian tag half continues the sentence, so it opens
@@ -3026,3 +3159,39 @@ translation and one other, measured through `buildCastResolver` with each book's
 real `cast-id-history.json`. And the orphan-cache arithmetic re-derived
 independently is **76 caches / 20 live books / 2 trashed / 54 orphans**, which
 matches the reviewer exactly and settles revision 5's "nine of the 31".
+
+**Round 8 -- Premium adversarial gate on revision 8, 2026-08-13. Verdict: not
+safe to approve.** Five Criticals, four of them in revision 8's own new work.
+The recurring shape held exactly: **every one is a measurement, guard, or
+control that cannot detect the thing it exists to detect.** Three claims were
+independently confirmed and should not be re-derived -- D14's model-independence
+(span kind is a function of `LanguageConventions` and text alone; the roster
+reaches only `SpanEvidence.speaker`), F12's corrected citations (every one
+re-checked), and `crossExamine`'s single application site at `:393`. Every
+finding below was re-verified against the tree before folding.
+
+| ID | Severity | Finding | Disposition |
+|---|---|---|---|
+| R-9C1 | Critical | **D18's two write sites were the wrong two, and the column is identically ZERO on the default configuration.** `applyNarratorDefault` is the `else` of a branch whose knob defaults on; and `crossExamine` **cannot** put `narrator` on a speech span -- `NARRATOR_ID` is returned only by `decideTagSpanOnly` (tag spans) and `decideNarrationOnly` (narration spans), while every speech path returns `modelId` or `span.speaker.characterId`, which can never be `narrator` (`buildNameIndex` skips the narrator id). Since the numerator is over speech spans, the intersection is empty. Worse, the site that DOES produce engine demotion by default -- `reconcileSentenceCharacterIds` (`analysis.ts:1423`, called `:5286`/`:6787`, knob-independent) -- **is the motivating incident's own mechanism**: `dropEvidencelessCast` shrinks the roster, the validator demotes every orphaned sentence, and that is how 16 drops made a 72% collapse. D18 would have reported it as `modelNarrator`, i.e. the wrong instruction | §D18 rebuilt around **five** sites, ordered by default-path impact, with `reconcileSentenceCharacterIds` first -- it already carries `originalId` on its `onDemote` hook, so no new plumbing. `escalateFlaggedWindows` (`escalation.ts:277`, default `local`) and `recoverTaggedNarratorLines` added as sites that INVALIDATE the field rather than set it. **The rule is restated over the property, not over a site list**, since a site list is what got it wrong |
+| R-9C2 | Critical | **Criterion 3's mutation control was inert.** Hand-executed: the fixture's only narrator sentence lacking `priorCharacterId` aligns to the **tag** span, so it never enters any narrator *speech* column -- the exact population the mutation redirects. Under the mutant, `unknownOriginNarrator` and `modelNarrator` are both still 0 and all three assertions pass. The sole control on the trap the spec calls the one an implementer is most likely to make | Fixture gains a narrator on a **speech** span with no prior, asserting `unknownOriginNarrator === 1` **and** `modelNarrator === 0` |
+| R-9C3 | Critical | **Criterion 16 asserted a property `alignSentences` does not provide.** Two of its three transforms are length-changing (a leading dash plus space is 2 normalised chars) and `ANCHOR_MIN_LEN = 24` is a hard length threshold; a needle at 24-25 loses anchor status when stripped, which merges runs and changes the bounded haystack for every neighbour. **A correct implementation can fail the criterion**, and the criterion told the reader that variation is a defect -- predicting the repair *weaken the join*. The two-tier fixture requirement added mid-round makes it MORE likely to fire, by mandating fixtures near the boundary. Inherited by Wave 2 criterion 10-prime and on-box check 2b | Split into **Tier A** (denominator fields -- byte-identical, no tolerance, they never read model text) and **Tier B** (join-dependent fields -- byte-identical under the length-PRESERVING transform only; under the other two, bounded by the count of needles that crossed the 24-char boundary, **computed from the fixture**, so any other drift still fails) |
+| R-9C4 | Critical | **No verdict state behind D17.** A book with heavy stage-2 omission has `spokenTotal > 0` (step 4 misses), a low orphan share (step 5 misses), and `attributableSpoken` under the floor so the share is `null` (step 6 misses), reaching **step 7, `ok`.** D17 was added to make omission visible and made it visible only in Wave 1's script column -- invisible on every Wave 2 surface, generation ungated. #1984's failure shape for the fifth time, one level below the change meant to close it | **Sixth state `unanswered`** added at step 4d, badging and gating like `missing`. Three sub-decisions deliberately left to the owner as question 5 -- whether a sixth state is worth Wave 2's surface, where its threshold sits, and whether it should distinguish *model omitted* from *aligner could not place*. **Wave 1 is unaffected either way**; it prints the column regardless |
+| R-9C5 | Critical | **`attributableSpoken` had two formulas 50 lines apart** -- `spokenTotal - orphanSpoken` in the fenced block an implementer copies, and a four-term subtraction in the interface. R-6N2 reproduced with the polarity reversed. And `orphanSpoken` and `splitSpeech` are **not disjoint** (a span with two disagreeing sentences, one unresolvable, is both), with no precedence stated -- double subtraction, and negative on a drifted, heavily-segmented book | Defined **once**, as a **direct count** of speech spans with exactly one resolvable attribution. Never a subtraction. Both surfaces corrected; overlap is impossible by construction rather than by a precedence rule |
+| R-9M1 | Major | **§Trigger still asserted D13's bimodality** -- *a separating threshold does exist ... the answer was yes* -- which §D13 re-gated had downgraded 100 lines earlier to *checked under a unit this spec has since replaced*. Unreconciled | §Trigger's paragraph prefixed with the downgrade and re-tensed to the past |
+| R-9M2 | Major | **§D13 re-gated's own fix never reached the normative rule.** It argues the drift share must exclude spans the metric could not attribute, then fixes only `unattributedSpeech` and leaves `splitSpeech` to dilute by the identical argument -- and the states table, which the same document declares normative, still read over `spokenTotal`. An implementer coding from the table implements the version the prose calls wrong | Both terms excluded; the states-table cell carries the rule |
+| R-9M3 | Major | **Four of F12's own stale citations survived in the body** -- `persistDroppedQuotesBatch` twice, `segments-io.ts:338`, `cast.tsx:583` -- in the same revision as the table whose purpose is to stop exactly this. Plus §Known false positives still referred the reader to the CJK change as a live change of this spec's | All corrected. The recurrence is recorded rather than quietly fixed: **the falsification table did not sweep itself**, which is another instance of this document's standing trap |
+| R-9M4 | Major | **Criterion 1's test asserted a score of zero.** Executed: in both arms the narrator sentence lands on the tag span, so `narratorIdSpoken` is `0 === 0`. An implementation that never tests `NARRATOR_CHARACTER_IDS` passes every assertion; the `unattributedSpeech` guard catches join-lost but not numerator-never-implemented | Fixture gains a fourth sentence -- a narrator on a speech span. **Re-measured after the fix: speech 3 / tag 1, `narratorIdSpoken` 1 and `tagNarratorSpan` 1 in BOTH arms.** Two assertions promoted to mandatory |
+| R-9m1 | Minor | The drifted mutation table billed the `cache.updatedAt` keying mutation against **row 4**, which contains no repair step; row 5 is the repair fixture and the document says so two paragraphs below. Also *four fixtures* heading a seven-row table | Both corrected |
+| R-9m2 | Minor | Criterion 4's stated mutation mechanism was wrong: `spokenTotal` does **not** drop to 1 under a sentence-list denominator -- both dash lines yield one speech span each. The test still goes red via `unattributedSpeech`, but the unstated tell is `tagTotal` dropping to 0 | Mechanism corrected and `tagTotal` asserted |
+| R-9m3 | Minor | `analysis.ts:2210` cited for the `conventionsFor` call; that is `:2209` (`:2210` is the `if`) | Corrected at all four occurrences |
+
+**What this round says about the method, not the document.** Four of the five
+Criticals are in work added *this revision*, and all four are the same shape the
+previous seven rounds found. The rebaseline replaced a metric that could not see
+a punctuation change with one that -- as first drafted -- could not see the
+incident's own mechanism, could not fail its own mutation, and had no verdict
+behind its newest signal. **Moving the measurement one level deeper did not move
+the failure mode.** The honest reading is that this document's defect rate is a
+property of how it is written rather than of what it is about: every column,
+guard and fixture needs a stated answer to "what makes this go red", and the ones
+that get skipped are the ones that read as obviously correct.
