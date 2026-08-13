@@ -888,34 +888,171 @@ describe('parser — #2288 M2: residuals accepted with rule B (design doc § Res
       .filter((s) => s.kind === 'speech')
       .map((s) => body.slice(s.start, s.end));
 
-  it("residual 1: the straddle inside a language's own PRIMARY pairs is untouched (design residual 1)", () => {
-    // M2 only adds a tier BELOW primary; Task 3 never touched scanQuoteRuns or
-    // the leftmost-accept loop. es's primary quotePairs leads with «»; an
-    // unclosed « (no » after "Hola") makes the primary scan skip past the
-    // beat straight to the NEXT » — the one closing the second turn's own
-    // quote — merging beat + second turn's opening tag into one run. This is
-    // exactly `main`'s behaviour today (design doc's own worked example) —
-    // 579 of 2,456 well-formed straddle shapes corrupt this way, and M2
-    // moves none of that.
+  it("residual 1: the straddle inside a language's own PRIMARY pairs is REPAIRED (#2315's own regression test; design doc M2 residual 1, INVERTED by the #2315 re-open bound)", () => {
+    // M2 only added a tier BELOW primary; it never touched scanQuoteRuns or
+    // the leftmost-accept loop, so this shape stayed merged under M2 alone.
+    // #2315's re-open bound lives IN scanQuoteRuns: the unclosed « (no » after
+    // "Hola") now ends the run at the re-open rather than swallowing turn 2's
+    // own opening tag, so both turns come back clean. This inverts what this
+    // test pinned before #2315 (a genuine two-run MERGE) — it now pins the
+    // fix instead. Cross-referenced from #2315's own "the re-open bound"
+    // describe block above (the 'es' worked example).
     const es = conventionsFor('es')!;
-    const merged = speechOf('«Hola, dijo él. «Adiós», dijo ella.', es);
-    expect(merged).toEqual(['Hola, dijo él. «Adiós']);
-    // Prove it's a genuine MERGE, not an absence of runs or two clean turns:
-    // the single run's text must contain both halves.
-    expect(merged).toHaveLength(1);
-    expect(merged[0]).toContain('dijo él');
-    expect(merged[0]).toContain('Adiós');
+    const spoken = speechOf('«Hola, dijo él. «Adiós», dijo ella.', es);
+    expect(spoken).toEqual(['Hola, dijo él. ', 'Adiós']);
   });
 
-  it("residual 2: a spurious secondary run over narration survives, with BOTH real turns intact (design residual 2, F1's 284)", () => {
+  it("residual 2: a spurious secondary run over VERB-BEARING narration is DECLINED by the #2315 tag-clause guard; both real turns stay intact (design doc M2 residual 2, REVISED by #2315 defect 2)", () => {
     // "Stop" sits in the gap between two real turns, framed by the secondary
-    // «» pair. It contains no primary opener, so the gap tier accepts it as
-    // a (spurious) third run — narration read as speech — but BOTH real
-    // turns ("Hi" and "Bye") survive untouched. That's the residual the
-    // owner decision (rule B) accepted: audible, attributable, recoverable —
-    // never a lost turn.
+    // «» pair, and contains no primary opener — the M2 gap tier alone would
+    // accept it as a (spurious) third run, narration read as speech. But
+    // "The sign said «Stop»." is a VERB-BEARING clause with no sentence break
+    // before the candidate ("said" + no '.' before "«"), which is exactly the
+    // shape the #2315 tag-clause guard cannot tell apart from a genuine tag
+    // (design doc § "Defect 2 — the tag-cut cut", the 156-case residual: verb-
+    // bearing narration the guard declines even though it names no speaker).
+    // The guard has no roster to check "Stop" isn't a name, by design (design
+    // doc's rejected-rules list: roster-aware admission fails on a bare-name
+    // turn). What still matters — and is still true — is that BOTH real turns
+    // ("Hi" and "Bye") survive untouched; only the spurious third run is gone.
     const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
     const spans = speechOf('“Hi”, he said. The sign said «Stop». “Bye”, she said.', enTier);
-    expect(spans).toEqual(['Hi', 'Stop', 'Bye']);
+    expect(spans).toEqual(['Hi', 'Bye']);
+  });
+});
+
+describe('parser — #2315: the re-open bound', () => {
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  /* Case 1 — same-glyph re-open. `fr` has a single quote pair, so turn 2's
+     opener is the same glyph as the stray. The per-opener scan resumes at the
+     END of the accepted run, so turn 2 produces NO CANDIDATE AT ALL: no
+     acceptance-order rule can reach this, which is why the fix is in the scan.
+     Design § "Defect 1 — the mechanism", case 1. */
+  it('fr: an unterminated « does not swallow the next turn', () => {
+    expect(
+      speechOf('«Bonjour», dit-il, regardant le «panneau de Faust. «Et toi», demanda-t-elle.', conventionsFor('fr')!),
+    ).toEqual(['Bonjour', 'panneau de Faust. ', 'Et toi']);
+  });
+  it('es: the design’s worked example keeps both turns', () => {
+    expect(speechOf('«Hola, dijo él. «Adiós», dijo ella.', conventionsFor('es')!)).toEqual([
+      'Hola, dijo él. ', 'Adiós',
+    ]);
+  });
+  /* The shape a real book produces when a CLOSING quote is typed as an OPENING
+     one. `toEqual`, not `toContain`: a superset assertion cannot see a rule
+     that ADDS a span, which is how an earlier candidate rule passed every
+     anchor while inventing a spurious speech span. */
+  it('en: a closing quote typed as an opening one keeps both turns', () => {
+    expect(speechOf('“Hello,“ he said. “Goodbye,” she said.', conventionsFor('en')!)).toEqual([
+      'Hello,', ' he said. ', 'Goodbye,',
+    ]);
+  });
+
+  /* Case 3 — `ru`'s `“` closes turn 1 AND opens a pair, so the scan seeds a run
+     there, that run is discarded for overlapping turn 1, and the cursor has by
+     then passed turn 2's genuine `“`. Surfaced by the family instrument's own
+     no-stray control, which exists to prove it does not cry wolf. */
+  it('ru: turn 1’s own closing „…“ does not consume turn 2’s opener', () => {
+    expect(speechOf('„Привет“, сказал он. “Пока”, сказала она.', conventionsFor('ru')!)).toEqual([
+      'Привет', 'Пока',
+    ]);
+  });
+
+  it('runs stay disjoint when a run is truncated at a re-open', () => {
+    const body = '«Hola, dijo él. «Adiós», dijo ella.';
+    const spans = parseChapterStructure(body, buildNameIndex([], conventionsFor('es')!))
+      .flatMap((p) => p.spans)
+      .sort((a, b) => a.start - b.start);
+    for (let i = 1; i < spans.length; i++) expect(spans[i].start).toBeGreaterThanOrEqual(spans[i - 1].end);
+  });
+
+  it('a truncated run never produces an empty speech span', () => {
+    /* `cut > interiorStart` guarantees this; the degenerate `««` input falls
+       through to the shipped behaviour instead. */
+    expect(speechOf('««Hola», dijo él.', conventionsFor('es')!).every((s) => s.length > 0)).toBe(true);
+  });
+
+  /* DEPTH 3 — the proviso's reason to exist. `main` already mis-parses these;
+     the requirement is only that the fix does not make it worse by promoting a
+     depth-3 quoted word to its own speech span, which the render then
+     attributes and voices separately. Design § "Depth ≥ 3". */
+  it.each([
+    ['en', '“He told me, ‘She said “no” to him,’ and walked off,” Mary explained.', 'no'],
+    ['zh', '「他说『她说「不」了』然后走了」她解释说。', '不'],
+    ['ru', '«Он сказал „она сказала «нет» ему“ мне», объяснил он.', 'нет'],
+    /* straight from the corpus: se/charlotte-perkins-gilman_moving-the-mountain */
+    ['en', '“Mother had an old storybook,” Nellie remarked, “where somebody said, ‘You can’t always have your “druthers” ’—like home.”', 'druthers'],
+  ])('%s: depth-3 nesting is not fragmented into a one-word span', (lang, body, fragment) => {
+    expect(speechOf(body, conventionsFor(lang)!)).not.toContain(fragment);
+  });
+
+});
+
+describe('parser — #2315 defect 2: a gained secondary run must not cut a tag clause', () => {
+  const ru = conventionsFor('ru')!;
+  const tiered = { ...ru, secondaryQuotePairs: [['‘', '’']] as Array<[string, string]> };
+  const roster = [{ id: 'anton', name: 'Антон' }];
+  const speakersOf = (body: string, conv: typeof ru) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  /* POSITIVE CONTROL, and it must come first: without it a zero below could
+     mean "the metric cannot read a speaker at all". */
+  it('control: with no secondary pair the turn is attributed', () => {
+    expect(speakersOf('«Привет», сказал ‘Антон’.', ru)).toEqual([['Привет', 'anton']]);
+  });
+
+  it('the tag keeps its name when the tier is declared', () => {
+    expect(speakersOf('«Привет», сказал ‘Антон’.', tiered)).toEqual([['Привет', 'anton']]);
+  });
+
+  /* MUST STILL WORK: a genuine secondary-convention SECOND TURN, which the
+     guard must admit. The discriminator is the sentence boundary after the
+     tag, not the verb. */
+  it('a genuine secondary-convention second turn is still recovered', () => {
+    expect(speakersOf('«Привет», сказал Антон. ‘Пока’, сказал Антон.', tiered)).toEqual([
+      ['Привет', 'anton'], ['Пока', 'anton'],
+    ]);
+  });
+});
+
+describe('parser — #2315 residuals, accepted (design § Residuals)', () => {
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  /* 1a — the CROSS-GLYPH straddle. This interval geometry is byte-for-byte a
+     legitimate nest, and it occurs in 5,267 of 239,725 real corpus paragraphs
+     where it is overwhelmingly correct. Every rule that acts on it was
+     measured: `R2` removes 601,392 characters of real speech; `R4` lets a
+     quoted word in narration change how a later turn parses. */
+  it('residual 1a: a cross-glyph straddle still swallows the next turn', () => {
+    expect(
+      speechOf('«Hola», dijo él, mirando el “cartel de Fausto. «Y tú», preguntó ella, cerca de la galería”.', conventionsFor('es')!),
+    ).toEqual(['Hola', 'cartel de Fausto. «Y tú», preguntó ella, cerca de la galería']);
+  });
+  /* 1b — the SYMMETRIC delimiter. With `"` the opener and the closer are the
+     same character, so an odd count means one is unpaired and nothing local can
+     say which. Irreducible: even `R2`, the ceiling, leaves this class. */
+  it('residual 1b: a stray ASCII " still swallows the next turn', () => {
+    expect(
+      speechOf('“Hi”, he said, passing the "Faust poster. "Bye", she said, near the gallery".', conventionsFor('en')!),
+    ).toEqual(['Hi', 'Faust poster. ', ', she said, near the gallery']);
+  });
+  /* 3 — depth >= 3 nesting is STILL mis-parsed; `main` truncates at the
+     depth-3 closer and this change leaves that untouched. Pinned so the
+     pre-existing defect is visible rather than assumed fixed. */
+  it('residual 3: depth-3 nesting is still truncated at the depth-3 closer', () => {
+    expect(speechOf('“He told me, ‘She said “no” to him,’ and walked off,” Mary explained.', conventionsFor('en')!))
+      .toEqual(['He told me, ‘She said “no']);
   });
 });

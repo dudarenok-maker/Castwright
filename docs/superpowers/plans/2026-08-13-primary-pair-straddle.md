@@ -607,4 +607,48 @@ reads 0 with both tier guards deleted. **Do not reuse that family as a gate.**
 
 ## Ship notes
 
-*(filled at merge)*
+Implemented Tasks 1–11 in the `fix/server-2315-reopen-bound` worktree, off
+`main` at `090168a5`. All measured figures reproduced against the shipped
+code exactly, confirmed by an over-and-above equivalence check
+(`scratchpad/s2315/equivalence.mts`, re-pointed at this worktree): the
+engine.mjs prototype of `R1c_plainPrefix+G` is byte-identical to the shipped
+`parser.ts` over all 1,190,634 corpus paragraphs (`DIFFERING 0`), so every
+figure below is a genuine measurement of the shipped code, not the prototype.
+
+- Family: **172 of 805** (de 24, en 30, es 4, fr 0, ja 4, ru 92, zh 18;
+  no-stray control 0 destroyed everywhere).
+- Anchors: **19/22** (the three residual cross-glyph/symmetric-delimiter
+  failures, as designed).
+- Arm A (140-book English, M1's tuple): **938 / 0 MERGED / 0 LOST / 0
+  GAINED**, SPLIT 34 — `NOT MET` on the literal `0 SPLIT` bar per Decision A,
+  met on every other clause.
+- Arm B (7 languages, own tables): **1,231 changed / 1,231 text-preserving /
+  0 characters lost / 0 mid-word**.
+- Attribution family: positive control 42/42, shipped guard **0/42** lost,
+  firing control (mutation (d)) **21/42** lost — matches the design exactly.
+- M2 pairwise (F1/F2/F3/SUPP): **+1,762 repaired / −20 regressed**, 0 nesting
+  regressions, suppression 0 of 21 — matches the design exactly.
+- **Tag-cut corpus proxy — DIVERGES from the design doc, and this is not a
+  bug.** The design's cited "156 across 71" is `RULE=shipped+G` — the
+  tag-clause guard measured **in isolation**, without the re-open bound.
+  What's actually shipped is both rules together
+  (`R1c_plainPrefix+G`), which measures **162 across 76**: combining the
+  two rules shifts primary-run boundaries in the `main`-table baseline the
+  proxy diffs against, which moves where a handful of tag spans fall. Both
+  numbers reproduced directly (`s2315/tagcut.mts shipped+G` → 156/71 exactly;
+  `s2315/tagcut.mts R1c_plainPrefix+G` → 162/76). Doesn't change the
+  criterion this residual is measured against — Decision C already binds
+  acceptance to the attribution-aware family (0 of 42), not this proxy — so
+  no re-decision is owed, only the correction that 162/76, not 156/71, is
+  the number that describes what shipped.
+- Task 10 mutations (a)–(e): all five went RED for the predicted reason, all
+  five reverted; full detail in the PR body and the implementation report.
+- On-box acceptance: row **D3** added to
+  [`docs/testing/onbox-acceptance-register.md`](../../testing/onbox-acceptance-register.md)
+  (generate a `zh`/`ja` chapter with a continuation paragraph; confirm the
+  recovered inner turn voices as its own turn in its own cast voice). The
+  live view is **not** updated by this PR — owed to the coordinating/shipping
+  thread, which owns the pre-publish comparator run.
+- Design doc moved to `status: stable` in the same diff.
+
+Ship date / merge SHA: *(filled by the coordinating thread at merge)*.

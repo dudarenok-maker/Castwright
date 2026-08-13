@@ -1,6 +1,8 @@
 # The primary-pair straddle, and the tag-clause cut — design
 
-Status: **active — recommendation made, three owner decisions owed (Task 0)** ·
+Status: **stable — shipped**, all three owner decisions answered (Task 0) and
+implemented per
+[the plan](../plans/2026-08-13-primary-pair-straddle.md)'s Ship notes ·
 Issue: [#2315](https://github.com/dudarenok-maker/Castwright/issues/2315) ·
 Blocks: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) (held in
 draft until this lands) ·

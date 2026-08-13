@@ -1,4 +1,4 @@
-import type { ParagraphEvidence, SpanEvidence } from './types.js';
+import type { LanguageConventions, ParagraphEvidence, SpanEvidence } from './types.js';
 import type { NameIndex } from './name-matcher.js';
 import { findRosterName, findSubjectName } from './name-matcher.js';
 import { splitEvidencedInteriorTurns } from './paragraph-recovery.js';
@@ -377,10 +377,41 @@ function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>
     This cannot delete a primary run and cannot alter a table with an empty
     tier — M1's never-delete invariant and the 270-test suite hold by
     construction, not by measurement. */
+/** Sentence-final punctuation, including the CJK full-width forms — without
+    them `zh`/`ja` read every tag as one unbroken clause. */
+const SENTENCE_END = /[.!?…。！？；;]/u;
+
+/** #2315 defect 2. A gained SECONDARY run that lands INSIDE a tag clause
+    truncates it, `findRosterName` never reaches the name, and the adjacent real
+    turn loses its speaker — so it is read in the wrong voice. The turn
+    survives, so every turns-destroyed instrument in this strand reads 0.
+
+    The discriminator is a SENTENCE BOUNDARY, not a verb alone:
+      `, сказал `      verb, no sentence end -> inside the tag clause -> decline
+      `, сказал он. `  verb, sentence end    -> a new sentence, a turn -> admit
+      ` en la portada. ` no verb             -> narration; M2's suppression
+                                                class                  -> admit
+
+    The window is the CLAUSE, not the whole gap: scoping it to the gap was
+    measured and only moved the corpus figure 265 -> 165, because a long
+    paragraph's gap contains earlier sentence-final punctuation. Secondary-tier
+    only, so it is a measured no-op on every shipped table. */
+function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], conv: LanguageConventions): boolean {
+  const stems = [...conv.speechVerbStems, ...conv.beatVerbStems];
+  let from = 0;
+  for (const r of primaryRuns) if (r.end <= cand.start && r.end > from) from = r.end;
+  for (let i = cand.start - 1; i >= from; i--) {
+    if (SENTENCE_END.test(line[i])) { from = i + 1; break; }
+  }
+  const clause = line.slice(from, cand.start).toLowerCase();
+  return stems.some((s) => clause.includes(s.toLowerCase()));
+}
+
 function findQuoteRuns(
   line: string,
   pairs: Array<[string, string]>,
   secondary: Array<[string, string]>,
+  conv: LanguageConventions,
 ): QuoteRun[] {
   const primaryRuns = scanQuoteRuns(line, pairs);
   if (!secondary.length) return primaryRuns;
@@ -399,9 +430,41 @@ function findQuoteRuns(
       }
     }
     if (straddles) continue;
+    if (cutsATagClause(line, c, primaryRuns, conv)) continue;
     out.push(c);
   }
   return out.sort((a, b) => a.start - b.start);
+}
+
+/** #2315. A quotation run may not contain a further occurrence of its OWN
+    opening glyph: a quotation cannot re-open without having closed.
+
+    Why this is not an acceptance rule. The per-opener scan resumes at the end
+    of an accepted run (`pos = end.at + end.glyph.length` below), so a re-opened
+    glyph inside that range never becomes a candidate at all — there is nothing
+    for any ordering, election, or tiering rule to choose. 258 of the 396 shapes
+    in the design's family are this case, and `fr`, whose table has one pair, is
+    entirely this case. */
+function reopenCut(
+  line: string,
+  interiorStart: number,
+  endAt: number,
+  open: string,
+  openers: Set<string>,
+): number | null {
+  const at = line.indexOf(open, interiorStart);
+  if (at < 0 || at >= endAt) return null;
+  /* No language nests a pair inside itself — conventions alternate BY DEPTH, so
+     depth 3 re-uses depth 1's glyph. An opener of any class between this run's
+     own opener and the re-occurrence means a nest is in play, and the
+     re-occurrence is a nesting delimiter rather than a re-open. Refusing to act
+     whenever nesting is anywhere in play costs family shapes (164 -> 172) and
+     no real turns. */
+  for (const o of openers) {
+    const k = line.indexOf(o, interiorStart);
+    if (k >= 0 && k < at) return null;
+  }
+  return at;
 }
 
 function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
@@ -492,6 +555,17 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
         pos = start + open.length;
         continue;
       }
+      /* #2315: end the run at a re-open rather than letting it swallow the next
+         turn. The run is still EMITTED, with no closing delimiter — deleting it
+         destroys a turn, the harm this strand refuses; the spurious speech span
+         it can produce is the accepted lesser harm. Resuming at `cut` is what
+         lets the next turn be seen at all. */
+      const cut = reopenCut(line, interiorStart, end.at, open, openers);
+      if (cut !== null && cut > interiorStart && cut < end.at) {
+        candidates.push({ start, end: cut, openLen: open.length, closeLen: 0 });
+        pos = cut;
+        continue;
+      }
       candidates.push({
         start,
         end: end.at + end.glyph.length,
@@ -523,7 +597,7 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
     onto adjacent speech spans exactly like the dash path. */
 function parseQuoteParagraph(line: string, base: number, index: NameIndex): ParagraphEvidence {
   const conv = index.conventions;
-  const runs = findQuoteRuns(line, conv.quotePairs, conv.secondaryQuotePairs);
+  const runs = findQuoteRuns(line, conv.quotePairs, conv.secondaryQuotePairs, conv);
   const spans: SpanEvidence[] = [];
   let cursor = 0;
   for (const run of runs) {
