@@ -1,6 +1,7 @@
 import type { ParagraphEvidence, SpanEvidence } from './types.js';
 import type { NameIndex } from './name-matcher.js';
 import { findRosterName, findSubjectName } from './name-matcher.js';
+import { splitEvidencedInteriorTurns } from './paragraph-recovery.js';
 
 /* Spec §5.1. Conservative by construction: only two interior-dash patterns
    toggle span state; anything ambiguous degrades to `unanchored` (flag, not
@@ -86,12 +87,28 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
     must not assume `spans[].start`/`end` sum to the paragraph's full
     length; the aligner is overlap-based and tolerant of these
     micro-gaps. */
-export function parseChapterStructure(body: string, index: NameIndex): ParagraphEvidence[] {
+export interface ParseChapterOptions {
+  /** Recovery for degraded manuscripts: run splitEvidencedInteriorTurns first so
+      dialogue turns hidden inside narration-open merges become line-starting
+      dashes. ON BY DEFAULT (length-preserving, offset-safe — see the
+      splitEvidencedInteriorTurns doc). Pass `false` to disable. Quotes-only
+      languages (no dialogueOpen) are a no-op either way. */
+  recoverMidParagraphTurns?: boolean;
+}
+
+export function parseChapterStructure(
+  body: string,
+  index: NameIndex,
+  opts?: ParseChapterOptions,
+): ParagraphEvidence[] {
   const conv = index.conventions;
+  const text = (opts?.recoverMidParagraphTurns ?? true)
+    ? splitEvidencedInteriorTurns(body, index)
+    : body;
   const out: ParagraphEvidence[] = [];
   let offset = 0;
   // Callers pass \n-normalized text; offsets below are absolute into that body.
-  for (const line of body.split('\n')) {
+  for (const line of text.split('\n')) {
     const start = offset;
     offset += line.length + 1; // +1 for the split '\n'
     const trimmed = line.trim();
