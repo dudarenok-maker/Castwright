@@ -1699,8 +1699,12 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toMatch(/use the manuscript's own script/i);
     expect(inbox).toMatch(/exactly as this chapter'?s\s+prose spells them/i);
     expect(inbox).toMatch(/never\s+transliterate, romanise, or translate/i);
-    /* No language is asserted anywhere — stating one would be a guess. */
-    expect(inbox).not.toMatch(/^- Language:/m);
+    /* No language is asserted ANYWHERE — stating one would be a guess. Pinning
+       a single spelling (`^- Language:`) would let `- Book language: en` or
+       `- Language (detected): en` reintroduce the defect untouched, so this
+       checks for any `<label>: ` language assertion in the prompt. Verified no
+       existing prompt text trips it. */
+    expect(inbox).not.toMatch(/\blanguage\s*:/i);
   });
 
   it('carves `id` OUT of the script rule so ids stay ASCII kebab-case', () => {
@@ -1737,19 +1741,29 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
           id: 'anton-gorodovsky',
           name: 'Anton Gorodovsky',
           role: 'Protagonist',
-        } as unknown as CharacterOutput,
+          color: '#c94f7c',
+        },
       ],
     );
-    expect(inbox).toMatch(/already appears in the running roster or the known-series/i);
-    expect(inbox).toMatch(/reuse that `id` exactly as written there/i);
-    expect(inbox).toMatch(/even when you are correcting their `name`/i);
-    /* the carve-back must sit with the id rule, not somewhere the model can
-       read as applying only to a different section */
+    /* The drifted id must be offered back verbatim, not "corrected". */
+    expect(inbox).toContain('"id": "anton-gorodovsky"');
+    expect(inbox).toMatch(/already appears in the running roster below/i);
+    /* whitespace-tolerant: the block is hard-wrapped, so a reflow must not
+       read as a missing rule */
+    expect(inbox).toMatch(/reuse that `id` exactly as\s+written\s+there/i);
+    expect(inbox).toMatch(/even when you are\s+correcting their `name`/i);
+    /* The carve-back must sit INSIDE the same `## Names` block as the id rule —
+       a structural check rather than a character budget, so rewording the
+       paragraph cannot break a test that is not about wording. */
+    const namesAt = inbox.indexOf("## Names — use the manuscript's own script");
+    const nextHeadingAt = inbox.indexOf('\n## ', namesAt + 1);
     const idRuleAt = inbox.indexOf('`id` is the ONE exception');
     const carveAt = inbox.indexOf('already appears in the running roster');
-    expect(idRuleAt).toBeGreaterThan(-1);
+    expect(namesAt).toBeGreaterThan(-1);
+    expect(nextHeadingAt).toBeGreaterThan(namesAt);
+    expect(idRuleAt).toBeGreaterThan(namesAt);
     expect(carveAt).toBeGreaterThan(idRuleAt);
-    expect(carveAt - idRuleAt).toBeLessThan(400);
+    expect(carveAt).toBeLessThan(nextHeadingAt);
   });
 
   it('carries the name-fidelity + no-spurious-merge guardrails (2026-06-16 Russian surname-smear / Игорь↔Илья)', () => {

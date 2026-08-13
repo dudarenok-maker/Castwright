@@ -1738,10 +1738,13 @@ ${priorJson}
 
      The gap is narrower than "no language guidance". `languagePreamble`
      (analyzer/gemini.ts) IS appended to the system instruction for a
-     non-English book — "the manuscript text is in Russian (Cyrillic script) …
-     do not translate or transliterate it" — and its `castFields` clause binds
+     non-English book: "the manuscript text is in Russian (Cyrillic script).
+     Quote evidence VERBATIM from the manuscript (do not translate or
+     transliterate it)" — note the prohibition is scoped to EVIDENCE QUOTES,
+     not to the response at large — and its `castFields` clause binds `tone`,
      `role`, `description` and each `attributes` tag to the book's language.
-     It never mentions `name` or `aliases`. This block closes exactly that.
+     It never mentions `name` or `aliases`. This block closes exactly that, and
+     is NOT redundant with the preamble: nothing there governs the cast's names.
 
      Anchored on THE PROSE, not on a language name passed in from the route.
      Two reasons, both load-bearing: the chapter text is in front of the model
@@ -1775,10 +1778,10 @@ attribution pass, and it is what the reader sees in the cast list.
 
 \`id\` is the ONE exception: it stays ASCII kebab-case, so transliterate for the
 id and only for the id — \`Антон Городецкий\` → \`anton-gorodetsky\`. **Unless
-the character already appears in the running roster or the known-series list
-below — then reuse that \`id\` exactly as written there, whatever its spelling,
-even when you are correcting their \`name\`.** Minting a second id for someone
-already on the roster splits them into two characters.
+the character already appears in the running roster below, or — when this prompt
+carries one — in the known-series list: then reuse that \`id\` exactly as written
+there, whatever its spelling, even when you are correcting their \`name\`.**
+Minting a second id for someone already listed splits them into two characters.
 `;
 
   /* #938 — the book's byline author is NOT a character. Rendered only when known. */
