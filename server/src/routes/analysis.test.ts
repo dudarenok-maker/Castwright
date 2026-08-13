@@ -1679,71 +1679,28 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
   });
 
-  /* #2313 — the script of the returned names was unconstrained, so a Russian
-     book came back with a 59%-Latin roster after a runtime change, with the
-     same weights and the same prompt. These pin the rule that closes it. */
-  it('names the manuscript language when it is known', () => {
-    const inbox = buildStage1ChapterInbox(
-      'mns_test',
-      'Ночной дозор',
-      { id: 1, title: 'Глава 1', body: 'Тело главы.' },
-      [],
-      [],
-      '',
-      'ru',
-    );
-    expect(inbox).toContain('- Language: ru');
-  });
-
-  it('requires names in the prose\'s own script even when the language is UNKNOWN', () => {
-    /* The rule is anchored on the chapter text, not on the language name, so a
-       book whose language never got detected is still protected. If this ever
-       regresses to rendering only under a known language, the books most likely
-       to drift — the ones detection failed on — lose the guardrail. */
+  /* #2313 — `name`/`aliases` were the one part of a non-English roster nothing
+     bound to the manuscript's script, so they drifted: a Russian book came back
+     59% Latin-named with the same weights and the same prompt. */
+  it('binds name/aliases to the prose\'s own script, unconditionally', () => {
+    /* Unconditional is the point. The rule takes no language argument, because
+       `resolveBookLanguageForManuscript` returns 'en' on a miss and
+       `normaliseBookLanguage` is `primary || 'en'` — so a language-gated rule
+       would go silent (or assert English) on exactly the books that drift:
+       those imported before fs-2 and those left undecided at the confirm
+       screen. Those books also get an EMPTY `languagePreamble`, so this block
+       is their only protection. */
     const inbox = buildStage1ChapterInbox(
       'mns_test',
       'Untitled',
       { id: 1, title: 'Chapter 1', body: 'Body.' },
       [],
     );
-    expect(inbox).not.toContain('- Language:');
     expect(inbox).toMatch(/use the manuscript's own script/i);
     expect(inbox).toMatch(/exactly as this chapter'?s\s+prose spells them/i);
     expect(inbox).toMatch(/never\s+transliterate, romanise, or translate/i);
-  });
-
-  it('every production call site actually PASSES the language through', () => {
-    /* #2313 — the unit tests above prove the builder CAN render the rule; they
-       cannot prove production reaches it. `language` has a default, so a call
-       site that omits it compiles and silently renders no language line — the
-       exact shape that made this bug invisible for a week. Precedent for a
-       source-scan guard here: workspace/cast-lock.guard.test.ts. */
-    const src = readFileSync(
-      new URL('./analysis.ts', import.meta.url),
-      'utf8',
-    );
-    const calls: string[] = [];
-    const NEEDLE = 'buildStage1ChapterInbox(';
-    for (let i = src.indexOf(NEEDLE); i >= 0; i = src.indexOf(NEEDLE, i + 1)) {
-      /* skip the declaration itself */
-      if (/export function\s*$/.test(src.slice(Math.max(0, i - 20), i))) continue;
-      let depth = 0;
-      let end = i + NEEDLE.length - 1;
-      for (let j = i + NEEDLE.length - 1; j < src.length; j += 1) {
-        if (src[j] === '(') depth += 1;
-        else if (src[j] === ')') {
-          depth -= 1;
-          if (depth === 0) { end = j; break; }
-        }
-      }
-      calls.push(src.slice(i, end + 1));
-    }
-    /* Fail loudly rather than pass on an empty scan — a renamed function would
-       otherwise silently satisfy a `.every()` over nothing. */
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    for (const call of calls) {
-      expect(call).toContain('bookLanguage');
-    }
+    /* No language is asserted anywhere — stating one would be a guess. */
+    expect(inbox).not.toMatch(/^- Language:/m);
   });
 
   it('carves `id` OUT of the script rule so ids stay ASCII kebab-case', () => {
@@ -1755,13 +1712,44 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
       'Ночной дозор',
       { id: 1, title: 'Глава 1', body: 'Тело главы.' },
       [],
-      [],
-      '',
-      'ru',
     );
     expect(inbox).toMatch(/`id` is the ONE exception/);
     expect(inbox).toMatch(/stays ASCII kebab-case/i);
     expect(inbox).toContain('Антон Городецкий` → `anton-gorodetsky');
+  });
+
+  it('does NOT let the id rule override reuse-the-roster-id-verbatim', () => {
+    /* The transliterate-for-the-id sentence renders ABOVE the running-roster and
+       series-prior blocks, both of which require reusing an existing id
+       verbatim. Without the carve-back, a model correctly repairing a drifted
+       `"Anton Gorodovsky"` back to `"Антон Городецкий"` would then derive
+       `anton-gorodetsky` alongside the roster's existing `anton-gorodovsky`.
+       `mergeRosterChapter` merges by id, so that splits one character into two
+       roster rows, two voice profiles and two sets of lines — and it arrives
+       past retireCharacterId/buildCastResolver, which watch for an id that
+       CHANGED, not for a second one being minted. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Ночной дозор',
+      { id: 3, title: 'Глава 3', body: 'Тело главы.' },
+      [
+        {
+          id: 'anton-gorodovsky',
+          name: 'Anton Gorodovsky',
+          role: 'Protagonist',
+        } as unknown as CharacterOutput,
+      ],
+    );
+    expect(inbox).toMatch(/already appears in the running roster or the known-series/i);
+    expect(inbox).toMatch(/reuse that `id` exactly as written there/i);
+    expect(inbox).toMatch(/even when you are correcting their `name`/i);
+    /* the carve-back must sit with the id rule, not somewhere the model can
+       read as applying only to a different section */
+    const idRuleAt = inbox.indexOf('`id` is the ONE exception');
+    const carveAt = inbox.indexOf('already appears in the running roster');
+    expect(idRuleAt).toBeGreaterThan(-1);
+    expect(carveAt).toBeGreaterThan(idRuleAt);
+    expect(carveAt - idRuleAt).toBeLessThan(400);
   });
 
   it('carries the name-fidelity + no-spurious-merge guardrails (2026-06-16 Russian surname-smear / Игорь↔Илья)', () => {
