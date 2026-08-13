@@ -46,7 +46,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`) unless testing word-mode against a real Whisper install.
+Run in mock mode (`npm run dev:mock`) unless testing word-mode against a real Whisper install.
 
 1. Open `#/books/sb/listen` → Captions tile visible in "Or download a file".
 2. Click Download on the Captions tile → export modal opens with Captions pre-selected, granularity/scope/file-format controls visible.

@@ -46,7 +46,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`) at `#/voices` for the global path, or `#/books/<id>/library` for the per-book path.
+Run in mock mode (`npm run dev:mock`) at `#/voices` for the global path, or `#/books/<id>/library` for the per-book path.
 
 1. Open `#/voices`. Find the `af_aoede` (Kokoro) or `Charon` (Gemini) family with two characters sharing one base voice (mock canned data may need a quick edit to seed a duplicate pair).
 2. Click the radio circles on `Wren` + `Wren Sparrow` (same `bookId`). Pill renders `Selected · 2 · same base voice ✓ · Compare · Merge into Wren Sparrow · Clear`.

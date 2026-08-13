@@ -94,7 +94,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** → expected stage = `{ kind: 'books' }`. Click "?" in the top bar → URL = `#/help`, stage = `{ kind: 'help' }`, all sections visible.
 2. **Navigate to `#/help?code=sidecar-unreachable`** → the sidecar-unreachable section is focused / scrolled into view.

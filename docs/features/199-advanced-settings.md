@@ -71,7 +71,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, default in dev) via `npm run dev`:
+Run in mock mode via `npm run dev:mock`:
 
 1. **Navigate to `#/advanced`** — heading "Advanced configuration" visible, "LLM sampling parameters" section open (no accordion collapse needed, it's the first registry group) with its "Ollama temperature" row rendered, and the separate "Per-sentence QA gates" section — also open by default — showing "Signal QA max re-records".
 2. **Edit "Signal QA max re-records"** from 2 to 5 and press Tab — the row shows `default: 2` + a "Revert" button; no banner (apply: live).

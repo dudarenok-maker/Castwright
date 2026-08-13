@@ -164,7 +164,7 @@ section, amended 2026-07-15). Plan:
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`) unless noted.
+Run in mock mode (`npm run dev:mock`) unless noted.
 
 1. **Cold Voice step, unanswered.** `#/setup` → advance to the Voice step. Expected: the
    guided question renders with both radios unchecked; cards render in today's historical

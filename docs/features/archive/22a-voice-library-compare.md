@@ -80,7 +80,7 @@ This is the soft variant of exploration option (3) — visually privileges the f
 
 ### Manual acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`.
+Run `npm run dev:mock`.
 
 1. **Open `#/books/<id>/library`** → no checkboxes visible by default; existing drag-to-reassign behavior preserved.
 2. **Click the checkbox on one `VoiceCard`** → card gains a peach tint (mirroring `cast.tsx:195`); floating pill appears bottom-center "Selected · 1 [Compare]"; Compare disabled.

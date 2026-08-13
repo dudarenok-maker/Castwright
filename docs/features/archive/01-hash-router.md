@@ -30,7 +30,7 @@ Two-way binding between the URL hash and `ui.stage`. `parseHash` turns a URL int
 
 ## Acceptance walkthrough
 
-Run with `VITE_USE_MOCKS=true`. Open the app, then in DevTools console call `parseHash('#/...')` and `stageToHash({...})` to verify round-trips, OR drive via real URL changes.
+Run `npm run dev:mock`. Open the app, then in DevTools console call `parseHash('#/...')` and `stageToHash({...})` to verify round-trips, OR drive via real URL changes.
 
 1. **Cold boot at `/` (no hash)** — `installRouter` calls `replaceState` to `#/`. URL bar shows `#/`.
 2. **Hand-edit URL to `#/new`** → `stage = { kind: 'upload' }`. Edit to `#/voices` → `{ kind: 'voices' }`. Edit to `#/log` → `{ kind: 'changelog' }`.

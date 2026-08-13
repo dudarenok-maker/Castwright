@@ -54,7 +54,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`) unless noted.
+Run in mock mode (`npm run dev:mock`) unless noted.
 
 1. **Empty library, cold boot at `#/`** — library is empty, "Take the guided tour" CTA is visible. Click it. Expected: sample provisions (`api.loadSample` called), `tour.active = true`, step s1 "Welcome to Castwright" centered bubble.
 2. **Advance through Library steps (s1–s3)** — Next on s1 → s2 spotlight on the sample book card; Next → s3 spotlight on New book button (`kind: explain`). Back returns to s2.

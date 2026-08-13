@@ -70,7 +70,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run `npm start` (or `npm run dev` for HMR) in mock mode (`VITE_USE_MOCKS=true`, on by default in `.env.development`).
+Run in mock mode (`npm run dev:mock`).
 
 1. Open `http://localhost:5173/#/`. Library view appears.
 2. Click "Solway Bay". Stage → `{ kind: 'ready', bookId: 'sb' }`.

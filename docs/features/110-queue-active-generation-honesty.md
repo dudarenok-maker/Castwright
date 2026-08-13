@@ -122,7 +122,7 @@ Part A is read-side only:
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`):
+Run in mock mode (`npm run dev:mock`):
 
 1. Cold boot → analyse a book → confirm cast → land on `#/books/<id>/generate`.
    Generation auto-starts (reconcile path).

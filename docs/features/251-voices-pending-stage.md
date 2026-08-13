@@ -50,7 +50,7 @@ Plan: [docs/superpowers/plans/2026-07-12-voices-pending-stage.md](../superpowers
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** → library cards; "The Tidewatcher" card shows a **"Cast ready"** badge and no progress bar.
 2. **Click "The Tidewatcher"** → URL `#/books/tw/cast`, stage `{ kind: 'ready', view: 'cast' }` — the Cast (voice design) view, NOT Generate.

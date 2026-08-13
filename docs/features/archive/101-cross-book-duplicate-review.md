@@ -67,7 +67,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`) — the Hollow Tide #1+#2 fixture seeds the unlinked Wren/wren-sparrow pair.
+Run in mock mode (`npm run dev:mock`) — the Hollow Tide #1+#2 fixture seeds the unlinked Wren/wren-sparrow pair.
 
 1. **Cold boot at `#/voices`** → expected family card for `af_aoede` (Kokoro) shows two character rows: "Wren Sparrow" (The Tidewatcher’s Oath) + "Wren" (The Ebb). Expected: small amber `⚠ 1 duplicate candidate` pill in the family-card header.
 2. **Click the pill.** Expected: `<DuplicateReviewModal/>` opens with side-by-side cards. Header: "Same person across books?". Default survivor: "Wren Sparrow" (longer name). Survivor radio is swappable.
