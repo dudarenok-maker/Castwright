@@ -289,7 +289,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -299,7 +299,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2429,6 +2429,45 @@ conflated once already during triage.
 `#2026 — additional acceptance criteria: Russian XTTS quality` section.
 *Cost:* short — a handful of `/synthesize` probes plus one attempt at
 reproducing the degenerate collapse.
+
+### A45 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
+
+PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
+`stripHtml`/`extractFirstHeading`/`epub.ts`'s `decodeEntities` from a
+five-entity hand-rolled list to the complete HTML5 named set. Every layer of
+the fix is proved by unit and end-to-end tests fixing the sentence text
+explicitly (`html-utils.test.ts`, `entity-dialogue-e2e.test.ts`) — what those
+tests cannot prove is that a real, EPUB-sourced entity survives the whole
+pipeline the same way. Design spec's own "What I could not establish": whether
+the stage-2 analyzer model echoes a surviving entity into its returned
+sentence text, which decides whether the *body-line* symptom reproduced at all
+before this fix (a second thread observed, on a live run, that the current
+model sometimes strips a leading dash rather than echoing it verbatim — that
+would mean the body-path symptom already didn't reproduce pre-fix on today's
+model, which is a finding about the analyzer, not a failure of this fix).
+
+- **Lead with the chapter-title beat — the only criterion no model behaviour
+  can mask** (design spec Finding 0). On an EPUB whose first chapter heading
+  carries named entities (e.g. `<h1>L&rsquo;&Eacute;t&eacute;</h1>`), confirm
+  the spoken title beat says "L'Été" cleanly — no "ampersand … semicolon", no
+  gibberish.
+- **Secondary: a Spanish, French, or Russian EPUB using `&mdash;`/`&ndash;` or
+  accented named entities in body text.** Confirm a dash-opened dialogue line
+  renders with a pause (not spoken "ampersand n dash semicolon" or similar),
+  accented words render as the correct letters (not "e acute" spoken aloud),
+  and the manuscript view shows real glyphs rather than raw entity text.
+  **Record whether this symptom reproduced at all pre-fix** — per the design
+  spec, that is itself new information about the analyzer chain, not a gate on
+  this fix.
+- No real es/fr/ru EPUB with named (as opposed to numeric) HTML entities was
+  available in this workspace at design time — confirm one exists among the
+  on-box corpus, or construct a minimal one from a real chapter with `&mdash;`
+  hand-substituted for a literal dash, if none does.
+
+*Needs:* a real EPUB (or a hand-modified one) carrying named HTML entities in
+its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
+two bullets above. *Cost:* short — one import + one chapter-title listen, plus
+one body-line listen if a suitable entity-laden EPUB is available.
 
 ## Group B — local Ollama analyzer only
 
