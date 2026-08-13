@@ -450,7 +450,13 @@ describe('ModelManagerView — load/stop failure surfacing (#2349)', () => {
 
     await waitFor(() => expect(api.unloadSidecar).toHaveBeenCalledWith({ engine: 'qwen', model: '1.7b' }));
     await waitFor(() =>
-      expect(store.getState().notifications.toasts.some((t) => t.message.includes('sidecar went away'))).toBe(true),
+      expect(
+        store
+          .getState()
+          .notifications.toasts.some(
+            (t) => t.message.includes('sidecar went away') && t.message.includes(`Stop ${QWEN_BASE17_ITEM.label} failed:`),
+          ),
+      ).toBe(true),
     );
   });
 

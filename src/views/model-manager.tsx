@@ -271,14 +271,18 @@ function ModelInventory({ keepAliveMap }: { keepAliveMap: Record<string, number>
                     message: result.error || `${verb} ${item.label} failed`,
                   }),
                 );
-                return; // nothing changed on disk/VRAM — don't refetch
+                return; // assume nothing changed on disk/VRAM — don't refetch
               }
               await refetch();
             } catch (e) {
               dispatch(
                 notificationsActions.pushToast({
                   kind: 'error',
-                  message: e instanceof Error ? e.message : `${verb} ${item.label} failed`,
+                  /* Prefix a transport-level (thrown) failure with the op + model so
+                     the toast isn't an ambiguous bare "Failed to fetch". */
+                  message: e instanceof Error
+                    ? `${verb} ${item.label} failed: ${e.message}`
+                    : `${verb} ${item.label} failed`,
                 }),
               );
             } finally {
