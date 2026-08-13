@@ -5,7 +5,6 @@
    code. See
    docs/superpowers/specs/2026-07-10-fs52-caption-srt-export-design.md. */
 
-import { createWriteStream } from 'node:fs';
 import { stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ZipFile } from 'yazl';
@@ -14,7 +13,7 @@ import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { probeDurationSec } from './build-m4b.js';
-import { ExportIncompleteError, sanitiseForZip, pad2 } from './build-mp3-zip.js';
+import { createZipWritePipeline, ExportIncompleteError, sanitiseForZip, pad2 } from './build-mp3-zip.js';
 import { loadManuscriptSentencesByChapter } from './manuscript-sentences.js';
 import {
   buildSentenceCues,
@@ -188,23 +187,30 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
   }
 
   // per-chapter: zip of one caption file per chapter, each zero-based.
-  return new Promise<BuildCaptionsResult>((resolve, reject) => {
-    const zip = new ZipFile();
-    const ws = createWriteStream(outPath);
-    ws.on('error', reject);
-    let bytes = 0;
-    zip.outputStream.on('data', (chunk: Buffer) => {
-      bytes += chunk.length;
-    });
-    zip.outputStream.on('error', reject);
-    zip.outputStream.pipe(ws).on('finish', () => resolve({ sizeBytes: bytes, warning }));
-
+  const zip = new ZipFile();
+  /* createZipWritePipeline (build-mp3-zip.ts) — shared with buildMp3Zip
+     and buildCodecZip. Finding 1 (independent review of the original
+     crash fix): this branch accepted a `signal` option but never
+     consulted it at all — an abort mid-build did nothing. The loop below
+     now checks `throwIfAborted()` between chapters, matching the other
+     two zip builders, which stops the loop from packing any more chapters
+     once a signal trips. The pipeline itself forwards every yazl/write-
+     stream error into one rejection that also tears down the write
+     stream, and resolves only once it's genuinely closed. */
+  const pipeline = createZipWritePipeline(outPath, zip);
+  try {
     for (let i = 0; i < resolved.length; i++) {
+      signal?.throwIfAborted();
       const { chapter } = resolved[i];
       const content = formatCues(perChapterCues[i], captionFileFormat);
       const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${captionFileFormat}`;
       zip.addBuffer(Buffer.from(content, 'utf8'), entryName, { mtime: new Date() });
     }
     zip.end();
-  });
+    const sizeBytes = await pipeline.donePromise;
+    return { sizeBytes, warning };
+  } catch (e) {
+    pipeline.rejectBuild(e);
+    throw e;
+  }
 }

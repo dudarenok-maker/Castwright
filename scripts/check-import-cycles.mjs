@@ -34,7 +34,8 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -136,8 +137,20 @@ export function checkCycleFloor(currentCycles, allowlistCycles) {
   );
 }
 
-const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
+  // Internal, undocumented test hook mirroring run-golden-audio.mjs's
+  // RUN_GOLDEN_AUDIO_PROBE_GUARD_ONLY — the #2291 regression test needs a
+  // real subprocess through a junction to genuinely exercise the
+  // argv[1]-vs-import.meta.url resolution, but must not thereby spawn the
+  // real `npx madge` (network-touching, ~10s) inside `npm run test:hooks`'s
+  // pre-commit/pre-push/CI hot path — this file's own test suite already
+  // documents that a real madge pass is deliberately kept out of test:hooks.
+  // Proves the guard resolved TRUE before madge is spawned; the only caller
+  // is scripts/tests/entry-point-guards.test.mjs.
+  if (process.env.CHECK_IMPORT_CYCLES_PROBE_GUARD_ONLY === '1') {
+    process.stdout.write('check-import-cycles: direct-invocation guard resolved TRUE (probe-only, madge not run)\n');
+    process.exit(0);
+  }
   let current;
   try {
     current = runMadge();

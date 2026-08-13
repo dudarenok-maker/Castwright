@@ -118,6 +118,14 @@ function setupRepo(startVersion) {
     resolve(dir, 'scripts', 'gh.mjs'),
     readFileSync(resolve(here, '..', 'gh.mjs'), 'utf8'),
   );
+  // #2291 — bump-version.mjs (and release-notes-gate.mjs, release-body.mjs)
+  // now import ./lib/is-main-module.mjs (the shared direct-execution guard);
+  // mirror it too, or the throwaway script crashes on module resolution.
+  mkdirSync(resolve(dir, 'scripts', 'lib'));
+  writeFileSync(
+    resolve(dir, 'scripts', 'lib', 'is-main-module.mjs'),
+    readFileSync(resolve(here, '..', 'lib', 'is-main-module.mjs'), 'utf8'),
+  );
 
   // Init throwaway git repo with a local identity so commits work in CI.
   // env: cleanGitEnv() so a parent git-hook context doesn't redirect these

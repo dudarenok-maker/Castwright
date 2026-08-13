@@ -15,6 +15,20 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { SidecarDesignError } from '../tts/design-voice-core.js';
+
+/* runVoiceDesign's POST to /qwen/design-voice moved to undici's fetch (it needs
+   DESIGN_DISPATCHER so its 600s ceiling isn't preempted by undici's hidden
+   300s cap), so a `vi.spyOn(globalThis,'fetch')` alone no longer intercepts it
+   — these tests were reaching the real sidecar and 502ing. Route undici at the
+   same global stub each test installs, so one `spyOn` still covers both. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) =>
+      (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 

@@ -1,6 +1,8 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// @ts-expect-error — shared helper ships no .d.ts; see its own header (#2291).
+import { isDirectlyInvoked } from '../../../../scripts/lib/is-main-module.mjs';
 import { findBookByBookId, bookStateLanguage } from '../../workspace/scan.js';
 import { getOrHydrateManuscript } from '../../store/manuscripts.js';
 import { stripFrontMatterBoilerplate } from '../strip-front-matter.js';
@@ -145,10 +147,12 @@ function parseArgs(argv: string[]): { bookId: string; chapters: number[]; silver
   return { bookId, chapters, silver };
 }
 
-// Run only when invoked directly (not when imported by tests). Normalise both
-// sides with resolve() — a bare string compare is Windows-brittle (drive-letter
-// casing / slash direction), matching the repo precedent (build-companion-apk.mjs).
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+// Run only when invoked directly (not when imported by tests). Routed
+// through the shared scripts/lib/is-main-module.mjs helper (#2291) — a bare
+// resolve()-normalised compare misses across a symlink/junction (e.g. this
+// repo's junctioned worktrees) because it only realpaths one side; see that
+// file's header for the full reasoning and #2291's incident writeup.
+if (isDirectlyInvoked(import.meta.url)) {
   const { bookId, chapters, silver } = parseArgs(process.argv.slice(2));
   const run = silver ? captureSilverCorpus({ bookId, chapters }) : captureCorpus({ bookId, chapters });
   run

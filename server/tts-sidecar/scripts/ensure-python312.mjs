@@ -6,8 +6,8 @@
 // the bottom does the actual discovery / winget install / guidance I/O, which is
 // best-effort and NOT unit-tested. Side-effect-guarded so importing it is inert.
 
-import { pathToFileURL } from 'node:url';
 import { spawnSync, execSync } from 'node:child_process';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
 
 /**
  * Decide how to acquire Python 3.12 from a discovery result. Pure — no I/O.
@@ -70,7 +70,9 @@ function wingetAvailable() {
 
 // Side-effect guard: only runs when invoked directly (`node ensure-python312.mjs`),
 // stays inert on import so tests/consumers don't trigger I/O.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   const platform = process.platform;
   const found = discoverPython312(platform);
   const decision = decidePythonAcquisition({ found, platform, wingetAvailable: wingetAvailable() });

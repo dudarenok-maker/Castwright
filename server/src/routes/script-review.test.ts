@@ -43,11 +43,13 @@ let priorChapterIdFor: typeof PriorChapterIdFor;
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
    chunker derives a finite, num_ctx-bound budget and a large chapter splits);
    it defaults to 'gemini' so the existing single-call tests are unchanged. */
-const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock, selectAnalyzerMock } = vi.hoisted(() => ({
+const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock, unloadResidentOllamaMock, selectAnalyzerMock } = vi.hoisted(() => ({
   runReview: vi.fn(),
   engineState: { engine: 'gemini' as 'gemini' | 'local' },
   selectAnalyzerForPhaseMock: vi.fn(),
   warmOllamaModelMock: vi.fn(),
+  /* Resolves immediately; the real one evicts every resident Ollama model. */
+  unloadResidentOllamaMock: vi.fn(async () => {}),
   selectAnalyzerMock: vi.fn(),
 }));
 
@@ -77,12 +79,23 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
    control the warm outcome without a real Ollama daemon; `selectAnalyzer`
    (the RE-selection `switchToFallback` performs) is mocked too so the
    post-fallback analyzer instance is the SAME fake analyzer wired to
-   `runReview`, not a real GeminiAnalyzer that would attempt a network call. */
+   `runReview`, not a real GeminiAnalyzer that would attempt a network call.
+
+   `unloadResidentOllama` MUST be mocked too. This factory spreads
+   `importOriginal`, so overriding only `warmOllamaModel` left the real one in
+   place — and script-review.ts's teardown (`pinnedLocal` →
+   `!isAnyAnalyzerRunBusy()` → `void unloadResidentOllama()`) calls it. On any
+   box with a live daemon that meant a real /api/tags probe followed by a real
+   `keep_alive: 0` /api/generate against EVERY resident model: running this
+   unit test evicted the developer's analyzer model, and would evict the model
+   out from under a long analysis run in progress. Same leak shape as the one
+   closed in ollama-vram-sample.test.ts. */
 vi.mock('./ollama-health.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ollama-health.js')>();
   return {
     ...actual,
     warmOllamaModel: warmOllamaModelMock,
+    unloadResidentOllama: unloadResidentOllamaMock,
   };
 });
 
@@ -2009,5 +2022,64 @@ describe('mutation endpoints', () => {
       .send({ chapterId: 1, version: entry.version, selected: null });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('chapterId, version, and selected are required.');
+  });
+});
+
+/* #2292 (owner decision) — a checkpoint-save lock timeout reports contention,
+ * not a broken chapter.
+ *
+ * `upsertChapterEntry` takes `script-review-ledger:<bookId>`, so ordinary
+ * contention (a concurrent /resolve or selection PATCH on the same book)
+ * reaches this route's per-chapter failure path. The shape stays per-chapter —
+ * failing a whole multi-chapter review because one chapter hit the ledger lock
+ * is worse than reporting the one, and the chapter's ops were already
+ * broadcast live — but the reason no longer reads as a fault in that chapter.
+ *
+ * Two-directional: an ordinary ledger-write failure keeps its own message,
+ * which is the half that reddens if the route rewrote every reason.
+ */
+describe('script-review — per-chapter reason on a lock timeout (#2292)', () => {
+  async function reviewWithLedgerThrow(toThrow: unknown) {
+    writeBook(SENTENCES);
+    runReview.mockImplementation((_m: string, chapterId: number): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.resolve(CANNED_OPS);
+      return Promise.resolve({ ops: [] });
+    });
+
+    const ledger = await import('../workspace/script-review-ledger.js');
+    const spy = vi.spyOn(ledger, 'upsertChapterEntry').mockRejectedValue(toThrow);
+    try {
+      return await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('names contention in the chapter-failed message', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const res = await reviewWithLedgerThrow(
+      new LockAcquisitionTimeoutError('script-review-ledger:b_x', 10_000),
+    );
+
+    const events = parseSse(res.text);
+    /* The site really ran — chapter 1 is the only one with ops, so it is the
+       only one that reaches `upsertChapterEntry` at all. */
+    const failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed).toBeDefined();
+    expect(failed?.message).toBe(`Failed to save findings: ${LOCK_CONTENTION_ITEM_REASON}`);
+    /* The route's own framing survives; only the reason changed. And never
+       the raw lock text, which read as "this chapter is broken". */
+    expect(failed?.message).toContain('Failed to save findings:');
+    expect(failed?.message).not.toContain('withKeyLock');
+  });
+
+  it('an ordinary ledger failure keeps its own message', async () => {
+    const res = await reviewWithLedgerThrow(new Error('simulated disk-full'));
+
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed?.message).toBe('Failed to save findings: simulated disk-full');
   });
 });

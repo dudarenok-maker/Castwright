@@ -16,6 +16,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
@@ -354,6 +355,8 @@ async function main() {
   process.exit(0);
 }
 
-// CLI guard — only run main() when invoked directly, not when imported by tests.
-const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+// CLI guard — only run main() when invoked directly, not when imported by
+// tests. See scripts/lib/is-main-module.mjs — an un-realpathed comparison
+// misses when the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) await main();

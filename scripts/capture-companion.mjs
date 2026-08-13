@@ -5,7 +5,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const androidDir = resolve(repoRoot, 'apps/android');
@@ -179,6 +180,6 @@ async function main(argv) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   await main(process.argv.slice(2));
 }

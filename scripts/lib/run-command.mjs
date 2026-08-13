@@ -4,7 +4,7 @@
 // into an "undefined" stderr message.
 //
 // Env is unconditionally scrubbed of the GIT_DIR-family vars (scrubGitEnv,
-// #2169/#2184) — mirroring execGit (bump-version.mjs:221-223): a
+// #2169/#2184) — mirroring execGit (bump-version.mjs:222-224): a
 // caller-supplied `env` REPLACES `process.env` outright and is then
 // scrubbed, it is not merged onto `process.env`; omitting `env` scrubs
 // `process.env` itself. sync-wiki.mjs pins several git calls to an explicit

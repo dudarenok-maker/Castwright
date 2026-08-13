@@ -18,12 +18,12 @@
    any non-excluded chapter has no encoded file in the matching format
    on disk. Re-uses the same modal 409 banner copy as the MP3.ZIP path. */
 
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { ZipFile } from 'yazl';
 import { audioDir } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
-import { ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
+import { createZipWritePipeline, ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 export type CodecZipFormat = 'aac-m4a' | 'opus';
@@ -87,33 +87,46 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
 
   try {
     const zip = new ZipFile();
-    const writePromise = new Promise<number>((resolve, reject) => {
-      const ws = createWriteStream(outPath);
-      ws.on('error', reject);
-      let bytes = 0;
-      zip.outputStream.on('data', (chunk: Buffer) => {
-        bytes += chunk.length;
-      });
-      zip.outputStream.on('error', reject);
-      zip.outputStream.pipe(ws).on('finish', () => resolve(bytes));
-    });
+    /* createZipWritePipeline (build-mp3-zip.ts) — shared with buildMp3Zip
+       and buildCaptions's per-chapter branch. Forwards every yazl/write-
+       stream error into one rejection that also tears down the write
+       stream (nit (f): previously `ws` was never destroyed on ANY
+       rejection, leaking the write fd for the process's lifetime — masked
+       before this PR by the crash itself), and resolves only once the
+       write stream is genuinely closed. `signal?.throwIfAborted()` below
+       is what stops a cancelled build from registering any more chapters
+       — see the pipeline's own doc comment for why an earlier version's
+       attempt to also destroy the in-flight read stream on abort didn't
+       hold up and was removed. */
+    const pipeline = createZipWritePipeline(outPath, zip);
 
-    for (let i = 0; i < resolved.length; i++) {
-      signal?.throwIfAborted();
-      const { chapter, path } = resolved[i];
-      const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${meta.entryExt}`;
-      const st = await stat(path);
-      zip.addReadStream(createReadStream(path), entryName, {
-        size: st.size,
-        mtime: new Date(),
-        compress: false,
-      });
-      entries.push(entryName);
-      onProgress?.((i + 1) / total);
+    try {
+      for (let i = 0; i < resolved.length; i++) {
+        signal?.throwIfAborted();
+        const { chapter, path } = resolved[i];
+        const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${meta.entryExt}`;
+        const st = await stat(path);
+        const readStream = createReadStream(path);
+        readStream.on('error', pipeline.rejectBuild);
+        zip.addReadStream(readStream, entryName, {
+          size: st.size,
+          mtime: new Date(),
+          compress: false,
+        });
+        entries.push(entryName);
+        onProgress?.((i + 1) / total);
+      }
+      zip.end();
+      const sizeBytes = await pipeline.donePromise;
+      return { sizeBytes, entries };
+    } catch (e) {
+      /* Covers any throw the pipeline's own listeners didn't already
+         catch (e.g. `signal.throwIfAborted()` itself) — idempotent if
+         `rejectBuild` already fired for some other reason (a ws/zip/
+         readStream error). */
+      pipeline.rejectBuild(e);
+      throw e;
     }
-    zip.end();
-    const sizeBytes = await writePromise;
-    return { sizeBytes, entries };
   } finally {
     await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   }

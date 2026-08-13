@@ -50,6 +50,7 @@ let bookDir: string;
 let app: Express;
 let bookId: string;
 let resetJobs: () => void;
+let awaitInFlightJobs: () => Promise<void>;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-export-guard-test-'));
@@ -61,11 +62,12 @@ beforeAll(async () => {
      file — 0 failures in 14 runs (#2083's own survey) — not the live
      ~2-in-5 rate, which belongs to voices.test.ts, a different file already
      fixed under #2046. */
-  const { exportRouter, _resetExportJobs } = await import('./export.js');
+  const { exportRouter, _resetExportJobs, _awaitInFlightExportJobs } = await import('./export.js');
   const { makeBookId } = await import('../workspace/paths.js');
   const { _resetUserSettingsCache } = await import('../workspace/user-settings.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   resetJobs = _resetExportJobs;
+  awaitInFlightJobs = _awaitInFlightExportJobs;
   _resetUserSettingsCache();
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -105,7 +107,19 @@ beforeAll(async () => {
   app.use('/api/books', exportRouter);
 });
 
-beforeEach(() => {
+/* Nit (a) (independent review): this file's own beforeEach/afterAll used
+   to reset/rmSync with no drain at all, and its local `drain()` (removed
+   below) polled `job.status` — this PR's OWN new regression test
+   (export.test.ts's "awaiting in-flight jobs ... waits for the WHOLE job,
+   not just its status flip") proves that's insufficient: `job.status`
+   flips inside runExportJob's try block, well before its `finally` (the
+   manifest write) has run. Same defect class as the crash this whole PR
+   fixes — a teardown that doesn't actually wait for a job's tail-end fs
+   work can race it. `_awaitInFlightExportJobs()` (see its own doc comment
+   for what it does and doesn't guarantee) replaces both the ad-hoc drain
+   and the un-awaited reset/rmSync calls below. */
+beforeEach(async () => {
+  await awaitInFlightJobs?.();
   resetJobs?.();
   const exportsDir = join(bookDir, 'exports');
   if (existsSync(exportsDir)) rmSync(exportsDir, { recursive: true, force: true });
@@ -115,21 +129,11 @@ afterEach(() => {
   delete process.env.DISK_GUARD_MODE;
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await awaitInFlightJobs?.();
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
 });
-
-/* Drain a fire-and-forget export job to a terminal state so its background
-   work never outlives the test (and can't race the temp-dir teardown). */
-async function drain(exportId: string): Promise<void> {
-  for (let i = 0; i < 50; i++) {
-    const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
-    const status = (res.body as { status?: string }).status;
-    if (status === 'done' || status === 'failed' || status === 'cancelled') return;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
 
 describe('export disk guard', () => {
   it('BLOCK mode → 409 disk_full before the job is created', async () => {
@@ -151,7 +155,7 @@ describe('export disk guard', () => {
     expect(res.body.status).toBe('in_progress');
     expect(typeof res.body.warning).toBe('string');
     expect(res.body.warning).toMatch(/disk space/i);
-    await drain(res.body.id as string);
+    await awaitInFlightJobs();
   });
 
   it('OFF mode → 201 with no warning', async () => {
@@ -161,6 +165,6 @@ describe('export disk guard', () => {
       .send({ format: 'mp3-zip', destination: 'download' });
     expect(res.status).toBe(201);
     expect(res.body.warning).toBeUndefined();
-    await drain(res.body.id as string);
+    await awaitInFlightJobs();
   });
 });

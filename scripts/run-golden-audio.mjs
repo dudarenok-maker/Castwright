@@ -60,10 +60,11 @@
 //   GOLDEN_COQUI=1   GOLDEN_QWEN_VOICE=<designed voiceId>
 
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { maxNvidiaSmiUtil, GPU_BUSY_THRESHOLD } from './verify-cache.mjs';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // Re-exported for backward compatibility: scripts/tests/run-golden-audio.test.mjs
 // imports maxNvidiaSmiUtil from this module. The implementation itself moved to
@@ -184,36 +185,11 @@ export function run(label, cmd, cmdArgs, { env, shell } = {}) {
 
 // Guard the actual run (spawns real suites / real nvidia-smi) so a test file
 // can `import` this module for its pure exports (`maxNvidiaSmiUtil`,
-// `gpuBusyWarningFor`) without triggering a full golden-audio run — same
-// pattern as verify-cache.mjs's `isDirectInvocation`.
-//
-// Two-tier, not strict-only (#2036 review round 2). The strict `import.meta.url`
-// equality check gets every ordinary invocation shape right, INCLUDING an 8.3
-// short path — Node applies the same resolution to both sides in that case.
-// What it gets wrong is a symlink or junction ANYWHERE in the invoked path:
-// Node resolves symlinks when computing the entry module's own
-// `import.meta.url`, but `pathToFileURL(argv[1])` reflects the raw, unresolved
-// invocation path, so the two sides disagree for a perfectly ordinary `node
-// scripts/run-golden-audio.mjs`. Verified with a real junction:
-//   import.meta.url             file:///…/real/probe.mjs
-//   pathToFileURL(argv[1]).href file:///…/link/probe.mjs
-// This repo junctions aggressively for worktrees, and the strict check alone
-// silently exits 0 having run nothing through one — the exact failure mode a
-// guard must not have. The fallback mirrors check-onbox-register.mjs's laxer,
-// symlink-immune detector (a basename/suffix match rather than URL equality);
-// it stays a FALLBACK, not a replacement, because it can't tell an 8.3 short
-// path (already handled correctly above) from a genuine non-invocation.
-function computeIsDirectInvocation() {
-  const arg1 = process.argv[1];
-  if (!arg1) return false;
-  try {
-    if (import.meta.url === pathToFileURL(arg1).href) return true;
-  } catch {
-    // fall through to the laxer, symlink-immune check below
-  }
-  return arg1.replace(/\\/g, '/').endsWith('scripts/run-golden-audio.mjs');
-}
-const isDirectInvocation = computeIsDirectInvocation();
+// `gpuBusyWarningFor`) without triggering a full golden-audio run. See
+// scripts/lib/is-main-module.mjs (#2291) for the symlink/junction mechanism
+// this guards against; its double-realpath comparison supersedes the
+// basename/suffix fallback this file used to hand-roll for the same reason.
+const isDirectInvocation = isDirectlyInvoked(import.meta.url);
 
 if (isDirectInvocation) {
   // Internal, undocumented test hook (#2036 review round 2, R2) — NOT a

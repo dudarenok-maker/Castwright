@@ -503,8 +503,75 @@ Design rationale:
   derived from it — wrapping only the write buys nothing at all; (3) two or
   more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
   order is **`design` → `library-voice` → `cast`** — never acquire an earlier
-  class while holding a later one, or two requests hang forever with no
-  timeout and no diagnostic. `server/src/workspace/cast-lock.guard.test.ts`
+  class while holding a later one, or two requests deadlock. Since #2260 that
+  no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
+  throws a `LockAcquisitionTimeoutError`
+  (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
+  diagnostic, **not** a licence to violate the order — the budget is per
+  acquisition, so a nested path's worst case is depth × 10s, and ORDINARY
+  contention behind a long holder reaches the same error, so a firing timeout
+  means "look at the holder first, then the rules". **WHICH WRITE the timeout
+  came out of decides the outcome — never which handler caught it** (#2295:
+  discriminating by handler is what produced that bug, since one handler can
+  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  loud *by rethrowing into their job's or request's terminal outcome*: the six
+  best-effort `catch` blocks around identity writes, plus the two
+  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
+  each wrapped at its own call rather than at the enclosing
+  `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
+  journals, which are lineage and must stay best-effort. Swallowing at an
+  identity site would report success with `cast.json` written and the
+  retirement lost; swallowing at an authoritative write reported success with
+  `cast.json` and `state.json` never written at all. FOUR handlers swallow it
+  deliberately: `reconcileRejectEdgesOnDisk`
+  (`server/src/routes/analysis.ts`), which runs after every retirement has
+  landed and writes only cosmetic `notLinkedTo` edges the next persist
+  re-heals; and the three interim cast.json snapshots (per-chapter, stage-1,
+  subset), which a final write in the same run clobbers, so a timeout there
+  diverges nothing (#2292). A NINTH site fails loud in a different shape and is
+  counted separately for that reason: `cast-reject-orphan`'s
+  `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
+  because its leftover is not something a user can rely on anything else
+  clearing — the two `supersededBy` prune passes key on conditions an orphaned
+  id does not ordinarily meet (they fire only if a later analysis re-mints that
+  id as a live cast row, or if the target leaves the roster), so the body names
+  a retry rather than a later analysis. Only the five batch routes
+  (`script-review`, `cast-design`,
+  `voice-style`, `cast-series-patch`, `voice-override-linked`) are neither
+  swallowed nor escalated: they keep their per-item failure shape inside an
+  otherwise-successful 200/207 and report contention through `itemFailureReason`
+  (`workspace/file-lock.ts`). **No client-facing failure ever carries a lock
+  timeout's own message** — not an escalating body, not a per-item reason, and
+  not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
+  which embeds the absolute workspace path, and this app is served over LAN
+  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  needs exactly one of them: **per-item** failures inside a 200/207 use
+  `itemFailureReason` (the five batch routes); a handler that fails the
+  **whole request** uses `requestFailureMessage`, which curates this one class
+  and leaves every other body verbatim — `git grep requestFailureMessage`
+  enumerates all twelve sites (`book-state` ×4, `voice-library` ×3, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `cast-design`'s defensive
+  outer), alongside the two merge routes' own explicit
+  `LOCK_CONTENTION_REQUEST_ERROR` branch; and
+  both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
+  class to `code: 'lock-contention'` with the same curated sentence and no
+  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  to the log at every one of them. A new handler downstream of any lock is
+  wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
+  final round). See each site's own comment.
+  **Letting it through is not the
+  same as throwing where it was caught** — at a handler that sits mid-way
+  through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
+  throwing on the spot skips the writes that follow and lands in an enclosing
+  best-effort handler that reports success anyway, which is worse than
+  swallowing: loud nowhere, and now with a half-written book. Those sites park
+  the error in a local and rethrow it after the remaining writes have
+  completed, so the terminal outcome is an error AND disk is whole. **A
+  deferred rethrow binds the CALLER too**: by the time it escapes, the work is
+  applied, so a caller with follow-up writes of its own must finish them before
+  letting it surface (`cast-merge-suggestions.ts`'s accept route and its
+  `dismissSuggestion`) — otherwise the skipped write just moves up one frame.
+  `server/src/workspace/cast-lock.guard.test.ts`
   fails the build on a new unlocked site. Two allowlisted exceptions, each
   keyed on file **and** count so a further unlocked write in either still
   fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and

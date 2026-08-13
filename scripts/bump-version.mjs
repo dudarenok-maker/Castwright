@@ -22,9 +22,9 @@
 // be run only from a clean working tree, on `main`, by a maintainer.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   checkReleaseNotes,
   checkMojibake,
@@ -38,6 +38,7 @@ import { gh, ghSpawn } from './gh.mjs';
 // #2170 — same normaliser release.yml's publish step applies, imported
 // rather than copied so the two can't drift apart (see the refusal below).
 import { normalise } from './release-body.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -79,6 +80,19 @@ function parseArgs(argv) {
   return out;
 }
 
+// process.exit() truncates pending async stdout writes on POSIX pipes (sync
+// on Windows, async on Linux/macOS — see build-release-zip.mjs's fix for
+// #2297/the same defect class). This function and die() throw a CliError
+// carrying the intended exit code instead of exiting directly, so the
+// process only ever exits naturally once the event loop drains; see the
+// entry guard at the bottom of this file for the single catch.
+class CliError extends Error {
+  constructor(msg, code = 1) {
+    super(msg);
+    this.code = code;
+  }
+}
+
 function printHelpAndExit(code) {
   process.stdout.write(
     'Usage: node scripts/bump-version.mjs --level patch|minor|major ' +
@@ -89,12 +103,12 @@ function printHelpAndExit(code) {
       `${DEFAULT_NOTES_FILE} — the publish job WILL FAIL unless you reconcile ` +
       'the two before pushing the tag.\n',
   );
-  process.exit(code);
+  throw new CliError('help', code);
 }
 
 function die(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
-  process.exit(1);
+  throw new CliError(msg, 1);
 }
 
 function info(msg) {
@@ -678,7 +692,7 @@ async function main() {
 
   if (args.dryRun) {
     info('[DRY-RUN] No mutations made. Re-run without --dry-run to apply.');
-    process.exit(0);
+    return;
   }
 
   // Cross-OS gate (plan 127): fire + block BEFORE any mutation, so a red
@@ -778,21 +792,19 @@ async function main() {
     info(`       git tag -a ${newTag} --cleanup=verbatim -F <path-to-notes.md>`);
     info(`       (that file must not carry a UTF-8 BOM — git passes it through verbatim)`);
   }
-  process.exit(0);
 }
 
 // Guarded so tests can import the pure helpers (semverBump, pickWorkflowRun)
-// without executing the release procedure (matches install-qwen3.mjs).
-//
-// `process.argv[1]` is resolved through realpathSync before the compare: Node
-// realpaths `import.meta.url` (symlinks resolved unless --preserve-symlinks),
-// but `pathToFileURL(process.argv[1])` keeps the symlinked invocation path. On
-// macOS the temp dir is a symlink (`/var/folders` → `/private/var/folders`), so
-// running the script from there (e.g. the bump-version test's throwaway repo)
-// left the two hrefs unequal — the guard was false, main() silently never ran,
-// and the script exited 0 with empty output. realpathing argv[1] makes both
-// sides the canonical path so the guard holds regardless of symlinks.
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
-  await main();
+// without executing the release procedure. See scripts/lib/is-main-module.mjs
+// (#2291) for the symlink/junction mechanism this guards against — first found
+// here via a macOS symlinked tmpdir.
+if (isDirectlyInvoked(import.meta.url)) {
+  main().catch((err) => {
+    if (err instanceof CliError) {
+      process.exitCode = err.code;
+    } else {
+      process.stderr.write(`[FAIL] ${err.stack ?? String(err)}\n`);
+      process.exitCode = 1;
+    }
+  });
 }

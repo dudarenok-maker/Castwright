@@ -38,6 +38,7 @@
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { forceSidecarRecycle } from './sidecar-supervisor.js';
 import type { TtsEngine } from './index.js';
+import { fetch as undiciFetch, Agent } from 'undici';
 import { setReconcileResidentQwenTiersProvider } from '../gpu/qwen-tier-reconcile-gate.js';
 
 /* Engines whose model lives in the local sidecar and must be loaded before
@@ -187,6 +188,43 @@ export async function ensureSidecarEngineReady(
     `gpu/qwen-tier-reconcile-gate.ts`) threads this value through so it can
     honestly report whether it freed anything, instead of reporting success
     just because it was called. */
+/* Seventh instance of #2287's defect, and the same endpoint as the sixth
+   (synthesise-chapter.ts's EVICT_DISPATCHER). /unload dispatches to
+   QwenEngine.unload() / unload_base17(), both of which take `_synth_lock`
+   before nulling, and FastAPI's `await asyncio.to_thread(...)` withholds
+   response headers until that thread returns — so headers wait on the lock,
+   which a wide Qwen batch or a clone_voice distil can hold for well over
+   300s.
+
+   Left on the global fetch this failed WORSE than the sixth site, because the
+   failure is invisible: the catch below swallows it, Promise.allSettled
+   discards the rejection, and the function returns `true` regardless. The
+   caller is therefore told the tier was evicted when it was not — so
+   generation.ts loads the 1.7B on top of a still-resident 0.6B, the 8 GB OOM
+   its own comment warns about. It also feeds gpu/evict-idle-tts.ts, where a
+   bogus `true` makes withCapacityRetry burn a retry attempt on an eviction
+   that freed nothing.
+
+   NARROWED, NOT CLOSED: the 300s cap was by far the likeliest way to reach
+   that state, but past the ceiling below — or on any other error — the
+   swallow-and-return-`true` path still exists. Closing it means changing what
+   this function's return value MEANS ("issued an unload" per the doc above vs
+   "the tier is actually gone"), which both callers and evictIdleQwenBase read,
+   so it is a deliberate design decision rather than a fix to smuggle in here.
+
+   BOTH production callers (generation.ts:194 and :1069) pass no signal, so
+   the hidden 300s cap was the only bound in existence — meaning a dispatcher
+   alone would reproduce the round-4 persona regression verbatim. Hence a
+   ceiling as well, matching the 600_000 used by SYNTH_CALL_TIMEOUT_MS,
+   DESIGN_ABSOLUTE_MAX_MS, PERSONA_ABSOLUTE_MAX_MS and DERIVE_ABSOLUTE_MAX_MS.
+   A caller-supplied signal still wins. */
+export const UNLOAD_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
+const UNLOAD_ABSOLUTE_MAX_MS = 600_000;
+
 export async function reconcileResidentQwenTiers(
   keep: { keep06: boolean; keep17: boolean },
   signal?: AbortSignal,
@@ -201,13 +239,16 @@ export async function reconcileResidentQwenTiers(
   }
   if (!h || h.recycle_pending === true) return false;
 
+  const budget = AbortSignal.timeout(UNLOAD_ABSOLUTE_MAX_MS);
+  const bounded = signal ? AbortSignal.any([budget, signal]) : budget;
   const unload = async (model?: '1.7b'): Promise<void> => {
     try {
-      await fetch(`${base}/unload`, {
+      await undiciFetch(`${base}/unload`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(model ? { engine: 'qwen', model } : { engine: 'qwen' }),
-        signal,
+        signal: bounded,
+        dispatcher: UNLOAD_DISPATCHER,
       });
     } catch {
       /* best-effort */

@@ -16,6 +16,22 @@ import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { SidecarDesignError } from './design-voice-core.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 
+/* Some calls this suite exercises moved to undici's fetch (they need a
+   dispatcher so a legitimate multi-minute wait isn't cut off at undici's
+   hidden 300s headersTimeout — see DERIVE_DISPATCHER / DESIGN_DISPATCHER),
+   while others legitimately stay on the global one. Delegating undici's fetch
+   to whatever this file stubs globally keeps every existing mock and
+   assertion working across both transports, with no per-test changes. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) =>
+      (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
+
+
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
 
 beforeEach(() => {

@@ -38,6 +38,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // ---- Argument parsing -------------------------------------------------------
 
@@ -354,11 +355,16 @@ export function main(argv = process.argv.slice(2), runners = makeDefaultRunners(
   });
 }
 
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/wt-merge.mjs');
-
-if (invokedAsCli) {
-  process.exit(main());
+// process.exit() truncates pending async stdout writes on POSIX pipes
+// (synchronous on Windows, ASYNCHRONOUS on Linux/macOS) — see the comment by
+// scripts/lib/is-main-module.mjs's own isDirectlyInvoked for why the
+// process.exit(main()) shape is unsafe for anything but provably-tiny
+// output. runMerge() above prints a multi-line reconciliation report (and,
+// on a conflict/verify failure, a suggested-follow-up block plus a tail of
+// verify output), so it doesn't qualify; setting exitCode and letting the
+// process exit naturally once the event loop drains (main() is fully
+// synchronous — every git/npm call is spawnSync, so no open handle survives
+// its return) avoids the truncation instead.
+if (isDirectlyInvoked(import.meta.url)) {
+  process.exitCode = main();
 }
