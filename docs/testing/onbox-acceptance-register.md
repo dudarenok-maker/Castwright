@@ -97,19 +97,135 @@ comparison, see the edge list above). The merge step that closes this, run
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
-2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
-   Unlike `check:onbox-register`'s no-flag run, this comparison is
-   deliberately ONE-DIRECTIONAL: your register having rows the live page
-   doesn't have yet is the normal reason you're publishing, not a defect, so
-   it is never reported here. It fails ONLY when the live page has a row (or
-   group) your register does not — the signature of another lane having
-   already published ahead of you.
-3. **If it fails**, do NOT publish — your register is BEHIND what is already
-   live. Pull the latest `main` (the row that's already live should already
-   be merged there via its own PR), confirm `npm run check:onbox-register`
-   (no flag) is green, and re-run step 2 against the SAME saved copy from
-   step 1 to confirm it now passes. It should — main pulling in the missing
-   row is what resolves this, not another fetch of the live page.
+2. Run
+   `npm run check:onbox-register -- --against-published <saved-file>`. Unlike
+   `check:onbox-register`'s no-flag run, this comparison is deliberately
+   ONE-DIRECTIONAL: your register having rows the live page doesn't have yet
+   is the normal reason you're publishing, not a defect, so it is never
+   reported here. A row (or group) the live page has that your register
+   lacks is reported ONLY when `origin/main`'s own copy of this register
+   still has it too — the signature of another lane having already
+   published ahead of you. When `origin/main` also lacks it, the row was a
+   deliberate discharge (by this change or an already-merged one), not a
+   race, and is not reported: discharging a row (and, since rows renumber
+   contiguously, often renumbering the survivors) always makes the
+   still-live page look "ahead" of your working copy in this exact shape,
+   and that is expected. **The command fetches `origin/main` itself, fresh,
+   every run — you do not need to `git fetch` by hand first.** It then reads
+   `FETCH_HEAD`, deliberately NOT the local `origin/main` ref: `git fetch
+   origin main` only guarantees it writes `FETCH_HEAD` — whether it also
+   updates `refs/remotes/origin/main` depends on this checkout's
+   `remote.origin.fetch` refspec actually mapping `refs/heads/main`, which a
+   narrowed refspec can skip while the fetch still exits 0, leaving
+   `origin/main` silently stale even though the fetch just "succeeded". If
+   you ever need to reproduce this baseline by hand for debugging, run
+   `git fetch origin main` followed by `git show FETCH_HEAD:<path>` — NOT
+   `git show origin/main:<path>`, which can read stale (or, in a narrowly-
+   configured clone, entirely unresolvable) content even immediately after a
+   successful fetch. It follows that this step needs network access to
+   `origin`, with no offline fallback: you're about to publish to a remote
+   URL anyway, so an operator who can't reach the network here can't
+   complete step 4 either.
+3. **If it fails**, do NOT publish. There are two distinct failure shapes,
+   named in the error text:
+   - **A row/group named as already live and BEHIND** — this message has TWO
+     different causes, and they need opposite fixes; check which one applies
+     before you act:
+     - **Another lane's row, already merged into `main`.** Pull the latest
+       `main` (the row that's already live should already be merged there
+       via its own PR), confirm `npm run check:onbox-register` (no flag) is
+       green, and re-run step 2 against the SAME saved copy from step 1 to
+       confirm it now passes. It should — `main` pulling in the missing row
+       is what resolves this, not another fetch of the live page.
+     - **Your OWN change discharged this row, and it just hasn't merged
+       yet.** Publishing (step 4) happens BEFORE this PR merges to `main` —
+       that is the normal order, not a mistake — so `origin/main` cannot yet
+       know your branch removed the row: the baseline can only recognise a
+       discharge that has already landed there. Every pre-merge discharge
+       therefore trips this exact same message, and pulling `main` will not
+       help (there's nothing to pull yet). Instead, re-run step 2 with
+       `--discharging <ID>[,<ID>...]` naming the row(s) you deliberately
+       removed, e.g. `npm run check:onbox-register -- --against-published
+       <saved-file> --discharging E10` or `--discharging E10,E11` for more
+       than one.
+
+       **The rule for which IDs to name is arithmetic, never trial-and-error:
+       name exactly as many IDs from a group as rows you actually discharged
+       from that group — never "whichever IDs the error message lists," and
+       never "keep adding IDs until the command goes green."** Padding
+       `--discharging` until the check passes is the exact failure mode this
+       check exists to catch (the #1931/A44 incident this whole mechanism was
+       built to close): a group with one genuine competing-lane addition on
+       top of your own discharge will always leave one leftover ID after you
+       have named your true count, and appeasing that leftover — naming it
+       too, just because the check is still red — silently deletes another
+       lane's live row at publish time. **If, after naming your true count
+       for a group, the check still reports a leftover for that group, STOP.
+       Do not name that ID too.** It is not yours to discharge: another lane
+       published a row into that same group, and the fix is to merge it in
+       (see "Another lane's row, already merged into `main`," above) before
+       you publish — not to add its ID to `--discharging`. The tool's own
+       error text already says this ("merge it in before publishing"); when
+       the doc and the tool disagree, trust the tool, not the instinct to
+       make it stop complaining.
+
+       Two shapes, both governed by that same count rule — knowing which one
+       you're in tells you how the IDs will be spelled, not how many to name:
+       - **A middle row of a group that still has survivors (the
+         renumbering wrinkle).** Rows renumber contiguously within a group,
+         so discharging a MIDDLE row does NOT make that row the one
+         reported — every row after it shifts down to fill the gap, so it's
+         the group's HIGHEST id that vanishes from the live page instead. If
+         your true count for this group is 1, the single ID the error names
+         is correct — but it's correct *because your true count is 1*, not
+         because the error said so. If your true count is N, expect to name
+         N ids this way (the shifted id can change each time you re-run);
+         never name an (N+1)th id just because the check is still red after N.
+       - **A whole group with NO survivors left** — e.g. discharging a
+         single-row group's only row (Group F's sole row, F1, is a real,
+         live example of exactly this shape). There is nothing left to
+         renumber, so every row the group's live-page section still lists
+         reads as live-only. Name exactly the rows you discharged — for a
+         one-row group, that's one ID, not "every ID the error currently
+         lists for this group." A second live-only ID surviving after you've
+         named your one is proof another lane independently published into
+         the same now-otherwise-empty group, not evidence you actually
+         discharged two rows.
+
+       Either way, naming an ID that turns out not to be live-only at all (a
+       typo, or copied from the wrong discharge) is itself a refusal, not a
+       silent no-op — the point is to keep a genuinely competing-lane row
+       from slipping through unreported, not to mute the check wholesale.
+   - **"Cannot verify"** — the check refuses to guess whether an extra row
+     is a discharge or a race, and fails closed instead. This is NOT the
+     same as the register being behind: pulling `main` on your own machine
+     doesn't fix it, in either of the two shapes below.
+     - **A git call failed** — the command's own `git fetch origin main`, or
+       the `git show FETCH_HEAD:<path>` that reads what it just fetched,
+       failed (network unreachable, no credentials, `origin` misconfigured
+       or unresolvable, a timeout). The error names which one
+       (`fetch` or `show`) — run that command by hand to see the underlying
+       error, fix whatever it reports (network, auth, the remote), then
+       re-run step 2.
+     - **No git call failed, but the baseline is malformed** — `origin/main`'s
+       OWN copy of this register is internally inconsistent (a count
+       mismatch, a contiguity gap, a duplicate group letter, a sub-lettered
+       row heading, a glance-table row with no matching body section, ...),
+       so the fetch and the read both succeeded but the content they got
+       back can't be trusted. The error names no `fetch`/`show` failure in
+       this shape — that absence is itself the signal. Run
+       `npm run check:onbox-register` against a checkout of `main` (not your
+       branch) to see which specific check fails, then fix THAT on `main`
+       first (its own PR) before retrying step 2 here — this can't be fixed
+       from your branch, only from `main`.
+
+   **Known limitation:** a row that's live and still genuinely owed but was
+   never actually merged into `main` at all (e.g. published straight from a
+   branch that never merged, or from a PR later reverted) is not
+   distinguishable from a deliberate discharge — it silently reads as
+   discharged rather than being flagged. Accepted trade-off, not an
+   oversight; see `checkLiveView`'s own header comment in
+   `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url`.
 
@@ -122,8 +238,21 @@ eyeballed diff — it does not, and cannot, make the four steps happen on
 their own. An early version of this check compared both directions
 symmetrically, which inverted the diagnosis (failed on every ordinary
 publish and told the operator to delete the rows they were about to ship) —
-fixed before this landed; see the `checkLiveView` function's own header
-comment in `scripts/check-onbox-register.mjs` for the reasoning.
+fixed before this landed. A later version still fired on every legitimate
+row discharge, because removing a row is invisible in that same direction
+too: the still-live page always looks "ahead" of a register that just
+discharged a row from it. It now disambiguates the two by checking whether
+`origin/main`'s own copy of the register also lacks the row before reporting
+it (#2199); see the `checkLiveView` function's own header comment in
+`scripts/check-onbox-register.mjs` for the reasoning. The `origin/main` copy
+that comparison reads is fetched fresh by the command itself immediately
+before reading it, not taken from whatever the local `origin/main` ref
+already happened to point at — an operator whose local ref predated a merge
+would otherwise see that merge's row as absent from both their own register
+and their stale baseline, which reads identically to a deliberate discharge
+and would have let the exact #1931 race straight back through. See
+`resolveBaselineText`'s own header comment in
+`scripts/check-onbox-register.mjs` for that half of the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
@@ -160,17 +289,17 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
-| **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 1 |
-| — | **Blocked** (hardware absent) | 1 |
+| **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
+| — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -189,7 +318,8 @@ mock mode. **16 tests executed: 15 pass, 1 blocked.** Results are recorded in
 the run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` (§2 preconditions
 filled, per-test `Result:` lines and §7.1 completed for the tests run). PR #1837
 shipped the template (3a/3b1/3b2, 51 tests); Wave 3c added **Section E** (9
-tests) — Section E remains entirely unrun, see the blockers below.
+tests) — 6 of 9 now run across runs 2 and 3, E-03/E-06/E-07 still owed; see
+below.
 
 **The run found one Critical defect, now fixed.** Every freshly cloned Qwen
 voice returned HTTP 500 on its first synthesis until the sidecar restarted —
@@ -298,8 +428,29 @@ asserts which voice reached the provider.
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E — 4 of 9 now run (2026-07-31); E-03…E-07 still owed, but no
-  longer blocked.** The #1944 blocker below is genuinely
+- **Section E — 6 of 9 now run (2026-07-31/08-01, across runs 2 and 3);
+  E-03, E-06 and E-07 still owed, but no longer blocked.**
+  **Run 3 (2026-08-01)** added E-01's first genuine exercise — **P**
+  (mechanism), **by-ear NEGATIVE**. Owner: *"2 does not sound like 4 much,
+  cross language is not working well."* Mechanism passes, perceptual
+  identity does not: a controlled experiment isolated the cause to the
+  **source clip's language**, not XTTS cloning — a clone built from a
+  Russian clip scored **0.7824** against its own source in the same chapter
+  where the English-sourced clone scored **0.2321** (caveat: the RU floor is
+  contaminated, narrator vs RU source already 0.577, because Qwen Russian
+  voices cluster). It also passed **E-05** (audition vs render **0.5515**
+  against floors of 0.105 / 0.051), and reproduced **E-04** (**F**)
+  deliberately: same cloned voice/engine/`language: ru`, only length
+  differs — a 46-char line returned 200, a 245-char line 500. Cause: `spacy`
+  absent from the sidecar venv and undeclared in every `requirements/*.txt`,
+  while `main.py` hardcodes `enable_text_splitting=True`. Filed
+  [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017), fixed
+  in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039).
+  Run 3 also produced [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
+  (an orphaned `characterId` renders silently in the narrator's voice) and
+  [#2026](https://github.com/dudarenok-maker/Castwright/issues/2026)
+  (Russian XTTS quality — register row A44). The #1944 blocker below is
+  genuinely
   gone — Coqui loaded cleanly in a post-`/embed` process during run 2, logging
   `Coqui ready — 58 speakers in manifest`. A *second*, separate blocker sat
   behind it — the clone **derive** failed without shared FFmpeg libraries
@@ -367,6 +518,18 @@ asserts which voice reached the provider.
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
 device to `cpu` while `ASR_COMPUTE_TYPE=int8_float16` remains pinned makes every
 `/transcribe` 500. `_compute_type()` is correct; nothing enforces the pairing.
+**Fixed for the Advanced Configuration path by [#2180](https://github.com/dudarenok-maker/Castwright/issues/2180):**
+`PUT /api/config` rejects a `qa.asr.device` / `qa.asr.computeType` save that
+would leave this pair mismatched, checked against the resulting effective
+config (not just the incoming patch); `POST /api/config/reset` (every
+Advanced Settings row's per-key Revert, plus a group/`qa-gates` or `all`
+reset) checks the same resulting-effective-config rule before clearing
+anything, so a Revert click can't reopen the pair either (independent review
+of PR #2205, finding F1 — the reset path was still an open bypass when #2180
+first shipped). So the UI can no longer produce this state. A hand-edited
+`server/.env` still bypasses save-time validation by design and can still
+reach this combination — that residue is explicitly out of scope for #2180
+(belongs with #2131's sidecar-side surfacing work instead).
 (2) `npm start` appears to launch two sidecars but does not — the venv
 `python.exe` is a launcher that re-execs the base interpreter as a child. Only
 one holds :9000. Separately, `npm run stop` repeatedly reported
@@ -2002,7 +2165,309 @@ comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
 
+### A38 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
+
+`.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
+/ `SIDECAR_VRAM_RESTART_MB=0` as literal, active env assignments — and each of the
+three threshold functions in `main.py` treats a **present** `0` (or any parseable
+value) as an explicit override, not as "unset." Since #2179 comments the generated
+`.env.example` block out instead of emitting it active, a fresh install now leaves
+all three **absent**, so the sidecar self-computes 70% of total physical RAM (hard
+restart), 90% of the resident card's total VRAM (soft recycle), and 98% of the
+card's total VRAM (hard restart) — three lifecycle behaviours that were silently
+disabled on every install that copied `.env.example` verbatim (Pinokio, and the
+documented manual/`INSTALL.md` path) until this fix, and are now live. None of this
+is exercised by any pytest/vitest suite — the three threshold functions are unit-
+tested for their env-present/absent MATH, not for whether a real sidecar process
+ever crosses a live threshold and actually exits/recycles.
+
+- Confirm a fresh install (a `server/.env` written from the current
+  `.env.example` — i.e. all three of `SIDECAR_RESTART_MB` /
+  `SIDECAR_VRAM_RECYCLE_SOFT_MB` / `SIDECAR_VRAM_RESTART_MB` absent from the
+  environment) computes and uses the auto thresholds at sidecar startup (70%
+  of total RAM; 90%/98% of the resident card's total VRAM) rather than
+  treating them as disabled.
+- Drive committed RAM up toward the ~70% ceiling (a long multi-chapter run,
+  or a synthetic host-memory hog alongside the sidecar) and confirm the
+  sidecar self-exits with code 43 for the supervisor to respawn, rather than
+  never recycling.
+- Drive reserved VRAM up toward the 90% soft threshold and confirm `/health`
+  sets `recycle_pending` and a clean chapter-boundary recycle fires (not a
+  mid-chapter hard exit); then, on a card where the soft recycle didn't
+  already relieve the pressure, continue up toward the 98% hard threshold
+  and confirm the hard self-exit fires instead of an uncontrolled OOM.
+- Watch for thrash: across an ordinary render, the auto thresholds must not
+  fire routinely — a card sitting in the high-80s/90s% reserved as a normal
+  batch peak (see the `_TORCH_ACTIVE_RESERVED_MB` torch-managed-card
+  carve-out in `main.py`) should not trip a recycle storm now that the
+  ceiling is live where it was previously inert.
+
+*Needs:* a fresh install (or a `server/.env` with the three vars removed) so
+the auto path is actually reached; the single 8 GB card is enough; a way to
+push committed RAM/reserved VRAM toward the thresholds (a long render, or a
+synthetic memory/VRAM hog run alongside it). *Criteria:*
+`_mem_restart_threshold_mb` / `_vram_recycle_soft_threshold_mb` /
+`_vram_restart_threshold_mb` in `server/tts-sidecar/main.py` (`:8265-8284`,
+`:8154-8185`); the #2210 PR body and `0b0e7694`'s commit message record the
+before/after values. *Cost:* short-to-medium — the VRAM-pressure legs need a
+way to actually saturate the card, which may need a synthetic hog rather
+than a real render.
+
 ---
+
+### A39 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+Design doc §On-box acceptance, criterion 1. A from-scratch `bootstrap-venv.mjs`
+run on the nvidia profile is unit-tested at the seam
+(`bootstrap-venv-helpers.test.ts`'s ordering assertions), but a real pip venv's
+version string, real PEP-427 directory escaping, and a real `pip check`/Kokoro
+provider report have never confirmed the write actually lands correctly on a
+genuinely fresh box — every other row here starts from an already-bootstrapped
+venv (self-heal) or a deliberately broken one (clobbered), neither of which
+exercises `installForProfile`'s write branch on a first-ever install.
+
+- Wipe (or freshly clone into) the sidecar venv and run a genuine from-scratch
+  bootstrap on the nvidia profile — not an upgrade, not the boot-time self-heal.
+- Inspect `site-packages` for `onnxruntime-<version>.dist-info` at the version
+  `onnxruntime-gpu` actually installed.
+- Run `pip check` — expect exit 0.
+- Load Kokoro and confirm it reports `CUDAExecutionProvider`.
+
+*Needs:* the existing NVIDIA dev box, willingness to rebuild the venv from
+scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
+tester's exact scenario, with the app running. Every other row for this feature
+proves a mechanism; this one is the acceptance criterion the issue was actually
+filed against, and it has not been separately re-confirmed since the fix landed
+(the self-heal proof in §5 exercises boot, not an in-app package install).
+
+- Start the app normally (NVIDIA profile, a bootstrapped sidecar venv).
+- From the app UI, install Qwen3 (Model Manager → the Qwen engine's Install
+  action) — the exact step the original report describes failing.
+- Confirm the install completes with **no** `WinError 5` / `Accès refusé` on any
+  `.dll` under `site-packages/onnxruntime/capi/`.
+- Load Kokoro afterward and confirm it still reports `CUDAExecutionProvider` — the
+  install must not have silently swapped the GPU runtime for CPU en route.
+
+*Needs:* the existing NVIDIA dev box, the app running. *Criteria:* design doc
+§On-box acceptance item 2; run sheet §4 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
+branch (the clobbered-box row of the design doc's five-state table) is fully
+unit-tested against synthetic fixtures (`server/src/tts/ort-ensure-marker.test.ts`)
+but has never run against a **real** clobbered venv — a box where the GPU
+distribution's dist-info survives (pip uninstalls by name and never knew the two
+collided) while the actual files on disk are the CPU build. This is the population
+#2192 itself names as the largest affected group, and the state a wrong ownership
+predicate would entomb silently (see the design doc's §The three venv states).
+
+- **Manufacture the state deliberately**, on a copy of the venv or with the intent
+  to run the repair command afterward (this is destructive to a working GPU
+  install): with the sidecar stopped, `pip install --force-reinstall onnxruntime`
+  (plain, no `-gpu` suffix) into the sidecar venv that already has
+  `onnxruntime-gpu` installed. Confirm both `onnxruntime_gpu-*.dist-info` and a
+  **real** `onnxruntime-*.dist-info` (INSTALLER `pip`, non-empty RECORD) now exist,
+  and that `site-packages/onnxruntime/` is the CPU build's files.
+- **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
+  naming the condition and the exact remedy command
+  (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
+  and **no** `onnxruntime-<version>.dist-info` marker written over the real
+  distribution. `pip check` should still report the pre-existing broken
+  requirements — not silently "fixed" by a marker stamped over the wrong version.
+- **Run the named remedy command** and confirm it actually repairs the box: the
+  swap re-runs, `onnxruntime-gpu` is reinstalled, and a legitimate marker is
+  written afterward (`pip check` clean, Kokoro reports `CUDAExecutionProvider`
+  again).
+
+*Needs:* the existing NVIDIA dev box, no GPU activity required, ~10 minutes
+including the repair. *Criteria:* design doc §On-box acceptance item 6, the
+five-state table and "the clobbered box takes the loud path" in
+`docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
+
+**Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
+`upgrade/apply.ts`'s `pipInstall` marker handling (delete before the first
+`run(...)`, write as the function's last statement, delete-then-rethrow on a
+failed swap step) with a new dependency-injection seam added specifically because
+the real body had zero prior test coverage
+(`server/src/upgrade/apply-ort-marker.test.ts`) — but real `spawn`, a real
+`venvDir`, and a real packaged release directory have never driven it. A
+genuinely different consumer of the same `planOrtSwap` output than
+`bootstrap-venv.mjs` (A39), so that row passing proves nothing about this one.
+
+- Take a real installed Castwright release (not the dev checkout — the packaged
+  `release/` layout `upgrade/apply.ts` targets), on NVIDIA, with a marker already
+  present from a prior bootstrap or self-heal.
+- Trigger the in-app upgrade (Account → Check for updates → Install, or the
+  equivalent CLI path) to a release whose sidecar requirements changed enough to
+  re-run `pipInstall`.
+- Confirm the marker is deleted before the overlay install fires, and rewritten
+  (at the freshly-installed version) only after the swap steps succeed — inspect
+  `onnxruntime-<version>.dist-info`'s METADATA before/after, or watch for its
+  brief absence via a log/timestamp check if the window is too fast to catch by
+  hand. Confirm `pip check` is clean afterward.
+- If practical, force a swap-step failure (e.g. an interrupted network mid-swap)
+  and confirm the marker is deleted rather than left lying about a runtime that
+  was never reinstalled.
+
+*Needs:* a real installed release directory (not a dev worktree) and a way to
+trigger its upgrade path; the existing NVIDIA dev box otherwise. *Criteria:* the
+delete-first/write-last ordering invariant in
+`docs/features/282-ort-pip-consistency-marker.md`, and the `pipInstall` anchors in
+the design doc's §Changed files; run sheet §9 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A43 · Linking an orphaned `characterId` through the Cast screen actually reconnects its segments ([#2238](https://github.com/dudarenok-maker/Castwright/issues/2238), plan [278](../features/278-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped for the script half**
+
+#2238's acceptance criterion 5 — *"`repair-cast-id-drift.mjs`'s 'reported for
+human decision' count drops by each id linked through the UI, verified by a dry
+run before and after on a real book"* — cannot be proven in the PR. Every test
+in the branch drives a fixture workspace; the claim is about the real one, where
+the script's report-only bucket currently stands at **107 ids / 93 segments**.
+
+*What to observe.* Pick a needs-decision row with rendered segments behind it —
+***Exile*** `silveny` (17 segments across ch50/ch51/ch56/ch65) or ***Everblaze***
+`lady-alina` (6 across ch55/ch61) are the clearest. Then, in order:
+
+1. With the server **stopped**, run
+   `WORKSPACE_DIR="C:/AudiobookWorkspace" CACHE_DIR="<the checkout that ran this
+   workspace's analysis>/server/handoff/cache" node
+   scripts/repair-cast-id-drift.mjs` and record `reported for human decision`.
+   **Both env vars matter.** `WORKSPACE_DIR` defaults to a path that does not
+   exist on this box — the run scans **0 books** and prints a full summary of
+   clean zeros, so check the `books scanned:` line before trusting anything.
+   `CACHE_DIR` defaults to the *current* checkout, and a worktree's cache
+   silently sees nothing for a book analysed elsewhere, which moves the counts
+   this row is comparing.
+2. Start the server, open `#/books/<id>/cast`, pick the right character in that
+   row's `Compare against…`, press **Link to this character**.
+3. Confirm the row leaves "needs your decision" and appears under
+   **auto-reconciled**, and that `.audiobook/cast-id-history.json` gained a
+   `supersededBy` entry for it.
+4. Stop the server, re-run the dry pass, and confirm the reported count dropped
+   by that id — and that `re-render candidates` dropped by its segment count.
+5. **The negative case, which is the Critical this PR's review gate caught:**
+   open ***Exile***, whose `unknown-male` row carries 21 segments across 3
+   chapters. The link action must be **disabled** on that row, with a visible
+   reason, and a direct `POST .../link-orphan-match` with `orphanedId:
+   "unknown-male"` must 400. *Exile* is the right book for this: the repair
+   script reports that its analysis cache **"actually names it 5 different
+   things (timkin, brant, dwarf, rex, lord cassius)"**, so linking that id
+   book-wide would route five speakers onto one voice — #2040's original damage
+   class. ***Unlocked*** (`unknown-male`, 34 segments across ch63/ch67) is worth
+   checking as a second row, but note its evidence is weaker, not stronger: its
+   backup names **one** occurrence ("Lord Cassius") and its analysis cache names
+   **zero** characters, so it is the cache-blind case rather than the
+   many-speaker one.
+
+*Hardware:* none. A real workspace with drifted books, and the server stopped for
+steps 1 and 4 (the script refuses `--apply` against a live server, and a dry run
+against one is unreliable). *Criteria:* plan
+[278](../features/278-cast-character-identity.md) §Amendment 2026-08-10; the four
+constraints listed there each have unit coverage, but only the corpus proves the
+count moves.
+
+### A44 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
+
+PR #2050 fixed one of #2026's three defects (the leading dialogue em-dash) and
+deliberately shipped no register row here, because concurrent PR #2039 was
+actively editing this same file (annotating the E-04 row above). #2039 merged
+2026-08-01; this row is that deferred debt, tracked on
+[#2057](https://github.com/dudarenok-maker/Castwright/issues/2057).
+
+The complete criteria already exist in
+`docs/testing/fs38-wave3-onbox-acceptance.md`'s `#2026 — additional acceptance
+criteria: Russian XTTS quality` section and are **not** restated here —
+summarised below.
+
+- **Leading em-dash pause, by ear.** `softenDashes`
+  (`server/src/tts/text-normalize.ts`) rewrites a leading `—` to `... ` on the
+  theory a leading ellipsis pauses where a leading comma didn't. Pinned only
+  as a wire-text transform (`text-normalize.test.ts`); never confirmed on real
+  audio. Compare a line opening with `—` against the same line with no
+  leading punctuation, and against an interior-dash sentence — the original
+  issue's own reference points: **+0.14 s** for the leading dash (i.e. no
+  audible pause) versus **+1.53 s** for an interior one.
+- **`tts.coqui.degenGuard` live** (`_coqui_synth_is_degenerate`,
+  `server/tts-sidecar/main.py`; registry key `server/src/config/registry.ts:736`).
+  Pinned only by a scripted-fake pytest, never run against the real XTTS
+  model. Observe (a) it does **not** false-positive on ordinary 2–3 word
+  Russian lines at normal speaking pace — its 20 ms/speakable-char floor was
+  reused verbatim from Qwen's own calibration and never independently
+  measured for Coqui's actual healthy short-utterance duration; (b) if a live
+  repro of the original collapse can be captured, whether the retry actually
+  recovers it. **A negative on (b) may be correct behaviour, not a
+  failure** — the guard's own docstring is explicit that it can only catch an
+  implausibly SHORT render, and both historical collapses (`Хорошее олово.` →
+  Finnish, `Тёплое море.` → English) were fluent, plausible-duration
+  utterances outside its detection envelope.
+- **Neuter `-ее` standing invariant.** No local fix was attempted — the
+  mispronunciation is baked into the trained XTTS v2 checkpoint's own Russian
+  G2P, not a text-preprocessing bug. Confirm it **still reproduces** on
+  `main`, so a future `coqui-tts` upgrade has a baseline to check against.
+  Not a sign-off. Pairs with #2056.
+
+**Different mechanism from A37 (#2055) — do not merge with item 2 above.** A37
+covers the server-side ASR/WER override `qa.asr.catastrophicWer` in
+`classifyTranscript`; this row's item 2 is the sidecar-side duration heuristic
+`tts.coqui.degenGuard`. Same symptom (a Russian line collapsing into another
+language), different guard, different layer of the stack. These were
+conflated once already during triage.
+
+*Needs:* a Coqui-capable sidecar with XTTS resident, a Russian book or line
+(no clone needed — every #2026 defect reproduces on the stock catalogue voice
+`Damien Black`). *Criteria:* `docs/testing/fs38-wave3-onbox-acceptance.md`'s
+`#2026 — additional acceptance criteria: Russian XTTS quality` section.
+*Cost:* short — a handful of `/synthesize` probes plus one attempt at
+reproducing the degenerate collapse.
+
+### A45 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
+
+PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
+`stripHtml`/`extractFirstHeading`/`epub.ts`'s `decodeEntities` from a
+five-entity hand-rolled list to the complete HTML5 named set. Every layer of
+the fix is proved by unit and end-to-end tests fixing the sentence text
+explicitly (`html-utils.test.ts`, `entity-dialogue-e2e.test.ts`) — what those
+tests cannot prove is that a real, EPUB-sourced entity survives the whole
+pipeline the same way. Design spec's own "What I could not establish": whether
+the stage-2 analyzer model echoes a surviving entity into its returned
+sentence text, which decides whether the *body-line* symptom reproduced at all
+before this fix (a second thread observed, on a live run, that the current
+model sometimes strips a leading dash rather than echoing it verbatim — that
+would mean the body-path symptom already didn't reproduce pre-fix on today's
+model, which is a finding about the analyzer, not a failure of this fix).
+
+- **Lead with the chapter-title beat — the only criterion no model behaviour
+  can mask** (design spec Finding 0). On an EPUB whose first chapter heading
+  carries named entities (e.g. `<h1>L&rsquo;&Eacute;t&eacute;</h1>`), confirm
+  the spoken title beat says "L'Été" cleanly — no "ampersand … semicolon", no
+  gibberish.
+- **Secondary: a Spanish, French, or Russian EPUB using `&mdash;`/`&ndash;` or
+  accented named entities in body text.** Confirm a dash-opened dialogue line
+  renders with a pause (not spoken "ampersand n dash semicolon" or similar),
+  accented words render as the correct letters (not "e acute" spoken aloud),
+  and the manuscript view shows real glyphs rather than raw entity text.
+  **Record whether this symptom reproduced at all pre-fix** — per the design
+  spec, that is itself new information about the analyzer chain, not a gate on
+  this fix.
+- No real es/fr/ru EPUB with named (as opposed to numeric) HTML entities was
+  available in this workspace at design time — confirm one exists among the
+  on-box corpus, or construct a minimal one from a real chapter with `&mdash;`
+  hand-substituted for a literal dash, if none does.
+
+*Needs:* a real EPUB (or a hand-modified one) carrying named HTML entities in
+its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
+two bullets above. *Cost:* short — one import + one chapter-title listen, plus
+one body-line listen if a suitable entity-laden EPUB is available.
 
 ## Group B — local Ollama analyzer only
 
@@ -2050,38 +2515,233 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-Three rows re-analyze the **same manuscript** for different reasons. One local pass
-plus one cloud pass, captured with scene-break output, attribution output and
-truncation/429 telemetry all in mind, discharges all three. No TTS or GPU synthesis.
+**Three rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
+structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
+and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
+attribution). Results are recorded in each plan's acceptance section, and the
+headline finding is filed as
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187).
+
+In short: **C1 passed** (24 separators, 22 flagged, median separator→opener
+distance 5 chars — the `* * *` glyph itself; the ~92k forward-overshoot is
+mechanically gone). **C2's targets were missed** (flagged 6,568 vs ≤~500) because
+chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
+flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
+flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
+
+Since then the #2187 aligner fix landed, adding a **new C2** — one more local
+re-analysis to confirm plan 247's targets end to end — and #2253's convention
+invariant added a third row. **Both ran 2026-08-12/13 and are discharged**; see
+below. (Row IDs are positional and renumber on discharge, so a given ID has
+named several different rows over this group's life. The C2 discharged in the
+paragraph above was the srv-59 attribution row; the C2 discharged in the
+paragraph below is the post-#2187 one; the C2 that remains is what was C3.)
+
+**The 2026-08-12/13 run — 9/9 chapters, and it discharged two rows at once.**
+Throwaway `mns_rKjCHx0vrS`, build `52a8fb97`, local Ollama `qwen36-cw-iq4-32k`,
+structure engine on, `allowCloudFallback: false`, **12 h 27 m** of compute across
+an overnight pause. Full per-chapter figures and the seven run-sheet gaps it
+exposed are in
+[`night-watch-reanalysis-onbox-acceptance.md`](night-watch-reanalysis-onbox-acceptance.md)
+§4. Headline outcomes:
+
+- **Escalation executes on all nine chapters** — the post-#2187 C2's principal
+  owed item, and the thing offline replay explicitly could not prove. 61 windows
+  attempted, 21 lines applied. **Discharged.**
+- **Wall-clock missed target 5 by ~2.5–6×** — 12 h 27 m against +2–5 h. Cause
+  identified, so this is a recorded outcome rather than a re-run: the 16 GB model
+  does not fit the 5070 Ti's 14.2 GiB usable, and ~5 GB spilled over PCIe for the
+  whole run. Re-testing needs different hardware or a smaller quantisation.
+- **The bucket split is live** — `unresolved` populated on every chapter (670
+  book-wide), `flagged` 0 throughout, i.e. under its bar rather than over it.
+- **But the end-to-end outcome criterion FAILED**: 87.4% of dash-opening dialogue
+  was attributed to `narrator` (4131/4725) against a 30.3% baseline. The
+  dialogue-structure engine is **exonerated** by replay — today's engine over the
+  2026-08-06 cached stage-2 output reproduces 30.4% — so the cause is upstream,
+  filed as [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306).
+  That is why the row below survives with narrowed scope instead of discharging.
+
+The cloud row remains (renumbered **C1** now that the other two are discharged;
+it was C3 before 2026-08-06 and is referenced under that ID in
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)). It needs the
+separate **cloud** pass, which the local run did not exercise. No TTS or GPU
+synthesis.
 
 Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night Watch Tetralogy\Ночной дозор`.
 
-### C1 · Manuscript scene separator — Russian re-run (plan 261)
+> **Hold the full 12-hour re-run — the in-flight speaker-separation work**
+> ([#2288](https://github.com/dudarenok-maker/Castwright/issues/2288),
+> [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)) **changes dialogue
+> segmentation**, so a pass taken before it lands measures a moving target and has to
+> be repeated. Wait for it, then take C2 and C3 in one session.
+>
+> **But a one-chapter local-vs-Gemini A/B is the next step and is not blocked by
+> that.** [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s cause is
+> **not** identified: an offline replay showed that swapping the roster
+> `reconcileSentenceCharacterIds` validates against moves the victim rate 38.0% →
+> 76.3%, but the run's own logs record **zero demotions** on that path — same
+> `log(1, …)` channel as a control message that *does* appear — so the mechanism is a
+> real latent hazard that did not fire here. The dash lines were `narrator` before
+> reconcile, which points at the stage-2 output itself.
+>
+> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down the run's
+> checkout.** The 2026-08-12/13 pass's raw stage-2 output — the model's attribution
+> *before* any engine or reconcile — was destroyed with its worktree, and it is the
+> one artifact that would have settled the residual gap in #2306 without a re-run.
+> The analysis cache alone does not carry it: it holds the final, post-demotion ids.
 
-Plan 261 could not measure this book in its original round: it was mid-re-analysis
-and its `manuscript-edits.json` was deleted by the reparse (`:203-206`). The
-marker-anchored rule change is claimed to *mechanically* eliminate the old
-~92k-character forward-overshoot — that claim is what the re-run confirms. Failure
-here is always cosmetic: a divider off by a sentence, never data corruption.
+### C1 · Free-tier Gemma cloud pass completes end to end ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
-### C2 · srv-59 deterministic dialogue-structure attribution (plan 247)
+**Narrowed 2026-08-13 from three items to one** — see
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685#issuecomment-5274602285)
+for the full reasoning. Two items came out:
 
-"Manual acceptance walkthrough (on-box, owed post-merge)" (`:247-249,338-340`).
-Re-analyze the same book — 9 chapters, 14,065 sentences — on the default pipeline.
-Ship notes: "Not yet shipped: on-box acceptance is owed post-merge." Core engine
-merged PR #1482 (2026-07-09); still unrun as of 2026-07-21.
+- **429 classification — already covered offline.** `gemini.test.ts` carries four
+  tests over this exact behaviour against the real payload shapes, including both
+  historical misclassifications: the #1682 case (`free_tier` in the metric name
+  matching the daily marker, `:551`) and the #1695 case (the free tier's 15-req/min
+  cap colliding with a `\d{1,3}` heuristic, `:583`). The latter asserts the call
+  happened **twice** — it proves the retry, not merely the absence of a throw. A
+  live run would only detect fixture drift in those payloads, which is a far weaker
+  claim than the item made.
+- **`localInputFraction` calibration — obsolete.** The shipped `0.3` produced
+  **one** stage-2 truncation across nine chapters of the hardest book available;
+  truncation already *recovers* via the adaptive re-split (`stage2-chunk.ts`, #528)
+  rather than dropping, so the knob is prevention for a cured failure; and lowering
+  it means smaller chunks, more calls, longer wall-clock — pushing the wrong way on
+  the one target that just missed by 2.5–6×. The value is per-model and
+  per-`num_ctx` besides, so it would not survive the next model.
 
-### C3 · Cloud request sizing + local input-fraction calibration ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
+**What remains** is the systems property no unit test reaches: re-analyze end to end
+on `gemma-4-31b-it` — **including the script-review pass**, the one that actually
+429'd in the original incident (all 22 logged failures were `task: script-review`) —
+and confirm the book **completes** with no dropped chapters and no hang under real
+throttling, with the limiter, the retries and the fallback interacting over hours.
+Uses the free-tier `GEMINI_API_KEY` **already configured** in `server/.env` — a
+credential this run exercises, not a blocker.
 
-Three unchecked items. Uses the free-tier `GEMINI_API_KEY` **already configured** in
-`server/.env` — a credential this run exercises, not a blocker.
+**Its remaining draw is that it doubles as the cloud arm of
+[#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s control** — and
+with #2306's cause still open and the **stage-2 output** now the leading suspect,
+that A/B is the sharpest test available rather than a spare one. Two candidates have
+been eliminated offline (`isConventionRescue`'s roster gate moves 0.1 points;
+`reconcileSentenceCharacterIds`'s demotion is potent at 38.0% → 76.3% but logged
+**zero** demotions in the actual run), which is what promoted the A/B back up.
 
-Re-analyze end-to-end on `gemma-4-31b-it` **including the script-review pass** — the
-pass that actually 429'd in the original incident (all 22 logged failures were
-`task: script-review`) — and confirm a per-minute 429 is retried rather than
-misclassified as daily-quota. Then calibrate `analyzer.stage2.localInputFraction`
-(ships at 0.3) downward until a full local re-analysis completes with **zero**
-stage-2 truncation drops, and record the working value.
+**Two things the 2026-08-06 local pass established for this row, before anyone
+sets it up again:**
+
+- **`gemini-*` really does RECITATION-block this book — observed, not inherited.**
+  Mid-run, a queued Ollama call timed out into the cloud fallback and
+  `gemini-3.5-flash-lite` returned `PROHIBITED_CONTENT` on a stage-2 chapter-1
+  section. That is exactly why this row specifies `gemma-4-31b-it`.
+- **`server/.env` sets `GEMINI_MODEL=gemini-3.5-flash-lite`, which overrides the
+  RECITATION-safe code default.** The last-resort fallback in `analyzer/index.ts`
+  and `routes/analysis.ts` is already `gemma-4-31b-it`, so it is the `.env` line —
+  not the code — that must change for this row, or the pass silently runs on the
+  wrong model and dies on the filter.
+
+**Run it against a throwaway re-import, not the library book.** The analysis cache
+is keyed by `manuscriptId` only (`server/src/store/analysis-cache.ts` header), so
+re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json`
+and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
+for cast + generation.
+
+### C2 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
+
+**Partially discharged 2026-08-13** — see the run summary above. Two of this
+row's four criteria passed on the live run and do **not** need re-running:
+`unresolved` is populated per chapter, and `flagged` sits under its bar, so the
+bucket split reaches a real stage-2 output. Escalation's behaviour under the
+split was also observed. What follows is the narrowed remainder.
+
+**What is already proven, and does NOT need re-running:** the fix itself, at
+corpus scale. Two offline replays over the 2026-08-06 cache
+(`server/handoff/cache/replay-experiment.mts`, gitignored, throwaway) measured
+`HARM TOTAL victims=41` — down from the pre-fix baseline's 879, not to 0,
+because the rescue guard now also requires roster membership and 41 lines
+(`борис-игнатьевич` ×17, `егор` ×24) carry off-roster ids that
+`reconcileSentenceCharacterIds` demotes to `narrator` downstream regardless,
+so they were never actually recoverable — at both the production 80%
+alignment floor and forced to 100%, and all 17 workspace-book
+structure hashes unchanged (parser untouched, confirmed by construction and by
+diff). Unit and regression coverage for the invariant, the bucket split and
+every `EngineReport` consumer ships in the same PR.
+
+**What is still owed:** this PR ships engine behaviour proven only by replay
+over one book's *cached* analysis. What replay cannot prove is that a real
+end-to-end analysis run produces the same buckets, and that `escalated`/
+`escalationAccepted` behave with the new bucket split. Re-run Ночной дозор
+analysis and confirm: `[analysis:structure]` log lines show `unresolved=`
+populated and `flagged=` at conflict scale (order 10²/chapter, not 10³); ch5's
+dash-opening sentences are no longer rewritten to `narrator`; `state.json`'s
+`analysisProvenance.report` carries a populated `unresolved`. Full criteria:
+`docs/testing/night-watch-reanalysis-onbox-acceptance.md` §2A.5, and plan 247's
+re-specified target 1.
+
+**Residual risk not covered by this row:** the invariant activates for
+Russian, Spanish and French (`lang/es.ts`, `lang/fr.ts` both carry a non-null
+`dialogueOpen`), but Ночной дозор is Russian-only. Spanish and French ship on
+unit coverage plus the identical-convention argument, not corpus measurement —
+no Spanish or French book exists in the workspace to measure against. This row
+does not change that; it is not blocked on acquiring one.
+
+Same setup as C2: local Ollama, `qwen36-cw-iq4-32k`, ~14 GB VRAM free, sidecar
+suppressed (`DISABLE_AUTOSTART_SIDECAR=1`), no TTS. Batches naturally with C2's
+session rather than needing its own.
+
+### C3 · A deterministic stage-2 failure actually clears when the span is halved ([#2304](https://github.com/dudarenok-maker/Castwright/issues/2304))
+
+**What the unit tests already prove, and does NOT need re-running:** the wiring.
+A repeated failure signature stops the retry loop, the stop escalates to
+`splitSpanForRetry`, and it does so on **both** chunking routes — each mutation-
+verified, each with a control that reddens when the fix is made unconditional.
+
+**What is still owed** is the premise underneath all of that: *that a real model,
+degenerating deterministically on a real span, produces a different answer when
+the span is halved.* Every test above uses a fake model that succeeds on smaller
+input **by construction**, so they prove the split is reached, never that it
+helps. If the degeneration is a property of the *content* rather than the span
+length, the split re-runs twice and fails twice, and the chapter is no better off
+— just slower.
+
+The reproducer is already known and specific, which is the only reason this is
+cheap: Ночной дозор **ch8**, `repeat-loop` at offset **19**, which reproduced
+identically five times across two server lifetimes on 2026-08-12/13. Observe:
+
+- the analyzer log shows the retry **halting on the repeated signature** before
+  the `coverageRetries` budget is spent — *"the same attribution failure
+  reproduced exactly on attempt N"*. Do **not** pin N to 2: for the ch8 shape
+  (attempt 1 a plain truncation, attempts 2+ an identical repeat-loop) the stop
+  lands on **attempt 3**, because the first repeat is the first thing there is
+  anything to match against. Any N below the budget is a pass;
+- the log then shows **`re-attributing a <N>-char section as <M> smaller ones
+  (split depth D)`**. This line exists only because nothing else can see the
+  split: it happens inside a recursion that fires neither `onChunk` nor
+  `onSectionDone`, and `chunkCount` is fixed before any of it runs — so on a
+  multi-chunk chapter, which ch8 is, **both of those counters read identically
+  whether the escalation fires or is reverted outright**. An earlier draft of
+  this row asked for exactly those counters and would have recorded a PASS on a
+  null observation;
+- **ch8's sentence count is whole**, not the partial take. This is the criterion
+  that matters; the two above establish that the mechanism under test is what
+  produced it, rather than luck.
+
+Absence of the re-split line is **not** a failure on its own — the split
+declines for an indivisible span or at `maxSplitDepth`, and `onExhausted` fires
+either way. If the stop line appears without the split line, record that: it
+means the chapter reached the depth limit, which is its own result.
+
+Record the outcome either way. A **negative** result here is valuable and must
+not be quietly dropped: it would mean the escalation costs model calls without
+recovering the chapter, and that the remedy for this failure class has to be
+something other than a shorter prompt.
+
+Same setup as C1/C2, and it **batches with the C2 re-run** — that run replays
+this exact book and chapter, so this row needs no session of its own. Note C2 is
+itself waiting on [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306);
+this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 ---
 
@@ -2314,6 +2974,101 @@ Criteria: [`docs/features/272-golden-assembly-comparison.md`](../features/272-go
 
 ---
 
+### E9 · ORT marker — the Pinokio update path ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **group with E1**
+
+Design doc §On-box acceptance, criterion 4: `pinokio-scripts/update.js` — named
+specifically, not `install.js` — as "the deployment shape that reported the bug."
+`update.js` and `install.js` both invoke `bootstrap-venv.mjs` directly with **no
+server process at all**, but they are not interchangeable: `update.js` loads from
+the *currently checked-out* release and iterates its `run[]`, per the Pinokio
+installer's own documented one-update-lag behaviour (see E1) — a fresh-install
+pass does not stand in for an update pass. Every other on-box row for this feature
+runs through the dev server, a different process entirely; this is the only row
+that proves the out-of-process invocation applies the marker identically rather
+than taking some code path only the server-mediated call exercises.
+
+- On a machine with Pinokio and an **existing** (pre-fix) install (Windows, the
+  original reporter's platform, is the priority; **group with E1**, which already
+  owns the Pinokio box), run Update on the nvidia profile.
+- **This PR changes no `requirements/*.txt`, so on this release Update takes the
+  `noop` branch**: `bootstrap-venv.mjs`'s `classifyVenvState` sees an unchanged
+  `reqHash`, `main()` returns before ever calling `runInstall`, and no marker is
+  written by Update at all — that is expected, by design, not a failure. Confirm
+  instead that `pip check` is unchanged from its pre-Update state, then that the
+  marker arrives (and `pip check` goes clean) at the **next server boot** via
+  `ensureOrtMarker`'s self-heal — the same mechanism criterion 3 already proved,
+  reached through the Update entry point. A future release that *does* touch
+  `requirements/*.txt` takes the `pip-in-place` branch instead, and on that
+  branch `pip check` should be clean immediately after Update, with no server
+  ever having started — written directly by `bootstrap-venv.mjs`'s own call to
+  `applyOrtMarkerWrite`.
+- From within the app once it does start, install Qwen3 (the original bug's own
+  repro) and confirm no `WinError 5`.
+- **In the same session, also run a fresh Install** (`install.js`) and confirm the
+  same outcome — a second shape of this criterion, not a separate row. `install.js`
+  has no prior stamp, so it always takes the `pip-in-place`-shaped path (marker
+  written immediately, no boot needed) regardless of which branch Update took.
+
+*Needs:* a machine with Pinokio installed, an existing pre-fix install, nvidia
+profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
+§On-box acceptance item 4; run sheet §6 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### E10 · revoke is loopback-only — the forwarder boundary and the copy that replaces the button ([#2269](https://github.com/dudarenok-maker/Castwright/issues/2269), PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280), plan [225](../features/225-lan-browser-device-auth.md)) · **group with E2/E3**
+
+`DELETE /api/devices/:id` is now gated to true loopback. Nothing automated reaches
+the real boundary: the server test **fabricates** a request object with
+`req.ip = '127.0.0.2'`, and the frontend test **stubs** `window.location`. Both are
+correct unit tests and neither has ever seen the actual `:443` forwarder, which is
+what makes the host's own browser non-loopback in the first place
+(`lan-port-forwarder.ts` dials upstream with `localAddress: '127.0.0.2'`, and it is
+host-blind, so a phone on `castwright.local` is indistinguishable from the desktop
+there). The narrowing is also user-visible, and the replacement copy is the only
+thing standing between an owner and "the button vanished with no explanation."
+
+- From **`https://localhost:<port>`** (the direct port, NOT the `:443` shortcut):
+  Revoke a device — it succeeds and the row drops out of the list. This is the one
+  address the feature leaves working; if it fails, the gate is too tight.
+- From **`https://localhost/`** (port 443, through the forwarder): the Revoke
+  button still **renders** — `isLoopbackHost()` is a hostname-only client-side
+  heuristic that cannot see the forwarder — and pressing it returns 403. Confirm
+  the error shown is the actionable sentence naming the direct-port address, **not**
+  a raw `revoke failed (403)`, **and that the port in it is the one you actually
+  bound** (see the run-with-a-non-default-port note below).
+- From **`https://castwright.local` on a phone**: no Revoke control on any row, and
+  the explanation renders **once below the device list, not once per row**. Check
+  this with **at least 3 paired devices** — per-row rendering was the shape caught
+  in review, and with one device the bug is invisible. Confirm it is legible at
+  phone width and does not crush the label/date columns.
+- **The security half, and the reason the row exists:** from a paired phone (or any
+  LAN device holding a valid credential), call `DELETE /api/devices/<the host's own
+  record id>` directly — the id is in `GET /api/devices`, which that device can
+  read. Expect **403**, and confirm afterwards via the host UI that the host's
+  record is **still live, not revoked**. Before #2269 this succeeded and locked the
+  owner out of their own install.
+
+**Run this with a NON-DEFAULT `LAN_HTTPS_PORT`** — e.g. `LAN_HTTPS_PORT=9443`.
+This is not a nicety, it is what makes two of the bullets above mean anything.
+Every one of these hint strings hardcoded `https://localhost:8443` until
+[#2278](https://github.com/dudarenok-maker/Castwright/issues/2278) (PR
+[#2294](https://github.com/dudarenok-maker/Castwright/pull/2294)) made them read
+the actually-bound port. **On a default-port box the old hardcoded string and the
+new dynamic one render identically**, so the run would pass without proving the
+fix — the same trap the automated tests avoid by pinning 9443 rather than 8443.
+A non-default port also exercises the case the fix exists for: an operator who
+moved the port had, until #2278, no way to discover the one address revoke works
+from. (Note production auto-rebind can move the port again beyond whatever you
+set; the bound value is the one in the server's own startup line.)
+
+*Needs:* the LAN HTTPS server running with the `:443` forwarder actually bound
+(`npm run start:lan`; no elevation required on Windows — see plan 283's ship
+notes), a **non-default `LAN_HTTPS_PORT`** per the note above, plus a phone or
+second machine paired over `castwright.local`. *Cost:* 15–20 minutes; shares its
+whole setup with E2 and E3, so run the three together. *Criteria:* PR
+[#2280](https://github.com/dudarenok-maker/Castwright/pull/2280) body and PR
+[#2294](https://github.com/dudarenok-maker/Castwright/pull/2294) body; plan 225
+§Invariants item 6.
+
 ## Group F — a real Android device
 
 ### F1 · Android companion app — v1 live-device acceptance (plan 188) · **an entire untested axis**
@@ -2360,19 +3115,33 @@ on the real GitHub Actions runner, which local execution cannot substitute for
 PR #1873's own body discloses both under "Known gaps — stated rather than
 glossed" rather than leaving them to be rediscovered later.
 
-**The workflow has never executed on Actions.** `.github/workflows/quarantine-health.yml`
-parses as valid YAML and `scripts/quarantine-health.mjs` is verified standalone
-(46 unit tests, mutation-checked), but the live runner environment — `gh
-issue view` actually authenticating via the injected `GH_TOKEN`, the `apt-get
-install ffmpeg` step succeeding, the job actually posting to
-`$GITHUB_STEP_SUMMARY` — is unverified until the first dispatch (manual, via
-the Actions tab, or the Monday 03:00 UTC cron). `continue-on-error: true` and
-exclusion from every required check mean a failure here cannot block
-anything, but "the job doesn't crash" is still unconfirmed. **What to
-observe:** a manual dispatch (`gh workflow run quarantine-health.yml`)
-completes and its job summary renders a well-formed report — either the
-clean "nothing to run" no-op (today's empty register) or an actual bucketed
-table if the register is non-empty by then.
+**Partially discharged — the trigger-side dispatch question is answered; the
+`gh issue view` half is not.** The Monday 03:00 UTC cron has now dispatched
+the workflow for real, twice (`event: schedule`, 2026-08-03 and 2026-08-10;
+latest run id `31355401008`), both `conclusion: success`. Its `Install
+ffmpeg` step succeeded on the real runner, and the job summary rendered
+exactly the clean no-op this row anticipated:
+
+> \# Quarantine lane health report
+>
+> No quarantined tests are currently registered in
+> `docs/testing/flaky-register.md` — nothing to run. Clean no-op.
+
+`.github/workflows/quarantine-health.yml` parses as valid YAML and
+`scripts/quarantine-health.mjs` is verified standalone (46 unit tests,
+mutation-checked); the live dispatch now additionally confirms the job
+doesn't crash on the real runner, which was the open half of this question.
+
+**Still unverified: `gh issue view` actually authenticating via the injected
+`GH_TOKEN`.** Both real runs took the empty-register early-return path
+(`rows.length === 0` → `scripts/quarantine-health.mjs:776`, before the
+post-loop `gh issue view` calls) — `docs/testing/flaky-register.md` carries
+one row today (#1981, tracking #2226) but it's marked "Not quarantined —
+still gates," so it never reaches the quarantine-lane report. The run log
+does show `GITHUB_TOKEN Permissions: Issues: read`, so the wiring is
+plausible — but that is not proof the call actually works.
+`continue-on-error: true` and exclusion from every required check still mean
+a failure here cannot block anything.
 
 **Genuine `intermittent` classification is exercised only by unit tests over
 synthetic run sequences** — no real cross-run nondeterminism has been forced
@@ -2385,6 +3154,13 @@ bucket (a real mix of passed/failed across the 5 runs), not `always-passes`
 or `never-passes` — confirming the bucket that is this tool's entire reason
 to exist actually fires on real data, not just the synthetic sequences in
 `scripts/tests/quarantine-health.test.mjs`.
+
+**Net: this row shrinks but does not come out.** The trigger-side dispatch
+question above is answered — the workflow runs clean on the real runner —
+but its residual (`gh issue view` under real auth) now shares a single
+precondition with the second debt below: a real quarantined row in
+`docs/testing/flaky-register.md`. Neither remaining half can move until one
+exists.
 
 *Why this sits here and not as a plain automated-test-gap issue* (per this
 file's own closing rule below): this is NOT closable by writing more unit
@@ -2402,10 +3178,71 @@ shares G1's dispatch-triggered, opportunistic-timing framing and "what to
 observe" shape, not because Group G's runner criterion technically applies
 to it.
 
-*Needs:* nothing beyond repo access for the first half; a real quarantined
-flaky test (naturally occurring, not manufactured) for the second.
-*Cost:* minutes for the first dispatch; opportunistic for the second — piggy-back
+*Needs:* a real quarantined flaky test (naturally occurring, not
+manufactured) — the shared precondition left for both remaining halves.
+*Cost:* opportunistic — piggy-back
 on the next real quarantine event rather than manufacturing one.
+
+### G2 · The published release body now comes from the committed file, not the tag annotation ([#2137](https://github.com/dudarenok-maker/Castwright/issues/2137), PR #2168)
+
+`release.yml` validated `docs/release-notes-next.md` at the tag ref but published
+the tag's *annotation* — a different string, with nothing verifying the two
+agreed. This PR sources the body from the committed file, runs the same
+BOM / conflict-marker / mojibake checks against the annotation, and **fails the
+release closed** when file and annotation diverge.
+
+**Every part of that is unexercised until a real tag push.** `scripts/release-body.mjs`
+is covered standalone by `scripts/tests/release-body.test.mjs` (throwaway git repos,
+real annotations), but the live path — the workflow step actually invoking it on
+`ubuntu-latest`, the `actions/checkout` + "Restore annotated tag" dance leaving
+`%(contents)` readable, `docs/release-notes-next.md` actually being present in that
+checkout, and `gh release create --notes-file release/tag-notes.md` receiving the
+file this step wrote — is not.
+
+**This row carries more risk than most in this register: a false positive BLOCKS
+the release outright.** The divergence check is fail-closed by design, so a
+normalisation bug or a checkout that lacks the notes file does not degrade the
+body — it stops the cut. That is the correct posture, and it is precisely why the
+first live run needs watching rather than assuming.
+
+Pre-merge evidence, gathered rather than asserted — the **shipped**
+`resolveReleaseBody()` replayed against the last 12 real tags (not the test
+suite's own fixtures; the production function fed each tag's real annotation and
+real committed file):
+
+- `v1.14.0`, `v1.13.0`, `v1.12.3`, `v1.12.2`, `v1.12.1`, `v1.12.0`, `v1.11.0`,
+  `v1.10.0`, `v1.9.0` → **publish from FILE**. The normal path, 9 consecutive
+  recent releases.
+- `v1.8.0` → **BLOCKED**. Annotation is the bare placeholder `Castwright v1.8.0`
+  (18 B); file is 3,060 B of the *previous* cycle's notes, headed
+  `# Castwright v1.7.0`. Publishing the file would have shipped v1.7.0's notes.
+- `v1.7.0` → **BLOCKED**. File 3,060 B vs annotation 6,757 B — the same stale
+  file, against an annotation carrying the real notes.
+- `v1.6.0` → file absent at that ref → **publish from ANNOTATION** (rule 2).
+
+All four rules exercised against real history. Note that **two** historical
+releases genuinely diverged: at v1.7.0 and v1.8.0 the published body was not the
+file the gate had validated. This issue is not hypothetical, and the nine
+consecutive agreements since suggest the modern cut path is sound — so a spurious
+block on the next cut is unlikely, but not proven until observed.
+
+**What to observe, at the next real release cut:**
+
+1. The `publish` job's release-body step exits 0 and logs which source it chose —
+   expected: **the file**, not the annotation.
+2. The published GitHub release body is the full notes, not the one-line
+   `Castwright vX.Y.Z` placeholder and not empty. Compare it against
+   `git show <tag>:docs/release-notes-next.md`; they must match.
+3. The annotation checks ran and passed — visible in the step's output, not
+   silently skipped.
+4. If the step instead **fails**, that is a real signal, not noise: read the
+   message, which names both sources and their sizes, and decide whether the tag
+   or the file is wrong before overriding anything.
+
+*Needs:* nothing beyond a real `vX.Y.Z` tag push — i.e. the next release cut.
+*Cost:* zero extra; it is observed as part of a cut that was happening anyway.
+*Discharges when:* one real release publishes with a body sourced from the file
+and the observations above are recorded here.
 
 ---
 
@@ -2416,6 +3253,23 @@ on the next real quarantine event rather than manufacturing one.
 Waves A–G were built and merged **dormant** — the code path exists but has never run
 against real ROCm hardware. A dormant capability, not an active bug. This box is
 dual-NVIDIA; this will not move until AMD/ROCm hardware exists.
+
+### ORT pip-consistency marker — AMD box ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md))
+
+Design doc §On-box acceptance, criterion 5: "no marker is written" on AMD.
+`planOrtSwap('amd', …)` resolves to plain `onnxruntime` (`accelerator-profile.mjs`),
+so the AMD profile takes the `marker.action === 'delete'` branch — the same branch
+cpu and apple take, both of which this box CAN exercise. What is genuinely
+AMD-specific and unverified is the ordering that branch exists to protect: the
+AMD→ROCm-failure→CPU fallback inside `bootstrap-venv.mjs`'s `installForProfile`
+(`cpu.txt` carries an **explicit** `onnxruntime` line the fallback needs to actually
+install; a stale marker present at that moment would make pip silently skip it).
+That fallback only fires on real AMD hardware attempting a ROCm bootstrap that then
+fails over to CPU — nothing on a dual-NVIDIA box can reach it. Dormant, not broken:
+the delete-at-entry ordering (invariant 3 in the plan doc) is unit-tested via the
+injected `runPip`/marker seam, just never against a real ROCm→CPU fallback. This box
+is dual-NVIDIA; this will not move until AMD/ROCm hardware exists. Run sheet §7 in
+`docs/testing/ort-marker-onbox-acceptance.md` has the recipe ready for when it does.
 
 ---
 

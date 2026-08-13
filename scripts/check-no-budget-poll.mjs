@@ -22,9 +22,9 @@
 // The core scan functions are exported so the node:test acceptance suite can
 // import and exercise them against planted-violation temp files.
 
-import { readFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // --- Pattern regexes ---
 
@@ -114,8 +114,7 @@ export function scanDir(targetDir) {
 
 // --- CLI entry point ---
 
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   const repoRoot = process.cwd();
   const rawTarget = process.argv[2] ?? join(repoRoot, 'server', 'src');
   // Normalise: if the caller passes a relative path, resolve against cwd

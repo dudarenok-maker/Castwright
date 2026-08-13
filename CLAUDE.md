@@ -57,15 +57,22 @@ The seam is defect vs. taste, not near vs. far:
   formatting; don't refactor, rename, or reorganise what isn't broken. Match
   existing style even if you'd do it differently (see "Conventions worth
   preserving"). "I'd have written it another way" is never a reason to touch
-  a line.
-- **Defects in code you're already touching get fixed** — not noted, not
-  deferred, not left for a cleanup pass — provided they clear the fix-now bar
-  in [Execution model → Incidental
-  findings](#incidental-findings-report-judge-dispatch). A defect that needs
-  judgement or design is filed instead, and the ticket is the deliverable.
+  a line. This is narrower than it looks: a comment your change made *false*
+  is a chore, not taste, and gets fixed under the next bullet — the test is
+  whether the repo's own rules already say it's owed, or only your preference
+  does.
+- **Defects _and chores_ get fixed in the same round** — not noted, not
+  deferred, not left for a cleanup pass. This covers code you're already
+  touching *and* code next door that the work surfaced; adjacency is not the
+  test. A chore the work made owed — a staled derived artifact, a missing index
+  or register row, a knob without its wiring — is a finding on the same footing
+  as a bug, not a lesser one. The only finding that is filed instead of fixed is
+  one needing a **design pass** — a decision with more than one defensible
+  outcome — and then the ticket names that decision. Full protocol: [Execution
+  model → Incidental findings](#incidental-findings-report-fix-record).
 - **Remove what YOUR changes orphaned** (imports, variables, functions).
   Pre-existing dead code is a finding, not a licence: route it through the
-  same report-judge-dispatch path rather than deleting it on sight.
+  same report-fix-record path rather than deleting it on sight.
 - The test: every changed line traces to the user's request **or to a defect
   that request exposed** — and the PR body says which.
 
@@ -125,14 +132,15 @@ implementation-brief comment as the sole source of requirements. Runs
 `superpowers:subagent-driven-development` as the **primary** mode: cut the
 worktree + branch (per Branching workflow), then dispatch a fresh implementer
 subagent per task, a task-review subagent (spec + quality) after each, and a
-broad whole-branch `code-review` at the end — models chosen per the
-Model-routing table. The controlling thread coordinates and curates context; it
-does **not** hand-write task code a subagent could do. Keep the progress ledger
-(`.superpowers/sdd/progress.md`) so the run survives compaction — including
-every incidental finding and its disposition, per below.
+broad whole-branch review at the end — the mandatory gate is phase 3's, not
+this one — models chosen per the Model-routing table. The controlling thread
+coordinates and curates context; it does **not** hand-write task code a
+subagent could do. Keep the progress ledger
+(`.superpowers/sdd/progress.md`) so the run survives compaction —
+including every incidental finding and its disposition, per below.
 
-**3. Ship.** PR with `Closes #NN`, the mandatory `code-review` gate, merge —
-per the Before-shipping checklist and Branching workflow.
+**3. Ship.** PR with `Closes #NN`, the mandatory `pr-review-gate` pass,
+merge — per the Before-shipping checklist and Branching workflow.
 
 **Why the split:** design and implementation have different context needs; one
 thread pollutes both. The issue-comment handoff lets an implementation thread
@@ -154,7 +162,7 @@ A change is trivial when **nothing can break and nothing needs review**:
 - no regression test is owed, because there is no behaviour to regress.
 
 In practice that is a typo, a dead comment, a single-line doc tweak, and very
-little else. **If you would want a `code-review` pass on it, it is not
+little else. **If you would want a review pass on it, it is not
 trivial.** If a reviewer could reasonably ask "why this way?", it is not
 trivial. **When in doubt, it is not trivial** — an unnecessary branch costs
 thirty seconds; an unreviewed change on `main` costs whatever it costs.
@@ -163,50 +171,105 @@ Invoking the bar is **announced, not silent**: say so in the end-of-turn summary
 so the shortcut can be redirected. It should be rare. A run in which several
 changes were "trivial" is a run that mis-scoped the work.
 
-### Incidental findings: report, judge, dispatch
+### Incidental findings: report, fix, record
 
-Long-running agent work turns up defects in passing — in code being touched, in
-code next door. These are **fixed as found, not accumulated into a cleanup pass
-after the fact.** The accumulation is the failure mode: it converts a day of
-agent work into a day of human janitorial work.
+Long-running agent work turns things up in passing — in code being touched, in
+code next door. **They are fixed in the same round, by a dispatched fix agent.**
+Not accumulated into a cleanup pass, not converted into a queue of tickets for
+someone else's day. The queue is the failure mode: it turns a day of agent work
+into a day of human janitorial work, and every deferral re-pays the whole cost
+of rediscovering the finding from cold.
+
+**A finding is a defect OR a chore — the rule does not distinguish them.** The
+`bug`-vs-`type:chore` label is a routing detail for the board, not a licence to
+defer one and fix the other. Both were surfaced by this work; both cost the same
+to fix now and strictly more to fix later. Chores that count, with real examples
+from this repo:
+
+- **a derived artifact your change staled** — `src/lib/api-types.ts` after an
+  `openapi.yaml` edit, `docs/BACKLOG.md` after a board change, brand PNGs after
+  an SVG edit;
+- **a bookkeeping row your change made owed** — an `INDEX.md` entry, an
+  on-box-acceptance register row, a flaky-register line;
+- **a knob that landed without its wiring** — a registry key with no
+  `config:sync`, no Settings row, no `.env.example` line;
+- **dead or duplicated code the work exposed** — an orphaned export, a helper
+  that is now the second copy of one that already exists;
+- **a seam you touched that has no test**, or a `.skip` with no replacement;
+- **a stale comment or doc sentence your change made false.**
+
+**The seam is defect / chore / taste — the first two are fixed, the third is
+never touched.** Taste is "I'd have written it another way": renaming,
+reordering, restyling, or refactoring code that is correct and consistent with
+its neighbours. That stays off-limits under "Surgical changes" and does not
+become fixable by being relabelled a chore. The test: a chore is something the
+repo's own rules already say is owed; taste is something only your preference
+says is owed.
 
 The subagent's behaviour is unchanged — **it reports, it does not
-opportunistically fix.** Judgement stays in the main thread:
+opportunistically fix.** The main thread dispatches:
 
 1. **The subagent reports the finding** in its return value (implementer or
    task-review agent alike). It does not widen its own diff to fix it.
-2. **The main thread judges it** against the fix-now bar, **at the task boundary
-   where it surfaced** — not at the end of the branch. Deferring the triage
-   recreates the pile with extra steps.
-3. **Clears the bar → dispatch a dedicated fix agent immediately.** Fresh,
+2. **The main thread dispatches a dedicated fix agent immediately**, at the task
+   boundary where the finding surfaced — not at the end of the branch. Fresh,
    narrowly scoped: one finding, one fix, one paired test, briefed from the
    report. Not "and while you're there."
-4. **Doesn't clear it → file it** and move on: a GitHub issue in the same round,
-   labelled and boarded per "The backlog" — plus a `docs/BACKLOG.md` row *only*
-   if it is `type:feature`, since chores and bugs never render there. A finding
-   parked only in a plan's "suggested follow-ups" is a finding being lost.
+3. **Record it too.** File the GitHub issue in the same round, labelled and
+   boarded per "The backlog" — plus a `docs/BACKLOG.md` row *only* if it is
+   `type:feature`, since chores and bugs never render there. **The issue is
+   bookkeeping that accompanies the fix, not a substitute for it.** Filing one
+   and moving on is the leak this protocol exists to close.
 
-**The fix-now bar.** All four must hold:
+**The one thing that defers a finding: it needs a design pass.** That means the
+fix has more than one defensible outcome and something has to *choose* between
+them — an interface, a contract, or a behaviour the user has a stake in. Only
+then is the issue the whole deliverable for this round, and it goes through
+phase 1. Say in the issue which decision is owed; "needs design" without the
+decision named is a deferral in disguise.
 
-- the defect is in code the branch already touches, or directly adjacent to it;
-- the fix is **obvious** — one defensible answer, no options to weigh;
-- it needs no interface, contract, or behaviour decision;
-- it is coverable by a test in this same PR, and needs no regression plan of
-  its own.
+> This replaces the four-conjunct **"fix-now bar"** that earlier plans and code
+> comments cite. That bar gated *fixing*; this one gates *deferring*, and only
+> its third clause (no interface/contract/behaviour decision) survives. A
+> historical doc saying something "fails the fix-now bar" recorded a decision
+> under the old rule — it is not precedent under this one.
 
-Anything else — two defensible fixes, a changed signature, widened blast radius
-— is design work, and design work goes through phase 1.
+**These are NOT reasons to defer.** Each has been used; each is void:
 
-**Cost is not an objection.** A finding that clears the bar is by definition the
-Model-routing table's "single well-specified bug fix with a clear repro and no
-design decisions" — **Cheap tier**. The judgement is yours and stays cheap; the
-typing is Haiku's. More dispatches is the intended outcome, not a side effect.
+- **"it would expand the scope of this PR"** — a finding the work surfaced is in
+  scope by definition. The PR body declares the fix and that settles it.
+- **"it needs a judgement call"** — every fix needs judgement. The bar is
+  needing a *decision*, not needing thought. Weighing two implementations of
+  one agreed behaviour is not a design pass; picking which behaviour is right
+  is.
+- **"it's pre-existing"** / "the branch doesn't touch that file" / "it's next
+  door" — adjacency stopped being the test.
+- **"it needs its own test / its own regression plan"** — write the test in this
+  PR. That is the standing requirement anyway.
+- **"it's cheaper to batch these later"** — it is not. Ten open tickets cost
+  strictly more than ten dispatched agents, and they cost it in the user's time.
+- **"the user can decide later whether it's worth fixing"** — the user asked for
+  working code, not a triage inbox.
+- **"it's only a chore"** — the label is the board's routing, not a priority
+  ruling, and a chore is the *cheapest* thing on this list to dispatch. "It's
+  not user-visible" and "nothing is broken yet" are the same excuse: a stale
+  derived artifact or an unwired knob is a defect that has not been noticed
+  yet.
+
+**Cost is not an objection.** A finding that needs no design pass is by
+definition Cheap tier on the Model-routing table — a defect is its "single
+well-specified bug fix with a clear repro and no design decisions", a chore its
+"boilerplate/scaffolding" or "running commands and summarizing output". The
+dispatch is yours and stays cheap; the typing is Haiku's. More dispatches is the
+intended outcome, not a side effect: a round that turns up ten findings ends
+with ten fix agents, not ten tickets.
 
 **Nothing is dropped silently.** Every finding lands in the progress ledger as
-either fixed-here (with the fix agent's SHA) or deferred-with-issue-number. A
-finding that is neither is the exact leak this protocol closes. Incidental
-fixes are also **declared in the PR body** ("Also fixed, found in passing: …")
-— an unannounced fix reads as scope creep to a reviewer.
+fixed-here (with the fix agent's SHA), or — for the design-pass case only — as
+an issue number *plus the decision that is owed*. A finding that is neither is
+the exact leak this protocol closes. Incidental fixes are also **declared in the
+PR body** ("Also fixed, found in passing: …") — an unannounced fix reads as
+scope creep to a reviewer.
 
 This is the operative half of "Surgical changes": *fix what's broken, don't
 restyle what works.*
@@ -235,13 +298,14 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 **Mandatory review gates**, both using this table's Premium tier:
 - Every non-trivial spec (`brainstorming`) or plan (`writing-plans`) gets a
   real `assumption-checker` pass before the user is asked to approve it.
-- Every PR gets a `code-review` pass (no `--fix`) once fully staged, before
-  merge — except a docs-only PR (same file-set test as CONTRIBUTING.md's
-  doc-only CI fast-path), which is exempt entirely. Otherwise effort scales
-  with the PR's commit type/scope (CONTRIBUTING.md's commit-convention
-  vocabulary): `low` for a single-scope `chore`/`test`/`build`/`ci`, `medium`
-  for a single-scope `feat`/`fix`, `high` for `refactor`/`perf` or any
-  multi-scope PR — see the model-routing skill for the full split.
+- Every PR gets a `pr-review-gate` pass (findings only, never auto-applied)
+  once fully staged, before merge — except a docs-only PR (same file-set
+  test as CONTRIBUTING.md's doc-only CI fast-path), which is exempt
+  entirely. Otherwise effort scales with the PR's commit type/scope
+  (CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
+  `chore`/`test`/`build`/`ci`, `medium` for a single-scope `feat`/`fix`,
+  `high` for `refactor`/`perf` or any multi-scope PR — see the model-routing
+  skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the
@@ -367,10 +431,13 @@ Design rationale:
     daemon is unreachable).
   - **Gemini** (`GEMINI_API_KEY=…`) — calls the free-tier Gemini API
     directly. Optional `GEMINI_MODEL` (ships defaulting to
-    `gemini-3.5-flash-lite`; code-level last-resort fallback stays
-    `gemma-4-31b-it` — its own free-tier bucket, 30 RPM / 14,400 RPD, and
-    RECITATION-filter-immune; flip via env). Every outbound call (primary
-    AND retry) is gated through a per-model RPM/TPM/RPD limiter
+    `gemini-3.5-flash-lite`; resolves through the config registry like every
+    other knob, so an unset env falls through to that same shipped default —
+    the prior hardcoded `gemma-4-31b-it` code-level last-resort was retired
+    in #2179. Switch to a `gemma-*` model manually — its own free-tier
+    bucket, 30 RPM / 14,400 RPD, and RECITATION-filter-immune — via env).
+    Every outbound call (primary AND retry) is gated through a per-model
+    RPM/TPM/RPD limiter
     (`server/src/analyzer/rate-limit.ts`) so retries can't compound into
     429/500 storms. See `server/.env.example` for `GEMINI_RPM_*` /
     `GEMINI_TPM_*` / `GEMINI_RPD_*` overrides and
@@ -416,9 +483,18 @@ Design rationale:
   `server/src/gpu/` that needs a value from a route module goes through a
   stateless leaf gate the owning module registers an accessor into instead.
   Three exist: `gpu/active-generation-gate.ts`, `gpu/qwen-tier-reconcile-gate.ts`,
-  `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
-  `npx madge --circular --extensions ts server/src`, which should stay at
-  its 15-cycle baseline.
+  `gpu/sidecar-health-gate.ts` — each fails closed. The import graph's
+  circular-dependency baseline is mechanically enforced (#2053) by
+  `npm run check:cycles` (`scripts/check-import-cycles.mjs`) against the
+  committed cycle LIST in `server/madge-cycles-allowlist.json` — not a
+  hand-typed count, which is blind to a swapped cycle. Runs as a `verify.yml`
+  leg scope-gated to `server/**`, and in the full local `npm run verify` — not
+  in pre-commit or pre-push, so it never slows a commit. It shells out to a
+  version-pinned `npx --yes madge@8.0.0` rather than a `server/` devDependency
+  (madge 8 declares `peerOptional typescript@^5.4.4` and this repo is on
+  TypeScript 6, which makes the lockfile unresolvable for `npm ci`). Add a new
+  cycle to the allowlist if it's new and intentional, otherwise break it
+  instead of allowlisting it.
 - **`cast.json` writes go through `withCastLock`/`withCastLocks`, never a
   bare `writeJsonAtomic`/`rm`** (`server/src/workspace/cast-lock.ts`). Four
   rules: (1) lock the innermost read-through-write, never the caller — one
@@ -427,8 +503,75 @@ Design rationale:
   derived from it — wrapping only the write buys nothing at all; (3) two or
   more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
   order is **`design` → `library-voice` → `cast`** — never acquire an earlier
-  class while holding a later one, or two requests hang forever with no
-  timeout and no diagnostic. `server/src/workspace/cast-lock.guard.test.ts`
+  class while holding a later one, or two requests deadlock. Since #2260 that
+  no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
+  throws a `LockAcquisitionTimeoutError`
+  (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
+  diagnostic, **not** a licence to violate the order — the budget is per
+  acquisition, so a nested path's worst case is depth × 10s, and ORDINARY
+  contention behind a long holder reaches the same error, so a firing timeout
+  means "look at the holder first, then the rules". **WHICH WRITE the timeout
+  came out of decides the outcome — never which handler caught it** (#2295:
+  discriminating by handler is what produced that bug, since one handler can
+  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  loud *by rethrowing into their job's or request's terminal outcome*: the six
+  best-effort `catch` blocks around identity writes, plus the two
+  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
+  each wrapped at its own call rather than at the enclosing
+  `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
+  journals, which are lineage and must stay best-effort. Swallowing at an
+  identity site would report success with `cast.json` written and the
+  retirement lost; swallowing at an authoritative write reported success with
+  `cast.json` and `state.json` never written at all. FOUR handlers swallow it
+  deliberately: `reconcileRejectEdgesOnDisk`
+  (`server/src/routes/analysis.ts`), which runs after every retirement has
+  landed and writes only cosmetic `notLinkedTo` edges the next persist
+  re-heals; and the three interim cast.json snapshots (per-chapter, stage-1,
+  subset), which a final write in the same run clobbers, so a timeout there
+  diverges nothing (#2292). A NINTH site fails loud in a different shape and is
+  counted separately for that reason: `cast-reject-orphan`'s
+  `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
+  because its leftover is not something a user can rely on anything else
+  clearing — the two `supersededBy` prune passes key on conditions an orphaned
+  id does not ordinarily meet (they fire only if a later analysis re-mints that
+  id as a live cast row, or if the target leaves the roster), so the body names
+  a retry rather than a later analysis. Only the five batch routes
+  (`script-review`, `cast-design`,
+  `voice-style`, `cast-series-patch`, `voice-override-linked`) are neither
+  swallowed nor escalated: they keep their per-item failure shape inside an
+  otherwise-successful 200/207 and report contention through `itemFailureReason`
+  (`workspace/file-lock.ts`). **No client-facing failure ever carries a lock
+  timeout's own message** — not an escalating body, not a per-item reason, and
+  not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
+  which embeds the absolute workspace path, and this app is served over LAN
+  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  needs exactly one of them: **per-item** failures inside a 200/207 use
+  `itemFailureReason` (the five batch routes); a handler that fails the
+  **whole request** uses `requestFailureMessage`, which curates this one class
+  and leaves every other body verbatim — `git grep requestFailureMessage`
+  enumerates all twelve sites (`book-state` ×4, `voice-library` ×3, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `cast-design`'s defensive
+  outer), alongside the two merge routes' own explicit
+  `LOCK_CONTENTION_REQUEST_ERROR` branch; and
+  both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
+  class to `code: 'lock-contention'` with the same curated sentence and no
+  `detail` blob (that blob renders in the UI's collapsible). The raw error goes
+  to the log at every one of them. A new handler downstream of any lock is
+  wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
+  final round). See each site's own comment.
+  **Letting it through is not the
+  same as throwing where it was caught** — at a handler that sits mid-way
+  through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
+  throwing on the spot skips the writes that follow and lands in an enclosing
+  best-effort handler that reports success anyway, which is worse than
+  swallowing: loud nowhere, and now with a half-written book. Those sites park
+  the error in a local and rethrow it after the remaining writes have
+  completed, so the terminal outcome is an error AND disk is whole. **A
+  deferred rethrow binds the CALLER too**: by the time it escapes, the work is
+  applied, so a caller with follow-up writes of its own must finish them before
+  letting it surface (`cast-merge-suggestions.ts`'s accept route and its
+  `dismissSuggestion`) — otherwise the skipped write just moves up one frame.
+  `server/src/workspace/cast-lock.guard.test.ts`
   fails the build on a new unlocked site. Two allowlisted exceptions, each
   keyed on file **and** count so a further unlocked write in either still
   fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and
@@ -525,6 +668,17 @@ re-run `npm run backlog:sync`** so its row lands in `docs/BACKLOG.md`; a
 `type:chore` or `bug` issue is complete at the board and needs no row (see
 above). The backlog is only useful while it stays current.
 
+**Filing is for net-new work, not for findings.** A "suggested follow-up" that
+is a genuinely new capability belongs here. A **defect or a chore** found in
+passing does not: it gets **fixed in the same round** by a dispatched fix agent,
+and its issue merely records that — see [Incidental
+findings](#incidental-findings-report-fix-record). This is where the `type:chore`
+label misleads: it exists so the item routes to the board's "Bugs & Chores" view
+instead of `docs/BACKLOG.md`, **not** to mark it as deferrable. A chore the work
+made owed is fixed now and the issue closes in the same PR. A plan that ends
+with a list of unfixed defects or chores under "Suggested follow-ups" has
+mis-filed them.
+
 ## Planning-mode behaviour
 
 When in planning mode, or when asked "what's outstanding?" / "what's left?" / "summarise what we'd do":
@@ -546,7 +700,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact, but ONE-DIRECTIONAL: it fails only when the live page has a row your register lacks (your register having rows the live page doesn't yet is the normal reason you're publishing, not a defect) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact, but ONE-DIRECTIONAL: it fails only when the live page has a row your register lacks (your register having rows the live page doesn't yet is the normal reason you're publishing, not a defect) — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted, and discharging a middle row renumbers the survivors, so the ID that vanishes is the group's highest, not the row you conceptually removed — see the register's "Live view" step 3 for the full mechanics) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 
@@ -559,7 +713,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
 8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
-10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory `code-review` pass — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
+10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
 
 ## Out of scope until told otherwise
 
@@ -852,7 +1006,7 @@ junction and its target rather than trusting an exit code.
 
 **Trivial changes may skip the worktree** — same [trivial
 bar](#the-trivial-bar) as the Execution model's, no separate definition. Nothing
-can break, nothing needs review, and you would not want a `code-review` pass on
+can break, nothing needs review, and you would not want a review pass on
 it. Commit on a branch in the primary checkout, PR it, merge. **Announce the
 shortcut in the end-of-turn summary** so the user can redirect if they disagree.
 This should be rare; when in doubt, take the worktree.
@@ -980,7 +1134,7 @@ Working practice:
 - Default loop for non-trivial work: finalize the change → run
   `npm run verify:fast:branch` (same branch-scoped check pre-push now runs)
   → open the PR → cloud `verify.yml` (required, opt-out) and the mandatory
-  code-review pass run independently → merge once both are green. Run the
+  `pr-review-gate` pass run independently → merge once both are green. Run the
   full `npm run verify` manually only when you specifically want the full
   local battery (e.g. before a release cut, or debugging something scope-
   filtering might be hiding).

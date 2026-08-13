@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 112 knobs across 12 groups in total. High-risk groups (marked
+attribution — 115 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -63,8 +63,13 @@ is disabled.
 | Ollama retry temperature | Temp used on invalid-JSON retries | 0.6 | 0–2, step 0.1 | live | medium |
 | Ollama num_predict | Output-token cap for Ollama; -1 = predict until context fills | -1 | integer, min -1 | live | medium |
 | Gemini max output tokens | Per-request output-token cap for Gemini | 8192 | 256–32768 | live | medium |
+| Gemini temperature | Sampling temperature for cloud Gemini/Gemma analysis | 0.2 | 0–2, step 0.1 | live | medium |
+| Gemini max input tokens per request | Per-request INPUT-token cap for cloud analyzer passes; body chunks are sized to this | 12000 | 1000–60000 | live | medium |
 | Ollama num_ctx | Context-window size sent on every /api/chat call | 32768 | integer, min 0 | live | medium |
 | Ollama num_gpu | GPU layers for Ollama (999 = all) | 999 | integer, min 0 | live | medium |
+| Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |
+| Ollama warm timeout (ms) | How long to wait for a cold Ollama model to load into VRAM before reporting unreachable | 120000 | integer, min 1000 | live | low |
+| Analyzer eval-rate telemetry | Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in the Admin analyzer-throughput panel | `true` | boolean | live | low |
 
 ## 2. Analyzer chunking & truncation guards
 
@@ -77,7 +82,10 @@ is disabled.
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
 | Stage-2 chunk char budget | Max chars per stage-2 attribution chunk before pre-emptive split | 9000 | integer | live | medium |
+| Stage-2 local input fraction | Fraction of local num_ctx reserved for stage-2 INPUT; lower for a verbose local model whose output overflows the window | 0.3 | 0.1–0.9, step 0.05 | live | medium |
 | Stage-1 chunk char budget | Max chars per stage-1 cast-detection chunk before split | 24000 | integer | live | medium |
+| Stage-1 local input fraction | Fraction of local num_ctx reserved for stage-1 INPUT; lower for a verbose local model that overflows the window | 0.7 | 0.1–0.9, step 0.05 | live | medium |
+| Gemini output-heavy chunk chars | Per-chunk INPUT char budget for the output-heavy Gemini passes (script review, emotion, instruct annotation) | 32000 | integer, min 2000 | live | medium |
 | Coverage min ratio | Attributed/source word-ratio floor → treated as truncated | 0.6 | 0–1, step 0.05 | live | medium |
 | Coverage max ratio | Ratio ceiling → treated as a repeat-loop | 1.6 | 1–5, step 0.1 | live | medium |
 | Ending tail words | Trailing source words required present for "ending found" | 8 | integer | live | medium |
@@ -220,9 +228,10 @@ app-pinnable, so it just reports what the daemon is currently doing.
   <img alt="Per-sentence QA gates" src="images/advanced-settings/07-per-sentence-qa-gates.png">
 </picture>
 
-Group risk is **low** overall, but 4 knobs in this group are individually
-**medium** risk (Voice-QA device, Content-QA device, Content-QA model, Auto-fix
-voice mismatches) — the table's risk column shows each correctly.
+Group risk is **low** overall, but 5 knobs in this group are individually
+**medium** risk (Voice-QA device, Content-QA device, Content-QA model,
+Content-QA compute type, Auto-fix voice mismatches) —
+the table's risk column shows each correctly.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -239,10 +248,13 @@ voice mismatches) — the table's risk column shows each correctly.
 | ASR max WER | Word-error-rate threshold for drift | 0.4 | 0–1, step 0.05 | live | low |
 | ASR max WER (Spanish) | Spanish-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
 | ASR max WER (Russian) | Russian-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
+| ASR max WER (French) | French-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
+| ASR max WER (German) | German-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
 | Render-integrity QA (voice match) | ECAPA speaker-embed match check per rendered line | `false` | boolean | live | low |
 | Voice-QA device | cpu (0 VRAM) vs cuda for the ECAPA embed | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) device | cpu vs cuda for Whisper | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) model | faster-whisper model size/name; cap at `base` on an 8 GB card | `base` | string | restart · sidecar | **medium** |
+| Content-QA (Whisper) compute type | CTranslate2 compute type; `sidecar-default` leaves it to the sidecar's own device-dependent fallback — `auto` is CT2's own distinct value | `sidecar-default` | enum | restart · sidecar | **medium** |
 | Auto-fix voice mismatches | Re-render+replace severe voice mismatches | `false` | boolean | live | **medium** |
 | ASR max deletion run | Longest deletion run → truncation/drop drift | 4 | integer | live | low |
 | ASR min chars | Sentences shorter than this aren't scored | 12 | integer | live | low |
@@ -334,6 +346,9 @@ won't place on a card it should fit, or the eGPU drops off the bus.
 | Gemma 4 31B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
 | Gemma 4 31B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
 | Gemma 4 31B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
+| Gemma 4 26B A4B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
+| Gemma 4 26B A4B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
+| Gemma 4 26B A4B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
 
 ## 11. LAN access & device tokens
 
@@ -345,7 +360,7 @@ won't place on a card it should fit, or the eGPU drops off the bus.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Device authorization lifetime (days) | How long a browser/device authorization stays valid before re-pairing | 30 | integer, min 1 | live | low |
+| Device authorization lifetime (days) | How long a newly authorized browser or device stays valid — changing this does not extend authorizations that already exist | 365 | integer, min 1, max 400 | live | low |
 
 ## 12. Dialogue-structure attribution
 

@@ -64,6 +64,10 @@ export interface OrphanedCharacterFallback {
   resolution: 'alias' | 'normalised' | 'unresolved';
   resolvedCharacterId?: string;
   segments: number;
+  /** #2129 — whether this orphaned id's rendered AUDIO is still current, as
+      opposed to whether the id resolves (`resolution`). `'unknown'` means the
+      comparison could not be made and is presented as needing a re-render. */
+  audioCurrent: 'true' | 'false' | 'unknown';
   /** #2092/#2089 D4 — every live cast id this orphaned id has been rejected
       AGAINST. Absent when never rejected. Populated regardless of
       `resolution` — a rejected id is NOT filtered out of the map (mirrors
@@ -653,6 +657,13 @@ export const castSlice = createSlice({
       if (!entry) return;
       entry.resolution = toBannerResolution(resolution);
       entry.resolvedCharacterId = resolvedCharacterId;
+      /* #2129 — a reject/undo changes what this id RESOLVES to, which can also
+         change whether its rendered audio is current; this reducer cannot know
+         which (no history, no segments files here). `'unknown'` is the honest
+         value and buckets as needs-a-re-render, so the optimistic update can
+         never claim "audio is current" on the strength of a stale field. The
+         next book-state hydrate replaces it with the server's real verdict. */
+      entry.audioCurrent = 'unknown';
       const existing = entry.rejectedAgainst ?? [];
       if (!existing.includes(characterId)) {
         entry.rejectedAgainst = [...existing, characterId];
@@ -682,6 +693,12 @@ export const castSlice = createSlice({
       if (!entry) return;
       entry.resolution = toBannerResolution(resolution);
       entry.resolvedCharacterId = resolvedCharacterId;
+      /* #2129 — same reasoning as applyOrphanRejection above: this reducer
+         cannot compute currency (no history, no segments files here), and
+         `restoreSupersededId` stamps the CURRENT seq on an undo, so the
+         server's next verdict is `false` — 'unknown' is the honest,
+         fail-closed placeholder until the next hydrate replaces it. */
+      entry.audioCurrent = 'unknown';
       if (entry.rejectedAgainst) {
         const next = entry.rejectedAgainst.filter((id) => id !== characterId);
         entry.rejectedAgainst = next.length ? next : undefined;
@@ -716,6 +733,49 @@ export const castSlice = createSlice({
       if (!entry?.rejectedAgainst) return;
       const next = entry.rejectedAgainst.filter((id) => id !== characterId);
       entry.rejectedAgainst = next.length ? next : undefined;
+    },
+    /* From POST /api/books/:bookId/cast/:characterId/link-orphan-match
+       (#2238) — the orphaned-character-fallback banner's "Link to this
+       character" action, the positive mirror of applyOrphanRejection above.
+       The server has durably recorded characterId as orphanedId's live
+       target (cast-id-history.json's supersededBy, via retireCharacterId)
+       and returned orphanedId's resolution recomputed after that write —
+       this reducer applies the server's own answer, same as
+       applyOrphanRejection, rather than guessing. Unlike a reject, a link
+       never writes a notLinkedTo edge and never touches `rejectedAgainst`:
+       if this exact pair carried a prior rejection, the caller
+       (handleLinkOrphanMatch, cast.tsx) already cleared it by dispatching
+       undoOrphanRejection via the EXISTING undo path
+       (handleUndoOrphanRejection) before this action was even dispatched —
+       reusing that path rather than a second removal (#2238's own design
+       decision). No-op for an id no longer in the map.
+
+       Merge-reconciliation fix (#2128/#2129 x #2238) - same reasoning as
+       applyOrphanRejection/undoOrphanRejection above: a link changes what
+       `orphanedId` resolves onto, so any currency verdict computed for its
+       PRIOR resolution (very likely `unresolved`, since this action only
+       ever fires from the needs-decision section) is stale evidence, not
+       current evidence. Leaving `audioCurrent` untouched here would let a
+       leftover `'true'`/`'false'` from before the link keep presenting an id
+       whose target just changed as though its currency had been
+       recalculated. `'unknown'` is the same honest, fail-closed placeholder
+       the other two optimistic reducers use; the next book-state hydrate
+       replaces it with the server's real verdict. */
+    applyOrphanLink: (
+      s,
+      a: PayloadAction<{
+        orphanedId: string;
+        characterId: string;
+        resolution: RejectOrphanResolutionTier;
+        resolvedCharacterId?: string;
+      }>,
+    ) => {
+      const { orphanedId, resolution, resolvedCharacterId } = a.payload;
+      const entry = s.orphanedCharacterFallbacks?.[orphanedId];
+      if (!entry) return;
+      entry.resolution = toBannerResolution(resolution);
+      entry.resolvedCharacterId = resolvedCharacterId;
+      entry.audioCurrent = 'unknown';
     },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a

@@ -261,10 +261,55 @@ export async function buildPortableBundle(
      'data' Buffers and 'end' once finalised; we concatenate them. */
   const zip = new ZipFile();
   const chunks: Buffer[] = [];
+  /* Hoisted so the audio-entries loop below can route a read-stream
+     failure into the same rejection as everything else — same gap and
+     same fix as build-mp3-zip.ts / build-codec-zip.ts: yazl's `addFile`
+     attaches its own `readStream.on('error', ...)` before pumping, but
+     `addReadStream` — what the audio loop uses — does not, and `.pipe()`
+     never forwards 'error' from source to destination. An unforwarded
+     error on one of these streams (e.g. an audio file vanishing mid-build)
+     had zero listeners: Node throws it as an uncaught exception, taking
+     the whole server down (crash-logging.ts's uncaughtException handler
+     exits 1) instead of failing just this export.
+
+     No `done.catch(() => {})` no-op guard is needed here (unlike the
+     other two builders): the audio loop below has no `await` between
+     `addReadStream` calls, so `await done` is reached synchronously right
+     after `zip.end()` — before any async fs error could possibly fire —
+     and `await` itself attaches a consumer, closing the unhandled-
+     rejection window before it can open.
+
+     N6 (newly reachable once a build failure no longer crashes the
+     process — found in passing while reviewing this PR): `onData` below
+     is detached the instant the promise settles, not left running. Before
+     this PR, an unforwarded 'error' terminated the process immediately,
+     so nothing after it ever ran. Once errors started rejecting instead
+     of crashing, a rejection here left `zip.outputStream` still flowing —
+     `chunks.push` kept accumulating the rest of the bundle's bytes into
+     memory for a Buffer nobody would ever read, so peak memory on a
+     failed build was the same as a fully successful one. */
+  let settled = false;
+  let rejectBuild: (reason?: unknown) => void = () => {};
   const done = new Promise<Buffer>((resolve, reject) => {
-    zip.outputStream.on('data', (c: Buffer) => chunks.push(c));
-    zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
-    zip.outputStream.on('error', reject);
+    const onData = (c: Buffer) => chunks.push(c);
+    rejectBuild = (reason?: unknown) => {
+      if (settled) return;
+      settled = true;
+      zip.outputStream.off('data', onData);
+      reject(reason);
+    };
+    zip.outputStream.on('data', onData);
+    zip.outputStream.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
+    zip.outputStream.on('error', rejectBuild);
+    /* yazl's ZipFile also emits its own internal validation failures
+       (e.g. "file data stream has unexpected number of bytes") via
+       `self.emit('error', ...)` on the ZipFile object itself, not on
+       `outputStream` — same zero-listener/uncaught-exception gap. */
+    zip.on('error', rejectBuild);
   });
 
   const entries: string[] = [];
@@ -288,7 +333,9 @@ export async function buildPortableBundle(
   if (changeLogEntry) addBuffer(changeLogEntry.name, changeLogEntry.buf);
 
   for (const a of audioFilesByEntry) {
-    zip.addReadStream(createReadStream(a.diskPath), a.entryName, {
+    const readStream = createReadStream(a.diskPath);
+    readStream.on('error', rejectBuild);
+    zip.addReadStream(readStream, a.entryName, {
       size: a.size,
       mtime: stableMtime,
       compress: false,

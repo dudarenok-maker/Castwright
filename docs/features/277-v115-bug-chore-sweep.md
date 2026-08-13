@@ -6,11 +6,14 @@ owner: null
 
 # 277 — v1.15 bug & chore sweep: triage and round plan
 
-> Status: active — **Round 1 SHIPPED 2026-08-01** (four lanes, 12 issues) and
-> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues). Round 3 outstanding.
-> See "Round 1 outcome" and "Round 2 outcome" below; the latter carries the
-> round's substantive findings, including seven cases of a guard or test
-> reporting green while checking nothing.
+> Status: active — **Round 1 SHIPPED 2026-08-01** (four lanes, 12 issues),
+> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues), and **Round 3 RAN
+> 2026-08-05** (design-first; four PRs, four issues closed, five items left
+> needing design). See "Round 1 outcome", "Round 2 outcome" and "Round 3
+> outcome" below. Round 2's carries seven cases of a guard or test reporting
+> green while checking nothing; Round 3's carries the finding that **four of
+> ten issue premises did not survive verification**, and the cold-brief
+> handoff that caught what self-review structurally cannot.
 > Key files: this document is a coordination record, not a feature plan. The
 > per-item detail lives in each linked GitHub issue, which stays canonical.
 > URL surface: none
@@ -505,6 +508,421 @@ deliverable per item is a **phase-1 pass — ticket + plan doc**, not a diff.
   get **zero** CI coverage; this is why #1942's regression test never ran in
   cloud CI. Which runner, which weights, and how long are real questions.
 
+## Round 3 outcome (2026-08-05)
+
+Four PRs merged, **four issues closed** (#2033, #1808, #2144, and #898's design
+phase), two filed (#2144, #2149), one item paused deliberately, and five left
+untouched. The round's value was **not** in the diffs.
+
+### Four of ten premises did not survive verification, and a fifth was solved elsewhere
+
+The round opened with a read-only premise check across all ten issues before any
+design started. It took about twenty minutes and it changed the round:
+
+| # | Filed premise | What was actually true |
+|---|---|---|
+| #2033 | Qwen's batch path drops `voiceSubstitutedFrom` | **Not a defect.** Qwen never *sets* it — only `CoquiEngine` and `KokoroEngine` do — and batching is Qwen-only. Rescoped to a latent-gap guard. |
+| #1808 | Wave-3a deferred-minor sweep outstanding | **9 of 10 already shipped**, most carrying `#1808` markers in their own test titles. Item g is unreachable dead code. |
+| #898 | Device tokens need TTL **and** scope | **TTL shipped in `74fb2901`** — the day the issue was filed. Only the scope half was open. |
+| #1393 | Needs an in-flight-render registry | **The registry already exists** (`inFlightByBook`). |
+| #1950 | Needs a design decision on runner/weights | **Already designed elsewhere** — defect C of PR #2142's verify-scope unification, merged an hour earlier the same morning. |
+
+Verified as holding, byte-for-byte: #1984 (all four claims), #1309, #1932, #1996
+(though PR #2029 had already tried and reverted its proposed lever).
+
+**The rule this earns:** a design-first round starts with a premise pass, not a
+design pass. Two plan docs would have been written against defects that do not
+exist. An issue's age is the signal — every stale premise here was on a ticket
+filed 14+ days before, in a repo where 30+ PRs a week land next to it.
+
+### `gh issue view --json body` silently excludes comments
+
+The ten issues were batch-fetched with `--json number,title,state,labels,body`.
+That **omits comments**, and in this repo comments are where scope gets
+broadened and owner decisions land. #1393's 2026-07-06 comment carried a
+standing decision — the keep-set must come from real render facts, **not**
+`computeUsedQwenTiers(fullCast)` — which was invisible to the fetch and got
+publicly contradicted the same day, after a spec had already been drafted
+against the wrong scope. Use `--comments`, or add `comments` to the field list.
+Of ten issues, only two carried comments; both changed the work materially.
+
+### The dominant error shape: claims about absence, derived from a too-narrow grep
+
+Across three independent spec authors and the coordinating thread, **every**
+false statement this round was of one shape — an assertion about what is or
+isn't there, presented as observation but actually inferred from a grep whose
+pattern was never doubted:
+
+- "There are zero `403:` entries" — the pattern was `^ *403:`; the file had
+  `'403':`, quoted.
+- "The only `on ApiException catch` is `:176`" — missed every untyped
+  `catch (_)`.
+- "`ChapterSegment.modelKey` is stamped, written at `synthesise-chapter.ts:2490`"
+  — **the field does not exist**; `:2490` is a `provider.synthesize({…})`
+  argument, discarded after the call.
+- "The pytest pins that neither substituting engine can expose
+  `synthesizeBatch`" — it pins the *Python* `synthesize_batch`; the Node method
+  is unconditional on `SidecarTtsProvider` (`tts/sidecar.ts:322`).
+
+The checks that *succeeded* were the other kind: re-deriving an allowlist from
+scratch, standing up a real Express app to see what it does. **A claim about
+what isn't there needs a command, not a reading** — and the command's pattern is
+the thing to doubt. This is the same family as Round 2's green-checking-nothing
+cases: a search that finds nothing and a guard that checks nothing both report
+success by default.
+
+### The cold-brief handoff found what no amount of self-review could
+
+Both #1393 and #898 had two specs rejected by adversarial passes. #898 was
+rescued by **briefing a fresh agent from the issue and its comments alone**,
+with no access to the earlier drafts. That agent immediately found the one
+defect every reviewer had missed: the triage comment named `pairing.ts:145` as a
+mint site but never said it serves a **LAN browser running the full desktop
+UI**. Scoping every device token to `companion` — the obvious reading — would
+have 403'd the entire web app.
+
+That class of error is *a fact the author knew and did not write down*. It is
+invisible to the author specifically because they know it, so no amount of
+re-reading finds it. **Keep the cold-brief handoff as a step, not an
+experiment**: for anything whose deliverable is a brief, have someone read the
+brief cold before trusting it. It is also the honest test of whether phase 1
+produced a self-sufficient contract, which is the whole point of the
+[Execution model](../../CLAUDE.md#execution-model-default-for-all-non-trivial-work)'s
+design/implementation split.
+
+### What shipped
+
+| PR | Closes | What |
+|---|---|---|
+| [#2143](https://github.com/dudarenok-maker/Castwright/pull/2143) | #2033, #1808 | The latent-gap guard, both arms — no substituting engine has a *usable* `synthesize_batch` (AST-based, so a base-class stub is not a false positive), and `QwenEngine` never constructs a `SynthResult` with a non-`None` `substituted_from`. |
+| [#2147](https://github.com/dudarenok-maker/Castwright/pull/2147) | — | #898's design of record. |
+| [#2151](https://github.com/dudarenok-maker/Castwright/pull/2151) | — | #898's implementation plan: 10 tasks, 65 steps, 28 mutations, two PRs in a load-bearing order. |
+| [#2150](https://github.com/dudarenok-maker/Castwright/pull/2150) | #2144 | The auth bypass below. |
+
+**#2144 was found by an assumption-checker attacking #898's migration
+argument** — not by anyone looking for it. `device-tokens.ts:60` read
+`now > Date.parse(d.expiresAt)`, which is `false` for `NaN`, so a record with
+`expiresAt: null`, `""`, or garbage **authenticated forever**; only the literal
+`undefined` was caught. Its review then found a Before-shipping step-1 violation
+the first revision missed: `docs/features/225` is `status: active` and its
+invariant #2 stated the *vulnerable* predicate verbatim, so a future agent
+"restoring the invariant" would have reopened the bypass **and it would have
+read as conformance**. A stale invariant is worse than no invariant.
+
+### #1393 was abandoned rather than attempted a fourth time
+
+Three drafts, three rejections. Instead of a fourth revision the ticket now
+carries the verified ground: there is **no per-segment tier stamp**, and
+`inFlightByBook` cannot see splice or QA-repair renders (they register into
+`chapter-job-coordination.ts:13`'s separate map). So the cross-book race is
+reachable by a path no union over `inFlightByBook` can close — **#1393 is
+bigger than filed**, and restarting it needs a fresh thread from the
+`synthesiseChapter` publishing question, not another revision of a design its
+own facts rule out.
+
+### Still open from Round 3
+
+#1984 (needs a product-surface brainstorm with the repo owner), #1996 (blocked
+on on-box measurement), #1932, #1309, #485, #1393 (paused), and #898's phase 2 —
+which is fully briefed and needs only execution. #1950's work merged with
+someone else's PR and the issue is open only for want of a linkage.
+
+## Round 4 — the drain plan (planned 2026-08-11)
+
+Rounds 1–3 dispatched at whatever was actionable that morning. Round 4 is
+scoped differently: the goal is **to take the queue as close to empty as it can
+honestly go**, which means admitting up front that a fifth of it will never be
+cleared by effort at all.
+
+### Baseline, re-taken on `main` @ `f2b2e866` (2026-08-11)
+
+**49 open items — 14 `bug` + 35 `type:chore`** (board total open: 102; the
+balance is `type:feature`). Three rounds have closed ~31 items since the
+2026-08-01 baseline of 54, and the queue has held roughly flat because new
+findings replaced them at about the same rate.
+
+The items are **not one pile**, and treating them as one is why the queue looks
+immovable. They take four different actions:
+
+| Disposition | Count | The action |
+|---|---|---|
+| Diff-shaped — dispatchable now | 20 | Lanes A–D + #898 phase 2 + bookkeeping |
+| Design-first — phase-1 only | 8 | Ticket + plan doc, closes in Round 5 |
+| On-box — the deliverable is a measurement | 6 | One GPU sitting |
+| Blocked upstream / hardware | 10 | A disposition decision, not work |
+| Gated — live worktree or paused wave | 5 | Not scheduled by this sweep |
+
+20 + 8 + 6 + 10 + 5 = 49.
+
+**Realistic end state: 49 → ~13**, of which most are the design-first set
+awaiting Round 5 and the parked-blocked set.
+
+### Two live worktrees — do not dispatch into these
+
+`wt-1984-spec` (#1984, revision 7) and `wt-2128-audio-currency` (#2128), both
+committed 2026-08-11. Four others — `feat+fs38-wave3c-fe`, `fs38-followups-c`,
+`feat+fs-35-per-chapter-detect-emotions`, `feat+server-fs59-cjk-w5` — last moved
+in July and belong to the paused fs-38 Wave 3.
+
+### Round 0 — the premise pass, before any lane is briefed
+
+**20 of the 49 were filed 14+ days ago.** Round 3 found 4 of 10 premises dead in
+about twenty minutes, and two plan docs were nearly written against defects that
+do not exist. The same trap is loaded here, and it is larger.
+
+Scope: the ten stale non-blocked items — **#1826, #1691, #1393, #1309, #898,
+#485, #1685, #1600, #1527, #1084** — plus a duplicate check on **#2056 vs
+#2026** (both describe the Russian neuter `-ее` mispronunciation on XTTS; one is
+probably redundant).
+
+Two mechanics are non-negotiable, both from the Round 3 outcome above:
+
+- Fetch with `--comments`. `gh issue view --json body` omits them, and comments
+  are where scope gets broadened and owner decisions land.
+- **A claim that something isn't there needs a command, not a reading** — and
+  the command's pattern is the thing to doubt. Every false statement in Round 3
+  was an absence inferred from a grep nobody questioned.
+
+*Benefit (technical):* the cheapest step in the round and historically the
+highest-yield. It closes items outright and stops lanes being briefed against
+fiction.
+
+**Three reclassifications already found by this pass, from the durable record:**
+
+| # | Filed as | What is actually true |
+|---|---|---|
+| #2187 | Aligner under-aligns Russian dash dialogue | **The fix shipped** (`b2be5b7b`; book alignment 67.7% → 96.0%). Open only until on-box row C2 is discharged. Not code work. |
+| #1976 | A finished render strands ~3.9 GB | **A bookkeeping shell.** Four of its five criteria shipped; it closes when #1996 does. Not independent work. |
+| #2015 | analysis.ts's five writes replay a merge base | **Capture is solved** (PR #2185). Only the *rebuild* half is open — do not re-solve capture. |
+
+### Group 1 — bookkeeping closures (4, no code)
+
+One docs PR. The cheapest reduction available in the whole plan.
+
+- **#2057** — reconcile the onbox register's owed #2026 row and republish the
+  HTML twin. **Unblocked since 2026-08-01**, when PR #2039 merged.
+  *Benefit (technical):* the register is the merge gate for every on-box-gated
+  PR; a stale row makes that gate lie.
+- **#1976** — annotate as a shell that closes with #1996, so it stops being
+  scheduled. *Benefit (technical):* it reads like a live independent bug on the
+  board and is not one.
+- **#2056** — resolve against #2026: duplicate, or split the upstream-blocked
+  half cleanly. *Benefit (user):* one honest ticket for the XTTS Russian problem
+  instead of two half-descriptions of it.
+- **#2042** — this tracking issue; closes last, carrying the round's numbers.
+
+Bundle the outstanding register-publish debts into the same PR.
+
+### Group 2 — Lane A · server: `analysis.ts` + cast store (4, **sequential**)
+
+All four touch the same files, so this is **one worktree run in order**, not
+four parallel agents — invariant 1 below is the constraint, not a suggestion.
+
+- **#2239** — move `clearNotLinkedEdgesForDroppedRejections` out of
+  `analysis.ts` into `store/`.
+  *Benefit (architectural):* `analysis.ts` is the file every cast-lock incident
+  has run through; shrinking it is how the next one gets cheaper.
+- **#2161** — `rejectedPairs.forgotSupersededTo` can dangle the same way
+  `supersededBy` did before #2110.
+  *Benefit (technical):* a known-shape defect with a shipped precedent to copy.
+- **#2228** — srv-89: no test stands up either analyzer persist block; three
+  wiring facts are source-scan-only.
+  *Benefit (technical):* source-scan-only facts are exactly the
+  green-checking-nothing class Round 2 catalogued seven times.
+- **#2006** — the last open half of the three clone-consent TOCTOU gates.
+  *Benefit (user):* consent validated in one scope and written in another is a
+  real correctness hole on a privacy-sensitive path.
+
+### Group 3 — Lane B · server: process, routes, voice scoring (5)
+
+- **#2196** — an out-of-process book folder move leaves a stale record that
+  resurrects the old directory.
+  *Benefit (user):* data-loss-adjacent — the user's own filesystem action gets
+  silently undone.
+- **#1969** — reassigning a character's voice keeps scoring it against the old
+  voice's persisted audition centroid.
+  *Benefit (user):* voice-match scores are wrong after any reassignment, which
+  is a routine action.
+- **#2106** — `findListenerPid` has no timeout, so a slow refusal resets the
+  respawn budget forever. Carries `needs-plan`; confirm it needs one rather than
+  just a timeout.
+  *Benefit (technical):* an unbounded respawn budget is an infinite-loop class,
+  not a slowdown.
+- **#1826** — serialize voice-library entry writes (per-uuid lock or `updatedAt`
+  CAS). **Premise-check first** — the cast-lock sweep added a
+  `voice-library-usage.ts` detector and may already cover this.
+  *Benefit (technical):* the last unserialised writer in the family that sweep
+  otherwise closed.
+- **#1691** — make stage-1 cloud TPM reservation roster-aware (>130-char-cast
+  ceiling). Stale (07-17); check against #1685 before dispatching.
+  *Benefit (technical):* a large cast blows the reservation ceiling silently.
+
+### Group 4 — Lane C · frontend + test hygiene (2)
+
+- **#2230** — a 409 from the Listen-view book-meta editor is swallowed silently.
+  *Benefit (user):* the edit vanishes with no error; the user retypes it and it
+  vanishes again.
+- **#2235** — flaky `export.test.ts` uncaught ENOENT in its staging dir,
+  ~1-in-2 standalone on a contended box.
+  *Benefit (technical):* a flake in the gate corrupts every red-phase
+  verification downstream of it — Round 1 put this class first for this reason.
+
+### Group 5 — Lane D · ops, config, CI (4)
+
+- **#2194** — an existing `server/.env` keeps every knob locked after #2179,
+  because upgrades never rewrite it.
+  *Benefit (user):* every existing install silently ignores the new defaults —
+  an upgrade that does nothing.
+- **#1994** — Qwen has no golden duration baseline, so a speech-rate regression
+  on the **default** engine is invisible.
+  *Benefit (technical):* the golden tier covers the fallback engine and not the
+  hot path.
+- **#2243** — ops-56: decide whether `docs/superpowers/plans/**` is a record or
+  live instructions, then finish the review-gate sweep.
+  *Benefit (architectural):* stale docs read as conformance — the #2144 failure
+  shape exactly.
+- **#1966** — ops-48: evaluate `@nanonets/graft`. Date-gated to **2026-08-14**,
+  so it lands naturally inside this round.
+  *Benefit (technical):* retires a standing "revisit later" with a yes/no.
+
+### Group 6 — #898 phase 2 (1, execute-only)
+
+**The highest expected value single item in the plan, and it should not wait
+behind the lanes.**
+
+- **#898** — srv-41 pairing device-token scoping. Spec merged (#2147), plan
+  merged (#2151: 10 tasks, 65 steps, 28 mutations, two PRs in a load-bearing
+  order), handover brief posted. Phase 1 is complete; this needs a **fresh
+  implementation thread briefed from the ticket and nothing else.**
+  *Benefit (user):* the only fully-briefed security item in the queue, and its
+  design phase already produced one live auth bypass (#2144) as a side effect.
+
+### Group 7 — design-first: phase-1 only, no diffs (8)
+
+Each has more than one defensible answer, so the deliverable is a ticket + plan
+doc and closure happens in Round 5. Use the **cold-brief handoff** — a fresh
+agent reads the brief with no access to the drafts. It is what rescued #898
+after two rejected specs.
+
+**Take the first four this round; defer the rest.** Eight concurrent phase-1
+threads is more design than one round should carry.
+
+- **#1996** — VRAM reclaim hook location. Attempt 1 (PR #2029) was killed by
+  review; the traps are recorded — call
+  `PlacementController._reclaim_stranded_cache`, not `_placement.reclaim`; tests
+  must assert **ordering**, not that the hook was called; the idle watchdogs are
+  the likely home. Closing this also closes #1976.
+  *Benefit (user):* ~3.9 GB stranded after every render on an 8 GB card.
+- **#2015** — the cast.json **rebuild** half only.
+  *Benefit (technical):* four prior designs died on the capture problem, which
+  is now solved — this restart is much cheaper than it looks.
+- **#1932** — side-18: consolidate the two Coqui VRAM eviction mechanisms, or
+  document the split as deliberate and scope each in code. Premise verified as
+  holding in Round 3.
+  *Benefit (architectural):* two mechanisms for one job is how the next OOM gets
+  misdiagnosed.
+- **#2131** — decide whether an unresolvable `qa.asr.model` should fail early.
+  *Benefit (user):* today a whole book renders before the QA gate discovers it
+  cannot run.
+- **#2059** — attribution leading+interior dash produces a doubled comma.
+  Genuinely a question ("should it collapse?"), so it needs a decision, not a
+  fix. *Benefit (user):* a visible text artifact in Russian dialogue.
+- **#1309** — ops-24: the LAN port-443 forwarder collapses per-client identity,
+  weakening rate limits. Verified byte-for-byte in Round 3.
+  *Benefit (technical):* rate limits that cannot distinguish clients are not
+  rate limits.
+- **#485** — side-13: import safety + provenance for shared voice artifacts.
+  Size M; gates fs-28 … fs-31.
+  *Benefit (architectural):* it blocks four downstream features, so it is
+  holding up more than itself.
+- **#1393** — srv-58 Qwen tier eviction race. **Paused after three rejected
+  designs** — its own verified facts (no per-segment tier stamp;
+  `inFlightByBook` cannot see splice or QA-repair renders) rule out the shape it
+  was filed as. Restarting it needs a fresh thread from the `synthesiseChapter`
+  publishing question, not a fourth revision.
+  *Benefit (technical):* real cross-book corruption risk — but restarting it
+  wrongly has already cost three attempts.
+
+### Group 8 — on-box: one GPU sitting clears 6
+
+The deliverable is a **measurement**, not a diff. Dispatching a coding agent at
+these accomplishes nothing. **Nothing else in this plan has this ratio.**
+
+- **#2187** — discharge register row C2. Force `fresh: true`, and do **not**
+  re-measure alignment — that is already done from cache. Then close.
+- **#2026** — XTTS Russian quality on a stock catalogue voice (engine-level, not
+  clone-related).
+- **#1998** — cloned-voice identity loss across languages (0.600 → 0.229).
+- **#1084** + **#1527** — ASR content-QA `maxWer` never tuned or validated for
+  es/fr/de/ru; the 0.4 cap is English-tuned.
+- **#1685** — verify #1682 cloud request sizing; calibrate the stage-2 local
+  input fraction.
+
+Plus #1996's confirmation measurement, once its design lands.
+
+### Group 9 — blocked: a disposition decision, not work (10)
+
+#1228 (transformers CVE, upstream), #893 (sidecar dep bump, torchaudio EOL
+@2.11), #711 (eslint 9→10), #431 (jsdom · archiver · @google/genai), #790
+(ops-17 KGP / AGP 9), #1477 (TypeScript 7.0), #1335 (AMD / ROCm hardware not
+owned), #822 (Pinokio macOS box), #1001 (FlashAttention-2 wheels), #947 (ops-18,
+deferred by its own issue text).
+
+**No amount of effort clears these.** They wait on other people's releases or on
+hardware that is not owned. They are a fifth of the queue and they distort every
+triage pass that walks it.
+
+- **Option A — park.** Add a `blocked` label plus a review date; exclude them
+  from sweep counts.
+- **Option B — collapse.** Close all ten into one standing "upstream watch"
+  tracking issue that lists them.
+
+**Recommended: A.** Closing loses the per-item context, and several already
+carry `tracking`.
+
+*Benefit (technical):* either way, the queue starts reflecting work that can
+actually be done.
+
+### Group 10 — gated, not scheduled (5)
+
+- **#1984**, **#2128** — live worktrees as of 2026-08-11. #1984 is at revision 7
+  with rounds 5/6/7 all failing their gates and **scope growth awaiting owner
+  sign-off**. Neither is touched by this sweep.
+- **#2068**, **#2054**, **#1600** — fs-38 Wave 3, which is **paused** with E-04
+  failing and on-box at 16/60. They unpause with the wave or not at all.
+
+### Sequencing
+
+1. **Round 0** premise pass — read-only, no branch.
+2. **Group 1** bookkeeping — one docs PR.
+3. **#898 phase 2** in its own thread, **in parallel with Lanes A–D** (four
+   worktrees, file-disjoint; Lane A internally sequential).
+4. **Group 7** phase-1 threads for #1996 / #2015 / #1932 / #2131.
+5. **Group 8** at the next GPU sitting.
+6. **Group 9** on the owner's call.
+
+### Decisions this round needs from the repo owner
+
+1. **Group 9** — park with a label, or collapse into one tracking issue?
+2. **Group 8** — is a GPU sitting available? It is the best ratio in the plan.
+3. **fs-38 Wave 3** — stays paused, or unpauses (adds 3 items and unblocks four
+   stale worktrees)?
+4. **#1984** — the scope growth is stalled on sign-off, independently of this
+   sweep.
+
+### Driving view
+
+`docs/features/277-v115-bug-chore-sweep-board.html` is the hand-authored board
+for this round — every one of the 49 items, grouped as above, filterable by
+disposition and area, with per-item state kept in the reader's `localStorage` so
+a redeploy never wipes progress. It is a **tracked file**, edited here and
+republished from here; treat it the way the onbox register's live view is
+treated, and never publish a rendering of this markdown over its URL.
+
+Canonical URL:
+<https://claude.ai/code/artifact/f3608d3e-0e02-4eaa-9af3-3322b9ce0bb3> — pass it
+as `url` on every republish, or a second competing board is minted.
+
 ## Invariants to preserve
 
 1. **Lane files must not overlap.** The Round 1 grouping above is the constraint,
@@ -574,9 +992,33 @@ against 13 closed. Every finding was either fixed in the lane that surfaced it
 or, where it was a false premise, corrected in place on the issue that carried
 it.
 
-**Still open from this sweep:** Round 3's design-first list, headed by #2033
-(pulled out of Round 2 because it changes the sidecar batch wire contract).
-
 The round's substantive findings are in "Round 2 outcome" above — in particular
 the seven green-checking-nothing cases and the proposed rule that a new guard
 must ship with a demonstration that neutralising it turns something red.
+
+**Round 3 — ran 2026-08-05.** Design-first. Four PRs
+[#2143](https://github.com/dudarenok-maker/Castwright/pull/2143),
+[#2147](https://github.com/dudarenok-maker/Castwright/pull/2147),
+[#2151](https://github.com/dudarenok-maker/Castwright/pull/2151) and
+[#2150](https://github.com/dudarenok-maker/Castwright/pull/2150); **#2033,
+#1808 and #2144 closed**, plus #898's entire design phase (spec, plan, handover
+brief). #2144 and #2149 filed.
+
+Unlike Rounds 1 and 2 this round's return was in **triage, not diffs**: four of
+ten filed premises did not survive verification and a fifth was already solved
+by a concurrent session. Two plan docs would otherwise have been written against
+defects that do not exist. Full detail in "Round 3 outcome" above, including the
+`gh issue view` comment-blindness trap and the cold-brief handoff.
+
+**Round 4 — planned 2026-08-11, not yet dispatched.** Baseline re-taken at 49
+open items (14 bug + 35 chore) on `main` @ `f2b2e866`. Scoped as a *drain*
+rather than a dispatch: the full plan, the four-way disposition split, the
+Round 0 premise pass, and the four owner decisions it is waiting on are in
+"Round 4 — the drain plan" above. Driving board:
+`docs/features/277-v115-bug-chore-sweep-board.html`.
+
+**Still open from this sweep:** #1984, #1996, #1932, #1309, #485, #1393 (paused
+after three rejected designs — its own verified facts rule out the shape it was
+filed as), and #898's phase 2, which is fully briefed and needs only execution.
+#1950 shipped inside another session's PR and stays open only for want of an
+issue linkage.

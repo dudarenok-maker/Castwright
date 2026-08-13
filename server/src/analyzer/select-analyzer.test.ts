@@ -56,7 +56,9 @@ describe('selectAnalyzer dispatch', () => {
     /* Default analysis model — comes from DEFAULT_USER_SETTINGS via
        getResolvedOllamaModel. Flip in lockstep with that. */
     expect(s.model).toBe('qwen3.5:4b');
-    expect(s.fallbackModel).toBe('gemma-4-31b-it');
+    /* Fallback model resolves through configValue('analyzer.gemini.model')
+       (#2179) — with no GEMINI_MODEL env set, that's the registry default. */
+    expect(s.fallbackModel).toBe('gemini-3.5-flash-lite');
   });
 
   it('local + no Gemini key → bare OllamaAnalyzer (no fallback)', () => {
@@ -81,7 +83,43 @@ describe('selectAnalyzer dispatch', () => {
     process.env.GEMINI_API_KEY = 'test-key';
     const s = selectAnalyzer();
     expect(s.analyzer).toBeInstanceOf(FallbackAnalyzer);
-    expect(s.fallbackModel).toBe('gemma-4-31b-it');
+    expect(s.fallbackModel).toBe('gemini-3.5-flash-lite');
+  });
+
+  /* #2179 — the five direct `process.env.GEMINI_MODEL ?? 'gemma-4-31b-it'`
+     readers were converted to `configValue('analyzer.gemini.model')`. The
+     property most likely to break in a careless conversion is env-override
+     still winning — configValue resolves env before the registry default,
+     but only a live assertion proves it. */
+  it('GEMINI_MODEL env still overrides the registry default for the fallback model', () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    process.env.GEMINI_MODEL = 'gemini-3.1-flash-lite';
+    const s = selectAnalyzer();
+    expect(s.fallbackModel).toBe('gemini-3.1-flash-lite');
+  });
+
+  it('with GEMINI_MODEL unset, the fallback model is the registry default (gemini-3.5-flash-lite), not the retired gemma-4-31b-it literal', () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    delete process.env.GEMINI_MODEL;
+    const s = selectAnalyzer();
+    expect(s.fallbackModel).toBe('gemini-3.5-flash-lite');
+  });
+
+  it('GEMINI_MODEL env overrides the registry default on the direct gemini engine too', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini' });
+    process.env.GEMINI_API_KEY = 'test-key';
+    process.env.GEMINI_MODEL = 'gemini-3.1-flash-lite';
+    const s = selectAnalyzer();
+    expect(s.engine).toBe('gemini');
+    expect(s.model).toBe('gemini-3.1-flash-lite');
+  });
+
+  it('direct gemini engine + no GEMINI_MODEL env → resolves to the registry default', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini' });
+    process.env.GEMINI_API_KEY = 'test-key';
+    delete process.env.GEMINI_MODEL;
+    const s = selectAnalyzer();
+    expect(s.model).toBe('gemini-3.5-flash-lite');
   });
 
   it('per-request model override wins on the local path', () => {
@@ -111,7 +149,7 @@ describe('selectAnalyzer dispatch', () => {
     expect(s.engine).toBe('local');
     expect(s.model).toBe('qwen3.5:9b');
     /* Fallback wired because we still have a Gemini key in env. */
-    expect(s.fallbackModel).toBe('gemma-4-31b-it');
+    expect(s.fallbackModel).toBe('gemini-3.5-flash-lite');
   });
 
   it('OLLAMA_MODEL env beats the static default', () => {
@@ -215,9 +253,10 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
     const s1 = selectAnalyzerForPhase({ phase: 'phase1' });
     expect(s0.engine).toBe('gemini');
     expect(s1.engine).toBe('gemini');
-    /* Default Gemini model is whatever `selectAnalyzer` resolves —
-       gemma-4-31b-it per current default. */
-    expect(s0.model).toBe('gemma-4-31b-it');
+    /* Default Gemini model is whatever `selectAnalyzer` resolves — the
+       registry default (gemini-3.5-flash-lite) via configValue (#2179),
+       since no GEMINI_MODEL env / override is set. */
+    expect(s0.model).toBe('gemini-3.5-flash-lite');
     expect(s1.model).toBe(s0.model);
   });
 

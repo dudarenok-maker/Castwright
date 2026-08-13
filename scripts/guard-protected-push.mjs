@@ -17,6 +17,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 export const PROTECTED_REFS = ['refs/heads/main'];
 export const ZERO = '0'.repeat(40);
@@ -72,18 +74,16 @@ export function helpMessage(reason) {
 }
 
 // CLI mode: `node scripts/guard-protected-push.mjs <remote> <url>` with the
-// ref list on stdin. Detect via argv[1] so `import` from tests stays inert.
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/guard-protected-push.mjs');
-
-if (invokedAsCli) {
+// ref list on stdin. Detect via isDirectlyInvoked() so `import` from tests
+// stays inert (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   // git can't resolve remoteSha when it isn't fetched locally; treat an
   // unverifiable ancestry as "cannot prove non-fast-forward" => allow, so
   // ordinary pushes are never falsely blocked.
   const isAncestor = (ancestor, descendant) => {
-    const r = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant]);
+    const r = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      env: scrubGitEnv(),
+    });
     if (r.status === 0) return true; // ancestor → fast-forward
     if (r.status === 1) return false; // not an ancestor → non-fast-forward
     return true; // exit >1 or spawn error → can't verify → don't block

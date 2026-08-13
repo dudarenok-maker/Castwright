@@ -18,6 +18,7 @@ import { fetch as undiciFetch, Agent } from 'undici';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from './tts-errors.js';
+import { configValue } from '../config/resolver.js';
 
 export interface EmbedOptions {
   signal?: AbortSignal;
@@ -34,11 +35,25 @@ const EMBED_DISPATCHER = new Agent({
   connectTimeout: 10_000,
 });
 
-/** True when the embed runs on the GPU. Reads the SAME `SPK_DEVICE` env the
-    sidecar reads (shared env under `npm start`), so it stays in lockstep with
-    where ECAPA actually runs. */
+/** True when the embed runs on the GPU. Resolved through
+    `configValue('qa.speaker.device')` (env -> override store -> registry
+    default) rather than a raw `process.env.SPK_DEVICE` read, so a UI-set
+    override in Advanced Configuration is actually seen — the two used to
+    diverge whenever the knob was set from the UI rather than `.env` (#2178's
+    defect, left unfixed for this gate until #2224; mirrors `asrRunsOnGpu`'s
+    fix in `transcribe-client.ts`, same defect shape).
+
+    One difference from `asrRunsOnGpu`, noted rather than solved here:
+    `SpeakerEngine` DOES self-demote cuda -> cpu on a load failure (main.py,
+    "SPK_DEVICE=cuda but no CUDA device — using cpu."), so a resolved 'cuda'
+    can disagree with where ECAPA is ACTUALLY running after a demotion —
+    unlike ASR, which has no such fallback. This is not a regression: a raw
+    `process.env.SPK_DEVICE` read couldn't see the demotion either, so the
+    window exists identically before and after this change. If `SpeakerEngine`
+    ever surfaces its real device on `/health` the way ASR's docblock
+    describes, this should switch to reading that instead. */
 export function spkRunsOnGpu(): boolean {
-  return (process.env.SPK_DEVICE ?? 'cpu').trim().toLowerCase().startsWith('cuda');
+  return configValue<string>('qa.speaker.device').trim().toLowerCase().startsWith('cuda');
 }
 
 export async function embedSegment(

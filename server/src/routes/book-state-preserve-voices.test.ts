@@ -405,7 +405,19 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
      after construction forces real dispatch now, decoupled from when the
      result is actually awaited below — without it, /assign's request doesn't
      even reach the network until the final `Promise.all`, by which point the
-     gate has long since released and there is nothing left to race. */
+     gate has long since released and there is nothing left to race.
+
+     [#2215] Waiting for PUT to *reach* the intercepted read used to be a
+     fixed ~20ms wall-clock sleep followed by `expect(intercepted).toBe(true)`
+     — a guess at how long PUT "should" take to get there, which is not a
+     synchronisation primitive: under load (parallel vitest workers, a
+     concurrent GPU job, a cold import) PUT can still be short of the
+     interceptor when the sleep elapses, and the assertion goes red on
+     ordering alone rather than on the behaviour under test. `interceptedSignal`
+     replaces the guess with the real happens-before edge: the mock itself
+     resolves it the instant PUT's readJson call reaches the interceptor, so
+     the await returns as soon as that is true and no sooner — deterministic
+     regardless of machine load. */
   it('#1981 — a stale cast PUT does not erase a concurrently /assign-planted voice', async () => {
     const stateIo = await import('../workspace/state-io.js');
     const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
@@ -418,10 +430,22 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       released = resolve;
     });
     let intercepted = false;
+    let signalIntercepted!: () => void;
+    const interceptedSignal = new Promise<void>((resolve) => {
+      signalIntercepted = resolve;
+    });
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (!intercepted && path === raceCastPath) {
         intercepted = true;
         const value = await actual.readJson(path); // real read, now — happens-before /assign's write
+        /* Signalled AFTER the real read, not at interceptor entry (PR #2232
+           review, finding 1). The invariant this edge exists to establish is
+           "PUT's read genuinely happens-before /assign's write" — resolving on
+           entry would release /assign while the read was still pending, which
+           is harmless while the route holds withCastLock but gives the
+           lock-removed mutation strictly LESS slack than the 20ms sleep did.
+           Signal what the comment actually claims. */
+        signalIntercepted();
         await gate; // hold the RESOLUTION open until released below
         return value;
       }
@@ -444,7 +468,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
         });
       putPromise.catch(() => {}); // force dispatch now (see header comment)
       // Let PUT reach (and get stuck behind) the intercepted read.
-      await new Promise((r) => setTimeout(r, 20));
+      await interceptedSignal;
       expect(intercepted).toBe(true);
 
       const assignPromise = request(app)
@@ -470,5 +494,117 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     expect((nova.overrideTtsVoices as Record<string, { name: string }> | undefined)?.qwen?.name).toBe(
       `qwen-${RACE_VOICE_UUID}`,
     );
+  });
+});
+
+/* #2166 — the cast PUT is not a writer of notLinkedTo. persistence-middleware
+   fires this PUT on nine ordinary cast actions carrying the whole redux
+   roster, and cast-slice's `existing.notLinkedTo ?? inc.notLinkedTo` merge
+   makes redux's array win — so without the server-owned pass a stale client
+   re-PUTs edges the reconciliation just repaired. */
+describe('book-state PUT cast — notLinkedTo is server-owned', () => {
+  const seedCast = () =>
+    writeBook(bookDir, bookId, [
+      {
+        id: 'mairin',
+        name: 'Mairin',
+        role: 'character',
+        color: '#abc',
+        notLinkedTo: [{ bookId, characterId: 'm2' }],
+      },
+    ]);
+
+  beforeEach(() => seedCast());
+
+  it('[P7] ignores a client-mutated notLinkedTo and keeps the on-disk value', async () => {
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin',
+              role: 'character',
+              color: '#abc',
+              notLinkedTo: [{ bookId, characterId: 'HIJACK' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+  });
+
+  it('[P8] still persists every other field the same PUT carried', async () => {
+    /* The collateral-freeze check: a pass that froze the WHOLE character
+       would satisfy [P7] and be badly wrong. */
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin Renamed',
+              role: 'lead',
+              color: '#def',
+              notLinkedTo: [{ bookId, characterId: 'HIJACK' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.name).toBe('Mairin Renamed');
+    expect(mairin.role).toBe('lead');
+    expect(mairin.color).toBe('#def');
+    expect(mairin.notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+  });
+
+  it('[P9] a repaired edge survives the next unrelated cast PUT', async () => {
+    /* The oscillation the spec's review round found. Without Task 4, redux's
+       `existing.notLinkedTo ?? inc.notLinkedTo` merge means the next ordinary
+       cast edit re-PUTs the stale array and silently undoes the repair —
+       which would make Task 3's reconciliation a coin-flip against the
+       client rather than a fix. */
+    const { reconcileRejectEdgesOnDisk } = await import('./analysis.js');
+
+    // The stranded state: a same-book edge with NO rejectedPairs entry.
+    expect(onDiskCast().characters[0].notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+
+    await reconcileRejectEdgesOnDisk(bookDir, bookId, () => {});
+    expect(onDiskCast().characters[0].notLinkedTo).toEqual([]);
+
+    // What a client that hydrated BEFORE the repair would send next.
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin Renamed',
+              role: 'character',
+              color: '#abc',
+              notLinkedTo: [{ bookId, characterId: 'm2' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.notLinkedTo).toEqual([]);
+    expect(mairin.name).toBe('Mairin Renamed');
   });
 });

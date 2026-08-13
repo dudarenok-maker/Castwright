@@ -250,24 +250,90 @@ function isBetterCoverage(a: Stage2CoverageVerdict, b: Stage2CoverageVerdict): b
   return score(a) < score(b);
 }
 
+/** A failure's identity, for deciding whether re-running could possibly help.
+    Structural rather than the rendered `issues` strings: those embed a
+    formatted ratio, so two materially identical failures could differ by a
+    digit. `coverageRatio` is quantised for the same reason — a retry that moves
+    it in the fourth decimal has not found anything new.
+
+    Deliberately NOT including sentence COUNT or text: the question is "did the
+    model fail the same way", not "did it emit the same bytes". */
+function verdictSignature(v: Stage2CoverageVerdict): string {
+  const d = v.duplicatedBlock;
+  return [
+    v.endingPresent ? 'end' : 'noend',
+    d ? `dup:${d.startIndex}:${d.length}:${d.offset}` : 'nodup',
+    `cov:${v.coverageRatio.toFixed(3)}`,
+  ].join('|');
+}
+
 /** Run a stage-2 attribution call, validate its coverage against the source
-    prose, and re-run on failure (the loop-and-truncate defect is stochastic, so
-    a fresh attempt usually clears it). Keeps the least-bad take when all
-    attempts fail — the caller decides what to do with a still-failing verdict
-    (warn + flag for retry, never silently accept). Pure except for the injected
-    `call`, so it unit-tests without the analyzer or the network. */
+    prose, and re-run on failure. Keeps the least-bad take when all attempts
+    fail — the caller decides what to do with a still-failing verdict (warn +
+    flag for retry, never silently accept). Pure except for the injected
+    `call`, so it unit-tests without the analyzer or the network.
+
+    The retry exists because the loop-and-truncate defect is USUALLY stochastic,
+    so a fresh sample usually clears it. When it is not, retrying is futile and
+    actively harmful: it burns the whole budget re-running a call that cannot
+    succeed, then reports the result as a soft "SUSPECT after retries" as though
+    it had been transient. Observed 2026-08-12/13 on Ночной дозор ch8 — five
+    attempts across two server lifetimes, every one failing with the same rule
+    at the same offset (`repeat-loop` at 19), which rules out in-process state.
+
+    So: if a retry reproduces the PREVIOUS attempt's failure signature exactly,
+    stop and report it. One identical repeat is the signal — the retry's whole
+    premise is sampling variance, and two consecutive identical structural
+    verdicts are strong evidence there is too little of it here to help.
+
+    Deliberately NOT claimed: that variance is absent. The comparison is against
+    the immediately preceding attempt, so a sequence like A,B,A,A stops on the
+    third-and-fourth pair having ALREADY observed variance at B. That is the
+    intended trade — the escalation this feeds (a re-split, i.e. a different
+    prompt) is a better use of the remaining budget than another identical call
+    either way, and a false stop costs a split rather than a lost retry.
+
+    `onExhausted` fires only on that path, so a caller can distinguish "we ran
+    out of attempts" from "more attempts are very unlikely to help". */
 export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ text: string }> }>(opts: {
   body: string;
   maxRetries: number;
   call: () => Promise<T>;
   thresholds?: Stage2CoverageThresholds;
   onRetry?: (attempt: number, verdict: Stage2CoverageVerdict) => void;
-}): Promise<{ result: T; coverage: Stage2CoverageVerdict; attempts: number }> {
+  /** Fired instead of a further retry when an attempt reproduced the previous
+      one's failure signature exactly — i.e. the defect is deterministic here
+      and the remaining budget cannot help. */
+  onExhausted?: (attempts: number, verdict: Stage2CoverageVerdict) => void;
+}): Promise<{
+  result: T;
+  coverage: Stage2CoverageVerdict;
+  attempts: number;
+  /** True when the loop stopped early because a retry reproduced the previous
+      failure signature. Distinguishes a provably-futile retry from simply
+      running out of attempts. */
+  deterministicFailure: boolean;
+}> {
   let result = await opts.call();
   let coverage = validateStage2Coverage(opts.body, result.sentences, opts.thresholds);
   let attempts = 1;
+  let deterministicFailure = false;
+  /* The signature of the attempt JUST MADE — tracked separately from `coverage`,
+     which is the running BEST and stops advancing as soon as a retry scores
+     worse. Comparing against `coverage` looks equivalent and is not: once
+     attempt 1 is the least-bad take, `coverage` freezes on it and every
+     subsequent identical repeat is compared against a verdict no attempt since
+     has produced, so the match never fires and the whole budget burns — the
+     exact behaviour this guard exists to stop. That shape is ordinary, not
+     exotic: a first attempt that merely truncates outscores repeat-loop takes,
+     which carry a duplicated block. */
+  let lastAttemptVerdict = coverage;
   while (!coverage.ok && attempts <= opts.maxRetries) {
-    opts.onRetry?.(attempts + 1, coverage);
+    /* `lastAttemptVerdict`, not `coverage` — otherwise `onRetry` and
+       `onExhausted` describe DIFFERENT attempts and the operator log reads as
+       two contradictory issue strings for one moment (e.g. a ratio message from
+       attempt 1 followed by "reproduced exactly … (repeat-loop at 19)"). */
+    opts.onRetry?.(attempts + 1, lastAttemptVerdict);
     const retryResult = await opts.call();
     const retryCoverage = validateStage2Coverage(opts.body, retryResult.sentences, opts.thresholds);
     attempts += 1;
@@ -276,6 +342,12 @@ export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ 
       coverage = retryCoverage;
     }
     if (coverage.ok) break;
+    if (verdictSignature(retryCoverage) === verdictSignature(lastAttemptVerdict)) {
+      deterministicFailure = true;
+      opts.onExhausted?.(attempts, retryCoverage);
+      break;
+    }
+    lastAttemptVerdict = retryCoverage;
   }
-  return { result, coverage, attempts };
+  return { result, coverage, attempts, deterministicFailure };
 }

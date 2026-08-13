@@ -569,3 +569,62 @@ describe('#1981 — writeVoiceStylePersona\'s written=false path (a character de
     expect(cast.characters.find((c) => c.id === 'marlow')).toBeUndefined();
   });
 });
+
+/* #2292 (owner decision) — a lock timeout on ONE character's persist reports
+ * contention, not a failed persona.
+ *
+ * `writeVoiceStylePersona` takes the book's cast lock, so ordinary contention
+ * lands in the per-character `failures` map. That map stays (one contended
+ * character must not fail the batch — the other characters' personas are
+ * already generated and persisted by then), but the reason no longer reads as
+ * "this character's voice style could not be generated", which is the opposite
+ * of what happened: the persona generated fine and the write was blocked.
+ *
+ * Two-directional: an ordinary error at the same site keeps its own message,
+ * which is the half that reddens if the route rewrote every failure reason.
+ */
+describe('voice-style generate-all — per-item reason on a lock timeout (#2292)', () => {
+  async function generateAllWithThrowOnWren(toThrow: unknown) {
+    const castDesign = await import('./cast-design.js');
+    const original = castDesign.writeVoiceStylePersona;
+    const spy = vi
+      .spyOn(castDesign, 'writeVoiceStylePersona')
+      .mockImplementation(async (dir: string, characterId: string, persona: string) => {
+        if (characterId === 'wren') throw toThrow;
+        return original(dir, characterId, persona);
+      });
+    try {
+      return await request(app).post(`/api/books/${bookId}/cast/voice-style/generate-all`);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('reports contention for the contended character and still persists the others', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const res = await generateAllWithThrowOnWren(
+      new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000),
+    );
+
+    expect(res.status).toBe(200);
+    /* The site really ran, for exactly the character the spy aimed at. */
+    expect(Object.keys(res.body.failures)).toEqual(['wren']);
+    expect(res.body.failures.wren).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(res.body.failures.wren).not.toContain('withKeyLock');
+
+    /* Not escalated: the other character's persona is on disk. */
+    expect(res.body.voiceStyles).toEqual({ marlow: 'persona-for-marlow' });
+    expect(readCast().characters.find((c) => c.id === 'marlow')?.voiceStyle).toBe(
+      'persona-for-marlow',
+    );
+  });
+
+  it('an ordinary error at the same site keeps its own message', async () => {
+    const res = await generateAllWithThrowOnWren(new Error('simulated disk-full'));
+
+    expect(res.status).toBe(200);
+    expect(res.body.failures.wren).toBe('simulated disk-full');
+  });
+});

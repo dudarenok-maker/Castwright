@@ -19,14 +19,40 @@
  *      earlier class while holding a later one. The DELETE library-voice path
  *      holds `library-voice:<uuid>` across clearLibraryVoiceReferences, which
  *      takes a cast lock per book — so POST /assign must take library-voice
- *      BEFORE its cast lock, not after. The other order is an AB/BA cycle on a
- *      mutex with no timeout and no diagnostic: both requests hang forever.
+ *      BEFORE its cast lock, not after. The other order is an AB/BA cycle:
+ *      both requests block until one of them hits `withKeyLock`'s acquisition
+ *      timeout.
+ *
+ * SINCE #2260 THIS MUTEX HAS A TIMEOUT (file-lock.ts): each acquisition is
+ * bounded at 10s and throws `LockAcquisitionTimeoutError`, naming the key and
+ * pointing at rules 1 and 4. That replaces the permanent, diagnostic-free hang
+ * violations of those two rules used to produce — it does NOT make a violation
+ * survivable. Three things to know before reading a fired timeout as a rule
+ * breach:
+ *   - the budget is PER ACQUISITION, so a nested path's worst case is depth ×
+ *     10s (a two-book withCastLocks is 2 deep; voice-library's DELETE is N+1
+ *     deep for N confirmed books);
+ *   - ORDINARY contention behind a legitimately long holder reaches the exact
+ *     same error, so check for a long holder before hunting a violation;
+ *   - the best-effort `catch` blocks around the identity writes (analysis.ts,
+ *     cast-merge.ts, not-linked-edges.ts) deliberately RETHROW this one class
+ *     via `isLockAcquisitionTimeout` while still swallowing disk faults —
+ *     swallowing a timeout would return 200 with cast.json written and the
+ *     retirement lost. Keep that discrimination if you add a site.
  *
  * WHAT THIS DOES NOT COVER: it protects one read-modify-write. It does NOT make
  * a validate-then-write safe when the validation and the write sit in different
  * lock scopes — analysis.ts's merge base (#2015) and the clone-consent gates
  * (#2006). Four designs for that have been attempted and none survived review;
  * do not add a fifth here without reading those issues first.
+ *
+ * #2015's merge-base half is now DETECTED rather than serialised (see
+ * workspace/cast-merge-base.ts) — the validate/write window is deliberately
+ * left exactly as wide as before, but a write landing inside it is no longer
+ * silent. That is not a fifth attempt at the general problem this section
+ * warns about: it does not try to make validate-then-write safe. The warning
+ * above still stands, in full, for the #2006 half and for any attempt to
+ * actually close the window rather than just see into it.
  *
  * Key derivation lives here and ONLY here. A site that derived the key slightly
  * differently would get a second mutex that never contends with the first, and

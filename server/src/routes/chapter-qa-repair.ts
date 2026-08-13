@@ -699,6 +699,12 @@ chapterQaRepairRouter.post(
         modelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),
         expectedSec: segFile.durationSec,
+        /* #2128 — carried forward verbatim, never refreshed. This path
+           re-synthesises SOME sentences against the current resolver, correctly,
+           but leaves every other segment byte-identical; refreshing the stamp
+           would clear the whole chapter's row on the strength of a one-sentence
+           repair. Fail-closed and deliberate — see plan 280's known limit 1. */
+        castHistorySeq: segFile.castHistorySeq,
       });
 
       /* Edit 6b (srv-36): for accepted acoustic takes, write their new embeddings

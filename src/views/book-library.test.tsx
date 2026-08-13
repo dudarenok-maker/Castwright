@@ -12,6 +12,7 @@ import { uiSlice } from '../store/ui-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { BookLibraryView, applyLibraryFilters } from './book-library';
+import { api } from '../lib/api';
 import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
 
 import type { ContinueItem } from '../store/continue-listening-slice';
@@ -21,15 +22,20 @@ const mockGetContinueListening = vi.fn<() => Promise<ContinueItem[]>>(
 );
 const mockSetShelfStatus = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
-vi.mock('../lib/api', () => ({
-  api: {
-    /* WorkspacePathRow fires this on mount. Never resolve — the row just
-       stays hidden, which is fine for these assertions. */
-    getWorkspaceInfo: () => new Promise(() => {}),
-    getContinueListening: () => mockGetContinueListening(),
-    setShelfStatus: () => mockSetShelfStatus(),
-  },
-}));
+vi.mock('../lib/api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/api')>();
+  return {
+    ...mod,
+    api: {
+      /* WorkspacePathRow fires this on mount. Never resolve — the row just
+         stays hidden, which is fine for these assertions. */
+      getWorkspaceInfo: () => new Promise(() => {}),
+      getContinueListening: () => mockGetContinueListening(),
+      setShelfStatus: () => mockSetShelfStatus(),
+      getLibrary: vi.fn(),
+    },
+  };
+});
 
 const oneBook: LibraryBook = {
   bookId: 'b1',
@@ -88,6 +94,36 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
       </Provider>,
     ),
   };
+}
+
+function renderWithLibraryError(
+  error: { message: string; status?: number; fromServer?: boolean } | null,
+) {
+  const store = configureStore({
+    reducer: {
+      account: accountSlice.reducer,
+      library: librarySlice.reducer,
+      tour: tourSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
+    },
+    preloadedState: {
+      library: { loaded: true, error, authors: [], books: [], pausedSnapshots: {} },
+    },
+  });
+  return render(
+    <Provider store={store}>
+      <BookLibraryView
+        authors={[]}
+        activeBookId={null}
+        onOpenBook={vi.fn()}
+        onDeleteBook={vi.fn()}
+        onReparseBook={vi.fn()}
+        onReplaceManuscript={vi.fn()}
+        onEditBook={vi.fn()}
+        onStartNew={vi.fn()}
+      />
+    </Provider>,
+  );
 }
 
 describe('BookLibraryView — loading affordance', () => {
@@ -829,7 +865,7 @@ describe('BookLibraryView — loading affordance', () => {
         continueListening: continueListeningSlice.reducer,
       },
       preloadedState: {
-        library: { loaded: true, error: 'Network', authors: [], books: [], pausedSnapshots: {} },
+        library: { loaded: true, error: { message: 'Network' }, authors: [], books: [], pausedSnapshots: {} },
       },
     });
     render(
@@ -886,6 +922,136 @@ describe('BookLibraryView — loading affordance', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('BookLibraryView — 401 recovery pointer (task-6)', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  /* #2278 review round 4, Finding 3 — re-pointed at the shape realGetLibrary
+     actually emits. It used to assert against
+     `Library scan failed (401): Missing or invalid LAN access token.`, a
+     concatenation apiErrorFromResponse no longer produces at all: a parsed
+     body yields the server's prose with fromServer TRUE, and an unparseable
+     one yields the bare `Library scan failed (401)`. The invariant worth
+     keeping is the second one — a synthetic developer string must not become
+     the user's explanation. `fromServer` is left ABSENT here (not `false`)
+     because the store types it optional, so undefined is a real shape. */
+  it('renders a recovery pointer on a 401 library error', () => {
+    renderWithLibraryError({ message: 'Library scan failed (401)', status: 401 });
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/authorize this browser/i)).toBeInTheDocument();
+    // The synthetic developer string must not reach the user.
+    expect(screen.queryByText(/Library scan failed/)).not.toBeInTheDocument();
+  });
+
+  it('still shows the raw message for a non-401 error', () => {
+    renderWithLibraryError({ message: 'Library scan failed (500): boom', status: 500 });
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+  });
+
+  /* #2278 review round 4, Finding 2 — the two are COMPOSED, not alternatives.
+     There is exactly one 401 producer on the server (lan-auth.ts's
+     requireLanToken) and it always emits JSON, so fromServer is true on every
+     real lapsed-authorization 401 — an either/or would have deleted #2247
+     Task 6's sentence from production entirely while leaving its tests green
+     on the unreachable arm. The app supplies what happened; the server
+     supplies where to go, with the live port. */
+  it('composes the app\'s own framing WITH the server\'s port-bearing guidance on a genuine 401', () => {
+    renderWithLibraryError({
+      message:
+        'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+      status: 401,
+      fromServer: true,
+    });
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
+    ).toBeInTheDocument();
+    // Both parts live in ONE paragraph, so this also pins that they are not
+    // rendered as mutually exclusive branches.
+    expect(
+      screen.getByText(
+        /This browser is no longer authorized for Castwright on your network\. Missing or invalid LAN access token\. Start pairing from https:\/\/localhost:9443/,
+      ),
+    ).toBeInTheDocument();
+    // recoveryHint()'s own composed pointer must NOT also render — the server
+    // sentence already says where to go, and two of those read as duplicated
+    // instructions.
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+  });
+
+  // recoveryHint()'s discipline (never promise a port it doesn't know, e.g.
+  // the :443-forwarder path) must stay the fallback when the server said
+  // nothing useful — fromServer: false/absent is the untouched round-2 path.
+  it('falls back to recoveryHint() on a 401 whose message was not genuinely from the server', () => {
+    renderWithLibraryError({
+      message: 'Library scan failed (401)',
+      status: 401,
+      fromServer: false,
+    });
+    // The app's own sentence renders on BOTH arms (round 4, Finding 2) — only
+    // the pointer that follows it varies.
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/authorize this browser/i)).toBeInTheDocument();
+    expect(screen.queryByText(/library scan failed/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the recovery pointer after Retry fails with 401 (a real state transition, not a preload)', async () => {
+    /* Preload a NON-401 error so the recovery pointer is provably absent
+       before the click — a 401 preload here would make this test pass even
+       if book-library.tsx dropped `status:` from the Retry dispatch entirely,
+       since findByText's first (synchronous) check would already see the
+       pointer from the preloaded state. */
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.getLibrary).mockRejectedValue(new ApiError('nope', 401));
+    renderWithLibraryError({ message: 'boom', status: 500 });
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    expect(await screen.findByText(/authorize this browser/i)).toBeInTheDocument();
+  });
+
+  // #2278 review round 3, Finding 3 — Retry's own dispatch (book-library.tsx,
+  // not layout.tsx's first-load effect) must thread ApiError.fromServer
+  // through too, or a retry that hits the real 401 body would silently drop
+  // back to recoveryHint() instead of the server's own message.
+  it('threads fromServer through Retry\'s own dispatch, so a genuine server message wins after a retry too', async () => {
+    const { ApiError } = await import('../lib/api');
+    vi.mocked(api.getLibrary).mockRejectedValue(
+      new ApiError(
+        'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+        401,
+        true,
+      ),
+    );
+    renderWithLibraryError({ message: 'boom', status: 500 });
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    expect(
+      await screen.findByText(/start pairing from https:\/\/localhost:9443 or https:\/\/castwright\.local/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This browser is no longer authorized for Castwright on your network/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/authorize this browser/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['localhost', '8443', /https:\/\/localhost:8443/],
+    ['localhost', '', /Open Castwright on this computer/],
+    ['castwright.local', '', /Open Castwright on the computer running it/],
+    ['192.168.1.9', '8443', /Open Castwright on the computer running it/],
+  ])('addresses the %s (port=%s) case', (hostname, port, expected) => {
+    vi.stubGlobal('location', { hostname, port });
+    renderWithLibraryError({ message: 'x', status: 401 });
+    expect(screen.getByText(expected)).toBeInTheDocument();
   });
 });
 

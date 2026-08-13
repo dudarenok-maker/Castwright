@@ -8,7 +8,14 @@ owner: null
 
 > Status: active (deterministic engine + escalation + provenance land first; script-review inbox
 > annotations are sequenced after the concurrent script-review-persistence PR merges — see
-> "Delivery sequencing" below; on-box acceptance owed post-merge)
+> "Delivery sequencing" below; **on-box acceptance RUN 2026-08-06 — flagged 6,568 vs the ≤~500
+> target, because only 1 of 5 measured chapters cleared the 80% alignment floor; where the engine
+> did run it hit the target at 488. The aligner, not the engine, is the bottleneck —
+> [#2187](https://github.com/dudarenok-maker/Castwright/issues/2187). See "Acceptance RESULT" below.
+> Target 1's `flagged ≤ ~500` bar was itself unsound (absolute over chapters varying 3× in
+> length) and was re-specified 2026-08-11 via #2253 into the 1a legibility / 1b engine-health
+> criteria below — see "Targets" and
+> `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`.**)
 > Key files: `server/src/analyzer/dialogue-structure/{types,parser,windows,aligner,cross-examine,escalation,name-matcher}.ts`,
 > `server/src/analyzer/dialogue-structure/lang/{en,es,fr,de,ru,index}.ts`, `server/src/routes/analysis.ts`
 > (`attributeChapterStage2`), `server/src/config/registry.ts` (`analyzer-structure` group),
@@ -42,8 +49,12 @@ owner: null
   - `LanguageConventions` table per language (`dialogue-structure/lang/{en,es,fr,de,ru}.ts`),
     keyed off the book's already-resolved `opts.stageCall.language` — no new opts field. An
     unsupported/unknown language resolves to an empty table, so the parser emits no evidence and
-    the cross-examiner falls back to exactly current behaviour (narrator-default only, model
-    confidence passed through) — **byte-identical to pre-engine output**.
+    the cross-examiner falls back to the narrator-default path (model confidence passed through).
+    **Since #2245 that fallback is a pass-through — with no table there is no basis to judge, so
+    nothing is demoted — which is the OPPOSITE of pre-engine output, not byte-identical to it**
+    (pre-engine demoted every non-spoken line). This is a default-path change: the
+    `structure.enabled && conventions` guard fails on the null table whatever the knob says. See
+    invariant 4.
   - Four new registry knobs under a new `analyzer-structure` group (`server/src/config/registry.ts`
     lines 1062-1103) — see "Registry knobs" below.
   - `state.json` gains an optional `analysisProvenance` block (`server/src/workspace/scan.ts`) —
@@ -58,8 +69,11 @@ owner: null
   has no `analysisProvenance` block; the book-state GET route already tolerates that (pinned by
   a dedicated back-compat test, see Test plan).
 - **Reversibility:** one registry kill-switch, `analyzer.structure.enabled` (env `STRUCTURE_ENGINE`,
-  default `true`). Flipping it off restores exactly the pre-engine `applyNarratorDefault`-only
-  behaviour. Escalation has its own independent off-switch
+  default `true`). Flipping it off returns to the `applyNarratorDefault`-only path — no longer
+  *byte-identical* to pre-engine behaviour since #2245, which made that path read the book's own
+  conventions table instead of one language-blind regex bundle (so e.g. an English leading dash is
+  narration there now, and a no-table language is left alone rather than demoted wholesale).
+  Escalation has its own independent off-switch
   (`analyzer.structure.escalation` = `'off'`).
 
 ## Invariants to preserve
@@ -129,15 +143,19 @@ full commit history):
    pinned in `parser.test.ts` (multi-sentence utterance cases) and end-to-end in
    `analysis.structure-fixture.test.ts` (assertion 3, the multi-sentence utterance test — the
    continuation is explicitly asserted `!== 'narrator'`).
-4. **Engine-OFF / unsupported-language → byte-identical; below-alignment-floor → flag-only
-   (correction disabled).** Three independent fallback paths, all safe, but not all the same
-   output:
+4. **Engine-OFF → byte-identical to a plain `applyNarratorDefault` call; unsupported-language →
+   pass-through, no demotion (#2245); below-alignment-floor → flag-only (correction disabled).**
+   Three independent fallback paths, all safe, but not all the same output:
    - `analyzer.structure.enabled = false` (env `STRUCTURE_ENGINE=0`): the engine does not run at
-     all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call.
-     Pinned by a dedicated `toEqual` test comparing the two code paths (task 8).
-   - Unsupported/unknown book language: the language convention table resolves empty, so the
-     parser (`parser.ts`) emits zero `StructuralEvidence`, and the cross-examiner's per-sentence
-     decisions degrade to the same narrator-default-only shape.
+     all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call, now
+     with the book's own conventions table (#2245 decoupled conventions resolution from this
+     knob, so turning the engine off no longer discards the language). Pinned by a dedicated
+     `toEqual` test comparing the two code paths (task 8).
+   - Unsupported/unknown book language: `conventionsFor` resolves to `null`, so the engine's
+     `structure.enabled && conventions` guard fails before `parser.ts` ever runs, and the ELSE
+     branch's `applyNarratorDefault(sentences, null)` call is a pass-through: with no conventions
+     table there is no basis to judge spoken vs. narration, so nothing is demoted — the sentence
+     list is returned by reference, untouched.
    - Alignment rate for a chapter falls below the floor (`analyzer.structure.alignmentFloorPct`
      concept from spec §5.2, default 80%): `crossExamine`'s `flagOnly` branch
      (`cross-examine.ts:264, 77-85`) disables correction chapter-wide — every sentence passes
@@ -262,8 +280,120 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
 
 **Targets:**
 
-1. Flagged sentences land at triage scale — target **≤ ~500** (down from 0-that-should-have-been-
-   thousands), concentrated on genuinely ambiguous lines.
+1. **Legibility and engine health, replacing the original absolute `flagged
+   ≤ ~500` bar** (re-specified 2026-08-11 via #2253; the original was unsound —
+   it was absolute over chapters varying 3× in length, and a chapter could pass
+   it by giving the engine LESS to see. Design of record:
+   `docs/superpowers/specs/2026-08-11-dialogue-convention-invariant-design.md`).
+
+   **1a — Review burden** (renamed from "Legibility" on 2026-08-12 via #2267).
+   Share of a chapter's sentences with `confidence < 0.75` — the set the review
+   UI actually highlights (`src/views/manuscript.tsx:415`, `:529`, `:1919`).
+   **No bar, and no structural claim.** It reports how much of a chapter the
+   review UI will light up, which is worth knowing on its own; it does *not*
+   grade the source's legibility, and a high reading is not a reason to
+   re-convert anything. Defined over confidence, not over a report bucket,
+   because nothing in `src/` or `openapi.yaml` reads `structureReport` at all.
+
+   **Why 1a lost its bar and its structural claim.** It carried `≤ 44%` and was
+   meant to name paragraph-degraded chapters. Measured, it did the opposite in
+   both directions, and the ≤44% bar is **withdrawn, not re-tuned**:
+
+   - *False negatives.* The five paragraph-degraded Ночной дозор chapters read
+     ch4 23.2%, ch5 42.9%, ch6 37.2%, ch7 26.7%, ch8 41.8% — **none exceeds
+     44%**.
+   - *False positives.* *Unlocked* (English) is structurally healthy — 1 victim
+     in 1,430 quote-opening sentences, 0.07% (#2264) — yet **three** of its
+     chapters breach 44%: ch72 54.9%, ch61 53.0%, ch69 45.2%.
+   - *The calibration set was contaminated.* 44% came from "the worst
+     structurally-intact chapter (ch2, 38.9%)", where "intact" meant only that
+     ch1/2/3/9 had zero **dash-invariant victims** — a fact about victims,
+     reused as a claim about structure. Direct measurement of the source text
+     refutes it: **ch2 has 64 merged dialogue turns inside a single 8,604-char
+     paragraph and ch1 has 87 inside a 10,651-char one.** Chapter 1 contains
+     `- Не надо, - буркнул я. - То-то. Проснулся? - Да.` — a whole exchange
+     collapsed into one narration paragraph. Degradation in this EPUB is a
+     **continuum across all nine chapters**, not a ch4–8 property; ch3 is the
+     only chapter that reads clean. The bar was calibrated from a degraded
+     chapter, which is why it never fired.
+
+   The structural question moves to **1c** below. Design of record:
+   [`docs/superpowers/specs/2026-08-12-merged-turn-legibility-design.md`](../superpowers/specs/2026-08-12-merged-turn-legibility-design.md).
+
+   **1b — Engine health.** Three readings, interpreted together, never alone:
+   1. **Victim rate ≤ 4%** (1/30 = 3.3%, rounded up; n=30 hand-labelled sample,
+      Task 1) — sentences opening with the language's dialogue marker that the
+      engine demoted to `narrator` against the model, as a share of
+      dialogue-marker-opening sentences. Stated as a rate with a named
+      denominator so it cannot be passed by shrinking the numerator's
+      population. Stated with its sample size because it is an estimate, not a
+      measurement.
+   2. **`unresolved` share** — the coverage disclosure that separates "few
+      conflicts because attribution is confident" from "few conflicts because
+      nothing was examined".
+   3. **`alignedPct` and `flagOnly`** — because reading 1 and reading 2 land in
+      *different counters* depending on the chapter. Above the alignment floor a
+      rescued dialogue line is `dash-line-keep-flag`, bucket `flagged`. Below
+      it, the whole chapter is `flag-only-floor`, bucket `unresolved` — the
+      engine reached no verdict at all, so the conflict was never adjudicated.
+      Same sentence, different counter. Reading `flagged` without `flagOnly`
+      beside it will look like the conflict count collapsed when in fact the
+      chapter was never examined.
+
+   **1c — Legibility** (new 2026-08-12 via #2267; replaces 1a's structural
+   role). **`maxMergedTurnsInParagraph < 10`** per chapter — the largest number
+   of dialogue turns found inside any single paragraph. **Every** paragraph
+   counts, including one that itself opens with a dialogue dash: under a
+   maximum, skipping those hid real merges for free (#2275 C1). Reported by the
+   analyzer at **`analysisProvenance.maxMergedTurnsInParagraph` — a sibling of
+   `analysisProvenance.report`, not a field inside it** (#2275 C3), so a
+   fully-cached re-run still carries it even though `report` is absent. Applies
+   to **ru / es / fr only** — languages
+   whose typography gives every dialogue turn its own paragraph, so a turn
+   found *inside* another paragraph is conversion damage **by construction**,
+   not a correlate of it. English has no such invariant to violate and is
+   `undefined`, never `0`.
+
+   Calibrated against four books that are **not** Ночной дозор, so no
+   assumption about that EPUB's chapters enters the clean end:
+
+   | source | max turns in one paragraph |
+   |---|---|
+   | El Encargo de Coalfall (es) | 0 |
+   | La Commande de Coalfall (fr) | 0 |
+   | Юный дрессировщик (ru, 208k chars, 15 chapters) | 1 |
+   | Заказ Коалфолла (ru) | 2 |
+   | **Ночной дозор — 8 of 9 chapters** | **58 – 133** |
+   | Ночной дозор ch3 | 6 |
+
+   The bar sits 5× above the worst clean reading and 5.8× below the lowest
+   degraded chapter, inside an empirically empty interval. It is a **maximum,
+   never a sum or a rate** — a rate was specified first and failed review,
+   because merging moves character mass out of dialogue paragraphs and into
+   narration ones, inflating a rate's numerator and denominator together and
+   making it *lenient on exactly the books it targets*. A maximum works because
+   false positives are sparse (a legitimate narration-then-quoted-speech
+   paragraph yields 1–2) while a genuine merge is dense (dozens).
+
+   **What a 1c breach means.** 1c grades the *manuscript's* legibility, not the
+   engine's correctness — the two are separable and this criterion is
+   deliberately the former. A breach says *re-convert this source*, not *the
+   engine regressed*. It is a real failure with a specific remedy, and **never
+   grounds for widening the threshold** — the clean end is calibrated from
+   other books precisely so a degraded chapter cannot hide inside it.
+
+   **Explicitly rejected: a "narrator delta ≈ 0" invariant.** Below the
+   alignment floor `flagOnly` passes the model's id through verbatim on every
+   sentence carrying a speech span, so the engine column equals the model column
+   and the delta is 0 by construction — and turning `analyzer.structure.enabled`
+   off gives 0 too. It reproduced the exact flaw it was written to close.
+
+   This change ships for all three languages carrying a dash dialogue marker —
+   ru, es, fr — per Global Constraints in
+   `docs/superpowers/plans/2026-08-11-dialogue-convention-invariant.md`. All
+   measurement above is Russian (the only language with a corpus in the
+   workspace); es/fr ship on unit coverage plus the identical-convention
+   argument, not on a measured replay.
 2. The hard-error class (structure-says-speech attributed to narrator/unknown-bucket) drops to
    **near-zero** after correction + escalation, from the ~859-sentence baseline.
 3. Named-character line counts rise / unknown-bucket (`unknown-male`/`unknown-female`) share
@@ -281,6 +411,104 @@ engine on, `analyzer.structure.escalation = 'local'`) via `cd server && npm run 
 aggregated `{alignedPct, confirmed, corrected, flagged, escalated, escalationAccepted}` — this is
 the before/after instrument for acceptance, replacing the "we could not determine which
 analyzer/model produced this analysis" forensics gap this spec also closes.
+
+### Acceptance RESULT — run 2026-08-06 · targets missed, root cause identified
+
+Run by Claude Code on the dual-GPU box: full 9-chapter re-analysis, **15,069 sentences**,
+`qwen36-cw-iq4-32k` via local Ollama, structure engine on, `escalation='local'`, no mock mode.
+Provenance recorded `engine: local, model: qwen36-cw-iq4-32k:latest, structureEngineVersion: 1`.
+
+| Target | Result | Verdict |
+|---|---|---|
+| 1. Flagged ≤ ~500 | **6,568** | ❌ missed |
+| 2. Hard-error class near-zero | narrator holds 10,240 / 15,059 lines (68%) | ❌ not demonstrated |
+| 3. Unknown-bucket share falls | roster folded 58 → 35; unknown bucket **3 entries / 61 lines (0.4%)** | ✅ met |
+| 4. Chapter 1/9 spot-check | ch9 flagged **488** — under target | ✅ where the engine ran |
+| 5. Wall-clock +2–5 h at `'local'` | escalation barely ran (22 windows vs ~553 expected) | n/a — see below |
+
+**Why target 1 was missed — the aligner, not the engine.** Per-chapter
+`[analysis:structure]` output:
+
+| Chapter | aligned | outcome | flagged |
+|---|---|---|---|
+| 5 | 4% | below floor — escalation skipped | 1,732 |
+| 6 | 2% | below floor — escalation skipped | 1,679 |
+| 7 | 66% | below floor — escalation skipped | 1,447 |
+| 8 | 73% | below floor — escalation skipped | 1,222 |
+| 9 | **95%** | **engine ran** — confirmed 580, corrected 531, escalated 22, accepted 130 | **488** |
+
+Only chapter 9 cleared the hardcoded **80% alignment floor** (`dialogue-structure/evidence.ts:40`);
+everything else hit the §5.2 chapter-wide flag-only fallback exactly as designed. **Where alignment
+succeeded, the engine met the target** (488 ≤ ~500). So the design is validated and
+`locateSentenceOffsets` is the bottleneck — filed as
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187). Root-cause signal: short,
+highly-repeated dialogue sentences bind to a later occurrence (ch7's `"- Да."` resolved to offset
+69,710 instead of ~60,850, and the two sentences after it did not locate at all).
+
+**Measurement caveat — the report covers chapters 5–9 only.** Chapters 1–4 were served from the
+resume cache after two environmental restarts (an unrelated concurrent session's `stop-app` port
+sweep, and a `tsx watch` restart), so they contributed nothing to the aggregate: book `flagged`,
+`corrected` and `confirmed` sum *exactly* to the ch5–9 components, and `alignedPct` 47.4% is their
+weighted average. Deliberately not re-run — the diagnostic is conclusive without the missing four,
+and #2187 is the deliverable either way.
+
+This discharged register row **C2 _as numbered before 2026-08-06_**. Note that "C2" was reused: a
+*different* row now carries that ID (the flagged-count re-run described below). Register row IDs are
+positional and contiguous, so they renumber as rows are discharged — the register's own sync log
+records that reuse.
+
+### #2187 RESOLVED — alignment fixed, every chapter now clears the floor
+
+The aligner bottleneck above is fixed (anchor-first, two-pass, interval-bounded location in
+`dialogue-structure/aligner.ts`). The mechanism was not a missed match but a **wrong** one: a miss
+never moved the cursor, but `findMatch`'s unbounded `indexOf` fallback let a short, ultra-common
+line bind thousands of characters downstream and drag the cursor with it, stranding the rest of the
+chapter. Short needles are now resolved against the body *sliced* to the interval between their
+bounding anchors, so they structurally cannot match outside it.
+
+Re-measured **without a GPU** — the aligner is pure, so the 15,069 cached stage-2 sentences from
+the 2026-08-06 run were replayed through the production EPUB parser and the production aligner:
+
+| Chapter | aligned before | aligned after |
+|---|---|---|
+| 4 | 63.9% | 99.7% |
+| 5 | 3.7% | **94.6%** |
+| 6 | 1.7% | **92.7%** |
+| 7 | 66.4% | **92.0%** |
+| 8 | 73.5% | **95.7%** |
+| 9 | 95.0% | 96.7% |
+| **book (all 9 chapters)** | **67.7%** | **96.0%** |
+
+The before-column reproduces the on-box report (4/2/66/73/95) to within rounding, which is what
+makes the after-column trustworthy. **Every chapter now clears the 80% floor**, so the §5.2
+chapter-wide flag-only fallback no longer fires and the engine's corrections actually apply.
+
+Chapter 4 is new information: it was never in the provenance report (it came from the resume cache,
+per the caveat above) and was also below the floor at 63.9%.
+
+**Two denominators — do not compare these figures directly.** The `book` row above is a
+sentence-weighted mean over **all 9 chapters**, because the replay had every chapter's cached
+sentences available. The on-box `alignedPct` of **47.4%** recorded earlier in this document is a
+mean over **chapters 5–9 only**, since chapters 1–4 never reached the provenance report. Chapters
+1–3 aligned well both before and after (98.0/97.8/99.1% → 98.0/97.8/99.1%), which is why the
+all-chapter pre-fix mean (67.7%) sits well above the ch5–9 one (47.4%). Neither number is wrong;
+they answer different questions.
+
+**Reproducing this measurement.** The probe is not committed (it is a throwaway, in the spirit of
+the §5.4 appendix): parse `…/Ночной дозор/manuscript.epub` with the production `parseManuscript`,
+read the cached stage-2 sentences from `server/handoff/cache/mns_oyK7Po6BiT.json` (`chapters` keyed
+`"1"`–`"9"`, each an array of `{text, characterId, …}`), and for each chapter call
+`parseChapterStructure(body, buildNameIndex(roster, conventionsFor('ru')))` then
+`alignSentences(sentences, paras, body)` and read `alignedPct`. Run it once on the branch and once
+with `aligner.ts` reverted to `main` to get both columns.
+
+**Target 1 (now the 1a legibility / 1b engine-health criteria, re-specified 2026-08-11 via
+#2253 — see "Targets" above) is not yet re-measured end to end** — that needs a real
+re-analysis, because `flagged`/`unresolved`/`confidence` are outputs of the cross-examiner running
+over the *model's* stage-2 output, not of alignment alone. What is now established is that the
+precondition it was blocked on is satisfied on every chapter. Chapter 9 already showed the engine
+hits the old absolute bar once alignment is good (488 ≤ ~500) — retained here as history; the
+absolute bar itself is no longer the criterion.
 
 ## Appendix — §5.4 probe methodology (reproduce for acceptance re-runs)
 
@@ -335,6 +563,17 @@ flagged (unanchored vs. contested-alternation vs. lumped, etc.) during the chapt
 
 ## Ship notes
 
-(Filled in when status flips to `stable` — commit SHA, on-box acceptance results against the
-targets above, any behaviour delta vs. this plan. Not yet shipped: on-box acceptance is owed
-post-merge per the Test plan above.)
+**On-box acceptance discharged 2026-08-06** — full results, per-chapter alignment table and the
+measurement caveat are in "Acceptance RESULT — run 2026-08-06" above. Headline: the deterministic
+engine is validated (chapter 9, aligned 95%, landed flagged **488** against the ≤~500 target), but
+book-level flagged is **6,568** because chapters 5–8 fell below the 80% alignment floor and degraded
+to flag-only. Follow-up filed as
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187).
+
+**#2187 landed** — see "#2187 RESOLVED" above. Alignment on the same corpus goes 67.7% → 96.0%
+book-level, and every chapter clears the 80% floor, so the flag-only fallback no longer fires.
+The plan stays `active` for one more step: target 1 (flagged ≤ ~500/chapter) is a property of the
+cross-examiner over a real stage-2 run, so it needs one re-analysis to confirm end to end. That is
+tracked as an on-box register row rather than holding this plan open indefinitely.
+
+(Still to fill when status flips to `stable` — commit SHA and any behaviour delta vs. this plan.)

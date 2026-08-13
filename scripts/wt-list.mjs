@@ -8,11 +8,13 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const PORT_VARS = ['VITE_PORT', 'PORT', 'LOCAL_TTS_PORT', 'PLAYWRIGHT_PORT'];
 
 function gitOrThrow(args) {
-  const result = spawnSync('git', args, { encoding: 'utf8' });
+  const result = spawnSync('git', args, { encoding: 'utf8', env: scrubGitEnv() });
   if (result.error) throw new Error(`git ${args.join(' ')}: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);
@@ -98,11 +100,14 @@ export function main() {
   return 0;
 }
 
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/wt-list.mjs');
-
-if (invokedAsCli) {
-  process.exit(main());
+// process.exit() truncates pending async stdout writes on POSIX pipes
+// (synchronous on Windows, ASYNCHRONOUS on Linux/macOS) — see the comment by
+// scripts/lib/is-main-module.mjs's own isDirectlyInvoked for why the
+// process.exit(main()) shape is unsafe for anything but provably-tiny
+// output. main()'s table can run to one row per worktree, so it doesn't
+// qualify; setting exitCode and letting the process exit naturally once the
+// event loop drains (main() is fully synchronous — no open handle survives
+// its return) avoids the truncation instead.
+if (isDirectlyInvoked(import.meta.url)) {
+  process.exitCode = main();
 }

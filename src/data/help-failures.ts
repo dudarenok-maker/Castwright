@@ -44,6 +44,10 @@ const CATEGORIES = {
   'gpu-acceleration-unavailable': 'performance',
   'voice-not-designed': 'voices',
   'cloned-voice-broken': 'voices',
+  /* #2260 — contention over a book's own files, so it belongs with the other
+     file-level classes rather than with `analysis`, even though the analysis
+     run is where it currently surfaces. */
+  'lock-contention': 'files',
   auth: 'analysis',
   unknown: 'other',
 } satisfies Record<FailureCode, CategoryId>;
@@ -67,6 +71,7 @@ const TITLES = {
   'gpu-acceleration-unavailable': 'Running on CPU (GPU acceleration unavailable)',
   'voice-not-designed': 'Non-English chapter missing a designed voice',
   'cloned-voice-broken': "Cloned voice can't render as itself",
+  'lock-contention': 'Something else had the book open',
   auth: 'Gemini API key problem',
   unknown: 'Unrecognised error',
 } satisfies Record<FailureCode, string>;

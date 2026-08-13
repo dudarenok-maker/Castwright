@@ -41,6 +41,16 @@ vi.mock('../lan-auth.js', () => ({
   getLanAuthToken: vi.fn(() => undefined),
   extractToken: vi.fn(() => undefined),
   readCwLanCookie: vi.fn(() => undefined),
+  // #2278 review Finding 1/7 — pairing.ts's 403 branch calls this; without a
+  // mock here it would be undefined and throw (masking the 403 as a 500).
+  // #2278 review round 3, Finding 4 — a NON-default port (9443, not 8443):
+  // the earlier 8443 return coupled this test to a hand-copied string that
+  // proves the route emits the mock's return value, but nothing about the
+  // port actually being dynamic (lan-auth.test.ts covers that directly).
+  pairingOriginHint: vi.fn(
+    () =>
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+  ),
 }));
 vi.mock('./export-lan.js', async (orig) => {
   const real = await orig<typeof import('./export-lan.js')>();
@@ -56,31 +66,44 @@ vi.mock('../lan-runtime.js', () => ({
   setLanRuntime: () => {},
 }));
 vi.mock('./cert-root.js', () => ({ resolveRootCaPath: () => ({ path: 'FAKE', source: 'default' as const }) }));
-vi.mock('../config/resolver.js', () => ({ configValue: (_key: string) => 30 }));
+vi.mock('../config/resolver.js', () => ({ configValue: (_key: string) => 365 }));
 vi.mock('node:fs', async (orig) => {
   const real = await orig<typeof import('node:fs')>();
   return { ...real, readFileSync: (p: unknown, ...rest: unknown[]) =>
     p === 'FAKE' ? Buffer.from(TEST_CERT_PEM) : (real.readFileSync as any)(p, ...rest) };
 });
-vi.mock('../workspace/device-tokens.js', () => ({
-  createDevice: vi.fn(async (label: string, ttlDays: number) => ({
-    device: {
-      id: 'd1',
-      label,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + ttlDays * 86_400_000).toISOString(),
-      revoked: false,
-    },
-    token: 'tok_test',
-  })),
-  clampTtlDays: (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : 30),
-}));
+vi.mock('../workspace/device-tokens.js', () => {
+  // Matches the real class's no-arg constructor (checked by TypeScript
+  // against the real export's type even though the mock supplies the
+  // runtime value) with a fixed, known message tests can assert against.
+  class DeviceStoreDegradedError extends Error {
+    constructor() {
+      super('store unreadable');
+    }
+  }
+  return {
+    createDevice: vi.fn(async (label: string, ttlDays: number, opts?: { selfBind?: boolean }) => ({
+      device: {
+        id: 'd1',
+        label,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + ttlDays * 86_400_000).toISOString(),
+        revoked: false,
+        ...(opts?.selfBind ? { selfBind: true } : {}),
+      },
+      token: 'tok_test',
+    })),
+    clampTtlDays: (v: unknown) =>
+      typeof v === 'number' && Number.isInteger(v) ? Math.min(Math.max(v, 1), 400) : 365,
+    DeviceStoreDegradedError,
+  };
+});
 
 import { pairSessionRouter, pairRedeemRouter, redeemLimiter } from './pairing.js';
 import { _resetPairingSessionsForTests, createPairingSession } from '../workspace/pairing-sessions.js';
 import { mayStartPairingSession, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 import { getLanRuntime } from '../lan-runtime.js';
-import { createDevice } from '../workspace/device-tokens.js';
+import { createDevice, DeviceStoreDegradedError } from '../workspace/device-tokens.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -120,6 +143,10 @@ describe('pairing routes', () => {
     const first = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
     expect(first.status).toBe(201);
     expect(first.body.token).toBe('tok_test');
+    // The companion QR redeem path must never self-bind -- it has no way to
+    // know it's running on the host, unlike redeem-browser's server-derived
+    // session.selfBind. createDevice is called with no options argument at all.
+    expect(vi.mocked(createDevice).mock.lastCall?.length).toBe(2);
     const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code });
     expect(second.status).toBe(410);
   });
@@ -129,10 +156,72 @@ describe('pairing routes', () => {
     expect(res.status).toBe(401);
   });
 
+  // #2204 review (F2/F7, pairing-ordering note) — redeemPairingSession
+  // already consumed the code before createDevice ever runs, so a degraded
+  // device store used to burn the one-time code for nothing: the user would
+  // have to generate a whole fresh QR code with no explanation. The code
+  // must survive a failed mint and still work on retry.
+  it('POST /redeem does not burn the pairing code when the device store is degraded, and answers 503', async () => {
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    vi.mocked(createDevice).mockRejectedValueOnce(new DeviceStoreDegradedError());
+    const redeem = appWith(pairRedeemRouter);
+
+    const first = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(first.status).toBe(503);
+    expect(first.body.error).toBe('store unreadable');
+
+    // The code was NOT consumed by the failed attempt -- a retry with the
+    // same code succeeds once createDevice is healthy again (the mock's
+    // default implementation, restored automatically after the one-shot
+    // mockRejectedValueOnce above).
+    const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(second.status).toBe(201);
+    expect(second.body.token).toBe('tok_test');
+  });
+
+  // Same fix, the cookie-setting sibling endpoint.
+  it('POST /redeem-browser does not burn the pairing code when the device store is degraded, and answers 503', async () => {
+    const { code } = createPairingSession('x', undefined, 10);
+    vi.mocked(createDevice).mockRejectedValueOnce(new DeviceStoreDegradedError());
+    const redeem = appWith(pairRedeemRouter);
+
+    const first = await request(redeem).post('/api/pair/redeem-browser').send({ code });
+    expect(first.status).toBe(503);
+    expect(first.body.error).toBe('store unreadable');
+
+    const second = await request(redeem).post('/api/pair/redeem-browser').send({ code });
+    expect(second.status).toBe(201);
+  });
+
+  // A genuine (non-degraded) createDevice failure must still surface as a
+  // plain 500 -- the `instanceof DeviceStoreDegradedError` check must
+  // actually discriminate, not swallow every error as a 503. The code is
+  // still restored (the restore happens unconditionally in the catch, not
+  // gated on the error type): burning a one-time code because of a
+  // transient, unrelated failure is exactly the same user-hostile outcome
+  // the degraded-store case was fixed for, so the fix generalises rather
+  // than special-casing one error class.
+  it('POST /redeem still 500s on a non-degraded createDevice failure, but still restores the code', async () => {
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    vi.mocked(createDevice).mockRejectedValueOnce(new Error('boom'));
+    const redeem = appWith(pairRedeemRouter);
+
+    const first = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(first.status).toBe(500);
+
+    const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(second.status).toBe(201);
+  });
+
   it('POST /session 403s when the caller may not start a pairing session (non-loopback, non-friendly)', async () => {
     vi.mocked(mayStartPairingSession).mockReturnValueOnce(false);
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
     expect(res.status).toBe(403);
+    // #2278 review Finding 1 — the 403 body is pairingOriginHint()'s
+    // port-correct guidance, not a hardcoded string.
+    expect(res.body.error).toBe(
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+    );
   });
 
   it('POST /session stores the desktop label; /redeem prefers it over the phone-supplied label', async () => {
@@ -168,6 +257,31 @@ describe('pairing routes', () => {
     expect(setCookie).toMatch(/HttpOnly/i);
     expect(setCookie).toMatch(/SameSite=Strict/i);
     expect(setCookie).toMatch(/Secure/i);
+    expect(setCookie).toMatch(/Max-Age=31536000/); // 365 days — must track ttl()
+  });
+
+  // #2257 — the real revoke-prior-self-bind logic lives in device-tokens.ts
+  // (createDevice, covered by its own unit tests); createDevice is mocked
+  // module-wide in this file, so the route-level contract to pin here is
+  // that /redeem-browser threads the session's server-derived selfBind flag
+  // through to createDevice's opts — which is what actually triggers the
+  // revoke downstream. A self-bind session's redeem calls createDevice with
+  // { selfBind: true } ...
+  it('redeem-browser of a self-bind session calls createDevice with selfBind:true (which is what revokes the prior self-bind)', async () => {
+    const { code } = createPairingSession('This computer', undefined, 10, true);
+    const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toEqual({ selfBind: true });
+  });
+
+  // ... a non-self-bind session's redeem (the QR cross-device pairing flow)
+  // must NOT — marking it as one would let a phone's pairing revoke the
+  // desktop's own credential.
+  it('redeem-browser of a non-self-bind session calls createDevice with selfBind:false (does not revoke anything)', async () => {
+    const { code } = createPairingSession('Pixel', undefined, 10); // selfBind defaults false
+    const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toEqual({ selfBind: false });
   });
 
   it('redeem-browser 409s when LAN auth not enforced', async () => {

@@ -26,6 +26,14 @@ export interface ConfigKnob {
   step?: number;
   /** For type==='enum'. */
   options?: string[];
+  /** For type==='string' (or 'device'). A closed VALUE SHAPE for an
+      otherwise free-text knob — validated case-insensitively against the
+      trimmed input in coerceAndValidate's string/default case. Small,
+      general capability (#2180): a knob with no closed `options` set can
+      still refuse a malformed value ("cuda1") at save time without being
+      forced into an enum with an unbounded option list (e.g. every
+      "cuda:<n>" card index). */
+  pattern?: RegExp;
   apply: ApplyMode;
   risk: Risk;
   /** True for analyzer-prompt knobs (no env; value is a .md fork pointer). Added in Task 0.5. */

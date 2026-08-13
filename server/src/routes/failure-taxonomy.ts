@@ -24,6 +24,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { AnalyzerTruncatedError } from '../analyzer/errors.js';
+import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 export type FailureCode =
   | 'vram-spill'
@@ -44,6 +45,7 @@ export type FailureCode =
   | 'gpu-acceleration-unavailable'
   | 'voice-not-designed'
   | 'cloned-voice-broken'
+  | 'lock-contention'
   | 'auth'
   | 'unknown';
 
@@ -486,6 +488,39 @@ function withCopy(code: FailureCode, userMessage: string, detail?: string): Anal
     unmatched errors additionally fall through to the analysis signature scan
     (so ECONNREFUSED etc. classify here too). */
 export function classifyAnalysisFailure(err: unknown, modelLabel: string): AnalysisFailure {
+  /* #2260 FINAL ROUND (B2) — FIRST, ahead of every other branch, because a
+     lock-acquisition timeout is the one class here whose own message must never
+     reach a client: it embeds the lock key, which for every key space this can
+     carry is an absolute path inside the user's workspace
+     (`…\books\<Author>\<Series>\<Title>\.audiobook\cast.json`). Both analysis
+     jobs hand this function's `userMessage` straight to `endJob(job, {kind:
+     'error', message})`, which fans out over SSE to every subscriber including
+     a paired phone on the LAN — so without this branch the six identity/
+     authoritative fail-loud sites in `analysis.ts` broadcast the workspace
+     layout, plus `withKeyLock:` and both cast-lock rule numbers, on ordinary
+     contention. Below, `withCopy('unknown', raw)` is exactly what did that.
+
+     Curated copy is the shared `LOCK_CONTENTION_REQUEST_ERROR` rather than a
+     seventh phrasing of the same fact — the same constant the two merge routes
+     return and a sibling of the five per-item routes'
+     `LOCK_CONTENTION_ITEM_REASON`, so a reword moves one string. It is passed
+     explicitly instead of being taken from `FAILURE_REMEDIATIONS`, which may
+     not import anything (it crosses into the frontend bundle) and therefore
+     cannot share the constant; its `lock-contention` entry carries the offline
+     Help-view prose and the remediation this call pulls.
+
+     NO `detail` deliberately: that blob renders in the UI's collapsible, so
+     putting the raw message there would reinstate the leak one fold down. The
+     raw error still reaches the server log at both call sites (`[analysis]
+     failed` logs `message`, `[analysis-subset] failed` logs `stack`).
+
+     Scoped to the ANALYSIS classifier, not added to `FAILURE_SIGNATURES` as a
+     `source: 'both'` row: the constant cannot live in the signature table's
+     copy map (above), and no generation path takes one of these locks, so a
+     table row would be an untested claim of coverage. */
+  if (isLockAcquisitionTimeout(err)) {
+    return withCopy('lock-contention', LOCK_CONTENTION_REQUEST_ERROR);
+  }
   if (err instanceof AnalyzerTruncatedError) {
     return withCopy(
       'analyzer-truncated',

@@ -65,6 +65,8 @@ import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
+import { allKnobDescriptors } from '../../server/src/config/descriptors';
+import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
 import { initialCharacters } from '../data/characters';
 import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -254,6 +256,10 @@ export interface AnalyseOpts {
       prior books" pill so the user sees the context being applied.
       `names` is the first three for display; `count` is the total. */
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
+  /** #2015 — a non-fatal advisory from the server (today only
+      `cast_merge_base_stale`). Both the full-book and the subset stream emit
+      it; the subset route carries two of the five merge-base write sites. */
+  onWarning?: (warning: { code: string; message: string }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. */
   model?: string;
@@ -873,6 +879,7 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
     chapters: [{ id: 1, title: 'Chapter 1' }],
     language: mockLanguage,
     languageSupported: true,
+    languageFallback: false,
     supportedLanguages: mockSupportedLanguages,
   };
   return { tempId: 'imp_' + Math.random().toString(36).slice(2, 10), candidate };
@@ -1937,8 +1944,13 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
 
 async function realGetLibrary(): Promise<LibraryResponse> {
   const res = await fetch('/api/library');
-  if (!res.ok)
-    throw new Error(`Library scan failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  // #2278 review round 3, Finding 3 — /api/library sits behind the same
+  // requireLanToken guard as listDevices, so its 401 body now carries
+  // pairingOriginHint()'s port-correct guidance too; parse it via
+  // apiErrorFromResponse (and its `fromServer` flag) instead of the raw
+  // response text, so book-library.tsx can prefer it over recoveryHint()'s
+  // own composed pointer when it's genuinely available.
+  if (!res.ok) throw await apiErrorFromResponse(res, `Library scan failed (${res.status})`);
   return res.json();
 }
 
@@ -2337,10 +2349,23 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   });
-  if (!res.ok)
-    throw new Error(
-      `Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+  if (!res.ok) {
+    /* #2165 — every deliberate refusal this route sends (an analysis is
+       running, an Author/Series/Title collision, a cloned-voice consent
+       refusal) is a 409 carrying `{ error: '…' }`, and that sentence reaches
+       the user verbatim through BooksRoute's showError. Surface the sentence,
+       not the envelope. Non-JSON bodies (a proxy's 502 page, an empty 500)
+       fall through to the raw text exactly as before. */
+    const body = await res.text();
+    let detail = body || res.statusText;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === 'string' && parsed.error) detail = parsed.error;
+    } catch {
+      /* not JSON — keep the raw body */
+    }
+    throw new Error(`Book state PUT failed (${res.status}): ${detail}`);
+  }
 }
 
 /* Plan 47 — per-book resume bookmark.
@@ -2688,7 +2713,8 @@ interface AnalysisStreamEvent {
     | 'chapter-failed'
     | 'chapter-resolved'
     | 'throttle'
-    | 'series-prior';
+    | 'series-prior'
+    | 'warning';
   phaseId?: number;
   progress?: number;
   label?: string;
@@ -2776,6 +2802,7 @@ async function realAnalyseManuscript(
     onChapterResolved,
     onThrottle,
     onSeriesPrior,
+    onWarning,
     model,
     fresh,
     allowStage1Shrink,
@@ -2872,6 +2899,10 @@ async function realAnalyseManuscript(
           count: payload.count,
           names: payload.names.filter((n): n is string => typeof n === 'string'),
         });
+      }
+    } else if (payload.kind === 'warning') {
+      if (payload.code && payload.message) {
+        onWarning?.({ code: payload.code, message: payload.message });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
@@ -4613,7 +4644,24 @@ export interface UndoRejectOrphanMatchResponse {
       removed pair can each skip independently. The mock never sets this
       (it has no `supersededBy` state to conflict with). */
   supersededByOther?: string[];
+  /** #2161 — the sibling refusal case: set (non-empty) when one or more
+      removed pairs had a forgotten `supersededBy` alias to restore, but the
+      restore was REFUSED because that alias's own target has quietly
+      stopped being a live cast id since the original reject (see the
+      server route's own doc comment). Each entry is the dead target id.
+      `mockUndoRejectOrphanMatch` sets this for the
+      `MOCK_TARGET_NOT_LIVE_ORPHANED_ID` sentinel orphaned id, for e2e
+      coverage — see its own comment. */
+  targetNotLive?: string[];
 }
+
+/** #2161 — e2e sentinel: `mockUndoRejectOrphanMatch` reports this exact id
+    as the dead target of a refused alias restore whenever the row being
+    undone is THIS orphaned id, giving `test:e2e` a deterministic way to
+    drive the "the toast must not claim success" path without a real
+    `cast-id-history.json` on disk (mock mode has none). Not a real
+    character id — chosen to read unambiguously as a fixture in a toast. */
+export const MOCK_TARGET_NOT_LIVE_ORPHANED_ID = 'orphan-with-dead-alias-target';
 
 async function realUndoRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
@@ -4658,6 +4706,23 @@ export async function mockUndoRejectOrphanMatch(
     };
   }
   mockRejectedOrphanPairs.delete(key);
+  /* #2161 — the `MOCK_TARGET_NOT_LIVE_ORPHANED_ID` sentinel simulates the
+     server refusing to restore a forgotten alias because its own target
+     has quietly stopped being live, so `test:e2e` (mock mode, no real
+     cast-id-history.json to seed) can still drive the "the toast must not
+     claim success" path deterministically. Every other orphanedId keeps
+     the ordinary canned-success shape below. */
+  if (args.orphanedId === MOCK_TARGET_NOT_LIVE_ORPHANED_ID) {
+    return {
+      characterId: args.characterId,
+      orphanedId: args.orphanedId,
+      wasRejected: true,
+      resolution: null,
+      resolvedCharacterId: undefined,
+      removedFrom: [args.orphanedId],
+      targetNotLive: ['ghost-alias-target'],
+    };
+  }
   /* Mock mode has no real resolver either, so it assumes the common/lossless
      case: undo restores resolution onto the same `characterId` the reject
      had blocked (a 'history' match — collapses to 'alias' in the frontend's
@@ -4672,6 +4737,69 @@ export async function mockUndoRejectOrphanMatch(
     resolution: 'history',
     resolvedCharacterId: args.characterId,
     removedFrom: [args.orphanedId],
+  };
+}
+
+/* POST /api/books/:bookId/cast/:characterId/link-orphan-match  (#2238) — the
+   orphaned-character-fallback banner's "Link to this character" action, the
+   positive mirror of `rejectOrphanMatch` above. `characterId` is the live
+   cast member the user picked from the needs-decision row's own <select>
+   (the same candidate state the reject button reads); `orphanedId` is the
+   map key. Mirrored to redux via castActions.applyOrphanLink alone — unlike
+   a reject, a link never writes a notLinkedTo edge, so there is no second
+   dispatch to pair it with. When the row already carries this candidate in
+   `rejectedAgainst` (a prior "not the same character" for this exact pair),
+   the caller (`handleLinkOrphanMatch`, src/views/cast.tsx) reuses the
+   EXISTING undo path (`handleUndoOrphanRejection`) to clear it BEFORE
+   calling this — see the server route's own doc comment
+   (server/src/routes/cast-link-orphan.ts) for why a second removal
+   implementation does not belong here. */
+export interface LinkOrphanMatchArgs {
+  bookId: string;
+  characterId: string;
+  orphanedId: string;
+}
+export interface LinkOrphanMatchResponse {
+  characterId: string;
+  orphanedId: string;
+  resolution: RejectOrphanResolutionTier;
+  resolvedCharacterId?: string;
+}
+
+async function realLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrphanMatchResponse> {
+  const { bookId, characterId, orphanedId } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/link-orphan-match`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orphanedId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Link match failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+export async function mockLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrphanMatchResponse> {
+  await wait(80);
+  /* Linking a pair clears any mock-tracked rejection for it too — mirrors
+     the real server durably clearing the rejection (via the frontend's
+     reused undo call) before this write is ever reached in the normal
+     flow. */
+  mockRejectedOrphanPairs.delete(rejectedOrphanPairKey(args));
+  return {
+    characterId: args.characterId,
+    orphanedId: args.orphanedId,
+    resolution: 'history',
+    resolvedCharacterId: args.characterId,
   };
 }
 
@@ -5374,6 +5502,7 @@ async function realRunAnalysisForChapters(
     onChapterResolved,
     onThrottle,
     onSeriesPrior,
+    onWarning,
     model,
     allowStage1Shrink,
   }: AnalyseOpts = {},
@@ -5473,6 +5602,10 @@ async function realRunAnalysisForChapters(
           count: payload.count,
           names: payload.names.filter((n): n is string => typeof n === 'string'),
         });
+      }
+    } else if (payload.kind === 'warning') {
+      if (payload.code && payload.message) {
+        onWarning?.({ code: payload.code, message: payload.message });
       }
     } else if (payload.kind === 'result' && payload.response) {
       result = payload.response;
@@ -5993,6 +6126,22 @@ export interface CastDesignStatus {
   failures?: Array<{ characterId: string; name: string; error: string }>;
 }
 
+/* #2051 — the `handle()` switch below (and CastDesignCallbacks/
+   CastDesignStatus above it) is a HAND-WRITTEN mirror of the generated
+   `CastDesignEvent`/`SingleDesignEvent` unions in api-types.ts, not derived
+   from them. Deliberate, not an oversight: this is a permissive wire parser
+   feeding narrow per-event callbacks (one optional handler per event, most
+   fields renamed/reshaped on the way through — e.g. `character_designed`'s
+   `voiceId` fans out to `onCharacterDesigned`'s differently-shaped payload),
+   so the generated discriminated union isn't a drop-in the way a 1:1 REST
+   mirror would be (see #1883/plan 270) — forcing that swap would mean
+   deciding how a permissive parser narrows into a generated union, which is
+   design work a much smaller guard already makes unnecessary.
+   `src/lib/api.design-sse-event-types.test.ts` is that guard: it cross-checks
+   the switch's `case` labels against `CastDesignEvent['type'] |
+   SingleDesignEvent['type']` in api-types.ts, so a tenth event type reaching
+   the generated types without a matching `case` here fails a test — see that
+   file's header for what the guard does and does NOT catch. */
 export async function readCastDesignStream(res: Response, cb: CastDesignCallbacks): Promise<void> {
   if (!res.ok || !res.body) {
     let detail = '';
@@ -7172,46 +7321,108 @@ async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(trimmed ? { label: trimmed } : {}),
   });
-  if (!res.ok)
-    throw new ApiError(
-      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
-      res.status,
-    );
+  // #2278 review Finding 2 — parses the server's JSON `{ error }` body (see
+  // apiErrorFromResponse below) rather than embedding the raw response text:
+  // a 403 here now carries port-correct pairing guidance (pairingOriginHint()
+  // on the server) that PairDeviceModal renders verbatim instead of its own
+  // hardcoded copy.
+  if (!res.ok) throw await apiErrorFromResponse(res, `pair session failed (${res.status})`);
   return res.json();
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
+  constructor(
+    message: string,
+    readonly status: number,
+    /** True when `message` came from the server's own JSON `{ error }` body
+     *  (#2278 review round 3, Finding 1) — false when apiErrorFromResponse
+     *  fell back to a synthetic "<action> failed (<status>)" string because
+     *  the body was absent, not JSON, or had no `error` field (e.g. an HTML
+     *  403 from an interposed proxy or the :443 forwarder). A caller that
+     *  renders `message` as the user's ENTIRE explanation — not just logs it
+     *  — MUST gate on this rather than on `message` being non-empty: the
+     *  synthetic fallback is always non-empty too, so an emptiness check
+     *  can't tell a real server sentence from a bare developer string.
+     *  Defaults false — every direct `new ApiError(...)` call that bypasses
+     *  apiErrorFromResponse is, by construction, not a confirmed server
+     *  message. */
+    readonly fromServer: boolean = false,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
 }
 
-async function realCreateDevicePairSession(body: { label: string }) {
+/** Build an ApiError from a non-ok Response, preferring the server's own
+ *  JSON `{ error }` body over a synthetic `fallback` string (#2278). Several
+ *  LAN-guard 401/403 bodies carry actionable, port-correct guidance (e.g.
+ *  `pairingOriginHint()` on the server) that the UI renders verbatim —
+ *  discarding it here would silently regress that. Falls back to `fallback`
+ *  (with `fromServer: false`) when the body is absent, not JSON, or has no
+ *  non-empty string `error` field.
+ *
+ *  The rendered `message` deliberately stays short in the fallback case — a
+ *  reverse proxy's HTML error page is not a sentence to show a reader — so
+ *  the raw body is logged instead (#2278 review round 4, Finding 9). Without
+ *  it a gateway/proxy fault surfaces as a bare status code with no diagnostic
+ *  anywhere, including devtools. */
+async function apiErrorFromResponse(res: Response, fallback: string): Promise<ApiError> {
+  const text = await res.text().catch(() => '');
+  let parsed: { error?: unknown } | null = null;
+  try {
+    parsed = JSON.parse(text) as { error?: unknown };
+  } catch {
+    /* not JSON — the fallback path below owns this case */
+  }
+  if (typeof parsed?.error === 'string' && parsed.error.length > 0) {
+    return new ApiError(parsed.error, res.status, true);
+  }
+  console.error(`${fallback}${text ? `: ${text.slice(0, 500)}` : ` ${res.statusText}`}`);
+  return new ApiError(fallback, res.status, false);
+}
+
+async function realCreateDevicePairSession(body: { label: string; selfBind?: boolean }) {
   const res = await fetch('/api/devices/pair-session', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(`pair-session failed (${res.status})`, res.status);
+  if (!res.ok) throw await apiErrorFromResponse(res, `pair-session failed (${res.status})`);
   return res.json() as Promise<{ url: string; code: string; expiresAt: number; friendlyUrl?: string }>;
 }
 async function realListDevices() {
   const res = await fetch('/api/devices');
-  if (!res.ok) throw new ApiError(`list devices failed (${res.status})`, res.status);
+  if (!res.ok) throw await apiErrorFromResponse(res, `list devices failed (${res.status})`);
   return res.json() as Promise<{ devices: PublicDevice[] }>;
 }
 async function realRevokeDevice(id: string) {
   const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  // Deliberately NOT apiErrorFromResponse (#2278 review round 3, nit): the
+  // card's own revokeLoopbackOnlyHint substitutes for this on 403 regardless
+  // of what the server said (the server's message here is a generic, non-
+  // port "Devices can only be revoked from the host UI.", not the guidance
+  // the card needs), so parsing the body would only cost a fetch-body read
+  // with no caller ever reading the result. The 404 ("Unknown device.") is
+  // collateral loss from the same choice, not a separate oversight — revoke
+  // has no UI path that renders a 404 message differently from any other.
   if (!res.ok) throw new ApiError(`revoke failed (${res.status})`, res.status);
   return res.json() as Promise<{ ok: true }>;
 }
 async function realRegenerateLanCert() {
   const res = await fetch('/api/lan/cert/regenerate', { method: 'POST' });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new ApiError(body?.error ?? `regenerate cert failed (${res.status})`, res.status);
-  }
+  if (!res.ok) throw await apiErrorFromResponse(res, `regenerate cert failed (${res.status})`);
   return res.json() as Promise<{ hosts: string[] }>;
 }
 export interface LanCertStatus {
   requested: boolean;
   active: boolean;
+  /** The port the server actually bound (#2278) — read this instead of
+      hardcoding 8443: window.location.port is empty on the castwright.local
+      and :443-forwarder paths, exactly when the real port is unknowable
+      client-side. NOT necessarily an HTTPS port — this is whatever the server
+      bound, HTTP or HTTPS; check `active` before composing an `https://` URL
+      from it. The response is an unchecked cast, so a body missing this field
+      types as `number` but reads `undefined`: composition sites must also
+      check it is a real port (see lan-access-card.tsx's loopbackHttpsOrigin). */
+  boundPort: number;
   health: 'healthy' | 'missing' | 'expired';
   certHosts: string[];
   currentLanIps: string[];
@@ -7231,7 +7442,7 @@ async function realRedeemBrowserPair(body: { code: string }) {
   return res.json() as Promise<{ label: string; expiresAt: string }>;
 }
 
-const mockCreateDevicePairSession = async (_b: { label: string }) =>
+const mockCreateDevicePairSession = async (_b: { label: string; selfBind?: boolean }) =>
   ({
     url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`,
     code: 'MOCKCODEMOCKCODE',
@@ -7246,6 +7457,7 @@ const mockRegenerateLanCert = async () => ({
 const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
   requested: true,
   active: false,
+  boundPort: 8443,
   health: 'missing',
   certHosts: [],
   currentLanIps: ['192.168.1.42'],
@@ -7253,7 +7465,7 @@ const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
   expiresAt: null,
 });
 const mockRedeemBrowserPair = async (_b: { code: string }) =>
-  ({ label: 'This browser', expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
+  ({ label: 'This browser', expiresAt: new Date(Date.now() + 365 * 86_400_000).toISOString() });
 
 /* Plan 75 — portable book bundle (single .zip with state + manuscript +
    audio + cover + change-log for one book). The export returns the
@@ -8193,1283 +8405,19 @@ async function mockRestoreBookBackup(_bookId: string, _backupFile: string): Prom
 
 /* ── Advanced config (/api/config + /api/config/prompts) ──────────────── */
 
-/* Canned mock descriptors — four representative knobs across two groups that
-   give the UI tests something to render. Keep them small but cover the main
-   type variants (number, boolean, enum, string) and apply modes. */
-const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
-  {
-    key: 'KOKORO_SAMPLE_RATE',
-    group: 'tts',
-    label: 'Kokoro sample rate',
-    help: 'Sample rate (Hz) for Kokoro synthesis output.',
-    type: 'integer',
-    min: 8000,
-    max: 48000,
-    step: 1000,
-    apply: 'restart-sidecar',
-    risk: 'low',
-    isPrompt: false,
-    default: 24000,
-  },
-  {
-    key: 'ANALYZER_STAGE1_PROMPT',
-    group: 'analyzer',
-    label: 'Stage-1 attribution prompt',
-    help: 'System prompt template used for per-sentence speaker attribution.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: true,
-    default: 'Attribute each sentence to its speaker.',
-  },
-  {
-    // Mirrors the real registry's tts-engine.device knobs (Plan 2) — needed so
-    // e2e can exercise the device picker's stale-reason badge in mock mode.
-    key: 'tts.qwen.device',
-    group: 'tts-engine',
-    label: 'Qwen device',
-    help: 'PyTorch device for Qwen3-TTS. "auto" picks cuda:0 → mps → cpu.',
-    type: 'device',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 'auto',
-  },
-  /* Mirrors the real registry's 11 knob groups / ~97 knobs (server/src/config/registry.ts),
-     minus the tts-engine group and tts.qwen.device knob above (already mocked). Backs the
-     Advanced Settings marketing-screenshot scenes (e2e/marketing/scenes.ts), which click
-     through all 11 groups. */
-  {
-    key: 'analyzer.ollama.temperature',
-    group: 'analyzer-sampling',
-    label: 'Ollama temperature',
-    help: 'Sampling temperature for the first analysis attempt; lower values stay closer to the schema.',
-    type: 'number',
-    min: 0,
-    max: 2,
-    step: 0.1,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 0.2,
-  },
-  {
-    key: 'analyzer.ollama.retryTemperature',
-    group: 'analyzer-sampling',
-    label: 'Ollama retry temperature',
-    help: 'Temperature used on invalid-JSON retries to escape the failure path.',
-    type: 'number',
-    min: 0,
-    max: 2,
-    step: 0.1,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 0.6,
-  },
-  {
-    key: 'analyzer.ollama.numPredict',
-    group: 'analyzer-sampling',
-    label: 'Ollama num_predict',
-    help: 'Output-token cap for Ollama; -1 means predict until context window fills.',
-    type: 'integer',
-    min: -1,
-    step: 1,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: -1,
-  },
-  {
-    key: 'analyzer.gemini.maxOutputTokens',
-    group: 'analyzer-sampling',
-    label: 'Gemini max output tokens',
-    help: 'Per-request output-token cap for Gemini; set to match the free-tier ceiling.',
-    type: 'integer',
-    min: 256,
-    max: 32768,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 8192,
-  },
-  {
-    key: 'analyzer.stage2.chunkCharBudget',
-    group: 'analyzer-chunking',
-    label: 'Stage-2 chunk char budget',
-    help: 'Maximum characters per stage-2 attribution chunk before the chapter is pre-emptively split.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 9000,
-  },
-  {
-    key: 'analyzer.stage1.chunkCharBudget',
-    group: 'analyzer-chunking',
-    label: 'Stage-1 chunk char budget',
-    help: 'Maximum characters per stage-1 cast-detection chunk before the chapter is split. For local engines the effective budget is derived (lowered) from Ollama num_ctx so a large or non-Latin chapter can never overflow the context window.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 24000,
-  },
-  {
-    key: 'analyzer.stage2.minCoverage',
-    group: 'analyzer-chunking',
-    label: 'Coverage min ratio',
-    help: 'Attributed/source word-ratio floor below which a chapter is treated as truncated.',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 0.6,
-  },
-  {
-    key: 'analyzer.stage2.maxCoverage',
-    group: 'analyzer-chunking',
-    label: 'Coverage max ratio',
-    help: 'Attributed/source word-ratio ceiling above which a chapter is treated as a repeat-loop.',
-    type: 'number',
-    min: 1,
-    max: 5,
-    step: 0.1,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 1.6,
-  },
-  {
-    key: 'analyzer.stage2.endingTailWords',
-    group: 'analyzer-chunking',
-    label: 'Ending tail words',
-    help: 'How many trailing source words must appear in the output for the chapter ending to be considered present.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 8,
-  },
-  {
-    key: 'analyzer.stage2.minDupRun',
-    group: 'analyzer-chunking',
-    label: 'Min duplicated-sentence run',
-    help: 'Smallest contiguous run of duplicated sentences (constant offset) flagged as a repeat-loop.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 4,
-  },
-  {
-    key: 'analyzer.stage2.coverageRetries',
-    group: 'analyzer-chunking',
-    label: 'Coverage-guard retries',
-    help: 'Number of re-runs when stage-2 coverage fails; 0 disables the guard.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 2,
-  },
-  {
-    key: 'qa.seg.maxRerecords',
-    group: 'qa-gates',
-    label: 'Signal QA max re-records',
-    help: 'How many times a suspect sentence is re-recorded before keeping the best take; 0 disables the gate.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 2,
-  },
-  {
-    key: 'qa.seg.silenceRms',
-    group: 'qa-gates',
-    label: 'Silence RMS threshold',
-    help: 'Mean RMS at or below this value marks a segment as dead/near-silent.',
-    type: 'number',
-    min: 0,
-    max: 0.1,
-    step: 0.001,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.003,
-  },
-  {
-    key: 'qa.seg.noiseFloor',
-    group: 'qa-gates',
-    label: 'Noise floor',
-    help: 'Normalised sample amplitude below which a sample is counted as silent for the internal-silence-run scan.',
-    type: 'number',
-    min: 0,
-    max: 0.1,
-    step: 0.001,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.01,
-  },
-  {
-    key: 'qa.seg.maxInternalSilenceSec',
-    group: 'qa-gates',
-    label: 'Max internal silence (s)',
-    help: 'Longest contiguous near-silent run above this (seconds) marks a segment as suspect.',
-    type: 'number',
-    min: 0.1,
-    max: 10,
-    step: 0.1,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 1.5,
-  },
-  {
-    key: 'qa.seg.minRatio',
-    group: 'qa-gates',
-    label: 'Duration min ratio',
-    help: 'Duration/expected ratio below this marks a segment as truncated.',
-    type: 'number',
-    min: 0,
-    max: 5,
-    step: 0.1,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.4,
-  },
-  {
-    key: 'qa.seg.maxRatio',
-    group: 'qa-gates',
-    label: 'Duration max ratio',
-    help: 'Duration/expected ratio above this marks a segment as runaway/garbled.',
-    type: 'number',
-    min: 0,
-    max: 5,
-    step: 0.1,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 2.5,
-  },
-  {
-    key: 'qa.seg.minRunawaySec',
-    group: 'qa-gates',
-    label: 'Runaway absolute floor (s)',
-    help: 'A segment is only flagged "runaway" when its rendered audio is at least this many seconds long. Stops one-word lines (sub-second expected duration) from false-flagging. 0 disables the floor.',
-    type: 'number',
-    min: 0,
-    max: 30,
-    step: 0.5,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 3,
-  },
-  {
-    key: 'qa.asr.enabled',
-    group: 'qa-gates',
-    label: 'ASR QA enabled',
-    help: 'Enable Whisper-based content verification; requires the sidecar venv with faster-whisper installed.',
-    type: 'boolean',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'qa.asr.maxRerecords',
-    group: 'qa-gates',
-    label: 'ASR max re-records',
-    help: 'Re-record budget for ASR drift; 0 = detect and flag only.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 2,
-  },
-  {
-    key: 'qa.asr.sampleEvery',
-    group: 'qa-gates',
-    label: 'ASR sample rate',
-    help: 'Transcribe 1-in-N sentences; 1 = every sentence.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 1,
-  },
-  {
-    key: 'qa.asr.maxWer',
-    group: 'qa-gates',
-    label: 'ASR max WER',
-    help: 'Word-error-rate above this threshold is flagged as content drift.',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.4,
-  },
-  {
-    key: 'qa.asr.maxWer.es',
-    group: 'qa-gates',
-    label: 'ASR max WER (Spanish)',
-    help: 'Spanish-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.4,
-  },
-  {
-    key: 'qa.asr.maxWer.ru',
-    group: 'qa-gates',
-    label: 'ASR max WER (Russian)',
-    help: 'Russian-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.4,
-  },
-  {
-    key: 'qa.asr.maxWer.fr',
-    group: 'qa-gates',
-    label: 'ASR max WER (French)',
-    help: 'French-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.4,
-  },
-  {
-    key: 'qa.asr.maxWer.de',
-    group: 'qa-gates',
-    label: 'ASR max WER (German)',
-    help: 'German-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.4,
-  },
-  {
-    key: 'qa.speaker.enabled',
-    group: 'qa-gates',
-    label: 'Render-integrity QA (voice match)',
-    help: 'When on, each rendered line of a stochastic-engine character is embedded (ECAPA speaker model) and checked for acoustic match against the character\'s voice centroid, flagging misfires. Off by default. CPU (zero VRAM).',
-    type: 'boolean',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'qa.speaker.device',
-    group: 'qa-gates',
-    label: 'Voice-QA device',
-    help: '"cpu" (default) uses zero VRAM and never competes with synthesis. "cuda" runs the embed on the GPU — only worthwhile with GPU_VRAM_BUDGET >= 2 (at the default budget of 1 it serialises behind synth and is likely slower than cpu). Changing the device restarts the sidecar.',
-    type: 'string',
-    apply: 'restart-sidecar',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'cpu',
-  },
-  {
-    key: 'qa.asr.device',
-    group: 'qa-gates',
-    label: 'Content-QA (Whisper) device',
-    help: '"cpu" (default) uses zero VRAM. "cuda" runs Whisper on the GPU; pin a card with "cuda:1". Changing the device restarts the sidecar.',
-    type: 'string',
-    apply: 'restart-sidecar',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'cpu',
-  },
-  {
-    key: 'qa.speaker.autoRepair',
-    group: 'qa-gates',
-    label: 'Auto-fix voice mismatches',
-    help: 'When on, severe voice-mismatch lines are re-rendered and replaced if the fresh take matches. Off until calibration confirms a low false-positive rate.',
-    type: 'boolean',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'qa.asr.maxDeletionRun',
-    group: 'qa-gates',
-    label: 'ASR max deletion run',
-    help: 'Longest contiguous deletion run above this signals truncation/drop drift.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 4,
-  },
-  {
-    key: 'qa.asr.minChars',
-    group: 'qa-gates',
-    label: 'ASR min chars',
-    help: 'Sentences shorter than this (trimmed chars) are not scored — too short for reliable WER.',
-    type: 'integer',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 12,
-  },
-  {
-    key: 'qa.asr.minRefWords',
-    group: 'qa-gates',
-    label: 'ASR min reference words',
-    help: 'On 2-word references a single ASR substitution is routed to inconclusive instead of drift — one homophone on a two-word line is weak evidence. 1-word refs and deletions/insertions still flag. 0 disables.',
-    type: 'integer',
-    min: 0,
-    max: 10,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 2,
-  },
-  {
-    key: 'qa.asr.maxBridgeRun',
-    group: 'qa-gates',
-    label: 'ASR max compound-bridge run',
-    help: 'Longest adjacent token run rejoined to a single manuscript token when Whisper splits an invented name (e.g. "Scapegrace" → "scape a grace"). 3 catches three-token splits; set to 2 to restore pair-only bridging.',
-    type: 'integer',
-    min: 2,
-    max: 4,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 3,
-  },
-  {
-    key: 'qa.asr.homophone1Word',
-    group: 'qa-gates',
-    label: 'ASR 1-word homophone tolerance',
-    help: 'On a single-word reference, a lone substitution within one edit of what was heard ("Uneventfully" → "Unaventfully") is treated as a spelling variant (inconclusive) rather than drift. Disable to flag every 1-word mismatch. Far-apart substitutions still drift.',
-    type: 'boolean',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: true,
-  },
-  {
-    key: 'qa.asr.maxCompression',
-    group: 'qa-gates',
-    label: 'ASR max compression ratio',
-    help: 'Whisper compression_ratio above this indicates a loop/repeat hallucination regardless of WER.',
-    type: 'number',
-    min: 1,
-    max: 10,
-    step: 0.1,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 2.4,
-  },
-  {
-    key: 'qa.asr.minAvgLogprob',
-    group: 'qa-gates',
-    label: 'ASR min avg log-prob',
-    help: 'Whisper avg_logprob below this makes the transcript untrustworthy (inconclusive, not a re-record).',
-    type: 'number',
-    min: -5,
-    max: 0,
-    step: 0.1,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: -1,
-  },
-  {
-    key: 'qa.asr.maxNoSpeech',
-    group: 'qa-gates',
-    label: 'ASR max no-speech prob',
-    help: 'Whisper no_speech_prob above this makes the transcript untrustworthy (inconclusive).',
-    type: 'number',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 0.6,
-  },
-  {
-    key: 'tts.batch.size',
-    group: 'tts-batching',
-    label: 'Qwen batch size',
-    help: 'Hard width cap: max sentences packed into one batched Qwen forward. Set to 1 to disable batching entirely (every Qwen sentence becomes its own call). Only affects Qwen — Coqui/Kokoro/Gemini always synth one-per-call.',
-    type: 'integer',
-    min: 1,
-    apply: 'restart-server',
-    risk: 'medium',
-    isPrompt: false,
-    default: 32,
-  },
-  {
-    key: 'tts.batch.tokenBudget',
-    group: 'tts-batching',
-    label: 'Qwen batch token budget',
-    help: 'Variable-width packing budget (normalised chars): keep adding sentences to a batch while (count+1) × maxLen ≤ budget. Short/dialogue batches pack wider; long batches stay narrow. Set to 0 for exact fixed-width slicing (QWEN_BATCH_SIZE only, kill-switch).',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-server',
-    risk: 'medium',
-    isPrompt: false,
-    default: 3600,
-  },
-  {
-    key: 'tts.batch.size17b',
-    group: 'tts-batching',
-    label: 'Qwen 1.7B batch size',
-    help: 'Hard width cap for the 1.7B Quality-tier specifically. Defaults to the same 32 as the 0.6B tier: once the 0.6B base is no longer co-resident (#1162 readiness-gate fix evicts the unused tier), a 1.7B render fits 32/3600 on an 8 GB card (measured peak ~5.7 GB, ~1.7 GB margin under the recycle line) at ~2× real-time. Lower this (and the budget below) on a smaller card if you hit a recycle storm. Only affects 1.7B groups.',
-    type: 'integer',
-    min: 1,
-    apply: 'restart-server',
-    risk: 'medium',
-    isPrompt: false,
-    default: 32,
-  },
-  {
-    key: 'tts.batch.tokenBudget17b',
-    group: 'tts-batching',
-    label: 'Qwen 1.7B batch token budget',
-    help: 'Variable-width packing budget (normalised chars) for the 1.7B Quality tier only. Defaults to the same 3600 as the 0.6B tier (safe on an 8 GB card post-#1162, since the unused 0.6B base no longer co-resides). Lower it on a smaller card if a 1.7B render trips the VRAM recycle. Set to 0 for exact fixed-width slicing on the 1.7B tier (tts.batch.size17b only).',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-server',
-    risk: 'medium',
-    isPrompt: false,
-    default: 3600,
-  },
-  {
-    key: 'tts.batch.bucket',
-    group: 'tts-batching',
-    label: 'Qwen batch length bucketing',
-    help: 'Sort batchable Qwen groups by normalised text length before slicing into batches, so similar-length sentences share a batch (less padding waste). Output is byte-identical regardless of batch composition. Set to false to revert to index order.',
-    type: 'boolean',
-    apply: 'restart-server',
-    risk: 'medium',
-    isPrompt: false,
-    default: true,
-  },
-  {
-    key: 'tts.gen.workers',
-    group: 'tts-batching',
-    label: 'Generation workers',
-    help: 'Number of chapters the generation queue synthesises concurrently. Queue/synthesis concurrency only — the GPU semaphore is the VRAM guard. Default 1: the Qwen forward is serialised, so a 2nd same-book worker just contends on the lock, doubles per-chapter RTF, and accelerates the host-memory leak toward a recycle. Raise only on a multi-GPU / non-Qwen setup.',
-    type: 'integer',
-    min: 1,
-    max: 4,
-    apply: 'restart-server',
-    risk: 'medium',
-    isPrompt: false,
-    default: 1,
-  },
-  {
-    key: 'tts.accelerator',
-    group: 'tts-engine',
-    label: 'Accelerator profile',
-    help: 'Which GPU stack the voice engines install + run on. "auto" (default) detects your hardware (NVIDIA → CUDA, AMD → ROCm/DirectML, Apple → Metal, else CPU). Pin "nvidia", "amd", or "cpu" to override. Changing this is NOT instant: it REBUILDS the Python environment (a different torch / ONNX-runtime install) and restarts the sidecar — your books and voices are untouched. AMD (ROCm/DirectML) is an experimental preview.',
-    type: 'enum',
-    options: ['auto', 'nvidia', 'amd', 'cpu'],
-    apply: 'rebuild',
-    risk: 'high',
-    isPrompt: false,
-    default: 'auto',
-  },
-  {
-    key: 'tts.coqui.device',
-    group: 'tts-engine',
-    label: 'Coqui device',
-    help: 'Device for Coqui XTTS v2. "auto" lets the sidecar pick based on CUDA availability. Changing this requires a sidecar restart.',
-    type: 'device',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 'auto',
-  },
-  {
-    key: 'tts.kokoro.device',
-    group: 'tts-engine',
-    label: 'Kokoro device',
-    help: 'Device for Kokoro (onnxruntime). "auto" lets the sidecar pick; pin a card with "cuda:1" or force "cpu". Changing this requires a sidecar restart.',
-    type: 'device',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 'auto',
-  },
-  {
-    key: 'tts.qwen.attnImpl',
-    group: 'tts-engine',
-    label: 'Qwen attention impl',
-    help: '"sdpa" is the PyTorch-native default and requires no extra deps. "flash_attention_2" needs the flash-attn wheel and benchmarks ≈ SDPA on the 4070 (TTS is decode-bound, not prefill-bound). Changing this requires a sidecar restart.',
-    type: 'enum',
-    options: ['sdpa', 'flash_attention_2'],
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 'sdpa',
-  },
-  {
-    key: 'tts.preload.coqui',
-    group: 'tts-engine',
-    label: 'Preload Coqui at startup',
-    help: 'When true, the sidecar eagerly loads Coqui XTTS v2 at startup (~30-60 s, ~3 GB VRAM). When false (default), Coqui loads on demand via the in-app Load button. Changing this requires a sidecar restart.',
-    type: 'boolean',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'tts.preload.kokoro',
-    group: 'tts-engine',
-    label: 'Preload Kokoro at startup',
-    help: 'When true (default), the sidecar eagerly loads Kokoro v1 at startup (~1 s, ~1 GB VRAM). When false, Kokoro warms on demand on the first synth that needs it. Turn off if Qwen is your main engine and you want the ~1 GB VRAM back. Changing this requires a sidecar restart.',
-    type: 'boolean',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: true,
-  },
-  {
-    key: 'tts.preload.qwen',
-    group: 'tts-engine',
-    label: 'Preload Qwen at startup',
-    help: 'When true, the sidecar eagerly loads the Qwen Base synth model (~1.2 GB VRAM) at startup. When false (default), Qwen warms on demand via the in-app Load button. Only the Base model is eagerly warmed — the VoiceDesign model stays transient. Changing this requires a sidecar restart.',
-    type: 'boolean',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'tts.preload.qwenBase17',
-    group: 'tts-engine',
-    label: 'Preload Qwen 1.7B-Base at startup',
-    help: 'When true, the sidecar eagerly loads the Qwen 1.7B-Base model (~3.4 GB VRAM) at startup. Required for the anchored emotion-variant workflow (fs-55). When false (default), the 1.7B-Base warms on demand via the in-app Load button or POST /load {engine:"qwen", model:"1.7b"}. Changing this requires a sidecar restart.',
-    type: 'boolean',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'gpu.reserveMb',
-    group: 'gpu-lifecycle',
-    label: 'GPU VRAM reserve cap (MB)',
-    help: 'Ceiling on the VRAM safety cushion held back from every capacity admission. The actual per-device cushion is min(5% of that device\'s own VRAM, this cap) — right-sized to the card rather than a flat subtraction. Read by the sidecar (its primary consumer) at process start, so a change needs a sidecar restart to fully take effect.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 500,
-  },
-  {
-    key: 'sidecar.qwenDesignIdleTtl',
-    group: 'gpu-lifecycle',
-    label: 'Qwen VoiceDesign idle TTL (s)',
-    help: 'Seconds of voice-design inactivity before the watchdog frees the transient Qwen VoiceDesign 1.7B model (reclaiming ~4–5 GB VRAM). Values below 5 fall back to the default (120) to avoid reload thrash. A real /synthesize also frees it immediately.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 120,
-  },
-  {
-    key: 'sidecar.qwenBase17IdleTtl',
-    group: 'gpu-lifecycle',
-    label: 'Qwen 1.7B-Base idle TTL (s)',
-    help: 'Seconds of inactivity before the watchdog frees the resident Qwen 1.7B-Base model (reclaiming ~3.4 GB VRAM). It stays warm across back-to-back emotion-variant mints and 1.7B (Quality-tier) synths so a full-library re-mint runs in one pass without fragmenting the CUDA allocator (issue #1024); lower this to shrink the warm window on a small card. Values below 5 fall back to the default (120) to avoid reload thrash.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 120,
-  },
-  {
-    key: 'sidecar.coquiIdleTtl',
-    group: 'gpu-lifecycle',
-    label: 'Coqui (XTTS) idle TTL (s)',
-    help: 'Seconds of Coqui inactivity before a VRAM-starved operation may reclaim the resident XTTS model (~3 GB). Unlike the other idle TTLs there is no background watchdog — this only ever fires when another operation would otherwise fail for want of VRAM. Raise it if a mixed-engine book keeps reloading XTTS between chapters (a reload costs ~90s); lower it if renders still fail while an idle Coqui is loaded. Values below 5 fall back to the default (30) to avoid reload thrash.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 30,
-  },
-  {
-    key: 'sidecar.asrIdleTtl',
-    group: 'gpu-lifecycle',
-    label: 'ASR (Whisper) idle TTL (s)',
-    help: 'Seconds of ASR inactivity before the sidecar frees the Whisper model. Mainly reclaims VRAM on ASR_DEVICE=cuda; on cpu it frees host RAM. Values below 5 fall back to the default (120) to avoid reload thrash.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 120,
-  },
-  {
-    key: 'sidecar.spkIdleTtl',
-    group: 'gpu-lifecycle',
-    label: 'Speaker-embed (ECAPA) idle TTL (s)',
-    help: 'Seconds of speaker-embed inactivity before the sidecar frees the ECAPA model. Reclaims VRAM only on SPK_DEVICE=cuda (a no-op on cpu). Values below 5 fall back to the default (120) to avoid reload thrash.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 120,
-  },
-  {
-    key: 'sidecar.disableMkldnn',
-    group: 'gpu-lifecycle',
-    label: 'Disable torch MKLDNN',
-    help: 'When true, sets torch.backends.mkldnn.enabled = False at model load to curb the variable-shape CPU host-RAM leak (pytorch#32596). CPU-only flag — a no-op if the leak is on the CUDA allocator side. Default off (opt-in until a live A/B proves the committed slope flattens).',
-    type: 'boolean',
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: false,
-  },
-  {
-    key: 'sidecar.recycleSoftMb',
-    group: 'gpu-lifecycle',
-    label: 'Soft recycle threshold (MB committed RAM)',
-    help: 'Committed-private RAM (MB) at which the sidecar sets recycle_pending in /health, triggering a clean chapter-boundary recycle rather than a mid-chapter hard exit. 0 = disabled (default). Set a few GB below SIDECAR_RESTART_MB.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 0,
-  },
-  {
-    key: 'sidecar.restartMb',
-    group: 'gpu-lifecycle',
-    label: 'Hard restart threshold (MB committed RAM)',
-    help: 'Committed-private RAM (MB) at which the sidecar self-exits so the supervisor respawns a fresh process (process recycling). 0 = auto (default): uses 70% of total physical RAM when psutil can read it, or disabled when it cannot. Override with an absolute MB value.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 0,
-  },
-  {
-    key: 'sidecar.vramRecycleSoftMb',
-    group: 'gpu-lifecycle',
-    label: 'Soft VRAM recycle threshold (MB reserved)',
-    help: 'Reserved VRAM (MB) at which the sidecar sets recycle_pending in /health. 0 = auto (default): uses 90% of device total VRAM when readable. Override with an absolute MB value to tune for your card.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 0,
-  },
-  {
-    key: 'sidecar.vramRestartMb',
-    group: 'gpu-lifecycle',
-    label: 'Hard VRAM restart threshold (MB reserved)',
-    help: 'Reserved VRAM (MB) at which the sidecar self-exits so the supervisor respawns a fresh CUDA context (the only thing that resets a spilled/fragmented VRAM pool). 0 = auto (default): uses 98% of device total VRAM when readable. Override with an absolute MB value.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'high',
-    isPrompt: false,
-    default: 0,
-  },
-  {
-    key: 'sidecar.vramFreeFloorMb',
-    group: 'gpu-lifecycle',
-    label: 'Per-card VRAM free floor (MB)',
-    help: 'Absolute free-VRAM headroom below which a card is treated as critically low and the sidecar recycles. The only OOM guard for Kokoro/Whisper (their VRAM is invisible to the torch-reserved metric). Default 1024MB.',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-sidecar',
-    risk: 'medium',
-    isPrompt: false,
-    default: 1024,
-  },
-  {
-    key: 'analyzer.ollama.numCtx',
-    group: 'analyzer-sampling',
-    label: 'Ollama num_ctx',
-    help: 'Context-window size handed to Ollama on every /api/chat call. Ollama keys the KV cache by (model, num_ctx), so warming with default 32768 and then changing it forces a re-load. Larger = more KV-cache VRAM; 32768 gives large/non-Latin chapters headroom (the stage-1/2 chunkers handle anything still over budget). Lower it if a bigger analyzer model strains the GPU.',
-    type: 'integer',
-    min: 0,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 32768,
-  },
-  {
-    key: 'analyzer.ollama.numGpu',
-    group: 'analyzer-sampling',
-    label: 'Ollama num_gpu',
-    help: 'Number of GPU layers for Ollama (999 = all layers). Ollama treats this as part of its load-time cache key alongside num_ctx, so mismatching values between /load and /api/chat can force redundant model swaps. Hardcoded today; registering this env name lifts it to a runtime knob.',
-    type: 'integer',
-    min: 0,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 999,
-  },
-  {
-    key: 'rate.rpm.gemma',
-    group: 'rate-limits',
-    label: 'Gemma 4 31B RPM',
-    help: 'Requests-per-minute cap for gemma-4-31b-it. Override to adjust the free-tier limit (default 30 RPM from AI Studio 2026-05-16). The limiter waits proactively so no 429s are issued.',
-    type: 'integer',
-    min: 1,
-    apply: 'restart-server',
-    risk: 'low',
-    isPrompt: false,
-    default: 30,
-  },
-  {
-    key: 'rate.tpm.gemma',
-    group: 'rate-limits',
-    label: 'Gemma 4 31B TPM',
-    help: 'Input-tokens-per-minute cap for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key — the limiter then treats it as Infinity (no TPM gate).',
-    type: 'integer',
-    min: 0,
-    apply: 'restart-server',
-    risk: 'low',
-    isPrompt: false,
-    default: 16000,
-  },
-  {
-    key: 'rate.rpd.gemma',
-    group: 'rate-limits',
-    label: 'Gemma 4 31B RPD',
-    help: 'Requests-per-day cap for gemma-4-31b-it. Default 14400 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
-    type: 'integer',
-    min: 1,
-    apply: 'restart-server',
-    risk: 'low',
-    isPrompt: false,
-    default: 14400,
-  },
-  {
-    key: 'audio.loudnorm.enabled',
-    group: 'audio-loudness',
-    label: 'Loudnorm enabled',
-    help: 'Enable EBU R128 two-pass loudness normalisation; disable to skip normalisation entirely.',
-    type: 'boolean',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: true,
-  },
-  {
-    key: 'audio.loudnorm.targetLufs',
-    group: 'audio-loudness',
-    label: 'Target LUFS',
-    help: 'Integrated loudness target in LUFS; -16 matches the Audible/ACX audiobook spec.',
-    type: 'number',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: -16,
-  },
-  {
-    key: 'audio.loudnorm.lra',
-    group: 'audio-loudness',
-    label: 'Loudness range (LRA)',
-    help: 'Target loudness range in LU; 11 is the audiobook community standard.',
-    type: 'number',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 11,
-  },
-  {
-    key: 'audio.loudnorm.truePeak',
-    group: 'audio-loudness',
-    label: 'True-peak ceiling (dBTP)',
-    help: 'True-peak ceiling; -1.5 leaves headroom for codec inter-sample peaks.',
-    type: 'number',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: -1.5,
-  },
-  {
-    key: 'analyzer.engine',
-    group: 'analyzer-models',
-    label: 'Analyzer engine',
-    help: '"local" routes through the Ollama daemon (auto-falls back to Gemini when Ollama is unreachable and GEMINI_API_KEY is set). "gemini" always goes direct to the Gemini API.',
-    type: 'enum',
-    options: ['local', 'gemini'],
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'local',
-  },
-  {
-    key: 'analyzer.ollama.url',
-    group: 'analyzer-models',
-    label: 'Ollama URL',
-    help: 'Base URL of the local Ollama daemon.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'http://localhost:11434',
-  },
-  {
-    key: 'analyzer.ollama.model',
-    group: 'analyzer-models',
-    label: 'Ollama model',
-    help: 'Ollama model tag passed to /api/chat as the last-resort fallback. The Account-tab model picker takes precedence when it has Ollama tag shape (contains ":")',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'qwen3.5:4b',
-  },
-  {
-    key: 'analyzer.gemini.model',
-    group: 'analyzer-models',
-    label: 'Gemini analyzer model',
-    help: 'Gemini model used directly (ANALYZER=gemini) or as the Ollama-unreachable fallback (ANALYZER=local). Separate free-tier bucket from gemini-* models; lower daily-hit risk for per-chapter stage-2 analysis.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'gemma-4-31b-it',
-  },
-  {
-    key: 'analyzer.gemini.voiceStyleModel',
-    group: 'analyzer-models',
-    label: 'Voice-style model',
-    help: 'Gemini model used to design each cast member\'s natural-language voice persona (one call per character). Pinned to gemini-3.1-flash-lite (its own free-tier RPD bucket). Routes through the same per-model rate limiter as the main analyzer.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'gemini-3.1-flash-lite',
-  },
-  {
-    key: 'analyzer.personaGeneration.engine',
-    group: 'analyzer-models',
-    label: 'Persona generation engine',
-    help: '"gemini" (default) designs each cast member\'s voice persona via the Gemini API — the locked quality choice. "local" routes persona generation through the local Ollama daemon so a no-Gemini install can still design voices. No silent cross-provider fallback: gemini with no key, or local with the daemon down, fails with a clear message.',
-    type: 'enum',
-    options: ['local', 'gemini'],
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'gemini',
-  },
-  {
-    key: 'analyzer.personaGeneration.localModel',
-    group: 'analyzer-models',
-    label: 'Persona local model',
-    help: 'Ollama model tag (e.g. qwen3.5:9b) used when persona generation engine is "local". Blank inherits the analyzer\'s resolved local model, so a box that has run local analysis needs no extra download.',
-    type: 'string',
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: '',
-  },
-  {
-    key: 'analyzer.phase0.model',
-    group: 'analyzer-models',
-    label: 'Phase-0 model override',
-    help: 'When set, drives Phase 0 (cast detection) with this specific model while Phase 1 uses ANALYZER_PHASE1_MODEL. Leave empty to use the legacy single-model ANALYZER path for both phases. The two analyzers hit independent rate-limit buckets, so quota is effectively doubled.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: '',
-  },
-  {
-    key: 'analyzer.phase1.model',
-    group: 'analyzer-models',
-    label: 'Phase-1 model override',
-    help: 'When set, drives Phase 1 (sentence attribution) with this specific model while Phase 0 uses ANALYZER_PHASE0_MODEL. Leave empty to use the legacy single-model ANALYZER path.',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: '',
-  },
-  {
-    key: 'analyzer.phase1.minLagChapters',
-    group: 'analyzer-models',
-    label: 'Phase-1 minimum lag (chapters)',
-    help: 'Minimum number of Phase-0 chapters that must complete ahead of any Phase-1 dispatch. Ensures the roster is populated before attribution starts. Set to 0 to release the lag entirely. Only active when the per-phase model split is configured.',
-    type: 'integer',
-    min: 0,
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 10,
-  },
-  {
-    key: 'prompt.castDetection',
-    group: 'analyzer-prompts',
-    label: 'Cast detection prompt',
-    help: 'The skill file sent to the analysis model for Phase-0 cast detection. Editing forks a local copy at the path below; the server reads the file on every analysis call so changes take effect without a restart.',
-    type: 'string',
-    apply: 'live',
-    risk: 'high',
-    isPrompt: true,
-    default: 'skills/audiobook-character-detection-per-chapter.md',
-  },
-  {
-    key: 'prompt.sentenceAttribution',
-    group: 'analyzer-prompts',
-    label: 'Sentence attribution prompt',
-    help: 'The skill file sent to the analysis model for Phase-1 sentence attribution. Editing forks a local copy; changes take effect without a restart.',
-    type: 'string',
-    apply: 'live',
-    risk: 'high',
-    isPrompt: true,
-    default: 'skills/audiobook-sentence-attribution.md',
-  },
-  {
-    key: 'prompt.emotionAnnotation',
-    group: 'analyzer-prompts',
-    label: 'Emotion annotation prompt',
-    help: 'The skill file sent to the analysis model for per-quote emotion annotation. Editing forks a local copy; changes take effect without a restart.',
-    type: 'string',
-    apply: 'live',
-    risk: 'high',
-    isPrompt: true,
-    default: 'skills/audiobook-emotion-annotation.md',
-  },
-  {
-    key: 'prompt.scriptReview',
-    group: 'analyzer-prompts',
-    label: 'Script review prompt',
-    help: 'The skill file sent to the analysis model for per-chapter script review (strip_tag/split/extract_dialogue/merge/fix_emotion ops). Editing forks a local copy; changes take effect without a restart.',
-    type: 'string',
-    apply: 'live',
-    risk: 'high',
-    isPrompt: true,
-    default: 'skills/audiobook-script-review.md',
-  },
-  {
-    key: 'prompt.instructAnnotation',
-    group: 'analyzer-prompts',
-    label: 'Instruct-annotation prompt',
-    help: 'The skill file sent to the analysis model for per-chapter instruct-annotation (delivery directions + vocalization flags). Editing forks a local copy; changes take effect without a restart.',
-    type: 'string',
-    apply: 'live',
-    risk: 'high',
-    isPrompt: true,
-    default: 'skills/audiobook-instruct-annotation.md',
-  },
-  {
-    key: 'prompt.voiceStyle',
-    group: 'analyzer-prompts',
-    label: 'Voice-style prompt',
-    help: 'The skill file sent to the model for voice-persona generation (one call per cast member). Editing forks a local copy; revert restores the shipped prompt.',
-    type: 'string',
-    apply: 'live',
-    risk: 'high',
-    isPrompt: true,
-    default: 'skills/audiobook-voice-style.md',
-  },
-  {
-    key: 'lan.deviceTokenTtlDays',
-    group: 'lan-access',
-    label: 'Device authorization lifetime (days)',
-    help: 'How long a browser/device authorization stays valid before it must be re-paired.',
-    type: 'integer',
-    min: 1,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 30,
-  },
-  // analyzer-structure — mirror server/src/config/registry.ts (parity-tested
-  // in api.config.test.ts so this can't drift from the real §12 group).
-  {
-    key: 'analyzer.structure.enabled',
-    group: 'analyzer-structure',
-    label: 'Structure engine',
-    help: 'Deterministic dialogue-structure pass that corrects tag-proven attributions and derives honest confidence. Off = pre-engine behaviour.',
-    type: 'boolean',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: true,
-  },
-  {
-    key: 'analyzer.structure.escalation',
-    group: 'analyzer-structure',
-    label: 'Attribution escalation',
-    help: "Second-pass re-query of unresolved dialogue windows: 'local' (default) uses the configured analyzer, 'cloud' the Gemini-API Gemma model, 'off' disables.",
-    type: 'enum',
-    options: ['off', 'local', 'cloud'],
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: 'local',
-  },
-  {
-    key: 'analyzer.structure.maxWindowsPerChapter',
-    group: 'analyzer-structure',
-    label: 'Escalation windows per chapter',
-    help: 'Cap on re-queried conversation windows per chapter.',
-    type: 'integer',
-    min: 0,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 120,
-  },
-  {
-    key: 'analyzer.structure.maxWindowsPerBook',
-    group: 'analyzer-structure',
-    label: 'Escalation windows per book',
-    help: 'Cap on re-queried conversation windows per full-book analysis.',
-    type: 'integer',
-    min: 0,
-    apply: 'live',
-    risk: 'low',
-    isPrompt: false,
-    default: 600,
-  },
-];
+/* #2270 — the mock catalogue is now projected straight from the server
+   registry with no hand-written exceptions: retiring the last two UI-only
+   descriptors (one with no registry equivalent at all, the other
+   superseded by the six real isPrompt knobs at registry.ts:1198-1248)
+   also removed the two legacy groups ('tts', 'analyzer') that existed
+   solely to host them. */
+const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = allKnobDescriptors();
 
-const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
-  {
-    id: 'tts',
-    label: 'Text-to-speech',
-    help: 'Synthesis engine settings.',
-    risk: 'low',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'analyzer',
-    label: 'Analyzer',
-    help: 'Analysis prompt templates and tuning.',
-    risk: 'medium',
-    collapsedByDefault: true,
-  },
-  {
-    id: 'tts-engine',
-    label: 'Voice engine & device',
-    help: 'Voice engine device, language, and preload behaviour.',
-    risk: 'high',
-    collapsedByDefault: true,
-  },
-  {
-    id: 'analyzer-sampling',
-    label: 'LLM sampling parameters',
-    help: 'Temperature and token limits for the analysis model.',
-    risk: 'medium',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'analyzer-chunking',
-    label: 'Analyzer chunking & truncation guards',
-    help: 'How chapters are split and how truncation/loops are detected.',
-    risk: 'medium',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'analyzer-prompts',
-    label: 'Analyzer prompts & skills',
-    help: 'The instructions sent to the analysis model. Editing forks a local copy.',
-    risk: 'high',
-    collapsedByDefault: true,
-  },
-  {
-    id: 'analyzer-models',
-    label: 'Analyzer models & endpoints',
-    help: 'Which model/endpoint runs the analysis.',
-    risk: 'medium',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'tts-batching',
-    label: 'Voice batching & throughput',
-    help: 'Batch sizing and generation concurrency.',
-    risk: 'medium',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'qa-gates',
-    label: 'Per-sentence QA gates',
-    help: 'Acoustic and ASR checks applied before assembly.',
-    risk: 'low',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'audio-loudness',
-    label: 'Audio loudness targets',
-    help: 'EBU R128 normalization targets.',
-    risk: 'low',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'gpu-lifecycle',
-    label: 'GPU arbitration, memory & lifecycle',
-    help: 'Idle-eviction TTLs, the per-device VRAM reserve, and sidecar recycle/restart thresholds. Footguns live here.',
-    risk: 'high',
-    collapsedByDefault: true,
-  },
-  {
-    id: 'rate-limits',
-    label: 'Gemini rate limits',
-    help: 'Per-model request/token/day caps for the Gemini API.',
-    risk: 'low',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'lan-access',
-    label: 'LAN access & device tokens',
-    help: 'Lifetime of browser/device authorizations minted from Admin.',
-    risk: 'low',
-    collapsedByDefault: false,
-  },
-  {
-    id: 'analyzer-structure',
-    label: 'Dialogue-structure attribution',
-    help: 'Deterministic structure engine that corrects/flags stage-2 attributions.',
-    risk: 'medium',
-    collapsedByDefault: false,
-  },
-];
+/* #2270 review nit — copy rather than alias REGISTRY_GROUPS: no caller
+   mutates MOCK_CONFIG_GROUPS today, but handing out the server registry's
+   own array by reference means a future in-place mutation here would
+   corrupt the real registry's GROUPS for every other consumer. */
+const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [...REGISTRY_GROUPS];
 
 /* In-memory mock config store. Starts with default values; PUT/reset mutate it.
    Every knob's `effective` is derived from MOCK_CONFIG_DESCRIPTORS' `default`
@@ -9485,15 +8433,20 @@ function deriveMockConfigDefaults(): import('./types').ConfigValues {
 
 const MOCK_CONFIG_VALUES: import('./types').ConfigValues = deriveMockConfigDefaults();
 
-/* In-memory prompt store keyed by id. */
+/* In-memory prompt store keyed by id. #2270 — seeded with a real registry
+   isPrompt knob (prompt.castDetection, one of the six at
+   registry.ts:1198-1248) rather than a retired UI-only fiction;
+   text/defaultText stand in for the real prompt file's content (the
+   registry's own `default` for this key is the skill file's path, not
+   its content). */
 const MOCK_PROMPTS = new Map<string, PromptState>([
   [
-    'ANALYZER_STAGE1_PROMPT',
+    'prompt.castDetection',
     {
-      id: 'ANALYZER_STAGE1_PROMPT',
-      text: 'Attribute each sentence to its speaker.',
+      id: 'prompt.castDetection',
+      text: 'Detect every speaking character introduced or recurring in this chapter.',
       isForked: false,
-      defaultText: 'Attribute each sentence to its speaker.',
+      defaultText: 'Detect every speaking character introduced or recurring in this chapter.',
     },
   ],
 ]);
@@ -9530,16 +8483,118 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
   };
 }
 
+/* #2209 — mirrors the real PUT /api/config route's per-key pattern
+   validation (server/src/config/registry.ts's `qa.asr.device` pattern,
+   applied by resolver.ts's coerceAndValidate) so mock mode can exercise a
+   genuine save rejection without inventing a fixture unrelated to real
+   server behaviour — this is #2180's own "cuda1 typo" example, on the
+   exact knob it names. Every other mock knob stays permissive. */
+const MOCK_ASR_DEVICE_PATTERN = /^(cpu|auto|cuda|cuda:\d+)$/i;
+
+/* #2209 review B4 — mirrors server/src/config/pair-rules.ts's
+   ASR_DEVICE_COMPUTE_TYPE_RULE (CT2_SUPPORTED_COMPUTE_TYPES /
+   ASR_COMPUTE_TYPE_SENTINELS / asrDeviceFamily / the check() message) so
+   mock mode's Reset path can reject too — a reset never revalidates a
+   per-key pattern (it always restores a key's own, trivially-valid
+   default), so this cross-field rule is the ONLY way either the real or
+   the mock reset route can fail at all. `api.config.test.ts` asserts this
+   message is byte-identical to importing the real rule and calling it
+   directly, not just similar. */
+const MOCK_CT2_SUPPORTED_COMPUTE_TYPES: Record<'cpu' | 'cuda', readonly string[]> = {
+  cpu: ['float32', 'int8', 'int8_float32'],
+  cuda: ['bfloat16', 'float16', 'float32', 'int8', 'int8_bfloat16', 'int8_float16', 'int8_float32'],
+};
+const MOCK_ASR_COMPUTE_TYPE_SENTINELS = ['sidecar-default', 'auto', 'default'];
+
+function mockAsrDeviceFamily(device: string): 'cpu' | 'cuda' {
+  return device.trim().toLowerCase().startsWith('cuda') ? 'cuda' : 'cpu';
+}
+
+/** The RESULTING effective qa.asr.device/qa.asr.computeType pair — `overrides`
+    supplies whichever of the two a patch/reset touches, the current mock
+    store supplies the other — mirrors the real route's "patch value where
+    touched, else already-in-effect value" pass 2 (config.ts:121-129). Returns
+    the pair-rule's error string when unsupported, else null. Only called
+    when the caller has already checked at least one of the two keys is
+    actually touched (mirrors config.ts:120/180's own guard). */
+function mockAsrPairError(
+  overrides: Partial<Record<'qa.asr.device' | 'qa.asr.computeType', number | boolean | string>>,
+): string | null {
+  const device = String(
+    'qa.asr.device' in overrides
+      ? overrides['qa.asr.device']
+      : MOCK_CONFIG_VALUES['qa.asr.device']?.effective,
+  );
+  const computeType = String(
+    'qa.asr.computeType' in overrides
+      ? overrides['qa.asr.computeType']
+      : MOCK_CONFIG_VALUES['qa.asr.computeType']?.effective,
+  );
+  if (MOCK_ASR_COMPUTE_TYPE_SENTINELS.includes(computeType)) return null;
+  const family = mockAsrDeviceFamily(device);
+  const supported = MOCK_CT2_SUPPORTED_COMPUTE_TYPES[family];
+  if (supported.includes(computeType)) return null;
+  return (
+    `qa.asr.device=${device} + qa.asr.computeType=${computeType} is an unsupported pair — `
+    + `${computeType} is not available on ${family === 'cuda' ? 'a cuda' : 'a cpu (or auto)'} device. `
+    + `Supported compute types here: ${supported.join(', ')} `
+    + `(or the sentinels: ${MOCK_ASR_COMPUTE_TYPE_SENTINELS.join(', ')}).`
+  );
+}
+
+/* #2209 review B1 — matches realPutConfig/realResetConfig's shared
+   thrown shape exactly (`Config ${action} failed (${status}): ${bodyText}`,
+   built by configApiErrorMessage further below in this file), where
+   bodyText is the server's `{ error }` JSON body verbatim — so
+   describeConfigSaveError (components/settings/override-row.tsx) parses a
+   mock-mode rejection identically to a real one, on EITHER verb. Before
+   this review round, the mock (and the real PUT throw site) only ever
+   said "update", so a rejected Reset's wrapper text never matched
+   describeConfigSaveError's regex and rendered raw. */
+function mockConfigErrorMessage(action: string, status: number, error: string): string {
+  return `Config ${action} failed (${status}): ${JSON.stringify({ error })}`;
+}
+
 export async function mockPutConfig(
   patch: Record<string, number | boolean | string>,
 ): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
   await wait(30);
+  // Pass 1 (mirrors the real route): validate the whole patch before
+  // writing anything, so a rejected key can't leave an earlier key in the
+  // same patch already applied.
+  const asrDevice = patch['qa.asr.device'];
+  if (typeof asrDevice === 'string' && !MOCK_ASR_DEVICE_PATTERN.test(asrDevice.trim())) {
+    throw new Error(
+      mockConfigErrorMessage(
+        'update',
+        400,
+        `qa.asr.device: does not match the required shape (${MOCK_ASR_DEVICE_PATTERN.source})`,
+      ),
+    );
+  }
+  // Pass 2 (mirrors the real route's cross-field pass): only runs when the
+  // patch actually touches one of the pair-rule's keys.
+  if ('qa.asr.device' in patch || 'qa.asr.computeType' in patch) {
+    const pairError = mockAsrPairError(patch);
+    if (pairError) throw new Error(mockConfigErrorMessage('update', 400, pairError));
+  }
   const applied: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
     if (key in MOCK_CONFIG_VALUES) {
+      // #2209 review — mirrors resolver.ts's coerceAndValidate: a
+      // pattern-validated knob persists the TRIMMED form, not the raw
+      // input (a match is checked against `s.trim()` above, but this
+      // loop used to write back the untrimmed `value` regardless, so a
+      // padded '  cuda:1  ' would validate and then round-trip its
+      // whitespace into the mock store — a real divergence from the real
+      // server, which explicitly avoids exactly that, per its own
+      // comment citing independent-review finding F4 on PR #2205).
+      // qa.asr.device is the only mock knob with a pattern; every other
+      // key is persisted byte-for-byte as sent, same as before.
+      const persisted = key === 'qa.asr.device' && typeof value === 'string' ? value.trim() : value;
       MOCK_CONFIG_VALUES[key] = {
         ...MOCK_CONFIG_VALUES[key],
-        effective: value,
+        effective: persisted,
         source: 'override',
         overridden: true,
       };
@@ -9562,6 +8617,22 @@ export async function mockResetConfig(body: {
       : body.group
         ? MOCK_CONFIG_DESCRIPTORS.filter((d) => d.group === body.group).map((d) => d.key)
         : [];
+  // #2209 review B4 — mirrors the real reset route's own cross-field pass
+  // (config.ts:178-192): a clearing key resolves to its DEFAULT (not its
+  // current effective value), the other pair-rule key keeps whatever's
+  // already in effect. Runs before anything is actually cleared below.
+  const clearing = new Set(keysToReset);
+  if (clearing.has('qa.asr.device') || clearing.has('qa.asr.computeType')) {
+    const resetOverrides: Partial<Record<'qa.asr.device' | 'qa.asr.computeType', number | boolean | string>> = {};
+    for (const k of ['qa.asr.device', 'qa.asr.computeType'] as const) {
+      if (clearing.has(k)) {
+        const d = MOCK_CONFIG_DESCRIPTORS.find((x) => x.key === k);
+        if (d) resetOverrides[k] = d.default;
+      }
+    }
+    const pairError = mockAsrPairError(resetOverrides);
+    if (pairError) throw new Error(mockConfigErrorMessage('reset', 400, pairError));
+  }
   for (const key of keysToReset) {
     const descriptor = MOCK_CONFIG_DESCRIPTORS.find((d) => d.key === key);
     if (descriptor && key in MOCK_CONFIG_VALUES) {
@@ -9611,11 +8682,11 @@ export async function mockRestartSidecar(): Promise<{ ok: boolean; error?: strin
 /* Test helper — reset the mock config store to its initial defaults. */
 export function _resetMockConfig(): void {
   Object.assign(MOCK_CONFIG_VALUES, deriveMockConfigDefaults());
-  MOCK_PROMPTS.set('ANALYZER_STAGE1_PROMPT', {
-    id: 'ANALYZER_STAGE1_PROMPT',
-    text: 'Attribute each sentence to its speaker.',
+  MOCK_PROMPTS.set('prompt.castDetection', {
+    id: 'prompt.castDetection',
+    text: 'Detect every speaking character introduced or recurring in this chapter.',
     isForked: false,
-    defaultText: 'Attribute each sentence to its speaker.',
+    defaultText: 'Detect every speaking character introduced or recurring in this chapter.',
   });
 }
 
@@ -9638,14 +8709,33 @@ async function realGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
 }
 
 /* Real implementations for /api/config and /api/config/prompts. */
-async function realGetConfig(): Promise<ConfigResponse> {
+
+/* #2209 review B1 — ONE shared wrapper-string constructor for every
+   /api/config throw site below, so the wording structurally cannot
+   diverge per-verb the way it already had: realPutConfig independently
+   hand-wrote "Config update failed" and realResetConfig hand-wrote
+   "Config reset failed", and describeConfigSaveError
+   (components/settings/override-row.tsx) only ever matched the first —
+   so every rejected Revert/Reset (resetKnob/resetGroup/resetAllConfig,
+   all routed through api.resetConfig) rendered this raw wrapper text
+   instead of the server's own message. `action` is a single word
+   ('fetch'/'update'/'reset') describing which verb failed; the mock
+   implementations above build the identical shape via
+   mockConfigErrorMessage so a mock-mode rejection parses the same way a
+   real one does. Exported so tests can drive a real throw site against a
+   mocked `fetch` and assert against the Error it ACTUALLY throws, rather
+   than hand-writing the wire string the parser is supposed to match. */
+export async function configApiErrorMessage(action: string, res: Response): Promise<string> {
+  return `Config ${action} failed (${res.status}): ${(await res.text()) || res.statusText}`;
+}
+
+export async function realGetConfig(): Promise<ConfigResponse> {
   const res = await fetch('/api/config');
-  if (!res.ok)
-    throw new Error(`Config fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok) throw new Error(await configApiErrorMessage('fetch', res));
   return res.json();
 }
 
-async function realPutConfig(
+export async function realPutConfig(
   patch: Record<string, number | boolean | string>,
 ): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
   const res = await fetch('/api/config', {
@@ -9653,14 +8743,11 @@ async function realPutConfig(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  if (!res.ok)
-    throw new Error(
-      `Config update failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+  if (!res.ok) throw new Error(await configApiErrorMessage('update', res));
   return res.json();
 }
 
-async function realResetConfig(body: {
+export async function realResetConfig(body: {
   keys?: string[];
   group?: string;
   all?: boolean;
@@ -9670,8 +8757,7 @@ async function realResetConfig(body: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok)
-    throw new Error(`Config reset failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok) throw new Error(await configApiErrorMessage('reset', res));
   return res.json();
 }
 
@@ -10658,6 +9744,7 @@ const real = {
   removeNotLinkedTo: realRemoveNotLinkedTo,
   rejectOrphanMatch: realRejectOrphanMatch,
   undoRejectOrphanMatch: realUndoRejectOrphanMatch,
+  linkOrphanMatch: realLinkOrphanMatch,
   addFromSeriesRoster: realAddFromSeriesRoster,
   createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
@@ -10966,6 +10053,7 @@ const mock = {
   removeNotLinkedTo: mockRemoveNotLinkedTo,
   rejectOrphanMatch: mockRejectOrphanMatch,
   undoRejectOrphanMatch: mockUndoRejectOrphanMatch,
+  linkOrphanMatch: mockLinkOrphanMatch,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,

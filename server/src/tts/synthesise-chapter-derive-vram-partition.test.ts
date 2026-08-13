@@ -21,7 +21,7 @@
    still loads on top of a still-warm Qwen — the exact co-residency window
    this task exists to close. An end-state-only assertion cannot see that;
    a call-ORDER assertion can and does (see the second test below). */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import {
   UnresolvableClonedVoiceError,
@@ -32,7 +32,32 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import { setLastKnownCoquiInstallState, _resetUserSettingsCache } from '../workspace/user-settings.js';
 
+/* The phase-evict POST to the sidecar's /unload uses undici's fetch, not the
+   global one — it needs a dispatcher so a legitimate 600s queue behind another
+   book's synth isn't cut off at undici's hidden 300s headersTimeout (see
+   EVICT_DISPATCHER in synthesise-chapter.ts). A global-fetch spy therefore no
+   longer observes it. `importOriginal` keeps the real `Agent`, which the
+   module constructs at import time. */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: fetchMock };
+});
+
+
+/* This file exercises BOTH transports and must mock both with the same fn:
+   the phase-evict `/unload` goes through undici's fetch (it needs
+   EVICT_DISPATCHER so a legitimate 600s queue isn't cut at undici's hidden
+   300s cap), while `/qwen/evict-voice` — issued by routes/qwen-voice.ts on a
+   3s budget where that cap can never bite — correctly stays on the global
+   one. Assertions here span both, so one shared mock keeps them meaningful. */
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock);
+});
+
 afterEach(() => {
+  fetchMock.mockReset();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   _resetUserSettingsCache();
 });
@@ -74,7 +99,7 @@ function isEngineUnload(url: unknown): boolean {
     sidecar traffic (the per-voice prompt-cache evict) is answered 200 and
     deliberately NOT recorded — see the note above. */
 function mockEvictFetch(callOrder: string[]): void {
-  vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+  fetchMock.mockImplementation(async (url, init) => {
     if (!isEngineUnload(url)) return new Response(null, { status: 200 });
     const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
       engine?: string;
@@ -406,7 +431,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 
     };
     const deriveEngineArtifact = vi.fn();
     // Simulates "the sidecar is in a recycle window and /unload returns 502" (F1's own scenario).
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 502, statusText: 'Bad Gateway' }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 502, statusText: 'Bad Gateway' }));
 
     const result = await synthesiseChapter({
       sentences: [sentence(1, 'mira')],
@@ -471,7 +496,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 
     };
     const deriveEngineArtifact = vi.fn();
     setLastKnownCoquiInstallState('ready');
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 502, statusText: 'Bad Gateway' }));
+    fetchMock.mockResolvedValue(new Response(null, { status: 502, statusText: 'Bad Gateway' }));
 
     let thrown: unknown;
     try {
@@ -642,7 +667,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 
    condition, which under-covered the cross-chapter "prior chapter left
    Coqui resident, this chapter only has HEALTHY coqui clones" case). */
 function mockFailingCoquiUnloadFetch(callOrder: string[]) {
-  return vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+  return fetchMock.mockImplementation(async (url, init) => {
     /* #1951 — same URL filter as mockEvictFetch: only `/unload` changes
        residency, and only `/unload` should fail here. */
     if (!isEngineUnload(url)) return new Response(null, { status: 200 });
@@ -1164,7 +1189,7 @@ describe('[#1894] render phase evicts Coqui once its groups are done', () => {
     /* Only the TRAILING evict fails — a sidecar recycle landing between the
        two. Every group is already synthesised at that point, so a throw here
        would discard completed work purely to free VRAM. */
-    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+    fetchMock.mockImplementation(async (_url, init) => {
       const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
         engine?: string;
       };
@@ -1210,5 +1235,5 @@ describe('[#1894] render phase evicts Coqui once its groups are done', () => {
 });
 
 function mockFetchSpy() {
-  return vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(null, { status: 200 }));
+  return fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
 }

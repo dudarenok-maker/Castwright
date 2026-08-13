@@ -7,7 +7,7 @@
 import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
@@ -106,6 +106,12 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import {
+  readJsonWithFingerprint,
+  describeFingerprintForLog,
+} from '../workspace/cast-fingerprint.js';
+import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
 import {
   mergeAnalysisResultWithExistingCast,
   overlayInterimCastForLiveView,
@@ -119,8 +125,14 @@ import {
 import {
   retireCharacterId,
   dropSupersededIdsReclaimedByLiveCast,
+  dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
+  loadCastIdHistoryWithStatus,
+  CastIdHistoryUnreadableError,
+  type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
+import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
+import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -163,6 +175,7 @@ import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
 import { annotateSceneBreaks } from '../analyzer/scene-breaks.js';
 import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
 import type { DecisionBucket, EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
+import { measureChapterLegibility } from '../analyzer/dialogue-structure/legibility.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
@@ -171,22 +184,49 @@ import { GeminiAnalyzer } from '../analyzer/gemini.js';
    it) fall back to the reuse-carryover snapshot the reparse handler wrote, so
    continuity survives the reparse → re-analysis window. Once this run writes a
    fresh cast.json it takes precedence and the carryover goes inert until the
-   next reparse refreshes it. */
-export async function readPriorCastForMerge(
-  bookDir: string,
-): Promise<Array<{ id: string } & Record<string, unknown>>> {
-  const fromCast = (
-    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
-      castJsonPath(bookDir),
-    ).catch(() => null)
-  )?.characters;
-  if (fromCast?.length) return fromCast;
-  const fromCarryover = (
-    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+   next reparse refreshes it.
+
+   #2015 / #2155 — the whole two-file fallback runs INSIDE the cast lock, which
+   is what makes "which file did these rows come from" a decidable question
+   answered atomically with the read itself. That is the capture problem the
+   four earlier designs died on: fingerprinting cast.json from outside this
+   fallback describes bytes the snapshot may not have come from.
+
+   Rule 1 (one level only) holds: both production callers sit at the top of
+   their run outside any lock, and applyReparse never calls this. */
+export interface PriorCastSnapshot {
+  rows: Array<{ id: string } & Record<string, unknown>>;
+  /** sha256 of cast.json's raw bytes when the rows came from it. `null` means
+      "no compare-and-set is available for this run" — carryover-sourced or
+      empty. A null fingerprint DISABLES conflict detection rather than
+      producing a wrong verdict (design §1a). */
+  fingerprint: string | null;
+  source: 'cast' | 'carryover' | 'none';
+}
+
+export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastSnapshot> {
+  type Rows = Array<{ id: string } & Record<string, unknown>>;
+  return withCastLock(bookDir, async () => {
+    const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
+    const fromCast = cast.value?.characters;
+    if (fromCast?.length) {
+      /* fingerprint is a hash, never ABSENT, on this branch — the file
+         demonstrably parsed. The guard is for the type, not the case. */
+      return {
+        rows: fromCast,
+        fingerprint: typeof cast.fingerprint === 'string' ? cast.fingerprint : null,
+        source: 'cast' as const,
+      };
+    }
+    const carry = await readJsonWithFingerprint<{ characters?: Rows }>(
       castReuseCarryoverJsonPath(bookDir),
-    ).catch(() => null)
-  )?.characters;
-  return fromCarryover ?? [];
+    );
+    const fromCarryover = carry.value?.characters;
+    if (fromCarryover) {
+      return { rows: fromCarryover, fingerprint: null, source: 'carryover' as const };
+    }
+    return { rows: [], fingerprint: null, source: 'none' as const };
+  });
 }
 
 /* §4.4 — the choke point every id-retiring call site records through.
@@ -204,9 +244,18 @@ export async function readPriorCastForMerge(
    definition and why the end-of-run drop cannot repair it). Pass `null` ONLY
    where no roster is final yet, and say why at the call site — the parameter
    is deliberately required rather than optional so a new call site cannot
-   skip the filter by omission. */
-async function recordRetirements(
+   skip the filter by omission.
+
+   `bookId` (#2133) is threaded through purely so a retirement that drops a
+   self-loop `rejectedPairs` entry (`retireCharacterId`'s
+   `droppedSelfLoopRejections`) can locate and clear the matching one-sided
+   `notLinkedTo` edge on `cast.json` — that edge is keyed by `(bookId,
+   characterId)`, not `bookDir`. `null`/undefined is tolerated (mirrors
+   `bookDir`): the retirement itself still records, just without the
+   notLinkedTo cleanup, since there is no book to look one up on. */
+export async function recordRetirements(
   bookDir: string | null | undefined,
+  bookId: string | null | undefined,
   retirements: ReadonlyArray<Retirement>,
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
@@ -227,7 +276,179 @@ async function recordRetirements(
     );
   }
   for (const { from, to } of keep) {
-    await retireCharacterId(bookDir, from, to);
+    const result = await retireCharacterId(bookDir, from, to);
+    if (result.droppedSelfLoopRejections.length && bookId) {
+      await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
+    }
+  }
+}
+
+/* #2166 — the per-persist half of the reject-edge invariant. Its sibling
+   (`clearNotLinkedEdgesForDroppedRejections`, #2133 — moved to
+   `store/not-linked-edges.ts` by #2239) is PER-RETIREMENT and driven by
+   `droppedSelfLoopRejections`; this one is PER-PERSIST and
+   derived purely from state, which is what lets it heal a reject that failed
+   between its two writes — a state no retirement ever reports. The two are
+   compatible in either order: after the #2133 helper runs, pair and edge are
+   both gone, so this sees nothing to do.
+
+   Its OWN withCastLock, and the write is TEXTUALLY inside it, in this file.
+   That is not stylistic: `cast-lock.guard.test.ts` is syntactic and
+   call-graph-blind, and this file's allowlist entry is keyed on file AND
+   count, so a write that lived in reject-edge-reconcile.ts (however well
+   locked by its caller) would read as a sixth unlocked write here and redden
+   the build. reject-edge-reconcile.ts is therefore PURE and this function
+   owns the read, the lock and the write.
+
+   Best-effort, mirroring every other id-history write in this file: a failure
+   must not fail the analysis. A surviving stale edge merely re-suppresses one
+   future §4.4 name-match until the next persist tries again.
+
+   Fails SAFE on either read (final-review Critical, #2166). An unreadable
+   cast.json already did — the roster is empty, so nothing is reconciled. An
+   unreadable cast-id-history.json used to fail DESTRUCTIVE, because the empty
+   history it degrades to is indistinguishable from "nothing was ever
+   rejected", which is exactly the evidence the removal pass acts on. It now
+   reads the history through `loadCastIdHistoryWithStatus` and refuses to act
+   at all on `degraded`. See the comment at that call below.
+
+   `statusBeforePersist` exists because that local read is NOT sufficient on
+   its own at the two persist call sites (PR #2202 gate review, Critical). The
+   steps that run earlier in the same try block — `recordRetirements`,
+   `dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`
+   — all read through the COLLAPSING `loadCastIdHistory` and write back
+   unconditionally, so a cast-id-history.json that was degraded when the
+   persist began has already been REPLACED with a valid, empty file by the time
+   this function reads it. The local read then says `ok`, the guard never
+   fires, and every same-book reject edge is deleted — both records of a real
+   user decision gone, deterministically, on the next analysis. So the callers
+   inside the persist decide the verdict BEFORE the first rewriting step and
+   hand it in here; a `degraded` verdict wins over whatever the file says by
+   now. Direct callers that pass nothing keep the local read as their only
+   check, which is correct for them — nothing has laundered the file underneath
+   them.
+
+   Exported only so analysis-reject-edge-reconcile.test.ts can drive it
+   without standing up a full analysis run. */
+
+/* #2214/#2201 — shared user-facing wording for "cast-id-history.json could
+   not be read, nothing changed" so it reads identically no matter which of
+   the three call sites emits it: this function's own degraded-read branch
+   below, and the two persist blocks' `catch (historyErr)` handlers, which
+   need the same line because a degraded read now makes
+   `dropSupersededIdsReclaimedByLiveCast` throw before this function is ever
+   reached (see those handlers' own comments). */
+export const DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE =
+  `Skipped "not the same character" link check — cast-id-history.json for this book could not ` +
+  `be read. No links were changed; the file needs attention (see the server log for the cause).`;
+
+/* #2214/#2201 review finding 5 — the two persist-block `catch (historyErr)`
+   handlers below had identical bodies (an `instanceof` check plus the same
+   `log()` call), pinned only by a source-scan test because the persist
+   blocks themselves aren't standable-up in a unit test. Extracting the
+   shared body into its own exported function gives that behaviour a
+   reachable seam: this can be driven directly, including the negative case
+   (a plain `Error` emits nothing) that a source scan can't check at all. */
+export function logIfDegradedCastIdHistory(
+  err: unknown,
+  log: (phaseId: number, message: string) => void,
+): void {
+  if (err instanceof CastIdHistoryUnreadableError) {
+    log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
+  }
+}
+
+export async function reconcileRejectEdgesOnDisk(
+  bookDir: string,
+  bookId: string | undefined,
+  log: (phaseId: number, message: string) => void,
+  statusBeforePersist?: CastIdHistoryStatus,
+): Promise<void> {
+  /* No bookId means no way to tell this book's edges from a cross-book one —
+     see bookIdForRetirementCleanup, which already warns for this run. */
+  if (!bookId) return;
+  try {
+    await withCastLock(bookDir, async () => {
+      const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) return;
+      /* #2166 final review (Critical) — the removal pass treats an empty
+         history as PROOF that every same-book edge is stranded. A `degraded`
+         read (the file exists but is unreadable or the wrong shape) produces
+         the same empty history as `absent` does, but proves nothing: a
+         transient EPERM/EBUSY from an AV scanner or a cloud-sync client would
+         otherwise delete every reject the user ever made on this book — and
+         only a `rejectedPairs`-backed one could ever come back. So skip the
+         whole reconciliation, not just the removals: the add pass has nothing
+         to add from an empty history anyway (it is driven entirely by
+         `rejectedPairs`), so skipping it costs nothing and skipping outright
+         is one branch instead of two. `absent` keeps its current meaning —
+         that IS the genuine pre-#2166 stranded-edge shape. */
+      const { status: statusNow, history } = await loadCastIdHistoryWithStatus(bookDir);
+      /* Belt AND braces (PR #2202 gate review, Critical). `statusNow` alone is
+         blind at the persist call sites, where an earlier always-writing step
+         has already laundered a degraded file into a valid empty one — see the
+         `statusBeforePersist` paragraph in this function's doc comment. A
+         degraded verdict from EITHER read refuses. */
+      const status = statusBeforePersist === 'degraded' ? 'degraded' : statusNow;
+      if (status === 'degraded') {
+        console.warn(
+          `[analysis] reject-edge reconciliation skipped for book ${bookId} — its cast-id-history.json ` +
+            `could not be read (see the [cast-id-history] warning just above for the cause), so a ` +
+            `stranded "not the same character" link cannot be told from one whose recorded rejection ` +
+            `is merely unreadable right now. No links were changed; the next persist will try again.`,
+        );
+        /* #2201 — the console.warn above is operator-visible only; a user
+           watching the in-app run log saw nothing and read a clean run as
+           proof the book was healthy. Distinguishable from the `Cleared N
+           stranded …` / `Restored N …` lines below (those fire only when a
+           write actually happened): this one fires only when nothing changed
+           because the file could not be trusted. */
+        log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
+        return;
+      }
+      const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
+      if (!adds.length && !removes.length) return;
+      await writeJsonAtomic(castJsonPath(bookDir), { characters: next });
+      if (removes.length) {
+        log(
+          1,
+          `Cleared ${removes.length} stranded "not the same character" link(s) with no recorded ` +
+            `rejection (${removes.map((e) => `${e.characterId} -/- ${e.orphanedId}`).join(', ')}).`,
+        );
+      }
+      if (adds.length) {
+        log(
+          1,
+          `Restored ${adds.length} "not the same character" link(s) from a recorded rejection ` +
+            `(${adds.map((e) => `${e.characterId} -/- ${e.orphanedId}`).join(', ')}).`,
+        );
+      }
+    });
+  } catch (err) {
+    /* #2260 round 4 (owner decision) — the FIRST deliberate exception. Every
+       IDENTITY handler #2260 touched lets a withKeyLock ACQUISITION timeout
+       through (`isLockAcquisitionTimeout`, workspace/file-lock.ts); this one
+       swallows it along with everything else, and does so on purpose. (#2292
+       later added three more deliberate swallows on the same kind of
+       reasoning — the interim cast.json snapshots, which a final write in the
+       same run clobbers — so this is no longer the ONLY one, as this comment
+       used to say. It is still the only one in the identity path.)
+
+       Round 2 added a rethrow here on the same reasoning it used at the six
+       identity sites — "cast.json is already written and the identity record
+       never updated". That reasoning does not describe THIS site. It was
+       copy-pasted from handlers where the caught error can come out of
+       `retireCharacterId` itself; here no identity record is at risk, because
+       this call runs LAST in the persist — after every `recordRetirements`
+       and both `dropSuperseded*` calls have already landed — and the only
+       thing it writes is a set of cosmetic `notLinkedTo` edges. A failure
+       here is exactly what this function's own doc comment above says it is:
+       a surviving stale edge re-suppresses ONE future §4.4 name-match until
+       the next persist tries again, and this pass is itself the self-healing
+       mechanism. Failing an entire completed analysis run over that is
+       disproportionate, so the whole handler stays best-effort — a lock
+       timeout included. */
+    console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
   }
 }
 
@@ -847,6 +1068,39 @@ const PHASES = [
    of collapsing to the literal `book`. Only a fallback for `record.bookId`. */
 function bookIdFromTitle(title: string): string {
   return safeBookId(title);
+}
+
+/* M6 (fix round, #2163) — `recordRetirements`'s `bookId` parameter exists
+   for exactly one purpose: keying `clearNotLinkedEdgesForDroppedRejections`'s
+   lookup against `notLinkedTo` edges on `cast.json`, which are written with
+   the workspace `makeBookId` shape (`author__series__title`,
+   `workspace/paths.js`). `bookIdFromTitle` above — a 32-char kebab slug of
+   the title alone — produces a completely different shape, so using it as
+   a fallback here can never match a real edge; it only manufactures a value
+   that LOOKS like a book id without being the one anything else uses. Every
+   `recordRetirements` call site in this file used to fall back to it via
+   `record.bookId ?? bookIdFromTitle(record.title)`, which fails OPEN: the
+   call proceeds with a bookId that silently can never match, so any
+   self-loop-rejection cleanup that run needed simply never happens, with
+   nothing logged. Not reachable today — `loadManuscriptForBook` always sets
+   `record.bookId` — but a param that exists for one narrow purpose should
+   not accept a value that defeats that purpose without saying so.
+   `recordRetirements` already has the right fail-closed behaviour built in
+   (`if (result.droppedSelfLoopRejections.length && bookId)` skips the
+   cleanup when `bookId` is falsy) — this helper's job is only to stop
+   handing it a value that looks truthy but is wrong, and to say so when it
+   would have. Deliberately does NOT derive a new id shape of its own. */
+export function bookIdForRetirementCleanup(record: {
+  bookId?: string | null;
+  title: string;
+}): string | undefined {
+  if (record.bookId) return record.bookId;
+  console.warn(
+    `[analysis] record.bookId is absent for "${record.title}" — skipping notLinkedTo cleanup for any ` +
+      `character-id retirement this run records (a title-derived id would never match a real notLinkedTo ` +
+      `edge's book id, so silently using one would fail without saying so).`,
+  );
+  return undefined;
 }
 
 function durationPlaceholder(): string {
@@ -1821,7 +2075,7 @@ function buildCloudEscalationAnalyzer(): Analyzer | null {
     );
     return null;
   }
-  const model = process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+  const model = configValue<string>('analyzer.gemini.model');
   return new GeminiAnalyzer({ apiKey, model });
 }
 
@@ -1845,6 +2099,15 @@ export async function attributeChapterStage2(opts: {
      when omitted. */
   engine?: 'gemini' | 'local';
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
+  /** Fired when the coverage retry stopped early because the failure was
+      reproduced exactly — deterministic, so more attempts cannot help. */
+  onCoverageExhausted?: (attempts: number, verdict: { issues: string[] }) => void;
+  /** #2304 — fired when a deterministic coverage failure actually PROCEEDS to a
+      re-split. `onCoverageExhausted` only says the retry stopped; the split
+      still declines for an indivisible span or at the depth limit, and it
+      happens inside a recursion that touches neither `chunkCount` nor
+      `onSectionDone`. Without this the escalation is unobservable. */
+  onDeterministicSplit?: (info: { parts: number; chars: number; depth: number }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
   onSectionDone?: (index: number, sentenceCount: number) => void;
   /* srv-59 Task 9b — per-BOOK escalation-window budget, shared/mutable
@@ -1924,6 +2187,8 @@ export async function attributeChapterStage2(opts: {
     coverageRetries: resolveStage2CoverageRetries(),
     callForBody,
     onRetry: opts.onCoverageRetry,
+    onExhausted: opts.onCoverageExhausted,
+    onDeterministicSplit: opts.onDeterministicSplit,
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
@@ -1934,14 +2199,15 @@ export async function attributeChapterStage2(opts: {
      per-sentence attribution against the chapter's structural evidence (dash/
      quote dialogue tags, conversation-window alternation, pronoun resolution)
      and derives an honest confidence for every sentence, auto-correcting
-     tag-proven misattributions. Gated by the `analyzer.structure.enabled`
-     knob AND language support; the ELSE branch is byte-identical to the
-     pre-engine `applyNarratorDefault` behaviour (coverage keys on text, not
-     characterId, so the verdict above is unaffected either way). */
-  const conventions = configValue<boolean>('analyzer.structure.enabled')
-    ? conventionsFor(opts.stageCall.language)
-    : null;
-  if (conventions) {
+     tag-proven misattributions. The engine itself is gated by the
+     `analyzer.structure.enabled` knob AND language support; #2245 split
+     conventions resolution off the knob (it was `knob ? conventionsFor(lang)
+     : null`, so turning the engine off also threw the language away) so the
+     ELSE branch's `applyNarratorDefault` fallback still gets the right
+     per-language quote rules even with the knob off — mirrors `fpConventions`
+     above, which already resolves conventions independently of this knob. */
+  const conventions = conventionsFor(opts.stageCall.language);
+  if (configValue<boolean>('analyzer.structure.enabled') && conventions) {
     const index = buildNameIndex(stage1.characters, conventions);
     const paras = parseChapterStructure(opts.chapter.body, index);
     const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
@@ -1952,6 +2218,9 @@ export async function attributeChapterStage2(opts: {
       rosterIds,
       unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
       alignmentFloorPct: 80,
+      /* #2253 — the language's own turn marker, so a merged paragraph (#2254)
+         costs the engine its structural evidence but not the speaker. */
+      dialogueOpen: conventions.dialogueOpen,
     });
     result.sentences = examined.sentences;
     if (opts.onStages) { detSnapshot = structuredClone(examined.sentences); detReasons = examined.reasons; }
@@ -1995,17 +2264,27 @@ export async function attributeChapterStage2(opts: {
     }
 
     result.structureReport = { ...examined.report, language: conventions.language };
+    /* #2275 C4 — the `merged=` reading used to be logged only from HERE,
+       inside this engine-gated branch, which a fully-cached run (every
+       chapter served from the stage-2 cache) never reaches at all — exactly
+       the case design of record §4 exists to protect. It is now logged
+       up front at the `runMainAnalyzerJob`/`runSubsetAnalyzerJob` call sites
+       instead (skipped there when the reading is undefined), so this line
+       no longer repeats it. */
     console.log(
       `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
-        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged} ` +
+        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} ` +
+        `flagged=${examined.report.flagged} unresolved=${examined.report.unresolved} ` +
         `escalated=${examined.report.escalated} escalationAccepted=${examined.report.escalationAccepted}`,
     );
   } else {
     /* Deterministic narrator-default: force non-spoken sentences to `narrator`
-       and flag the first of each demoted block low-confidence. Runs for ALL
-       languages, AFTER coverage (coverage keys on text, not characterId, so the
-       verdict is unchanged) and UPSTREAM of fold/reconcile. */
-    result.sentences = applyNarratorDefault(result.sentences);
+       and flag the first of each demoted block low-confidence. Runs for every
+       language that has a conventions table, AFTER coverage (coverage keys on
+       text, not characterId, so the verdict is unchanged) and UPSTREAM of
+       fold/reconcile. `conventions === null` (no table) is a no-op inside
+       applyNarratorDefault — no basis to judge, so nothing is demoted. */
+    result.sentences = applyNarratorDefault(result.sentences, conventions);
     if (opts.onStages) { detSnapshot = structuredClone(result.sentences); detReasons = []; }
   }
 
@@ -2052,12 +2331,12 @@ export function attributeChapterStage2WithEval(
     the stage-2 cache, which doesn't carry a stored EngineReport) — so the
     caller omits `report` entirely rather than persisting a zeroed-out one.
 
-    `confirmed`/`corrected`/`flagged`/`escalated`/`escalationAccepted` are
-    plain sums. `alignedPct` is a per-chapter-sentence-count-weighted mean
-    (weight = confirmed+corrected+flagged+lumped, i.e. every sentence
-    crossExamine classified for that chapter) rather than a flat average of
-    percentages, so one huge chapter doesn't get diluted to the same weight
-    as a two-sentence one. */
+    `confirmed`/`corrected`/`flagged`/`unresolved`/`escalated`/`escalationAccepted`
+    are plain sums. `alignedPct` is a per-chapter-sentence-count-weighted mean
+    (weight = confirmed+corrected+flagged+unresolved+lumped, i.e. every
+    sentence crossExamine classified for that chapter) rather than a flat
+    average of percentages, so one huge chapter doesn't get diluted to the
+    same weight as a two-sentence one. */
 export function aggregateStructureReports(
   reports: EngineReport[],
 ): AnalysisProvenanceReport | undefined {
@@ -2065,6 +2344,7 @@ export function aggregateStructureReports(
   let confirmed = 0;
   let corrected = 0;
   let flagged = 0;
+  let unresolved = 0;
   let escalated = 0;
   let escalationAccepted = 0;
   let weightedAlignedSum = 0;
@@ -2073,9 +2353,12 @@ export function aggregateStructureReports(
     confirmed += r.confirmed;
     corrected += r.corrected;
     flagged += r.flagged;
+    unresolved += r.unresolved;
     escalated += r.escalated;
     escalationAccepted += r.escalationAccepted;
-    const weight = r.confirmed + r.corrected + r.flagged + r.lumped;
+    /* #2253 — `unresolved` was carved out of `flagged`; omitting it here would
+       silently shrink each chapter's weight and skew the book alignedPct. */
+    const weight = r.confirmed + r.corrected + r.flagged + r.unresolved + r.lumped;
     weightedAlignedSum += r.alignedPct * weight;
     totalWeight += weight;
   }
@@ -2087,9 +2370,26 @@ export function aggregateStructureReports(
     confirmed,
     corrected,
     flagged,
+    unresolved,
     escalated,
     escalationAccepted,
   };
+}
+
+/** #2267 — collapse this pass's per-chapter `measureChapterLegibility`
+    readings (Task 1) into the book-level worst-paragraph reading. `Math.max`
+    across chapters, never a sum — Global Constraint, see the design of
+    record §2.1 for why a rate/sum was tried and refuted. A chapter that
+    contributed `undefined` (no supported language for that chapter, or the
+    engine didn't run for it this pass) is skipped rather than counted as 0.
+    `undefined` when no chapter in this pass contributed a reading at all. */
+export function aggregateMaxMergedTurns(perChapter: Array<number | undefined>): number | undefined {
+  let worst: number | undefined;
+  for (const n of perChapter) {
+    if (n === undefined) continue;
+    if (worst === undefined || n > worst) worst = n;
+  }
+  return worst;
 }
 
 /* ── Sticky analysis: in-flight job map + multi-subscriber broadcast ────
@@ -2150,6 +2450,10 @@ export interface AnalysisJobReplayState {
       first subscriber would see the SeriesPriorPill but the second
       one — post-reload, post-navigate-back — would miss it). */
   lastSeriesPrior: { kind: 'series-prior'; count: number; names: string[] } | null;
+  /** #2015 — advisories emitted during the run, keyed by `code` so a burst
+      across the five merge-base write sites replays as ONE. Not cleared:
+      a stale merge base stays true for the rest of the run. */
+  warnings: Map<string, { kind: 'warning'; code: string; message: string }>;
 }
 
 export interface AnalysisJob {
@@ -2270,15 +2574,38 @@ export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFil
     seconds for cold-boot rehydration purposes. */
 const ANALYSIS_STATE_WRITE_THROTTLE_MS = 5_000;
 
+/* #2165 — the job's CURRENT book directory. `job.bookDir` is a string copy
+   taken at job creation; renaming the book mid-run mutates the
+   ManuscriptRecord in place (book-state.ts's `rec.bookDir = newDir`) but
+   cannot reach that copy, so a disk write keyed on it recreates the
+   pre-rename directory and lands the file where nothing reads it. Re-read
+   the record instead.
+
+   Falls back to the pinned copy if the record is absent for any reason:
+   belt-and-braces when the store has no record. The case that genuinely
+   motivates re-reading is a record being replaced (reparse via
+   `putManuscript` — a captured reference would miss the fresh path).
+
+   NOT for markAnalysisBusy/clearAnalysisBusy. Those are a matched pair over
+   a ref-counted Map; clearing under a different key than the one marked
+   would leak the old entry forever AND underflow the new one, releasing a
+   guard a sibling job may still hold. The busy key stays pinned — see the
+   accepted-gap note at the clearAnalysisBusy site for the race that the
+   rename guard narrows but does not close. */
+function liveBookDir(job: AnalysisJob): string | null {
+  return getManuscript(job.manuscriptId)?.bookDir ?? job.bookDir;
+}
+
 async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise<void> {
-  if (!job.bookDir) return;
+  const bookDir = liveBookDir(job); // #2165
+  if (!bookDir) return;
   const phase = job.replay.lastPhase;
   if (!phase) return;
   const now = Date.now();
   if (!force && now - job.lastDiskWriteAt < ANALYSIS_STATE_WRITE_THROTTLE_MS) return;
   job.lastDiskWriteAt = now;
   try {
-    await writeAnalysisState(job.bookDir, {
+    await writeAnalysisState(bookDir, {
       manuscriptId: job.manuscriptId,
       phaseId: phase.phaseId,
       phaseLabel: phase.label,
@@ -2302,10 +2629,11 @@ async function persistTerminalSnapshot(
   state: 'paused' | 'halted',
   finalEv: { code?: string; message?: string } | null,
 ): Promise<void> {
-  if (!job.bookDir) return;
+  const bookDir = liveBookDir(job); // #2165
+  if (!bookDir) return;
   const phase = job.replay.lastPhase;
   try {
-    await writeAnalysisState(job.bookDir, {
+    await writeAnalysisState(bookDir, {
       manuscriptId: job.manuscriptId,
       phaseId: phase?.phaseId ?? 0,
       phaseLabel: phase?.label ?? PHASES[0].label,
@@ -2384,6 +2712,17 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
       }
       break;
     }
+    case 'warning': {
+      const e = ev as { code?: string; message?: string };
+      if (typeof e.code === 'string' && typeof e.message === 'string') {
+        job.replay.warnings.set(e.code, {
+          kind: 'warning',
+          code: e.code,
+          message: e.message,
+        });
+      }
+      break;
+    }
     /* heartbeat / throttle / result / error: not replayed (heartbeat +
        throttle are ephemeral; result + error are terminal and the route
        closes the connection right after emitting them anyway). */
@@ -2397,6 +2736,7 @@ export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): vo
   if (job.replay.lastCastUpdate) send(job.replay.lastCastUpdate);
   if (job.replay.lastSeriesPrior) send(job.replay.lastSeriesPrior);
   for (const failed of job.replay.failedByChapterId.values()) send(failed);
+  for (const warning of job.replay.warnings.values()) send(warning);
 }
 
 function endJob(job: AnalysisJob, finalEv?: unknown): void {
@@ -2422,7 +2762,12 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
          any main run's snapshot survives a sibling subset
          completing successfully. */
       if (job.kind === 'main') {
-        void deleteAnalysisState(job.bookDir);
+        /* #2165 — the CURRENT directory, not the pinned copy: deleting the
+           pre-rename path leaves the real analysis-state.json behind, and
+           scanActiveAnalyses later offers it as a resumable analysis for a
+           book that finished. */
+        const dir = liveBookDir(job);
+        if (dir) void deleteAnalysisState(dir);
       }
     } else if (kind === 'error' && code === 'aborted') {
       /* Paused or displaced. Write paused state so the cold-boot
@@ -2453,6 +2798,20 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
   /* Release the cross-operation busy flag so a "Design full cast" run can
      start once analysis is done (mutual exclusion — re-analysis rewrites the
      whole cast). Ref-counted, so a sibling main/subset job keeps it held. */
+  /* Pinned deliberately (#2165) — mark/clear must use the same key, or the
+     ref count leaks on one side and underflows on the other, releasing a
+     guard a sibling job may still hold.
+
+     KNOWN, ACCEPTED GAP: book-state.ts's rename guard narrows but does NOT
+     close the race that makes this key wrong. An analysis whose
+     markAnalysisBusy lands between that route's last check and its
+     renameWithRetry registers against the pre-rename directory, so
+     isAnalysisBusy(newDir) is false for this run's whole life and
+     cast-design.ts's analysis-vs-bulk-design exclusion silently disappears
+     for that book. The run's own disk writes are unaffected (liveBookDir
+     above). Closing it needs a primitive spanning registration and rename —
+     a per-book lock, or keying busy state on book id instead of path — which
+     is out of scope for #2165. */
   if (job.bookDir) clearAnalysisBusy(job.bookDir);
   /* Release the run-scoped analyzer PIN. keepAliveFor() returned -1 for every
      Ollama call while a run was in flight (see analyzer/ollama.ts) so the model
@@ -2616,6 +2975,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };
@@ -2696,6 +3056,15 @@ export async function resolveBookAuthorForManuscript(manuscriptId: string): Prom
     return '';
   }
 }
+
+/* #2015 §4 — shared by both job bodies' `reportCastConflict` (below). Hoisted
+   so the code + message can't drift between the main/subset copies, and so
+   Task 6's test and Task 8's frontend read the same literal rather than a
+   fresh copy of each. */
+const CAST_MERGE_BASE_STALE_CODE = 'cast_merge_base_stale';
+const CAST_MERGE_BASE_STALE_MESSAGE =
+  'Another change to this book’s cast landed while the analysis was running. ' +
+  'The analysis result was applied on top of the older cast, so that change may have been overwritten.';
 
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
@@ -2803,6 +3172,20 @@ export async function runMainAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+     proceeds with the same base it uses today, so NO data is lost that is not
+     already lost today; what changes is that it is now visible. */
+  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+    console.warn(
+      `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
+    );
+    send({
+      kind: 'warning',
+      code: CAST_MERGE_BASE_STALE_CODE,
+      message: CAST_MERGE_BASE_STALE_MESSAGE,
+    });
+  };
   /* `lastStep` mirrors the most recent phase milestone to the server log (so a
      stall's last log line names where it wedged) and feeds the fatal-error log
      below (so a failure names its phase, not just a stack). */
@@ -2845,11 +3228,22 @@ export async function runMainAnalyzerJob(
        snapshot the prior on a fresh run — with reuse continuity stripped, since
        fresh legitimately re-derives that. Read happens before the fresh block
        below rm's cast.json, so the value survives that deletion. */
-    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = recordRef.bookDir
-      ? requestedFresh
-        ? dropReuseContinuityKeepDesignedVoice(await readPriorCastForMerge(recordRef.bookDir))
-        : await readPriorCastForMerge(recordRef.bookDir)
-      : [];
+    const priorSnapshot = recordRef.bookDir
+      ? await readPriorCastForMerge(recordRef.bookDir)
+      : { rows: [], fingerprint: null, source: 'none' as const };
+    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
+      ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
+      : priorSnapshot.rows;
+    /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+       every merge-base write and reset by the Start-fresh delete below. */
+    const castBase: CastMergeBase | null = recordRef.bookDir
+      ? createCastMergeBase(
+          /* #2165 — live, not pinned. The fallback and the `!` are belt-and-
+             braces that TypeScript cannot prove unreachable. */
+          () => liveBookDir(job) ?? recordRef.bookDir!,
+          priorSnapshot.fingerprint,
+        )
+      : null;
 
     /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
        feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
@@ -2893,8 +3287,33 @@ export async function runMainAnalyzerJob(
          at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
          against the roster that actually got persisted. */
       try {
-        await recordRetirements(recordRef.bookDir, reconciled.retirements, null, log);
+        await recordRetirements(
+          recordRef.bookDir,
+          bookIdForRetirementCleanup(recordRef),
+          reconciled.retirements,
+          null,
+          log,
+        );
       } catch (historyErr) {
+        /* #2260 — THE CANONICAL "why" for the four rethrow sites in this file;
+           the other three point here. A withKeyLock ACQUISITION timeout is not
+           the disk fault this handler is scoped for. It is the shape a
+           cast-lock rule-1/rule-4 violation OR ordinary contention produces,
+           and swallowing it reports a clean run with the identity record never
+           updated — the divergence #2040 exists to prevent, silently, and
+           strictly worse than the hang the timeout replaced. Let exactly that
+           one class through; everything else (EPERM/ENOSPC/AV-lock,
+           CastIdHistoryUnreadableError) is swallowed exactly as before. See
+           `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
+
+           Round 4 — `reconcileRejectEdgesOnDisk`'s own handler is the ONE
+           deliberate exception and swallows it; see that handler for why it is
+           not in this class. Nothing else in this file is exempt.
+
+           Nothing follows this call in the surrounding block, so this site
+           throws where it catches. The two PERSIST sites cannot — see their
+           own comments for the deferred rethrow. */
+        if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
     }
@@ -2917,15 +3336,26 @@ export async function runMainAnalyzerJob(
            the roster this delete exists to remove (design §4 rule 1 — this
            is the innermost, one-level lock around the whole read-through-
            delete span; the delete itself has no read of its own to pull
-           inside it). This file's five merge-base writes plus
-           readPriorCastForMerge are deliberately out of scope here — tracked
-           on #2015, not folded into this lock. */
+           inside it). #2015/#2155 update: the five merge-base writes and
+           readPriorCastForMerge are no longer out of scope here — they are
+           locked too, and the carryover's delete now rides this same hold. */
         const freshBookDir = recordRef.bookDir;
-        await withCastLock(freshBookDir, () => rm(castJsonPath(freshBookDir), { force: true }));
+        await withCastLock(freshBookDir, async () => {
+          await rm(castJsonPath(freshBookDir), { force: true });
+          /* Start fresh intentionally discards reuse continuity — drop the
+             reparse carryover too so it can't resurrect links (srv-13).
+             #2155: inside the SAME hold as cast.json's delete, so a concurrent
+             analysis can no longer observe the intermediate state where the
+             carryover is written but cast.json is not yet gone. */
+          await rm(castReuseCarryoverJsonPath(freshBookDir), { force: true });
+          /* #2015 §3a rule 2 — the capture above deliberately happened BEFORE
+             this delete (so the rows survive it), which means the captured
+             hash describes a file we are now removing. Without this reset the
+             first write site re-reads an absent file against a live hash and
+             reports a guaranteed false conflict on every fresh run. */
+          castBase?.markDeleted();
+        });
         await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
-        /* Start fresh intentionally discards reuse continuity — drop the
-           reparse carryover too so it can't resurrect links (srv-13). */
-        await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
         /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
            meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);
@@ -3643,10 +4073,22 @@ export async function runMainAnalyzerJob(
                  able to swap a persisted id. Only §4.4's five listed sites
                  record retirements, and none of them is this one. */
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-                characters: mergedInterim,
-              });
+              await castBase!.writeChecked(
+                { characters: mergedInterim },
+                reportCastConflict('interim'),
+              );
             } catch (persistErr) {
+              /* #2292 (owner decision) — a `LockAcquisitionTimeoutError` is
+                 SWALLOWED here deliberately, NOT parked like the authoritative
+                 final write in the persist block below (#2295, `writeChecked`
+                 wrapped at `reportCastConflict('final')`). Tell the two apart
+                 by what follows the write, not by the handler's wording: this
+                 is a PROGRESS SNAPSHOT, and the authoritative write later in
+                 the same run clobbers whatever it managed to put on disk, so a
+                 timeout here leaves nothing diverged. Failing a multi-minute
+                 analysis because one mid-run checkpoint could not take the
+                 lock is disproportionate — the same reasoning that makes
+                 `reconcileRejectEdgesOnDisk` the other deliberate swallow. */
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
           }
@@ -3855,10 +4297,16 @@ export async function runMainAnalyzerJob(
             // produces no retirements — see the interim-write comment above
             // for the full rationale.
             const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
-            await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-              characters: mergedStage1,
-            });
+            await castBase!.writeChecked(
+              { characters: mergedStage1 },
+              reportCastConflict('stage1'),
+            );
           } catch (persistErr) {
+            /* #2292 (owner decision) — deliberate swallow, including a
+               `LockAcquisitionTimeoutError`. Same reasoning as the per-chapter
+               interim write above: this is the Phase-0b snapshot, the
+               authoritative end-of-run write clobbers it, and the run's own
+               loud failure lives at that write (#2295), not here. */
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
         }
@@ -4021,6 +4469,44 @@ export async function runMainAnalyzerJob(
        Rolled up into `analysisProvenance.report` at the persist site below
        via aggregateStructureReports. */
     const structureReports: EngineReport[] = [];
+    /* #2267 — Task 1's worst-paragraph merged-turn reading, one per
+       non-excluded chapter. Deliberately computed HERE, over every chapter's
+       text up front, rather than accumulated from `attributeChapterStage2`
+       as `structureReports` above is: that path only runs for chapters
+       freshly attributed THIS pass, so on a fully-cached re-run (every
+       chapter served from the stage-2 cache below) it would never fire at
+       all — exactly the case design of record §4 exists to protect, since
+       this metric needs only chapter text + the book's resolved language,
+       never an EngineReport or the engine having run. Folded via
+       `aggregateMaxMergedTurns` (Math.max, never a sum) and merged into the
+       persisted report separately from `aggregateStructureReports` at the
+       persist site below. */
+    const legibilityConventions = conventionsFor(bookLanguage);
+    /* #2275 C4 — one `merged=` line per chapter with a defined reading,
+       emitted HERE (up front, regardless of engine state or caching) rather
+       than only inside the engine-gated branch of attributeChapterStage2 —
+       target 1c grades per chapter, and a fully-cached run (the case this
+       metric exists to score) never reaches that branch at all.
+       `scope=book` marks the line as a book-wide reading, not per-chapter
+       pass progress — the subset route (below) measures the whole book here
+       while `chaptersCovered` reports only the re-run subset, so without this
+       marker a "re-analyse one chapter" run would print one `merged=` line
+       per book chapter against a one-chapter progress line and read as false
+       progress. Skipped entirely for a language with no dash convention
+       (`n === undefined`) — an operator grepping this prefix for "did the
+       structure pass run?" should never see a false-yes line for e.g. an
+       English book. */
+    const perChapterMaxMergedTurns: Array<number | undefined> = recordRef.chapterHints
+      .filter((c) => !c.excluded)
+      .map((c) => {
+        const n = legibilityConventions
+          ? measureChapterLegibility(c.body, legibilityConventions)
+          : undefined;
+        if (n !== undefined) {
+          console.log(`[analysis:structure] ch=${c.id} scope=book merged=${n}`);
+        }
+        return n;
+      });
     const completedSet = new Set<number>();
 
     /* Replay cached chapters synchronously up front. Cheap, deterministic
@@ -4406,11 +4892,25 @@ export async function runMainAnalyzerJob(
               verdict.issues[0] ?? 'coverage'
             }); re-analysing (attempt ${attempt}).`,
           ),
+        onCoverageExhausted: (attempts, verdict) =>
+          log(
+            1,
+            `Chapter ${i + 1}/${totalChapters} — the same attribution failure reproduced exactly on ` +
+              `attempt ${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
+              `deterministically, so re-running the same prompt cannot help. Halting the retries; ` +
+              `a re-split follows unless the section is indivisible or already at the split-depth limit.`,
+          ),
+        onDeterministicSplit: ({ parts, chars, depth }) =>
+          log(
+            1,
+            `Chapter ${i + 1}/${totalChapters} — re-attributing a ${chars.toLocaleString()}-char ` +
+              `section as ${parts} smaller ones (split depth ${depth}).`,
+          ),
       });
       if (stage2ChunkCount > 1) {
         log(
           1,
-          `Chapter ${i + 1}/${totalChapters} — large chapter attributed in ${stage2ChunkCount} sections to stay under the model output cap.`,
+          `Chapter ${i + 1}/${totalChapters} — attributed in ${stage2ChunkCount} sections.`,
         );
       }
       if (!coverageVerdict.ok) {
@@ -4845,6 +5345,25 @@ export async function runMainAnalyzerJob(
     // against a corrupted run. The user sees the `attribution_drift`
     // error in the analysing view and can retry.
     if (record.bookDir) {
+      /* #2260 review round 3 (C1) — a lock-acquisition timeout out of the
+         identity block below must fail the JOB, but it must NOT be thrown
+         from inside this persist: doing that skipped
+         `logCarriedForwardCharacters` and the whole state.json rewrite, and
+         then landed in `catch (persistErr)` — which logs "non-fatal" and
+         falls through to `send({kind:'result'})`. Net effect of throwing
+         early was strictly worse than swallowing: the job still reported
+         SUCCESS, and state.json now kept the PREVIOUS run's chapter list,
+         durations, analysisProvenance and updatedAt. So the timeout is
+         parked here and rethrown after this try/catch has closed — the
+         writes all complete, and the throw then escapes `catch (persistErr)`
+         into the job's top-level catch, which ends the job via
+         `endJob(…, {kind:'error'})`.
+
+         #2295 — this slot now has TWO producers, hence the name: the identity
+         block below, and the AUTHORITATIVE cast.json write above it. Which
+         WRITE timed out is what decides; which HANDLER caught it is not (see
+         the wrap on `writeChecked` below). */
+      let persistLockTimeout: unknown;
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: reconciled.sentences,
@@ -4859,6 +5378,14 @@ export async function runMainAnalyzerJob(
             stage1.characters,
           );
         } catch (journalErr) {
+          /* #2295 — a lock-acquisition timeout is swallowed HERE, on purpose,
+             and this handler is why the discrimination is by WRITE SITE rather
+             than by handler: `catch (persistErr)` below covers this call too,
+             so parking from there would fail a whole completed analysis over a
+             lineage file. The journal is lineage, not identity — losing it
+             degrades the merge-undo affordance, it cannot diverge cast.json
+             from the identity record. The AUTHORITATIVE cast.json write below
+             is the one that parks and fails the run. */
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
         /* srv-1 — record this run's dedup lineage + persist diminutive
@@ -4875,6 +5402,9 @@ export async function runMainAnalyzerJob(
           // or every suggestion fails both id checks and the list empties.
           await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
         } catch (dedupErr) {
+          /* #2295 — same deliberate swallow as the fold journal above, same
+             reason: dedup lineage + diminutive suggestions are advisory, and a
+             lock timeout on either must not fail a completed analysis. */
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
         if (phase1DriftExceeded) {
@@ -4895,13 +5425,50 @@ export async function runMainAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
-          await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergedFinal.characters,
-          });
+          /* #2295 — the AUTHORITATIVE cast.json write, and the only write
+             reaching `catch (persistErr)` below that takes a lock at all
+             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85).
+             A concurrent `performCastMerge` holding `cast:<bookDir>` made this
+             throw a `LockAcquisitionTimeoutError`, which `catch (persistErr)`
+             swallowed: cast.json AND state.json unwritten, `result` emitted
+             anyway. That is the silent success #2260 exists to remove, one
+             level up from the identity block below.
+
+             DISCRIMINATED BY WHICH WRITE TIMED OUT, not by which handler
+             caught it — discriminating by handler is what produced this bug in
+             the first place. The same `catch (persistErr)` also covers the
+             fold/dedup/suggestions journals (their own handlers above keep
+             swallowing, deliberately), so parking from there would escalate a
+             best-effort lineage write into a failed run. The state.json write
+             further down is authoritative too, but it is a bare
+             `writeJsonAtomic` with no lock of its own, so it cannot produce
+             this class and needs no wrapper.
+
+             Rethrown immediately, not deferred: unlike the identity block
+             below there is nothing left to finish here — cast.json did NOT
+             land, so recording retirements against a roster that was never
+             persisted would be worse than skipping them. Control flow is
+             therefore byte-for-byte what it was (the persist aborts,
+             `catch (persistErr)` logs); the only change is that the parked
+             value makes the job's terminal an error instead of a result. */
+          try {
+            await castBase!.writeChecked(
+              { characters: mergedFinal.characters },
+              reportCastConflict('final'),
+            );
+          } catch (castWriteErr) {
+            if (isLockAcquisitionTimeout(castWriteErr)) persistLockTimeout = castWriteErr;
+            throw castWriteErr;
+          }
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write, and never let a throwing history
              write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
-             state.json. Mirrors writeFoldJournal/writeDedupJournal above. */
+             state.json. Mirrors writeFoldJournal/writeDedupJournal above.
+             #2260 round 3 (C1) — still true for the one class this handler
+             no longer swallows: a lock-acquisition timeout DEFERS out of
+             this block (parked in `persistLockTimeout`, rethrown once the
+             persist's own try/catch has closed) rather than skipping the
+             writes below. */
           try {
             /* Wave 2 final-review finding 1(b) — every retirement recorded
                at this final write is filtered against the roster that was
@@ -4911,8 +5478,24 @@ export async function runMainAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            const retirementBookId = bookIdForRetirementCleanup(record);
+            /* #2166 / PR #2202 gate review (Critical) — decide whether
+               cast-id-history.json is READABLE before anything below rewrites
+               it. Every history step in this block (`recordRetirements`, both
+               `dropSuperseded*` helpers) reads through the collapsing
+               `loadCastIdHistory` and writes back unconditionally, so a
+               degraded file is REPLACED by a valid, empty one within a few
+               lines of here. Taking the verdict after that laundering would
+               read `ok` on a file whose real content was lost, and the
+               reconciliation below would then delete every same-book reject
+               edge — destroying the surviving half of a decision whose durable
+               half is already unreadable. The verdict must be captured here,
+               first, and carried down. */
+            const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
+              record.bookDir,
+            );
+            await recordRetirements(record.bookDir, retirementBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, retirementBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -4922,7 +5505,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, retirementBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -4952,8 +5535,53 @@ export async function runMainAnalyzerJob(
                   .join(', ')}) — affected segments need review.`,
               );
             }
+            /* #2110 — the mirror-image drop: an entry whose TARGET (not key)
+               has quietly stopped being live (this run's carry-forward
+               dropped an unvoiced character with no name-fallback match, and
+               nothing else ever recorded that as a retirement). Left alone
+               it's worse than inert — see the function's own doc comment —
+               so prune it against this exact just-persisted roster, same as
+               the reclaim drop above. */
+            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+              record.bookDir,
+              liveIds,
+            );
+            if (displacedByDeadTarget.length) {
+              log(
+                1,
+                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+            /* #2166 — heal any reject whose two writes came apart, against
+               this exact just-persisted roster. Best-effort; see the
+               helper's own doc comment. `historyStatusBeforePersist` is the
+               pre-rewrite verdict captured at the top of this block — without
+               it the helper's own read sees the file the steps above just
+               rewrote, not the one the persist started with. */
+            await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+            /* #2260 round 2 — see the dedup site near the top of this job for
+               why a lock-acquisition timeout must NOT be swallowed here.
+               Round 3 (C1) — but nor may it be thrown from HERE: that skipped
+               logCarriedForwardCharacters + the state.json rewrite below and
+               was then caught by `catch (persistErr)`, which reports the job
+               as a SUCCESS anyway. Park it; the rethrow is after this
+               persist's own catch. */
+            if (isLockAcquisitionTimeout(historyErr)) {
+              persistLockTimeout = historyErr;
+            } else {
+              console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+              /* #2214/#2201 — a degraded cast-id-history.json now makes the
+                 unconditional `dropSupersededIdsReclaimedByLiveCast` call
+                 above throw before `reconcileRejectEdgesOnDisk` is ever
+                 reached, so its own degraded-read log line never fires on
+                 this path. Emit the same user-facing wording here so a run
+                 against a damaged file still shows something in the in-app
+                 log instead of reading as clean. */
+              logIfDegradedCastIdHistory(historyErr, log);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -4997,6 +5625,14 @@ export async function runMainAnalyzerJob(
                 report: aggregateStructureReports(structureReports),
                 scope: 'book',
                 chaptersCovered: chapters.length,
+                /* #2267/#2275 C3 — a SIBLING of `report`, computed
+                   independently: `aggregateStructureReports` returns
+                   `undefined` for an empty `structureReports` (engine off, or
+                   every chapter this pass served from cache), but this
+                   reading needs neither an EngineReport nor the engine having
+                   run — see design of record §4 and the field's own doc
+                   comment on BookStateJson.analysisProvenance. */
+                maxMergedTurnsInParagraph: aggregateMaxMergedTurns(perChapterMaxMergedTurns),
               },
               updatedAt: new Date().toISOString(),
             };
@@ -5007,6 +5643,16 @@ export async function runMainAnalyzerJob(
         console.error('[analysis] failed to persist .audiobook/* for', record.bookDir, persistErr);
         // Non-fatal — the analysis result still streams back to the client.
       }
+      /* #2260 round 3 (C1) — the deferred rethrow. OUTSIDE the try/catch
+         above on purpose: from in there it would be caught by
+         `catch (persistErr)` and the job would still end via
+         `send({kind:'result'})`. From here it reaches this job's top-level
+         catch, which classifies it and calls `endJob(job, {kind:'error', …})`
+         — the loud outcome the timeout exists to produce — while every write
+         in the persist has already completed. (#2295 — "every write" is the
+         identity-block producer's property; the authoritative-write producer
+         aborts the persist by design, since its own write did not land.) */
+      if (persistLockTimeout !== undefined) throw persistLockTimeout;
     }
 
     if (phase1DriftExceeded) {
@@ -5283,6 +5929,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };
@@ -5358,6 +6005,20 @@ export async function runSubsetAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+     proceeds with the same base it uses today, so NO data is lost that is not
+     already lost today; what changes is that it is now visible. */
+  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+    console.warn(
+      `[analysis-subset] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
+    );
+    send({
+      kind: 'warning',
+      code: CAST_MERGE_BASE_STALE_CODE,
+      message: CAST_MERGE_BASE_STALE_MESSAGE,
+    });
+  };
   /* `lastStep` is a breadcrumb of the most recent phase milestone — mirrored to
      the server log (so a stall's last server-log line names where it wedged)
      and folded into the fatal-error log below (so a failure names the phase it
@@ -5384,9 +6045,18 @@ export async function runSubsetAnalyzerJob(
 
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
      the existing cast before any interim write clobbers cast.json. */
-  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
+  const priorSnapshot = record.bookDir
     ? await readPriorCastForMerge(record.bookDir)
-    : [];
+    : { rows: [], fingerprint: null, source: 'none' as const };
+  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
+  /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+     every merge-base write. */
+  const castBase: CastMergeBase | null = record.bookDir
+    ? createCastMergeBase(
+        () => liveBookDir(job) ?? record.bookDir!, // #2165 — fallback + ! are belt-and-braces
+        priorSnapshot.fingerprint,
+      )
+    : null;
 
   /* Heal cross-series/author reuse links in the prior cast before it feeds the
      seed + cast.json merges (see the streaming path for the full rationale —
@@ -5435,8 +6105,18 @@ export async function runSubsetAnalyzerJob(
     /* `liveIds: null` — same reasoning as the main route's dedup site: no
        roster is final here. See that call site's comment. */
     try {
-      await recordRetirements(record.bookDir, dedupRetirements, null, log);
+      await recordRetirements(
+        record.bookDir,
+        bookIdForRetirementCleanup(record),
+        dedupRetirements,
+        null,
+        log,
+      );
     } catch (historyErr) {
+      // #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
+      // lock-acquisition timeout must NOT be swallowed here (the canonical
+      // "why" for this file's four rethrow sites).
+      if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
@@ -5623,10 +6303,15 @@ export async function runSubsetAnalyzerJob(
               // no name-fallback and produces no retirements — see the main
               // route's interim-write comment for the full rationale.
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await writeJsonAtomic(castJsonPath(record.bookDir), {
-                characters: mergedInterim,
-              });
+              await castBase!.writeChecked(
+                { characters: mergedInterim },
+                reportCastConflict('subset-interim'),
+              );
             } catch (persistErr) {
+              /* #2292 (owner decision) — deliberate swallow, including a lock
+                 timeout; mirrors the main route's interim handler. Progress
+                 snapshot, clobbered by the authoritative write below, which is
+                 where a timeout DOES fail the run (#2295). */
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
           }
@@ -5794,6 +6479,39 @@ export async function runSubsetAnalyzerJob(
        Only chapters actually re-run here (`toRun`) can contribute — a
        subset retry never touches other chapters' cached sentences. */
     const subsetStructureReports: EngineReport[] = [];
+    /* #2267 — mirrors the main route's `perChapterMaxMergedTurns`: computed
+       up front from EVERY non-excluded chapter's text + the book's resolved
+       language, independent of whether the structure engine ran for a given
+       chapter (see the main route's matching comment / design of record §4).
+       Deliberately over `record.chapterHints`, NOT `toRun`: this is a
+       book-level reading, and a subset retry only reprocesses the chapters it
+       targets — computing over `toRun` alone would let a re-analysis of one
+       clean chapter silently overwrite a high reading left by every OTHER
+       chapter with that chapter's own low one (#2275 C2). Computing it this
+       way also keeps it decoupled from the `analyzer.structure.enabled` knob,
+       the same as the main route. #2275 C4 — one `merged=` line per chapter
+       with a defined reading, emitted HERE (mirrors the main route) so a
+       subset re-run — including a clean chapter never re-attributed by the
+       engine this pass — still names a breaching chapter in the operator
+       log. `scope=book` marks the line as a book-wide reading, not
+       per-chapter pass progress — this loop runs over every chapter in the
+       book while `chaptersCovered` (below) reports only `toRun.length`, so
+       without the marker a "re-analyse one chapter" run prints one
+       `merged=` line per book chapter against a one-chapter progress line
+       and reads as false progress. Skipped entirely for a language with no
+       dash convention (`n === undefined`), same as the main route. */
+    const subsetLegibilityConventions = conventionsFor(bookLanguage);
+    const subsetPerChapterMaxMergedTurns: Array<number | undefined> = record.chapterHints
+      .filter((c) => !c.excluded)
+      .map((c) => {
+        const n = subsetLegibilityConventions
+          ? measureChapterLegibility(c.body, subsetLegibilityConventions)
+          : undefined;
+        if (n !== undefined) {
+          console.log(`[analysis:structure] ch=${c.id} scope=book merged=${n}`);
+        }
+        return n;
+      });
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
@@ -5838,11 +6556,25 @@ export async function runSubsetAnalyzerJob(
                 verdict.issues[0] ?? 'coverage'
               }); re-analysing (attempt ${attempt}).`,
             ),
+          onCoverageExhausted: (attempts, verdict) =>
+            log(
+              1,
+              `Chapter ${ch.id} — the same attribution failure reproduced exactly on attempt ` +
+                `${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
+                `deterministically, so re-running the same prompt cannot help. Halting the retries; ` +
+                `a re-split follows unless the section is indivisible or already at the split-depth limit.`,
+            ),
+          onDeterministicSplit: ({ parts, chars, depth }) =>
+            log(
+              1,
+              `Chapter ${ch.id} — re-attributing a ${chars.toLocaleString()}-char section as ` +
+                `${parts} smaller ones (split depth ${depth}).`,
+            ),
         });
       if (subsetChunkCount > 1) {
         log(
           1,
-          `Chapter ${ch.id} — large chapter attributed in ${subsetChunkCount} sections to stay under the model output cap.`,
+          `Chapter ${ch.id} — attributed in ${subsetChunkCount} sections.`,
         );
       }
       for (const s of chapterSentences) s.chapterId = ch.id;
@@ -6109,6 +6841,13 @@ export async function runSubsetAnalyzerJob(
        exceeded the threshold — same reasoning as the main route's
        persist block. */
     if (record.bookDir && !isAborted()) {
+      /* #2260 round 3 (C1) — see the main job's persist block for why a lock-
+         acquisition timeout is parked rather than thrown from inside this
+         try: thrown here it skips state.json and is then swallowed by
+         `catch (persistErr)`, leaving the job reporting success.
+         #2295 — and for why the slot has two producers (the identity block,
+         and the authoritative cast.json write above it). */
+      let persistLockTimeout: unknown;
       try {
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: subsetReconciled.sentences,
@@ -6123,6 +6862,8 @@ export async function runSubsetAnalyzerJob(
             stage1.characters,
           );
         } catch (journalErr) {
+          // #2295 — deliberate swallow; see the main job's matching handler
+          // for why the discrimination is by write site, not by handler.
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
         /* srv-1 — record this run's dedup lineage + persist diminutive
@@ -6139,6 +6880,7 @@ export async function runSubsetAnalyzerJob(
           // every suggestion fails both id checks and the list empties.
           await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
         } catch (dedupErr) {
+          // #2295 — deliberate swallow, mirroring the main job's handler.
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
         if (subsetDriftExceeded) {
@@ -6158,12 +6900,25 @@ export async function runSubsetAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
-          await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergedFinal.characters,
-          });
+          /* #2295 — the authoritative cast.json write; mirrors the main job's
+             same-named wrap, including WHY it is wrapped at the write rather
+             than at `catch (persistErr)` (which also covers the journals) and
+             why it rethrows immediately rather than deferring. */
+          try {
+            await castBase!.writeChecked(
+              { characters: mergedFinal.characters },
+              reportCastConflict('subset-final'),
+            );
+          } catch (castWriteErr) {
+            if (isLockAcquisitionTimeout(castWriteErr)) persistLockTimeout = castWriteErr;
+            throw castWriteErr;
+          }
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write; wrapped so a throwing history
-             write can't skip cast.json / state.json. */
+             write can't skip cast.json / state.json. #2260 round 3 (C1) —
+             the one class this handler no longer swallows DEFERS out of the
+             block instead of skipping those writes; see the main job's
+             matching comment. */
           try {
             /* Wave 2 final-review finding 1(b) — every retirement recorded
                at this final write is filtered against the roster that was
@@ -6173,8 +6928,17 @@ export async function runSubsetAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            const subsetBookId = bookIdForRetirementCleanup(record);
+            /* #2166 / PR #2202 gate review (Critical) — mirrors the main
+               path's same-named capture: the id-history verdict is decided
+               BEFORE any step below rewrites cast-id-history.json, because
+               those steps launder a degraded file into a valid empty one and
+               a verdict taken after them reads `ok` on lost content. */
+            const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
+              record.bookDir,
+            );
+            await recordRetirements(record.bookDir, subsetBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, subsetBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -6184,7 +6948,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, subsetBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
@@ -6205,8 +6969,40 @@ export async function runSubsetAnalyzerJob(
                   .join(', ')}) — affected segments need review.`,
               );
             }
+            // #2110 — mirrors the main path's same-named block above: prune
+            // an entry whose TARGET quietly died, against this exact
+            // just-persisted roster.
+            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+              record.bookDir,
+              liveIds,
+            );
+            if (displacedByDeadTarget.length) {
+              log(
+                1,
+                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+            // #2166 — mirrors the main path's same-named call above, including
+            // the pre-rewrite verdict captured at the top of this block.
+            await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
-            console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+            /* #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
+               lock-acquisition timeout must NOT be swallowed here.
+               Round 3 (C1) — and nor thrown from here; mirrors the main
+               job's same-named handler. */
+            if (isLockAcquisitionTimeout(historyErr)) {
+              persistLockTimeout = historyErr;
+            } else {
+              /* Kept on ONE line deliberately: analysis-reject-edge-reconcile
+                 .test.ts's [C13] source scan matches this exact call text to
+                 prove each catch handler reaches `logIfDegradedCastIdHistory`,
+                 and a wrapped call is invisible to it. */
+              console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+              // #2214/#2201 — mirrors the main path's same-named handler above.
+              logIfDegradedCastIdHistory(historyErr, log);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -6246,6 +7042,9 @@ export async function runSubsetAnalyzerJob(
                 report: aggregateStructureReports(subsetStructureReports),
                 scope: 'subset',
                 chaptersCovered: toRun.length,
+                /* #2267/#2275 C3 — see the matching comment at the main
+                   route's persist site above. */
+                maxMergedTurnsInParagraph: aggregateMaxMergedTurns(subsetPerChapterMaxMergedTurns),
               },
               updatedAt: new Date().toISOString(),
             };
@@ -6259,6 +7058,11 @@ export async function runSubsetAnalyzerJob(
           persistErr,
         );
       }
+      /* #2260 round 3 (C1) — the deferred rethrow, outside the try/catch so
+         it escapes `catch (persistErr)` and reaches this job's top-level
+         catch, which ends the job via `endJob(job, {kind:'error', …})`.
+         Mirrors the main job. */
+      if (persistLockTimeout !== undefined) throw persistLockTimeout;
     }
 
     if (subsetDriftExceeded) {

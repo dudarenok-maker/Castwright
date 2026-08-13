@@ -363,6 +363,9 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
         voiceName: 'qwen-oduvan',
         resolution: 'unresolved',
         segments: 1,
+        // #2129 — a genuine miss (`!resolution`) is always `false` at the
+        // predicate's very first branch, converted to the wire string here.
+        audioCurrent: 'false',
       },
     });
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
@@ -399,6 +402,9 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
       mayrin: {
         resolution: 'unresolved',
         segments: 1,
+        // #2129 — blocked by the legacy `rejected` list, so `resolve()`
+        // returns undefined and the predicate's `!resolution` branch fires.
+        audioCurrent: 'false',
       },
     });
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
@@ -440,6 +446,9 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
       mayrin: {
         resolution: 'unresolved',
         segments: 1,
+        // #2129 — blocked by the pair-scoped `rejectedPairs`, same
+        // `!resolution` branch as the legacy-`rejected` case above.
+        audioCurrent: 'false',
         rejectedAgainst: ['mairin'],
       },
     });

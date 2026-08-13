@@ -2256,7 +2256,9 @@ export interface paths {
          * Mint a new per-device token (returned once) (srv-33)
          * @description Generates a fresh, individually-revocable device token. The raw token is
          *     returned ONCE in this response (only its SHA-256 is persisted) — the
-         *     caller must surface it to the user immediately.
+         *     caller must surface it to the user immediately. LOOPBACK-ONLY (defense
+         *     in depth: a stolen browser cookie that could mint a fresh, durable
+         *     device token would survive revoking the stolen one).
          */
         post: operations["createDevice"];
         delete?: never;
@@ -2275,7 +2277,12 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Revoke a paired device (srv-33) */
+        /**
+         * Revoke a paired device (srv-33)
+         * @description LOOPBACK-ONLY (#2269), symmetric with `POST /api/devices`: a stolen
+         *     browser cookie that cannot mint a fresh token must equally not be
+         *     able to revoke the legitimate owner's.
+         */
         delete: operations["revokeDevice"];
         options?: never;
         head?: never;
@@ -2413,9 +2420,13 @@ export interface paths {
          *     recomputed AFTER these writes land (`null` on the ordinary "still
          *     doesn't resolve" outcome). Idempotent — a repeat call for the same
          *     pair is a no-op on cast.json, though the rejection is still
-         *     (re-)recorded. The `rejectedPairs` write failing surfaces as a 500
-         *     (it is the only mechanism enforcing the reject for a normalised-tier
-         *     match); a stale `supersededBy`-entry cleanup failure does not. Use
+         *     (re-)recorded. The `rejectedPairs` entry is written FIRST and the
+         *     `notLinkedTo` edge second (#2166), so a half-failure always leaves the
+         *     visible half — the chip renders and Undo works. BOTH writes failing
+         *     surface as a 500, with distinct meanings: a `rejectedPairs` failure
+         *     means nothing was written; a cast.json failure means the rejection is
+         *     durably recorded but the character link is not. Retry is safe after
+         *     either. A stale `supersededBy`-entry cleanup failure is non-fatal. Use
          *     the DELETE on this same path to undo.
          */
         post: operations["rejectOrphanMatch"];
@@ -2434,6 +2445,44 @@ export interface paths {
          *     a pair that was never rejected 200s with `wasRejected: false`.
          */
         delete: operations["undoRejectOrphanMatch"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/{characterId}/link-orphan-match": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link an orphaned-id reconciliation ("this IS the same character") —
+         * @description The positive mirror of `reject-orphan-match`'s POST above: records
+         *     "orphanedId IS the same character as characterId" by durably
+         *     aliasing `orphanedId -> characterId` in `cast-id-history.json`'s
+         *     `supersededBy` (`retireCharacterId`), so `buildCastResolver` picks it
+         *     up at render/QA/splice time and the needs-your-decision row leaves
+         *     the banner's needs-decision section. Refuses a reserved minor-cast
+         *     fold-bucket target (`unknown-male`/`unknown-female`, 400) — a shared
+         *     bucket stands in for multiple unrelated background characters, so
+         *     aliasing a real id onto it is a lossy merge, not a reconciliation.
+         *     Does not itself clear a pre-existing pair-scoped rejection of this
+         *     exact pair — the client clears that first via the EXISTING
+         *     `reject-orphan-match` DELETE undo (no second removal
+         *     implementation); calling this route while a rejection is still in
+         *     place still durably writes the alias, but `resolution` in the
+         *     response stays blocked (`null`) until the rejection is actually
+         *     cleared. Has no DELETE of its own: once linked, the row moves into
+         *     the auto-reconciled section, which already renders
+         *     `reject-orphan-match`'s own "Not the same character" button/undo
+         *     chip as this action's full undo path.
+         */
+        post: operations["linkOrphanMatch"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2930,8 +2979,10 @@ export interface components {
              *     within the ride-out budget) / `gpu_contention` (same, for
              *     GPU-busy contention) / `unsupported_language` (the book's
              *     language has no sidecar mapping — checked before the stream
-             *     produces any progress) / `unknown` (defensive catch-all for an
-             *     unexpected throw escaping the design loop).
+             *     produces any progress) / `lock-contention` (a cast-lock
+             *     acquisition on this backstop's own path timed out — #2260) /
+             *     `unknown` (defensive catch-all for any other unexpected throw
+             *     escaping the design loop).
              * @enum {string}
              */
             type: "resume_from" | "idle" | "progress" | "heartbeat" | "character_skipped" | "character_designed" | "variant_designed" | "character_failed" | "error";
@@ -2967,7 +3018,7 @@ export interface components {
              * @description error only — machine-readable whole-run abort reason.
              * @enum {string}
              */
-            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "unknown";
+            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "unknown";
             /** @description error only — human-readable abort message. */
             message?: string;
         };
@@ -3009,7 +3060,9 @@ export interface components {
              *     design) run — the result is already persisted by the time this
              *     fires. `error` is the terminal event for a failed run: `code`
              *     `not_found` (character deleted mid-run), `design_failed` (the
-             *     design call itself threw), or `unsupported_language`.
+             *     design call itself threw), `unsupported_language`, or
+             *     `lock-contention` (a cast-lock acquisition on this route's own
+             *     path timed out — #2260).
              * @enum {string}
              */
             type: "resume_from" | "idle" | "heartbeat" | "phase" | "preview_ready" | "designed" | "error";
@@ -3042,7 +3095,7 @@ export interface components {
              * @description error only.
              * @enum {string}
              */
-            code?: "not_found" | "design_failed" | "unsupported_language";
+            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention";
             /** @description error only. */
             message?: string;
         };
@@ -3728,6 +3781,15 @@ export interface components {
              */
             languageSupported?: boolean;
             /**
+             * @description #2276 — True when `language` is a confidence-floor guess (no
+             *     majority across body chapters, or too little text to corroborate
+             *     itself) rather than a genuine decision. Mirrors
+             *     `DetectionResult.fallback` (server/src/tts/detect-language.ts) —
+             *     `languageSupported` can't stand in for it, since a guess and a
+             *     real decision can both land on the same (supported) language.
+             */
+            languageFallback?: boolean;
+            /**
              * @description fs-41/fs-50 — Languages available in the confirm-view selector
              *     (registry-supplied, supported:true entries only).
              */
@@ -3801,6 +3863,27 @@ export interface components {
             phaseId: number;
             progress: number;
             label?: string;
+        };
+        /**
+         * @description Non-fatal advisory on the analysis SSE stream. The analysis continues;
+         *     a `warning` never replaces the terminal `result`. Follows the same
+         *     `code` + `message` envelope the splice, generation and QA-repair
+         *     streams use, so a caller can dedupe and route without parsing prose.
+         */
+        AnalyseWarningEvent: {
+            /** @enum {string} */
+            kind: "warning";
+            /**
+             * @description Stable machine-readable warning code. Today only
+             *     `cast_merge_base_stale` — emitted when another route wrote
+             *     `cast.json` between two of this run's own merge-base writes, so the
+             *     analysis result was merged onto an older cast and that write may
+             *     have been overwritten. Replayed once per code on reconnect.
+             * @enum {string}
+             */
+            code: "cast_merge_base_stale";
+            /** @description Human-readable advisory text. */
+            message: string;
         };
         AnalyseResponse: {
             /** @example ns */
@@ -4956,7 +5039,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -5486,10 +5569,15 @@ export interface components {
              *     recomputed AFTER the undo's writes land. Restoring a rejected
              *     pair's forgotten `supersededBy` alias (when present) makes this
              *     the SAME value the resolver returned before the original reject
-             *     — the lossless-undo contract, UNLESS `supersededByOther` is set
-             *     (a later, unrelated re-analysis has since recorded a different
-             *     alias for `orphanedId`; the restore is skipped rather than
-             *     overwriting it — see `supersededByOther`).
+             *     — the lossless-undo contract, UNLESS either `supersededByOther`
+             *     or `targetNotLive` is set: `supersededByOther` when a later,
+             *     unrelated re-analysis has since recorded a DIFFERENT alias for
+             *     `orphanedId` (the restore is skipped rather than overwriting it
+             *     — see `supersededByOther`); `targetNotLive` when the forgotten
+             *     alias's own target has quietly stopped being a live cast id
+             *     since the original reject (#2161 — the restore is refused
+             *     rather than reintroducing a dangling alias — see
+             *     `targetNotLive`).
              * @enum {string|null}
              */
             resolution: "exact" | "history" | "normalised-id" | "normalised-history" | null;
@@ -5527,6 +5615,39 @@ export interface components {
              *     succeeded.
              */
             supersededByOther?: string[];
+            /**
+             * @description #2161 — same shape and reasoning as `supersededByOther` above,
+             *     for the sibling refusal case: set (non-empty) when one or more
+             *     of the removed pairs had a forgotten `supersededBy` alias to
+             *     restore, but the restore was REFUSED because that alias's own
+             *     target has quietly stopped being a live cast id since the
+             *     original reject (the #2110 dangling-alias hazard, reopened
+             *     through a stale Undo stash if written back unconditionally).
+             *     Each entry is the dead target id, one per refused restore.
+             *     Writing it back anyway would silently reintroduce a
+             *     `supersededBy` entry pointing at a character that no longer
+             *     exists. Absent (never an empty array) in the ordinary case:
+             *     nothing to restore, or every restore attempted succeeded or was
+             *     skipped for the different reason `supersededByOther` covers.
+             */
+            targetNotLive?: string[];
+        };
+        LinkOrphanMatchResponse: {
+            /** @description The live character (path param, echoed back). */
+            characterId: string;
+            orphanedId: string;
+            /**
+             * @description How `orphanedId` resolves against the live cast + id history,
+             *     recomputed AFTER this call's write lands. `null` only when a
+             *     still-active pair-scoped rejection blocks it (#2238 decision 1) —
+             *     the alias was still durably written; clearing the rejection via
+             *     the existing DELETE /reject-orphan-match undo lets it take
+             *     immediately, with no further link call needed.
+             * @enum {string|null}
+             */
+            resolution: "exact" | "history" | "normalised-id" | "normalised-history" | null;
+            /** @description The live cast id `orphanedId` resolves onto, when `resolution` is non-null. */
+            resolvedCharacterId?: string;
         };
         /**
          * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
@@ -5625,6 +5746,19 @@ export interface components {
                     resolvedCharacterId?: string;
                     /** @description How many rendered segments (across every rendered chapter) carry this orphaned id. */
                     segments: number;
+                    /**
+                     * @description #2129/#2128 — whether this orphaned id's RENDERED AUDIO is
+                     *     still current, as opposed to whether the id currently
+                     *     RESOLVES (`resolution`). `true` only when every rendered
+                     *     chapter carrying this id was rendered against the
+                     *     cast-id-history state that established its current target;
+                     *     `unknown` when the comparison cannot be made (a render
+                     *     predating the stamp, or a history file predating the
+                     *     one-shot back-fill). `unknown` is presented as needing a
+                     *     re-render, not as fine — only `true` clears a row.
+                     * @enum {string}
+                     */
+                    audioCurrent: "true" | "false" | "unknown";
                     /**
                      * @description #2092/#2089 D4 — every live cast id this orphaned id has
                      *     been rejected AGAINST (`cast-id-history.json`'s
@@ -6593,7 +6727,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyseResponse"];
-                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseResponse"];
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
         };
@@ -6624,7 +6758,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseResponse"];
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
         };
@@ -9656,6 +9790,28 @@ export interface operations {
                     };
                 };
             };
+            /** @description Devices can only be minted from the host UI */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+            /** @description Device token store is degraded (unreadable/unwritable) — see error for the reason */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     revokeDevice: {
@@ -9680,12 +9836,34 @@ export interface operations {
                     };
                 };
             };
+            /** @description Devices can only be revoked from the host UI */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
             /** @description Unknown device */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Device token store is degraded (unreadable/unwritable) — see error for the reason */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };
@@ -9808,7 +9986,10 @@ export interface operations {
              * @description Refused (nothing was written). Either the write would have replaced
              *     a character's consented cloned voice, or it would have overwritten an
              *     analysed manuscript with an empty sentence list, or the new
-             *     Author/Series/Title path is already taken.
+             *     Author/Series/Title path is already taken, or an analysis is
+             *     currently running for this book and the patch would move its folder
+             *     (renaming mid-analysis would split the book's state across two
+             *     directories — retry once the run finishes).
              */
             409: {
                 headers: {
@@ -9960,7 +10141,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Failed to durably record the rejection in cast-id-history.json — retry */
+            /** @description Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -10016,6 +10197,61 @@ export interface operations {
                 content?: never;
             };
             /** @description Failed to restore the forgotten alias entry, or to durably remove the rejection — retry */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    linkOrphanMatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectOrphanMatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The linked pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkOrphanMatchResponse"];
+                };
+            };
+            /** @description Missing fields, characterId/orphanedId self-pair, or characterId is a reserved fold-bucket id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Failed to durably record the alias — retry, the write is idempotent */
             500: {
                 headers: {
                     [name: string]: unknown;

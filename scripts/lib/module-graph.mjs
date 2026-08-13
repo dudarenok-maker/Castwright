@@ -13,6 +13,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, dirname, join, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { scrubGitEnv } from '../git-env.mjs';
 
 const require = createRequire(import.meta.url);
 const acorn = require('acorn');
@@ -159,6 +160,7 @@ export function classifyIgnored(absPaths, cwd) {
     cwd,
     input: posix.join('\n'),
     encoding: 'utf8',
+    env: scrubGitEnv(),
   });
 
   if (proc.error) {

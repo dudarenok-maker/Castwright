@@ -32,7 +32,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withKeyLock } from '../workspace/file-lock.js';
+import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
@@ -53,6 +53,7 @@ import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
+import { isAnalysisBusy } from '../tts/design-lock.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
@@ -64,6 +65,7 @@ import {
   CastVoiceConsentError,
   preserveClonedSlotsOnCastWrite,
   preserveDesignedVoicesOnCastWrite,
+  preserveNotLinkedToOnCastWrite,
   rejectForeignCloneKeys,
 } from '../workspace/preserve-cast-voices.js';
 import {
@@ -72,6 +74,7 @@ import {
   collectRenderedInstructHashesByChapter,
   collectRenderedSpeakerMaps,
   collectRenderedTextHashesByChapter,
+  type OrphanedCharacterFallback,
 } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
@@ -141,7 +144,10 @@ async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<
      Runs BEFORE preserveDesignedVoicesOnCastWrite, whose slot-blind
      fill-the-gap pass only ever restores a wholly-absent map. */
   const restored = preserveClonedSlotsOnCastWrite(existingChars, cast.characters);
-  const characters = preserveDesignedVoicesOnCastWrite(existingChars, restored);
+  const characters = preserveNotLinkedToOnCastWrite(
+    existingChars,
+    preserveDesignedVoicesOnCastWrite(existingChars, restored),
+  );
   return { ...cast, characters };
 }
 
@@ -492,12 +498,28 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        which measured 0/188 coverage across all 20 books (spec §4.6). Empty
        `{}` when nothing is orphaned. Tolerant of a missing audio dir /
        missing history file. */
-    const orphanedCharacterFallbacks = await collectOrphanedCharacterFallbacks(
-      bookDir,
-      state.chapters,
-      (cast?.characters ?? []) as Array<{ id: string }>,
-      orphanedCharacterFallbackHistoryFile,
-    ).catch(() => ({}));
+    /* #2129 — the collector's own type stays `AudioCurrency` (`true | false |
+       'unknown'`), which the repair-pass consumer (Task 9) imports directly;
+       OpenAPI cannot express that union as one scalar without an awkward
+       `oneOf`, so the wire shape is the STRING enum `'true' | 'false' |
+       'unknown'` instead — converted here, at the route boundary, not inside
+       the collector. The `.catch(() => ({}))` must stay INSIDE the awaited
+       call and typed, or the result widens to `Record<…> | {}` and `v` below
+       will not narrow (round 1, M19) — annotating the local is the smallest
+       fix. */
+    const rawFallbacks: Record<string, OrphanedCharacterFallback> =
+      await collectOrphanedCharacterFallbacks(
+        bookDir,
+        state.chapters,
+        (cast?.characters ?? []) as Array<{ id: string }>,
+        orphanedCharacterFallbackHistoryFile,
+      ).catch(() => ({}));
+    const orphanedCharacterFallbacks = Object.fromEntries(
+      Object.entries(rawFallbacks).map(([id, v]) => [
+        id,
+        { ...v, audioCurrent: String(v.audioCurrent) },
+      ]),
+    );
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend
        diffs it against the live manuscript to flag a `done` chapter whose
@@ -833,6 +855,32 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
         const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
         if (newDir !== bookDir) {
+          /* #2165 — refuse while an analysis is registered for this book. A
+             running analysis writes follow a rename (layer 2), but the busy
+             key stays pinned by design. Moving the folder out from under a
+             running job would recreate the pre-rename directory and split the
+             book's state across two folders. The rename guard here keeps the
+             two layers synchronized.
+
+             A pure predicate over a ref-counted in-memory Map — NO lock is
+             taken here, so it cannot interact with the global
+             design → library-voice → cast lock order. Refuse only; never wait.
+             Waiting would hold a request open across a multi-minute run.
+
+             Reported BEFORE the path-collision 409 below on purpose: this one
+             is transient and self-clearing, so naming it first stops the user
+             changing a title they didn't need to change.
+
+             Deliberately inside this branch — a PUT that moves no folder
+             (castConfirmed, prosody flags, notes, tags: the autosaves the
+             persistence middleware fires constantly, including during an
+             analysis) must keep returning 204. */
+          if (isAnalysisBusy(bookDir)) {
+            return res.status(409).json({
+              error:
+                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+            });
+          }
           if (existsSync(newDir)) {
             return res.status(409).json({
               error:
@@ -843,6 +891,31 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              before the rename — fs.rename on Windows fails with ENOENT if
              they don't. */
           await mkdir(dirname(newDir), { recursive: true });
+          /* #2165 — re-check after the mkdir yield. The guard above reads
+             in-memory state, and there are two `await`s between it and the
+             move; an analysis start that lands in that window would call
+             markAnalysisBusy(record.bookDir) against the PRE-rename path
+             (analysis.ts:2764), and since the busy key is pinned by design,
+             isAnalysisBusy(newDir) would then be false for that run's whole
+             life — silently disabling cast-design.ts:684's analysis-vs-design
+             mutual exclusion for this book.
+
+             ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
+             itself, it does NOT close it. Check-then-rename is still two
+             operations. Additionally, a writeChecked that resolved the old
+             directory before the rename would still write there afterwards,
+             recreating the pre-rename folder — the original #2165 symptom, at
+             much lower probability since layer 2 now follows the rename.
+             Closing it fully needs a primitive that spans the analysis
+             registration and the rename (a per-book lock, or keying busy state
+             on book id rather than path) — out of scope for #2165,
+             deliberately, not by oversight. */
+          if (isAnalysisBusy(bookDir)) {
+            return res.status(409).json({
+              error:
+                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+            });
+          }
           /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
              (atomic-rename.ts). Any other failure surfaces immediately. */
           await renameWithRetry(bookDir, newDir);
@@ -896,7 +969,12 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
       return res.status(409).json({ error: e.message });
     }
     console.error('[book-state] PUT failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to write book state.' });
+    /* #2260 FINAL ROUND (B2) — the `cast` slice above runs inside
+       `withCastLock`, whose key is the absolute path of this book's cast.json.
+       Curate that one class; every other body is unchanged. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to write book state.'),
+    });
   }
 });
 
@@ -1164,7 +1242,11 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     res.json(payload);
   } catch (e) {
     console.error('[book-state] reparse failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to re-parse manuscript.' });
+    /* #2260 FINAL ROUND (B2) — the reparse takes `withCastLock` for the
+       cast.json read+delete arm. Same curation. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to re-parse manuscript.'),
+    });
   }
 });
 
@@ -1210,9 +1292,15 @@ bookStateRouter.post(
       res.json(payload);
     } catch (e) {
       console.error('[book-state] replace-manuscript failed', e);
-      res
-        .status(500)
-        .json({ error: (e as Error).message || 'Failed to replace manuscript.' });
+      /* #2260 FINAL ROUND (B2) — replace-manuscript reaches the same
+         `withCastLock` cast.json read+delete arm through the shared
+         applyReparse() core as reparse above. Same curation. */
+      res.status(500).json({
+        error: requestFailureMessage(
+          e,
+          (e as Error).message || 'Failed to replace manuscript.',
+        ),
+      });
     }
   },
 );
@@ -1693,6 +1781,10 @@ bookStateRouter.put('/:bookId/listen-stats', async (req: Request, res: Response)
     res.json(written);
   } catch (e) {
     console.error('[book-state] PUT listen-stats failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to write listen-stats.' });
+    /* #2260 FINAL ROUND (B2) — the only `listen-stats:` key space in the app,
+       and the one non-cast key that reaches a client-facing 500. Same curation. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to write listen-stats.'),
+    });
   }
 });

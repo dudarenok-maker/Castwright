@@ -56,9 +56,15 @@ export interface CrossExamineOpts {
   unknownBucketIds: Set<string>;
   /** default 80: below → flagOnly (no corrections) */
   alignmentFloorPct: number;
+  /** #2253 — the language's paragraph-start dialogue marker, threaded from the
+      `LanguageConventions` the caller already resolved. `null`/absent for
+      quote-only languages (en/de/ja/zh) and disables the convention invariant
+      entirely. MUST NOT carry the `g` flag: `.test()` on a global regex is
+      stateful via `lastIndex` and would alternate true/false across calls. */
+  dialogueOpen?: RegExp | null;
 }
 
-type Bucket = 'confirmed' | 'corrected' | 'flagged' | 'lumped';
+type Bucket = 'confirmed' | 'corrected' | 'flagged' | 'unresolved' | 'lumped';
 
 interface Decision {
   characterId: string;
@@ -84,7 +90,7 @@ function flagOnlyDecision(as: AlignedSentence): Decision {
     characterId: as.sentence.characterId,
     confidence: Math.min(modelConfidence(as.sentence), CONFIDENCE.UNALIGNED_CAP),
     reason: 'flag-only-floor',
-    bucket: 'flagged',
+    bucket: 'unresolved',
     flagged: true,
   };
 }
@@ -98,14 +104,14 @@ function decideUnanchoredSpeech(modelId: string, opts: CrossExamineOpts): Decisi
         characterId: modelId,
         confidence: CONFIDENCE.UNANCH_NAMED_FLAG,
         reason: `unanchored-named:${modelId}`,
-        bucket: 'flagged',
+        bucket: 'unresolved',
         flagged: true,
       }
     : {
         characterId: modelId,
         confidence: CONFIDENCE.UNANCH_NARR_FLAG,
         reason: 'unanchored-narrator',
-        bucket: 'flagged',
+        bucket: 'unresolved',
         flagged: true,
       };
 }
@@ -201,6 +207,50 @@ function decideAnchoredSpeech(modelId: string, span: SpanEvidence, opts: CrossEx
   }
 }
 
+/** #2253 — the dialogue-convention invariant.
+
+    A sentence that OPENS with the language's dialogue marker is speech by that
+    language's own convention. Structural evidence to the contrary means the
+    parser failed to segment a merged paragraph (#2254) — not that the line is
+    narration. The engine must not assert a speaker it cannot support, but it
+    must also not assert `narrator`, which is exactly as strong a claim.
+
+    Deliberately NOT a length heuristic: tag-span size predicts nothing (three
+    chapters of the reference book carry 4,767-6,968-char tag spans and produce
+    ZERO mis-voiced lines). This asks whether the text declares its own type.
+
+    Limit worth knowing: this reads the MODEL's sentence text. A victim whose
+    model output dropped the leading dash is not recovered. */
+function isConventionDialogue(as: AlignedSentence, opts: CrossExamineOpts): boolean {
+  return opts.dialogueOpen != null && opts.dialogueOpen.test(as.sentence.text ?? '');
+}
+
+/** #2253 — the convention rescue applies only when there is a real speaker to
+    KEEP. `narrator` and the unknown-gender buckets are not speakers, and an id
+    absent from the roster is one `reconcileSentenceCharacterIds` will demote
+    downstream anyway — keeping it rescues nothing and inflates `demotedCount`
+    toward the hard attribution-drift abort. Mirrors `decideUnanchoredSpeech`'s
+    test at :101. BOTH call sites must ask this same question: asking it
+    differently made the same input decide differently either side of the
+    alignment floor. */
+function isConventionRescue(as: AlignedSentence, opts: CrossExamineOpts): boolean {
+  const id = as.sentence.characterId;
+  return isConventionDialogue(as, opts) && opts.rosterIds.has(id) && !isNarratorOrUnknown(id, opts);
+}
+
+/** Keep the model's speaker and flag it below the review UI's 0.75 highlight
+    threshold. This FLAGS, it does not ATTRIBUTE — the kept speaker may still be
+    wrong, and is surfaced as uncertain rather than asserted. */
+function decideConventionDialogue(modelId: string): Decision {
+  return {
+    characterId: modelId,
+    confidence: CONFIDENCE.TAG_WEAK_KEEP_FLAG,
+    reason: `dash-line-keep-flag:${modelId}`,
+    bucket: 'flagged',
+    flagged: true,
+  };
+}
+
 /** A sentence whose only aligned spans are `tag` (a beat/tag clause itself,
     e.g. "сказал Антон") — never `speech`. The tag/beat text is narrator
     voice, not the character's: demote (Wave A rule, kept), no block-clamp
@@ -250,7 +300,7 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
       characterId: modelId,
       confidence: Math.min(modelConfidence(as.sentence), CONFIDENCE.UNALIGNED_CAP),
       reason: 'unaligned',
-      bucket: 'flagged',
+      bucket: 'unresolved',
       flagged: true,
     };
   }
@@ -266,6 +316,15 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
   if (speechSpan) {
     block.active = false;
     return speechSpan.speaker ? decideAnchoredSpeech(modelId, speechSpan, opts) : decideUnanchoredSpeech(modelId, opts);
+  }
+
+  /* #2253 — before EITHER demote route. Placed above the tag branch (not
+     inside decideTagSpanOnly) so it also covers decideNarrationOnly below:
+     "no speech span => narrator" has two producers, and guarding only one
+     reroutes traffic instead of fixing the outcome. */
+  if (isConventionRescue(as, opts)) {
+    block.active = false;
+    return decideConventionDialogue(modelId);
   }
 
   if (as.spans.some((s) => s.kind === 'tag')) {
@@ -295,6 +354,7 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
     confirmed: 0,
     corrected: 0,
     flagged: 0,
+    unresolved: 0,
     lumped: 0,
     escalated: 0,
     escalationAccepted: 0,
@@ -312,7 +372,14 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
       // Suppress corrections below the floor EXCEPT the high-precision
       // pure-narration demote, which doesn't depend on the (unreliable)
       // window/alternation picture.
-      if (isPureNarrationAligned(as) && as.sentence.characterId !== NARRATOR_ID) {
+      /* #2253 — the third conjunct. Without it the defect survives intact
+         below the floor, and no chapter of the reference corpus is below the
+         floor, so no corpus measurement would ever show it. */
+      if (
+        isPureNarrationAligned(as) &&
+        as.sentence.characterId !== NARRATOR_ID &&
+        !isConventionRescue(as, opts)
+      ) {
         decision = decideNarrationOnly(as.sentence.characterId, block);
       } else {
         block.active = false;

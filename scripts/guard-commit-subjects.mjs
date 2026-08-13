@@ -19,6 +19,8 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { validateCommitSubject, helpMessage as subjectHelp } from './validate-commit-msg.mjs';
+import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const isZeroSha = (sha) => /^0+$/.test(sha);
 const UNIT = '\x1f'; // git log field separator
@@ -95,6 +97,7 @@ function gitListSubjects(remoteSha, localSha) {
   const res = spawnSync('git', ['log', `--format=%H${UNIT}%s`, ...computeRevs(remoteSha, localSha)], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    env: scrubGitEnv(),
   });
   if (res.status !== 0 || typeof res.stdout !== 'string') return [];
   return res.stdout
@@ -106,12 +109,7 @@ function gitListSubjects(remoteSha, localSha) {
     });
 }
 
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  Array.isArray(process.argv) &&
-  /guard-commit-subjects\.mjs$/.test(process.argv[1] ?? '');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   let stdinText = '';
   try {
     stdinText = readFileSync(0, 'utf8');

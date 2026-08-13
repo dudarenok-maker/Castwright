@@ -35,6 +35,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { itemFailureReason } from '../workspace/file-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import type { LibraryCastCharacter } from '../workspace/library-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -176,8 +177,14 @@ castSeriesPatchRouter.post(
           characterId: t.characterId,
         });
       } catch (err) {
+        /* #2292 (owner decision) — `applyPatchToCastFile` runs inside that
+           book's cast lock, so a `LockAcquisitionTimeoutError` is reachable by
+           ordinary contention on ONE series-mate. It stays a per-book `failed`
+           entry (207) rather than failing the propagation to the others, but
+           the reason names contention instead of implying that book's cast is
+           broken. */
         const message = err instanceof Error ? err.message : String(err);
-        failed.push({ bookId: t.bookId, bookTitle: t.bookTitle, error: message });
+        failed.push({ bookId: t.bookId, bookTitle: t.bookTitle, error: itemFailureReason(err, message) });
       }
     }
 

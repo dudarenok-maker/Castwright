@@ -314,6 +314,17 @@ jobs:
             npx vitest run --config vitest.config.slow.ts
           fi
 
+      # #2053: madge's --circular pass over server/src's import graph isn't
+      # free, so it's deliberately cloud/full-`npm run verify`-only (repo-
+      # owner decision on the issue) rather than a pre-push/pre-commit leg.
+      # Asserts the cycle LIST against the committed allowlist
+      # (server/madge-cycles-allowlist.json), not just a count — a count is
+      # blind to a swapped cycle.
+      # leg: check:cycles
+      - name: Import-cycle allowlist (madge)
+        if: fromJSON(needs.detect.outputs.scopes).step_check_cycles || fromJSON(needs.detect.outputs.scopes).shared
+        run: npm run check:cycles
+
   sidecar-tests:
     name: Sidecar tests (pytest)
     needs: detect

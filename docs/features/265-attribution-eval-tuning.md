@@ -201,9 +201,17 @@ and/or a `GEMINI_API_KEY`.
    banner naming the engine and exits 0 rather than throwing a connection
    error.
 5. **Cloud engine:** with `GEMINI_API_KEY` set, `npm run eval:attribution --
-   --engine gemma` runs the same scorecard against `gemma-4-31b-it`.
-   `ATTRIBUTION_ESCALATION=off` skips the second cloud (escalation) pass
-   while iterating quickly.
+   --engine gemma` runs the same scorecard against whatever
+   `configValue('analyzer.gemini.model')` resolves to (the `gemma` CLI flag
+   is a slot name, not a model pin) — the registry default is
+   `gemini-3.5-flash-lite` (15 RPM / 500 RPD), not `gemma-4-31b-it` (30 RPM
+   / 14,400 RPD), since #2179 converted `run-eval-cli.ts`'s hardcoded
+   `gemma-4-31b-it` fallback to the shared config resolver. `slotLabel`
+   reflects this: it prints `gemma:<resolved-model-id>` (e.g.
+   `gemma:gemini-3.5-flash-lite`) rather than a fixed name. Set
+   `GEMINI_MODEL=gemma-4-31b-it` (or another `gemma-*` id) explicitly to
+   run against the larger free-tier bucket. `ATTRIBUTION_ESCALATION=off`
+   skips the second cloud (escalation) pass while iterating quickly.
 
 ## Out of scope
 

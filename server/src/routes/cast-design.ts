@@ -37,6 +37,11 @@ import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import {
+  isLockAcquisitionTimeout,
+  itemFailureReason,
+  requestFailureMessage,
+} from '../workspace/file-lock.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
@@ -610,13 +615,22 @@ async function runDesignJob(
             });
             return;
           }
-          /* Per-character synthesis failure — record it and move on. */
-          job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+          /* Per-character synthesis failure — record it and move on.
+             #2292 (owner decision) — a `LockAcquisitionTimeoutError` out of
+             the persist steps in this try (`applyOverrideToCastFiles`,
+             `persistEmotionVariant`, `ensureCharacterVoiceUuid`,
+             `writeVoiceStylePersona`) keeps this per-character shape — one
+             contended character must not fail the other N — but reports
+             contention rather than implying the character itself is at fault.
+             The same string on both surfaces so the live toast and the
+             end-of-job `failures` list can't disagree. */
+          const reason = itemFailureReason(e, message);
+          job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',
             characterId,
             name: character.name ?? characterId,
-            errorReason: message,
+            errorReason: reason,
           });
           break;
         }
@@ -788,12 +802,33 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
   });
 
   void runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
-    /* Defensive — the loop catches per-character; a throw here is unexpected. */
-    endJob(job, {
-      type: 'error',
-      code: 'unknown',
-      message: (e as Error).message || 'Cast design failed.',
-    });
+    /* Defensive — the loop catches per-character; a throw here is unexpected.
+       #2260 FINAL ROUND (B2) — curated all the same. The REACHABLE contention
+       path in this route is per-character and already reports
+       `LOCK_CONTENTION_ITEM_REASON`; this outer handler is the backstop, and a
+       backstop that leaks is still a leak. No fixture drives it (nothing is
+       known to reach it), so this is consistency, not a covered fix. */
+    /* #2260 FINAL ROUND (B2) nit — 'unknown' left this backstop unable to reach
+       the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links for a
+       lock-contention failure, same as the analysis path's own
+       `classifyAnalysisFailure` (failure-taxonomy.ts) already does. Two
+       literal branches, not a `code` variable, so the literal `code: '...'`
+       stays greppable/regex-extractable the way every other code on this
+       event already is (see single-design.ts's identical nit for the guard
+       this matters to). */
+    if (isLockAcquisitionTimeout(e)) {
+      endJob(job, {
+        type: 'error',
+        code: 'lock-contention',
+        message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
+      });
+    } else {
+      endJob(job, {
+        type: 'error',
+        code: 'unknown',
+        message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
+      });
+    }
   });
 });
 

@@ -20,6 +20,8 @@
 
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const isZeroSha = (sha) => /^0+$/.test(sha ?? '');
 
@@ -61,13 +63,17 @@ function gitChangedFiles(remoteSha, localSha) {
   if (remoteSha && !isZeroSha(remoteSha)) {
     revArg = `${remoteSha}..${localSha}`;
   } else {
-    const mb = spawnSync('git', ['merge-base', localSha, 'origin/main'], { encoding: 'utf8' });
+    const mb = spawnSync('git', ['merge-base', localSha, 'origin/main'], {
+      encoding: 'utf8',
+      env: scrubGitEnv(),
+    });
     if (mb.status !== 0 || !mb.stdout.trim()) return null;
     revArg = `${mb.stdout.trim()}..${localSha}`;
   }
   const res = spawnSync('git', ['diff', '--name-only', revArg], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    env: scrubGitEnv(),
   });
   if (res.status !== 0 || typeof res.stdout !== 'string') return null;
   return res.stdout
@@ -76,12 +82,7 @@ function gitChangedFiles(remoteSha, localSha) {
     .filter(Boolean);
 }
 
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  Array.isArray(process.argv) &&
-  /is-docs-only-push\.mjs$/.test(process.argv[1] ?? '');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   let stdinText = '';
   try {
     stdinText = readFileSync(0, 'utf8');

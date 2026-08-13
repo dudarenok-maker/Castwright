@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// @ts-expect-error — shared helper ships no .d.ts; see its own header (#2291).
+import { isDirectlyInvoked } from '../../../../scripts/lib/is-main-module.mjs';
 import { parseLabelledChapter, type LabelledChapter } from './schema.js';
 import { parseRosterSnapshot, type RosterSnapshot } from './roster-schema.js';
 import {
@@ -15,6 +17,7 @@ import {
 import { OllamaAnalyzer } from '../ollama.js';
 import { GeminiAnalyzer } from '../gemini.js';
 import type { Analyzer } from '../index.js';
+import { configValue } from '../../config/resolver.js';
 
 const DEFAULT_CORPUS = fileURLToPath(new URL('./corpus/', import.meta.url));
 const COMMITTED = fileURLToPath(new URL('./__fixtures__/', import.meta.url));
@@ -26,7 +29,7 @@ const FIXTURE_RE = /^(.+)-ch(\d+)\.([a-z]{2})(\.silver)?\.labelled\.json$/;
 
 export function slotLabel(engine: 'qwen' | 'gemma'): string {
   if (engine === 'qwen') return `qwen:${process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b'}`;
-  return `gemma:${process.env.GEMINI_MODEL ?? 'gemma-4-31b-it'}`;
+  return `gemma:${configValue<string>('analyzer.gemini.model')}`;
 }
 
 /** Pure — no filesystem access. Parses a fixture filename into its slug/
@@ -89,7 +92,7 @@ async function buildAnalyzer(engine: 'qwen' | 'gemma'): Promise<Analyzer | null>
   }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
-  return new GeminiAnalyzer({ apiKey, model: process.env.GEMINI_MODEL ?? 'gemma-4-31b-it' });
+  return new GeminiAnalyzer({ apiKey, model: configValue<string>('analyzer.gemini.model') });
 }
 
 /** A FixtureAgg tagged with its corpus tier, for the CLI's gold/silver
@@ -282,10 +285,12 @@ async function main(): Promise<void> {
   printScorecard(results);
 }
 
-// Run only when invoked directly (not when imported by tests). Normalise both
-// sides with resolve() — a bare string compare is Windows-brittle (drive-letter
-// casing / slash direction), matching the repo precedent (capture-cli.ts).
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+// Run only when invoked directly (not when imported by tests). Routed
+// through the shared scripts/lib/is-main-module.mjs helper (#2291) — a bare
+// resolve()-normalised compare misses across a symlink/junction (e.g. this
+// repo's junctioned worktrees) because it only realpaths one side; see that
+// file's header for the full reasoning and #2291's incident writeup.
+if (isDirectlyInvoked(import.meta.url)) {
   main().catch((e) => {
     console.error(e);
     process.exit(1);

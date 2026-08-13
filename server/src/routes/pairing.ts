@@ -19,13 +19,13 @@ import { enumerateLanUrls } from './export-lan.js';
 import { resolveRootCaPath } from './cert-root.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
-import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
-import { createDevice, clampTtlDays } from '../workspace/device-tokens.js';
+import { createPairingSession, redeemPairingSession, restorePairingSession } from '../workspace/pairing-sessions.js';
+import { createDevice, clampTtlDays, DeviceStoreDegradedError } from '../workspace/device-tokens.js';
 import {
   isLanTokenEnforced,
   isPrivateNetworkRequest,
   mayStartPairingSession,
-  PAIRING_ORIGIN_HINT,
+  pairingOriginHint,
 } from '../lan-auth.js';
 import { configValue } from '../config/resolver.js';
 
@@ -51,7 +51,7 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
   // Loopback (the host UI) OR an already-paired device on the friendly hostname
   // may start a pairing session; bare-LAN-IP access stays loopback-only.
   if (!mayStartPairingSession(req)) {
-    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
+    res.status(403).json({ error: pairingOriginHint() });
     return;
   }
   // Gate on what the server ACTUALLY bound, not the requested flag: a cert-less box
@@ -115,8 +115,27 @@ pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), 
   // Desktop-chosen session label wins (so the admin list matches what the user
   // named on this machine); otherwise the redeeming device's own label; else 'Device'.
   const label = result.label ?? (typeof body.label === 'string' ? body.label : 'Device');
-  const { token } = await createDevice(label, ttl());
-  res.status(201).json({ token });
+  try {
+    const { token } = await createDevice(label, ttl());
+    res.status(201).json({ token });
+  } catch (err) {
+    // #2204 review (F2/F7, pairing-ordering note) — redeemPairingSession above
+    // already consumed the one-time code; if the device store can't actually
+    // record the new device, the code must not be burned for nothing (a
+    // degraded store today, healthy again in a moment, would otherwise force
+    // the user to generate a whole new QR code with no explanation). Restore
+    // it so the same code is still redeemable for the rest of its original
+    // TTL. This does NOT reopen the single-use race: `redeemPairingSession`
+    // already closed that synchronously the moment it ran, for every OTHER
+    // caller of this code; restoring only re-opens the window for the ONE
+    // caller who legitimately holds it and hasn't gotten a device yet.
+    restorePairingSession(code);
+    if (err instanceof DeviceStoreDegradedError) {
+      res.status(503).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 });
 
 pairRedeemRouter.post(
@@ -142,14 +161,27 @@ pairRedeemRouter.post(
       return;
     }
     const ttlDays = ttl();
-    const { device, token } = await createDevice(result.label ?? 'Device', ttlDays);
-    res.cookie('__Host-cw_lan', token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: ttlDays * 86_400_000,
-    });
-    res.status(201).json({ label: device.label, expiresAt: device.expiresAt });
+    try {
+      const { device, token } = await createDevice(result.label ?? 'Device', ttlDays, {
+        selfBind: result.selfBind,
+      });
+      res.cookie('__Host-cw_lan', token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'strict',
+        path: '/',
+        maxAge: ttlDays * 86_400_000,
+      });
+      res.status(201).json({ label: device.label, expiresAt: device.expiresAt });
+    } catch (err) {
+      // Same restore-on-failure as /redeem above -- see that comment for why
+      // this doesn't reopen the single-use race.
+      restorePairingSession(code);
+      if (err instanceof DeviceStoreDegradedError) {
+        res.status(503).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   },
 );

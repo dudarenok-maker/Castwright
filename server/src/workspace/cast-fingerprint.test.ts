@@ -1,0 +1,217 @@
+/* #2015 — the compare-and-set primitive behind the merge-base staleness
+   detector. The coupling test at the bottom is the important one: it is the
+   only thing standing between a change to writeJsonAtomic's serialisation and
+   a detector that reports a conflict on every write it makes itself. */
+import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { writeJsonAtomic } from './state-io.js';
+
+/* Mock fs/promises so a single test can inject a non-ENOENT read failure
+   without relying on the real filesystem (#2185 review, item 1) — every
+   other call (the default readFile path, writeFile, rename, ...) still
+   points at the real impl. Module-scoped swap, mirroring state-io.test.ts's
+   setRenameImpl pattern: each test installs its own failure via
+   setReadFileImpl(). */
+type ReadFileUtf8 = (path: string, encoding: BufferEncoding) => Promise<string>;
+let readFileImpl: ReadFileUtf8 | null = null;
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const actualReadFile = actual.readFile as unknown as ReadFileUtf8;
+  return {
+    ...actual,
+    readFile: (path: string, encoding: BufferEncoding): Promise<string> =>
+      (readFileImpl ?? actualReadFile)(path, encoding),
+  };
+});
+
+function setReadFileImpl(fn: ReadFileUtf8 | null): void {
+  readFileImpl = fn;
+}
+
+/* Import AFTER vi.mock so cast-fingerprint.ts picks up the mocked readFile. */
+const { readFile } = await import('node:fs/promises');
+const {
+  ABSENT,
+  UNREADABLE,
+  FINGERPRINT_SENTINELS,
+  hashBytes,
+  readJsonWithFingerprint,
+  fingerprintOfWrite,
+  describeFingerprintForLog,
+} = await import('./cast-fingerprint.js');
+
+function tmpDir(): string {
+  return mkdtempSync(join(tmpdir(), 'castwright-fingerprint-'));
+}
+
+describe('readJsonWithFingerprint', () => {
+  it('returns ABSENT — not null, not a hash — for a file that does not exist', async () => {
+    const dir = tmpDir();
+    try {
+      const got = await readJsonWithFingerprint(join(dir, 'nope.json'));
+      expect(got.value).toBeNull();
+      expect(got.fingerprint).toBe(ABSENT);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('hashes the RAW bytes, not a re-serialised form', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    try {
+      /* Deliberately non-canonical whitespace: a normalising implementation
+         would hash this identically to the compact form below, which is the
+         bug this asserts against. */
+      writeFileSync(p, '{  "characters"  :  [ ]  }', 'utf8');
+      const loose = await readJsonWithFingerprint(p);
+      writeFileSync(p, '{"characters":[]}', 'utf8');
+      const tight = await readJsonWithFingerprint(p);
+
+      expect(loose.value).toEqual({ characters: [] });
+      expect(tight.value).toEqual({ characters: [] });
+      expect(loose.fingerprint).not.toBe(tight.fingerprint);
+      expect(loose.fingerprint).toBe(hashBytes('{  "characters"  :  [ ]  }'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still fingerprints unparseable bytes (a malformed cast.json is a real on-disk state)', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    try {
+      writeFileSync(p, '{ not json', 'utf8');
+      const got = await readJsonWithFingerprint(p);
+      expect(got.value).toBeNull();
+      expect(got.fingerprint).toBe(hashBytes('{ not json'));
+      expect(got.fingerprint).not.toBe(ABSENT);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns UNREADABLE — not ABSENT — for a non-ENOENT read failure (#2185 review)', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    try {
+      writeFileSync(p, '{"characters":[]}', 'utf8');
+      const err = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      setReadFileImpl(async () => {
+        throw err;
+      });
+
+      const got = await readJsonWithFingerprint(p);
+
+      expect(got.value).toBeNull();
+      expect(got.fingerprint).toBe(UNREADABLE);
+      expect(got.fingerprint).not.toBe(ABSENT);
+    } finally {
+      setReadFileImpl(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still returns ABSENT for a real ENOENT even with the mock installed (no regression on the happy path)', async () => {
+    const dir = tmpDir();
+    try {
+      setReadFileImpl(null); // default pass-through — ENOENT comes from the real fs
+      const got = await readJsonWithFingerprint(join(dir, 'nope.json'));
+      expect(got.value).toBeNull();
+      expect(got.fingerprint).toBe(ABSENT);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fingerprintOfWrite — coupling guard against writeJsonAtomic', () => {
+  it('predicts the exact bytes writeJsonAtomic lands on disk', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    try {
+      const payload = { characters: [{ id: 'nova', voiceId: 'v1', nested: { a: [1, 2] } }] };
+      await writeJsonAtomic(p, payload);
+      const onDisk = await readFile(p, 'utf8');
+
+      /* If writeJsonAtomic ever changes its serialisation (indent, key order,
+         trailing newline), this fails HERE rather than as a detector that
+         reports a conflict on every write it made itself. */
+      expect(fingerprintOfWrite(payload)).toBe(hashBytes(onDisk));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('agrees with what readJsonWithFingerprint observes after the write', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    try {
+      const payload = { characters: [{ id: 'wren' }] };
+      await writeJsonAtomic(p, payload);
+      const observed = await readJsonWithFingerprint(p);
+      expect(observed.fingerprint).toBe(fingerprintOfWrite(payload));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ABSENT can never collide with a real sha256 hex digest', () => {
+    expect(ABSENT).not.toMatch(/^[0-9a-f]{64}$/);
+    expect(hashBytes('')).toMatch(/^[0-9a-f]{64}$/);
+    /* The name of this test claims the guarantee comes from the NUL prefix, so
+       assert THAT, not merely that the sentinel fails a hex-digest regex — a
+       plain 'ABSENT' with no prefix would pass the regex check too. A sha256
+       hex digest can only contain [0-9a-f], so a leading NUL makes collision
+       impossible by construction rather than by length. */
+    expect(ABSENT.startsWith(String.fromCharCode(0))).toBe(true);
+  });
+
+  it('UNREADABLE can never collide with a real sha256 hex digest or with ABSENT', () => {
+    expect(UNREADABLE).not.toMatch(/^[0-9a-f]{64}$/);
+    expect(UNREADABLE.startsWith(String.fromCharCode(0))).toBe(true);
+    expect(UNREADABLE).not.toBe(ABSENT);
+  });
+});
+
+describe('describeFingerprintForLog - every sentinel renders safe text (#2186)', () => {
+  it('renders every member of FINGERPRINT_SENTINELS as non-empty text with no NUL byte', () => {
+    /* Iterates the actual sentinel SET, not two hardcoded literals: a future
+       third sentinel added to FINGERPRINT_SENTINELS without a matching label
+       in describeFingerprintForLog falls through to the raw-hex-prefix
+       branch, which still carries the leading NUL and fails the assertions
+       below. That is the whole point: this test breaks the day someone adds
+       a sentinel to FINGERPRINT_SENTINELS and forgets to teach the renderer
+       about it — a sentinel declared but never added to that array is still
+       not caught. */
+    const nul = String.fromCharCode(0);
+    for (const sentinel of FINGERPRINT_SENTINELS) {
+      const rendered = describeFingerprintForLog(sentinel);
+      expect(rendered).not.toContain(nul);
+      expect(rendered.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('still renders a real sha256 digest as a 12-char prefix (unaffected by the sentinel table)', () => {
+    const digest = hashBytes('{"characters":[]}');
+    expect(describeFingerprintForLog(digest)).toBe(digest.slice(0, 12));
+  });
+
+  it('never resolves through Object.prototype for a prototype-shaped input (review finding 1)', () => {
+    /* A plain-object lookup table resolves 'constructor', 'toString',
+       '__proto__', 'hasOwnProperty' etc. through the prototype chain instead
+       of failing the lookup — despite the table's declared `string` value
+       type, which is only a compile-time claim TypeScript cannot verify
+       against a runtime index. Each of these must fall through to the
+       raw-hex-prefix branch like any other non-sentinel string, and the
+       result must always be a string. */
+    for (const input of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const rendered = describeFingerprintForLog(input);
+      expect(typeof rendered).toBe('string');
+      expect(rendered).toBe(input.slice(0, 12));
+    }
+  });
+});

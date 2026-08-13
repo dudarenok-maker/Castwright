@@ -32,6 +32,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { networkInterfaces, platform } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -168,8 +169,11 @@ export async function setupLanCerts({ silent = false } = {}) {
 // success from the exit code (server/src/routes/lan-cert.ts's regenerate route,
 // which spawns this script) keep working. Pass --best-effort for install flows
 // (Pinokio install.js) where a missing mkcert must NOT abort the install — there
-// it exits 0 and the server simply falls back to loopback HTTP.
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('setup-lan-certs.mjs')) {
+// it exits 0 and the server simply falls back to loopback HTTP. See
+// scripts/lib/is-main-module.mjs — replaces the naive `file://${argv[1]}`
+// form (always false on Windows) and the basename fallback with the
+// shared, junction-safe check (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   const bestEffort = process.argv.includes('--best-effort');
   const result = await setupLanCerts();
   if (!result && !bestEffort) process.exit(1);

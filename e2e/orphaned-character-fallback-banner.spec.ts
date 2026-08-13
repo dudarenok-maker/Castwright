@@ -46,6 +46,15 @@
 import { test, expect, type Page } from '@playwright/test';
 import { goToConfirm, waitForRouteReady } from './helpers';
 
+/* #2161 — mirrors `MOCK_TARGET_NOT_LIVE_ORPHANED_ID` (src/lib/api.ts)
+   exactly. Not imported: `src/lib/api.ts` resolves as a CommonJS module
+   under Playwright's own (separate from Vite's) module loader, and a named
+   import of it there throws `SyntaxError: Named export ... not found` at
+   collection time (confirmed) — unlike the browser-side app code, which
+   loads it through Vite's ESM pipeline and sees the real named export. Keep
+   this literal in sync with the source if it ever changes. */
+const MOCK_TARGET_NOT_LIVE_ORPHANED_ID = 'orphan-with-dead-alias-target';
+
 /* Confirm the cast (fe-46: confirm lands on Cast first) without continuing
    on to the manuscript route, so the spec stays on `#/books/:id/cast` where
    the advisory banner lives. */
@@ -60,10 +69,12 @@ async function reachCastView(page: Page): Promise<void> {
    the same render-time fact the server's `collectOrphanedCharacterFallbacks`
    (server/src/audio/segments-io.ts) aggregates for real, which mock-mode
    generation has no way to reproduce (see header). Carries the real
-   post-Task-17 shape (`resolution`/`resolvedCharacterId`/`segments`),
-   mirroring coqui-fallback-non-english.spec.ts's `seedRenderedCoquiFallback`.
-   One auto-reconciled entry ('mayrin' → 'narrator') and one needs-your-
-   decision entry ('coalfall', unresolved) — both banner sections at once. */
+   post-Task-17 shape (`resolution`/`resolvedCharacterId`/`segments`,
+   `audioCurrent` since Task 7/#2129), mirroring
+   coqui-fallback-non-english.spec.ts's `seedRenderedCoquiFallback`. One
+   auto-reconciled entry ('mayrin' → 'narrator', audio current) and one
+   needs-your-decision entry ('coalfall', unresolved) — both banner sections
+   at once. */
 async function seedOrphanedFallback(page: Page): Promise<void> {
   await page.evaluate(() => {
     const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
@@ -74,14 +85,101 @@ async function seedOrphanedFallback(page: Page): Promise<void> {
           resolution: 'alias',
           resolvedCharacterId: 'narrator',
           segments: 6,
+          audioCurrent: 'true',
         },
         coalfall: {
           resolution: 'unresolved',
           segments: 13,
+          audioCurrent: 'false',
         },
       },
     });
   });
+}
+
+/* #2129, widened by I2 (fix round, #2163) — a second seed with both
+   non-exact resolution tiers represented, so the "resolves now — may still
+   need a re-render" note can be pinned against a real 'normalised' row too
+   (see src/views/cast.tsx's own comment on the `info.resolution !==
+   'unresolved'` gate: both 'alias' and 'normalised' carry it — #2107's
+   ruling is that only 'exact' means the rendered bytes are fine, and this
+   section never shows an 'exact' row). Both rows carry `audioCurrent:
+   'unknown'`, which buckets with STALE (never "current") per #2129's Global
+   Constraint 4, so they land in the same STALE section; the note is gated on
+   resolution AND audio currency, so this seed pins the per-row RESOLUTION
+   half of that gate — that both non-exact tiers ('alias' and 'normalised')
+   get the note — while holding currency constant. See `seedOrphanedFallbackMixedCurrency`
+   below for the bucket split itself. */
+async function seedOrphanedFallbackWithNormalised(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
+    store.dispatch({
+      type: 'cast/setOrphanedCharacterFallbacks',
+      payload: {
+        mayrin: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 6,
+          audioCurrent: 'unknown',
+        },
+        Mayrin_: {
+          resolution: 'normalised',
+          resolvedCharacterId: 'narrator',
+          segments: 2,
+          audioCurrent: 'unknown',
+        },
+      },
+    });
+  });
+}
+
+/* #2129 — one row per audio-currency bucket, so both auto-reconciled
+   sections render simultaneously (mirrors the frontend unit test's
+   "splits the auto-reconciled disclosure by audio currency" fixture). */
+async function seedOrphanedFallbackMixedCurrency(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
+    store.dispatch({
+      type: 'cast/setOrphanedCharacterFallbacks',
+      payload: {
+        fine: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 6,
+          audioCurrent: 'true',
+        },
+        stale: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 67,
+          audioCurrent: 'false',
+        },
+      },
+    });
+  });
+}
+
+/* #2161 — one auto-reconciled row keyed on the mock's dedicated e2e sentinel
+   (`MOCK_TARGET_NOT_LIVE_ORPHANED_ID`), which makes `mockUndoRejectOrphanMatch`
+   (src/lib/api.ts) report a refused alias restore (`targetNotLive`) on Undo,
+   instead of the ordinary canned-success shape every other orphaned id gets.
+   Mock mode has no real cast-id-history.json to seed a genuinely dead alias
+   target into, so the sentinel is the only way to drive this path here. */
+async function seedOrphanedFallbackWithDeadAliasTarget(page: Page): Promise<void> {
+  await page.evaluate((orphanedId) => {
+    const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
+    store.dispatch({
+      type: 'cast/setOrphanedCharacterFallbacks',
+      payload: {
+        [orphanedId]: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 4,
+          audioCurrent: 'true',
+        },
+      },
+    });
+  }, MOCK_TARGET_NOT_LIVE_ORPHANED_ID);
 }
 
 test.describe('cast view — orphaned-characterId advisory banner (#2023, split #2040 Task 17)', () => {
@@ -106,9 +204,9 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
 
     /* auto-reconciled is collapsed by default — the list is absent until
        the toggle is clicked. */
-    await expect(page.getByTestId('orphaned-auto-reconciled')).toHaveCount(0);
+    await expect(page.getByTestId('orphaned-auto-reconciled-current')).toHaveCount(0);
     await page.getByRole('button', { name: /character id.*auto-reconciled/i }).click();
-    const autoReconciled = page.getByTestId('orphaned-auto-reconciled');
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-current');
     await expect(autoReconciled).toBeVisible();
     await expect(autoReconciled).toContainText('mayrin');
     await expect(autoReconciled).toContainText('6 segment');
@@ -194,12 +292,170 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
 
     await movedRow.getByRole('button', { name: /undo/i }).click();
 
-    /* The chip is gone and the row is back under auto-reconciled. */
+    /* The chip is gone and the row is back under auto-reconciled — but in
+       the STALE section, not the section it started in: applyOrphanRejection/
+       undoOrphanRejection (src/store/cast-slice.ts) always write
+       `audioCurrent: 'unknown'` on a reject/undo (Task 7's fail-closed
+       placeholder — neither reducer has the history/segments data to
+       compute a real verdict), and `'unknown'` buckets with "needs a
+       re-render", never with "current" (#2129's Global Constraint 4). The
+       stale section's own disclosure was never toggled, so open it before
+       reading its content. */
     await expect(page.getByTestId('orphaned-needs-decision')).not.toContainText('mayrin', {
       timeout: 5_000,
     });
-    const autoReconciled = page.getByTestId('orphaned-auto-reconciled');
+    await page.getByRole('button', { name: /character id.*auto-reconciled.*re-render/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-stale');
     await expect(autoReconciled).toContainText('mayrin');
     await expect(autoReconciled.getByText('Not Narrator')).toHaveCount(0);
+  });
+
+  /* #2161 — the server refuses to restore a forgotten `supersededBy` alias
+     whose own target has quietly stopped being live, rather than silently
+     reintroducing a dangling entry (#2110's hazard, reopened through a stale
+     Undo stash). Before this fix the Undo toast read identically to a fully
+     successful undo either way — this is the browser-level proof that it no
+     longer does: only a real page, real toast, real timing can show the
+     wording a user actually sees, which is the point CLAUDE.md's testing
+     discipline names for UI-visible behaviour crossing this exact seam. */
+  test('undoing a reject whose forgotten alias target is no longer live shows a toast that says so, not a plain success message', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallbackWithDeadAliasTarget(page);
+
+    await page.getByRole('button', { name: /character id.*auto-reconciled/i }).click();
+    const autoRow = page.getByTestId(`orphaned-row-${MOCK_TARGET_NOT_LIVE_ORPHANED_ID}`);
+    await autoRow.getByRole('button', { name: /not the same character/i }).click();
+
+    const movedRow = page
+      .getByTestId('orphaned-needs-decision')
+      .getByTestId(`orphaned-row-${MOCK_TARGET_NOT_LIVE_ORPHANED_ID}`);
+    await expect(movedRow).toBeVisible({ timeout: 5_000 });
+    await movedRow.getByRole('button', { name: /undo/i }).click();
+
+    /* THE ASSERTION THIS TEST EXISTS FOR: the toast names the dead target
+       and says it was not restored, rather than the unqualified "Undid …"
+       message every other Undo produces (see the two other Undo specs in
+       this file). A regression that dropped the wiring anywhere between the
+       server response and this toast would leave the plain success message
+       here instead. */
+    const toast = page.getByRole('status').getByText(/no longer exists.*not restored/i);
+    await expect(toast).toBeVisible({ timeout: 5_000 });
+  });
+
+  /* #2238 — the needs-your-decision row's positive action. Mock mode's
+     `linkOrphanMatch` (`mockLinkOrphanMatch` in src/lib/api.ts) always
+     resolves the pair (`resolution: 'history'`, `resolvedCharacterId` =
+     whatever candidate was picked) — the canned success case, mirroring how
+     the sibling reject spec above treats mock mode's canned response as the
+     boundary and leaves server-side persistence to
+     server/src/routes/cast-link-orphan.test.ts. */
+  test('linking a needs-your-decision row to a picked candidate moves it into auto-reconciled (stale — a link resets audio currency)', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallback(page);
+
+    const row = page.getByTestId('orphaned-row-coalfall');
+    const linkButton = row.getByRole('button', { name: /link to this character/i });
+    await expect(linkButton).toBeDisabled();
+
+    await row.getByRole('combobox').selectOption({ label: 'Narrator' });
+    await expect(linkButton).toBeEnabled();
+    await linkButton.click();
+
+    /* The row leaves needs-your-decision entirely (a link resolves it,
+       unlike a reject on this section, which leaves it in place) — the
+       section itself is conditionally mounted (see the "no substitution
+       yet" case above), so the whole section disappears rather than
+       shrinking to an empty list. */
+    await expect(page.getByTestId('orphaned-needs-decision')).toHaveCount(0, { timeout: 5_000 });
+
+    /* #2128/#2129 x #2238 (merge-reconciliation fix) — applyOrphanLink
+       (src/store/cast-slice.ts) always resets audioCurrent to 'unknown' on
+       a link, same fail-closed discipline as applyOrphanRejection/
+       undoOrphanRejection: a link changes what the id resolves onto, so
+       whatever currency verdict applied to its PRIOR ('unresolved') state is
+       stale evidence. 'unknown' buckets with 'false' (#2129's Global
+       Constraint 4), so the row lands in the STALE auto-reconciled section,
+       not the current one — never the pre-#2129 single, unsplit section. */
+    await page.getByRole('button', { name: /character id.*auto-reconciled.*re-render/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-stale');
+    await expect(autoReconciled).toContainText('coalfall');
+  });
+
+  /* #2129, widened by I2 (fix round, #2163) — the banner must distinguish
+     "resolves today" (auto-reconciled) from "the already-rendered audio is
+     definitely fine". EVERY non-exact resolution shown in this section
+     (`'alias'` — server tiers 'history'/'normalised-history' — AND
+     `'normalised'` — server tier 'normalised-id') can be the exact damage
+     `scripts/repair-cast-id-drift.mjs` lists as needing a re-render:
+     register row A32's own real fixture (`docs/testing/onbox-acceptance-
+     register.md`) is `the-torment` (*Playing with Fire*, 67 segments),
+     which resolves via the **normalised-id** tier — RC2's underscore-vs-
+     hyphen split, no history entry involved at all — and was still
+     narrator-rendered. #2107's ruling (same register, ~line 1508) is that
+     only the `'exact'` tier means the rendered bytes are fine; this section
+     never shows an `'exact'` row (an exact match isn't an orphan), so both
+     resolutions it does show need the note. */
+  test('every auto-reconciled row is marked "audio may still need a re-render", whether it resolved via alias or via a normalised id', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallbackWithNormalised(page);
+
+    await page.getByRole('button', { name: /character ids.*auto-reconciled.*re-render/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled-stale');
+    await expect(autoReconciled).toBeVisible();
+
+    const aliasNote = page.getByTestId('orphaned-alias-audio-note-mayrin');
+    await expect(aliasNote).toBeVisible();
+    await expect(aliasNote).toContainText(/resolves now/i);
+    await expect(aliasNote).toContainText(/re-render/i);
+
+    const normalisedNote = page.getByTestId('orphaned-alias-audio-note-Mayrin_');
+    await expect(normalisedNote).toBeVisible();
+    await expect(normalisedNote).toContainText(/resolves now/i);
+    await expect(normalisedNote).toContainText(/re-render/i);
+  });
+
+  /* #2129 (Task 8) — the auto-reconciled disclosure splits into two
+     sections by `audioCurrent`, each collapsed by default, each showing its
+     own count in its own header — so the actionable count (rows whose
+     audio needs a re-render) is legible without expanding anything. This
+     crosses the redux/component seam at real browser layout/focus timing
+     (CLAUDE.md's stated bar for a Playwright spec over jsdom), same as the
+     rest of this file. */
+  test('splits the auto-reconciled disclosure into two collapsed sections, each showing its own count (#2129)', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallbackMixedCurrency(page);
+
+    const banner = page.getByTestId('orphaned-character-fallback-banner');
+    await expect(banner).toBeVisible({ timeout: 5_000 });
+
+    /* Both headers are readable WITHOUT clicking anything. */
+    const currentHeader = page.getByRole('button', {
+      name: /1 character id auto-reconciled — audio is current/i,
+    });
+    const staleHeader = page.getByRole('button', {
+      name: /1 character id auto-reconciled — audio needs a re-render/i,
+    });
+    await expect(currentHeader).toBeVisible();
+    await expect(staleHeader).toBeVisible();
+
+    /* Still collapsed — the detail (segment count) stays inside. */
+    await expect(page.getByTestId('orphaned-auto-reconciled-current')).toHaveCount(0);
+    await expect(page.getByTestId('orphaned-auto-reconciled-stale')).toHaveCount(0);
+
+    /* Expanding one section reveals only its own row. */
+    await staleHeader.click();
+    const staleSection = page.getByTestId('orphaned-auto-reconciled-stale');
+    await expect(staleSection).toBeVisible();
+    await expect(staleSection).toContainText('stale');
+    await expect(staleSection).toContainText('67 segment');
+    await expect(page.getByTestId('orphaned-auto-reconciled-current')).toHaveCount(0);
   });
 });

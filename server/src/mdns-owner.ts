@@ -118,8 +118,8 @@ export function spawnMdnsResponder(
      and already logged its own message." Treating it as still-alive was a
      Critical bug caught by round 2 of adversarial review on the design
      spec (docs/superpowers/specs/2026-07-06-lan-pairing-friendly-hostname-link-design.md):
-     it let a dead responder keep answering isFriendlyHostnameReachable()
-     with "true," handing a friendlyUrl to a user with no other way to
+     it let a dead responder keep answering friendlyHostnameLiveness()'s
+     mdns field "true," handing a friendlyUrl to a user with no other way to
      pair. The warn() call stays code-gated because the graceful path
      already logs its own message from inside mdns-responder.mjs itself —
      warning here too would just be a redundant second line, not a

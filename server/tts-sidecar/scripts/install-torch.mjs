@@ -13,8 +13,8 @@
 // exercise planTorchPreinstall without a venv.
 
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import { installRecipe } from './accelerator-profile.mjs';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
 
 /**
  * Decide whether torch must be pre-installed BEFORE the requirements overlay for
@@ -41,7 +41,9 @@ export function planTorchPreinstall(profile, platform) {
   return { action: 'skip', reason: 'torch comes from the overlay / PyPI for this profile' };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
   const plan = planTorchPreinstall(profile, process.platform);
   if (plan.action === 'skip') {

@@ -284,6 +284,168 @@ describe('runStage2ChapterChunked', () => {
     expect(out.coverage.ok).toBe(true);
   });
 
+  /* #2304 — the point of the fix, and the reason stopping early is not enough
+     on its own. A repeat-loop is degeneration just like a truncation, and the
+     span split was the remedy for it all along — it was simply wired only to
+     the THROWING path. Without the escalation the chapter keeps a known-bad
+     take and is flagged "for retry", advice that is false for a deterministic
+     failure: the user-triggered retry re-runs the same prompt, fails
+     identically, and the book can never be generated correctly. */
+  it('re-splits a span whose coverage fails DETERMINISTICALLY, and recovers', async () => {
+    const body = makeBody(6);
+    let deterministicFailures = 0;
+    /* Any span over 60 chars always returns the same badly-truncated take — a
+       repeat-loop stand-in: identical failure every attempt, so retrying the
+       same prompt can never clear it. Smaller spans attribute cleanly. */
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => {
+      if (subBody.length > 60) {
+        deterministicFailures += 1;
+        const full = fakeAttribute(subBody);
+        return { ...full, sentences: full.sentences.slice(0, 1) };
+      }
+      return fakeAttribute(subBody);
+    });
+
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 80,
+      coverageRetries: 1,
+      callForBody: call,
+    });
+
+    expect(deterministicFailures).toBeGreaterThan(0); // the bad path was hit
+    /* Recovered via smaller sections: every sentence present, contiguous ids,
+       and a PASSING verdict — not a "best take" salvage. */
+    expect(out.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(out.coverage.ok).toBe(true);
+  });
+
+  /* The test above splits at charBudget 80 against a ~220-char body, so it only
+     ever exercises the MULTI-CHUNK route. The single-call route is the one the
+     module header calls "the vast majority of chapters", and it had to be wired
+     separately — exactly as archive/187 records the truncation re-split being
+     wired to the multi-chunk route first and needing a follow-up. Left out, this
+     fix reaches almost no real chapter, and the operator log would announce a
+     re-split that never ran. */
+  it('re-splits an UNDER-budget body whose coverage fails DETERMINISTICALLY', async () => {
+    const body = makeBody(6);
+    let deterministicFailures = 0;
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => {
+      // The whole body always returns the same one-sentence take; smaller spans are clean.
+      if (subBody.length >= body.length) {
+        deterministicFailures += 1;
+        const full = fakeAttribute(subBody);
+        return { ...full, sentences: full.sentences.slice(0, 1) };
+      }
+      return fakeAttribute(subBody);
+    });
+
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 10_000, // > body.length → single-call path is selected
+      coverageRetries: 5,
+      callForBody: call,
+    });
+
+    expect(deterministicFailures).toBeGreaterThan(0);
+    /* Without the escalation on this path the chapter keeps 1 of 6 sentences —
+       strictly worse than before the fix, because it also stops retrying. */
+    expect(out.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(out.coverage.ok).toBe(true);
+    expect(out.chunkCount).toBeGreaterThan(1); // it really did re-split
+  });
+
+  /* Without this callback the escalation is INVISIBLE. `onChunk`/`onSectionDone`
+     fire per top-level chunk and `chunkCount` is `chunks.length`, fixed before
+     any re-split runs — so on a multi-chunk chapter they read identically
+     whether the escalation fires or is reverted outright. An acceptance run
+     reading them would record a pass on a null observation. */
+  it('reports a deterministic re-split that top-level counters cannot see', async () => {
+    const body = makeBody(6);
+    const splits: Array<{ parts: number; depth: number }> = [];
+    const call = vi.fn(async (subBody: string) => {
+      if (subBody.length > 60) {
+        const full = fakeAttribute(subBody);
+        return { ...full, sentences: full.sentences.slice(0, 1) };
+      }
+      return fakeAttribute(subBody);
+    });
+
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 80, // multi-chunk route — the one where the counters are blind
+      coverageRetries: 1,
+      callForBody: call,
+      onDeterministicSplit: ({ parts, depth }) => splits.push({ parts, depth }),
+    });
+
+    expect(splits.length, 'the escalation must announce itself').toBeGreaterThan(0);
+    for (const s of splits) expect(s.parts).toBeGreaterThan(1);
+    /* The point of the callback: chunkCount is blind to what just happened. */
+    expect(out.chunkCount).toBe(splitBodyIntoChunks(body, 80).length);
+    expect(out.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('does NOT report a split when the span is indivisible (no false positive)', async () => {
+    /* The control. `onExhausted` fires here but no split follows, which is
+       exactly the case a criterion built on `onExhausted` alone would misread. */
+    const body = 'A single unsplittable blob with no sentence end';
+    const splits: number[] = [];
+    const exhausted: number[] = [];
+    const call = vi.fn(async () => ({
+      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A single' }],
+    }));
+
+    await runStage2ChapterChunked({
+      body,
+      charBudget: 10_000,
+      coverageRetries: 3,
+      callForBody: call,
+      onDeterministicSplit: ({ parts }) => splits.push(parts),
+      onExhausted: (attempts) => exhausted.push(attempts),
+    });
+
+    expect(exhausted.length, 'the retry must still stop').toBeGreaterThan(0);
+    expect(splits, 'an indivisible span must not claim a split').toEqual([]);
+  });
+
+  /* A deterministic re-split whose sub-tree throws must NOT be re-run by the
+     truncation catch at the same depth. Before the guarded call was hoisted out
+     of the `try`, the throw escaping `splitAndRetry()` landed in that frame's
+     own catch, matched, and executed the identical sub-tree a second time —
+     every call a real model round trip, and provably futile, which is the same
+     "an identical prompt cannot help" waste this whole change exists to remove. */
+  it('does not run the deterministic re-split twice when its sub-tree throws', async () => {
+    const body = makeBody(6);
+    const seen: string[] = [];
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => {
+      seen.push(subBody);
+      // Big spans fail coverage deterministically; small ones throw irreducibly.
+      if (subBody.length > 60) {
+        const full = fakeAttribute(subBody);
+        return { ...full, sentences: full.sentences.slice(0, 1) };
+      }
+      throw new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', subBody.length);
+    });
+
+    await expect(
+      runStage2ChapterChunked({ body, charBudget: 10_000, coverageRetries: 1, callForBody: call }),
+    ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+
+    /* Check only the THROWING spans (≤60 chars). A span that fails coverage is
+       legitimately called twice — that is the guard's own retry — so counting
+       every repeat cannot separate the bug from the intended behaviour. A span
+       that throws gets exactly one call per visit, so a second occurrence can
+       only be the sub-tree running twice. */
+    const throwing = seen.filter((s) => s.length <= 60);
+    const dupes = throwing.filter((s, i) => throwing.indexOf(s) !== i);
+    expect(
+      dupes,
+      `these irreducible spans were re-attributed with an identical prompt: ${dupes.join(' | ')}`,
+    ).toEqual([]);
+    expect(throwing.length, 'the irreducible leaves must actually be reached').toBeGreaterThan(0);
+  });
+
   it('re-splits an UNDER-budget body that still truncates on the single call', async () => {
     /* A dense chapter whose char count fits the budget but whose per-sentence
        JSON output overflows the model cap (output scales with sentence count,

@@ -254,7 +254,11 @@ export interface BookStateJson {
      `report` is present only when the dialogue-structure engine (srv-59)
      actually ran for at least one chapter this pass (aggregated via
      `aggregateStructureReports` in analysis.ts) — omitted when the engine
-     was off (or every chapter served from cache) for the whole run.
+     was off (or every chapter served from cache) for the whole run. #2275
+     C3: this used to also be true of `maxMergedTurnsInParagraph` (folded
+     into `report` by the now-deleted `mergeMaxMergedTurns`, fabricating a
+     zeroed `report` when the engine never ran), which is why that field now
+     lives as a SIBLING of `report` below instead — see its own doc comment.
      Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump (plan 27
      rename-vs-add policy); absent on state.json files written before this
      landed, and no reader may require it. */
@@ -276,6 +280,17 @@ export interface BookStateJson {
         chapter; 'subset': just the retried ones. Optional/additive, same as
         `scope`. */
     chaptersCovered?: number;
+    /** #2267 — worst-paragraph merged dialogue-turn count across the book
+        (max, not sum). A manuscript property, not an engine report: it needs
+        only chapter text + the book's resolved language, never a dialogue-
+        structure `EngineReport`, so it lives as a sibling of `report` rather
+        than inside it (#2275 C3) — it must keep having a reading on a run
+        where `report` is entirely absent (engine off, or every chapter this
+        pass served from cache; design of record §4). ABSENT means not
+        measured: either an older analysis, or a language with no
+        paragraph-dash convention. Never default it to 0 — 0 means "measured
+        clean", absent means "not measured". */
+    maxMergedTurnsInParagraph?: number;
   };
 }
 
@@ -293,6 +308,12 @@ export interface AnalysisProvenanceReport {
   confirmed: number;
   corrected: number;
   flagged: number;
+  /* #2253 — "no verdict" sentences, split out of `flagged`. Additive OPTIONAL
+     field: `CURRENT_STATE_SCHEMA` does NOT bump (see the rename-vs-add policy
+     above), state.json files written before this landed simply lack the key,
+     and no reader may require it. Always written by
+     `aggregateStructureReports` going forward. */
+  unresolved?: number;
   escalated: number;
   escalationAccepted: number;
 }

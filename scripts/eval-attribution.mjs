@@ -13,7 +13,8 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_GROUND_TRUTH = resolve(__dirname, 'lib', 'coalfall-ground-truth.json');
@@ -283,7 +284,7 @@ function parseArgs(argv) {
 }
 
 // Main guard — only execute when run directly.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   const argv = process.argv.slice(2);
   const { positional, minRecall } = parseArgs(argv);
 

@@ -35,7 +35,8 @@ export interface BuildMp3ZipOptions {
       0..1 ratio. The route uses this to update the job's `progress`. */
   onProgress?: (ratio: number) => void;
   /** Optional cancellation signal. Checked between chapters; when aborted
-      mid-build the zip stream is destroyed and an AbortError is thrown.
+      mid-build the WRITE stream is destroyed (the zip/read side is NOT —
+      see this file's class docstring above) and an AbortError is thrown.
       The route's cancel handler is the only producer today. */
   signal?: AbortSignal;
 }
@@ -54,6 +55,119 @@ export class ExportIncompleteError extends Error {
     this.name = 'ExportIncompleteError';
     this.missing = missing;
   }
+}
+
+/* Write pipeline wrapper around a yazl ZipFile — shared by buildMp3Zip,
+   buildCodecZip, and buildCaptions's per-chapter branch.
+
+   The actual subject of the crash fix this pipeline supports: yazl emits
+   an `'error'` on `zip.outputStream` for a bad write, AND on the `zip`
+   object itself for some of its own internal validation failures — either
+   with zero listeners is an unhandled `'error'`, which Node throws as an
+   uncaughtException (installCrashHandlers() answers that with exit(1)).
+   `ws.on('error', ...)`, `zip.outputStream.on('error', ...)`, and
+   `zip.on('error', ...)` below forward all three into one rejection path
+   instead. Callers additionally attach `readStream.on('error',
+   pipeline.rejectBuild)` on each chapter's own read stream at the
+   `addReadStream` call site (yazl's `addFile` does this itself; its
+   lower-level `addReadStream` does not, and `.pipe()` never forwards
+   `'error'` source→destination).
+
+   On any rejection, `rejectBuild` also unpipes `zip.outputStream` from the
+   write stream and destroys the write stream — nit (f) from the original
+   review: previously `ws` was never destroyed on ANY rejection, leaking
+   the write fd for the process's lifetime (masked before this PR by the
+   crash itself). The returned promise resolves only once the write
+   stream's `close` event fires (fd genuinely released), not merely
+   `finish` (bytes flushed to the OS, but the fd can still be open).
+
+   What this does NOT do (a later revision of this fix tried, and a third
+   review pass found it didn't work): stop bytes already read from a
+   chapter's source file from continuing to flow through yazl's internal
+   pump after rejection. An earlier version tracked "the most recently
+   added read stream" and destroyed it on abort, on the theory that it was
+   the one currently being pumped. Measured false: the per-chapter loop
+   registers entries far faster than yazl's pump consumes them, so by the
+   time a caller aborts, the tracked stream is typically one yazl hasn't
+   even started, while the pump is still on an earlier chapter — destroying
+   it was a no-op for whatever was actually in flight. Unpiping + destroying
+   the WRITE stream still does its job (bytes stop landing on disk — the
+   file's size goes flat), it's the SOURCE-side read cost (CPU, disk reads)
+   that keeps running for a bit after this promise settles. That gap is
+   accepted rather than chased further: the per-chapter loop's own
+   `signal?.throwIfAborted()` check still stops the loop from registering
+   any MORE chapters once a signal trips, which bounds the residual cost to
+   whatever chapter was already in flight. */
+export interface ZipWritePipeline {
+  /** Reject the pipeline (idempotent — a second call is a no-op) and tear
+      down the write stream so nothing keeps writing once this returns. */
+  rejectBuild: (reason?: unknown) => void;
+  /** Resolves with the total byte count once the write stream is fully
+      closed. Rejects with whatever `rejectBuild` was called with. Marked
+      handled immediately (see comment inline) so a rejection that lands
+      before the caller awaits this isn't flagged as an unhandled
+      rejection — the caller's own `await` still observes it. */
+  donePromise: Promise<number>;
+}
+
+export function createZipWritePipeline(outPath: string, zip: ZipFile): ZipWritePipeline {
+  const ws = createWriteStream(outPath);
+  let settled = false;
+  let bytes = 0;
+  let resolveDone!: (n: number) => void;
+  let rejectDone!: (reason?: unknown) => void;
+  const donePromise = new Promise<number>((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
+  });
+  donePromise.catch(() => {});
+
+  const onData = (chunk: Buffer): void => {
+    bytes += chunk.length;
+  };
+
+  const rejectBuild = (reason?: unknown): void => {
+    if (settled) return;
+    settled = true;
+    rejectDone(reason ?? new Error('zip write failed'));
+    /* Stop the WRITE side doing any further I/O now that we've decided to
+       fail — this does NOT stop source-side reads already in flight; see
+       this file's class docstring above for why that gap is accepted
+       rather than chased further. Three things: detach the byte-counting
+       'data' listener (N3, independent review — previously left attached,
+       so after rejectBuild the unpiped outputStream stayed in flowing mode
+       with a live consumer, letting yazl's pump run at full speed with no
+       backpressure through every already-registered chapter, into a
+       counter nobody would ever read — mirrors build-portable-book.ts's
+       onData teardown); unpipe so no already-buffered zip bytes reach the
+       write stream; and destroy the write stream to release its fd and
+       cut off any write still in flight. */
+    zip.outputStream.off('data', onData);
+    zip.outputStream.unpipe(ws);
+    ws.destroy();
+  };
+
+  ws.on('error', rejectBuild);
+  zip.outputStream.on('data', onData);
+  zip.outputStream.on('error', rejectBuild);
+  /* yazl's ZipFile emits several of its OWN internal validation failures
+     (e.g. "file data stream has unexpected number of bytes") via
+     `self.emit('error', ...)` on the ZipFile object itself — not on
+     `outputStream`. Without a listener here those are ALSO an unhandled
+     'error' with zero listeners → an uncaught exception, same failure
+     class as the readStream gap this whole pipeline exists to close. */
+  zip.on('error', rejectBuild);
+  zip.outputStream.pipe(ws);
+  ws.on('close', () => {
+    if (settled) return;
+    settled = true;
+    resolveDone(bytes);
+  });
+
+  return {
+    rejectBuild,
+    donePromise,
+  };
 }
 
 export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3ZipResult> {
@@ -110,56 +224,79 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
   const entries: string[] = [];
   try {
     const zip = new ZipFile();
-    const writePromise = new Promise<number>((resolve, reject) => {
-      const ws = createWriteStream(outPath);
-      ws.on('error', reject);
-      let bytes = 0;
-      zip.outputStream.on('data', (chunk: Buffer) => {
-        bytes += chunk.length;
-      });
-      zip.outputStream.on('error', reject);
-      zip.outputStream.pipe(ws).on('finish', () => resolve(bytes));
-    });
+    /* createZipWritePipeline (above) resolves only once the write stream
+       is genuinely closed, and forwards every yazl/write-stream error
+       into one rejection that also tears down the write stream (nit (f)),
+       so a caller can trust nothing is still writing to disk once it
+       settles. `signal?.throwIfAborted()` below is what actually stops a
+       cancelled build from registering any more chapters. */
+    const pipeline = createZipWritePipeline(outPath, zip);
 
-    for (let i = 0; i < resolved.length; i++) {
-      signal?.throwIfAborted();
-      const { chapter, mp3Path } = resolved[i];
-      const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
-      /* `entryName` is the pretty label written INTO the zip; the on-disk
-         staging filename is the same string routed through sanitizeIdSegment
-         so a `..`/separator that survived sanitiseForZip can't escape
-         stagingDir (js/path-injection). No-op for real titles. */
-      const taggedPath = join(stagingDir, sanitizeIdSegment(entryName));
+    try {
+      for (let i = 0; i < resolved.length; i++) {
+        signal?.throwIfAborted();
+        const { chapter, mp3Path } = resolved[i];
+        const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
+        /* `entryName` is the pretty label written INTO the zip; the on-disk
+           staging filename is the same string routed through sanitizeIdSegment
+           so a `..`/separator that survived sanitiseForZip can't escape
+           stagingDir (js/path-injection). No-op for real titles. */
+        const taggedPath = join(stagingDir, sanitizeIdSegment(entryName));
 
-      const tags: Id3Tags = {
-        title: chapter.title,
-        album,
-        artist,
-        albumArtist,
-        track: i + 1,
-        trackTotal: total,
-        genre: state.genre ?? null,
-        date: state.publicationDate ?? null,
-        comment: 'Rendered with Castwright · castwright.ai',
-      };
-      await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
-      const taggedStat = await stat(taggedPath);
+        const tags: Id3Tags = {
+          title: chapter.title,
+          album,
+          artist,
+          albumArtist,
+          track: i + 1,
+          trackTotal: total,
+          genre: state.genre ?? null,
+          date: state.publicationDate ?? null,
+          comment: 'Rendered with Castwright · castwright.ai',
+        };
+        await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
+        const taggedStat = await stat(taggedPath);
 
-      /* `compress: false` keeps entries "stored" — MP3 is already
-         compressed, so deflate would burn CPU for ~0-1% gain. Stored
-         entries also stay byte-readable from the zip without inflate,
-         which keeps the test harness simple. */
-      zip.addReadStream(createReadStream(taggedPath), entryName, {
-        size: taggedStat.size,
-        mtime: new Date(),
-        compress: false,
-      });
-      entries.push(entryName);
-      onProgress?.((i + 1) / total);
+        /* `compress: false` keeps entries "stored" — MP3 is already
+           compressed, so deflate would burn CPU for ~0-1% gain. Stored
+           entries also stay byte-readable from the zip without inflate,
+           which keeps the test harness simple. */
+        const chapterReadStream = createReadStream(taggedPath);
+        /* Production stability (macOS cross-os.yml crash, run 31588267496):
+           yazl's `addFile` attaches its own `readStream.on('error', ...)`
+           before pumping a file, but `addReadStream` — what we use here —
+           does NOT (see node_modules/yazl/index.js). `.pipe()` never
+           forwards 'error' from source to destination either. So a read
+           failure on this exact stream (e.g. `taggedPath` vanishing between
+           being staged and being read, which is exactly what happens when a
+           test/teardown deletes the workspace mid-build) had ZERO
+           listeners: Node throws it synchronously as an uncaught exception,
+           bypassing every try/catch in the awaited call chain — including
+           this function's own `finally` below — instead of failing the
+           export. Forward it into the same rejection as every other build
+           failure. */
+        chapterReadStream.on('error', pipeline.rejectBuild);
+        zip.addReadStream(chapterReadStream, entryName, {
+          size: taggedStat.size,
+          mtime: new Date(),
+          compress: false,
+        });
+        entries.push(entryName);
+        onProgress?.((i + 1) / total);
+      }
+      zip.end();
+      const sizeBytes = await pipeline.donePromise;
+      return { sizeBytes, entries };
+    } catch (e) {
+      /* Covers any throw the pipeline's own listeners didn't already
+         catch (e.g. `signal.throwIfAborted()` itself, or a bug in
+         `applyId3v24Tags`) — ensures the write stream is torn down on
+         EVERY exit path, not only the ones yazl happens to route through
+         an 'error' event. Idempotent: a no-op if `rejectBuild` already
+         fired for some other reason. */
+      pipeline.rejectBuild(e);
+      throw e;
     }
-    zip.end();
-    const sizeBytes = await writePromise;
-    return { sizeBytes, entries };
   } finally {
     /* Best-effort staging cleanup. If this throws, the caller's higher-up
        failure handler will already be reporting the build error — don't

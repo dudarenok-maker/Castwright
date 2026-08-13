@@ -1,8 +1,10 @@
 # Flaky-test register
 
 Tests quarantined out of the gating suites into the non-gating lane
-(`npm run test:quarantine`). A row here is a debt: the test does not gate
-releases until it is rewritten deterministically and graduated back.
+(`npm run test:quarantine`), or still gating and tracked here as known-flaky
+pending that move. A row here is a debt: the test does not gate releases
+once quarantined, until it is rewritten deterministically and graduated
+back.
 Empty register = done. See the rewrite playbook in
 `docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md`.
 
@@ -22,8 +24,34 @@ it never gates a merge.
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT does not erase a concurrently /assign-planted voice | `server/src/routes/book-state-preserve-voices.test.ts` | intermittent under full-suite box contention | Fails intermittently in a full `test:server` run under box contention; passes 7/7 in isolation. Observed 2026-08-07: `1 failed / 6741 passed`, `[fail] test:server (exit 1, took 746.6s)`. | #2226 | Not quarantined — still gates |
+| #2235 — revokes the older same-format manifest when a re-export of the same format finishes | `server/src/routes/export.test.ts` | intermittent under full-suite box contention | Fails on its first attempt and passes on retry inside a full `npm run test:server` run; surfaced only as a `[retry-hazard]` warning because vitest's `retry:1` absorbs it. Observed 2026-08-11 in the `dbcf36c5` pre-commit run (506 files / 7079 tests passed). | #2235 | Not quarantined — still gates |
 
-_Empty — no tests are currently quarantined._
+_Otherwise empty — no other tests are currently quarantined or tracked here._
+
+<!-- Graduated 2026-08-12: `server/src/routes/script-review.test.ts` ::
+"cancel immediately removes the job from the registry, so a same-scope retry
+starts fresh instead of joining the doomed job" (#2262). Its row recorded the
+class as UNDETERMINED — box contention vs. a real cancel-then-retry ordering
+bug masked by `retry:1` — and that is why this note exists rather than a bare
+deletion: the row carried an open question, and the next investigator should
+find the answer, not the question again.
+
+It was contention, established by MECHANISM rather than by a failure rate. The
+synchronisation point was a bare 20ms wall-clock sleep before
+`expect(runReview).toHaveBeenCalledTimes(2)` — the whole budget for the second
+request to reach the analyzer. Positive control: shrinking 20ms -> 0ms on an
+idle box reproduces the reported symptom verbatim. The feared reading is
+structurally incapable of producing it: "the retry joins the doomed job" is a
+PERMANENT absence of the second call, which fails at every budget and in
+isolation, not a race a retry re-rolls — and `firstCall.release()` sits after
+the assertion, so under the unfixed code the doomed job could never be cleaned
+up in time for a late second call. Corroborated by 5 isolated `--retry=0` runs
+and one full `src/routes` `--retry=0` run (128 files / 2092 tests), all green.
+
+Fixed by polling the condition (`vi.waitFor`, 2000ms) instead of sleeping at
+it, so the test is no longer timing-dependent. #2028's retry-hazard concern was
+right to flag this test; it did not apply to this failure. -->
 
 <!-- Graduated 2026-07-27: the two sleep-prevention wake-lock tests in
 `server/src/routes/generation.test.ts` (#1854). They were never flaky. They

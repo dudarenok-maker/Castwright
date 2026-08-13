@@ -132,6 +132,7 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };

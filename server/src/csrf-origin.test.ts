@@ -162,7 +162,8 @@ it('403s a cookie POST from castwright.dev.local when NODE_ENV=production (round
     expect(next).not.toHaveBeenCalled();
     expect(r.statusCode).toBe(403);
   } finally {
-    process.env.NODE_ENV = originalNodeEnv;
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
   }
 });
 

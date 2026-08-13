@@ -14,7 +14,8 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const SIDECAR_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'server', 'tts-sidecar');
 
@@ -51,7 +52,7 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
   // but requirements-dev.txt was never installed. Without this, that box goes
   // from green-skip to RED on `npm run verify` and pre-push — a regression
   // dressed up as "local behaviour is unchanged".
-  const probe = spawnSync(python, ['-m', 'pytest', '--version'], { encoding: 'utf8' });
+  const probe = spawnSync(python, ['-m', 'pytest', '--version'], { encoding: 'utf8', windowsHide: true });
   if ((probe.status ?? 1) !== 0) {
     const msg = 'sidecar pytest -- venv present but pytest is not installed';
     if (requireVenv) {
@@ -70,7 +71,7 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
   const result = spawnSync(
     python,
     ['-m', 'pytest', '-m', 'not golden', '--tb=short', '-q', 'tests', ...passthrough],
-    { cwd: sidecarDir, stdio: 'inherit' },
+    { cwd: sidecarDir, stdio: 'inherit', windowsHide: true },
   );
   if (result.error) {
     process.stderr.write(`run-sidecar-tests: failed to spawn python: ${result.error.message}\n`);
@@ -79,12 +80,10 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
   return result.status ?? 1;
 }
 
-// Direct-execution guard. MUST use pathToFileURL: the naive
-// `file://${process.argv[1]}` form yields two slashes on Windows
-// (file://C:/...) where import.meta.url has three (file:///C:/...), so it is
-// ALWAYS false there — the script would silently do nothing and exit 0.
-// Every other script in scripts/ uses this form; see bump-version.mjs:654.
-const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+// Guarded so tests can import resolveVenvPython/main without running pytest.
+// See scripts/lib/is-main-module.mjs (#2291) for the symlink/junction
+// mechanism this guards against — first found here via GitHub's
+// macos-latest CI runner, where it cost days of red cross-OS CI.
+if (isDirectlyInvoked(import.meta.url)) {
   process.exit(main());
 }

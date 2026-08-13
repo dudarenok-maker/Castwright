@@ -606,23 +606,25 @@ The compact version:
    inline test timeouts. (`scripts/check-no-budget-poll.mjs` is the automated
    gate; run it locally with `node scripts/check-no-budget-poll.mjs`.)
 
-**Mutation-verifying a server test against module-level state (#2028).**
-`server/vitest.config.ts` sets `retry: 1` for the whole server suite (pool
-contention mitigation — see the comment above `maxWorkers` there). For a test
-that asserts on module-level mutable state keyed by a fixed string (a
-`Map`/`Set`/counter at module scope, or a fixture keyed by a fixed path), that
-retry does **not** re-run a clean attempt: attempt 1 fails and leaks its
-mutation, attempt 2 reads state attempt 1 already touched, and can pass **for
-the wrong reason** — a genuine red-phase test reporting green. When
-mutation-verifying a red-phase test that touches shared module/fixture state,
-confirm it goes red with `npx vitest run --retry=0 <file>`, not the default
-`npx vitest run <file>` — the retry can silently absorb the exact failure
-you're trying to prove. `server/vitest.config.ts`'s `retryHazardReporter`
-prints a `[retry-hazard]` line for any test that needed a retry to pass, as a
-backstop for the case where this gets missed — treat that line as a prompt to
-re-run with `--retry=0` and judge whether it's a genuine transient (route
-through `quarantinedIt`, `docs/testing/flaky-register.md`) or a red-phase test
-the retry hid.
+**Mutation-verifying a server or frontend test against module-level state
+(#2028, #2063).** Both `server/vitest.config.ts` and the root
+`vitest.config.ts` set `retry: 1` for their whole suite (pool contention
+mitigation for the server suite — see the comment above `maxWorkers` there —
+and jsdom/timer flake absorption for the frontend suite, see
+`docs/features/archive/45-vitest-pool-tuning.md`). For a test that asserts on
+module-level mutable state keyed by a fixed string (a `Map`/`Set`/counter at
+module scope, or a fixture keyed by a fixed path), that retry does **not**
+re-run a clean attempt: attempt 1 fails and leaks its mutation, attempt 2 reads
+state attempt 1 already touched, and can pass **for the wrong reason** — a
+genuine red-phase test reporting green. When mutation-verifying a red-phase
+test that touches shared module/fixture state, confirm it goes red with
+`npx vitest run --retry=0 <file>`, not the default `npx vitest run <file>` —
+the retry can silently absorb the exact failure you're trying to prove. Both
+configs' `retryHazardReporter` prints a `[retry-hazard]` line for any test
+that needed a retry to pass, as a backstop for the case where this gets
+missed — treat that line as a prompt to re-run with `--retry=0` and judge
+whether it's a genuine transient (route through `quarantinedIt`,
+`docs/testing/flaky-register.md`) or a red-phase test the retry hid.
 
 ## Releasing
 
@@ -647,7 +649,11 @@ $EDITOR docs/release-notes-next.md
 #    The bump REFUSES if the notes are missing or their version marker is stale
 #    (a release can't ship a placeholder body); --allow-placeholder overrides.
 node scripts/bump-version.mjs --level minor
-#    (Or point at a different file: --notes-file path/to/notes.md)
+#    (Or point at a different file: --notes-file path/to/notes.md — the bump
+#    REFUSES if that file disagrees with docs/release-notes-next.md, since
+#    release.yml publishes from the latter only and a genuine divergence
+#    would otherwise fail the tag at publish time; --allow-notes-divergence
+#    cuts anyway, --dry-run only reports it.)
 
 # 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
 git push origin main
@@ -681,9 +687,20 @@ platform-independent zip + SHA-256 using the tag annotation as the body. Full sp
   (the bumper refuses to run if they've drifted).
 - Every `vX.Y.Z` tag is an annotated tag pointing at a `chore: bump version
 to X.Y.Z` commit. Lightweight tags do NOT fire the workflow.
-- Release notes live in the tag annotation, not the GitHub Release UI. The
-  workflow reads `git tag -l --format='%(contents)' vX.Y.Z` and uses that
-  verbatim as the body.
+- Release notes live in `docs/release-notes-next.md`, not the GitHub Release
+  UI. The bumper builds the tag annotation from that file, and since #2168
+  `release.yml` publishes the release body from the **file** — not from the
+  annotation. It still reads the annotation back
+  (`git tag -l --format='%(contents)' vX.Y.Z`) to compare the two, and fails
+  the publish job if they diverge.
+- A non-default `--notes-file` MUST agree with `docs/release-notes-next.md`
+  (compared normalised: CRLF -> LF, trailing whitespace stripped) — a genuine
+  divergence refuses the cut, since `release.yml` publishes the GitHub release
+  body from `docs/release-notes-next.md` only and a divergent tag would
+  otherwise fail at publish time, after the full pre-release battery has run
+  and the tag is already pushed. `--allow-notes-divergence` cuts anyway;
+  `--dry-run` downgrades the refusal to a report instead of blocking the
+  preview.
 
 If the artefact is broken after publish, delete the release + tag and bump
 again — never amend or force-push a published tag:

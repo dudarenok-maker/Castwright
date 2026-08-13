@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
 afterAll(() => { delete process.env.CASTWRIGHT_VRAM_SAMPLE; });
@@ -25,7 +25,25 @@ vi.mock('./sidecar-supervisor.js', async (importOriginal) => {
   };
 });
 
-import { ensureSidecarEngineReady, reconcileResidentQwenTiers } from './ensure-sidecar-loaded.js';
+import {
+  ensureSidecarEngineReady,
+  reconcileResidentQwenTiers,
+  UNLOAD_DISPATCHER,
+} from './ensure-sidecar-loaded.js';
+
+/* reconcileResidentQwenTiers' /unload moved to undici's fetch — it needs
+   UNLOAD_DISPATCHER plus its own ceiling, because that call waits on the
+   sidecar's `_synth_lock` and neither production caller supplies a signal.
+   Delegating undici's fetch to whatever this file stubs globally keeps every
+   existing stub and assertion working across both transports. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) =>
+      (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
 
 const realFetch = global.fetch;
 afterEach(() => {
@@ -174,6 +192,11 @@ describe('ensureSidecarEngineReady', () => {
 describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
   /* Build a fetch mock: first GET /health returns `health`, every POST /unload
      is recorded. Returns the recorded /unload bodies. */
+  const unloadInits: Array<(RequestInit & { dispatcher?: unknown }) | undefined> = [];
+  beforeEach(() => {
+    unloadInits.length = 0;
+  });
+
   function mockSidecar(health: Record<string, unknown>): {
     fetch: ReturnType<typeof vi.fn>;
     unloads: () => Array<Record<string, unknown>>;
@@ -182,6 +205,7 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     const f = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith('/health')) return { ok: true, json: async () => health };
       if (url.endsWith('/unload')) {
+        unloadInits.push(init);
         unloads.push(JSON.parse((init?.body as string) ?? '{}'));
         return { ok: true, json: async () => ({ status: 'idle' }) };
       }
@@ -195,6 +219,30 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     global.fetch = m.fetch as unknown as typeof fetch;
     await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(true);
     expect(m.unloads()).toEqual([{ engine: 'qwen' }]); // 0.6B only
+  });
+
+  /* #2287 seventh call site. /unload waits on the sidecar's `_synth_lock`, so
+     it can legitimately exceed undici's hidden 300s headersTimeout — and this
+     path is the WORST of the family, because the catch swallows the failure,
+     Promise.allSettled discards it, and the function returns `true` anyway: the
+     caller is told the tier was evicted when it was not, then loads the 1.7B on
+     top of a resident 0.6B (8 GB OOM). Neither production caller supplies a
+     signal, so a dispatcher alone would trade that for an unbounded hang —
+     assert BOTH. The file's delegation mock makes the transport swap otherwise
+     invisible, so without this the fix could be reverted with the whole suite
+     still green. */
+  it('sends /unload with the long-call dispatcher AND a bound (regression lock)', async () => {
+    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+
+    await reconcileResidentQwenTiers({ keep06: false, keep17: true });
+
+    expect(unloadInits, 'the /unload should have been issued').toHaveLength(1);
+    const init = unloadInits[0]!;
+    /* Identity, not presence: `toBeDefined()` would also pass for an Agent with
+       a finite headersTimeout, which reintroduces the exact bug. */
+    expect(init.dispatcher, '/unload must carry UNLOAD_DISPATCHER').toBe(UNLOAD_DISPATCHER);
+    expect(init.signal, '/unload must stay bounded — no caller supplies one').toBeDefined();
   });
 
   it('evicts the 1.7B base for a pure-0.6B run, keeps the 0.6B base, reports true', async () => {

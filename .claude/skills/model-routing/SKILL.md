@@ -91,7 +91,7 @@ for subagent dispatch above.
 - **Exemption**: a docs-only PR — changed-file set entirely under `docs/**`,
   root-level `*.md`, or `.github/*.md` (the same file-set test
   CONTRIBUTING.md's "Doc-only PR fast-path" already uses for the `verify.yml`
-  `paths-ignore` skip) — is exempt from this gate entirely; no code-review
+  `paths-ignore` skip) — is exempt from this gate entirely; no review
   pass runs.
 - **Effort level**: for every other PR, scales with the PR's commit
   type/scope, reusing CONTRIBUTING.md's existing commit-convention
@@ -108,18 +108,51 @@ for subagent dispatch above.
   `high`). `ultra` is never auto-selected here — it is billed and requires
   explicit user opt-in (`/code-review ultra`, or the user asking for it by
   name), per the Workflow tool's own rule.
-- **Mechanism**: the `code-review` skill at the effort level determined
-  above, run once fully staged, **without** `--fix` — produces a findings
-  report only. (`--fix` applies whatever the pass surfaced wholesale;
-  there's no per-finding confidence filter to gate it on, so triage happens
-  by hand instead — see Findings handling.) This is the `code-review`
-  *skill* — a working/branch-diff tool — not the separate `/review`
-  PR-comment slash command.
-- **Findings handling**: triage the report by hand. Clear-cut findings
-  (unambiguous bug, obvious dead code, a straightforward CLAUDE.md
-  violation) get fixed directly, committed, and pushed. Findings that turn
-  on a judgment call route through the carve-out below instead of being
-  auto-applied.
+- **Mechanism**: invoke the `pr-review-gate` skill, which dispatches a
+  **non-fork** subagent at this table's **Premium** tier carrying the
+  adversarial gate brief, at the effort level determined above, once fully
+  staged — a findings report only, triaged by hand; the subagent edits nothing.
+  The same bar applies when the user runs `/code-review` themselves: no `--fix`.
+  `--fix` applies whatever the pass surfaced wholesale, and there's no per-finding
+  confidence filter to gate it on, so triage happens by hand instead — see
+  Findings handling. This is a working/branch-diff review — not the separate
+  `/review` PR-comment slash command, and not the
+  `code-review@claude-plugins-official` plugin command either: that plugin
+  reviews a GitHub PR, discards every finding below 80% confidence, and
+  posts a public comment on the PR instead of returning a report to triage.
+  - **Why not invoke the built-in `code-review` skill directly**: it is
+    user-invocable only — `Skill(skill: "code-review")` fails with "cannot
+    be used with Skill tool due to disable-model-invocation", and a
+    dispatched subagent hits the same wall, so "dispatch an agent and have
+    it invoke the skill" is not a workaround. It remains available and is
+    the *better* reviewer: the user may type `/code-review <level>` at any
+    point, and when they do it supersedes the agent pass for that round.
+  - **Never report the gate as having run when it did not.** If the agent
+    pass was substituted, or skipped, say so plainly in the user-facing
+    summary.
+- **Findings handling**: triage the report by hand, then **fix in this round**.
+  Every finding gets a dispatched fix agent — one finding, one fix, one paired
+  test — committed and pushed before merge. Clear-cut findings (unambiguous
+  bug, obvious dead code, a straightforward CLAUDE.md violation) are the
+  ordinary case, not the only case. **Cleanup-only findings are in scope too** —
+  a reuse/simplification/efficiency nit, a staled derived artifact, a missing
+  index or register row, an unwired knob. They are cheaper to dispatch than a
+  bug, not a lesser class of work, and "it's only a chore" / "it's not
+  user-visible" is not a deferral. (This is a *fixing* rule, not a re-review
+  rule: cleanup-only findings still do not re-trigger a pass — see below.) The
+  one exception stays taste: a reviewer preferring a different shape for code
+  that is correct and consistent with its neighbours is declined, not filed.
+  **The single finding allowed to leave the round unfixed is one needing a
+  design pass** — more than one defensible outcome, a decision the user has a
+  stake in — which routes through the judgment-call carve-out below and gets an
+  issue naming that decision as its deliverable. Everything else is fixed now:
+  "it expands the PR's scope", "it's pre-existing", "it needs its own test",
+  and "we can batch these" are **not** deferral grounds — see [CLAUDE.md →
+  Incidental
+  findings](../../../CLAUDE.md#incidental-findings-report-fix-record) for the
+  full void-reasons list and the defect/chore/taste seam. A ten-finding report
+  ends as ten fix commits, not a follow-up epic. None of this licenses `--fix`:
+  the fixes are dispatched and reviewed per finding, never applied wholesale.
 - **Re-review trigger**: only when the initial pass surfaced ≥1 finding
   that is an actual correctness bug (wrong behavior, crash, security issue —
   not a reuse/simplification/efficiency-only cleanup nit). Fixing and

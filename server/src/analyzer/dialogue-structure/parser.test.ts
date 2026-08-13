@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { stripHtml } from '../../parsers/html-utils.js';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { anchorSpansFromTags, parseChapterStructure } from './parser.js';
@@ -276,5 +277,461 @@ describe('applyTag — addressee/bystander gate (opt-in languages)', () => {
     );
     const sp = speech('“Fireball,” he said to Valkyrie.', idx);
     expect(sp?.speaker).toEqual({ characterId: 'valkyrie', source: 'tag-name' });
+  });
+});
+
+describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 1)', () => {
+  const enIdx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
+  const zhIdx = buildNameIndex([{ id: 'li', name: '李' }], conventionsFor('zh')!);
+  const speechOf = (body: string, idx: ReturnType<typeof buildNameIndex>) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('de: a `„` run ends at the NEAREST of its closers, per turn (#1601)', () => {
+    expect(speechOf('„Hallo", rief sie. „Nein", sagte er.', deIdx)).toEqual(['Hallo', 'Nein']);
+  });
+  it('de: a differently-classed nested run stays inside its outer run', () => {
+    expect(speechOf('„Er sagte »hallo« zu mir“, berichtete sie.', deIdx)).toEqual([
+      'Er sagte »hallo« zu mir',
+    ]);
+  });
+  it('en: nesting resolves to the OUTER run', () => {
+    expect(speechOf('“He said ‘hi’ to me,” she reported.', enIdx)).toEqual(['He said ‘hi’ to me,']);
+  });
+  it('en: a same-glyph pair still pairs', () => {
+    expect(speechOf('He said "nothing at all" and left.', enIdx)).toEqual(['nothing at all']);
+  });
+  it('zh: nesting resolves to the OUTER run', () => {
+    expect(speechOf('“他说‘你好’然后走了”', zhIdx)).toEqual(['他说‘你好’然后走了']);
+  });
+});
+
+describe('parser — #2288 an apostrophe is not a closing quote (en)', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // (1) a cased letter on BOTH sides — the contraction and the name
+  it('a contraction does not end a single-quoted turn', () => {
+    expect(speechOf('‘I don’t know,’ she said.')).toEqual(['I don’t know,']);
+  });
+  it('two single-quoted turns each survive their contraction', () => {
+    expect(speechOf('‘We can’t go back,’ said Mary. ‘It isn’t safe.’')).toEqual([
+      'We can’t go back,',
+      'It isn’t safe.',
+    ]);
+  });
+  it('an apostrophe inside a name does not end the turn', () => {
+    expect(speechOf('‘Ask O’Brien,’ she said.')).toEqual(['Ask O’Brien,']);
+  });
+
+  // (1b) same shape as above, but NFD-decomposed: the base letter before the
+  // apostrophe and its combining mark are separate code points, so `\p{L}`
+  // alone (pre-round-2) misses the mark and reads "not a letter" — the
+  // original #2288 bug, unfixed, for any manuscript that arrives decomposed
+  // (this path has no NFC-normalisation guarantee). Built with `.normalize`
+  // rather than typed pre-composed so an editor can't silently re-compose it.
+  it('a contraction survives even when the manuscript is NFD-decomposed (combining marks)', () => {
+    const body = '‘I saw André’s car,’ she said.'.normalize('NFD');
+    expect(speechOf(body)).toEqual(['I saw André’s car,'.normalize('NFD')]);
+  });
+
+  // (2) whitespace-then-letter — elision that OPENS a word
+  it('a leading-elision apostrophe does not end the turn', () => {
+    expect(speechOf('‘Give ’em back,’ she said, ‘’cause they’re mine.’')).toEqual([
+      'Give ’em back,',
+      '’cause they’re mine.',
+    ]);
+  });
+
+  // (3) opener-then-letter — turn-initial elision, which would otherwise
+  //     close on an EMPTY interior and produce no speech span at all
+  it('a turn-initial elision does not destroy the turn', () => {
+    expect(speechOf('‘’Tis nothing,’ he said.')).toEqual(['’Tis nothing,']);
+  });
+
+  // controls — each input has exactly one closer-glyph occurrence per
+  // opener, so the never-delete fallback restores that same closer even if
+  // isRealCloser were mutated to reject unconditionally: these two tests
+  // pass either way and do NOT discriminate accept from reject. What they
+  // DO guard: a broken opener set, a broken sort/cursor loop, or the wrong
+  // glyphs entering APOSTROPHE_SHAPED. The five tests above are the ones
+  // that actually distinguish "closer accepted" from "closer rejected".
+  it('CONTROL: single-quoted turns with no apostrophe are unchanged', () => {
+    expect(speechOf('‘Hello,’ he said. ‘Goodbye,’ she said.')).toEqual(['Hello,', 'Goodbye,']);
+  });
+  it('CONTROL: a double-quoted turn containing a contraction is unchanged', () => {
+    expect(speechOf('“I don’t know,” she said.')).toEqual(['I don’t know,']);
+  });
+});
+
+describe('parser — #2288 a rule may move a run boundary, never delete a run', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // All three bodies below are REAL corpus paragraphs from
+  // se/anne-parrish_the-perennial-bachelor.epub. Each is an inner quotation
+  // whose ONLY `’` is a contraction, so every closer is rejected and the run
+  // vanishes unless the fallback restores it. Verified: each returns [] under
+  // the Step 3 mutation.
+  it('a quotation whose only closer is a contraction keeps its (truncated) turn', () => {
+    expect(speechOf('“ ‘Shoo fly! Don’t bother me!')).toEqual(['Shoo fly! Don']);
+  });
+
+  it('the same, for a possessive', () => {
+    expect(speechOf('“ ‘Ping Wing, the Pieman’s son,')).toEqual(['Ping Wing, the Pieman']);
+  });
+
+  it('the same, for a dialect elision', () => {
+    expect(speechOf('“ ‘The strife is o’er, the battle done;')).toEqual(['The strife is o']);
+  });
+
+  it('a turn whose only closer is an apostrophe is truncated, never dropped', () => {
+    // `’` in O’Brien is the sole `’`; the fallback restores it as the closer.
+    // Without the fallback the outer run vanishes and the NESTED “hi” is
+    // promoted to a top-level turn — a silent, wrong speaker change.
+    expect(speechOf('‘He said “hi” to O’Brien.')).toEqual(['He said “hi” to O']);
+  });
+
+  it('the same, for a leading-elision-only paragraph', () => {
+    expect(speechOf('‘He said “hi” ’cause he was late.')).toEqual(['He said “hi” ']);
+  });
+
+  // Each body's every `’` is a contraction/possessive/dialect-elision — no
+  // later `’` sits after punctuation — so each individually goes to `[]`
+  // under the Step 3 mutation. Asserted as exact arrays, not lengths: a
+  // length check alone would still pass on a wrongly-promoted nested run
+  // (same speaker-changed silently, same run count) — see the two tests
+  // above, which is exactly why that shape is asserted there instead.
+  // Two similarly-shaped candidates were tried and rejected here: `‘’Twas
+  // raining hard…` and `‘’Cause nobody asked…`. Both have their sole `’`
+  // immediately after the opener, so the run interior is empty and the
+  // span-builder drops it — they return `[]` with AND without the Step 3
+  // fallback, discriminating nothing between the two.
+  it.each([
+    ['‘She wouldn’t say why.', ['She wouldn']],
+    ['‘That is Sam’s coat.', ['That is Sam']],
+    ['‘We shall ne’er surrender.', ['We shall ne']],
+    ['‘Don’t you dare say it.', ['Don']],
+    ['‘It wasn’t my fault, he claimed.', ['It wasn']],
+  ] as const)('a paragraph whose only closer is rejected keeps its truncated turn: %s', (body, expected) => {
+    expect(speechOf(body)).toEqual(expected);
+  });
+});
+
+describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desired)', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('NOT FIXED: a possessive-plural apostrophe still ends the turn early', () => {
+    // `boys’` has a letter before and a SPACE after, so none of the three
+    // shapes in isRealCloser fires. Locally indistinguishable from a real
+    // closer. Desired output is ['It was the boys’ fault,']; flip this test
+    // when that is fixed.
+    expect(speechOf('‘It was the boys’ fault,’ she said.')).toEqual(['It was the boys']);
+  });
+
+  it('NOT FIXED: German »…« emphasis glued to a word still forms a run', () => {
+    // `»` immediately followed by `Frühstücks` and closed by `«` glued to
+    // `schiff` reads as one quote run around the emphasised compound.
+    // Desired output is [] (no speech span at all — this is emphasis, not
+    // dialogue); flip this test when that is fixed.
+    const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
+    const body = 'Woher aber der Name »Frühstücks«schiff?';
+    const speech = parseChapterStructure(body, deIdx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+    expect(speech).toEqual(['Frühstücks']);
+  });
+
+  it('NOT FIXED: same-glyph nesting splits into two truncated fragments, not one long turn', () => {
+    // The inner `‘dare’` is a second occurrence of the SAME opener/closer
+    // glyphs as the outer run, so the rejected-closer resumed-skip bound
+    // (#2288 Critical: a rejected closer's resumed skip stops at the next
+    // opener of any class) treats the second `‘` as the boundary of the
+    // outer run's search. The
+    // outer run's only closer candidate before that boundary is the rejected
+    // `Don’t` apostrophe, so NEVER-DELETE falls back to it, truncating to
+    // "Don". The second `‘` then starts its OWN run, whose first closer
+    // (`dare’` — letter before, space after, no isRealCloser clause fires)
+    // is accepted immediately, yielding "dare" as a separate turn. The scan
+    // is single-glyph and non-stacking, so it cannot disambiguate an inner
+    // same-glyph pair from the outer one regardless of the rule — no turn is
+    // destroyed, but "leave," is lost from both fragments. Desired output is
+    // ['Don’t you ‘dare’ leave,']; flip this test if same-glyph nesting is
+    // ever disambiguated (would need a stacking scan, out of scope for #2288).
+    expect(speechOf('‘Don’t you ‘dare’ leave,’ she said.')).toEqual(['Don', 'dare']);
+  });
+
+  it('NOT FIXED (under-repair, not regression): a dash-preceded elision apostrophe still ends the turn early', () => {
+    // Real corpus paragraph, `se/joseph-conrad_chance.epub`, hand-adjudicated
+    // as the bound's nearest miss. `’pon`'s apostrophe is preceded by an em
+    // dash, which is neither a cased letter (clause 1) nor whitespace/bracket
+    // (clause 2), so `isRealCloser` accepts it as a genuine closer and the
+    // scan stops there — one apostrophe short of the turn's real end.
+    //
+    // This is an UNDER-repair, not a regression: `main` truncates this
+    // paragraph to ['It'], this rule gives ['It’s like being in jail—'] —
+    // strictly longer, still entirely speech, never narration, never a lost
+    // turn. Desired output is ['It’s like being in jail—’pon my word. I
+    // suppose that man is out there waiting for you. Head jailer! Ough!'];
+    // flip this test when that is fixed.
+    //
+    // A widened elision clause (treating a dash before the apostrophe the
+    // same as whitespace) was implemented and measured against this exact
+    // shape: corpus-identical apart from repairing this one paragraph, but a
+    // synthetic interrupted-turn probe reproduces the same
+    // narration-swallowing over-run through a dash-preceded glued closer, and
+    // well-typeset public-domain prose systematically lacks the
+    // missing-space-after-closer defect that would exercise the new
+    // rejection branch — so a corpus zero cannot clear it. Rejected.
+    expect(
+      speechOf(
+        '‘It’s like being in jail—’pon my word. I suppose that man is out there waiting for you. Head jailer! Ough!’',
+      ),
+    ).toEqual(['It’s like being in jail—']);
+  });
+
+  it('NOT FIXED: an inch mark between the elided contraction and the closer still caps the scan', () => {
+    // Neither anchor (an interior-start-anchored bound or the shipped
+    // at-rejection-anchored bound) fixes this: `nearestOpenerAtOrAfter`
+    // (parser.ts) computes the bound from the raw opener set —
+    // `conventionsFor('en').quotePairs`'s openers — with no validity check of
+    // its own, and `en`'s table carries `"` as an opener (it pairs with
+    // itself), so the `"` in `6"` caps the search exactly like a real opener
+    // would, regardless of where the bound is anchored. Desired output is
+    // ["It’s 6" long,"]; flip this test when that is fixed. A unit-mark
+    // opener rule (rejecting `"`/`'`/`’` as an opener when digit-preceded)
+    // was measured and rejected earlier in this design: 0 repairs, 4 losses.
+    expect(speechOf('‘It’s 6" long,’ he said.')).toEqual(['It']);
+  });
+});
+
+describe('parser — #2288 round 2: a rejected closer\'s skip is bounded to the next opener (Critical)', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }, { id: 'tom', name: 'Tom' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // Both bodies are the known-bug inputs from the #2288 review. Without a
+  // bound, a rejected apostrophe-shaped closer's search for a later
+  // occurrence of the same glyph wanders past intervening turns with no stop
+  // condition — landing on a plausible-looking closer several turns away and
+  // destroying everything in between. Expected arrays below are MEASURED
+  // (`parseChapterStructure` run against these exact bodies), not predicted:
+  // they are what `main` produces today, which the bound must reproduce.
+  it('a stray apostrophe between turns does not swallow the turns that follow', () => {
+    const body =
+      'Tom said the ‘phone wasn’t working. “I agree,” said Mary. It was the boys’ fault.';
+    // Without the bound: ["phone wasn’t working. “I agree,” said Mary. It was the boys"]
+    // — Mary's whole turn destroyed, walking past “I agree,” to accept the
+    // later "boys’" apostrophe as if it closed the ‘phone run.
+    expect(speechOf(body)).toEqual(['phone wasn', 'I agree,']);
+  });
+
+  it('a rejected closer immediately after an opener does not reach past the next turn', () => {
+    const body = '‘Yes’said Tom. “No,” said Mary. ‘Maybe,’ said Tom.';
+    // Without the bound the ‘Yes’said run's rejected "Yes’said" apostrophe
+    // would skip all the way to the later "Maybe,’" closer, merging three
+    // turns (and two speakers) into one.
+    expect(speechOf(body)).toEqual(['Yes', 'No,', 'Maybe,']);
+  });
+});
+
+describe('parser — #2288 round 3: the bound is anchored at the rejection, not the interior start', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }, { id: 'tom', name: 'Tom' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  // Expected arrays below are MEASURED (`parseChapterStructure` run against
+  // these exact bodies), not predicted.
+  it('the standard British shape — a single-quoted turn nesting a double-quoted one — is now repaired', () => {
+    const body = '‘He said “yes,” but I don’t believe him,’ she said.';
+    // Anchoring at the opening quote's INTERIOR START (the round-2 bound)
+    // caps the search at the nested “ — which belongs to THIS turn, not a
+    // following one — leaving this identical to `main`: ["He said “yes,”
+    // but I don"]. Anchoring at the REJECTED closer's own index instead lets
+    // the search pass that nested opener, because nothing after it is a
+    // different turn's opener either.
+    expect(speechOf(body)).toEqual(['He said “yes,” but I don’t believe him,']);
+  });
+
+  // Both bodies are round 2's known-bug fixtures, re-asserted here because
+  // moving the anchor is exactly the kind of change that could silently
+  // re-open them — see the round-2 describe block above for what the
+  // un-bounded scan does to each.
+  it('known-bug 1 stays identical under the new anchor', () => {
+    const body =
+      'Tom said the ‘phone wasn’t working. “I agree,” said Mary. It was the boys’ fault.';
+    expect(speechOf(body)).toEqual(['phone wasn', 'I agree,']);
+  });
+
+  it('known-bug 2 stays identical under the new anchor', () => {
+    const body = '‘Yes’said Tom. “No,” said Mary. ‘Maybe,’ said Tom.';
+    expect(speechOf(body)).toEqual(['Yes', 'No,', 'Maybe,']);
+  });
+
+  it('nesting stays unharmed (no rejection occurs, so the anchor never comes into play)', () => {
+    expect(speechOf('“He said ‘hi’ to me,” she reported.')).toEqual(['He said ‘hi’ to me,']);
+  });
+});
+
+// Salvaged from blocked PR #2286 (source commit b5e7a365): only the cases that
+// pass against the SHIPPED lang tables, with no table change of any kind. That
+// PR widens several languages' quotePairs; those widened-table cases stay
+// there and are NOT reproduced here. `de` is the one language #2286 concluded
+// should gain nothing from its table widening — every candidate opener it
+// tried (ASCII same-glyph, curly, Swiss) let a „ run extend past the next
+// turn's opener and swallow it, per #1601 — so these three pin the shipped,
+// unwidened `de` table against exactly the counter-examples that sank the
+// widening attempt.
+describe('parser — #2288 de gains no opener from #2279 (counter-examples, PR #2286 salvage)', () => {
+  const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, deIdx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('#2288: de + ASCII-quoted sign — a turn pair around it keeps BOTH turns', () => {
+    const body = '„Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.';
+    expect(speechOf(body)).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + curly-opened sign — a „…” turn pair around a “-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag”, sagte er. Das Schild sagte “Zu". „Und du?”, fragte sie.';
+    expect(speechOf(body)).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + Swiss-opened sign — a „…“ / »…« turn pair around a «-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag“, sagte er. Das Schild sagte «Zu". »Und du?«, fragte sie.';
+    expect(speechOf(body)).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de carries no opener beyond „ and » — the exclusion IS the fix', () => {
+    expect(new Set(conventionsFor('de')!.quotePairs.map(([o]) => o))).toEqual(new Set(['„', '»']));
+  });
+});
+
+describe('parser — #2288 deep nesting stays one turn (design-alternative pin)', () => {
+  // This is the shape that killed the rejected convention-election design
+  // alternative during the #2288 design pass — it collapsed into four
+  // fragments instead of one turn. The shipped design (an apostrophe is not a
+  // closing quote, plus never-delete-a-run) cannot regress it, which is
+  // exactly why it is worth pinning now, ahead of the next attempt at #2286.
+  it('an outer double-quoted turn containing THREE inner single-quoted phrases stays one turn', () => {
+    const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+    const body = '“He said ‘hi’ and ‘bye’ and ‘hi’ to me,” she reported.';
+    const speech = parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+    expect(speech).toEqual(['He said ‘hi’ and ‘bye’ and ‘hi’ to me,']);
+  });
+});
+
+describe('parser — #2288 round 4: crossGlyphBound guards a multi-closer opener (forward-cover for #2286)', () => {
+  // No shipped table pairs an apostrophe-shaped closer alongside a SIBLING
+  // closer for the same opener (see the `crossGlyphBound` comment above
+  // `nearestOpenerAtOrAfter` in parser.ts — de's `„` is the only shipped
+  // multi-closer opener, and none of its closers is apostrophe-shaped), so
+  // this `quotePairs` table is SYNTHETIC, not any shipped convention. It
+  // exists only to reach the OPENER-OCCURRENCE-WIDE bound this branch
+  // guards, which #2286's table widening (pairing `‘`/`’` alongside another
+  // closer on one opener) would otherwise make reachable with no test
+  // covering it — the same forward-cover shape as the zh nesting
+  // characterisation above; this is not coverage of any shipped table.
+  it("a sibling closer's un-rejected first occurrence cannot skip past a rejected apostrophe-shaped closer's bound", () => {
+    const synth = {
+      ...conventionsFor('en')!,
+      quotePairs: [['«', '’'], ['«', '»'], ['“', '”']] as [string, string][],
+    };
+    const idx = buildNameIndex([{ id: 'tom', name: 'Tom' }], synth);
+    const body = '«He said don’t go. “Stop,” said Tom. Later» he left.';
+    const speech = parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+    // Measured against `parseChapterStructure`, not predicted. Without
+    // `crossGlyphBound`, `»`'s un-rejected first occurrence would win `end`
+    // past "Stop,"'s turn entirely, merging all three sentences into one run
+    // and destroying Tom's line and its speaker attribution.
+    expect(speech).toEqual(['He said don', 'Stop,']);
+  });
+});
+
+// #2289 — es/fr.dialogueOpen carried &mdash; but not &ndash;, so an EPUB
+// toolchain that left the entity literal in the body text (stripHtml only
+// decodes a small named-entity set, per ru.ts's precedent comment) opened no
+// dialogue paragraph at all: `&ndash; Un momento` parsed as narration while
+// `&mdash; Un momento` — the exact same dash, just the other entity — parsed
+// as dialogue. Exercised against `parseChapterStructure` itself (not
+// `isSpokenLine`), since `dialogueOpen` drives the paragraph split there
+// directly and `isSpokenLine` alone would not prove the fix reaches it.
+describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;', () => {
+  const esIdx = buildNameIndex([{ id: 'ana', name: 'Ana' }], conventionsFor('es')!);
+  const frIdx = buildNameIndex([{ id: 'anne', name: 'Anne' }], conventionsFor('fr')!);
+
+  it('#2289: es — &ndash; opens a dialogue paragraph (was narration)', () => {
+    const paras = parseChapterStructure('&ndash; Un momento — dijo él.', esIdx);
+    expect(paras[0].kind).toBe('dialogue');
+  });
+  it('#2289: fr — &ndash; opens a dialogue paragraph (was narration)', () => {
+    const paras = parseChapterStructure('&ndash; Un instant — dit-il.', frIdx);
+    expect(paras[0].kind).toBe('dialogue');
+  });
+  it('#2289: positive control — &mdash; still opens dialogue in es and fr', () => {
+    const esParas = parseChapterStructure('&mdash; Un momento — dijo él.', esIdx);
+    const frParas = parseChapterStructure('&mdash; Un instant — dit-il.', frIdx);
+    expect(esParas[0].kind).toBe('dialogue');
+    expect(frParas[0].kind).toBe('dialogue');
+  });
+  it('#2289: negative control — ordinary narration is not dialogue', () => {
+    const paras = parseChapterStructure('Ana caminó por la calle.', esIdx);
+    expect(paras[0].kind).toBe('narration');
+  });
+  it('#2289: negative control — an unrelated entity (&zzz;) does not open dialogue', () => {
+    /* Guards against an over-broad fix such as a dialogueOpen pattern of the
+       shape `^\s*(?:&\w+;|[-–—])\s*` (case/unicode flags), which would match
+       any entity.
+
+       #2310 swapped this fixture from `&hellip;` to `&zzz;`. `&hellip;` used to
+       survive `stripHtml`, which is what made this control realistic body text;
+       since #2310 the full named set decodes, so it no longer would. An
+       UNKNOWN reference is left literal by `decodeHTMLStrict`, so `&zzz;` keeps
+       the control realistic end-to-end rather than demoting it to a unit-level
+       mutation guard. (`&nbsp;` was never a candidate — it was decoded even
+       before #2310, which is the vacuous-fixture bug #2289 shipped and had to
+       correct.) */
+    const paras = parseChapterStructure('&zzz; Un momento — dijo él.', esIdx);
+    expect(paras[0].kind).toBe('narration');
+  });
+
+  /* #2310 — once stripHtml decodes the entity, `dialogueOpen`'s entity branch
+     stops firing on freshly-parsed text and the `[-–—]` character-class branch
+     carries the load instead. Pin that the handover is real, so the shims can
+     be retained as pure back-compat rather than silently doing the work. */
+  it('#2310: the DECODED dash still opens dialogue in es and fr', () => {
+    expect(parseChapterStructure(stripHtml('<p>&ndash; Un momento.</p>'), esIdx)[0].kind)
+      .toBe('dialogue');
+    expect(parseChapterStructure(stripHtml('<p>&mdash; Un instant.</p>'), frIdx)[0].kind)
+      .toBe('dialogue');
   });
 });

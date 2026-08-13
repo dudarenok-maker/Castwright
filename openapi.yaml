@@ -561,6 +561,7 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
+                  - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
 
   /api/manuscripts/{manuscriptId}/analysis/chapters:
@@ -599,6 +600,7 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
+                  - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
 
   /api/books/{bookId}/chapters/{chapterId}/exclude:
@@ -3179,7 +3181,9 @@ paths:
       description: |
         Generates a fresh, individually-revocable device token. The raw token is
         returned ONCE in this response (only its SHA-256 is persisted) — the
-        caller must surface it to the user immediately.
+        caller must surface it to the user immediately. LOOPBACK-ONLY (defense
+        in depth: a stolen browser cookie that could mint a fresh, durable
+        device token would survive revoking the stolen one).
       requestBody:
         required: false
         content:
@@ -3202,11 +3206,33 @@ paths:
                       token:
                         type: string
                         description: 'Raw access token — shown once; only its hash is stored.'
+        '403':
+          description: Devices can only be minted from the host UI
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+        '503':
+          description: Device token store is degraded (unreadable/unwritable) — see error for the reason
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/devices/{id}:
     delete:
       summary: Revoke a paired device (srv-33)
       operationId: revokeDevice
+      description: |
+        LOOPBACK-ONLY (#2269), symmetric with `POST /api/devices`: a stolen
+        browser cookie that cannot mint a fresh token must equally not be
+        able to revoke the legitimate owner's.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
       responses:
@@ -3217,7 +3243,25 @@ paths:
               schema:
                 type: object
                 properties: { ok: { type: boolean } }
+        '403':
+          description: Devices can only be revoked from the host UI
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
         '404': { description: Unknown device }
+        '503':
+          description: Device token store is degraded (unreadable/unwritable) — see error for the reason
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/lan/cert/regenerate:
     post:
@@ -3330,7 +3374,10 @@ paths:
             Refused (nothing was written). Either the write would have replaced
             a character's consented cloned voice, or it would have overwritten an
             analysed manuscript with an empty sentence list, or the new
-            Author/Series/Title path is already taken.
+            Author/Series/Title path is already taken, or an analysis is
+            currently running for this book and the patch would move its folder
+            (renaming mid-analysis would split the book's state across two
+            directories — retry once the run finishes).
 
   /api/books/{bookId}/cast/{characterId}/not-linked-to:
     post:
@@ -3416,9 +3463,13 @@ paths:
         recomputed AFTER these writes land (`null` on the ordinary "still
         doesn't resolve" outcome). Idempotent — a repeat call for the same
         pair is a no-op on cast.json, though the rejection is still
-        (re-)recorded. The `rejectedPairs` write failing surfaces as a 500
-        (it is the only mechanism enforcing the reject for a normalised-tier
-        match); a stale `supersededBy`-entry cleanup failure does not. Use
+        (re-)recorded. The `rejectedPairs` entry is written FIRST and the
+        `notLinkedTo` edge second (#2166), so a half-failure always leaves the
+        visible half — the chip renders and Undo works. BOTH writes failing
+        surface as a 500, with distinct meanings: a `rejectedPairs` failure
+        means nothing was written; a cast.json failure means the rejection is
+        durably recorded but the character link is not. Retry is safe after
+        either. A stale `supersededBy`-entry cleanup failure is non-fatal. Use
         the DELETE on this same path to undo.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
@@ -3439,7 +3490,7 @@ paths:
         '404':
           description: Book or character not found
         '500':
-          description: Failed to durably record the rejection in cast-id-history.json — retry
+          description: Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way
         '409':
           description: Book has no cast on disk yet
     delete:
@@ -3477,6 +3528,53 @@ paths:
           description: Book or character not found
         '500':
           description: Failed to restore the forgotten alias entry, or to durably remove the rejection — retry
+        '409':
+          description: Book has no cast on disk yet
+
+  /api/books/{bookId}/cast/{characterId}/link-orphan-match:
+    post:
+      summary: Link an orphaned-id reconciliation ("this IS the same character") — #2238
+      operationId: linkOrphanMatch
+      description: |
+        The positive mirror of `reject-orphan-match`'s POST above: records
+        "orphanedId IS the same character as characterId" by durably
+        aliasing `orphanedId -> characterId` in `cast-id-history.json`'s
+        `supersededBy` (`retireCharacterId`), so `buildCastResolver` picks it
+        up at render/QA/splice time and the needs-your-decision row leaves
+        the banner's needs-decision section. Refuses a reserved minor-cast
+        fold-bucket target (`unknown-male`/`unknown-female`, 400) — a shared
+        bucket stands in for multiple unrelated background characters, so
+        aliasing a real id onto it is a lossy merge, not a reconciliation.
+        Does not itself clear a pre-existing pair-scoped rejection of this
+        exact pair — the client clears that first via the EXISTING
+        `reject-orphan-match` DELETE undo (no second removal
+        implementation); calling this route while a rejection is still in
+        place still durably writes the alias, but `resolution` in the
+        response stays blocked (`null`) until the rejection is actually
+        cleared. Has no DELETE of its own: once linked, the row moves into
+        the auto-reconciled section, which already renders
+        `reject-orphan-match`'s own "Not the same character" button/undo
+        chip as this action's full undo path.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectOrphanMatchRequest' }
+      responses:
+        '200':
+          description: The linked pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkOrphanMatchResponse' }
+        '400':
+          description: Missing fields, characterId/orphanedId self-pair, or characterId is a reserved fold-bucket id
+        '404':
+          description: Book or character not found
+        '500':
+          description: Failed to durably record the alias — retry, the write is idempotent
         '409':
           description: Book has no cast on disk yet
 
@@ -4096,8 +4194,10 @@ components:
             within the ride-out budget) / `gpu_contention` (same, for
             GPU-busy contention) / `unsupported_language` (the book's
             language has no sidecar mapping — checked before the stream
-            produces any progress) / `unknown` (defensive catch-all for an
-            unexpected throw escaping the design loop).
+            produces any progress) / `lock-contention` (a cast-lock
+            acquisition on this backstop's own path timed out — #2260) /
+            `unknown` (defensive catch-all for any other unexpected throw
+            escaping the design loop).
         total: { type: integer }
         done: { type: integer }
         skipped:
@@ -4131,7 +4231,7 @@ components:
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
           type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, unknown]
+          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, unknown]
           description: error only — machine-readable whole-run abort reason.
         message: { type: string, description: error only — human-readable abort message. }
 
@@ -4184,7 +4284,9 @@ components:
             design) run — the result is already persisted by the time this
             fires. `error` is the terminal event for a failed run: `code`
             `not_found` (character deleted mid-run), `design_failed` (the
-            design call itself threw), or `unsupported_language`.
+            design call itself threw), `unsupported_language`, or
+            `lock-contention` (a cast-lock acquisition on this route's own
+            path timed out — #2260).
         characterId: { type: string }
         name: { type: string, description: 'resume_from / preview_ready / designed only.' }
         mode: { type: string, enum: [first, redesign], description: resume_from only. }
@@ -4200,7 +4302,7 @@ components:
         url: { type: string, description: designed only. }
         code:
           type: string
-          enum: [not_found, design_failed, unsupported_language]
+          enum: [not_found, design_failed, unsupported_language, lock-contention]
           description: error only.
         message: { type: string, description: error only. }
 
@@ -5062,6 +5164,15 @@ components:
           description: |
             fs-41/fs-50 — Whether the detected language has passed its
             validation gate (false ⇒ detected-but-unsupported).
+        languageFallback:
+          type: boolean
+          description: |
+            #2276 — True when `language` is a confidence-floor guess (no
+            majority across body chapters, or too little text to corroborate
+            itself) rather than a genuine decision. Mirrors
+            `DetectionResult.fallback` (server/src/tts/detect-language.ts) —
+            `languageSupported` can't stand in for it, since a guess and a
+            real decision can both land on the same (supported) language.
         supportedLanguages:
           type: array
           description: |
@@ -5169,6 +5280,29 @@ components:
         phaseId: { type: integer, minimum: 0 }
         progress: { type: number, minimum: 0, maximum: 1 }
         label: { type: string }
+
+    AnalyseWarningEvent:
+      type: object
+      description: |
+        Non-fatal advisory on the analysis SSE stream. The analysis continues;
+        a `warning` never replaces the terminal `result`. Follows the same
+        `code` + `message` envelope the splice, generation and QA-repair
+        streams use, so a caller can dedupe and route without parsing prose.
+      required: [kind, code, message]
+      properties:
+        kind: { type: string, enum: [warning] }
+        code:
+          type: string
+          description: |
+            Stable machine-readable warning code. Today only
+            `cast_merge_base_stale` — emitted when another route wrote
+            `cast.json` between two of this run's own merge-base writes, so the
+            analysis result was merged onto an older cast and that write may
+            have been overwritten. Replayed once per code on reconnect.
+          enum: [cast_merge_base_stale]
+        message:
+          type: string
+          description: Human-readable advisory text.
 
     AnalyseResponse:
       type: object
@@ -6717,6 +6851,7 @@ components:
         - gpu-acceleration-unavailable
         - voice-not-designed
         - cloned-voice-broken
+        - lock-contention
 
     ChapterQaVerdict:
       type: object
@@ -7406,10 +7541,15 @@ components:
             recomputed AFTER the undo's writes land. Restoring a rejected
             pair's forgotten `supersededBy` alias (when present) makes this
             the SAME value the resolver returned before the original reject
-            — the lossless-undo contract, UNLESS `supersededByOther` is set
-            (a later, unrelated re-analysis has since recorded a different
-            alias for `orphanedId`; the restore is skipped rather than
-            overwriting it — see `supersededByOther`).
+            — the lossless-undo contract, UNLESS either `supersededByOther`
+            or `targetNotLive` is set: `supersededByOther` when a later,
+            unrelated re-analysis has since recorded a DIFFERENT alias for
+            `orphanedId` (the restore is skipped rather than overwriting it
+            — see `supersededByOther`); `targetNotLive` when the forgotten
+            alias's own target has quietly stopped being a live cast id
+            since the original reject (#2161 — the restore is refused
+            rather than reintroducing a dangling alias — see
+            `targetNotLive`).
         resolvedCharacterId:
           type: string
           description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
@@ -7447,6 +7587,43 @@ components:
             skip but the last one. Absent (never an empty array) in the
             ordinary case: nothing to restore, or every restore attempted
             succeeded.
+        targetNotLive:
+          type: array
+          items: { type: string }
+          description: |
+            #2161 — same shape and reasoning as `supersededByOther` above,
+            for the sibling refusal case: set (non-empty) when one or more
+            of the removed pairs had a forgotten `supersededBy` alias to
+            restore, but the restore was REFUSED because that alias's own
+            target has quietly stopped being a live cast id since the
+            original reject (the #2110 dangling-alias hazard, reopened
+            through a stale Undo stash if written back unconditionally).
+            Each entry is the dead target id, one per refused restore.
+            Writing it back anyway would silently reintroduce a
+            `supersededBy` entry pointing at a character that no longer
+            exists. Absent (never an empty array) in the ordinary case:
+            nothing to restore, or every restore attempted succeeded or was
+            skipped for the different reason `supersededByOther` covers.
+    LinkOrphanMatchResponse:
+      type: object
+      required: [characterId, orphanedId, resolution]
+      properties:
+        characterId: { type: string, description: 'The live character (path param, echoed back).' }
+        orphanedId: { type: string }
+        resolution:
+          type: string
+          nullable: true
+          enum: [exact, history, normalised-id, normalised-history]
+          description: |
+            How `orphanedId` resolves against the live cast + id history,
+            recomputed AFTER this call's write lands. `null` only when a
+            still-active pair-scoped rejection blocks it (#2238 decision 1) —
+            the alias was still durably written; clearing the rejection via
+            the existing DELETE /reject-orphan-match undo lets it take
+            immediately, with no further link call needed.
+        resolvedCharacterId:
+          type: string
+          description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
 
     # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
     BookStateResponse:
@@ -7546,7 +7723,7 @@ components:
             actually spoke it. Empty/absent when nothing is orphaned.
           additionalProperties:
             type: object
-            required: [resolution, segments]
+            required: [resolution, segments, audioCurrent]
             properties:
               characterId:
                 type: string
@@ -7574,6 +7751,19 @@ components:
               segments:
                 type: integer
                 description: How many rendered segments (across every rendered chapter) carry this orphaned id.
+              audioCurrent:
+                type: string
+                enum: ['true', 'false', 'unknown']
+                description: |
+                  #2129/#2128 — whether this orphaned id's RENDERED AUDIO is
+                  still current, as opposed to whether the id currently
+                  RESOLVES (`resolution`). `true` only when every rendered
+                  chapter carrying this id was rendered against the
+                  cast-id-history state that established its current target;
+                  `unknown` when the comparison cannot be made (a render
+                  predating the stamp, or a history file predating the
+                  one-shot back-fill). `unknown` is presented as needing a
+                  re-render, not as fine — only `true` clears a row.
               rejectedAgainst:
                 type: array
                 items: { type: string }

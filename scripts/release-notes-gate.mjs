@@ -14,9 +14,10 @@
    annotated tag and IS the public GitHub release body, so a double-UTF-8
    encoding mangle there ships straight to the releases page. */
 
-import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const PLACEHOLDER_RE = /See the GitHub release for details\./i;
 
@@ -606,8 +607,7 @@ function repoRootFromHere() {
 }
 
 // CLI: node scripts/release-notes-gate.mjs <version> [notesPath]
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   const version = process.argv[2];
   const notesPath = process.argv[3]
     ? resolve(process.argv[3])

@@ -329,6 +329,58 @@ describe('cast-merge router', () => {
     expect(history.supersededBy).toHaveProperty(sourceId, targetId);
   });
 
+  it('#2133 — a merge that drops a self-loop rejectedPairs entry also clears the matching notLinkedTo edge', async () => {
+    // A reject's two writes (the rejectedPairs entry on cast-id-history.json
+    // and the one-sided notLinkedTo edge on cast.json) are created together
+    // and must be destroyed together — otherwise the surviving edge
+    // permanently suppresses §4.4's name matcher for a pairing that no
+    // longer exists. Self-sufficient: seeds its own source/target pair,
+    // a rejectedPairs entry `{from: targetId, to: sourceId}` (so retiring
+    // sourceId INTO targetId repoints pair.to onto targetId, colliding with
+    // pair.from and dropping it as a self-loop — the exact M2 shape pinned
+    // in cast-id-history.test.ts), and a notLinkedTo self-edge on the
+    // TARGET row naming itself (the shape `notLinkedTo` ends up in once a
+    // self-loop pair's `from` and `to` both equal the surviving id).
+    const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceId = `self-loop-src-${unique}`;
+    const targetId = `self-loop-tgt-${unique}`;
+
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(
+      { id: sourceId, name: 'Self Loop Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+      {
+        id: targetId,
+        name: 'Self Loop Target',
+        role: 'minor',
+        color: 'halloran',
+        lines: 1,
+        scenes: 1,
+        notLinkedTo: [{ bookId, characterId: targetId }],
+      },
+    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+    const { rejectOrphanedPair, loadCastIdHistory } = await import('../store/cast-id-history.js');
+    await rejectOrphanedPair(bookDir, targetId, sourceId);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId, targetId });
+    expect(res.status).toBe(200);
+
+    // The pair became a self-loop (targetId !-> targetId) and was dropped.
+    const history = await loadCastIdHistory(bookDir);
+    expect(history.rejectedPairs ?? []).not.toContainEqual(
+      expect.objectContaining({ from: targetId }),
+    );
+
+    // The matching notLinkedTo edge on the surviving target row is gone too.
+    const castAfter = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    const survivor = castAfter.characters.find((c) => c.id === targetId)!;
+    expect(survivor.notLinkedTo ?? []).toEqual([]);
+  });
+
   it('a throwing history write never fails the merge or leaves cast.json and the analysis cache disagreeing (#2040 Wave 2 final review, finding 4)', async () => {
     /* `performCastMerge`'s retirement call sat between the cast.json write
        and the analysis-cache reconciliation with no try/catch — unlike all

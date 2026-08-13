@@ -12,6 +12,7 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  copyFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -31,14 +32,23 @@ import {
   stepTouchedByDiff,
   computeShared,
   parseNvidiaSmiUtil,
+  maxNvidiaSmiUtil,
+  gpuContentionFor,
   isVitestPoolCrash,
   branchDiffFiles,
+  stagedDiffFiles,
   sidecarFingerprint,
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
 
 const { SCHEMA_VERSION } = _internals;
+
+// Resolve relative to THIS file, not the process cwd — same rationale as
+// scripts/tests/run-golden-audio.test.mjs's own HERE/SRC_PATH.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SRC_PATH = join(HERE, '..', 'verify-cache.mjs');
+const src = readFileSync(SRC_PATH, 'utf8');
 
 test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
   // Transient fork-pool process crashes — warrant ONE auto-retry.
@@ -469,6 +479,30 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// #2216 review round 3 — git-scrub.test.mjs is the first hooks test whose
+// scan surface reaches outside scripts/** (it walks pinokio-scripts/** too),
+// but test:hooks' globs didn't cover that directory: a pinokio-scripts-only
+// diff printed [cached] locally and scheduled only test:pinokio in cloud CI
+// (ci-scope.mjs derives both from this same STEPS[] entry) — neither of
+// which runs git-scrub.test.mjs, so a scrub deleted from e.g.
+// resolve-release.js's `git checkout` (no `cwd`, runs on an end user's
+// machine — the highest-risk site the guard covers) would ship undetected.
+test('stepTouchedByDiff: a pinokio-scripts/ diff matches test:hooks via globs (#2216 — git-scrub.test.mjs scans that directory too)', () => {
+  const diff = ['pinokio-scripts/lib/resolve-release.js'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+// #2216 review round 3 — the glob was *.{mjs,cjs} only, narrower than the
+// SCANNED_EXTENSIONS both gh-chokepoint.test.mjs and git-scrub.test.mjs
+// actually walk (.mjs/.cjs/.js/.mts/.cts/.ts). audit-stage2-coverage.mts is
+// a real file this gap already reached (cited by name in gh-chokepoint's own
+// header) — a raw `gh`/`git` call added there would print test:hooks
+// [cached] on exactly the diff that introduced it.
+test('stepTouchedByDiff: a scripts/*.mts diff matches test:hooks via globs (#2216 — SCANNED_EXTENSIONS parity)', () => {
+  const diff = ['scripts/audit-stage2-coverage.mts'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
 // Defect D (#2119 review): verify.yml matched NO scope, so a workflow-only
 // PR ran zero legs — in cloud AND locally. This suite's own stepTouchedByDiff
 // assertions against real workflow paths are what must stay in scope when
@@ -809,6 +843,10 @@ test('acceptance #2120b: adding a server test makes check:budget-poll RUN', () =
 //     fast paths (docs/features/archive/45-vitest-pool-tuning.md).
 //   - test:scripts / test:pinokio — not in any of the three fast aliases
 //     today (`npm run test:all` / `verify` cover them instead).
+//   - check:cycles — madge's --circular pass over server/src is not free on
+//     this graph (#2053, repo-owner decision on the issue); it runs as a
+//     verify.yml leg scope-gated to server/**, and in full `npm run verify`,
+//     but is deliberately NOT one of the three local fast/pre-push CSVs.
 // Reading package.json's real scripts (rather than hardcoding the CSVs here)
 // means an edit to any of the three that drops a step name is what this test
 // actually watches for.
@@ -818,6 +856,7 @@ const CLOUD_OR_FULL_VERIFY_ONLY_STEPS = new Set([
   'test:server-slow',
   'test:scripts',
   'test:pinokio',
+  'check:cycles',
 ]);
 
 test('every STEPS[] entry is covered by a local --steps CSV or explicitly allowlisted as cloud/full-verify-only', () => {
@@ -880,6 +919,103 @@ test('parseNvidiaSmiUtil returns null on empty / unparseable output', () => {
   assert.equal(parseNvidiaSmiUtil(''), null);
   assert.equal(parseNvidiaSmiUtil('\n'), null);
   assert.equal(parseNvidiaSmiUtil('N/A\n'), null);
+});
+
+// #2164: the contention probe used to read only the FIRST GPU line
+// (parseNvidiaSmiUtil above), which on a dual-GPU box misses a busy SECOND
+// card entirely — this dev box is cuda:0 (4070 8GB) idle / cuda:1 (5070 Ti
+// 16GB) busy, and the busy card sits at index 1. maxNvidiaSmiUtil takes the
+// max across every parseable line instead.
+
+test('maxNvidiaSmiUtil takes the max across a two-GPU output, not just the first line', () => {
+  assert.equal(maxNvidiaSmiUtil('3\n97\n'), 97);
+  // Order shouldn't matter.
+  assert.equal(maxNvidiaSmiUtil('97\n3\n'), 97);
+});
+
+test('maxNvidiaSmiUtil returns null on empty / unparseable output', () => {
+  assert.equal(maxNvidiaSmiUtil(''), null);
+  assert.equal(maxNvidiaSmiUtil('\n'), null);
+  assert.equal(maxNvidiaSmiUtil('N/A\nN/A\n'), null);
+});
+
+test('maxNvidiaSmiUtil ignores unparseable lines but keeps the max of the rest', () => {
+  assert.equal(maxNvidiaSmiUtil('N/A\n85\n'), 85);
+});
+
+// The actual regression test (#2164): a two-GPU stdout whose SECOND card is
+// over threshold must be detected as contention. Before the fix,
+// detectGpuContention called parseNvidiaSmiUtil (first-line-only) here, read
+// cuda:0's idle 3%, and returned busy:false — missing the busy cuda:1 card
+// entirely. That is the exact bug that let six commits die to co-running
+// generations tonight.
+test('gpuContentionFor: busy SECOND GPU (not the first) is detected as contention', () => {
+  assert.deepEqual(gpuContentionFor('3\n97\n'), { busy: true, util: 97 });
+});
+
+test('gpuContentionFor: idle when every GPU is under threshold', () => {
+  assert.deepEqual(gpuContentionFor('3\n12\n'), { busy: false, util: 12 });
+});
+
+test('gpuContentionFor: falls back to busy:false, util:null on unparseable output', () => {
+  // Mirrors detectGpuContention's own fallback for an absent/errored nvidia-smi
+  // (e.g. CI ubuntu runners, non-NVIDIA boxes) — the spawn failure itself is
+  // handled in detectGpuContention, but an empty/garbage stdout reaching this
+  // pure function must resolve the same way.
+  assert.deepEqual(gpuContentionFor(''), { busy: false, util: null });
+  assert.deepEqual(gpuContentionFor('N/A\n'), { busy: false, util: null });
+});
+
+// #2164 review finding 1: `gpuContentionFor` itself is fully unit-tested
+// above, but `detectGpuContention` — the actual production wire, which spawns
+// a real nvidia-smi and is not exported — was never asserted to actually call
+// it. A one-line revert of detectGpuContention's body back to
+// `parseNvidiaSmiUtil(r.stdout)` (the pre-#2164 first-line-only bug) left
+// every other test in this file green. Since detectGpuContention isn't
+// directly testable without spawning a real nvidia-smi, this pins the
+// production wire at the source level instead — same technique as
+// BLESS_ENV_SHAPE in scripts/tests/run-golden-audio.test.mjs.
+function detectGpuContentionBody() {
+  const match = src.match(/function detectGpuContention\(\) \{[\s\S]*?\n\}/);
+  assert.ok(match, "could not locate detectGpuContention's function body in verify-cache.mjs");
+  return match[0];
+}
+
+test('detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly', () => {
+  const body = detectGpuContentionBody();
+  assert.match(
+    body,
+    /return gpuContentionFor\(r\.stdout\);/,
+    'detectGpuContention must return gpuContentionFor(r.stdout) — the pure decision seam — ' +
+      'not inline its own threshold check',
+  );
+  assert.doesNotMatch(
+    body,
+    /parseNvidiaSmiUtil\(/,
+    'detectGpuContention must not call parseNvidiaSmiUtil directly — that is the first-line-only ' +
+      'parser this fix moved away from; calling it here silently reintroduces the #2164 bug ' +
+      'even though gpuContentionFor itself stays correct',
+  );
+});
+
+// #2164 review finding 2: the `--query-gpu` argument is unpinned and silently
+// determines correctness. parseNvidiaSmiUtil/maxNvidiaSmiUtil both read the
+// FIRST CSV field as the utilization percentage, which is only true because
+// the query requests utilization.gpu ALONE. Widening it — e.g. to
+// `index,utilization.gpu`, the richer shape #2164's own issue body pastes
+// ("1, NVIDIA GeForce RTX 5070 Ti, 91 %, 15455 MiB") — shifts the first field
+// to the GPU index (0 or 1, always under GPU_BUSY_THRESHOLD), reintroducing
+// #2164's always-idle bug through the query string instead of the parser,
+// with every existing test still green (they all pass CSV directly, not
+// through a real nvidia-smi query).
+test('detectGpuContention pins the --query-gpu=utilization.gpu flag the parsers depend on', () => {
+  const body = detectGpuContentionBody();
+  assert.match(
+    body,
+    /'--query-gpu=utilization\.gpu'/,
+    "detectGpuContention must query ONLY utilization.gpu — adding a field (e.g. 'index,') " +
+      'shifts the first CSV column the parsers read away from the utilization percentage',
+  );
 });
 
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
@@ -962,6 +1098,141 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
   } finally {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
+  }
+});
+
+// #2216 review round 3 — restores the property the deleted wrong-premise
+// test (see git history) used to pin: stagedDiffFiles must return `null`,
+// not `[]`, when git fails outright. This is the exact distinction the
+// whole #2216 correction turns on — verify-cache's scope filter treats
+// `null` as "diff failed, run everything" (safe) but a successful `[]` as
+// "nothing staged" (skips every leg). Mutation `return null` -> `return []`
+// in stagedDiffFiles passed 88/88 and 1270/1270 with neither replacement
+// test catching it — branchDiffFiles' own null test doesn't exercise
+// stagedDiffFiles at all. Independent of any ambient GIT_INDEX_FILE:
+// verified directly that a non-repo cwd fails git's discovery entirely
+// (falls back to --no-index usage-error interpretation, exit 129) even with
+// a real, valid, absolute GIT_INDEX_FILE set — the temp-index scrub this
+// file's `honours an ambient GIT_INDEX_FILE` test proves is a separate axis.
+test('stagedDiffFiles: returns null when cwd is not a git repo', () => {
+  const dir = mkTmp(); // no git init — nothing for git to discover
+  const files = stagedDiffFiles(dir);
+  assert.equal(files, null);
+});
+
+test('stagedDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
+  // Same shape as branchDiffFiles' own "ignores an ambient GIT_DIR" test
+  // above — stagedDiffFiles must resolve git state strictly relative to its
+  // `cwd` argument, even with GIT_DIR set in the process env for an
+  // unrelated repo. This is the actual #2169 hazard class this sweep closes
+  // (repository redirection); it does not depend on an ordinary git hook
+  // exporting GIT_DIR (it doesn't — see git-env.mjs's header) to be a real
+  // risk, since an operator's shell or another script's tooling can.
+  //
+  // Also isolates ambient GIT_INDEX_FILE around this call (save/clear/
+  // restore), which this test is NOT exercising — found live while landing
+  // #2216: running this suite from inside a REAL pre-commit hook in a git
+  // WORKTREE (as CLAUDE.md's branching workflow mandates for every non-
+  // trivial change — i.e. every real run of this hook), GIT_INDEX_FILE is
+  // an ABSOLUTE path into `.git/worktrees/<name>/index` — not the relative
+  // `.git/index` a primary checkout gets — and stagedDiffFiles deliberately
+  // does NOT scrub it (see git-env.mjs's header). Left uncontrolled, that
+  // real, unrelated index leaks into this test's throwaway `repoDir` spawn:
+  // `git diff --cached` resolves the repository correctly via `cwd` (GIT_DIR
+  // is scrubbed) but reads the WRONG index — the real worktree's, referencing
+  // blobs this fixture's object store has never heard of — and fails with
+  // `fatal: unable to read <sha>`, not a clean mismatch. That failure is
+  // real and correctly demonstrates why GIT_INDEX_FILE isolation belongs to
+  // the caller when the property under test is GIT_DIR specifically, the
+  // same way `gitAt()`'s own fixture-setup helper above already isolates it.
+  const repoDir = makeGitFixture();
+  writeFileSync(join(repoDir, 'staged.txt'), 'staged', 'utf8');
+  gitAt(repoDir, ['add', 'staged.txt']);
+
+  const bogusGitDir = join(mkTmp(), 'unrelated-repo', '.git');
+  const prevGitDir = process.env.GIT_DIR;
+  const prevIndexFile = process.env.GIT_INDEX_FILE;
+  process.env.GIT_DIR = bogusGitDir;
+  delete process.env.GIT_INDEX_FILE;
+  try {
+    const files = stagedDiffFiles(repoDir);
+    assert.deepEqual(files, ['staged.txt']);
+  } finally {
+    if (prevGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = prevGitDir;
+    if (prevIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = prevIndexFile;
+  }
+});
+
+// --- #2216 correction: stagedDiffFiles must HONOUR the ambient GIT_INDEX_FILE,
+// --- not scrub it. This is the important test — it is the concrete case the
+// --- original (wrong) decision would have broken. -------------------------
+//
+// Native git routes ordinary commands through a TEMPORARY index. Measured
+// inside a real pre-commit hook (git 2.54.0.windows.1): `git commit -a` and
+// `git commit -- <path>` hand the hook an absolute path to a *.lock temp
+// index, not `.git/index`. stagedDiffFiles() exists specifically to read the
+// index the in-flight commit is about — scrubbing GIT_INDEX_FILE would make
+// it read `.git/index` (empty, or stale) instead of the real staged set,
+// and a successful-but-empty `[]` does NOT trip verify-cache's "diff failed,
+// run everything" safety branch (only `null` does) — every leg would report
+// `[skip] … (out of scope)` and the commit gate would go green having
+// verified nothing. See scripts/git-env.mjs's header for the full account.
+test('stagedDiffFiles: honours an ambient GIT_INDEX_FILE pointing at a temporary index (git commit -a / -- <path> shape)', () => {
+  const repoDir = makeGitFixture();
+
+  // Seed the temp index as a byte-for-byte copy of the real index WHILE it
+  // still matches HEAD (nothing staged yet) — this is what git itself does
+  // for `commit -a`'s temp index: a copy of the real index with working-tree
+  // changes applied, not a blank slate. A blank/fresh index compared with
+  // `--cached` would show every HEAD-tracked file as "removed", which is a
+  // different (and misleading) shape than the real hazard this test proves.
+  const tempIndexPath = join(mkTmp(), 'temp-index.lock');
+  copyFileSync(join(repoDir, '.git', 'index'), tempIndexPath);
+
+  // The REAL index (`.git/index`) gets a different staged file than the
+  // temp index — this is what makes the assertion below meaningful: if
+  // stagedDiffFiles read the wrong index, it would report the WRONG file,
+  // not just an empty or null result.
+  writeFileSync(join(repoDir, 'via-real-index.txt'), 'real', 'utf8');
+  gitAt(repoDir, ['add', 'via-real-index.txt']);
+
+  // Populate the temp index with a DIFFERENT file — the shape a hook hands
+  // a `git commit -a` / `git commit -- <path>` invocation, where the temp
+  // index reflects the files that invocation is actually committing.
+  writeFileSync(join(repoDir, 'via-temp-index.txt'), 'temp', 'utf8');
+  const {
+    GIT_DIR: _GIT_DIR,
+    GIT_WORK_TREE: _GIT_WORK_TREE,
+    GIT_INDEX_FILE: _GIT_INDEX_FILE,
+    GIT_PREFIX: _GIT_PREFIX,
+    ...cleanEnv
+  } = process.env;
+  const populateTempIndex = spawnSync('git', ['add', 'via-temp-index.txt'], {
+    cwd: repoDir,
+    encoding: 'utf8',
+    env: { ...cleanEnv, GIT_INDEX_FILE: tempIndexPath },
+  });
+  assert.equal(populateTempIndex.status, 0, populateTempIndex.stderr);
+
+  const prevIndexFile = process.env.GIT_INDEX_FILE;
+  // Simulates the ambient env a real pre-commit hook hands its child
+  // process for `git commit -a` / `git commit -- <path>` — GIT_DIR is
+  // deliberately NOT set here (an ordinary hook doesn't export it).
+  process.env.GIT_INDEX_FILE = tempIndexPath;
+  try {
+    const files = stagedDiffFiles(repoDir);
+    assert.deepEqual(
+      files,
+      ['via-temp-index.txt'],
+      'stagedDiffFiles must read the ambient (temporary) index, not .git/index — ' +
+        'returning the real-index file, an empty array, or null all indicate the ' +
+        'ambient GIT_INDEX_FILE was scrubbed instead of honoured',
+    );
+  } finally {
+    if (prevIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = prevIndexFile;
   }
 });
 

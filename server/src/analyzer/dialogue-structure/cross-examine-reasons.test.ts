@@ -37,7 +37,7 @@ describe('crossExamine reasons', () => {
     for (let i = 0; i < result.sentences.length; i++) {
       expect(result.reasons[i].index).toBe(i);
       expect(typeof result.reasons[i].reason).toBe('string');
-      expect(['confirmed', 'corrected', 'flagged', 'lumped']).toContain(result.reasons[i].bucket);
+      expect(['confirmed', 'corrected', 'flagged', 'unresolved', 'lumped']).toContain(result.reasons[i].bucket);
     }
     // The confirmed line is NOT flagged, yet still carries a reason — the whole point.
     expect(result.reasons[0].bucket).toBe('confirmed');

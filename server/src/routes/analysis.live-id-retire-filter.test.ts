@@ -250,6 +250,7 @@ describe('runMainAnalyzerJob — the recording boundary refuses a retirement nam
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -293,7 +294,8 @@ describe('runMainAnalyzerJob — the recording boundary refuses a retirement nam
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
       rmSync(bookDir, { recursive: true, force: true });
-      process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+      else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
     }
   }, 60_000);
 });

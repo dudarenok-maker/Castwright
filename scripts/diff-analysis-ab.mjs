@@ -47,7 +47,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 /* ── Pure helpers (exported for the colocated unit test; no I/O, no TS imports
    so the test can import them under plain `node --test`) ──────────────────── */
@@ -383,7 +383,7 @@ async function main(argv) {
 
 /* Only run the CLI when invoked directly — importing the pure helpers (the
    colocated unit test) must not trigger argument parsing or the TS import. */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   main(process.argv.slice(2)).catch((err) => {
     process.stderr.write(`diff-analysis-ab: ${String(err?.stack ?? err)}\n`);
     process.exit(1);

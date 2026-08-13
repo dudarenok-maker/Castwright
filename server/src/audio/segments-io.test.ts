@@ -15,6 +15,7 @@ import {
   collectRenderedTextHashesByChapter,
   textHashForStale,
 } from './segments-io.js';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 
 let bookDir: string;
 
@@ -37,6 +38,21 @@ function writeSegmentsArray(slug: string, segments: Array<Record<string, unknown
   writeFileSync(
     join(bookDir, 'audio', `${slug}.segments.json`),
     JSON.stringify({ chapterId: Number(slug.slice(0, 2)), segments }),
+  );
+}
+
+/** #2129 — the same shape as `writeSegmentsArray`, plus the render-time
+    `castHistorySeq` stamp `isAudioCurrent` compares against the id-history
+    markers. `undefined` (the default) omits the field entirely from the
+    written JSON, mirroring a pre-#2128 render that predates the stamp. */
+function writeSegmentsArrayWithSeq(
+  slug: string,
+  castHistorySeq: number | undefined,
+  segments: Array<Record<string, unknown>>,
+) {
+  writeFileSync(
+    join(bookDir, 'audio', `${slug}.segments.json`),
+    JSON.stringify({ chapterId: Number(slug.slice(0, 2)), castHistorySeq, segments }),
   );
 }
 
@@ -100,12 +116,18 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
 
   /* Small helper mirroring cast-resolve.test.ts's `h` — this collector now
      takes the WHOLE loaded `CastIdHistory` shape (#2092/#2089 task 3) rather
-     than a bare supersededBy map plus a separately-threaded rejected array. */
+     than a bare supersededBy map plus a separately-threaded rejected array.
+     #2129 — widened to the FULL `CastIdHistory` type (including `schema`),
+     matching the collector's own Task 7 widening; every test in this
+     describe block resolves through `resolution`/`rejectedAgainst` only
+     (never `isAudioCurrent`'s seq/history markers), so omitting
+     `seq`/`recordedAtSeq` here is fine — those tests read `'unknown'`/
+     `false` off the predicate's early branches, same as before this task. */
   function h(
     supersededBy: Record<string, string> = {},
     extra?: { rejected?: string[]; rejectedPairs?: Array<{ from: string; to: string }> },
-  ) {
-    return { supersededBy, ...extra };
+  ): CastIdHistory {
+    return { schema: 1, supersededBy, ...extra };
   }
 
   it('maps an orphaned characterId to who actually rendered it + the voice used, tagged unresolved', async () => {
@@ -130,6 +152,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 1,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -148,6 +171,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 1,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -196,6 +220,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 1,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -215,6 +240,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 1,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -232,6 +258,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'alias',
         resolvedCharacterId: 'mairin',
         segments: 1,
+        audioCurrent: 'unknown',
         rejectedAgainst: undefined,
       },
     });
@@ -250,6 +277,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'normalised',
         resolvedCharacterId: 'the-mairin',
         segments: 1,
+        audioCurrent: 'unknown',
         rejectedAgainst: undefined,
       },
     });
@@ -273,6 +301,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'normalised',
         resolvedCharacterId: 'the-mairin',
         segments: 1,
+        audioCurrent: 'unknown',
         rejectedAgainst: undefined,
       },
     });
@@ -304,6 +333,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 1,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -330,6 +360,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 1,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -351,6 +382,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'alias',
         resolvedCharacterId: 'mairin',
         segments: 1,
+        audioCurrent: 'unknown',
         rejectedAgainst: undefined,
       },
     });
@@ -373,6 +405,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
           resolution: 'unresolved',
           resolvedCharacterId: undefined,
           segments: 1,
+          audioCurrent: false,
           rejectedAgainst: ['mairin'],
         },
       });
@@ -395,6 +428,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
           resolution: 'alias',
           resolvedCharacterId: 'mairin',
           segments: 1,
+          audioCurrent: 'unknown',
           rejectedAgainst: ['mr-marrow'],
         },
       });
@@ -416,6 +450,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
           resolution: 'alias',
           resolvedCharacterId: 'mairin',
           segments: 1,
+          audioCurrent: 'unknown',
           rejectedAgainst: undefined,
         },
       });
@@ -564,6 +599,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 2,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
@@ -589,9 +625,88 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 2,
+        audioCurrent: false,
         rejectedAgainst: undefined,
       },
     });
+  });
+});
+
+describe('collectOrphanedCharacterFallbacks — audioCurrent (#2129)', () => {
+  /* Real `CastIdHistory` fixtures — `h()` above (declared inside the parent
+     describe) omits `schema`/`seq`/`recordedAtSeq`, which is fine for the
+     resolution-only tests but `isAudioCurrent` needs the real shape, so
+     these are built inline per test instead of reusing `h`. */
+  const aliasCast = [{ id: 'mairin' }];
+
+  it('reports an alias-resolved id whose render predates its marker as NOT current', async () => {
+    // 'mayrin' resolves via the history side-table (tier 2, 'alias') onto the
+    // live 'mairin'. The marker recorded when that alias was ESTABLISHED is
+    // seq 3; this chapter rendered at seq 1 — BEFORE the marker — so the
+    // rendered bytes predate the alias and must not read as current.
+    writeSegmentsArrayWithSeq('01-one', 1, [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    const out = await collectOrphanedCharacterFallbacks(bookDir, chapters, aliasCast, {
+      schema: 1,
+      supersededBy: { mayrin: 'mairin' },
+      seq: 4,
+      recordedAtSeq: { mayrin: 3 },
+    });
+    expect(out.mayrin.resolution).toBe('alias'); // unchanged axis
+    expect(out.mayrin.audioCurrent).toBe(false); // new axis
+  });
+
+  it('reports an alias-resolved id re-rendered above its marker as current', async () => {
+    // Same alias, but this chapter rendered at seq 5 — AFTER the seq-3
+    // marker — so the rendered bytes reflect the current target.
+    writeSegmentsArrayWithSeq('01-one', 5, [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    const out = await collectOrphanedCharacterFallbacks(bookDir, chapters, aliasCast, {
+      schema: 1,
+      supersededBy: { mayrin: 'mairin' },
+      seq: 5,
+      recordedAtSeq: { mayrin: 3 },
+    });
+    expect(out.mayrin.audioCurrent).toBe(true);
+  });
+
+  it('reports unknown for a render with no stamp at all (pre-#2128 render)', async () => {
+    writeSegmentsArrayWithSeq('01-one', undefined, [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    const out = await collectOrphanedCharacterFallbacks(bookDir, chapters, aliasCast, {
+      schema: 1,
+      supersededBy: { mayrin: 'mairin' },
+      seq: 4,
+      recordedAtSeq: { mayrin: 3 },
+    });
+    expect(out.mayrin.audioCurrent).toBe('unknown');
+  });
+
+  it('aggregates across chapters — stale in ANY chapter is not current', async () => {
+    // ch1 rendered above the marker (current); ch2 rendered below it (stale).
+    // The aggregate for the id must be `false`, not "mostly fine".
+    writeSegmentsArrayWithSeq('01-one', 5, [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    writeSegmentsArrayWithSeq('02-two', 1, [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    const out = await collectOrphanedCharacterFallbacks(bookDir, chapters, aliasCast, {
+      schema: 1,
+      supersededBy: { mayrin: 'mairin' },
+      seq: 5,
+      recordedAtSeq: { mayrin: 3 },
+    });
+    expect(out.mayrin.segments).toBe(2);
+    expect(out.mayrin.audioCurrent).toBe(false);
+  });
+
+  it('leaves resolution and rejectedAgainst untouched (#2092/#2089 axis pinned against the split)', async () => {
+    // 'mayrin' does not resolve at all here (empty supersededBy, and
+    // 'mayrin'/'mairin' differ by more than separator/case, so no
+    // normalised-tier match) — genuinely unresolved, same as before this
+    // task. The rejectedPairs chip is independent of resolution/currency.
+    writeSegmentsArrayWithSeq('01-one', undefined, [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    const out = await collectOrphanedCharacterFallbacks(bookDir, chapters, aliasCast, {
+      schema: 1,
+      supersededBy: {},
+      rejectedPairs: [{ from: 'mayrin', to: 'mairin' }],
+    });
+    expect(out.mayrin.resolution).toBe('unresolved');
+    expect(out.mayrin.rejectedAgainst).toEqual(['mairin']);
   });
 });
 

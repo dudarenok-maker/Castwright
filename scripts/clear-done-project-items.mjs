@@ -10,10 +10,11 @@
 //   node scripts/clear-done-project-items.mjs           (dry-run — lists Done items)
 //   node scripts/clear-done-project-items.mjs --apply   (archives them)
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { gh, ghSpawn } from './gh.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -21,7 +22,15 @@ const CONFIG_PATH = resolve(repoRoot, 'docs', 'backlog-project-config.json');
 const PROJECT_OWNER = 'dudarenok-maker';
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
-function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exit(1); }
+// process.exit() truncates pending async stdout writes on POSIX pipes (sync
+// on Windows, async on Linux/macOS — see build-release-zip.mjs's fix for
+// #2297/the same defect class; this script runs unattended on ubuntu-latest
+// via release.yml, exactly the affected environment). die() throws instead
+// of exiting directly so the process only ever exits naturally, once the
+// event loop drains; see the entry guard at the bottom of this file for the
+// single catch.
+class CliError extends Error {}
+function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exitCode = 1; throw new CliError(msg); }
 // Surfaces what was archived on the GitHub Actions run summary page (not just
 // buried step logs) — the release.yml job runs --apply unattended on every
 // tag with no human dry-run checkpoint, so this is the audit trail for
@@ -31,9 +40,8 @@ function writeStepSummary(lines) {
   if (!summaryPath) return;
   appendFileSync(summaryPath, `${lines.join('\n')}\n`);
 }
-function gh(args) { return execFileSync('gh', args, { cwd: repoRoot, encoding: 'utf8' }); }
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 
@@ -112,12 +120,13 @@ function listDoneItems(config) {
 }
 
 function parseArgs(argv) {
-  const out = { apply: false };
+  const out = { apply: false, help: false };
   for (const a of argv) {
     if (a === '--apply') out.apply = true;
     else if (a === '--help' || a === '-h') {
-      info('Usage: node scripts/clear-done-project-items.mjs [--apply]');
-      process.exit(0);
+      // Defer the print + exit to main() — see the CliError/die note above.
+      out.help = true;
+      break;
     } else die(`Unknown argument: ${a}`);
   }
   return out;
@@ -125,6 +134,10 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    info('Usage: node scripts/clear-done-project-items.mjs [--apply]');
+    return;
+  }
   if (!existsSync(CONFIG_PATH)) die(`Not found: ${CONFIG_PATH} — run the Task 1 board setup first.`);
   if (!ghAvailable()) die('`gh` not found. Install the GitHub CLI + `gh auth login`.');
 
@@ -136,7 +149,7 @@ async function main() {
 
   if (!args.apply) {
     info('\n[DRY-RUN] Nothing archived. Re-run with --apply to archive these.');
-    process.exit(0);
+    return;
   }
 
   for (const item of doneItems) {
@@ -151,7 +164,13 @@ async function main() {
   ]);
 }
 
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
-  await main();
+if (isDirectlyInvoked(import.meta.url)) {
+  main().catch((err) => {
+    // die() already wrote its own [FAIL] line and set exitCode before
+    // throwing a CliError; only print here for a genuinely unexpected error.
+    if (!(err instanceof CliError)) {
+      process.stderr.write(`[FAIL] ${err.stack ?? String(err)}\n`);
+    }
+    process.exitCode = 1;
+  });
 }

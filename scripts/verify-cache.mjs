@@ -9,9 +9,11 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
 import { resolveVenvPython } from './run-sidecar-tests.mjs';
+import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -79,8 +81,31 @@ export const STEPS = [
          intended way to add a drift case) would skip the very test it adds.
          Same #1847 trap test:pinokio's comment below documents. */
       globs: [
-        'scripts/**/*.{mjs,cjs}',
+        /* #2216 review round 3 — widened from *.{mjs,cjs} to match the
+           SCANNED_EXTENSIONS both scripts/tests/gh-chokepoint.test.mjs and
+           scripts/tests/git-scrub.test.mjs actually scan (.mjs/.cjs/.js/
+           .mts/.cts/.ts). This was a real, not just theoretical, gap: four
+           .mts files already exist under scripts/ today (audit-audio-asr-
+           drift.mts, audit-missing-speakers.mts, audit-stage2-coverage.mts,
+           repair-missing-speakers.mts — none currently spawns git/gh, so no
+           live miss yet, but a future one would print test:hooks [cached]
+           on exactly the diff that introduced it). .js/.ts currently match
+           no file under scripts/, so this costs nothing today. */
+        'scripts/**/*.{mjs,cjs,js,mts,cts,ts}',
         'scripts/tests/fixtures/**',
+        /* pinokio-scripts/** is an input because scripts/tests/git-scrub.test.mjs
+           (#2216) scans that whole directory for unscrubbed `git` spawns — the
+           first hooks test whose scan surface reaches outside scripts/** at
+           all. Without this glob, a pinokio-scripts-only diff (e.g. deleting
+           `env: scrubGitEnv()` from resolve-release.js's `git checkout` — the
+           highest-risk site the guard covers, since it runs on an end user's
+           machine with no `cwd` at all) prints test:hooks [cached] locally and
+           schedules only test:pinokio in cloud CI (ci-scope.mjs derives both
+           from this same STEPS[] entry) — neither of which runs
+           git-scrub.test.mjs. Same #1847 trap the entries above already
+           document, just for a directory the guard reads rather than a single
+           runtime-read file. */
+        'pinokio-scripts/**',
         /* .github/workflows/** is an input because this step's own tests
            (verify-cache.test.mjs) assert stepTouchedByDiff against real
            workflow paths, so a workflow-only diff must stay in scope for the
@@ -192,6 +217,37 @@ export const STEPS = [
         // schemas.ts is reached from diff-analysis-ab.mjs, which imports it
         // with a .js specifier per the TypeScript convention.
         'server/src/handoff/schemas.ts',
+        // #2012: knob-docs-sync.test.mjs reads BOTH of these as TEXT at
+        // RUNTIME (regex extraction, not a module-graph edge) to assert every
+        // registry.ts KNOBS[].label has a matching Advanced-Settings.md table
+        // row. Without them here, a diff to either file alone (exactly the
+        // shape that could drift the two apart) prints [cached] and the
+        // guard never re-runs — same #1847 runtime-read trap as fixtures/**
+        // above.
+        'server/src/config/registry.ts',
+        'docs/wiki/Advanced-Settings.md',
+        // #2053: the SAME trap one file over (PR #2159 review, finding 3).
+        // check-import-cycles.test.mjs asserts this allowlist's STRUCTURE and
+        // runs under test:hooks — but the file was an input to `check:cycles`
+        // only, which is cloud/full-verify-only. An allowlist-only commit
+        // therefore left test:hooks [cached] locally and skipped its CI leg,
+        // so the structural test never ran on the one diff shape it exists
+        // to catch.
+        'server/madge-cycles-allowlist.json',
+        // ops-55 (#2241): review-gate-mechanism.test.mjs reads all three of
+        // these as TEXT at RUNTIME (frontmatter + prose regex, not a
+        // module-graph edge) to assert the mandated PR-review-gate mechanism
+        // stays model-invocable and cross-referenced. None sits under this
+        // step's own globs above (.claude/skills/** and root CLAUDE.md are
+        // both outside scripts/**, pinokio-scripts/**, .github/**, .husky/**)
+        // — without these entries, a diff touching only .claude/skills/** or
+        // CLAUDE.md prints test:hooks [cached] locally and (ci-scope.mjs
+        // derives its scope from this same STEPS[] entry) skips the guard's
+        // CI leg too, on exactly the diff shape that would break it. Same
+        // #1847 runtime-read trap as fixtures/** above.
+        '.claude/skills/pr-review-gate/SKILL.md',
+        '.claude/skills/model-routing/SKILL.md',
+        'CLAUDE.md',
       ],
       includeLockfiles: ['root'],
     },
@@ -288,6 +344,29 @@ export const STEPS = [
         'server/package.json',
       ],
       includeLockfiles: ['server'],
+    },
+  },
+  {
+    /* #2053: madge's --circular pass over server/src is not free on this
+       graph, so (per the repo-owner decision recorded on the issue) it's
+       cloud/full-`npm run verify`-only, same tier as test:e2e/test:server-
+       slow/test:scripts/test:pinokio below — NOT one of the three local
+       `--steps` CSVs in package.json. See verify-cache.test.mjs's
+       CLOUD_OR_FULL_VERIFY_ONLY_STEPS allowlist, which this name must also
+       be added to or that guard fails the build (#2120/#2154 shipped this
+       exact trap once already). */
+    name: 'check:cycles',
+    inputs: {
+      globs: ['server/src/**'],
+      extraFiles: [
+        'server/madge-cycles-allowlist.json',
+        // The madge VERSION is pinned inside this script's `npx --yes
+        // madge@8.0.0` spawn line rather than in server/package.json (see the
+        // script header for why it is not a devDependency), so this one file
+        // covers both "the guard logic changed" and "the tool version
+        // changed". No server manifest/lockfile input is needed here.
+        'scripts/check-import-cycles.mjs',
+      ],
     },
   },
   {
@@ -637,10 +716,14 @@ export function stepTouchedByDiff(step, diffFiles) {
 
 // Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
 // disables the scope filter and runs everything; never skip on uncertainty).
-function stagedDiffFiles(cwd) {
+// Exported (#2216) so its scrub (repo-location vars only — see gitEnv() below)
+// can be unit-tested directly, including that it deliberately does NOT touch
+// GIT_INDEX_FILE — see scripts/tests/verify-cache.test.mjs.
+export function stagedDiffFiles(cwd) {
   const r = spawnSync('git', ['diff', '--cached', '--name-only'], {
     cwd,
     encoding: 'utf8',
+    env: gitEnv(),
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -659,25 +742,35 @@ function stagedDiffFiles(cwd) {
 // files (branch fully merged into main, running directly on main, or a
 // commit-less branch) legitimately returns an empty array — the scope
 // filter correctly skips every step for that, which is fine given
-// verify.yml is now the required backstop. Exported (unlike
-// stagedDiffFiles) so it can be unit-tested directly.
+// verify.yml is now the required backstop. Exported so it can be unit-tested
+// directly (as of #2216, stagedDiffFiles above is too, for the same reason).
 //
-// Strips ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX before
-// spawning: this function is invoked with an explicit `cwd` and must resolve
-// git state strictly relative to it. Without stripping, a caller running
-// inside an enclosing git process that already has these set (e.g. this
-// very function running inside the pre-push hook it's part of) would have
-// git resolve against the ENCLOSING process's repo instead of `cwd` — harmless
-// when `cwd` happens to be that same repo (the real pre-push path), but wrong
-// whenever `cwd` points elsewhere (exactly what this file's own unit tests do).
+// Strips the ambient GIT_DIR/GIT_WORK_TREE/GIT_OBJECT_DIRECTORY/GIT_COMMON_DIR
+// repo-LOCATION vars (scrubGitEnv, scripts/git-env.mjs) plus GIT_PREFIX before
+// spawning: every function in this file that calls git is invoked with an
+// explicit `cwd` and must resolve git state strictly relative to it. Without
+// stripping, a caller running inside an enclosing process that already has
+// one of these set (an operator's shell export, or a script invoked from
+// inside another repo's tooling — NOT an ordinary git hook, which doesn't
+// export GIT_DIR/GIT_WORK_TREE) would have git resolve against the ENCLOSING
+// process's repo instead of `cwd` — harmless when `cwd` happens to be that
+// same repo, but wrong whenever `cwd` points elsewhere (exactly what this
+// file's own unit tests do). GIT_PREFIX is not one of scrubGitEnv's
+// repo-location keys (it affects relative-path interpretation within an
+// already-resolved repo, not which repo is resolved) but is stripped here
+// too for the same cwd-pinning reason.
+//
+// Deliberately does NOT strip GIT_INDEX_FILE (#2216 correction — see
+// git-env.mjs's header for the full account). stagedDiffFiles() above reads
+// the index the in-flight commit is about; a hook stages `git commit -a` and
+// `git commit -- <path>` through a TEMPORARY index and hands this function
+// exactly that path via GIT_INDEX_FILE. Scrubbing it would make
+// stagedDiffFiles() read `.git/index` instead of the real temp index — the
+// wrong staged set, or an empty one, which (being a successful `[]`, not a
+// `null`) would NOT trip verify-cache's "diff failed, run everything" safety
+// branch. See scripts/tests/verify-cache.test.mjs for the behavioural proof.
 function gitEnv() {
-  const {
-    GIT_DIR: _GIT_DIR,
-    GIT_WORK_TREE: _GIT_WORK_TREE,
-    GIT_INDEX_FILE: _GIT_INDEX_FILE,
-    GIT_PREFIX: _GIT_PREFIX,
-    ...cleanEnv
-  } = process.env;
+  const { GIT_PREFIX: _GIT_PREFIX, ...cleanEnv } = scrubGitEnv();
   return cleanEnv;
 }
 
@@ -709,7 +802,24 @@ export function branchDiffFiles(cwd) {
 // the test legs. When we detect a busy GPU we throttle test concurrency (soft —
 // warn + dial down, never block).
 
-const GPU_BUSY_THRESHOLD = 40; // % utilization
+// Utilisation-only, deliberately (#2164): VRAM occupancy does NOT count as
+// contention. The failure this guard prevents is fs/tmpdir and CPU
+// contention from *active* work (docs/features/archive/45-vitest-pool-tuning.md:
+// tmpdir contention, AV/OneDrive interleaving, pool pressure) — a model
+// parked in VRAM burns no CPU and touches no tmpdir. This box deliberately
+// keeps models resident (PRELOAD_KOKORO, the button-loaded Qwen Base), so a
+// residency trigger would pin LOW_CONCURRENCY=1 near-permanently while
+// preventing no crash. The #2164 incident's busy card was at 91% util —
+// squarely inside what max-across-GPUs already catches below. Host RAM
+// pressure (that incident also had Ollama holding ~14GB of system RAM) is
+// real contention neither utilisation nor VRAM occupancy measures — known
+// out of scope, not implemented.
+//
+// Exported so run-golden-audio.mjs's own bless-time contention warning shares
+// this exact value instead of redeclaring it (#2164 review finding 4) — two
+// independent `= 40`s meant raising one could silently leave the other
+// stale despite a comment claiming they mirror.
+export const GPU_BUSY_THRESHOLD = 40; // % utilization
 
 // Parse the first GPU's utilization (%) from nvidia-smi CSV output. Returns a
 // number, or null if unparseable / no GPU line.
@@ -724,8 +834,52 @@ export function parseNvidiaSmiUtil(stdout) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Max utilization (%) across EVERY GPU line in nvidia-smi CSV output — unlike
+// parseNvidiaSmiUtil above, which deliberately stays a single-line parser: that
+// is its documented contract (see its own doc comment; #2036 chose not to
+// widen it), and this function composes over it rather than duplicating it —
+// re-applying parseNvidiaSmiUtil one line at a time and taking the max. On a
+// multi-GPU box the busy card is not always index 0 (#2164: this dev box is
+// cuda:0 4070 8GB idle / cuda:1 5070 Ti 16GB busy) — a first-line-only read
+// misses exactly the contention this guard exists to catch. Lives here (moved
+// from a local copy in run-golden-audio.mjs, #2036) so both callers share one
+// implementation; run-golden-audio.mjs now imports this rather than keeping
+// its own. Returns the max over every parseable line, or null when none parse.
+export function maxNvidiaSmiUtil(stdout) {
+  if (!stdout) return null;
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let max = null;
+  for (const line of lines) {
+    const util = parseNvidiaSmiUtil(line);
+    if (util !== null && (max === null || util > max)) max = util;
+  }
+  return max;
+}
+
+// Pure decision seam (#2164): given raw nvidia-smi stdout, decide contention.
+// Split out from detectGpuContention so the decision is unit-testable without
+// spawning a real nvidia-smi — mirrors how run-golden-audio.mjs already splits
+// gpuBusyWarningFor out of warnIfGpuBusyForBless.
+export function gpuContentionFor(stdout) {
+  const util = maxNvidiaSmiUtil(stdout);
+  return { busy: util !== null && util >= GPU_BUSY_THRESHOLD, util };
+}
+
 // Returns { busy, util }. nvidia-smi absent / errors → { busy:false, util:null }
 // (e.g. CI ubuntu runners, non-NVIDIA boxes). Cheap (~100ms).
+//
+// The `--query-gpu=utilization.gpu` argument is load-bearing and must request
+// ONLY that field: both parseNvidiaSmiUtil and maxNvidiaSmiUtil blindly read
+// the FIRST CSV column of each line as the utilization percentage. Widening
+// the query — e.g. to `index,utilization.gpu`, the richer shape #2164's own
+// issue body pastes ("1, NVIDIA GeForce RTX 5070 Ti, 91 %, 15455 MiB") — would
+// shift that first column to the GPU index (0/1, always under threshold) and
+// silently reintroduce #2164's always-idle bug through the query string
+// instead of the parser. Pinned by a source-regex test in
+// scripts/tests/verify-cache.test.mjs.
 function detectGpuContention() {
   const r = spawnSync(
     'nvidia-smi',
@@ -733,8 +887,7 @@ function detectGpuContention() {
     { encoding: 'utf8', timeout: 5000 },
   );
   if (r.error || r.status !== 0) return { busy: false, util: null };
-  const util = parseNvidiaSmiUtil(r.stdout);
-  return { busy: util !== null && util >= GPU_BUSY_THRESHOLD, util };
+  return gpuContentionFor(r.stdout);
 }
 
 // Tool fingerprints — strings that change when the relevant tool's
@@ -785,10 +938,22 @@ export function sidecarFingerprint(
   return `${mtime}:${ver}`;
 }
 
+// Full tracked-plus-untracked-non-ignored file list, used to hash every
+// step's input files below. `--cached` reads the same index stagedDiffFiles()
+// does, so it inherits the same #2216 property: gitEnv() does not scrub
+// GIT_INDEX_FILE, so during an in-flight `git commit -a` this reads the
+// hook's TEMPORARY index (e.g. `.git/index.lock`), not `.git/index` — an
+// unstated side effect of composing scrubGitEnv() uniformly across every
+// function in this file, not something this function was written for on
+// purpose. It fails safe either way: if that temp index isn't readable at
+// the moment this runs, `r.status !== 0` and this returns `null`, and the
+// caller below (`if (!fileList)`) falls back to running every step uncached
+// rather than hashing against a wrong or incomplete file list.
 function gitFileList(cwd) {
   const r = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
     cwd,
     encoding: 'utf8',
+    env: gitEnv(),
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -814,10 +979,21 @@ function formatSecs(ms) {
 }
 
 // Top-level orchestrator. Returns process exit code.
+
+// Vitest fork-pool worker crash max attempts. Roughly 30% of runs on this dev box
+// (and reported cross-platform) suffer TWO crashes in a single step under
+// resource contention — a single retry (2 total attempts) is exhausted ~50% of
+// the time. Evidence: #2192 implementation branch (4 occurrences in ~13 full
+// server-suite runs). A cap of 3 total attempts (1 initial + 2 retries) lets
+// nearly every run that crashes succeed; 4+ adds no practical value and risks
+// masking a deeper instability. (A genuine test failure is never retried — only
+// a crash signature that matches isVitestPoolCrash does.)
+const MAX_POOL_ATTEMPTS = 3;
+
 /* Vitest fork-pool steps that can suffer a transient WORKER crash (the process
    dies) under resource contention (busy GPU / a parallel session) — distinct
-   from a red test. These warrant ONE automatic retry. See issue #848 +
-   docs/features/archive/45-vitest-pool-tuning.md. */
+   from a red test. These warrant up to MAX_POOL_ATTEMPTS automatic attempts
+   (1 initial + 2 retries). See issue #848 + docs/features/archive/45-vitest-pool-tuning.md. */
 const RETRIABLE_POOL_STEPS = new Set(['test:server', 'test:server-slow']);
 
 /** True iff `stderr` carries a vitest fork-pool PROCESS crash signature (a worker
@@ -831,8 +1007,7 @@ export function isVitestPoolCrash(stderr) {
 
 /** Run one pipeline step (`npm run <name>`) and return its exit code. Retriable
     pool steps stream stdout LIVE but CAPTURE stderr so a fork-pool crash can be
-    detected and the step retried exactly once; every other step inherits both
-    streams unchanged. */
+    detected and the step retried; every other step inherits both streams unchanged. */
 function runStepProcess(stepName, { cwd, env }) {
   const runOnce = (capture) => {
     const r = spawnSync('npm', ['run', stepName], {
@@ -848,14 +1023,21 @@ function runStepProcess(stepName, { cwd, env }) {
     return { code: r.status ?? 1, stderr };
   };
   if (!RETRIABLE_POOL_STEPS.has(stepName)) return runOnce(false).code;
-  let res = runOnce(true);
-  if (res.code !== 0 && isVitestPoolCrash(res.stderr)) {
-    console.log(
-      `[retry] ${stepName} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running once`,
-    );
-    res = runOnce(true);
+  let lastRes = null;
+  for (let attempt = 1; attempt <= MAX_POOL_ATTEMPTS; attempt += 1) {
+    const res = runOnce(true);
+    lastRes = res;
+    if (res.code === 0 || !isVitestPoolCrash(res.stderr)) {
+      return res.code; // success or a genuine red test (not a crash)
+    }
+    if (attempt < MAX_POOL_ATTEMPTS) {
+      console.log(
+        `[retry] ${stepName} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running (attempt ${attempt + 1} of ${MAX_POOL_ATTEMPTS})`,
+      );
+    }
   }
-  return res.code;
+  // Exhausted all MAX_POOL_ATTEMPTS attempts on crashes — return the last exit code
+  return lastRes.code;
 }
 
 export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
@@ -1007,15 +1189,9 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
   return 0;
 }
 
-const isDirectInvocation = (() => {
-  const arg1 = process.argv[1];
-  if (!arg1) return false;
-  try {
-    return import.meta.url === pathToFileURL(arg1).href;
-  } catch {
-    return false;
-  }
-})();
+// See scripts/lib/is-main-module.mjs (#2291) for the symlink/junction guard
+// mechanism.
+const isDirectInvocation = isDirectlyInvoked(import.meta.url);
 
 if (isDirectInvocation) {
   const here = dirname(fileURLToPath(import.meta.url));

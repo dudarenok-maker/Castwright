@@ -57,6 +57,29 @@ function resolveKnobInner(knob: ConfigKnob, reconcileDeviceUuid: boolean): KnobV
   return { key: knob.key, effective: knob.default, source: 'default', locked: false, overridden: false };
 }
 
+/** True when `knob.env` is set in the ambient environment to a value
+    `resolveKnobInner` will NOT use as the knob's env-sourced value — either
+    it fails `coerceAndValidate` (rejected, with the one-shot warning already
+    logged), or it's blank/whitespace-only, which `resolveKnobInner` treats
+    identically to "no env var at all" (falls through to override/default
+    WITHOUT validating or warning — see its `raw != null && raw.trim() !== ''`
+    guard). Both cases mean the server did not resolve this knob from its
+    ambient env text, so a consumer forwarding that raw text on regardless
+    (`buildSidecarEnv`, #2207) would disagree with the server for the same
+    reason either way (independent review of PR #2219, finding F3 — a blank
+    `GPU_RESERVE_MB=` reaches `main.py`'s unguarded `int(os.environ.get(...))`
+    and raises at capacity-admission time; verified in this repo, not merely
+    reported by the review). Lets a consumer act on a decision the resolver
+    already computes internally, without re-running validation itself and
+    without widening `KnobValueState` with a field only one caller needs. */
+export function isEnvValueRejected(knob: ConfigKnob): boolean {
+  if (!knob.env) return false;
+  const raw = process.env[knob.env];
+  if (raw == null) return false;
+  if (raw.trim() === '') return true;
+  return parseEnv(knob, raw) == null;
+}
+
 /** Effective value for a READ SITE or the Advanced UI. Reconciles a stored
     'cuda-uuid:<uuid>' override against the last-known device list, so the UI can
     show a concrete card and flag a vanished one as staleReason:'uuid_unresolved'. */
@@ -89,6 +112,25 @@ export function resolveKnob(knob: ConfigKnob): KnobValueState {
     whether the user had opened Advanced Settings during this server session. */
 export function resolveKnobForSidecarEnv(knob: ConfigKnob): KnobValueState {
   return resolveKnobInner(knob, false);
+}
+
+/** Effective value a knob WOULD resolve to if its persisted override were
+    cleared: env (if set and valid) else the shipped default — the override
+    step is skipped entirely, without needing a real override read. Used by
+    POST /api/config/reset to validate the RESULTING EFFECTIVE config a
+    requested clear would produce against PAIR_RULES, before committing
+    anything (independent review of PR #2205, finding F1) — mirroring
+    resolveKnobInner's env-then-default fallback the same way PUT's pass 2
+    mirrors its override-then-env-then-default one. */
+export function resolveKnobIgnoringOverride(knob: ConfigKnob): number | boolean | string {
+  if (knob.env) {
+    const raw = process.env[knob.env];
+    if (raw != null && raw.trim() !== '') {
+      const v = parseEnv(knob, raw);
+      if (v != null) return v;
+    }
+  }
+  return knob.default;
 }
 
 export function resolveAll(): Record<string, KnobValueState> {
@@ -132,7 +174,20 @@ export function coerceAndValidate(knob: ConfigKnob, raw: unknown): CoerceResult 
       return { ok: true, value: s };
     }
     case 'string':
-    default:
-      return { ok: true, value: String(raw) };
+    default: {
+      /* A pattern is always matched against the TRIMMED form (an anchored
+         ^...$ regex has no whitespace tolerance of its own) — so the value
+         persisted on a match must be that same trimmed form, not the raw
+         input. Untrimmed would round-trip '  CUDA:1  ' verbatim into the
+         override store and the sidecar's spawn env (independent review of
+         PR #2205, finding F4). A pattern-less string knob (e.g.
+         qa.asr.model) keeps its historical no-trim behaviour. */
+      const raw_s = String(raw);
+      const s = knob.pattern ? raw_s.trim() : raw_s;
+      if (knob.pattern && !knob.pattern.test(s)) {
+        return { ok: false, error: `does not match the required shape (${knob.pattern.source})` };
+      }
+      return { ok: true, value: s };
+    }
   }
 }

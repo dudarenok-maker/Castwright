@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { buildCastResolver } from '../store/cast-resolve.js';
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -69,11 +70,13 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-create-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castCreateRouter }, { castMergeRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-create.js'),
-    import('./cast-merge.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const [{ castCreateRouter }, { castMergeRouter }, { castRejectOrphanRouter }, { makeBookId }] =
+    await Promise.all([
+      import('./cast-create.js'),
+      import('./cast-merge.js'),
+      import('./cast-reject-orphan.js'),
+      import('../workspace/paths.js'),
+    ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK_WITH_CAST);
   bookIdNoCast = makeBookId(AUTHOR, SERIES, BOOK_NO_CAST);
 
@@ -81,6 +84,7 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', castCreateRouter);
   app.use('/api/books', castMergeRouter);
+  app.use('/api/books', castRejectOrphanRouter);
 });
 
 beforeEach(() => {
@@ -375,5 +379,225 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  /* F1 (fix round 2, #2163) — a THIRD path to #2110's end state, reachable by
+     UI clicks alone with no analysis run: "Not the same character"
+     (`cast-reject-orphan.ts`'s POST) calls `forgetSupersededId`, which
+     deletes `supersededBy[from]` unconditionally on every successful
+     reject — so unlike the drop path C1 covers (`displacedKeys`), the freed
+     key doesn't even land in `displaced`; it survives ONLY inside
+     `rejectedPairs`. Drives the full chain through the REAL routes (reject,
+     then create by the same name) rather than hand-writing
+     cast-id-history.json, so a regression in either route's own write path
+     would also be caught. */
+  it('F1 — a name minted after "Not the same character" does not re-mint the rejected id (#2163)', async () => {
+    // 1. Seed the auto-reconciled state: "marrow" is live, "mayrin" is an
+    //    orphaned id currently redirecting onto it via supersededBy (as if a
+    //    merge/analysis had recorded that alias).
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'marrow', name: 'Marrow', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(historyPath(), JSON.stringify({ schema: 1, supersededBy: { mayrin: 'marrow' } }));
+
+    // 2. Click "Not the same character" on the (marrow, mayrin) pair — the
+    //    real reject-orphan-match route, so forgetSupersededId's delete and
+    //    rejectOrphanedPair's write both happen exactly as the UI triggers
+    //    them.
+    const rejectRes = await request(app)
+      .post(`/api/books/${bookId}/cast/marrow/reject-orphan-match`)
+      .set('Content-Type', 'application/json')
+      .send({ orphanedId: 'mayrin' });
+    expect(rejectRes.status).toBe(200);
+
+    const historyAfterReject = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    // supersededBy.mayrin is gone (forgetSupersededId) — the only surviving
+    // record of "mayrin" is rejectedPairs[].from.
+    expect(historyAfterReject.supersededBy).toEqual({});
+    expect(historyAfterReject.rejectedPairs).toEqual([
+      { from: 'mayrin', to: 'marrow', forgotSupersededTo: 'marrow' },
+    ]);
+
+    // 3. Create a brand-new character named "Mayrin" — the naive mint is the
+    //    now-unprotected-by-supersededBy, but still-rejected, bare id.
+    const createRes = await callCreate(bookId, { name: 'Mayrin' });
+    expect(createRes.status).toBe(200);
+    expect(createRes.body.character.id).not.toBe('mayrin');
+
+    // 4. resolve('mayrin') must not land on the new row (or anywhere else) —
+    //    the segments that still carry the raw id "mayrin" must not silently
+    //    start reading as the brand-new, empty character.
+    const castAfterCreate = JSON.parse(readFileSync(join(bookDir(), '.audiobook', 'cast.json'), 'utf8'));
+    const historyAfterCreate = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    const resolution = buildCastResolver(castAfterCreate.characters, historyAfterCreate).resolve(
+      'mayrin',
+    );
+    expect(resolution).toBeUndefined();
+  });
+
+  /* F6 (fix round 2, #2163) — C1's `displacedKeys` avoidance matched neither
+     `collidingHistoryKey` (already left `historyKeys` by the time it's in
+     `displaced`) nor `collidingLiveId`, so it minted a suffixed id with no
+     stated reason. */
+  it('F6 — is reported, not silent, when a DISPLACED id is avoided', async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'lightning-dave', name: 'Lightning Dave', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        displaced: { the_torment: 'lightning-dave' },
+      }),
+    );
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'The Torment' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('the-torment');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        messages.some(
+          (m) =>
+            m.includes('avoided re-minting "the-torment"') &&
+            m.includes('displaced id "the_torment"'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  /* F7 (fix round 2, #2163) — C1's own comment claimed folding `displaced`
+     into `takenIds` is a no-op for `dropSupersededIdsReclaimedByLiveCast`,
+     because that function only ever drops a key already in `existingIds`.
+     True only at the INSTANT of the drop: `existingIds` is a per-request
+     snapshot, re-read fresh every call, while `displaced` is never pruned.
+     Here the character that reclaimed "the_torment" (`lightning-dave`) has
+     ITSELF since been removed from the live cast — `existingIds` no longer
+     protects the key, so this fold is the ONLY thing still reserving it.
+     Without it, re-creating "The Torment" would mint the bare id and hijack
+     whatever the ORIGINAL `the_torment` alias still covers on disk. */
+  it('F7 — a displaced key stays reserved even after the character that reclaimed it is itself later dropped', async () => {
+    // No "lightning-dave" in the live cast — it reclaimed "the_torment" once,
+    // then was itself dropped by a later analysis/merge.
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        displaced: { the_torment: 'lightning-dave' },
+      }),
+    );
+
+    const res = await callCreate(bookId, { name: 'The Torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).not.toBe('the-torment');
+  });
+
+  /* F6 — same silent gap, for a `rejectedPairs`-only avoidance (F1's new
+     bucket): `from` was never in `historyKeys` to begin with, so neither
+     existing branch ever named it either. */
+  it('F6 — is reported, not silent, when a REJECTED-PAIR id is avoided', async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'marrow', name: 'Marrow', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'marrow' }],
+      }),
+    );
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'Mayrin' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('mayrin');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        messages.some(
+          (m) =>
+            m.includes('avoided re-minting "mayrin"') &&
+            m.includes('rejected-pair id "mayrin"') &&
+            m.includes('rejected against "marrow"'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  /* K1 (#2161 round 3) — a FOURTH path to #2110's end state, distinct from
+     F1 above: F1's rejected pair has no `forgotSupersededTo` to restore, so
+     the freed key survives only in `rejectedPairs`. This repro clicks Undo
+     on a pair whose stashed alias target has quietly stopped being live —
+     `unrejectOrphanedPair`'s pair removal takes the id out of
+     `rejectedPairs` REGARDLESS of whether the restore succeeded, and before
+     this fix the refused restore left `supersededBy` untouched too, so
+     "mayrin" ended up reserved by NEITHER `historyKeys` nor `displacedKeys`
+     nor `rejectedPairs[].from` — free for a bare re-mint. Drives the real
+     DELETE undo route (exercising `applyRestoreSupersededId`'s new
+     `displaced` write directly, not a hand-seeded `displaced` fixture like
+     F6/F7 above) then the real create route, so a regression in either
+     route's own write path would also be caught — same reasoning as F1. */
+  it('K1 — a name minted after an Undo whose stashed alias target is no longer live does not re-mint the freed id (#2161)', async () => {
+    // 1. Seed the precondition directly (same style as F6/F7's `displaced`
+    //    fixtures): "mayrin" was rejected against the live "narrator",
+    //    having previously aliased to "wren" — a character no longer in
+    //    this book's live cast (initialCast is narrator-only), simulating a
+    //    later re-analysis that dropped it with no retirement recorded.
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'narrator', forgotSupersededTo: 'wren' }],
+      }),
+    );
+
+    // 2. Click Undo — the real DELETE route, so undoRejectedPairs' refusal
+    //    and its new displaced[] write both happen exactly as the UI
+    //    triggers them.
+    const undoRes = await request(app)
+      .delete(`/api/books/${bookId}/cast/narrator/reject-orphan-match`)
+      .set('Content-Type', 'application/json')
+      .send({ orphanedId: 'mayrin' });
+    expect(undoRes.status).toBe(200);
+    expect(undoRes.body.wasRejected).toBe(true);
+    expect(undoRes.body.targetNotLive).toEqual(['wren']);
+
+    const historyAfterUndo = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    // The refused restore never wrote supersededBy...
+    expect(historyAfterUndo.supersededBy).toEqual({});
+    // ...the pair is gone regardless (Undo's primary consequence)...
+    expect(historyAfterUndo.rejectedPairs).toEqual([]);
+    // ...and THE FIX: "mayrin" is reserved via displaced instead.
+    expect(historyAfterUndo.displaced).toEqual({ mayrin: 'wren' });
+
+    // 3. Create a brand-new character named "Mayrin" — the naive mint is
+    //    the now-unprotected-by-supersededBy-or-rejectedPairs bare id.
+    const createRes = await callCreate(bookId, { name: 'Mayrin' });
+    expect(createRes.status).toBe(200);
+    expect(createRes.body.character.id).not.toBe('mayrin');
+
+    // 4. resolve('mayrin') must not land on the new row — the segments that
+    //    still carry the raw id "mayrin" must not silently start reading as
+    //    the brand-new, unrelated character.
+    const castAfterCreate = JSON.parse(readFileSync(join(bookDir(), '.audiobook', 'cast.json'), 'utf8'));
+    const historyAfterCreate = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    const resolution = buildCastResolver(castAfterCreate.characters, historyAfterCreate).resolve(
+      'mayrin',
+    );
+    expect(resolution).toBeUndefined();
   });
 });

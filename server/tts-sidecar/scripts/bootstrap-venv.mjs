@@ -26,7 +26,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   classifyVenvState,
   readStamp,
@@ -36,7 +36,10 @@ import {
 } from './venv-migration.mjs';
 import { resolveInstallProfile } from './accelerator-profile.mjs';
 import { planTorchPreinstall } from './install-torch.mjs';
-import { planOrtSwap } from './install-ort.mjs';
+import { planOrtSwap, applyOrtMarkerDelete, applyOrtMarkerWrite } from './install-ort.mjs';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
+
+const REAL_MARKER = { del: applyOrtMarkerDelete, write: applyOrtMarkerWrite };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> tts-sidecar/ -> server/ -> repo root  (3 levels up)
@@ -151,7 +154,20 @@ export function installForProfile(
   runPip = (a) => pipOk(venvPy, a),
   platform = process.platform,
   venvDir = null,
+  marker = REAL_MARKER,
 ) {
+  const plan = planOrtSwap(profile, platform);
+  // Delete FIRST: cpu.txt carries an explicit `onnxruntime` line, and the
+  // AMD->CPU fallback below installs it. A stale marker present at that moment
+  // makes pip skip the real install.
+  // NOTE: on the amd path this `plan` is used only for the marker.del call
+  // above — the amd branch below calls planOrtSwap('amd', platform) again for
+  // its own swap decision, so planOrtSwap runs twice on that path. Safe ONLY
+  // because planOrtSwap is a pure function of (profile, platform) with no I/O;
+  // if it ever gains a side effect or a non-deterministic input, this needs to
+  // be hoisted into a single call instead.
+  if (venvDir) marker.del(venvDir, plan);
+
   if (profile === 'amd') {
     const torch = planTorchPreinstall('amd', platform);
     if (torch.action === 'install') {
@@ -209,14 +225,16 @@ export function installForProfile(
   // CUDAExecutionProvider is actually available (a missing swap = silent CPU-only
   // Kokoro on a GPU box). A swap failure is fatal here — better to fail the install
   // loudly than ship a GPU box that quietly synthesises on the CPU.
-  const ort = planOrtSwap(profile, platform);
+  const ort = plan;
   if (ort.action === 'swap') {
     log(`swapping ONNX runtime → the ${profile} GPU build`);
     for (const step of ort.steps) {
       if (!runPip(step)) {
+        if (venvDir) marker.del(venvDir, ort);
         throw new Error(`ONNX runtime swap failed (pip ${step.join(' ')}) for the ${profile} overlay`);
       }
     }
+    if (venvDir) marker.write(venvDir, ort);
   }
   return profile;
 }
@@ -317,6 +335,8 @@ function runInstall(venvPy, profile, venvDir) {
 // Run only when invoked directly (node bootstrap-venv.mjs); stay inert on import
 // so unit tests can exercise venvPythonPath / venvAlreadyBootstrapped without
 // triggering a real venv creation.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

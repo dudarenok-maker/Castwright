@@ -23,6 +23,8 @@ import {
   stage1ShrinkRefused,
   buildStage1ChapterInbox,
   readPriorCastForMerge,
+  recordRetirements,
+  bookIdForRetirementCleanup,
   trackForReplay,
   replayCatchUp,
   castInFlightEntryToLiveChapter,
@@ -31,6 +33,7 @@ import {
   runMainAnalyzerJob,
   runSubsetAnalyzerJob,
   aggregateStructureReports,
+  aggregateMaxMergedTurns,
   buildStage2ChapterInbox,
   buildStage2ChunkInbox,
   STAGE2_ATTRIBUTION_RULES,
@@ -39,6 +42,7 @@ import {
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
+import type { BookStateJson } from '../workspace/scan.js';
 import { GeminiContentBlockedError } from '../analyzer/errors.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
@@ -83,6 +87,41 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       );
     },
     isPerPhaseModelSelectionActive: () => false,
+  };
+});
+
+/* #2267 — `resolveBookLanguageForManuscript` (analysis.ts) resolves a book's
+   language via `findBookByManuscriptId`, which scans the REAL on-disk
+   `BOOKS_ROOT` tree — a tmpdir-based test book (as every provenance test
+   below uses) is never found there, so it always falls through to the 'en'
+   default (see the existing "writes analysisProvenance..." test's comment).
+   That's fine for tests that don't care about language, but the
+   fully-cached-book §4 test below needs a language WITH a paragraph-dash
+   convention (ru) to get a non-`undefined` legibility reading. Mirrors the
+   `__analyzer_device_test_phase1_selection` global-hook pattern above rather
+   than a real BOOKS_ROOT write (which would touch the real workspace) or a
+   file-wide behavior change (every other test keeps the real 'en' fallback
+   since the override only fires when the hook is set for that manuscriptId). */
+vi.mock('../workspace/scan.js', async () => {
+  const actual = await vi.importActual<typeof import('../workspace/scan.js')>('../workspace/scan.js');
+  return {
+    ...actual,
+    findBookByManuscriptId: async (manuscriptId: string) => {
+      const g = globalThis as Record<string, unknown>;
+      const override = g.__analysis_test_book_language_override as
+        | { manuscriptId: string; language: string }
+        | undefined;
+      if (override && override.manuscriptId === manuscriptId) {
+        return {
+          bookDir: '/test-language-override',
+          author: 'A',
+          series: 'S',
+          title: 'T',
+          state: { manuscriptId, language: override.language } as unknown as BookStateJson,
+        };
+      }
+      return actual.findBookByManuscriptId(manuscriptId);
+    },
   };
 });
 
@@ -1027,7 +1066,7 @@ describe('failedChapterErrors records (spec A4)', () => {
 describe('chapter-failed replay map (spec A4 — reconnect carries code/remediation)', () => {
   function makeJob() {
     return {
-      replay: { failedByChapterId: new Map(), logs: [] },
+      replay: { failedByChapterId: new Map(), logs: [], warnings: new Map() },
     } as unknown as Parameters<typeof trackForReplay>[0];
   }
   it('stores code + remediation off a chapter-failed event', () => {
@@ -1062,6 +1101,71 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
   });
 });
 
+describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
+  function makeJob(): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: 'm1',
+      kind: 'main',
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it('replays a warning emitted while nobody was listening', () => {
+    const job = makeJob();
+    trackForReplay(job, {
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message: 'Another change landed.',
+    });
+
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+
+    expect(sent).toContainEqual({
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message: 'Another change landed.',
+    });
+  });
+
+  it('dedupes by code — five sites conflicting once replay ONE advisory, not five', () => {
+    const job = makeJob();
+    for (let i = 0; i < 5; i++) {
+      trackForReplay(job, {
+        kind: 'warning',
+        code: 'cast_merge_base_stale',
+        message: `attempt ${i}`,
+      });
+    }
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+    expect(sent.filter((e) => (e as { kind?: string }).kind === 'warning')).toHaveLength(1);
+  });
+
+  it('ignores a malformed warning rather than storing an undefined key', () => {
+    const job = makeJob();
+    trackForReplay(job, { kind: 'warning' });
+    trackForReplay(job, { kind: 'warning', code: 'x' });
+    trackForReplay(job, { kind: 'warning', message: 'no code' });
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+    expect(sent).toHaveLength(0);
+  });
+});
+
 /* Bug-3 diagnosis (Task B4): a page reload re-subscribes to the sticky job and
    the server replays `job.replay.lastPhase` verbatim via replayCatchUp. The
    live elapsed/sentence rows survive a reload IFF that snapshot is kept fresh.
@@ -1077,6 +1181,7 @@ describe('replayCatchUp forwards live chapter rows on reconnect (bug 3 buffer)',
         lastPhase,
         logs: [],
         failedByChapterId: new Map(),
+        warnings: new Map(),
       },
     } as unknown as Parameters<typeof replayCatchUp>[0];
   }
@@ -2104,7 +2209,9 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
         JSON.stringify({ characters: [{ id: 'stale', voiceId: 'stale' }] }),
       );
       const prior = await readPriorCastForMerge(dir);
-      expect(prior.map((c) => c.id)).toEqual(['live']);
+      expect(prior.rows.map((c) => c.id)).toEqual(['live']);
+      expect(prior.source).toBe('cast');
+      expect(prior.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2122,21 +2229,495 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
         }),
       );
       const prior = await readPriorCastForMerge(dir);
-      expect(prior).toHaveLength(1);
-      expect(prior[0]).toMatchObject({ id: 'wren', voiceId: 'wren', voiceState: 'reused' });
+      expect(prior.rows).toHaveLength(1);
+      expect(prior.rows[0]).toMatchObject({ id: 'wren', voiceId: 'wren', voiceState: 'reused' });
+      expect(prior.source).toBe('carryover');
+      /* Design §1a — carryover rows describe bytes cast.json never held, so
+         there is no compare-and-set available. `null` says "I cannot check",
+         which is the honest answer and is what disables detection for the run
+         rather than producing a wrong verdict. */
+      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('returns [] when neither file exists', async () => {
+  it('returns no rows and no fingerprint when neither file exists', async () => {
     const dir = makeBookDir();
     try {
-      expect(await readPriorCastForMerge(dir)).toEqual([]);
+      const prior = await readPriorCastForMerge(dir);
+      expect(prior.rows).toEqual([]);
+      expect(prior.source).toBe('none');
+      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('an EMPTY characters[] in cast.json still falls through to the carryover', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castPath(dir), JSON.stringify({ characters: [] }));
+      writeFileSync(carryPath(dir), JSON.stringify({ characters: [{ id: 'wren' }] }));
+      const prior = await readPriorCastForMerge(dir);
+      expect(prior.rows.map((c) => c.id)).toEqual(['wren']);
+      expect(prior.source).toBe('carryover');
+      expect(prior.fingerprint).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)', () => {
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-record-retirements-selfloop-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  /* A reject's two writes (the `rejectedPairs` entry on cast-id-history.json
+     and the one-sided `notLinkedTo` edge on cast.json) are created together
+     and must be destroyed together (#2133). This mirrors the exact
+     `retireCharacterId` self-loop shape `cast-id-history.test.ts`'s M2 test
+     already pins (`rejectOrphanedPair(dir, 'mayrin', 'mairin')` then
+     `retireCharacterId(dir, 'mairin', 'mayrin')` drops `{from: mayrin, to:
+     mayrin}`) — seeded here with the matching `notLinkedTo` edge ALSO present
+     on cast.json's `mayrin` row, the shape `seedReuseGuardsFromPriorCast`
+     (merge-analysis-cast.ts) produces when a fresh analysis remints an
+     orphaned, previously-rejected id as a live character (the module's own
+     "an orphaned id is very often the character's own name" case). */
+  it('removes the notLinkedTo edge naming the dropped pair\'s `from` id from cast.json', async () => {
+    const dir = makeBookDir();
+    const bookId = 'b_record_retirements_selfloop_test';
+    try {
+      writeFileSync(
+        join(dir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'mayrin',
+              name: 'Mayrin',
+              notLinkedTo: [{ bookId, characterId: 'mayrin' }],
+            },
+          ],
+        }),
+      );
+      const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {});
+
+      const history = await loadCastIdHistory(dir);
+      expect(history.rejectedPairs ?? []).toEqual([]);
+
+      const cast = JSON.parse(
+        readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'),
+      ) as { characters: Array<{ id: string; notLinkedTo?: Array<{ bookId: string; characterId: string }> }> };
+      expect(cast.characters.find((c) => c.id === 'mayrin')!.notLinkedTo ?? []).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves an UNRELATED notLinkedTo edge on the same character untouched', async () => {
+    // Same self-loop drop as above, but the row also carries an edge for a
+    // different orphaned id — proves the cleanup is scoped to the dropped
+    // pair's own `from`, not a blanket clear of the character's notLinkedTo.
+    const dir = makeBookDir();
+    const bookId = 'b_record_retirements_selfloop_unrelated_test';
+    try {
+      writeFileSync(
+        join(dir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'mayrin',
+              name: 'Mayrin',
+              notLinkedTo: [
+                { bookId, characterId: 'mayrin' },
+                { bookId, characterId: 'someone-else' },
+              ],
+            },
+          ],
+        }),
+      );
+      const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {});
+
+      const cast = JSON.parse(
+        readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'),
+      ) as { characters: Array<{ id: string; notLinkedTo?: Array<{ bookId: string; characterId: string }> }> };
+      expect(cast.characters.find((c) => c.id === 'mayrin')!.notLinkedTo).toEqual([
+        { bookId, characterId: 'someone-else' },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('bookIdForRetirementCleanup — M6 (fix round, #2163)', () => {
+  /* recordRetirements' `bookId` param exists ONLY to key
+     clearNotLinkedEdgesForDroppedRejections' lookup against `notLinkedTo`
+     edges keyed with the workspace `makeBookId` shape. The old call sites
+     fell back to `record.bookId ?? bookIdFromTitle(record.title)` —
+     `bookIdFromTitle` produces a completely different (title-only kebab
+     slug) shape, so that fallback can never match a real edge; it fails
+     OPEN by proceeding with a value that looks like a book id without
+     being the one anything else uses. */
+  it('returns record.bookId unchanged when present', () => {
+    expect(bookIdForRetirementCleanup({ bookId: 'author__series__title', title: 'Some Title' })).toBe(
+      'author__series__title',
+    );
+  });
+
+  it('returns undefined (never a title-derived id) and warns when bookId is absent', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = bookIdForRetirementCleanup({ title: 'Some Title' });
+      expect(result).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain('Some Title');
+      expect(warnSpy.mock.calls[0][0]).toContain('skipping notLinkedTo cleanup');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('treats an empty-string bookId the same as absent (falls through to the warn+undefined path)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = bookIdForRetirementCleanup({ bookId: '', title: 'Some Title' });
+      expect(result).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+/* F8 (fix round 2, #2163) — the three unit tests above only pin the helper
+   in isolation; they prove nothing about whether all FOUR real call sites
+   (two in runMainAnalyzerJob's dedup + persist blocks, two in
+   runSubsetAnalyzerJob's own dedup + persist blocks) actually call it,
+   rather than still hand-rolling `record.bookId ?? bookIdFromTitle(record.title)`
+   inline. "Mutate every entry point" is the rule this wave kept being
+   bitten by — reverting ANY ONE of the four call sites back to the old
+   inline fallback must turn at least one of the two tests below red.
+
+   Neither test needs a real retirement to fire: `bookIdForRetirementCleanup`
+   is called (and warns, since `record.bookId` is never set by the raw
+   `putManuscript` fixture these tests use — the production-only path,
+   `loadManuscriptForBook`, is what actually populates it) once PER SITE,
+   independent of whether that site's retirement list ends up empty. Each
+   job's two sites are made to fire in the SAME run — the dedup site needs
+   only `priorCastForMerge.length > 1` (main) / is unconditional (subset),
+   the persist site needs only a normal completing run — so the warn COUNT
+   is the number of sites in that job still wired to the real helper. */
+describe('bookIdForRetirementCleanup wired into every real call site (F8, #2163)', () => {
+  function bookIdAbsentWarnings(warnSpy: { mock: { calls: unknown[][] } }): string[] {
+    return warnSpy.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .filter((m: string) => m.includes('record.bookId is absent'));
+  }
+
+  function buildTrivialAnalyzer(roster: CharacterOutput[], sentences: SentenceOutput[]): {
+    phase0: Analyzer;
+    phase1: Analyzer;
+  } {
+    return {
+      phase0: {
+        runStage1: () => Promise.reject(new Error('not used')),
+        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+          return { characters: roster };
+        },
+        runStage2Chapter: () =>
+          Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      },
+      phase1: {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: () =>
+          Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+        async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+          return { sentences };
+        },
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () =>
+          Promise.reject(new Error('no flagged windows — escalation should never be called')),
+      },
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  it(
+    'runMainAnalyzerJob — dedup site + persist site both call it (warn fires exactly twice)',
+    async () => {
+      const manuscriptId = `test-f8-main-${Date.now()}-${Math.random()}`;
+      const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-f8-main-e2e-test-'));
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+      writeFileSync(
+        join(bookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: 'b_f8_main_e2e_test',
+          manuscriptId,
+          title: 'F8 Main E2E Test Book',
+          author: 'Test Author',
+          series: 'Standalones',
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.md',
+          castConfirmed: false,
+          chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+      // Deliberately NO `bookId` field here — mirrors the raw putManuscript
+      // fixture pattern every other e2e-style test in this file already
+      // uses (the production-only loadManuscriptForBook path is what
+      // actually populates it), so `record.bookId` is genuinely falsy.
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'F8 Main E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: CHAPTER_BODY,
+        chapterHints,
+        bookDir,
+      });
+
+      // 2 prior characters -> priorCastForMerge.length > 1 -> reaches the
+      // MAIN job's dedup call site regardless of whether either name
+      // actually collides with anything.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            { id: 'filler-a', name: 'Filler A' },
+            { id: 'filler-b', name: 'Filler B' },
+          ],
+        }),
+      );
+
+      const roster: CharacterOutput[] = [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+        {
+          id: 'anton',
+          name: 'Anton',
+          role: 'lead',
+          color: '#111111',
+          gender: 'male',
+          evidence: [{ quote: 'Anton asked' }],
+        },
+      ];
+      const sentences: SentenceOutput[] = [
+        { id: 101, chapterId: 1, characterId: 'anton', confidence: 0.9, text: 'Are you sure this will work' },
+      ];
+      const { phase0, phase1 } = buildTrivialAnalyzer(roster, sentences);
+      const phase0Selection = buildSelection(phase0, 'phase0-model');
+      const phase1Selection = buildSelection(phase1, 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+        // Sanity check on the fixture itself, not the fix: this run's
+        // record genuinely has no bookId, so both call sites below are
+        // exercising the warn path, not silently no-op-ing on a truthy one.
+        expect(recordRef.bookId).toBeFalsy();
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        // One from the dedup site (priorCastForMerge.length > 1 above), one
+        // from the final authoritative persist. If EITHER call site reverts
+        // to the old inline fallback, this drops from 2 to 1.
+        expect(bookIdAbsentWarnings(warnSpy)).toHaveLength(2);
+      } finally {
+        warnSpy.mockRestore();
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'runSubsetAnalyzerJob — dedup site + persist site both call it (warn fires exactly twice)',
+    async () => {
+      const manuscriptId = `test-f8-subset-${Date.now()}-${Math.random()}`;
+      const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-f8-subset-e2e-test-'));
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+      writeFileSync(
+        join(bookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: 'b_f8_subset_e2e_test',
+          manuscriptId,
+          title: 'F8 Subset E2E Test Book',
+          author: 'Test Author',
+          series: 'Standalones',
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.md',
+          castConfirmed: false,
+          chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+      // Same deliberate omission as the main-job test above.
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'F8 Subset E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: CHAPTER_BODY,
+        chapterHints,
+        bookDir,
+      });
+
+      const roster: CharacterOutput[] = [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+        {
+          id: 'anton',
+          name: 'Anton',
+          role: 'lead',
+          color: '#111111',
+          gender: 'male',
+          evidence: [{ quote: 'Anton asked' }],
+        },
+      ];
+      const sentences: SentenceOutput[] = [
+        { id: 101, chapterId: 1, characterId: 'anton', confidence: 0.9, text: 'Are you sure this will work' },
+      ];
+      const { phase0, phase1 } = buildTrivialAnalyzer(roster, sentences);
+      const phase0Selection = buildSelection(phase0, 'phase0-model-subset');
+      const phase1Selection = buildSelection(phase1, 'phase1-model-subset');
+
+      // stage1Existed === true, so the subset route actually reaches Phase 1
+      // / the persist block the F8 persist site lives in, rather than
+      // stopping after cast-update.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: roster,
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: chapterHints.map((c) => c.id),
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+        expect(recordRef.bookId).toBeFalsy();
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        // One from the subset dedup site (unconditional — always reached),
+        // one from the subset final authoritative persist. If EITHER call
+        // site reverts to the old inline fallback, this drops from 2 to 1.
+        expect(bookIdAbsentWarnings(warnSpy)).toHaveLength(2);
+      } finally {
+        warnSpy.mockRestore();
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
 });
 
 describe('castInFlightEntryToLiveChapter — live tick chapter map (Phase-0a cast)', () => {
@@ -2489,6 +3070,7 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -2530,7 +3112,8 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
     clearPhase1Selection();
     detectOllamaDeviceMock.mockClear();
     setLastKnownAnalyzerDeviceMock.mockClear();
-    process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+    if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
   });
 
   async function runJobWith(engine0: 'local' | 'gemini', engine1: 'local' | 'gemini'): Promise<void> {
@@ -2619,6 +3202,7 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
       confirmed: 0,
       corrected: 0,
       flagged: 0,
+      unresolved: 0,
       lumped: 0,
       escalated: 0,
       escalationAccepted: 0,
@@ -2641,6 +3225,7 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
       confirmed: 3,
       corrected: 1,
       flagged: 1,
+      unresolved: 0,
       escalated: 1,
       escalationAccepted: 1,
     });
@@ -2666,9 +3251,43 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
       confirmed: 0,
       corrected: 0,
       flagged: 0,
+      unresolved: 0,
       escalated: 0,
       escalationAccepted: 0,
     });
+  });
+
+  it('#2253 — sums unresolved and counts it toward the alignedPct weight', () => {
+    // Chapter A: 100 classified sentences, 90 of them unresolved, 100% aligned.
+    // Chapter B: 10 classified sentences, all confirmed, 0% aligned.
+    // If `unresolved` is left out of the weight, A weighs 10 instead of 100 and
+    // the book reads ~9% aligned instead of ~91% — an inverted headline number.
+    const chapterA = makeReport({ alignedPct: 100, confirmed: 10, unresolved: 90 });
+    const chapterB = makeReport({ alignedPct: 0, confirmed: 10, flagOnly: true });
+    const result = aggregateStructureReports([chapterA, chapterB]);
+    expect(result?.unresolved).toBe(90);
+    expect(result?.alignedPct).toBeCloseTo((100 * 100 + 0 * 10) / 110, 5);
+  });
+});
+
+describe('aggregateMaxMergedTurns (#2267 — cross-chapter fold)', () => {
+  it('reports the MAXIMUM across chapters, never the sum', () => {
+    // A book whose chapters yield 3 and 11 reports 11, not 14 (Global
+    // Constraint: Math.max over paragraphs/chapters, never a sum).
+    expect(aggregateMaxMergedTurns([3, 11])).toBe(11);
+  });
+
+  it('is order-independent', () => {
+    expect(aggregateMaxMergedTurns([11, 3])).toBe(11);
+  });
+
+  it('skips a chapter that contributed undefined rather than treating it as 0', () => {
+    expect(aggregateMaxMergedTurns([undefined, 5])).toBe(5);
+  });
+
+  it('returns undefined when no chapter in this pass contributed a reading', () => {
+    expect(aggregateMaxMergedTurns([])).toBeUndefined();
+    expect(aggregateMaxMergedTurns([undefined, undefined])).toBeUndefined();
   });
 });
 
@@ -2853,6 +3472,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
     confirmed: 2,
     corrected: 2,
     flagged: 0,
+    unresolved: 0,
     escalated: 0,
     escalationAccepted: 0,
   };
@@ -2885,6 +3505,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -2933,7 +3554,135 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    '#2267 spec §4 — main route STILL persists maxMergedTurnsInParagraph when EVERY chapter is served from ' +
+      'cache (the fully-cached-book case: zero fresh EngineReports this pass)',
+    async () => {
+      /* This is the scenario spec §4 exists to protect: a re-run of an
+         already-analysed book where every chapter's sentences come back from
+         the stage-2 cache, so attributeChapterStage2 (and therefore
+         crossExamine / the EngineReport it produces) never runs at all this
+         pass. structureReports stays empty and aggregateStructureReports
+         returns undefined either way — the metric under test must not
+         vanish along with it, because it needs only chapter text + the
+         book's resolved language, neither of which requires the engine to
+         have run. `phase1Analyzer.runStage2Chapter` is wired to THROW below
+         so this test fails loudly (not silently) if the cache-seeding here
+         ever stops actually skipping fresh attribution. */
+      const manuscriptId = `test-provenance-cached-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      // Chapter 1's single paragraph has 2 merged turns (mirrors Task 1's
+      // legibility.test.ts fixture); chapter 2 is clean narration.
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: 'Он кивнул. - Привет. - Как дела?' },
+        { id: 2, title: 'Chapter Two', body: 'Тихо было.' },
+      ];
+      seedStateJson(bookDir, manuscriptId, { language: 'ru' });
+      // `resolveBookLanguageForManuscript` scans the real BOOKS_ROOT tree, which
+      // this tmpdir-based test book is never part of — route it through the
+      // `../workspace/scan.js` mock's override hook (see that mock's own
+      // comment above) instead, so `bookLanguage` actually resolves to 'ru'.
+      (globalThis as Record<string, unknown>).__analysis_test_book_language_override = {
+        manuscriptId,
+        language: 'ru',
+      };
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Provenance Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+      // Pre-seed the Phase-1 attribution cache for BOTH chapters, so the
+      // cached-chapter replay loop (analysis.ts, "Replay cached chapters
+      // synchronously up front") picks them up and skips
+      // attributeChapterStage2WithEval entirely for this run.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {
+          1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 1, text: 'Он кивнул.' }],
+          2: [{ id: 201, chapterId: 2, characterId: 'narrator', confidence: 1, text: 'Тихо было.' }],
+        },
+      });
+
+      function buildPhase1AnalyzerThatMustNotRun(): Analyzer {
+        return {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () =>
+            Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+          runStage2Chapter: () =>
+            Promise.reject(
+              new Error(
+                'fully-cached-book test: Phase-1 attribution must NOT run when every chapter is cached',
+              ),
+            ),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.reject(new Error('not used')),
+        };
+      }
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1AnalyzerThatMustNotRun(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // requestedFresh: false — a resumed run, NOT "Start fresh" (which
+        // would discard the cache we just seeded and defeat the test).
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const stateAfter = readState(bookDir);
+        // #2275 C3 — maxMergedTurnsInParagraph is a SIBLING of `report`, not
+        // nested inside it (report stays absent here: the engine never ran,
+        // every chapter was cached).
+        const provenance = stateAfter.analysisProvenance as {
+          report?: unknown;
+          maxMergedTurnsInParagraph?: number;
+        };
+        expect(provenance.report).toBeUndefined();
+        expect(provenance.maxMergedTurnsInParagraph).toBe(2);
+      } finally {
+        delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
       }
     },
     60_000,
@@ -2994,6 +3743,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3087,6 +3837,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3135,6 +3886,141 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         expect(narr.aliases).toContain('Narrator');
         expect(narr.voiceStyle).toContain('folkloric warmth');
       } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'C2 — subset route computes maxMergedTurnsInParagraph over every non-excluded chapter, ' +
+      "not just the chapters this pass re-attributes (`toRun`)",
+    async () => {
+      /* Regression for #2275 C2: re-analysing a single CLEAN chapter used to
+         recompute the book-level max over `toRun` alone, so a subset retry
+         that only touches a clean chapter silently overwrote a HIGH reading
+         left by every OTHER chapter with that chapter's own low reading.
+         Chapter 1 here is a 21-turn merged paragraph (reads 20 — the exact
+         fixture from legibility.test.ts's C1 case) and is deliberately left
+         OUT of `toRun`; only chapter 2 (a single clean narration sentence,
+         reads 0) is retried. The persisted book-level reading must still be
+         20 — it must come from `record.chapterHints`, not `toRun`. */
+      const manuscriptId = `test-provenance-subset-scope-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      const mergedTurns = Array.from({ length: 21 }, (_, i) => `Реплика ${i}`);
+      const chapter1Body = mergedTurns.join('. - ') + '.';
+      const chapter2Body = 'Тихо было.';
+
+      seedStateJson(bookDir, manuscriptId, { language: 'ru' });
+      (globalThis as Record<string, unknown>).__analysis_test_book_language_override = {
+        manuscriptId,
+        language: 'ru',
+      };
+
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: chapter1Body },
+        { id: 2, title: 'Chapter Two', body: chapter2Body },
+      ];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Provenance Subset-Scope Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+
+      const stage1: Stage1Output = {
+        characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
+        chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+      };
+      const narratorCast: CharacterOutput[] = [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      ];
+      // isPhase0aCoverageComplete requires a non-empty chapterCast entry for
+      // EVERY non-excluded chapter (including chapter 1, which this test
+      // never re-runs Phase 0a for) or the subset job defers cast
+      // finalisation and returns before ever reaching Phase 1 / persist.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1,
+        chapterCast: { 1: narratorCast, 2: narratorCast },
+      });
+
+      function buildSubsetOnlyPhase1Analyzer(): Analyzer {
+        return {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () =>
+            Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+          async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+            return {
+              sentences: [
+                { id: 201, chapterId: 2, characterId: 'narrator', confidence: 1, text: 'Тихо было' },
+              ],
+            };
+          },
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.reject(new Error('not used')),
+        };
+      }
+
+      const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset-scope');
+      const phase1Selection = buildSelection(
+        buildSubsetOnlyPhase1Analyzer(),
+        'phase1-model-subset-scope',
+      );
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: [2],
+        bookDir,
+        engine: selection.engine,
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // toRun = ONLY chapter 2 — chapter 1 (the merged mega-paragraph) is
+        // never re-attributed this pass.
+        const toRun = recordRef.chapterHints.filter((c) => c.id === 2);
+
+        await runSubsetAnalyzerJob(job, recordRef as never, selection, phase1Selection, toRun, false);
+
+        const stateAfter = readState(bookDir);
+        // #2275 C3 — maxMergedTurnsInParagraph is a SIBLING of `report`, not
+        // nested inside it.
+        const provenance = stateAfter.analysisProvenance as {
+          maxMergedTurnsInParagraph?: number;
+        };
+        expect(provenance.maxMergedTurnsInParagraph).toBe(20);
+      } finally {
+        delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
@@ -3374,6 +4260,12 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
               name: 'Legacy Duplicate',
               voiceState: 'generated',
             },
+            // #2110 — 'eliza' must be genuinely LIVE after this run for the
+            // 'old-eliza' -> 'eliza' assertion below to prove what it claims
+            // (an entry with a live target surviving untouched); voiced so
+            // the carry-forward loop rescues her even though the fresh
+            // roster never mentions her this run.
+            { id: 'eliza', name: 'Eliza', voiceState: 'reused' },
           ],
         }),
       );
@@ -3396,6 +4288,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3447,7 +4340,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -3506,6 +4400,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3556,7 +4451,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -3620,6 +4516,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3661,7 +4558,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -3865,6 +4763,7 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3911,7 +4810,8 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
         if (originalConcurrency === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
         else process.env.ANALYZER_OLLAMA_CONCURRENCY = originalConcurrency;
       }
@@ -4103,6 +5003,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4156,7 +5057,8 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4311,6 +5213,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4349,7 +5252,8 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4383,8 +5287,19 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
      row named "Anton" at Stage 1; foldMinorCast's bucket-id invariant then
      canonicalises the NAME to "Unknown male" while leaving the id untouched
      (see the "Invariant (plan 122)" comment in fold-minor-cast.ts) — this
-     test only asserts on the id, so that's inert here. */
-  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+     test only asserts on the id, so that's inert here.
+
+     #2110 — 'eliza' is given real dialogue (3+ lines, `foldMinorCast`'s
+     `MIN_LINES_DEFAULT`) so she survives THIS run's own fresh roster under
+     her own id, making her a genuinely LIVE target — needed so the
+     'old-eliza' -> 'eliza' assertion below still proves what it claims (an
+     entry with a live target surviving untouched) now that the dangling-
+     TARGET prune (#2110) runs at the same write as the reclaim drop this
+     test pins. Kept out of a prior-cast.json on purpose (this fixture is
+     deliberately prior-cast-less, below) — she is simply part of this run's
+     own detected cast, same as Anton. */
+  const CHAPTER_BODY =
+    '“Are you sure this will work,” Anton asked.\n\n“Yes,” Eliza said.\n\n“Let us go,” Eliza added.\n\n“Agreed,” Eliza replied.\n\nOlga nodded and looked away.';
 
   function stage1RosterForChapter(): CharacterOutput[] {
     return [
@@ -4397,6 +5312,14 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         gender: 'male',
         evidence: [{ quote: 'Anton asked' }],
       },
+      {
+        id: 'eliza',
+        name: 'Eliza',
+        role: 'lead',
+        color: '#333333',
+        gender: 'female',
+        evidence: [{ quote: 'Eliza said' }, { quote: 'Eliza added' }, { quote: 'Eliza replied' }],
+      },
     ];
   }
 
@@ -4408,6 +5331,27 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         characterId: 'unknown-male',
         confidence: 0.9,
         text: 'Are you sure this will work',
+      },
+      {
+        id: chapterId * 100 + 2,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Yes',
+      },
+      {
+        id: chapterId * 100 + 3,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Let us go',
+      },
+      {
+        id: chapterId * 100 + 4,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Agreed',
       },
     ];
   }
@@ -4525,10 +5469,10 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
       // untouched; nothing in this run's roster reclaims 'old-eliza'.
       await retireCharacterId(bookDir, 'old-eliza', 'eliza');
 
-      // No prior cast.json — readPriorCastForMerge returns [] for a missing
-      // file, keeping this fixture isolated to the reclaim scenario (no
-      // dedup/remap machinery needs to fire for a single fresh row with no
-      // same-name prior).
+      // No prior cast.json — readPriorCastForMerge returns no rows for a
+      // missing file, keeping this fixture isolated to the reclaim scenario
+      // (no dedup/remap machinery needs to fire for a single fresh row with
+      // no same-name prior).
       expect(existsSync(castJsonPath(bookDir))).toBe(false);
 
       const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
@@ -4549,6 +5493,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4593,7 +5538,8 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -4743,6 +5689,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -4839,7 +5786,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5025,7 +5973,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5203,7 +6152,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5223,8 +6173,17 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
      cache.stage1 must be pre-seeded so the subset route takes the "book
      already fully analysed" branch (stage1Existed === true) and actually
      reaches Phase 1 / the persist block where the drop lives — otherwise it
-     ends after cast-update and none of this ever runs. */
-  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+     ends after cast-update and none of this ever runs.
+
+     #2110 — 'eliza' is given real dialogue (3+ lines, `foldMinorCast`'s
+     `MIN_LINES_DEFAULT`) so she survives this run's own fresh roster under
+     her own id, making her a genuinely LIVE target — needed so the
+     'old-eliza' -> 'eliza' assertion below still proves what it claims (an
+     entry with a live target surviving untouched) now that the
+     dangling-TARGET prune (#2110) runs at the same write as the reclaim
+     drop this test pins. */
+  const CHAPTER_BODY =
+    '“Are you sure this will work,” Anton asked.\n\n“Yes,” Eliza said.\n\n“Let us go,” Eliza added.\n\n“Agreed,” Eliza replied.\n\nOlga nodded and looked away.';
 
   function stage1RosterForChapter(): CharacterOutput[] {
     return [
@@ -5237,6 +6196,14 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         gender: 'male',
         evidence: [{ quote: 'Anton asked' }],
       },
+      {
+        id: 'eliza',
+        name: 'Eliza',
+        role: 'lead',
+        color: '#333333',
+        gender: 'female',
+        evidence: [{ quote: 'Eliza said' }, { quote: 'Eliza added' }, { quote: 'Eliza replied' }],
+      },
     ];
   }
 
@@ -5248,6 +6215,27 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         characterId: 'unknown-male',
         confidence: 0.9,
         text: 'Are you sure this will work',
+      },
+      {
+        id: chapterId * 100 + 2,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Yes',
+      },
+      {
+        id: chapterId * 100 + 3,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Let us go',
+      },
+      {
+        id: chapterId * 100 + 4,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Agreed',
       },
     ];
   }
@@ -5351,6 +6339,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -5419,7 +6408,251 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pruned (#2110)', () => {
+  /* Mirrors "runSubsetAnalyzerJob — a re-minted live id drops its history
+     entry" above, but for the MIRROR-IMAGE drop `dropSupersededTargetsNoLongerLive`
+     performs: cast-id-history.json holds `{anton: 'антон'}` from an earlier
+     retirement; 'антон' is a live-but-UNVOICED prior character. This run's
+     fresh roster never mentions her, so the carry-forward drops her with no
+     retirement of her own ever recorded — the entry dangles. Proves the
+     SUBSET call site (analysis.ts's subset persist block, a separate call
+     from the main path's) is actually wired, the same way the sibling
+     "reclaim" describe block above proves its own subset call site. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Olga asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'olga',
+        name: 'Olga',
+        role: 'lead',
+        color: '#222222',
+        gender: 'female',
+        evidence: [{ quote: 'Olga asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'olga',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-subset-dangling-target-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_subset_dangling_target_e2e_test',
+        manuscriptId,
+        title: 'Subset Dangling Target E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function seedPriorCastWithDyingAntonAndEliza(bookDir: string): void {
+    writeFileSync(
+      castJsonPath(bookDir),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          {
+            id: 'антон',
+            name: 'Антон',
+            role: 'character',
+            color: 'unset',
+            voiceState: 'generated',
+          },
+          // Voiced (via `voiceState: 'reused'`), unlike 'антон' above — the
+          // carry-forward loop rescues a voiced/reused prior row even when
+          // the fresh roster never mentions it, so she stays LIVE after
+          // this run. Needed so the 'old-eliza' -> 'eliza' entry has a
+          // genuinely live target and the test can prove it survives
+          // untouched, not merely that it happens to die along with 'антон'.
+          { id: 'eliza', name: 'Eliza', role: 'character', color: 'unset', voiceState: 'reused' },
+        ],
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Subset Dangling Target E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  function makeSubsetJob(manuscriptId: string, bookDir: string, chapterIds: number[]): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'subset',
+      subsetChapterIds: chapterIds,
+      bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it(
+    'a fresh roster that drops a live-but-unvoiced "антон" prunes the dangling alias keyed to her, on the subset path',
+    async () => {
+      const manuscriptId = `test-subset-dangling-target-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      seedPriorCastWithDyingAntonAndEliza(bookDir);
+      await retireCharacterId(bookDir, 'anton', 'антон');
+      // Unrelated legacy entry with a LIVE target — must survive untouched.
+      await retireCharacterId(bookDir, 'old-eliza', 'eliza');
+      const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+      // stage1Existed === true so Phase 1 (and the persist block the prune
+      // lives in) actually runs this pass.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: stage1RosterForChapter(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        // Sanity check: 'антон' really vanished (unvoiced, no name match in
+        // the fresh roster) so the scenario actually fired.
+        const castAfter = JSON.parse(
+          readFileSync(castJsonPath(bookDir), 'utf8'),
+        ) as { characters: Array<{ id: string }> };
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('антон');
+
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).not.toHaveProperty('anton');
+        expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
+        expect(history.displaced).toEqual({ anton: 'антон' });
+        expect(
+          job.replay.logs.some(
+            (l) =>
+              l.message.includes('Dropped 1 history alias') &&
+              l.message.includes('anton -> антон') &&
+              l.message.includes('target no longer exists'),
+          ),
+        ).toBe(true);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5608,6 +6841,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -5639,7 +6873,8 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -5696,6 +6931,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -5739,7 +6975,8 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -6092,6 +7329,7 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -6128,7 +7366,8 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
-        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,

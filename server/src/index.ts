@@ -28,9 +28,9 @@ installCrashHandlers();
 
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { app } from './app.js';
 import { lanExposureWarning } from './lan-safety.js';
 import { ensureLanAuthToken } from './lan-auth.js';
@@ -77,6 +77,11 @@ import {
   startPortForwarder,
   type PortForwarderHandle,
 } from './lan-port-forwarder.js';
+import { resolveSidecarVenvDir } from './diagnostics/venv.js';
+// @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
+import { ensureOrtMarker } from '../tts-sidecar/scripts/install-ort.mjs';
+// @ts-expect-error — shared helper ships no .d.ts; see its own header (#2291).
+import { isDirectlyInvoked } from '../../scripts/lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -113,6 +118,17 @@ const runDir = resolveRunDir(repoRoot);
    already used in scripts/bump-version.mjs). */
 async function main(): Promise<void> {
   ensureWorkspace();
+
+  /* #2192 — heal venvs bootstrapped before the ORT marker existed: record that
+     onnxruntime-gpu (or another swap package) provides `onnxruntime`, so a
+     later `pip install` for some other package can't silently clobber the GPU
+     runtime back to the CPU build. Placed here, synchronously and early in
+     main() — well before either listenWithAutoRebind() call below — so it can
+     never land downstream of listenerCallback's enforceSingleSidecarOwner,
+     which can process.exit(). Pure fs (sitePackagesDir/dist-info reads only),
+     never throws — see install-ort.mjs's ensureOrtMarker for the guarantee. */
+  ensureOrtMarker(resolveSidecarVenvDir(repoRoot), (m: string) => console.log(m));
+
   /* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
      see real values from disk before the first request lands. Fire-and-forget:
      a missing or malformed file falls through to defaults inside
@@ -334,7 +350,7 @@ async function main(): Promise<void> {
       portForwarderHandle = startPortForwarder(listenPort);
     }
 
-    /* castwright-local-pairing-link — expose a single combined liveness check
+    /* castwright-local-pairing-link — expose the friendly-hostname liveness
        for the friendly-hostname pairing link (server/src/routes/devices.ts),
        via app.set()/app.get() — the same idiom this file already uses for
        'lanHttpsServer' just above (see that comment), avoiding a circular
@@ -343,9 +359,10 @@ async function main(): Promise<void> {
        EVERY boot (LAN-HTTPS or not) since listenerCallback is shared by both
        app.listen() branches — in non-LAN-HTTPS mode both handles are null,
        so the getter is still set, just permanently false, not unset. */
-    app.set('isFriendlyHostnameReachable', () =>
-      mdnsResponderHandle?.isAlive() === true && portForwarderHandle?.isBound() === true,
-    );
+    app.set('friendlyHostnameLiveness', () => ({
+      mdns: mdnsResponderHandle?.isAlive() === true,
+      forwarder: portForwarderHandle?.isBound() === true,
+    }));
   };
 
   /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
@@ -499,12 +516,13 @@ function shutdown(signal: NodeJS.Signals): void {
 }
 
 /* Guarded so a test can import this module (e.g. for `runShutdownSequence`)
-   without executing the real boot sequence — mirrors the identical guard in
-   scripts/bump-version.mjs. `process.argv[1]` is resolved through
-   realpathSync before the compare for the same reason documented there
-   (symlinked temp dirs on macOS would otherwise make the hrefs unequal). */
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+   without executing the real boot sequence. Routed through the shared
+   scripts/lib/is-main-module.mjs helper (#2291) rather than a hand-rolled
+   realpath compare — see that file's header for why BOTH sides (not just
+   the raw invoked-path argument) must be realpathed, or the guard silently
+   misses across a symlink/junction and the server exits 0 having never
+   booted. */
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));

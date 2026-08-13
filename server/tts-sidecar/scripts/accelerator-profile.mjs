@@ -6,8 +6,8 @@
 // from server/src/tts/accelerator-profile.test.ts which imports it directly.
 // Side-effect-guarded (see the bottom) so importing it is inert.
 
-import { pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
 
 /**
  * Parse a GPU-vendor probe into a vendor tag. Pure — no I/O.
@@ -206,7 +206,9 @@ export function describeResolved({ envOverride, wizardChoice, detected, platform
 
 // Side-effect guard: only runs when invoked directly (`node accelerator-profile.mjs`),
 // stays inert on import so tests/consumers don't trigger I/O.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   const detected = detectVendor({
     platform: process.platform,
     exec: (cmd) => execSync(cmd, { encoding: 'utf8' }),

@@ -55,7 +55,7 @@ let bookId: string;
 
 const rejectOrphanedPairMock = vi.fn();
 const forgetSupersededIdMock = vi.fn();
-const restoreSupersededIdMock = vi.fn();
+const undoRejectedPairsMock = vi.fn();
 
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
@@ -65,8 +65,11 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
       rejectOrphanedPairMock(...args) ?? actual.rejectOrphanedPair(...args),
     forgetSupersededId: (...args: Parameters<typeof actual.forgetSupersededId>) =>
       forgetSupersededIdMock(...args) ?? actual.forgetSupersededId(...args),
-    restoreSupersededId: (...args: Parameters<typeof actual.restoreSupersededId>) =>
-      restoreSupersededIdMock(...args) ?? actual.restoreSupersededId(...args),
+    // #2198 — the DELETE route now undoes a whole batch through this single
+    // primitive instead of calling restoreSupersededId directly, so this is
+    // the seam a failure-mode test on the id-history side must mock.
+    undoRejectedPairs: (...args: Parameters<typeof actual.undoRejectedPairs>) =>
+      undoRejectedPairsMock(...args) ?? actual.undoRejectedPairs(...args),
   };
 });
 
@@ -143,13 +146,13 @@ beforeEach(() => {
   writeBookOnDisk(initialCast);
   rejectOrphanedPairMock.mockReset();
   forgetSupersededIdMock.mockReset();
-  restoreSupersededIdMock.mockReset();
+  undoRejectedPairsMock.mockReset();
   // Default: all three no-op and fall through to the real implementation
   // (`?? actual...` in the mock factory above), so a test only needs to
   // override the ONE primitive it's exercising.
   rejectOrphanedPairMock.mockReturnValue(undefined);
   forgetSupersededIdMock.mockReturnValue(undefined);
-  restoreSupersededIdMock.mockReturnValue(undefined);
+  undoRejectedPairsMock.mockReturnValue(undefined);
 });
 
 afterAll(() => {
@@ -202,7 +205,7 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     expect(res.body.error).toMatch(/failed to durably record/i);
   });
 
-  it('rejectOrphanedPair failing still leaves the earlier notLinkedTo write in place (safe to retry)', async () => {
+  it('rejectOrphanedPair failing leaves cast.json untouched — the edge is never written (#2166)', async () => {
     rejectOrphanedPairMock.mockImplementation(() => {
       throw new Error('disk full');
     });
@@ -210,7 +213,7 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
 
     const cast = readCast();
     const mairin = cast.characters.find((c) => c.id === 'mairin');
-    expect(mairin?.notLinkedTo).toEqual([{ bookId, characterId: 'mayrin' }]);
+    expect(mairin?.notLinkedTo).toBeUndefined();
   });
 
   it('a subsequent successful retry after a rejectOrphanedPair failure returns 200', async () => {
@@ -225,9 +228,10 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     // override is consumed — this call succeeds.
     const second = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(second.status).toBe(200);
-    // The notLinkedTo write is idempotent — already present from the first
-    // (failed-only-at-history) attempt.
-    expect(second.body.alreadyPresent).toBe(true);
+    // The first attempt wrote nothing (#2166 — the fatal pair write runs
+    // before the edge), so the retry writes the notLinkedTo edge for the
+    // first time.
+    expect(second.body.alreadyPresent).toBe(false);
   });
 
   it('I1 (review round 1) — a rejectOrphanedPair failure on attempt 1 never reaches forgetSupersededId, so the retry writes the stash', async () => {
@@ -287,7 +291,7 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
 });
 
 describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLinkedTo removal already landed before any fatal id-history step can fail', () => {
-  it('a restoreSupersededId failure 500s with a message that does NOT claim "nothing else was changed" — the notLinkedTo edge is already gone', async () => {
+  it('#2198 — an undoRejectedPairs failure 500s with a message that does NOT claim "nothing else was changed" — the notLinkedTo edge is already gone', async () => {
     // Seed a state matching what a genuine prior POST reject leaves behind:
     // the notLinkedTo edge on cast.json, and a pair with a stash to restore
     // on cast-id-history.json.
@@ -310,7 +314,10 @@ describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLink
       }),
     );
 
-    restoreSupersededIdMock.mockImplementation(() => {
+    // #2198 — the route now calls the single batched `undoRejectedPairs`
+    // instead of `restoreSupersededId` directly, so that's the primitive a
+    // DELETE id-history failure-mode test mocks.
+    undoRejectedPairsMock.mockImplementation(() => {
       throw new Error('disk full');
     });
     const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
@@ -332,6 +339,108 @@ describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLink
     const history = readHistory();
     expect(history?.rejectedPairs).toEqual([
       { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin' },
+    ]);
+  });
+});
+
+describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLinkedTo edge with no matching pair', () => {
+  it('DELETE still clears a one-sided edge on a book stranded by the PRE-#2166 write order, where no matching pair exists', async () => {
+    // Pins the #2133 fix against a state POST can no longer produce. Under
+    // the OLD order, POST wrote notLinkedTo first (unconditional) and only
+    // then called rejectOrphanedPair; if that 500'd and the user never
+    // retried, the edge landed with no `rejectedPairs` entry behind it, so
+    // `rejectedPairsGoverning` had no pair to attribute the chip (or this
+    // DELETE) to. Before #2133, DELETE's removal loop iterated
+    // `matchingPairs` — empty here — so it never ran, leaving a one-sided
+    // edge with no chip and no way to remove it.
+    //
+    // #2166 closed that window at the source by reordering POST's two
+    // writes, so the state below is now reached only by a book stranded
+    // BEFORE this fix shipped. Those books still exist on disk, and DELETE
+    // is still their way out — hence the state is seeded directly rather
+    // than driven through POST, and this test now reads as pre-fix cleanup
+    // rather than as a live partial-failure window.
+    //
+    // Explicit fresh history file: `beforeEach` only resets cast.json, not
+    // cast-id-history.json, and this file's earlier tests write real pairs
+    // to the SAME bookDir — without this, a leftover `rejectedPairs` entry
+    // from an earlier test would make the "no pair exists" precondition
+    // below false.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {} }),
+    );
+    // The stranded state, seeded directly (see above — POST cannot produce it
+    // any more): the edge on cast.json, nothing behind it in history.
+    writeBookOnDisk([
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'mairin',
+        name: 'Mairin',
+        role: 'character',
+        color: 'unset',
+        notLinkedTo: [{ bookId, characterId: 'mayrin' }],
+      },
+    ]);
+
+    // Confirms the abandoned-half-write precondition: the edge landed, the
+    // pair did not.
+    const castBefore = readCast();
+    expect(castBefore.characters.find((c) => c.id === 'mairin')?.notLinkedTo).toEqual([
+      { bookId, characterId: 'mayrin' },
+    ]);
+    expect(readHistory()?.rejectedPairs ?? []).toEqual([]);
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    // No pair ever existed to undo — the id-history side has nothing to
+    // report, honestly.
+    expect(res.body.wasRejected).toBe(false);
+    expect(res.body.removedFrom).toEqual([]);
+
+    // The cast.json edge is cleared regardless — the whole point of the fix.
+    const castAfter = readCast();
+    expect(castAfter.characters.find((c) => c.id === 'mairin')?.notLinkedTo).toEqual([]);
+  });
+
+  it('leaves an UNRELATED notLinkedTo edge on the same character untouched', async () => {
+    // Same abandoned-half-write shape, but the row also carries an edge for
+    // a different orphaned id recorded some other way — proves the
+    // unconditional clear is scoped to THIS orphanedId, not a blanket wipe.
+    //
+    // #2166 — POST can no longer create the `mayrin` edge (the fatal pair
+    // write now runs before it), so both edges are seeded directly, as if
+    // left behind by a book rejected under the OLD write order before this
+    // fix shipped.
+    writeBookOnDisk([
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'mairin',
+        name: 'Mairin',
+        role: 'character',
+        color: 'unset',
+        notLinkedTo: [
+          { bookId, characterId: 'someone-else' },
+          { bookId, characterId: 'mayrin' },
+        ],
+      },
+    ]);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {} }),
+    );
+    // A fixture whose emptiness is load-bearing should assert its own
+    // emptiness — the unconditional clear at cast-reject-orphan.ts's DELETE
+    // handler is what this case exists to pin, and it only fires when no
+    // matching pair exists to route the clear through the pair loop instead.
+    expect(readHistory()?.rejectedPairs ?? []).toEqual([]);
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+
+    const castAfter = readCast();
+    expect(castAfter.characters.find((c) => c.id === 'mairin')?.notLinkedTo).toEqual([
+      { bookId, characterId: 'someone-else' },
     ]);
   });
 });

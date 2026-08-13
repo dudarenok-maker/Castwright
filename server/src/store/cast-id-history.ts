@@ -6,7 +6,54 @@
 
    The supersededBy map is transitive: if a→b then b→c, both a and b
    map to c for O(1) resolution without chasing — regardless of which of
-   the two retirements is recorded first. */
+   the two retirements is recorded first.
+
+   #2161/#2268 — why a REFUSED `forgotSupersededTo` restore files into
+   `displaced` rather than being discarded (round 3, reversing an earlier,
+   wrong version of this same paragraph — see below for why it was wrong).
+   Answered here, once, for a future reader about to make the same mistake.
+
+   `displaced` is keyed BY THE RETIRED ID, not by what it used to resolve
+   to — `history.displaced[entry.id] = entry.supersededBy`
+   (`dropSupersededIdsReclaimedByLiveCast`/`dropSupersededTargetsNoLongerLive`
+   below), and `cast-create.ts` reads `Object.keys(history.displaced)` as
+   its taken-id set. That is the whole mechanism: filing `displaced[id] =
+   target` reserves `id` — never `target` — against a bare re-mint.
+
+   `forgotSupersededTo` (on `RejectedPair`, below) stashes the
+   `supersededBy[from]` value `forgetSupersededId` removed at reject time,
+   so `unrejectOrphanedPair`/`undoRejectedPairs` can restore it later (D6).
+   `applyRestoreSupersededId` (#2161) refuses to write that stash back once
+   its own target has quietly stopped being live — writing it would
+   reintroduce the exact dangling `supersededBy` entry #2110 exists to
+   prevent. What a refused restore actually IS, at that point, is a
+   `supersededBy` association (`from → target`) that lost its target before
+   it could be re-established — precisely `displaced`'s stated meaning, not
+   a stretch of it. Filing `displaced[from] = target` (`from` is `id` in
+   `applyRestoreSupersededId`'s own parameter names) reserves exactly the id
+   this refusal puts at risk: `from` is no longer in `supersededBy` (nothing
+   was written), no longer has a governing `rejectedPairs` entry (the same
+   Undo call removes it unconditionally, regardless of whether the restore
+   itself succeeded), and — before this fix — was in `displaced` only if
+   some UNRELATED drop happened to have filed it there. A bare re-mint of
+   `from` would then resolve every segment still carrying it straight onto
+   the new, unrelated character — the #2040 misattribution class, reached
+   by re-mint instead of a dangling `supersededBy` key.
+
+   The earlier version of this paragraph (round 1) reasoned about the wrong
+   id: it treated `displaced` as reserving `target` — the dead id — and
+   discarded the stash on the theory that reserving a genuinely-cut
+   character's id was undesirable. `displaced` reserves the KEY, not the
+   value; the id actually at risk of hijack is `from`, which the discard
+   left unreserved in every one of the four post-Undo states. That
+   misreading is why the decision reverses here rather than merely gaining
+   an exception.
+
+   No residual beyond what `displaced` already carries generally (#2040
+   Task 14 review item 2b — entries accumulate and are never pruned once
+   filed, the same for every `displaced` writer in this module, not
+   specific to this refusal case). There is no separate hazard this
+   refusal's `displaced` write leaves open. */
 
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -15,12 +62,16 @@ import { withKeyLock } from '../workspace/file-lock.js';
 export interface CastIdHistory {
   schema: 1;
   supersededBy: Record<string, string>;
-  /** #2040 Task 14 review item 2b — ids `dropSupersededIdsReclaimedByLiveCast`
-   *  dropped from `supersededBy` because a fresh roster reclaimed the key as a
-   *  live cast id, keyed the same way `supersededBy` was before the drop
-   *  (id -> what it used to resolve to). This is the only surviving record of
-   *  that pair once the drop runs — losing it would mean every book that
-   *  re-analyses before Wave 3's banner ships loses the pair for good.
+  /** #2040 Task 14 review item 2b — ids dropped from `supersededBy` because a
+   *  fresh roster reclaimed the KEY as a live cast id
+   *  (`dropSupersededIdsReclaimedByLiveCast`), OR because the entry's TARGET
+   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110),
+   *  OR because a refused `forgotSupersededTo` restore put an orphaned
+   *  association at risk of hijack (`applyRestoreSupersededId`, #2161)
+   *  — keyed the same way `supersededBy` was before the drop (id -> what it
+   *  used to resolve to). This is the only surviving record of that pair
+   *  once the drop runs — losing it would mean every book that re-analyses
+   *  before Wave 3's banner ships loses the pair for good.
    *  Additive and backwards-compatible: optional, never bumps `schema`. An
    *  old reader that doesn't know this key still works — it only ever reads
    *  `supersededBy`, which is unaffected. A file written before this change
@@ -89,6 +140,39 @@ export interface CastIdHistory {
    *  still works — it only ever reads `supersededBy`/`rejected`, which are
    *  unaffected. */
   rejectedPairs?: RejectedPair[];
+  /** #2128 — monotonic per-book counter, incremented on EVERY write to this
+   *  file, whether or not a `supersededBy` key changed. The broader rule makes
+   *  "seq strictly increases across every write" a testable invariant rather
+   *  than an ambiguous one. Additive and backwards-compatible: optional, never
+   *  bumps `schema`. `loadCastIdHistory` repairs it upward from
+   *  `recordedAtSeq` (see its own doc comment) — without that repair, a file
+   *  that loses `seq` while keeping its markers can never clear a row again. */
+  seq?: number;
+  /** #2128 — the `seq` at which each key's CURRENT target was established.
+   *  NOT "when the alias was first recorded": `retireCharacterId`'s repoint
+   *  loop can move an alias onto a different cast row, whose voice is whichever
+   *  row won the merge, so a render made against the old target is stale even
+   *  though the KEY never changed. Restamping on repoint is what closes that.
+   *
+   *  The authoritative value `isAudioCurrent` compares. FIELD ABSENT means
+   *  "this file has never been through the lane" and reads `'unknown'`. A KEY
+   *  missing from a PRESENT field is NOT evidence of age and must read
+   *  `'unknown'` too, never contribute 0: `bumpSeqAndStamp`'s reconcile loops
+   *  guarantee `keys(recordedAtSeq) === keys(supersededBy)` after every write
+   *  (Global Constraint 6), so there is no write path that can leave a
+   *  `supersededBy` key with no marker — a key missing here despite the field
+   *  being present means the file itself is suspect, not merely old. Treating
+   *  that as `0` would CLEAR the row against any render stamp >= 0, which is
+   *  fail-open and silently reopens #2107 — the one axis this codebase must
+   *  not fail on (Global Constraint 4: only an affirmative comparison clears
+   *  a row; everything else, including this case, is damage and stays
+   *  listed). */
+  recordedAtSeq?: Record<string, number>;
+  /** #2128 — human-readable companion for operator diagnostics (an operator
+   *  hand-inspecting this file mid-repair-run can tell WHEN, not merely in what
+   *  order). NEVER compared: the predicate reads `recordedAtSeq` only. The
+   *  names carry the rule — `…Seq` is authoritative, `…Iso` is display. */
+  recordedAtIso?: Record<string, string>;
 }
 
 /** One pair-scoped rejection: `from` (an orphaned id) is NOT the same
@@ -100,7 +184,13 @@ export interface RejectedPair {
   /** The `supersededBy[from]` target `forgetSupersededId` removed at reject
    *  time, if any. Absent when there was nothing to forget (e.g. `from` only
    *  ever matched through a normalised tier, which has no `supersededBy`
-   *  entry to begin with). */
+   *  entry to begin with).
+   *
+   *  Historical record, not necessarily still true: the character this names
+   *  can itself quietly stop being live before Undo is ever clicked (#2161,
+   *  the same unvoiced-drop mechanism #2110 closed for `supersededBy`
+   *  itself). `applyRestoreSupersededId` is what checks liveness before
+   *  writing this value back — see its own doc comment. */
   forgotSupersededTo?: string;
 }
 
@@ -133,30 +223,117 @@ export function castIdHistoryPath(bookDir: string): string {
  *  `buildCastResolver` at render time, srv-86) silently loses history-based
  *  protection when this happens, which must not read as "no protection
  *  needed". That case logs one `console.warn` naming the path and cause, so
- *  the degraded-protection state is operator-visible instead of silent. */
+ *  the degraded-protection state is operator-visible instead of silent.
+ *
+ *  This function deliberately COLLAPSES "absent" and "degraded" onto the same
+ *  empty value, which is correct for every caller whose worst case is losing
+ *  protection for one run. A caller that would DESTROY data on an empty
+ *  history must use `loadCastIdHistoryWithStatus` below and refuse to act on
+ *  `degraded` — see its doc comment (#2166 final review, Critical). */
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
+  return (await loadCastIdHistoryWithStatus(bookDir)).history;
+}
+
+/** How a `loadCastIdHistoryWithStatus` read went (#2166 final review, Critical).
+ *
+ *  - `ok` — the file was read and passed the shape check. `history` is it.
+ *  - `absent` — no file on disk. `history` is the empty default, and that
+ *    emptiness is EVIDENCE: nothing has ever been retired for this book.
+ *  - `degraded` — the file exists but could not be read or did not pass the
+ *    shape check. `history` is the same empty default, but it is NOT evidence
+ *    of anything: it is "could not be determined". */
+export type CastIdHistoryStatus = 'ok' | 'absent' | 'degraded';
+
+export interface CastIdHistoryReadResult {
+  status: CastIdHistoryStatus;
+  history: CastIdHistory;
+}
+
+/** The whole-file shape check, extracted so `stampRecordedAtSeqIfAbsent` can
+ *  ask the identical question before it writes (a second, hand-rolled copy is
+ *  the duplicate-logic shape this lane exists to stop). All-or-nothing BY
+ *  DESIGN: a malformed field degrades the whole file to the empty default, so
+ *  no id gets alias protection and every affected id is listed as a genuine
+ *  miss. Fail-closed, and required by #2128's acceptance. */
+function isWellFormedHistory(raw: unknown): raw is CastIdHistory {
+  const h = raw as CastIdHistory;
+  return (
+    typeof raw === 'object' &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    h.schema === 1 &&
+    typeof h.supersededBy === 'object' &&
+    !Array.isArray(h.supersededBy) &&
+    h.supersededBy !== null &&
+    (h.displaced === undefined ||
+      (typeof h.displaced === 'object' && !Array.isArray(h.displaced) && h.displaced !== null)) &&
+    (h.rejected === undefined || Array.isArray(h.rejected)) &&
+    (h.rejectedPairs === undefined || Array.isArray(h.rejectedPairs)) &&
+    /* #2128 — validated the same way, and deliberately inside the same
+       all-or-nothing conjunction as everything above it. */
+    (h.seq === undefined || (typeof h.seq === 'number' && Number.isFinite(h.seq))) &&
+    (h.recordedAtSeq === undefined ||
+      (typeof h.recordedAtSeq === 'object' &&
+        !Array.isArray(h.recordedAtSeq) &&
+        h.recordedAtSeq !== null)) &&
+    (h.recordedAtIso === undefined ||
+      (typeof h.recordedAtIso === 'object' &&
+        !Array.isArray(h.recordedAtIso) &&
+        h.recordedAtIso !== null))
+  );
+}
+
+/** #2128 — `seq` repaired upward from the markers on load. A file that loses
+ *  `seq` (hand-edit, merge conflict, truncated write) while keeping
+ *  `recordedAtSeq` would otherwise load as 0, every subsequent write would
+ *  start again from 1, every existing stamp would stay above it, and the
+ *  book's rows could NEVER clear again. Reading the true floor off the markers
+ *  themselves costs nothing and makes that unreachable. */
+function repairSeq(h: CastIdHistory): number {
+  const marks = Object.values(h.recordedAtSeq ?? {}).filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  );
+  return Math.max(typeof h.seq === 'number' && Number.isFinite(h.seq) ? h.seq : 0, ...marks, 0);
+}
+
+/** The discriminated sibling of `loadCastIdHistory` — same read, same
+ *  warnings, same returned history, but it also says WHICH of the three
+ *  states produced that history (#2166 final review, Critical).
+ *
+ *  `loadCastIdHistory` collapses `absent` and `degraded` onto the identical
+ *  `{ schema: 1, supersededBy: {} }` value, which is exactly right for every
+ *  consumer whose worst case is "loses history-based protection this run"
+ *  (`buildCastResolver`, `clearNotLinkedEdgesForDroppedRejections`): a
+ *  degraded read costs them protection, never data.
+ *
+ *  `reconcileRejectEdgesOnDisk` is the first consumer for which that collapse
+ *  is destructive rather than merely unprotective. It treats an empty history
+ *  as proof that every same-book `notLinkedTo` edge is stranded, and DELETES
+ *  them — so a transient EPERM/EBUSY from an AV scanner, a cloud-sync client
+ *  or the OS indexer (readJson has no retry, so it propagates straight
+ *  through) would wipe every reject the user ever made on that book, and log
+ *  that it had cleared stranded links while doing it. Recovery on a later good
+ *  run is only partial: the add pass rebuilds solely from `rejectedPairs`, so
+ *  an edge backed only by the LEGACY id-wide `rejected` list never comes back.
+ *
+ *  Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel (#2185): a
+ *  transient read blip must never be mistaken for evidence.
+ *
+ *  Never throws, exactly like `loadCastIdHistory` — a lookup side-table must
+ *  not be able to break a book's render. See `loadCastIdHistory`'s own doc
+ *  comment above for the field-by-field validation rationale. */
+export async function loadCastIdHistoryWithStatus(
+  bookDir: string,
+): Promise<CastIdHistoryReadResult> {
   const path = castIdHistoryPath(bookDir);
   try {
     const raw = await readJson<CastIdHistory>(path);
     if (raw === null) {
       // No file on disk — nothing has ever been retired for this book.
-      return { schema: 1, supersededBy: {} };
+      return { status: 'absent', history: { schema: 1, supersededBy: {} } };
     }
-    if (
-      typeof raw === 'object' &&
-      !Array.isArray(raw) &&
-      raw.schema === 1 &&
-      typeof raw.supersededBy === 'object' &&
-      !Array.isArray(raw.supersededBy) &&
-      raw.supersededBy !== null &&
-      (raw.displaced === undefined ||
-        (typeof raw.displaced === 'object' &&
-          !Array.isArray(raw.displaced) &&
-          raw.displaced !== null)) &&
-      (raw.rejected === undefined || Array.isArray(raw.rejected)) &&
-      (raw.rejectedPairs === undefined || Array.isArray(raw.rejectedPairs))
-    ) {
-      return raw;
+    if (isWellFormedHistory(raw)) {
+      return { status: 'ok', history: { ...raw, seq: repairSeq(raw) } };
     }
     console.warn(
       `[cast-id-history] ${path} exists but has an unexpected shape — id-history protection disabled until it is fixed or removed.`,
@@ -166,7 +343,96 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       `[cast-id-history] ${path} is unreadable (${(err as Error)?.message ?? err}) — id-history protection disabled until it is fixed or removed.`,
     );
   }
-  return { schema: 1, supersededBy: {} };
+  return { status: 'degraded', history: { schema: 1, supersededBy: {} } };
+}
+
+/** Thrown by every mutating helper below when the read that would decide
+ *  what to preserve came back `degraded` (#2214) — the file exists but is
+ *  unreadable or the wrong shape. Every helper here used to read through the
+ *  COLLAPSING `loadCastIdHistory` and write back unconditionally, which
+ *  REPLACED the damaged file with a valid, empty one — silently destroying
+ *  every retirement, displacement and rejection ever recorded for the book,
+ *  with every later read then reporting `ok`. Throwing here instead, before
+ *  any inspection or mutation, is the fix: a caller cannot tell a
+ *  degraded-read no-op from a genuinely needed write (e.g.
+ *  `restoreSupersededId`'s `existing === target` early return, or
+ *  `rejectOrphanedPair`'s idempotent-pair return), so nothing below may run
+ *  at all once the verdict is `degraded`.
+ *
+ *  `absent` and `ok` are unaffected — a missing file is the common, expected
+ *  case (most books never retire an id) and stays silently writable, exactly
+ *  as before. Callers already tolerate a throw from these helpers (the write
+ *  itself could always fail — EPERM/ENOSPC — see `loadCastIdHistory`'s own
+ *  doc comment above); this is the same contract extended to a degraded
+ *  READ. Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel
+ *  (#2185): a transient read blip must never be mistaken for evidence. */
+export class CastIdHistoryUnreadableError extends Error {
+  readonly bookDir: string;
+  readonly path: string;
+
+  constructor(bookDir: string) {
+    const path = castIdHistoryPath(bookDir);
+    super(
+      `[cast-id-history] refusing to write ${path} — it exists but could not be read or did not ` +
+        `pass the shape check (see the [cast-id-history] warning just above for the cause). Writing ` +
+        `through this read would replace it with a valid, empty history, silently losing every ` +
+        `recorded retirement, displacement and rejection for this book. Fix or remove the file, then retry.`,
+    );
+    this.name = 'CastIdHistoryUnreadableError';
+    this.bookDir = bookDir;
+    this.path = path;
+  }
+}
+
+/** Read the history for a mutating helper below, refusing to proceed on a
+ *  `degraded` verdict (#2214) — see `CastIdHistoryUnreadableError`'s own doc
+ *  comment for why. `absent` and `ok` return their history unchanged. */
+async function loadHistoryOrThrow(bookDir: string): Promise<CastIdHistory> {
+  const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+  if (status === 'degraded') {
+    throw new CastIdHistoryUnreadableError(bookDir);
+  }
+  return history;
+}
+
+/** #2128 — the ONE place `seq` advances and markers move. Every writer in this
+ *  module calls this immediately BEFORE its `writeJsonAtomic`, whether or not
+ *  it touched a `supersededBy` key.
+ *
+ *  `stampedKeys` are the keys whose TARGET this write established or changed.
+ *  Beyond those, the reconcile loops below hold Global Constraint 6's
+ *  bidirectional invariant unconditionally: a marker whose key is gone is
+ *  destroyed, and a key with no marker (a pre-lane file, a hand-edit that
+ *  dropped the field, a merge conflict) is stamped at the new `seq`. That
+ *  second loop IS the one-shot back-fill: a legacy alias becomes current only
+ *  once a chapter is re-rendered ABOVE this stamp, which is the fail-closed
+ *  direction. */
+function bumpSeqAndStamp(history: CastIdHistory, stampedKeys: readonly string[]): void {
+  const next = (history.seq ?? 0) + 1;
+  const iso = new Date().toISOString();
+  const seqMap: Record<string, number> = { ...(history.recordedAtSeq ?? {}) };
+  const isoMap: Record<string, string> = { ...(history.recordedAtIso ?? {}) };
+
+  for (const k of stampedKeys) {
+    seqMap[k] = next;
+    isoMap[k] = iso;
+  }
+  for (const k of Object.keys(seqMap)) {
+    if (!(k in history.supersededBy)) {
+      delete seqMap[k];
+      delete isoMap[k];
+    }
+  }
+  for (const k of Object.keys(history.supersededBy)) {
+    if (!(k in seqMap)) {
+      seqMap[k] = next;
+      isoMap[k] = iso;
+    }
+  }
+
+  history.seq = next;
+  history.recordedAtSeq = seqMap;
+  history.recordedAtIso = isoMap;
 }
 
 /** Record that characterId `from` has been retired and replaced by `to`.
@@ -250,12 +516,18 @@ function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: s
 
 /** #2092/#2089 M2 (review round 1) — self-loop `rejectedPairs` entries
  *  `repointRejectedPairs` had to drop during this call, if any (see its own
- *  doc comment). Every current caller ignores this (a purely additive
- *  return, replacing the prior `Promise<void>`) — none of them manage
- *  `cast.json`'s `notLinkedTo` edges, which is what a dropped pair's
- *  original reject also wrote and this module has no access to clean up
- *  itself. A future caller that DOES care can consume it; today this is
- *  reported, not acted on further. */
+ *  doc comment). #2133 — a reject's two writes (this `rejectedPairs` entry
+ *  and the one-sided `notLinkedTo` edge the original reject also wrote onto
+ *  `cast.json`) are created together and must be destroyed together (see
+ *  `docs/features/278-cast-character-identity.md`'s invariant of the same
+ *  name) — a dropped pair with its `notLinkedTo` edge left behind would
+ *  permanently suppress §4.4's name matcher for a pairing that no longer
+ *  exists, invisibly. BOTH production callers now act on this return:
+ *  `analysis.ts`'s `recordRetirements` and `cast-merge.ts`'s
+ *  `performCastMerge` each locate any surviving `notLinkedTo` entry naming a
+ *  dropped pair's `from` id and remove it in the same write. This module
+ *  never touches `cast.json` itself (no access to it), so it can only
+ *  report the drop — cleanup is necessarily the caller's job. */
 export interface RetireCharacterIdResult {
   droppedSelfLoopRejections: RejectedPair[];
 }
@@ -273,7 +545,9 @@ export async function retireCharacterId(
   // Serialize writes per-book
   const bookId = bookDir; // Use bookDir as the lock key
   return withKeyLock(`cast-id-history:${bookId}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
 
     /* Direct reversal (#2040 Task 8 fix round 1, item 3): `to` is itself
        recorded as having been retired in favour of `from` — an earlier call
@@ -290,13 +564,16 @@ export async function retireCharacterId(
        repoint anything that targeted `from` at `to`, and write `from -> to`. */
     if (history.supersededBy[to] === from) {
       delete history.supersededBy[to];
+      const repointed: string[] = [];
       for (const [key, value] of Object.entries(history.supersededBy)) {
         if (value === from) {
           history.supersededBy[key] = to;
+          repointed.push(key);
         }
       }
       history.supersededBy[from] = to;
       const droppedSelfLoopRejections = repointRejectedPairs(history, from, to);
+      bumpSeqAndStamp(history, [from, ...repointed]);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
       return { droppedSelfLoopRejections };
     }
@@ -313,9 +590,30 @@ export async function retireCharacterId(
       return { droppedSelfLoopRejections: [] };
     }
 
+    /* #2128 — a retirement that changes nothing must not write. This mirrors
+       the idempotent-write discipline every other primitive in this module
+       already applies (`rejectOrphanedId`, `rejectOrphanedPair`,
+       `unrejectOrphanedPair`, `restoreSupersededId`); `retireCharacterId` was
+       the one that didn't, which was invisible until `seq` made a redundant
+       write observable. Without it, an analysis re-deriving an
+       already-recorded retirement restamps `from` and invalidates every render
+       made since the original — re-listing a book the operator just cleared.
+
+       The repoint loop below is included in "changes nothing": if no other
+       entry's value is `from`, and `supersededBy[from]` already equals
+       `resolvedTo`, the write is a byte-for-byte no-op. */
+    const alreadyRecorded =
+      history.supersededBy[from] === resolvedTo &&
+      !Object.values(history.supersededBy).includes(from);
+    if (alreadyRecorded && !history.rejectedPairs?.some((p) => p.to === from)) {
+      return { droppedSelfLoopRejections: [] };
+    }
+
     // Find all keys that currently point to 'from' and update them to 'to'
+    const repointed: string[] = [];
     for (const [key, value] of Object.entries(history.supersededBy)) {
       if (value === from) {
+        repointed.push(key);
         history.supersededBy[key] = resolvedTo;
       }
     }
@@ -324,6 +622,7 @@ export async function retireCharacterId(
     history.supersededBy[from] = resolvedTo;
 
     const droppedSelfLoopRejections = repointRejectedPairs(history, from, resolvedTo);
+    bumpSeqAndStamp(history, [from, ...repointed]);
 
     // Write back
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
@@ -366,8 +665,10 @@ export function refuseRetirementsOfLiveIds<T extends { from: string; to: string 
 }
 
 /** A history entry dropped because a fresh roster reintroduced its key as a
- *  live cast id. `id` is the (formerly-superseded) history key; `supersededBy`
- *  is what it used to resolve to before the live row reclaimed it. */
+ *  live cast id (`dropSupersededIdsReclaimedByLiveCast`), OR because its
+ *  TARGET quietly stopped being live (`dropSupersededTargetsNoLongerLive`,
+ *  #2110). `id` is the history key; `supersededBy` is what it used to
+ *  resolve to before the drop. */
 export interface DisplacedHistoryEntry {
   id: string;
   supersededBy: string;
@@ -409,7 +710,9 @@ export async function dropSupersededIdsReclaimedByLiveCast(
 ): Promise<DisplacedHistoryEntry[]> {
   const live = new Set(liveIds);
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (live.has(key)) {
@@ -424,6 +727,100 @@ export async function dropSupersededIdsReclaimedByLiveCast(
       }
       history.displaced = displaced;
     }
+    bumpSeqAndStamp(history, []);
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    return dropped;
+  });
+}
+
+/** A `supersededBy` entry whose TARGET (`to`, not `from`) is no longer a
+ *  live cast id — #2110, the mirror-image failure of
+ *  `dropSupersededIdsReclaimedByLiveCast` above (that one prunes an entry
+ *  whose KEY was reclaimed; this one prunes an entry whose TARGET died).
+ *
+ *  The real case: `supersededBy` holds `{anton: 'антон'}` — 'антон' is live
+ *  but unvoiced. A later re-analysis's carry-forward only re-adds
+ *  voiced/reused survivors (`isVoicedOrReused`,
+ *  `merge-analysis-cast.ts`), and the id-drift name-fallback only retires an
+ *  id when a same-name fresh row exists to retire it onto; with neither,
+ *  'антон' simply vanishes with NO `Retirement` ever recorded — nothing else
+ *  notices, and `buildCastResolver` already skips a history entry whose
+ *  target isn't live (`cast-resolve.ts:89-90`), so the dangling entry looks
+ *  perfectly inert. It is not: `POST /cast/create` only treats a
+ *  `supersededBy` KEY as taken, not a value (a live value is already in
+ *  `existingIds`, which holds only while the target stays live) — so once
+ *  'антон' dies, nothing stops a later mint from producing 'антон' again
+ *  (the id is usually the character's own display name, so this is the
+ *  expected case, not an edge one). The moment that happens, the dangling
+ *  entry's raw key ('anton') resolves via tier 2 straight onto the
+ *  brand-new, unrelated, empty row — SILENTLY, with no orphan report at
+ *  all, hijacking every segment the original alias covered. That is
+ *  strictly worse than those segments sitting orphaned-and-visible.
+ *
+ *  Dropping the entry out of `supersededBy` does not, by itself, close that
+ *  hazard — it relocates it one write later. The moment 'anton' leaves
+ *  `supersededBy`, it is free to re-mint again unless something else keeps
+ *  it reserved. That something is `displaced` (below): `POST /cast/create`
+ *  (`cast-create.ts`, C1 fix round, #2163) treats a `displaced` key as
+ *  taken exactly the same way it already treats a `supersededBy` key, so
+ *  the id stays reserved across the drop rather than reopening the hijack
+ *  window this function exists to close. This is why the drop is written
+ *  to move entries into `displaced` instead of discarding them outright —
+ *  losing the pair here would mean losing the last thing keeping the key
+ *  out of circulation.
+ *
+ *  MUST be called only against the full, final roster of an AUTHORITATIVE
+ *  write — never an interim one. The three mid-run "Cast so far" writes —
+ *  two inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
+ *  (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
+ *  those two functions — cited by symbol, not line: F2, #2163, a line
+ *  citation here was stale the moment it was written twice already) —
+ *  go through `overlayInterimCastForLiveView`, never this function,
+ *  precisely because `buildInterimCast` has
+ *  folded only the chapters analysed so far there: a character who simply
+ *  hasn't been reached yet is indistinguishable from one the analyzer
+ *  actually dropped, so pruning against an interim roster would destroy a
+ *  valid alias for a character who is merely not yet on stage (#2086's
+ *  exact hazard). Only the two end-of-run writes that call
+ *  `mergeAnalysisResultWithExistingCast` (analysis.ts's main and subset
+ *  persist blocks, both already the sole callers of
+ *  `dropSupersededIdsReclaimedByLiveCast`) call this too, with the same
+ *  `liveIds` binding (`mergedFinal.characters`, the exact roster the write
+ *  just persisted).
+ *
+ *  Dropped pairs move into `displaced`, the same bookkeeping
+ *  `dropSupersededIdsReclaimedByLiveCast` already established — once
+ *  dropped, `supersededBy` is the only place they lived. Deliberately does
+ *  NOT touch `rejectedPairs`' `forgotSupersededTo` (a stashed id on a
+ *  DIFFERENT record, restorable later via `restoreSupersededId`, which is
+ *  outside this function's write): a dangling `forgotSupersededTo` is a
+ *  separate, narrower hazard (only reachable if that specific pair's Undo
+ *  is later clicked) that needs its own call-site decision, not a
+ *  side-effect of pruning `supersededBy`. */
+export async function dropSupersededTargetsNoLongerLive(
+  bookDir: string,
+  liveIds: ReadonlyArray<string>,
+): Promise<DisplacedHistoryEntry[]> {
+  const live = new Set(liveIds);
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const dropped: DisplacedHistoryEntry[] = [];
+    for (const [key, target] of Object.entries(history.supersededBy)) {
+      if (!live.has(target)) {
+        dropped.push({ id: key, supersededBy: target });
+        delete history.supersededBy[key];
+      }
+    }
+    if (dropped.length) {
+      const displaced = { ...(history.displaced ?? {}) };
+      for (const entry of dropped) {
+        displaced[entry.id] = entry.supersededBy;
+      }
+      history.displaced = displaced;
+    }
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return dropped;
   });
@@ -471,7 +868,9 @@ export async function forgetSupersededId(
   expectedTarget?: string,
 ): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const removed = history.supersededBy[id];
     if (removed === undefined) return undefined;
     if (expectedTarget !== undefined && removed !== expectedTarget) {
@@ -489,6 +888,7 @@ export async function forgetSupersededId(
       return undefined;
     }
     delete history.supersededBy[id];
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return removed;
   });
@@ -523,24 +923,139 @@ export async function forgetSupersededId(
  *  DELETE after a prior successful restore), no write happens and
  *  `restored: true` is still returned — the desired end state already
  *  holds. */
+/** NOTE (#2198): this single-pair primitive has no production caller — the
+ *  reject Undo batches through `undoRejectedPairs` instead. It is kept
+ *  (exported and tested) as the primitive the batch's applier is shared with.
+ *  **Do not reach for it to undo several pairs in a loop**: that is precisely
+ *  the split-write shape #2198 removed — each call takes its own lock, read and
+ *  write, so a mid-loop failure leaves a half-completed state that blinds the
+ *  retry. Batch callers use `undoRejectedPairs`.
+ */
+/** `liveIds` (#2161) — the caller's current live cast roster. Required, not
+ *  optional: a caller that forgets to pass its roster would otherwise
+ *  silently reopen the hazard this parameter exists to close (see
+ *  `applyRestoreSupersededId`'s own doc comment for the mechanism). */
 export async function restoreSupersededId(
   bookDir: string,
   id: string,
   target: string,
-): Promise<{ restored: boolean; supersededByOther?: string }> {
+  liveIds: ReadonlyArray<string>,
+): Promise<{ restored: boolean; supersededByOther?: string; targetNotLive?: boolean }> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
-    const existing = history.supersededBy[id];
-    if (existing === target) {
-      return { restored: true };
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const { result, changed, touchedKeys } = applyRestoreSupersededId(
+      history,
+      id,
+      target,
+      new Set(liveIds),
+    );
+    if (changed) {
+      bumpSeqAndStamp(history, touchedKeys);
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     }
-    if (existing !== undefined) {
-      return { restored: false, supersededByOther: existing };
-    }
-    history.supersededBy[id] = target;
-    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-    return { restored: true };
+    return result;
   });
+}
+
+/** In-memory-only applier shared by `restoreSupersededId` and the batched
+ *  `undoRejectedPairs` below (#2198) — mutates `history` and reports the same
+ *  `{ restored, supersededByOther }` shape `restoreSupersededId` returns,
+ *  plus whether a mutation actually happened, so a caller batching several of
+ *  these under one write knows whether it needs to write at all. Never reads,
+ *  never locks, never writes — see this module's `undoRejectedPairs` doc
+ *  comment for why sharing the LOCKED wrapper instead would deadlock.
+ *
+ *  #2128 — also reports `touchedKeys`, the `supersededBy` keys this call
+ *  established or changed (empty on both no-op branches). The owning writer
+ *  (`restoreSupersededId` alone, or `undoRejectedPairs` accumulating across a
+ *  whole batch) folds this into the single `bumpSeqAndStamp` call it makes
+ *  immediately before its one write — derived from what the code actually
+ *  touched, not hand-transcribed into a table a future PR can outgrow.
+ *
+ *  Review round 1 (M4) — on THIS applier specifically, `touchedKeys` is
+ *  defence-in-depth, not load-bearing: the only branch that sets it
+ *  (`changed: true`, below) writes `history.supersededBy[id]` for the first
+ *  time, which means `id` had no marker before this call either —
+ *  `bumpSeqAndStamp`'s own back-fill loop would stamp it at the same `next`
+ *  seq with or without `id` in `stampedKeys`. Kept anyway because the
+ *  behaviour is correct BY the explicit list, not by relying on the
+ *  self-heal loop as the only mechanism — a future refactor that trims or
+ *  reorders `bumpSeqAndStamp`'s reconcile loops must not assume nothing here
+ *  depends on the back-fill still running.
+ *
+ *  `liveIds` (#2161) — the caller's current live cast roster, the SAME
+ *  determination `dropSupersededTargetsNoLongerLive` already makes for
+ *  `supersededBy` itself (`live.has(target)`), reused here rather than
+ *  invented a second way for `restoreSupersededId`/`undoRejectedPairs` to
+ *  answer "is this id still live". Closes #2161: `target` is only ever
+ *  about to be WRITTEN into `supersededBy[id]` in the branch below (the
+ *  other two branches above already return without touching disk), so this
+ *  is the one place a stale `forgotSupersededTo` could reintroduce the
+ *  dangling-target shape #2110 closed for `supersededBy` — a character
+ *  retired and referenced from a `rejectedPairs` stash, then quietly
+ *  dropped from the live roster by a later re-analysis with no retirement
+ *  ever recorded for the drop. SURFACED, not thrown: the pair removal is
+ *  Undo's primary consequence and still happens regardless (see this
+ *  function's two callers) — mirrors the existing `supersededByOther`
+ *  branch just above, which already skips-and-reports rather than failing
+ *  the whole undo over a value it declines to write. */
+function applyRestoreSupersededId(
+  history: CastIdHistory,
+  id: string,
+  target: string,
+  liveIds: ReadonlySet<string>,
+): {
+  result: { restored: boolean; supersededByOther?: string; targetNotLive?: boolean };
+  changed: boolean;
+  touchedKeys: string[];
+} {
+  const existing = history.supersededBy[id];
+  /* [H2] — deliberately no `liveIds` check on THIS branch: it is idempotent
+     (the desired end state — `supersededBy[id] === target` — already holds),
+     so it writes nothing and there is nothing for the #2161 liveness guard
+     below to protect against. A caller cannot reach this branch with a
+     `target` that is genuinely dangling without that same dangling entry
+     already having been written by some EARLIER call — this function
+     reports the existing state honestly rather than re-litigating a write
+     that already happened. */
+  if (existing === target) {
+    return { result: { restored: true }, changed: false, touchedKeys: [] };
+  }
+  if (existing !== undefined) {
+    return { result: { restored: false, supersededByOther: existing }, changed: false, touchedKeys: [] };
+  }
+  if (!liveIds.has(target)) {
+    console.warn(
+      `[cast-id-history] restoreSupersededId("${id}" -> "${target}") skipped — "${target}" is no ` +
+        `longer a live cast id; writing it back would reintroduce a dangling supersededBy target (#2110's ` +
+        `hazard, reopened through a stale forgotSupersededTo stash). The rejection is still undone; only ` +
+        `this alias restore was refused. Filed into displaced[id] to keep "${id}" reserved against re-mint.`,
+    );
+    /* [K1] (round 3) — file into `displaced`, not discard: `displaced` is
+       keyed by the id AT RISK of re-mint (`id`, i.e. the pair's `from`), not
+       by its target — see this file's own module doc comment for the full
+       reasoning (#2268, reversed from an earlier, wrong rationale). Without
+       this, `id` ends up in NONE of `cast-create.ts`'s taken-id sets (not
+       `supersededBy` — nothing was written there; not `displaced` — nothing
+       filed here, before this fix; not `rejectedPairs[].from` — the pair was
+       just removed by the same Undo), so a bare re-mint of `id` resolves the
+       OLD segments straight onto the NEW, unrelated character. Same
+       `displaced` merge shape `dropSupersededIdsReclaimedByLiveCast`/
+       `dropSupersededTargetsNoLongerLive` already use for a dropped
+       `supersededBy` entry. `touchedKeys` stays empty — this write never
+       touches `supersededBy`, so it must not be stamped as though it did
+       (`bumpSeqAndStamp`'s reconcile loop keys off `supersededBy` alone); a
+       phantom `recordedAtSeq` entry for a key absent from `supersededBy`
+       would be stamped then immediately deleted by that same loop — wasted,
+       not harmful, but `changed: true` is what actually matters here so the
+       caller persists the write at all. */
+    history.displaced = { ...(history.displaced ?? {}), [id]: target };
+    return { result: { restored: false, targetNotLive: true }, changed: true, touchedKeys: [] };
+  }
+  history.supersededBy[id] = target;
+  return { result: { restored: true }, changed: true, touchedKeys: [id] };
 }
 
 /** LEGACY (#2040 Task 17) — id-wide reject. Superseded by `rejectOrphanedPair`
@@ -562,10 +1077,13 @@ export async function restoreSupersededId(
  *  `supersededBy` itself. */
 export async function rejectOrphanedId(bookDir: string, id: string): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const rejected = history.rejected ?? [];
     if (rejected.includes(id)) return;
     history.rejected = [...rejected, id];
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
 }
@@ -598,12 +1116,15 @@ export async function rejectOrphanedPair(
   forgotSupersededTo?: string,
 ): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const pairs = history.rejectedPairs ?? [];
     if (pairs.some((p) => p.from === from && p.to === to)) return;
     const entry: RejectedPair =
       forgotSupersededTo === undefined ? { from, to } : { from, to, forgotSupersededTo };
     history.rejectedPairs = [...pairs, entry];
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
 }
@@ -620,19 +1141,244 @@ export async function rejectOrphanedPair(
  *  No-op (and no write) when the pair isn't present, mirroring this module's
  *  idempotent-write discipline — a repeat undo of an already-undone pair is
  *  safe. */
+/** NOTE (#2198): this single-pair primitive has no production caller — the
+ *  reject Undo batches through `undoRejectedPairs` instead. It is kept
+ *  (exported and tested) as the primitive the batch's applier is shared with.
+ *  **Do not reach for it to undo several pairs in a loop**: that is precisely
+ *  the split-write shape #2198 removed — each call takes its own lock, read and
+ *  write, so a mid-loop failure leaves a half-completed state that blinds the
+ *  retry. Batch callers use `undoRejectedPairs`.
+ */
 export async function unrejectOrphanedPair(
   bookDir: string,
   from: string,
   to: string,
 ): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
-    const pairs = history.rejectedPairs ?? [];
-    const idx = pairs.findIndex((p) => p.from === from && p.to === to);
-    if (idx < 0) return undefined;
-    const removed = pairs[idx];
-    history.rejectedPairs = [...pairs.slice(0, idx), ...pairs.slice(idx + 1)];
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const { removed, changed } = applyUnrejectOrphanedPair(history, from, to);
+    if (changed) {
+      bumpSeqAndStamp(history, []);
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    }
+    return removed?.forgotSupersededTo;
+  });
+}
+
+/** In-memory-only applier shared by `unrejectOrphanedPair` and the batched
+ *  `undoRejectedPairs` below (#2198) — same split as `applyRestoreSupersededId`
+ *  above: mutates `history`, reports the removed pair (if any) and whether a
+ *  mutation happened, never reads/locks/writes itself. */
+function applyUnrejectOrphanedPair(
+  history: CastIdHistory,
+  from: string,
+  to: string,
+): { removed: RejectedPair | undefined; changed: boolean } {
+  const pairs = history.rejectedPairs ?? [];
+  const idx = pairs.findIndex((p) => p.from === from && p.to === to);
+  if (idx < 0) return { removed: undefined, changed: false };
+  const removed = pairs[idx];
+  history.rejectedPairs = [...pairs.slice(0, idx), ...pairs.slice(idx + 1)];
+  return { removed, changed: true };
+}
+
+/** Undo a whole BATCH of `rejectOrphanedPair` entries atomically (#2198) —
+ *  the transactional replacement for a caller looping `restoreSupersededId`
+ *  + `unrejectOrphanedPair` per pair. One `withKeyLock`, one read, one
+ *  `writeJsonAtomic` for the WHOLE batch: `writeJsonAtomic` is a
+ *  temp-file-plus-rename, so a single write is all-or-nothing for free, and a
+ *  batch that fails partway through leaves the file byte-identical to before
+ *  the call — no half-restored alias, no half-removed pair.
+ *
+ *  This closes #2198: the pre-fix DELETE handler ran two SEPARATE loops over
+ *  a governing-pairs batch, each primitive taking its own lock/read/write.
+ *  Pair 1 fully completing already moves `supersededBy[pair1.from]`, which is
+ *  exactly what makes `rejectedPairsGoverning`'s resolution SEE fewer
+ *  governing pairs on a retry after pair 2's loop throws — the retry goes
+ *  blind to work it hasn't done yet. Per-pair atomicity doesn't fix this
+ *  (pair 1 alone still moves `supersededBy`); only batch-scope atomicity
+ *  does, which is why this shares appliers with, rather than calls, the two
+ *  single-pair primitives above.
+ *
+ *  MUST NOT call `restoreSupersededId`/`unrejectOrphanedPair` — both take
+ *  `withKeyLock('cast-id-history:' + bookDir)` themselves, and this function
+ *  already holds that same lock for the whole batch. Re-entering it deadlocks:
+ *  since #2260 that surfaces as a `LockAcquisitionTimeoutError` after 10s
+ *  (workspace/file-lock.ts) rather than hanging forever, but the batch still
+ *  fails and the rule stands. `applyRestoreSupersededId`
+ *  / `applyUnrejectOrphanedPair` are the shared, lock-free appliers this
+ *  function and the two single-pair primitives both mutate `history` through.
+ *
+ *  Order within `pairs` does not affect the result: each pair's restore (if
+ *  any) and pair-removal are applied to the in-memory `history` in the order
+ *  given, but every pair's restore reads/writes only its OWN `from` key, and
+ *  every pair's removal only removes its OWN `(from, to)` entry, so two
+ *  pairs can never observe or clobber each other's effect.
+ *
+ *  A pair with `forgotSupersededTo === undefined` contributes no alias
+ *  restore (mirrors the pre-#2198 loop's `continue`) — only its
+ *  `rejectedPairs` removal happens. `restored` on that pair's result is
+ *  `true` (nothing blocked it): the field's `false` cases — a NEWER alias
+ *  occupying `supersededBy[from]`, or (#2161) the stashed target quietly no
+ *  longer being live — can only arise from an ATTEMPTED restore, so neither
+ *  applies when no restore was attempted at all.
+ *
+ *  If nothing in the batch changes anything (every pair already absent, no
+ *  alias needed restoring), no write happens at all — same idempotent-write
+ *  discipline as every other primitive in this module. */
+export interface UndoRejectedPairResult {
+  from: string;
+  to: string;
+  /** false when a NEWER alias already occupies supersededBy[from] (see
+   *  `supersededByOther`), OR when the stashed target has quietly stopped
+   *  being live (#2161, see `targetNotLive`). */
+  restored: boolean;
+  supersededByOther?: string;
+  /** #2161 — true when the restore was refused because `forgotSupersededTo`
+   *  no longer names a live cast id (the #2110 hazard, reopened through a
+   *  stale stash — see `applyRestoreSupersededId`'s own doc comment). The
+   *  pair is still removed regardless; only the alias restore was skipped.
+   *  A `displaced` entry is filed to reserve the orphaned id. */
+  targetNotLive?: boolean;
+}
+
+/** `liveIds` (#2161) — the caller's current live cast roster, threaded into
+ *  every pair's restore via `applyRestoreSupersededId`. Required for the
+ *  same reason `restoreSupersededId` requires it: see that function's own
+ *  doc comment. */
+export async function undoRejectedPairs(
+  bookDir: string,
+  pairs: ReadonlyArray<{ from: string; to: string; forgotSupersededTo?: string }>,
+  liveIds: ReadonlyArray<string>,
+): Promise<UndoRejectedPairResult[]> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const live = new Set(liveIds);
+    const results: UndoRejectedPairResult[] = [];
+    /* #2128 — the tenth write site (P1). Each pair's `applyRestoreSupersededId`
+       reports the `supersededBy` keys IT touched; accumulated here and stamped
+       ONCE via `bumpSeqAndStamp` immediately before the single batch write, so
+       one `undoRejectedPairs` call is one `seq` bump no matter how many pairs
+       it restores — the key list is derived from what the loop actually
+       touched, never hand-transcribed. */
+    const touchedKeys: string[] = [];
+    let changed = false;
+    for (const pair of pairs) {
+      let restored = true;
+      let supersededByOther: string | undefined;
+      let targetNotLive: boolean | undefined;
+      if (pair.forgotSupersededTo !== undefined) {
+        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo, live);
+        restored = applied.result.restored;
+        supersededByOther = applied.result.supersededByOther;
+        targetNotLive = applied.result.targetNotLive;
+        if (applied.changed) changed = true;
+        /* Review round 1 (I1 follow-up) — confirmed by mutation testing that
+           dropping this accumulation is UNOBSERVABLE by any test today: the
+           same reason `applyRestoreSupersededId`'s `touchedKeys` is
+           defence-in-depth on the single-pair path (see its own doc comment,
+           M4) applies here too — `applied.changed` is only ever true when
+           `id` was just added to `supersededBy` for the first time, which
+           means it had no marker before this call, which means
+           `bumpSeqAndStamp`'s own back-fill loop (the "key with no marker"
+           reconcile) stamps it at the same final `seq` regardless of whether
+           it is also in `stampedKeys`. Kept for the same reason as M4: an
+           explicit list, not reliance on the self-heal loop as the only
+           mechanism. This is the SAME deferred self-heal gap the whole-branch
+           review is tracking, not a new one. */
+        touchedKeys.push(...applied.touchedKeys);
+      }
+      const { changed: unrejectChanged } = applyUnrejectOrphanedPair(history, pair.from, pair.to);
+      if (unrejectChanged) changed = true;
+      results.push({
+        from: pair.from,
+        to: pair.to,
+        restored,
+        ...(supersededByOther === undefined ? {} : { supersededByOther }),
+        ...(targetNotLive === undefined ? {} : { targetNotLive }),
+      });
+    }
+    if (changed) {
+      bumpSeqAndStamp(history, touchedKeys);
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    }
+    return results;
+  });
+}
+
+/** #2128 — perform the one-shot back-fill stamp on a book whose history file
+ *  has never been through this lane. Called by `repair-cast-id-drift.mjs
+ *  --apply` for EVERY book it scans, not only ones with an alias to record:
+ *  the books carrying pre-lane aliases are exactly the ones the A33 repair
+ *  workflow already visits, and absence of the field reads `'unknown'` until
+ *  it lands.
+ *
+ *  Returns whether it wrote. Four no-write cases, all deliberate: no file
+ *  (nothing to stamp), the file exists but is unreadable — bad JSON, an I/O
+ *  error (review round 1, M3: this used to be swallowed identically to "no
+ *  file", so an operator sweeping books via `--apply` got no output at all
+ *  for a corrupt one — now warned, matching the shape-check branch below),
+ *  the marker map already agrees with `supersededBy` key-for-key
+ *  (idempotent — see below), and — the one that matters — a file that fails
+ *  the shape check. Loading a malformed file returns the EMPTY default, so
+ *  stamping that would persist an empty history over whatever `supersededBy`
+ *  the operator still has on disk to repair.
+ *
+ *  The idempotent check tests the KEY SETS, not merely whether `recordedAtSeq`
+ *  is present (fold-in fix, follow-up to the original #2128 landing): a file
+ *  whose `recordedAtSeq` field exists but is missing entries for some
+ *  `supersededBy` keys — reachable by hand-edit or merge damage — used to
+ *  read as "already stamped" and stop here forever, with no route back to
+ *  Global Constraint 6's bidirectional invariant short of an unrelated write
+ *  that happens to touch every missing key. Comparing the key sets gives a
+ *  partially-damaged marker map a way to self-heal through this same
+ *  `--apply` entry point: `bumpSeqAndStamp`'s own reconcile loops (called
+ *  below with an empty `stampedKeys`) already backfill any `supersededBy` key
+ *  with no marker and prune any marker with no `supersededBy` key, so once
+ *  the write proceeds the repair is automatic — this function only needed to
+ *  stop refusing to make the call. Still conservative: a file whose sets
+ *  already agree makes no write, exactly as before. */
+export async function stampRecordedAtSeqIfAbsent(bookDir: string): Promise<boolean> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const path = castIdHistoryPath(bookDir);
+    let raw: CastIdHistory | null;
+    try {
+      raw = await readJson<CastIdHistory>(path);
+    } catch (err) {
+      console.warn(
+        `[cast-id-history] ${path} is unreadable (${(err as Error)?.message ?? err}) — skipping the #2128 ` +
+          `one-shot stamp rather than overwriting it with an empty history.`,
+      );
+      return false;
+    }
+    if (raw === null) return false;
+    if (!isWellFormedHistory(raw)) {
+      console.warn(
+        `[cast-id-history] ${path} has an unexpected shape — skipping the #2128 ` +
+          `one-shot stamp rather than overwriting it with an empty history.`,
+      );
+      return false;
+    }
+    if (raw.recordedAtSeq !== undefined) {
+      const markerKeys = Object.keys(raw.recordedAtSeq);
+      const supersededKeys = Object.keys(raw.supersededBy);
+      const inSync =
+        markerKeys.length === supersededKeys.length &&
+        supersededKeys.every((k) => k in raw.recordedAtSeq!);
+      if (inSync) return false;
+    }
+    const history: CastIdHistory = { ...raw, seq: repairSeq(raw) };
+    bumpSeqAndStamp(history, []);
+    /* Written as `writeJsonAtomic(castIdHistoryPath(bookDir), …)`, NOT via a
+       `const path` local. Review round 1 (C2): guard 5 counts write sites by
+       matching that literal text, so hoisting the path into a variable makes
+       the one new write site this lane adds invisible to the guard that exists
+       to see write sites. */
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-    return removed.forgotSupersededTo;
+    return true;
   });
 }

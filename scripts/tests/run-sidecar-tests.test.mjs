@@ -8,6 +8,9 @@ import {
   linkSync,
   copyFileSync,
   rmSync,
+  symlinkSync,
+  rmdirSync,
+  unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -167,18 +170,88 @@ const PYTHON_SKIP_REASON = REAL_PYTHON
       ...PYTHON_DISCOVERY.attempts.map((a) => `  - ${a}`),
     ].join('\n');
 
+// --- symlink/junction capability probe (#2291), mirrors PYTHON_SKIP_REASON's
+// shape immediately above ---
+//
+// Node's ESM loader realpaths the main entry point before deriving
+// import.meta.url, but process.argv[1] keeps the path exactly as invoked. So
+// when the invocation path runs through a symlink (POSIX) or a junction
+// (Windows — the admin-rights-free equivalent, used here so this runs on a
+// stock CI box), the two hrefs differ, the direct-execution guard in
+// run-sidecar-tests.mjs misses, and main() silently never runs — exit 0,
+// empty stdout/stderr. The test below reproduces that locally.
+//
+// Probed once at module load rather than assumed: a filesystem that can't
+// create a symlink/junction (e.g. some FAT-formatted mounts, or a POSIX box
+// without symlink privilege) must SKIP with a specific, named reason —
+// never silently pass because the repro itself couldn't be built.
+function removeLink(linkPath) {
+  // A junction reports as a directory to Windows (FILE_ATTRIBUTE_REPARSE_POINT
+  // | FILE_ATTRIBUTE_DIRECTORY) and must be removed with rmdir, not unlink, or
+  // the delete fails outright. rmdir on a reparse point removes only the link,
+  // never the target's contents — the POSIX unlink of a directory symlink has
+  // the identical link-only property.
+  //
+  // Tolerate ENOENT (link does not exist) so callers can safely call this in
+  // a finally block without masking the real error if symlinkSync threw before
+  // creating the link. A genuine removal failure (EACCES, etc.) still surfaces.
+  try {
+    if (IS_WIN) {
+      rmdirSync(linkPath);
+    } else {
+      unlinkSync(linkPath);
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
+function probeLinkSupport() {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-linkcheck-'));
+  const target = join(dir, 'target');
+  const link = join(dir, 'link');
+  try {
+    mkdirSync(target);
+    symlinkSync(target, link, IS_WIN ? 'junction' : 'dir');
+    removeLink(link);
+    return null;
+  } catch (err) {
+    return [
+      `cannot create a ${IS_WIN ? 'junction' : 'directory symlink'} on this filesystem `
+        + "(main()'s realpath-mismatch guard from #2291 is untested on this run, not confirmed",
+      `passing): ${err.message}`,
+    ].join('\n');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const LINK_SKIP_REASON = probeLinkSupport();
+
 // Builds <tmp>/scripts/run-sidecar-tests.mjs as a byte-for-byte copy of the
 // real script. Its own SIDECAR_DIR resolution then lands on
 // <tmp>/server/tts-sidecar, matching what makeFakeVenv() below builds there.
+//
+// #2291 — run-sidecar-tests.mjs now imports ./lib/is-main-module.mjs (the
+// shared direct-execution guard); mirror it too, or the throwaway script
+// crashes on module resolution (same technique bump-version.test.mjs's
+// setupRepo() uses for the same reason).
 function makeFixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), 'sidecar-e2e-'));
   mkdirSync(join(root, 'scripts'), { recursive: true });
   writeFileSync(join(root, 'scripts', 'run-sidecar-tests.mjs'), readFileSync(runnerScript, 'utf8'));
+  mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+  writeFileSync(
+    join(root, 'scripts', 'lib', 'is-main-module.mjs'),
+    readFileSync(resolve(here, '..', 'lib', 'is-main-module.mjs'), 'utf8'),
+  );
   return root;
 }
 
-function runEntryPoint(root, args, env = {}) {
-  return spawnSync(process.execPath, [join(root, 'scripts', 'run-sidecar-tests.mjs'), ...args], {
+function runEntryPoint(root, args, env = {}, execArgv = []) {
+  return spawnSync(process.execPath, [...execArgv, join(root, 'scripts', 'run-sidecar-tests.mjs'), ...args], {
     encoding: 'utf8',
     env: { ...process.env, ...env },
   });
@@ -311,6 +384,57 @@ test('run-sidecar-tests.mjs (real CLI): a python.exe that exists but is not a va
     const out = runEntryPoint(root, ['--require-venv']);
     assert.notEqual(out.status, 0);
   } finally {
+    cleanup(root);
+  }
+});
+
+test('run-sidecar-tests.mjs (real CLI): invoked through a symlink/junction still runs main() (#2291)', { skip: LINK_SKIP_REASON ?? false }, () => {
+  // Reproduces the macOS-runner bug directly: `root` holds the real fixture
+  // (scripts/run-sidecar-tests.mjs + server/tts-sidecar/...); `linkDir` is a
+  // symlink/junction pointing AT root. Invoking the script via
+  // <linkDir>/scripts/run-sidecar-tests.mjs gives argv[1] the linked path
+  // while Node's ESM loader realpaths it for import.meta.url — the exact
+  // mismatch that made the entry-point guard miss on GitHub's macos-latest
+  // runner (tmpdir() under /var, itself a symlink to /private/var).
+  //
+  // No venv is created, so this is the SAME assertion as the very first CLI
+  // test above (--require-venv + absent venv -> exit 1 with the ERROR
+  // banner) — proving main() actually ran, not just that the process exited
+  // non-zero for some unspecified reason. Before the fix this fails with
+  // exit 0 and empty stderr: the guard missed and main() never ran at all.
+  const root = makeFixtureRoot();
+  const linkContainer = mkdtempSync(join(tmpdir(), 'sidecar-e2e-link-'));
+  const linkDir = join(linkContainer, 'link');
+  try {
+    symlinkSync(root, linkDir, IS_WIN ? 'junction' : 'dir');
+    const out = runEntryPoint(linkDir, ['--require-venv']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /ERROR: sidecar pytest -- venv not found/);
+  } finally {
+    removeLink(linkDir);
+    rmSync(linkContainer, { recursive: true, force: true });
+    cleanup(root);
+  }
+});
+
+test('run-sidecar-tests.mjs (real CLI): invoked through a symlink/junction with --preserve-symlinks-main still runs main() (#2291)', { skip: LINK_SKIP_REASON ?? false }, () => {
+  // Node's --preserve-symlinks-main flag inverts the loader's behaviour: it
+  // keeps the invoked path (argv[1]) as-is instead of realpath'ing it, while
+  // import.meta.url still derives from the realpath'd entry. Without a
+  // symmetric comparison (realpath'ing BOTH sides), the guard misses again and
+  // main() silently never runs — exit 0 and empty stderr, the same failure mode
+  // as without the fix. This test ensures the fix handles both cases.
+  const root = makeFixtureRoot();
+  const linkContainer = mkdtempSync(join(tmpdir(), 'sidecar-e2e-link-'));
+  const linkDir = join(linkContainer, 'link');
+  try {
+    symlinkSync(root, linkDir, IS_WIN ? 'junction' : 'dir');
+    const out = runEntryPoint(linkDir, ['--require-venv'], {}, ['--preserve-symlinks-main']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /ERROR: sidecar pytest -- venv not found/);
+  } finally {
+    removeLink(linkDir);
+    rmSync(linkContainer, { recursive: true, force: true });
     cleanup(root);
   }
 });

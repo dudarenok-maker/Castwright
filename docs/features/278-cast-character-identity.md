@@ -9,11 +9,57 @@ owner: null
 > Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A32, B3, A33)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
 > `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
-> `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-create.ts`,
+> `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-link-orphan.ts`,
+> `server/src/routes/cast-create.ts`,
 > `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
 > URL surface: `#/books/<id>/cast` (the orphaned-id advisory banner)
 > OpenAPI ops: `GET /api/books/{id}` (`orphanedCharacterFallbacks` field),
-> `POST` and `DELETE /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
+> `POST` and `DELETE /api/books/{bookId}/cast/{characterId}/reject-orphan-match`,
+> `POST /api/books/{bookId}/cast/{characterId}/link-orphan-match`
+
+## Amendment 2026-08-10 — the banner can now ACCEPT a match (#2238)
+
+Wave 3 shipped the "needs your decision" section with a candidate picker and a
+single action, **"Not the same character"**. There was no way to record the
+positive answer, so the repair script's report-only bucket — **107 ids / 93
+segments** on the real workspace, including *Exile*'s `silveny` (17 segments
+across 4 chapters) — was stranded by construction: `retireCharacterId` does
+exactly the right thing but its only callers were the analyzer path and
+`performCastMerge`, neither reachable for an id that is not a cast row.
+
+`POST .../link-orphan-match` (#2238) mirrors the reject route at every layer.
+Four constraints, all of which have tests:
+
+1. **A reserved id is refused as the alias SOURCE**, not only as the target —
+   `unknown-male`/`unknown-female` are shared fold buckets and `narrator` is the
+   catch-all, so aliasing one book-wide routes several speakers onto one voice.
+   The first implementation guarded only the target; the review gate caught it
+   as a Critical with a live repro (*Unlocked*, `unknown-male`, 34 segments).
+   `narrator` is refused as a source but remains a legal target.
+2. **Both reserved checks compare through `normaliseIdKey`**, not raw string
+   equality — the same drift class (`Unknown_Male`) the repair script's guards 1
+   and 4 already normalise for.
+3. **A prior rejection is cleared through the existing undo path**, awaited, and
+   the link is **aborted** if that undo fails — otherwise the alias fights a
+   `rejectedPairs` entry still on disk and `rejectedPairsGoverning` blocks it.
+4. **`resolution: null` is surfaced, not swallowed** — it means the alias landed
+   but is still blocked, which is a different outcome from a clean link.
+
+No `withCastLock` is owed on this route: it reads `cast.json` to validate the
+target and otherwise writes only history, and the one path that does touch
+`cast.json` (`clearNotLinkedEdgesForDroppedRejections`, cleaning up
+`droppedSelfLoopRejections`) takes its own lock. That helper now lives in
+`server/src/store/not-linked-edges.ts` as a locked/lock-free pair
+(`clearNotLinkedEdgesForDroppedRejections` / `…Locked`), moved out of
+`analysis.ts` so its cross-module caller here no longer pulls in a whole
+route module ([#2239](https://github.com/dudarenok-maker/Castwright/issues/2239)).
+
+**Undo is a round trip, not a mirror** — a linked row moves into the
+auto-reconciled section, whose existing "Not the same character" forgets the
+alias and records a pair-scoped rejection. This is a deliberate deviation from
+#2238's acceptance criterion 3 ("symmetric"): the alias is recoverable
+(`forgetSupersededId` stashes it as `forgotSupersededTo`, restorable by that
+pair's own Undo), so the round trip is lossless even though it is not symmetric.
 
 ## Benefit / Rationale
 
@@ -187,15 +233,22 @@ owner: null
    resolution for both (review round 1) — the same normalised taken-set
    (built from `existingIds` **and** `historyKeys`) covers it.
 9. **An interim `cast.json` write never removes an id from the persisted
-   roster** (srv-87, #2086). The three interim ("Cast so far") writes
-   (`analysis.ts:3633`, `:3845`, `:5613`) go through
+   roster** (srv-87, #2086). The three interim ("Cast so far") writes — two
+   inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
+   (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
+   those two functions — cited by symbol, not line: a line citation here was
+   already stale twice over, F2, #2163) — go through
    `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
    which has no id-drift name-fallback and produces no `retirements` — there is
    nothing in its return type for a caller to discard. Only the two
-   authoritative end-of-run writes (`:4885`, `:6148`) apply identity merges and
+   authoritative end-of-run writes (the `mergeAnalysisResultWithExistingCast`
+   call in `runMainAnalyzerJob` and the one in
+   `runSubsetAnalyzerJob`) apply identity merges and
    call `retireCharacterId`. Before this fix, a mid-run death — **or a
    completed run whose `phase1DriftExceeded` gate skipped the authoritative
-   write** (`analysis.ts:4868`; `attributionDriftExceeded` is a normal, logged,
+   write** (`runMainAnalyzerJob`'s `attributionDriftExceeded` call, checked
+   at its two `phase1DriftExceeded` use sites later in the same function;
+   `attributionDriftExceeded` is a normal, logged,
    non-crash outcome, not only a process kill) — could leave a character's id
    durably swapped in `cast.json` with no history record, orphaning that
    character's frozen `<slug>.segments.json` entries to the narrator. Residual
@@ -213,6 +266,65 @@ owner: null
    93/161 before), and *Unlocked* alone still carries 34 orphaned segments
    under `unknown-male`; see the on-box register's A33 row) or a re-render
    to recover.
+10. **Invariant 10 — a reject's two writes are created together and destroyed
+    together.** The `rejectedPairs` entry is written first and removed last;
+    the `notLinkedTo` edge is created after it and destroyed before it, so
+    both verbs fail into the *visible* state (chip renders, Undo works, retry
+    completes). `reject-edge-reconcile.ts` heals a half-written reject at the
+    next authoritative persist, and `notLinkedTo` is server-owned on the cast
+    PUT so a stale client cannot undo that. Shipped by #2166 / plan 281.
+    **Open residual:** a multi-pair DELETE can half-complete and become
+    unretryable — see #2198.
+    - **#2200 fix (2026-08-07):** plan 281's add rule additionally suppressed
+      every add for a `from` whenever a RELOCATED edge existed for it (an edge
+      `merge-analysis-cast.ts` copied by name onto a row that is not any
+      pair's `to`) — reachable with no failure required, and it under-healed
+      a second, genuinely edgeless pair for that same `from` alongside the
+      relocated one. `reject-edge-reconcile.ts` now adds strictly per-pair on
+      `p.to`, unconditional on relocation; the relocated edge itself is left
+      in place either way (removal is untouched) and stays this invariant's
+      pre-existing residual, not a new one.
+    - **`retireCharacterId` dropping a self-loop `rejectedPairs` entry**
+      (`RetireCharacterIdResult.droppedSelfLoopRejections`,
+      `cast-id-history.ts`) — when the id a pair was rejected `to` retires
+      into a replacement that IS that same pair's `from`, the pair becomes
+      nonsensical (`X !-> X`) and is dropped. `retireCharacterId` never
+      touches `cast.json` itself, so it can only report the drop; BOTH
+      production callers (`analysis.ts`'s `recordRetirements` and
+      `cast-merge.ts`'s `performCastMerge`) now act on it, clearing the
+      matching `notLinkedTo` edge in the same write (or the same lock span,
+      for `cast-merge.ts`, which already holds it — rule 1 forbids a second
+      nested `withCastLock` for the same book).
+    - **`DELETE /reject-orphan-match`'s abandoned-half-write path** — the
+      route writes `notLinkedTo` first (unconditional, per its own module
+      doc) and `rejectedPairs` second; if the process dies or 500s between
+      the two and the user never retries, the `notLinkedTo` edge survives
+      with no pair, and the only removal path (`rejectedPairsGoverning`
+      returning a matching pair) can never find one. DELETE now also clears
+      the edge unconditionally, keyed on `orphanedId` directly, alongside the
+      pair-scoped removal (which stays keyed on each governing pair's own
+      `from`, for the `the_torment`/`The-Torment` normalised-collision
+      shape).
+      **Residual, recorded rather than fixed (I3, fix round, #2163):** the
+      endpoint change above is real and tested — it clears the edge for any
+      caller that reaches it — but nothing in the UI reaches it in this
+      exact state. `handleUndoOrphanRejection` (`src/views/cast.tsx`) only
+      fires from `OrphanRejectedChips`, which renders only off
+      `info.rejectedAgainst`, itself derived from `rejectedPairsGoverning`
+      — empty here by construction, since no `rejectedPairs` entry ever
+      landed. So the abandoned-half-write state stays invisible and
+      unreachable from the UI even after this fix; deciding how (or
+      whether) to surface it is a UI design call, deliberately left open
+      rather than folded into this endpoint change.
+    - **A dead `notLinkedTo` target on the read side** is a separate,
+      narrower case (finding B, same #2133 comment): `rejectedPairsGoverning`
+      rule 1 has no liveness check on `to`, so a chip can still name a
+      character no longer in the live cast (folded away by an unrelated
+      merge). The pair is already inert for resolution regardless — the chip
+      is cosmetic and its Undo button would 404 forever, so `src/views/
+      cast.tsx`'s `OrphanRejectedChips` hides it client-side rather than
+      changing `rejectedPairsGoverning`'s deliberately-raw rule-1 semantics
+      or loosening the DELETE route to accept a non-live `characterId`.
 
 ## Deviations from the spec
 

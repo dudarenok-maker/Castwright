@@ -19,6 +19,55 @@ import type { BookStateJson } from '../workspace/scan.js';
 vi.mock('./build-m4b.js', () => ({ probeDurationSec: vi.fn(async () => 0) }));
 vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment: vi.fn() }));
 
+/* Behavioral regression for the ZipFile-level `zip.on('error', rejectBuild)`
+   listener that build-captions.ts's per-chapter branch picks up via
+   `createZipWritePipeline` (build-mp3-zip.ts:159) — shared with buildMp3Zip
+   and buildCodecZip, not a build-captions.ts-local listener. Real yazl
+   never routes an addBuffer-path failure through ZipFile's own 'error'
+   event (only addFile/addReadStream's read-stream-error and
+   byte-count-mismatch paths do — see node_modules/yazl/index.js), so there
+   is no code-path-only way to provoke a genuine internal yazl error here.
+   Instead we intercept the `ZipFile` export itself and give it a
+   test-controlled way to emit 'error' on the INSTANCE, at a moment chosen
+   to mirror how yazl's own internal error emissions actually happen: from
+   an async callback (an fs.stat callback, a stream 'end' handler), never
+   synchronously during construction.
+
+   That timing choice is load-bearing, not cosmetic: `new Promise((resolve,
+   reject) => { const zip = new ZipFile(); ... })`'s executor runs
+   synchronously, and the Promise constructor auto-catches any *synchronous*
+   throw inside its executor and turns it into a rejection — with or
+   without `zip.on('error', reject)` ever being wired. Emitting synchronously
+   from the constructor would "pass" even with the fix line deleted, for the
+   wrong reason (JS's own executor-throw-to-rejection, not build-captions.ts's
+   deliberate forwarding). Scheduling the emit via `process.nextTick` moves
+   it outside that synchronous frame — same as yazl's real internal error
+   sites — so an absent `zip.on('error', reject)` reproduces the real bug:
+   the emit has zero listeners, Node throws it as a process-level
+   `uncaughtException`, and `buildCaptions`'s promise never settles.
+   `process.nextTick` (rather than `setImmediate`) also wins the race
+   against yazl's own real completion path deterministically: it's
+   scheduled at ZipFile construction time, before the per-chapter loop's
+   `addBuffer` calls even run, and Node drains the entire nextTick queue —
+   FIFO, so ours fires first — before any zlib thread-pool callback
+   (`addBuffer`'s own deflate step) can complete. */
+let triggerZipFileError: Error | null = null;
+vi.mock('yazl', async (importOriginal) => {
+  const real = await importOriginal<typeof import('yazl')>();
+  class TestZipFile extends real.ZipFile {
+    constructor() {
+      super();
+      if (triggerZipFileError) {
+        const err = triggerZipFileError;
+        process.nextTick(() => {
+          this.emit('error', err);
+        });
+      }
+    }
+  }
+  return { ...real, ZipFile: TestZipFile };
+});
+
 const ffmpegPresent = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 
@@ -155,6 +204,101 @@ describeIfFfmpeg('buildCaptions', () => {
       outPath,
     });
     expect(result.sizeBytes).toBeGreaterThan(0);
+  });
+
+  /* Finding 1 (independent review of the crash fix): the per-chapter zip
+     branch (the SECOND per-chapter loop, which packs already-computed
+     cues into the zip) accepted a `signal` option in BuildCaptionsOptions
+     but never consulted it anywhere in its own write path — an abort
+     landing after cue computation but before/during the zip write did
+     nothing; the build ran to completion regardless. Fixed by adding the
+     same `signal?.throwIfAborted()` check between chapters that the other
+     two zip builders already had.
+
+     Aborting from `onProgress` — fired once per chapter by the FIRST loop
+     (cue computation), which already called `throwIfAborted()` even
+     before this fix — lands the abort exactly between the two loops: by
+     the time execution reaches the per-chapter zip section, `signal` is
+     already aborted, but the FIRST loop's own (pre-existing) check can no
+     longer catch it because that loop has already exited. This isolates
+     the SECOND loop's gap specifically. Confirmed: reverting the fix
+     makes this pass with a COMPLETED zip instead of rejecting — this is
+     not a vacuous abort-before-anything-runs test.
+
+     N4 (third review pass): an earlier version of this test also asserted
+     `existsSync(outPath)` was `false` — dropped here. That assertion was
+     weak, not a genuine "the write stopped mid-flight" proof: this abort
+     lands before the per-chapter branch has added a single zip entry, in
+     the same synchronous window as `createZipWritePipeline`'s own
+     `createWriteStream` call, so Node's async `fs.open()` behind the write
+     stream never got far enough to matter either way — the file's absence
+     said nothing about whether teardown actually worked. The rejection
+     itself, asserted above, is what Finding 1's fix is actually
+     responsible for. */
+  it('rejects instead of completing when the signal aborts between cue computation and the zip write (per-chapter scope)', async () => {
+    const controller = new AbortController();
+    const outPath = join(bookDir, 'aborted-per-chapter.zip');
+    await expect(
+      buildCaptions({
+        bookDir,
+        state,
+        captionFileFormat: 'vtt',
+        captionGranularity: 'line',
+        captionScope: 'per-chapter',
+        outPath,
+        signal: controller.signal,
+        onProgress: () => controller.abort(),
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('forwards a ZipFile-level internal error to the rejection instead of crashing the process (per-chapter scope)', async () => {
+    /* Behavioral regression for zip.on('error', reject) in the per-chapter
+       branch — see the vi.mock('yazl', ...) comment at the top of this file
+       for why the injected error is emitted via process.nextTick rather
+       than synchronously, and why that's what makes this test exercise
+       build-captions.ts's own forwarding rather than the Promise
+       constructor's unrelated executor-throw-to-rejection behavior. */
+    const injected = new Error('mock yazl internal validation failure (ZipFile-level)');
+    let escaped: unknown = null;
+    const onUncaught = (err: unknown) => {
+      escaped = err;
+    };
+    process.on('uncaughtException', onUncaught);
+    triggerZipFileError = injected;
+    const outPath = join(bookDir, 'zipfile-level-error-test.zip');
+    try {
+      // De-raced (see build-mp3-zip.test.ts's identical sibling test for
+      // the full history): no more `Promise.race` against a hand-rolled
+      // timer — this one previously raced an 8s timer, itself bumped up
+      // from 1s with no recorded incident explaining the specific value
+      // (git history shows only the bump, not a measured prior flake).
+      // Racing unrelated real work under contention is exactly the shape
+      // that ever needed a bump in the first place. With the listener
+      // wired, the injected error rejects buildCaptions's own promise with
+      // the SAME error object; without it, the promise never settles, and
+      // this assertion fails by vitest's own (generous, centrally
+      // configured via testTimeout in vitest.config.ts) test timeout
+      // instead — the correct red for "never settles".
+      await expect(
+        buildCaptions({
+          bookDir,
+          state,
+          captionFileFormat: 'srt',
+          captionGranularity: 'sentence',
+          captionScope: 'per-chapter',
+          outPath,
+        }),
+      ).rejects.toBe(injected);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      triggerZipFileError = null;
+    }
+    // The other half of the regression: the injected error must have been
+    // forwarded to the rejection, NOT escaped as a raw uncaught exception.
+    // If this is non-null, an error on the ZipFile object crashed the
+    // process instead of being caught by the error listener.
+    expect(escaped).toBeNull();
   });
 
   it('throws ExportIncompleteError when a chapter has no audio file', async () => {

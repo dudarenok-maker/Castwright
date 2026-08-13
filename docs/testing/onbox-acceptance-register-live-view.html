@@ -181,9 +181,9 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">55</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">66</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
-    <div class="stat"><div class="n blk">1</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n blk">2</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 60)</div></div>
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
@@ -193,13 +193,13 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>37</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>45</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>3</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>3</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>8</td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>10</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
-      <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>1</td></tr>
+      <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
     </tbody>
   </table>
   </div>
@@ -209,7 +209,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">37 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">45 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -226,6 +226,8 @@
         <div class="flag"><b>RETRACTED — three run-2 results were wrong, and the cause is <a href="https://github.com/dudarenok-maker/Castwright/issues/1972">#1972</a> (fixed and merged, PR #1992).</b> A per-character re-record picked its target segments from <code>segments.json</code> but resolved their sentences — and so the voice — from the <b>analysis cache</b>, by sentence id. Once analysis has run since the render the two disagree, and the re-record renders another character&#39;s line in the requested character&#39;s voice. <code>resolvedVoiceName</code> still reported the assigned voice, because it was re-derived from the cast record rather than recorded from the render — so every retracted result had been read from the field the defect falsifies. <b>A24</b>: identity half withdrawn (0.949 against the chapter&#39;s own narrator); its language claim stands, measured from the audio by Whisper. <b>E-01</b>: identity half withdrawn (13 of 21 segments divergent). <b>C-17</b>: its <code>F</code> withdrawn entirely — the self-heal was never <em>reached</em>, so the test was never exercised. Reproduced with a <b>healthy</b> voice, and on two books that diverged for unrelated reasons — the precondition is only &ldquo;analysis has run since the last render.&rdquo;</div>
 
         <div class="flag"><b>Run 2 found a blocker that put Section E out of reach on a stock box — <a href="https://github.com/dudarenok-maker/Castwright/issues/1967">#1967</a> — now FIXED and merged (PR #1978), with its derive verified on-box 2026-07-31 (see A26 item 1).</b> Every XTTS clone <em>derive</em> fails because <code>torchcodec</code> cannot load without <b>shared</b> FFmpeg libraries, and the normal Windows install (<code>winget install Gyan.FFmpeg</code>) is a static build shipping <code>ffmpeg.exe</code> alone. The install docs assert the sidecar &ldquo;never calls <code>torchaudio.load</code>&rdquo; — it does, on exactly this path — which is <em>why</em> the installer drops <code>torchcodec</code> in with <code>--no-deps</code> and never provisions its native dependency. Stock XTTS voices read the speaker manifest, never a file, so this stayed invisible until cloning on Coqui shipped. The user sees only <code>derive-failed</code> — and the copy says &ldquo;Re-enable <b>Qwen</b>&rdquo; on a <b>Coqui</b> failure. E-01/E-02/E-09 above were only reachable after staging PyAV&#39;s own bundled FFmpeg set into the <code>torchcodec</code> package directory; that workaround is still in place on this box. <b>E-03…E-07 are now runnable on a stock box.</b></div>
+
+        <div class="flag"><b>Run 3 — 2026-08-01.</b> <b>E-01</b>'s first genuine exercise: <b>P</b> (mechanism) but <b>by-ear NEGATIVE</b> — owner: <em>&ldquo;2 does not sound like 4 much, cross language is not working well.&rdquo;</em> Mechanism passes, perceptual identity does not; a controlled experiment isolated the cause to the <em>source clip&#39;s language</em>, not XTTS cloning — a Russian-sourced clone scored <b>0.7824</b> against its own source in the same chapter where the English-sourced clone scored <b>0.2321</b> (caveat: the RU floor is contaminated, narrator vs RU source already 0.577, because Qwen Russian voices cluster). <b>E-05</b>: <b>P</b> — audition vs render <b>0.5515</b> against floors of 0.105/0.051. <b>E-04</b>: <b>F</b>, reproduced deliberately — same cloned voice/engine/<code>language: ru</code>, only length differs: a 46-char line returned 200, a 245-char line 500. Cause: <code>spacy</code> absent from the sidecar venv and undeclared in every <code>requirements/*.txt</code>, while <code>main.py</code> hardcodes <code>enable_text_splitting=True</code>. Filed <a href="https://github.com/dudarenok-maker/Castwright/issues/2017">#2017</a>, fixed in <a href="https://github.com/dudarenok-maker/Castwright/pull/2039">PR #2039</a>. Run 3 also produced <a href="https://github.com/dudarenok-maker/Castwright/issues/2023">#2023</a> (an orphaned <code>characterId</code> renders silently in the narrator's voice) and <a href="https://github.com/dudarenok-maker/Castwright/issues/2026">#2026</a> (Russian XTTS quality — see <a href="#ga">A44</a>).</div>
 
         <div class="flag"><b>Run 1 — 2026-07-29, SHA <code>2503bca6</code>.</b> First execution, on the dual-GPU box with a real sidecar and real Qwen weights, no mock mode. <b>16 tests executed: 15 pass, 1 blocked, zero failures.</b> Partially discharged — this row shrinks rather than clears. Results in the run sheet's §2, §7.1 and §7.4.</div>
 
@@ -246,7 +248,7 @@
 
         <p><b>Two environment blockers gate the remainder.</b></p>
         <ul>
-          <li><b>Section E was blocked by <a href="https://github.com/dudarenok-maker/Castwright/issues/1944">#1944</a> — fixed and accepted on-box 2026-07-30 (<a href="https://github.com/dudarenok-maker/Castwright/pull/1962">PR #1962</a>), and confirmed again in run 2: Coqui loaded cleanly in a post-<code>/embed</code> process, logging <code>Coqui ready — 58 speakers in manifest</code>. <b>4 of its 9 tests now pass; E-03…E-07 remain owed but are no longer blocked</b> — the second, separate blocker that sat behind this one (<a href="https://github.com/dudarenok-maker/Castwright/issues/1967">#1967</a>, the clone-derive/torchcodec failure) is now fixed and merged (<a href="https://github.com/dudarenok-maker/Castwright/pull/1978">PR #1978</a>, 2026-07-31); their first run doubles as <a href="#ga">A26</a> item 1.</b> Coqui/XTTS would not load in a sidecar that had already served ECAPA <code>/embed</code> — and cloning <em>always</em> calls <code>/embed</code> for the fidelity check. Root cause: speechbrain leaves lazy-proxy modules in <code>sys.modules</code> whose <code>__getattr__</code> raises <code>ImportError</code> rather than <code>AttributeError</code>, and CPython’s <code>inspect.getmodule()</code> walks every entry doing <code>hasattr(m, '__file__')</code> — which <code>TTS.api</code>’s import chain reaches via <code>torch.library.custom_op</code>. <b>Accepted with the boot-order pin disabled</b>, so the <code>sys.modules</code> disarm was genuinely the thing under test: <code>/embed</code> → <code>POST /load {coqui}</code> returned <b>500 on <code>main</code></b> @ <code>0edde146</code> and <b>200 <code>{"status":"ready"}</code></b> on the fix @ <code>d6af415d</code>, the latter logging 7 evicted proxies and <code>Coqui ready — 58 speakers in manifest</code>. <b><code>/health</code>’s <code>coqui_package_installed</code> is still the old spec probe that never imports</b> — read the new sticky <code>coqui_import_ok</code> instead; <a href="https://github.com/dudarenok-maker/Castwright/issues/1963">#1963</a> tracks <code>models-status</code>’s <code>importable</code> still carrying the old value.</li>
+          <li><b>Section E was blocked by <a href="https://github.com/dudarenok-maker/Castwright/issues/1944">#1944</a> — fixed and accepted on-box 2026-07-30 (<a href="https://github.com/dudarenok-maker/Castwright/pull/1962">PR #1962</a>), and confirmed again in run 2: Coqui loaded cleanly in a post-<code>/embed</code> process, logging <code>Coqui ready — 58 speakers in manifest</code>. <b>6 of its 9 tests now run (runs 2 and 3); E-03, E-06 and E-07 remain owed but are no longer blocked</b> — the second, separate blocker that sat behind this one (<a href="https://github.com/dudarenok-maker/Castwright/issues/1967">#1967</a>, the clone-derive/torchcodec failure) is now fixed and merged (<a href="https://github.com/dudarenok-maker/Castwright/pull/1978">PR #1978</a>, 2026-07-31); their first run doubles as <a href="#ga">A26</a> item 1.</b> Coqui/XTTS would not load in a sidecar that had already served ECAPA <code>/embed</code> — and cloning <em>always</em> calls <code>/embed</code> for the fidelity check. Root cause: speechbrain leaves lazy-proxy modules in <code>sys.modules</code> whose <code>__getattr__</code> raises <code>ImportError</code> rather than <code>AttributeError</code>, and CPython’s <code>inspect.getmodule()</code> walks every entry doing <code>hasattr(m, '__file__')</code> — which <code>TTS.api</code>’s import chain reaches via <code>torch.library.custom_op</code>. <b>Accepted with the boot-order pin disabled</b>, so the <code>sys.modules</code> disarm was genuinely the thing under test: <code>/embed</code> → <code>POST /load {coqui}</code> returned <b>500 on <code>main</code></b> @ <code>0edde146</code> and <b>200 <code>{"status":"ready"}</code></b> on the fix @ <code>d6af415d</code>, the latter logging 7 evicted proxies and <code>Coqui ready — 58 speakers in manifest</code>. <b><code>/health</code>’s <code>coqui_package_installed</code> is still the old spec probe that never imports</b> — read the new sticky <code>coqui_import_ok</code> instead; <a href="https://github.com/dudarenok-maker/Castwright/issues/1963">#1963</a> tracks <code>models-status</code>’s <code>importable</code> still carrying the old value.</li>
           <li><b>C-02, D-02 and any full-book work are blocked by the pre-existing side-11 host-memory leak.</b> Two full-chapter render attempts died — one at the QA gate, one with <code>recycle-storm</code> after the sidecar recycled 3× with committed memory peaking at 29,395 MB. <b>Workaround that works today:</b> the per-character re-record (splice) path renders one character's lines without the full-chapter memory churn — that is how the central claim above was proven.</li>
         </ul>
 
@@ -730,6 +732,113 @@
         <p class="src">A Coqui-capable sidecar, ASR content-QA enabled, a non-English book (Russian ideal — matches #2026's own repro) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2055">#2055</a> · criteria: the <code>CATASTROPHIC_WER</code> comment in <code>server/src/tts/segment-asr-qa.ts</code>; #2026's own repro recipe · short-to-medium — the collapse is intermittent, budget a few repeated renders of the same short lines, not one pass</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A38</span><span class="iname">Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install</span><span class="risk hot">Newly LIVE, never watched fire</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>.env.example</code> used to ship <code>SIDECAR_RESTART_MB=0</code> / <code>SIDECAR_VRAM_RECYCLE_SOFT_MB=0</code> / <code>SIDECAR_VRAM_RESTART_MB=0</code> as literal, active env assignments — and each of the three threshold functions in <code>main.py</code> treats a <b>present</b> <code>0</code> (or any parseable value) as an explicit override, not as "unset." Since #2179 comments the generated <code>.env.example</code> block out instead of emitting it active, a fresh install now leaves all three <b>absent</b>, so the sidecar self-computes 70% of total physical RAM (hard restart), 90% of the resident card's total VRAM (soft recycle), and 98% of the card's total VRAM (hard restart) — three lifecycle behaviours that were silently disabled on every install that copied <code>.env.example</code> verbatim (Pinokio, and the documented manual/<code>INSTALL.md</code> path) until this fix, and are now live. None of this is exercised by any pytest/vitest suite — the three threshold functions are unit-tested for their env-present/absent MATH, not for whether a real sidecar process ever crosses a live threshold and actually exits/recycles.</p>
+        <ul>
+          <li>Confirm a fresh install (a <code>server/.env</code> written from the current <code>.env.example</code> — all three of <code>SIDECAR_RESTART_MB</code> / <code>SIDECAR_VRAM_RECYCLE_SOFT_MB</code> / <code>SIDECAR_VRAM_RESTART_MB</code> absent) computes and uses the auto thresholds at sidecar startup rather than treating them as disabled.</li>
+          <li>Drive committed RAM up toward the ~70% ceiling (a long multi-chapter run, or a synthetic host-memory hog alongside the sidecar) and confirm the sidecar self-exits with code 43 for the supervisor to respawn, rather than never recycling.</li>
+          <li>Drive reserved VRAM up toward the 90% soft threshold and confirm <code>/health</code> sets <code>recycle_pending</code> and a clean chapter-boundary recycle fires (not a mid-chapter hard exit); then, on a card where the soft recycle didn't already relieve the pressure, continue up toward the 98% hard threshold and confirm the hard self-exit fires instead of an uncontrolled OOM.</li>
+          <li>Watch for thrash: across an ordinary render, the auto thresholds must not fire routinely — a card sitting in the high-80s/90s% reserved as a normal batch peak (the <code>_TORCH_ACTIVE_RESERVED_MB</code> torch-managed-card carve-out in <code>main.py</code>) should not trip a recycle storm now that the ceiling is live where it was previously inert.</li>
+        </ul>
+        <p class="src">A fresh install (or a <code>server/.env</code> with the three vars removed), the single 8 GB card, and a way to push committed RAM/reserved VRAM toward the thresholds · <a href="https://github.com/dudarenok-maker/Castwright/issues/2179">#2179</a> · criteria: <code>_mem_restart_threshold_mb</code> / <code>_vram_recycle_soft_threshold_mb</code> / <code>_vram_restart_threshold_mb</code> in <code>server/tts-sidecar/main.py</code> (<code>:8265-8284</code>, <code>:8154-8185</code>); the PR #2210 body and <code>0b0e7694</code>'s commit message record the before/after values · short-to-medium — the VRAM-pressure legs need a way to actually saturate the card</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A39</span><span class="iname">ORT marker — fresh NVIDIA bootstrap</span><span class="risk low">Design doc criterion 1</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>A from-scratch <code>bootstrap-venv.mjs</code> run is unit-tested at the seam, but a real pip venv&#39;s version string, real PEP-427 directory escaping, and a real <code>pip check</code>/Kokoro provider report have never confirmed the write lands correctly on a genuinely fresh box — every other row here starts from an already-bootstrapped or deliberately broken venv.</p>
+        <ul>
+          <li>Wipe (or freshly clone into) the sidecar venv and run a genuine from-scratch bootstrap on the nvidia profile.</li>
+          <li>Inspect <code>site-packages</code> for <code>onnxruntime-&lt;version&gt;.dist-info</code> at the installed GPU version.</li>
+          <li>Run <code>pip check</code> — expect exit 0. Load Kokoro and confirm <code>CUDAExecutionProvider</code>.</li>
+        </ul>
+        <p class="src">The existing NVIDIA dev box, willingness to rebuild the venv · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 1</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A40</span><span class="iname">ORT marker — the reported bug: in-app Qwen3 install</span><span class="risk hot">This IS #2192</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 2 — <b>this is #2192 itself</b>, the alpha tester&#39;s exact scenario, with the app running. Every other row proves a mechanism; this one is the acceptance criterion the issue was actually filed against, and it has not been separately re-confirmed since the fix landed.</p>
+        <ul>
+          <li>Start the app normally (NVIDIA profile, a bootstrapped sidecar venv).</li>
+          <li>From the app UI, install Qwen3 (Model Manager → Install) — the exact step the original report describes failing.</li>
+          <li>Confirm the install completes with <b>no</b> <code>WinError 5</code> / <code>Accès refusé</code> on any <code>.dll</code> under <code>onnxruntime/capi/</code>.</li>
+          <li>Load Kokoro afterward and confirm it still reports <code>CUDAExecutionProvider</code>.</li>
+        </ul>
+        <p class="src">The existing NVIDIA dev box, app running · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 2</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A41</span><span class="iname">ORT marker refuses — not repairs — a clobbered venv</span><span class="risk">Largest affected population, per #2192</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 6. <code>ensureOrtMarker</code>&#39;s refuse-and-log branch is fully unit-tested against synthetic fixtures but has never run against a <b>real</b> clobbered venv — a box where the GPU distribution&#39;s dist-info survives (pip uninstalls by name and never knew the two collided) while the actual files on disk are the CPU build. This is the population <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> itself names as largest.</p>
+        <ul>
+          <li>Manufacture the state deliberately (destructive — do this on a copy, or plan to run the repair command after): with the sidecar stopped, <code>pip install --force-reinstall onnxruntime</code> (plain) into a venv that already has <code>onnxruntime-gpu</code>. Confirm both dist-infos exist and the namespace is CPU files.</li>
+          <li>Boot the server. Expect <code>ensureOrtMarker</code> to return <code>'clobbered'</code>: a log line naming the condition and the exact remedy command, and <b>no</b> marker written over the real distribution.</li>
+          <li>Run the named remedy command and confirm it actually repairs the box — swap re-runs, a legitimate marker is written, <code>pip check</code> clean, Kokoro reports <code>CUDAExecutionProvider</code> again.</li>
+        </ul>
+        <p class="src">The existing NVIDIA dev box, no GPU activity required · ~10 minutes incl. repair · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 6</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A42</span><span class="iname">The in-app upgrade path applies the marker on a real installed release</span><span class="risk">Different code path from bootstrap; not one of the spec's six</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><b>Not in the design doc&#39;s six criteria.</b> Filed anyway: <code>upgrade/apply.ts</code>&#39;s <code>pipInstall</code> marker wiring is exercised only through the dependency-injection seam added for this fix — real <code>spawn</code>, a real <code>venvDir</code>, and a real packaged release directory have never driven it. A genuinely different consumer of the same swap plan than <code>bootstrap-venv.mjs</code> (A39), so passing there proves nothing about this one.</p>
+        <ul>
+          <li>Take a real installed release (not the dev checkout), on NVIDIA, with a marker already present.</li>
+          <li>Trigger the in-app upgrade to a release whose sidecar requirements changed enough to re-run <code>pipInstall</code>.</li>
+          <li>Confirm the marker is deleted before the overlay install and rewritten only after the swap steps succeed; confirm <code>pip check</code> is clean afterward.</li>
+          <li>If practical, force a swap-step failure and confirm the marker is deleted rather than left lying about a runtime that was never reinstalled.</li>
+        </ul>
+        <p class="src">A real installed release directory + a way to trigger its upgrade path; the existing NVIDIA dev box otherwise · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="num">A43</span><span class="iname">Linking an orphaned <code>characterId</code> through the Cast screen reconnects its segments</span><span class="risk">No GPU; real workspace, server stopped</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><a href="https://github.com/dudarenok-maker/Castwright/issues/2238">#2238</a>'s acceptance criterion 5 — <em>"the reported-for-human-decision count drops by each id linked through the UI, verified by a dry run before and after on a real book"</em> — cannot be proven in the PR. Every test in the branch drives a fixture workspace; the claim is about the real one, where the report-only bucket stands at <b>107 ids / 93 segments</b>.</p>
+        <ul>
+          <li>With the server <b>stopped</b>, run <code>WORKSPACE_DIR="C:/AudiobookWorkspace" node scripts/repair-cast-id-drift.mjs</code> and record <code>reported for human decision</code>. <b>Check the <code>books scanned:</code> line first</b> — the script defaults <code>WORKSPACE_DIR</code> to a path that does not exist on this box and will scan <b>0 books</b> while printing a full summary of clean zeros.</li>
+          <li>Pick a needs-decision row with real rendered segments behind it: <em>Exile</em>'s <code>silveny</code> (17 segments across ch50/ch51/ch56/ch65) or <em>Everblaze</em>'s <code>lady-alina</code> (6 across ch55/ch61).</li>
+          <li>Start the server, open <code>#/books/&lt;id&gt;/cast</code>, choose the right character in that row's <code>Compare against…</code>, press <b>Link to this character</b>. Confirm the row leaves "needs your decision" for <b>auto-reconciled</b>, and that <code>.audiobook/cast-id-history.json</code> gained a <code>supersededBy</code> entry.</li>
+          <li>Stop the server, re-run the dry pass, confirm the reported count dropped by that id <em>and</em> <code>re-render candidates</code> dropped by its segment count.</li>
+          <li><b>The negative case — the Critical this PR's review gate caught.</b> Open <em>Exile</em>, whose <code>unknown-male</code> row carries <b>21 segments across 3 chapters</b>. The link action must be <b>disabled</b> with a visible reason, and a direct <code>POST …/link-orphan-match</code> with <code>orphanedId: "unknown-male"</code> must <b>400</b>. <em>Exile</em> is the right book for this: the repair script reports its analysis cache <b>"actually names it 5 different things (timkin, brant, dwarf, rex, lord cassius)"</b>, so aliasing that id book-wide would route five speakers onto one voice — <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a>'s original damage class. <em>Unlocked</em> (<code>unknown-male</code>, 34 segments across ch63/ch67) is worth a second look, but its evidence is <em>weaker</em>, not stronger: its backup names <b>one</b> occurrence ("Lord Cassius") and its cache names <b>zero</b> characters — the cache-blind case, not the many-speaker one.</li>
+        </ul>
+        <p class="src">No hardware — a real workspace with drifted books, server stopped for the script steps · <a href="https://github.com/dudarenok-maker/Castwright/issues/2238">#2238</a> · plan 278 §Amendment 2026-08-10</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">A44</span><span class="iname">Russian XTTS quality — leading-dash pause, Coqui degeneracy guard, neuter <code>-ее</code> invariant</span><span class="risk">Coqui/XTTS resident, Russian text; no clone needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><a href="https://github.com/dudarenok-maker/Castwright/pull/2050">PR #2050</a> fixed one of <a href="https://github.com/dudarenok-maker/Castwright/issues/2026">#2026</a>'s three defects (the leading dialogue em-dash) and deliberately shipped no register row, because concurrent <a href="https://github.com/dudarenok-maker/Castwright/pull/2039">PR #2039</a> was actively editing this same file (annotating the E-04 row). #2039 merged 2026-08-01; this row is that deferred debt, tracked on <a href="https://github.com/dudarenok-maker/Castwright/issues/2057">#2057</a>.</p>
+        <p>The complete criteria already exist in <code>docs/testing/fs38-wave3-onbox-acceptance.md</code>'s <code>#2026 — additional acceptance criteria: Russian XTTS quality</code> section and are <b>not</b> restated here — summarised below.</p>
+        <ul>
+          <li><b>Leading em-dash pause, by ear.</b> <code>softenDashes</code> (<code>server/src/tts/text-normalize.ts</code>) rewrites a leading <code>—</code> to <code>... </code> on the theory a leading ellipsis pauses where a leading comma didn't. Pinned only as a wire-text transform; never confirmed on real audio. Compare a line opening with <code>—</code> against the same line with no leading punctuation, and against an interior-dash sentence — the original issue's own reference points: <b>+0.14 s</b> for the leading dash (no audible pause) versus <b>+1.53 s</b> for an interior one.</li>
+          <li><code>tts.coqui.degenGuard</code> <b>live</b> (<code>_coqui_synth_is_degenerate</code>, <code>server/tts-sidecar/main.py</code>; registry key <code>server/src/config/registry.ts:736</code>). Pinned only by a scripted-fake pytest, never run against the real XTTS model. Observe (a) it does <b>not</b> false-positive on ordinary 2–3 word Russian lines at normal pace — its 20 ms/speakable-char floor was reused verbatim from Qwen's own calibration, never independently measured for Coqui; (b) if a live repro of the original collapse can be captured, whether the retry actually recovers it. <b>A negative on (b) may be correct behaviour, not a failure</b> — the guard's own docstring says it can only catch an implausibly SHORT render, and both historical collapses (<code>Хорошее олово.</code> → Finnish, <code>Тёплое море.</code> → English) were fluent, plausible-duration utterances outside its detection envelope.</li>
+          <li><b>Neuter <code>-ее</code> standing invariant.</b> No local fix was attempted — the mispronunciation is baked into the trained XTTS v2 checkpoint's own Russian G2P. Confirm it <b>still reproduces</b> on <code>main</code>, so a future <code>coqui-tts</code> upgrade has a baseline. Not a sign-off. Pairs with #2056.</li>
+        </ul>
+        <p><b>Different mechanism from A37 (#2055) — do not merge with item 2 above.</b> A37 covers the server-side ASR/WER override <code>qa.asr.catastrophicWer</code> in <code>classifyTranscript</code>; this row's item 2 is the sidecar-side duration heuristic <code>tts.coqui.degenGuard</code>. Same symptom (a Russian line collapsing into another language), different guard, different layer of the stack — conflated once already during triage.</p>
+        <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian book or line, no clone needed (every #2026 defect reproduces on the stock catalogue voice <code>Damien Black</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2026">#2026</a> · criteria: <code>docs/testing/fs38-wave3-onbox-acceptance.md</code>'s <code>#2026 — additional acceptance criteria: Russian XTTS quality</code> section · short — a handful of <code>/synthesize</code> probes plus one attempt at reproducing the degenerate collapse</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">A45</span><span class="iname">Named-entity decode reaches the TTS engine on a real EPUB</span><span class="risk">single 8 GB card</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><a href="https://github.com/dudarenok-maker/Castwright/issues/2310">#2310</a> shipped <code>decodeNamedEntities</code> (<code>server/src/parsers/html-utils.ts</code>), widening <code>stripHtml</code>/<code>extractFirstHeading</code>/<code>epub.ts</code>'s <code>decodeEntities</code> from a five-entity hand-rolled list to the complete HTML5 named set — see plan <code>docs/superpowers/plans/2026-08-13-entity-decode-layer.md</code>. Every layer of the fix is proved by unit and end-to-end tests fixing the sentence text explicitly (<code>html-utils.test.ts</code>, <code>entity-dialogue-e2e.test.ts</code>) — what those tests cannot prove is that a real, EPUB-sourced entity survives the whole pipeline the same way. The design spec's own "What I could not establish": whether the stage-2 analyzer model echoes a surviving entity into its returned sentence text, which decides whether the <em>body-line</em> symptom reproduced at all before this fix (a second thread observed, on a live run, that the current model sometimes strips a leading dash rather than echoing it verbatim — that would mean the body-path symptom already didn't reproduce pre-fix on today's model, a finding about the analyzer, not a failure of this fix).</p>
+        <ul>
+          <li><b>Lead with the chapter-title beat — the only criterion no model behaviour can mask</b> (design spec Finding 0). On an EPUB whose first chapter heading carries named entities (e.g. <code>&lt;h1&gt;L&amp;rsquo;&amp;Eacute;t&amp;eacute;&lt;/h1&gt;</code>), confirm the spoken title beat says "L'Été" cleanly — no "ampersand … semicolon", no gibberish.</li>
+          <li><b>Secondary: a Spanish, French, or Russian EPUB using <code>&amp;mdash;</code>/<code>&amp;ndash;</code> or accented named entities in body text.</b> Confirm a dash-opened dialogue line renders with a pause (not spoken "ampersand n dash semicolon" or similar), accented words render as the correct letters (not "e acute" spoken aloud), and the manuscript view shows real glyphs rather than raw entity text. <b>Record whether this symptom reproduced at all pre-fix</b> — per the design spec, that is itself new information about the analyzer chain, not a gate on this fix.</li>
+          <li>No real es/fr/ru EPUB with named (as opposed to numeric) HTML entities was available in this workspace at design time — confirm one exists among the on-box corpus, or construct a minimal one from a real chapter with <code>&amp;mdash;</code> hand-substituted for a literal dash, if none does.</li>
+        </ul>
+        <p class="src">A real EPUB (or a hand-modified one) carrying named HTML entities in its heading and/or body, a working analyzer + TTS pipeline · <a href="https://github.com/dudarenok-maker/Castwright/issues/2310">#2310</a> · criteria: the two bullets above · short — one import + one chapter-title listen, plus one body-line listen if a suitable entity-laden EPUB is available</p>
+      </div>
+    </details>
+
 
 </section>
 
@@ -793,35 +902,218 @@
     <header>
       <h3 class="gtitle"><span class="gtag">C</span> One <span lang="ru">Ночной дозор</span> re-analysis <span class="gcount">3 rows</span></h3>
       <p class="setup">
-        Three rows re-analyze the <strong>same manuscript</strong> for different reasons. One local pass
-        plus one cloud pass — captured with scene-break output, attribution output and truncation/429
-        telemetry all in mind — discharges all three. No TTS or GPU synthesis.
+        <b>Two rows.</b> Two local passes have now run — <b>2026-08-06</b> (9 chapters, 15,069
+        sentences) and <b>2026-08-12/13</b> (9 chapters, 12 h 27 m) — both on
+        <code>qwen36-cw-iq4-32k</code> via local Ollama with the structure engine on,
+        <code>escalation='local'</code>, no mock mode. Between them they discharged plan 261's scene
+        separators, plan 247's srv-59 attribution, and the post-<a
+        href="https://github.com/dudarenok-maker/Castwright/issues/2187">#2187</a> escalation row.
+        What remains is the <b>cloud</b> pass (C1), the part of the dialogue-convention row that the
+        second pass could not settle (C2), and whether a halved span actually clears a deterministic
+        stage-2 failure (C3). No TTS or GPU synthesis for any of them.
       </p>
+      <div class="flag">
+        <b>Hold the full 12-hour re-run.</b> The in-flight speaker-separation work
+        (<a href="https://github.com/dudarenok-maker/Castwright/issues/2288">#2288</a>,
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2279">#2279</a>) changes
+        dialogue segmentation, so a pass taken before it lands measures a moving target and has to be
+        repeated. Wait for it, then take C2 and C3 in one session.
+        <b>A one-chapter local-vs-Gemini A/B is the next step and is NOT blocked by that.</b>
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>'s cause is
+        <b>not</b> identified: an offline replay showed that swapping the roster
+        <code>reconcileSentenceCharacterIds</code> validates against moves the victim rate
+        <b>38.0% → 76.3%</b>, but the run's own logs record <b>zero demotions</b> on that path — the
+        same <code>log(1, …)</code> channel as a control message that <em>does</em> appear — so that
+        mechanism is a real latent hazard which did not fire here. The dash lines were
+        <code>narrator</code> before reconcile, which points at the stage-2 output itself.
+        <b>And preserve <code>server/handoff/outbox/*-stage2-ch*.json</code> before tearing down the
+        run's checkout:</b> the 2026-08-12/13 pass's raw stage-2 output — the model's attribution
+        <em>before</em> any engine or reconcile — was destroyed with its worktree, and it is the one
+        artifact that would have settled #2306's residual gap without a re-run. The analysis cache
+        does not carry it; it holds the final, post-demotion ids.
+      </div>
+      <div class="flag">
+        <b>Discharged 2026-08-06 — results recorded, one target missed.</b>
+        <b>Scene separators (plan 261): PASS.</b> 24 separators found, 22 flagged (2 dropped by the
+        leading-separator rule, by design); median separator→opener distance <b>5 characters</b> — the
+        <code>* * *</code> glyph itself. The old ~92k forward-overshoot is mechanically gone: binding is
+        index-adjacent (<code>lastBefore + 1</code>), not a forward search. Chapters 1–4 contain no
+        separators at all, so their zero flags are correct.
+        <b>srv-59 attribution (plan 247): targets missed.</b> Flagged <b>6,568</b> against the ≤~500 target.
+        Cause: only chapter 9 cleared the hardcoded <b>80% alignment floor</b> (ch5 4%, ch6 2%, ch7 66%,
+        ch8 73%, ch9 95%); the rest degraded chapter-wide to flag-only. Where the engine actually ran,
+        <b>it met the target</b> — ch9 landed <code>confirmed=580 corrected=531 flagged=488</code>. The
+        <b>aligner, not the engine</b>, is the bottleneck, filed as
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2187">#2187</a>.
+        <b>Caveat:</b> the provenance report covers <b>chapters 5–9 only</b> — chapters 1–4 were served
+        from the resume cache after two environmental restarts and contributed nothing to the aggregate.
+        Deliberately not re-run: the diagnostic is conclusive without it.
+      </div>
+      <div class="flag">
+        <b>Second pass, 2026-08-12/13 — 9/9 chapters, and it discharged one row while failing the
+        other's outcome criterion.</b> Throwaway <code>mns_rKjCHx0vrS</code>, build
+        <code>52a8fb97</code>, <code>allowCloudFallback: false</code>, <b>12 h 27 m</b> of compute
+        across a deliberate overnight pause.
+        <b>Escalation executes on all nine chapters</b> — the post-#2187 row's principal owed item,
+        and precisely what offline replay could not prove. 61 windows attempted, 21 lines applied.
+        <b>Discharged.</b>
+        <b>Wall-clock missed target 5 by ~2.5–6×</b> (12 h 27 m against +2–5 h), recorded as an
+        outcome rather than a re-run because the cause is known: the 16 GB model does not fit the
+        5070 Ti's <b>14.2 GiB usable</b>, so ~5 GB spilled over PCIe for the entire run. §1.1's
+        premise that the eGPU makes the model fit is false.
+        <b>The bucket split is live</b> — <code>unresolved</code> populated on every chapter (670
+        book-wide), <code>flagged</code> 0 throughout, i.e. under its bar rather than over it.
+        <b>But the end-to-end outcome criterion FAILED:</b> <b>87.4%</b> of dash-opening dialogue was
+        attributed to <code>narrator</code> (4131/4725) against a 30.3% baseline. The
+        dialogue-structure engine is <b>exonerated</b> — today's engine replayed over the 2026-08-06
+        cached stage-2 output reproduces <b>30.4%</b> — so the cause is upstream, filed as
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>, still open.
+        Two candidates have been <b>eliminated</b> offline, both by replay over the 2026-08-06 cache
+        with zero model calls. <code>isConventionRescue</code>'s roster gate
+        (<code>cross-examine.ts:237</code>) — swapping the roster there moves the victim rate
+        <b>0.1 points</b>. And <code>reconcileSentenceCharacterIds</code>'s unconditional demotion of
+        off-roster ids — swapping <em>that</em> roster is potent (<b>38.0% → 76.3%</b>, and this
+        run's roster lost 10 ids including the protagonist), but the run's own logs record
+        <b>zero demotions</b> on that path, verified against a control message on the same
+        <code>log(1, …)</code> channel that <em>does</em> appear. So it is a real latent hazard that
+        did not fire here. The dash lines were <code>narrator</code> <em>before</em> reconcile, which
+        points at the stage-2 output itself — making a one-chapter local-vs-Gemini A/B the sharpest
+        next test.
+        <b>Target 1c never emitted</b> — no <code>scope=book merged=</code> line appears on a
+        <em>resumed</em> run, and pause/resume is the only practical way to survive a 12-hour
+        analysis, so it cannot serve as an acceptance criterion in its current form.
+      </div>
     </header>
     <details class="item">
-      <summary><span class="num">C1</span><span class="iname">Manuscript scene separator — Russian re-run (plan 261)</span><span class="risk low">Cosmetic risk</span><span class="chev">›</span></summary>
+      <summary><span class="num">C1</span><span class="iname">Free-tier Gemma cloud pass completes end to end</span><span class="risk low">Narrowed · take opportunistically</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>This book couldn't be measured in the original round — it was mid-re-analysis and its <code>manuscript-edits.json</code> was deleted by the reparse. The marker-anchored rule change is claimed to <em>mechanically</em> eliminate the old ~92k-character forward-overshoot; that claim is what the re-run confirms.</p>
-        <p>Failure here is always cosmetic: a divider off by a sentence, never data corruption.</p>
-        <p class="src"><code>plan 261:203-206</code></p>
+        <div class="flag"><b>Narrowed 2026-08-13 from three items to one.</b> Two came out on merit:
+        <b>429 classification is already covered offline</b> — <code>gemini.test.ts</code> carries four
+        tests over this exact behaviour against the real payload shapes, including both historical
+        misclassifications (#1682's <code>free_tier</code>-in-the-metric-name at <code>:551</code>,
+        #1695's 15-req/min <code>quotaValue</code> collision at <code>:583</code>), and the latter
+        asserts the call happened <b>twice</b>, so it proves the retry rather than the absence of a
+        throw; a live run would only detect fixture drift. <b><code>localInputFraction</code>
+        calibration is obsolete</b> — the shipped 0.3 produced <b>one</b> truncation across nine
+        chapters of the hardest book available, truncation already <em>recovers</em> via the adaptive
+        re-split rather than dropping, and lowering the knob means more calls and longer wall-clock,
+        pushing the wrong way on the one target that just missed by 2.5–6×.</div>
+        <p><b>What remains</b> is the systems property no unit test reaches: re-analyze end to end on
+        <code>gemma-4-31b-it</code> — <b>including the script-review pass</b>, the one that actually
+        429'd (all 22 logged failures were <code>task: script-review</code>) — and confirm the book
+        <b>completes</b>, no dropped chapters, no hang, under real throttling with the limiter, the
+        retries and the fallback interacting over hours. Uses the free-tier
+        <code>GEMINI_API_KEY</code> <b>already configured</b> in <code>server/.env</code> — the
+        credential this run exercises, not a blocker. <b>Take it opportunistically rather than
+        scheduling a session:</b> its remaining draw is that it doubles as the cloud arm of
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>'s control — which,
+        with #2306's cause still open and the stage-2 output the leading suspect, is now the sharpest
+        test available rather than a spare one.</p>
+        <p><b>Established by the 2026-08-06 local pass:</b> <code>gemini-*</code> really does
+        RECITATION-block this book — a queued Ollama call timed out into the cloud fallback and
+        <code>gemini-3.5-flash-lite</code> returned <code>PROHIBITED_CONTENT</code> on a stage-2 section.
+        Note <code>server/.env</code> sets <code>GEMINI_MODEL=gemini-3.5-flash-lite</code>, which
+        <em>overrides</em> the RECITATION-safe <code>gemma-4-31b-it</code> code default — that line, not the
+        code, is what must change. Run it against a <b>throwaway re-import</b>: the analysis cache is keyed
+        by <code>manuscriptId</code> only, so re-analyzing the library entry would overwrite the qwen36
+        sentences and cast the owner is keeping for generation.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — narrowed to 1 item 2026-08-13 · was <b>C3</b> before 2026-08-06</p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">C2</span><span class="iname">srv-59 dialogue-structure attribution (plan 247)</span><span class="risk">Batches with C1</span><span class="chev">›</span></summary>
+      <summary><span class="num">C2</span><span class="iname">Dialogue-convention invariant end to end</span><span class="risk hot">Buckets PASS 08-13 · outcome FAILED, blocked on #2306</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Re-analyze the same book — 9 chapters, 14,065 sentences — on the default pipeline. Ship notes: “Not yet shipped: on-box acceptance is owed post-merge.”</p>
-        <p class="src">Core engine merged PR #1482 (2026-07-09); still unrun as of 2026-07-21 · <code>plan 247:247-249,338-340</code></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">C3</span><span class="iname">Cloud request sizing + input-fraction calibration</span><span class="risk low">Key already set</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Uses the free-tier <code>GEMINI_API_KEY</code> <b>already configured</b> in <code>server/.env</code> — the credential this run exercises, not a blocker.</p>
+        <div class="flag"><b>Corpus-verified offline, does NOT need re-running.</b> Two replays over
+        the 2026-08-06 cache (<code>server/handoff/cache/replay-experiment.mts</code>, gitignored,
+        throwaway) measured <code>HARM TOTAL victims=41</code> — down from the pre-fix baseline's
+        <b>879</b>, not to 0, because the rescue guard now also requires roster membership and 41
+        lines (<code>борис-игнатьевич</code> ×17, <code>егор</code> ×24) carry off-roster ids that
+        <code>reconcileSentenceCharacterIds</code> demotes to <code>narrator</code> downstream
+        regardless, so they were never actually recoverable — at both the production 80% alignment
+        floor and forced to 100%, and all
+        <b>17</b> workspace-book structure hashes unchanged (parser untouched, confirmed by
+        construction and by diff). Unit and regression coverage for the invariant, the bucket split,
+        and every <code>EngineReport</code> consumer ships in the same PR.</div>
+        <div class="flag"><b>Partially discharged 2026-08-13 — two of four criteria PASS and are out
+        of scope for any re-run.</b> <code>unresolved=</code> is populated on every chapter (9–164,
+        670 book-wide) and <code>flagged=</code> is <b>0</b> throughout — under the "order 10²,
+        not 10³" bar rather than over it, and a real reading rather than a dead metric (five unit
+        tests assert <code>report.flagged === 1</code>): it means no model-vs-evidence conflict landed
+        on a <em>named roster character</em>. It says nothing about the victim rate, because victims
+        land in <code>corrected</code>.</div>
+        <div class="flag"><b>The third criterion FAILED and is what keeps this row open.</b> ch5's
+        dash-opening sentences went <b>69.7% → 87.2%</b> narrator; book-wide <b>87.4%</b>
+        (4131/4725) against a 30.3% baseline. The engine is <b>exonerated</b> by replay (30.4% vs a
+        recorded 30.3% over the 2026-08-06 cache), so this is upstream of <code>crossExamine</code> —
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>. <b>Do not
+        re-run this row until #2306 lands</b>: a repeat pass costs 12 h and would reproduce the same
+        number, since nothing in the engine changed.</div>
+        <p><b>What is still owed</b>, once #2306 is understood:</p>
         <ul>
-          <li>Re-analyze end-to-end on <code>gemma-4-31b-it</code> <b>including the script-review pass</b> — the pass that actually 429'd (all 22 logged failures were <code>task: script-review</code>). Confirm a per-minute 429 is retried rather than misclassified as daily-quota.</li>
-          <li>Calibrate <code>analyzer.stage2.localInputFraction</code> (ships at 0.3) downward until a full local re-analysis completes with <b>zero</b> stage-2 truncation drops. Record the working value.</li>
+          <li>ch5's dash-opening sentences are no longer rewritten to <code>narrator</code> — the
+          criterion that failed above.</li>
+          <li><code>state.json</code>'s <code>analysisProvenance.report</code> carries a populated
+          <code>unresolved</code> key. Not read off the 2026-08-13 pass.</li>
         </ul>
-        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — 3 unchecked items</p>
+        <p><b>Residual risk not covered by this row:</b> the invariant activates for Russian, Spanish
+        and French, but Ночной дозор is Russian-only — Spanish and French ship on unit coverage plus
+        the identical-convention argument, not corpus measurement. This row does not change that.</p>
+        <p>Same setup as C2: local Ollama, <code>qwen36-cw-iq4-32k</code>, ~14 GB VRAM free, sidecar
+        suppressed (<code>DISABLE_AUTOSTART_SIDECAR=1</code>), no TTS. Batches naturally with C2's
+        session.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2253">#2253</a> ·
+        <code>docs/testing/night-watch-reanalysis-onbox-acceptance.md</code> §2A.5 · plan 247's
+        re-specified target 1 · added 2026-08-11</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">C3</span><span class="iname">A deterministic stage-2 failure clears when the span is halved</span><span class="risk">Premise untested against a real model</span><span class="chev">›</span></summary>
+      <div class="body">
+        <div class="flag"><b>The wiring does NOT need re-running — it is unit-proven.</b> A repeated
+        failure signature stops the retry loop, the stop escalates to <code>splitSpanForRetry</code>,
+        and it does so on <b>both</b> chunking routes. Each is mutation-verified, each with a control
+        that reddens when the fix is made unconditional.</div>
+        <p><b>What is still owed is the premise underneath all of it:</b> that a real model
+        degenerating deterministically on a real span produces a <em>different</em> answer when the
+        span is halved. Every test above uses a fake model that succeeds on smaller input <b>by
+        construction</b>, so they prove the split is <em>reached</em> — never that it <em>helps</em>.
+        If the degeneration is a property of the content rather than the span length, the split
+        re-runs twice, fails twice, and the chapter is no better off — only slower.</p>
+        <p>The reproducer is known and specific, which is the only reason this is cheap: Ночной дозор
+        <b>ch8</b>, <code>repeat-loop</code> at offset <b>19</b>, reproduced identically five times
+        across two server lifetimes on 2026-08-12/13. Observe:</p>
+        <ul>
+          <li>the retry <b>halts on the repeated signature</b> before the
+          <code>coverageRetries</code> budget is spent — <em>"the same attribution failure reproduced
+          exactly on attempt N"</em>. <b>Do not pin N to 2:</b> for the ch8 shape (attempt 1 a plain
+          truncation, attempts 2+ an identical repeat-loop) the stop lands on <b>attempt 3</b>,
+          because the first repeat is the first thing there is anything to match against. Any N below
+          the budget is a pass;</li>
+          <li>the log then shows <b><code>re-attributing a &lt;N&gt;-char section as &lt;M&gt; smaller
+          ones (split depth D)</code></b>. That line exists only because nothing else can see the
+          split: it happens inside a recursion firing neither <code>onChunk</code> nor
+          <code>onSectionDone</code>, and <code>chunkCount</code> is fixed before any of it runs — so
+          on a multi-chunk chapter, which ch8 is, <b>both counters read identically whether the
+          escalation fires or is reverted outright</b>. An earlier draft of this row asked for exactly
+          those counters and would have recorded a PASS on a null observation;</li>
+          <li><b>ch8's sentence count is whole</b>, not the partial take. This is the criterion that
+          matters; the two above establish that the mechanism under test produced it, rather than
+          luck.</li>
+        </ul>
+        <p><b>Absence of the re-split line is not a failure on its own</b> — the split declines for an
+        indivisible span or at <code>maxSplitDepth</code>, and <code>onExhausted</code> fires either
+        way. If the stop line appears without the split line, record that: it means the chapter
+        reached the depth limit, which is its own result.</p>
+        <div class="flag"><b>Record the outcome either way — a NEGATIVE result here is valuable and
+        must not be quietly dropped.</b> It would mean the escalation spends model calls without
+        recovering the chapter, and that this failure class needs a remedy other than a shorter
+        prompt.</div>
+        <p>Same setup as C1/C2, and it <b>batches with the C2 re-run</b> — that run replays this exact
+        book and chapter, so this row needs no session of its own. C2 is itself waiting on
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>; this row is
+        not, and can be taken on any local re-analysis that reaches ch8.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2304">#2304</a> ·
+        added 2026-08-13</p>
       </div>
     </details>
   </section>
@@ -852,7 +1144,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -940,6 +1232,35 @@
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1880">#1880</a> · criteria in <code>docs/features/272-golden-assembly-comparison.md</code> · short</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">E9</span><span class="iname">ORT marker — the Pinokio update path</span><span class="risk">The original reporter's deployment shape</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 4: <code>pinokio-scripts/update.js</code> — named specifically, not <code>install.js</code> — as &ldquo;the deployment shape that reported the bug.&rdquo; Both invoke <code>bootstrap-venv.mjs</code> directly with <b>no server process at all</b>, but they are not interchangeable: <code>update.js</code> loads from the currently checked-out release (see E1&#39;s documented one-update lag), so a fresh-install pass does not stand in for an update pass.</p>
+        <ul>
+          <li>On a Pinokio machine with an <b>existing</b> (pre-fix) install (Windows priority — group with E1), run Update on the nvidia profile.</li>
+          <li>Confirm <code>pip check</code> is clean immediately after Update, with no server ever having started — the marker must come from <code>bootstrap-venv.mjs</code> itself, not the server-boot self-heal.</li>
+          <li>From the app, install Qwen3 (the original bug&#39;s repro) and confirm no <code>WinError 5</code>.</li>
+          <li><b>In the same session, also run a fresh Install</b> and confirm the same outcome — a second shape of this criterion, not a separate row.</li>
+        </ul>
+        <p class="src">A machine with Pinokio, an existing pre-fix install, nvidia profile · 20–40 min, sharing setup with E1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 4</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">E10</span><span class="iname">Revoke is loopback-only — the forwarder boundary</span><span class="risk">Every test fabricates the peer or stubs location</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>DELETE /api/devices/:id</code> is now gated to true loopback. Nothing automated reaches the real boundary: the server test <b>fabricates</b> a request with <code>req.ip = &#39;127.0.0.2&#39;</code>, and the frontend test <b>stubs</b> <code>window.location</code>. Neither has ever seen the actual <code>:443</code> forwarder — which is what makes the host&#39;s own browser non-loopback, because it dials upstream with <code>localAddress: &#39;127.0.0.2&#39;</code> and is host-blind, so a phone on <code>castwright.local</code> is indistinguishable from the desktop there.</p>
+        <ul>
+          <li>From <b><code>https://localhost:&lt;port&gt;</code></b> (the direct port, not the <code>:443</code> shortcut): Revoke succeeds and the row drops out. This is the one address the feature leaves working — if it fails, the gate is too tight.</li>
+          <li>From <b><code>https://localhost/</code></b> (port 443, through the forwarder): the button still <b>renders</b> (<code>isLoopbackHost()</code> is hostname-only and cannot see the forwarder) and returns 403. Confirm the error is the actionable sentence naming the direct-port address, <b>not</b> a raw <code>revoke failed (403)</code> — <b>and that the port in it is the one you actually bound</b> (see the non-default-port note below).</li>
+          <li>From <b><code>castwright.local</code> on a phone</b>: no Revoke control on any row, and the explanation renders <b>once below the list, not once per row</b> — check with <b>at least 3 paired devices</b>, since with one device that bug is invisible. Confirm it stays legible at phone width.</li>
+          <li><b>The security half, and the reason this row exists:</b> from a paired phone, call <code>DELETE /api/devices/&lt;the host&#39;s own record id&gt;</code> (the id is in <code>GET /api/devices</code>, which that device can read). Expect <b>403</b>, then confirm via the host UI that the host&#39;s record is <b>still live</b>. Before #2269 this succeeded and locked the owner out of their own install.</li>
+        </ul>
+        <div class="flag"><b>Run this with a NON-DEFAULT <code>LAN_HTTPS_PORT</code></b> (e.g. <code>9443</code>) — it is what makes two of the bullets above mean anything. Every one of these hint strings hardcoded <code>https://localhost:8443</code> until <a href="https://github.com/dudarenok-maker/Castwright/issues/2278">#2278</a> (<a href="https://github.com/dudarenok-maker/Castwright/pull/2294">PR #2294</a>) made them read the actually-bound port, so <b>on a default-port box the old hardcoded string and the new dynamic one render identically</b> and the run would pass without proving the fix — the same trap the automated tests avoid by pinning 9443 rather than 8443. It also exercises the case the fix exists for: an operator who moved the port had no way to discover the one address revoke works from. Production auto-rebind can move the port again beyond whatever you set; the bound value is the one in the server&#39;s own startup line.</div>
+        <p class="src">LAN HTTPS with the <code>:443</code> forwarder actually bound (no elevation needed on Windows), a <b>non-default <code>LAN_HTTPS_PORT</code></b>, plus a phone paired over <code>castwright.local</code> · 15–20 min, shares setup with E2/E3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2269">#2269</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2280">PR #2280</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2294">PR #2294</a> · plan 225 invariant 6</p>
+      </div>
+    </details>
+
   </section>
 
   <!-- F -->
@@ -964,7 +1285,7 @@
   <!-- G -->
   <section class="group" id="gg">
     <header>
-      <h3 class="gtitle"><span class="gtag">G</span> GitHub Actions itself <span class="gcount">1 row</span></h3>
+      <h3 class="gtitle"><span class="gtag">G</span> GitHub Actions itself <span class="gcount">2 rows</span></h3>
       <p class="setup">
         Not physical hardware — the prerequisite is a real dispatch of a specific workflow on the real
         Actions runner, which local execution cannot substitute for (a fresh <code>ubuntu-latest</code>
@@ -975,10 +1296,23 @@
       <summary><span class="num">G1</span><span class="iname">Quarantine-lane health report — first live dispatch (ops-32)</span><span class="risk">Two debts · one opportunistic</span><span class="chev">›</span></summary>
       <div class="body">
         <p>PR #1873's own body discloses both under “Known gaps — stated rather than glossed” rather than leaving them to be rediscovered.</p>
-        <p><b>1. The workflow has never executed on Actions.</b> The YAML parses and <code>quarantine-health.mjs</code> is verified standalone (46 unit tests, mutation-checked), but the live runner environment — <code>gh issue view</code> authenticating via the injected <code>GH_TOKEN</code>, the <code>apt-get install ffmpeg</code> step, the job posting to <code>$GITHUB_STEP_SUMMARY</code> — is unverified until the first dispatch. <code>continue-on-error: true</code> plus exclusion from every required check mean a failure can't block anything, but “the job doesn't crash” is still unconfirmed. <b>Observe:</b> <code>gh workflow run quarantine-health.yml</code> completes and its job summary renders a well-formed report — either the clean “nothing to run” no-op (today's empty register) or a real bucketed table.</p>
-        <p><b>2. Genuine <code>intermittent</code> classification is exercised only by unit tests over synthetic sequences.</b> No real cross-run nondeterminism has been forced through the classifier, and the empty register can't provide it — <b>the first dispatch alone won't discharge this half.</b> <b>Observe, next time a genuinely flaky test is quarantined:</b> its row lands in the <code>intermittent</code> bucket (a real mix of passed/failed across the 5 runs), not <code>always-passes</code> or <code>never-passes</code>.</p>
-        <div class="flag"><b>Why this is here and not a plain test-gap issue.</b> <code>classifyEntry</code> is already fully unit- and mutation-tested against every synthetic sequence that matters. What's missing is a real occurrence of cross-run nondeterminism, which by construction can't be manufactured inside a unit test. One honest caveat: unlike the first debt, this half does <b>not</b> strictly need the Actions runner — a local run against a real flaky register row would discharge it equally. It stays grouped here for the shared dispatch-triggered framing.</div>
-        <p class="src">Nothing beyond repo access for the first half; a naturally-occurring quarantined flaky test for the second · minutes for the dispatch, opportunistic for the rest — piggy-back on the next real quarantine event rather than manufacturing one · #1864, PR #1873</p>
+        <div class="flag"><b>Partially discharged — the trigger-side dispatch question is answered; the <code>gh issue view</code> half is not.</b> The Monday 03:00 UTC cron has now dispatched the workflow for real, twice (<code>event: schedule</code>, 2026-08-03 and 2026-08-10; latest run id <code>31355401008</code>), both <code>conclusion: success</code>. Its <code>Install ffmpeg</code> step succeeded on the real runner, and the job summary rendered exactly the clean no-op this row anticipated: <code># Quarantine lane health report</code> / <code>No quarantined tests are currently registered in `docs/testing/flaky-register.md` — nothing to run. Clean no-op.</code> The YAML parses and <code>quarantine-health.mjs</code> is verified standalone (46 unit tests, mutation-checked); the live dispatch now additionally confirms the job doesn't crash on the real runner, which was the open half of this question.</div>
+        <p><b>1. Still unverified: <code>gh issue view</code> actually authenticating via the injected <code>GH_TOKEN</code>.</b> Both real runs took the empty-register early-return path (<code>rows.length === 0</code> → <code>scripts/quarantine-health.mjs:776</code>, before the post-loop <code>gh issue view</code> calls) — <code>docs/testing/flaky-register.md</code> carries one row today (#1981, tracking #2226) but it's marked "Not quarantined — still gates," so it never reaches the quarantine-lane report. The run log does show <code>GITHUB_TOKEN Permissions: Issues: read</code>, so the wiring is plausible — but that is not proof the call actually works. <code>continue-on-error: true</code> plus exclusion from every required check still mean a failure can't block anything.</p>
+        <p><b>2. Genuine <code>intermittent</code> classification is exercised only by unit tests over synthetic sequences.</b> No real cross-run nondeterminism has been forced through the classifier, and the empty register can't provide it. <b>Observe, next time a genuinely flaky test is quarantined:</b> its row lands in the <code>intermittent</code> bucket (a real mix of passed/failed across the 5 runs), not <code>always-passes</code> or <code>never-passes</code>.</p>
+        <div class="flag"><b>Net: this row shrinks but does not come out.</b> The trigger-side dispatch question above is answered — the workflow runs clean on the real runner — but its residual (<code>gh issue view</code> under real auth) now shares a single precondition with debt 2 above: a real quarantined row in <code>docs/testing/flaky-register.md</code>. Neither remaining half can move until one exists.</div>
+        <div class="flag"><b>Why this is here and not a plain test-gap issue.</b> <code>classifyEntry</code> is already fully unit- and mutation-tested against every synthetic sequence that matters. What's missing is a real occurrence of cross-run nondeterminism, which by construction can't be manufactured inside a unit test. One honest caveat: unlike debt 1, debt 2 does <b>not</b> strictly need the Actions runner — a local run against a real flaky register row would discharge it equally. It stays grouped here for the shared dispatch-triggered framing.</div>
+        <p class="src">A real quarantined flaky test (naturally occurring, not manufactured) — the shared precondition left for both remaining halves · opportunistic, piggy-back on the next real quarantine event rather than manufacturing one · #1864, PR #1873</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">G2</span><span class="iname">Published release body now comes from the committed file, not the tag annotation</span><span class="risk hot">A false positive BLOCKS a release</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>release.yml</code> validated <code>docs/release-notes-next.md</code> at the tag ref but published the tag's <i>annotation</i> — a different string, with nothing verifying the two agreed. This PR sources the body from the committed file, runs the same BOM / conflict-marker / mojibake checks against the annotation, and <b>fails the release closed</b> when file and annotation diverge.</p>
+        <p><b>Every part of that is unexercised until a real tag push.</b> <code>scripts/release-body.mjs</code> is covered standalone by <code>scripts/tests/release-body.test.mjs</code> (throwaway git repos, real annotations), but the live path — the workflow step actually invoking it on <code>ubuntu-latest</code>, the checkout + “Restore annotated tag” dance leaving <code>%(contents)</code> readable, the notes file actually being present in that checkout, and <code>gh release create --notes-file</code> receiving the file this step wrote — is not.</p>
+        <div class="flag"><b>This row carries more risk than most: a false positive BLOCKS the release outright.</b> The divergence check is fail-closed by design, so a normalisation bug or a checkout missing the notes file does not degrade the body — it stops the cut. That's the correct posture, and exactly why the first live run needs watching rather than assuming.</div>
+        <p><b>Pre-merge evidence, gathered rather than asserted</b> — the shipped <code>resolveReleaseBody()</code> replayed against the last 12 real tags: <code>v1.14.0</code>…<code>v1.9.0</code> (9 releases) → publish from FILE; <code>v1.8.0</code> → BLOCKED (placeholder annotation, 18 B, vs. a stale 3,060 B file still headed <code>v1.7.0</code>); <code>v1.7.0</code> → BLOCKED (3,060 B file vs. 6,757 B annotation); <code>v1.6.0</code> → file absent at that ref → publish from ANNOTATION. <b>Two real historical releases genuinely diverged</b> — this is not hypothetical.</p>
+        <p><b>Observe, at the next real release cut:</b> the release-body step exits 0 and logs the FILE as its source; the published body matches <code>git show &lt;tag&gt;:docs/release-notes-next.md</code> exactly, not the one-line placeholder; the annotation checks visibly ran rather than being silently skipped. A failure here is a real signal — read what it names before overriding anything.</p>
+        <p class="src">Nothing beyond a real vX.Y.Z tag push — the next release cut · zero extra cost, observed as part of a cut that was happening anyway · <a href="https://github.com/dudarenok-maker/Castwright/issues/2137">#2137</a>, PR #2168</p>
       </div>
     </details>
   </section>
@@ -987,13 +1321,20 @@
 
   <section class="group is-blocked" id="blocked">
     <header>
-      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">1 row</span></h3>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">2 rows</span></h3>
     </header>
     <details class="item">
       <summary><span class="num">—</span><span class="iname">AMD GPU support Phase 2</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Waves A–G were built and merged <b>dormant</b> — the code path exists but has never run against real ROCm hardware. A dormant capability, not an active bug. This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1335">#1335</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">—</span><span class="iname">ORT pip-consistency marker — AMD box</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 5: &ldquo;no marker is written&rdquo; on AMD. <code>planOrtSwap('amd', …)</code> resolves to plain <code>onnxruntime</code>, so AMD takes the same <code>marker.action === 'delete'</code> branch as cpu and apple — both reachable on this box. What is genuinely AMD-specific and unverified is the ordering that branch protects: the AMD→ROCm-failure→CPU fallback inside <code>installForProfile</code> (<code>cpu.txt</code> carries an <b>explicit</b> <code>onnxruntime</code> line the fallback needs to actually install). That fallback only fires on real AMD hardware attempting a ROCm bootstrap that then fails over to CPU — nothing on a dual-NVIDIA box can reach it. This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 5</p>
       </div>
     </details>
   </section>
@@ -1021,7 +1362,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-05</b> against branch <code>fix/sidecar-main-residuals</code> — added <b>A35</b> (design-wins VRAM contention timeout, #2070), <b>A36</b> (ASR warm-reservation figure, #2094) and <b>A37</b> (catastrophic-WER language-collapse override, #2055). Owed count moves 52 → 55; Group A moves 34 → 37 rows. Prior sync (2026-08-05, branch <code>fix/server-2037-supervisor-respawn</code>): added <b>A34</b> (supervisor respawn survives a refused spawn attempt, #2037). Owed count moves 51 → 52; Group A moves 33 → 34 rows. Prior sync (2026-08-05, branch <code>feat/server-2040-wave3</code>): added <b>A33</b> (cast/analysis <code>characterId</code> drift, Wave 3 repair pass <code>--apply</code> run, #2040). Owed count moves 50 → 51; Group A moves 32 → 33 rows. Prior sync (2026-08-04, branch <code>feat/server-2040-wave2</code>): added <b>B3</b> (cast/analysis <code>characterId</code> drift, Wave 2 stops new drift, #2040). Owed count moved 49 → 50; Group B moved 2 → 3 rows. Prior to that (2026-08-02, branch <code>docs/docs-2040-cast-identity</code>): added <b>A32</b> (cast/analysis <code>characterId</code> drift, Wave 1 resolver, #2040). Owed count moved 48 → 49; Group A moved 31 → 32 rows. Prior to that (2026-08-01, <code>main</code> @ <code>c2e03c4a</code>): added <b>A30</b> (golden-audio bless guards, PR #2032) and <b>A31</b> (cast-time clone-readiness gate, #1980 / plan 276). Owed count moved 46 → 48; Group A moved 29 → 31 rows. <b>A19's 2026-07-31 datapoint is retracted</b> — it measured a foreign worktree's pytest suite holding ~5.4 GB, not an 8 GB card's limit; Qwen + Coqui together are 3.7 GB, so that row's question is fully open again, and the box's new <code>cuda:1</code> render pins must be undone before it runs. A1 amended twice: E-04 is unblocked by #2017/PR #2039, and C-05 gains sub-observations C-05a/C-05b (#2023 / PR #2041) without changing the Section C headcount.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-13</b> against branch <code>fix/server-2310-entity-decode</code> — added <b>A45</b> (named-entity decode reaches the TTS engine on a real EPUB, <a href="https://github.com/dudarenok-maker/Castwright/issues/2310">#2310</a>). Owed count moves <b>65 → 66</b>; Group A moves 44 → 45 rows. Not yet run on the box — recorded per the design spec's own "What I could not establish": whether a real EPUB's named entities survive end to end, and separately whether the stage-2 analyzer model even echoes a surviving entity into its returned sentence text (this PR's fix is proven up to that point by unit and end-to-end tests fixing the sentence text explicitly; only the on-box surface is owed). Prior sync: <b>2026-08-13</b> against branch <code>fix/server-coverage-retry-fail-fast</code> — added <b>C3</b> (a deterministic stage-2 failure actually clears when the span is halved, <a href="https://github.com/dudarenok-maker/Castwright/issues/2304">#2304</a>). Owed count moves <b>64 → 65</b>; Group C moves 2 → 3 rows. <b>The row exists because the unit tests cannot reach the claim they appear to make:</b> every one of them uses a fake model that succeeds on smaller input <em>by construction</em>, so they prove the re-split is reached and never that it helps. If the degeneration is a property of the content rather than the span length, the split re-runs twice, fails twice, and the chapter is no better off — only slower. A negative result is therefore a real outcome to record, not a failure to hide. It batches with C2's re-run, which replays the same book and the same chapter 8. <b>Also added to this group, without changing any count: a scheduling hold.</b> Do not take the next re-run until the in-flight speaker-separation work (<a href="https://github.com/dudarenok-maker/Castwright/issues/2288">#2288</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/2279">#2279</a>) lands — it changes dialogue segmentation, so a 12-hour pass taken now measures a moving target — and note that <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a> has since ELIMINATED two candidates offline, by replay over the 2026-08-06 cache with zero model calls. Changing <em>only</em> the roster that <code>reconcileSentenceCharacterIds</code> validates against moves the victim rate <b>38.0% → 76.3%</b> on identical stage-2 sentences — potent, and this run's roster lost 10 ids including the protagonist — but the run's own logs record <b>zero demotions</b> on that path, checked against a control message on the same <code>log(1, …)</code> channel that <em>does</em> appear, so it is a latent hazard that did not fire here. The cause is therefore still open, the stage-2 output is the leading suspect, and a one-chapter local-vs-Gemini A/B is the sharpest next test. Swapping the same roster at <code>crossExamine</code> instead moves it 0.1 points, so the obvious suspect — <code>isConventionRescue</code>'s roster gate — is exonerated; the damage lands one step later, where an off-roster id is demoted to <code>narrator</code> unconditionally. #2253's own row had already recorded that leak at <b>41 lines</b>; on the same corpus it is now <b>882</b>, because this run's roster lost 10 ids including the protagonist. <b>One artifact was lost and the group now says so:</b> the 2026-08-12/13 pass's raw stage-2 outbox was destroyed with its worktree, and it is the only thing that would have settled the residual 76 → 94 gap without a re-run. Prior sync: <b>2026-08-13</b> against branch <code>docs/docs-c2c3-acceptance-record</code> — <b>discharged the post-#2187 C2</b> (escalation executes end to end) from the 2026-08-12/13 <span lang="ru">Ночной дозор</span> pass; surviving dialogue-convention row renumbered <b>C3 → C2</b> and narrowed. Owed count moves <b>65 → 64</b>; Group C moves 3 → 2 rows. <b>The run took 12 h 27 m across a deliberate overnight pause</b> and completed 9/9 chapters, so the two things replay could never prove are now measured on live model output: escalation runs on every chapter (61 windows attempted, 21 lines applied), and the <code>flagged</code>/<code>unresolved</code> split reaches a real stage-2 output (670 unresolved book-wide, <code>flagged</code> 0 throughout). <b>Two targets were missed and are recorded rather than re-queued.</b> Wall-clock missed target 5 by ~2.5–6× — cause identified, not mysterious: §1.1 assumed the eGPU makes the model fit, and it does not (Ollama reports <b>14.2 GiB</b> usable on the 5070 Ti against a 16 GB model, so ~5 GB spilled over PCIe for the whole run), so a re-run of the same configuration would reproduce the miss and buys nothing. Target <b>1c never emitted at all</b> — no <code>scope=book merged=</code> line appears on a <em>resumed</em> run, and since pause/resume is the only practical way to survive a 12-hour analysis, a metric that requires an unbroken run cannot serve as an acceptance criterion in its current form. <b>The surviving row's outcome criterion FAILED and that is why it survives:</b> 87.4% of dash-opening dialogue was attributed to <code>narrator</code> (4131/4725) against a 30.3% baseline, worst on the previously-cleanest chapters (ch3 15.4→95.5%, ch2 20.2→93.9%) and least on the already-degraded ch5 — a uniform effect, which is itself evidence against a structure-dependent cause. <b>The dialogue-structure engine is exonerated and this should not be re-litigated:</b> today's engine replayed over the 2026-08-06 cached stage-2 output reproduces <b>30.4%</b> against the recorded 30.3%, so #2253 and #2277 are not at fault and the cause is upstream of <code>crossExamine</code> — filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>. The blind spot of that method is stated in the issue: the replay starts at <code>crossExamine</code>, so it can exonerate the engine and nothing else. <b>The confound that has to be settled before anyone reads the two numbers as a regression:</b> <code>stage2DurationsEngine</code> records the <em>selected</em> engine (<code>routes/analysis.ts:4356</code>), not the engine that served each call, so a silent <code>FallbackAnalyzer</code> failover to Gemini leaves it reading <code>"local"</code> — and the baseline predates the #2287/#2290 fix, under which undici's 300 s cap misread slow Ollama calls as unreachable and triggered exactly that failover. Both caches read <code>"local"</code>; the field cannot tell them apart. <b>Seven run-sheet gaps were folded into the run sheet in the same PR</b>, four of which return a confident wrong answer rather than an error: a UTF-8 <b>BOM</b> written by PowerShell's <code>Out-File -Encoding utf8</code> silently breaks the settings parse and drops the server back to defaults where <code>allowCloudFallback</code> is <code>true</code> — the exact contamination §2.2 exists to prevent, arrived at by following §2.2; the setting is cached in-process so a file edit changes nothing until restart; §1.2's quiet-box gate checks CPU but not <em>writes</em>, and what actually killed the first attempt at hour six was another session merging into <code>main</code> under a <code>tsx watch</code> server; and an SSE client's <code>curl --max-time</code> bounds the <em>observation</em>, not the run — the job survived the client disconnect and completed, proved by ch7 landing in the cache afterwards. Prior sync: <b>2026-08-11</b> against branch <code>docs/docs-2128-a45-acceptance</code> — <b>discharged A45</b> (#2128 — a real re-render actually clears an audio-currency row). Owed count moves <b>64 → 63</b>; Group A moves 45 → 44 rows. <b>Run on the box 2026-08-11</b>, all three steps PASS against the real 20-book workspace and a real sidecar: baseline dry run <b>23 rows / 188 segments</b> (reproducing the pre-fix figure exactly, as the run sheet predicts) → <code>--apply</code> printed <code>stamped cast-id-history recordedAtSeq on 4 book(s)</code> and all four history files went from <code>schema</code>+<code>supersededBy</code> only to <code>seq: 1</code> plus a <code>recordedAtSeq</code> for every alias → one real qwen 0.6B re-render of <em>Заказ Коалфолла</em> ch2 stamped <code>castHistorySeq: 1</code> → final dry run <b>21 rows / 167 segments</b>. The figures were <b>predicted before the run</b> (23−2 rows, 188−21 segments) and matched exactly, and a line-by-line diff of the two lists shows <b>removed: exactly that chapter's two rows; added: none</b> — so both halves of the criterion hold, including "every other row stays". The Castwright-owned fixture book was chosen deliberately: zero stakes if the audio changes, and it carries <b>two</b> rows on one chapter, which tests the clearing harder than the one-row minimum. No defects filed. <b>Two traps recorded in the run sheet for the next runner</b>, both of which return a confident wrong answer rather than an error: the script does <b>not</b> read <code>server/.env</code>, so without an explicit <code>WORKSPACE_DIR</code> it scans zero books and prints a full page of clean zeros; and <code>segments.json</code> carries <b>no per-segment</b> <code>modelKey</code>, so grouping segments by engine yields one silent empty bucket and proves nothing. Prior sync: <b>2026-08-11</b> against branch <code>fix/server-2128-audio-currency</code> (PR #2244) — added <b>A45</b> (#2128 — a real re-render actually clears an audio-currency row, <a href="https://github.com/dudarenok-maker/Castwright/issues/2128">#2128</a>, plan 280). Owed count moves <b>63 → 64</b>; Group A moves 44 → 45 rows. <b>This lane caused the phantom-row hazard the entry below records</b>: it published its A44 to the canonical URL from a draft branch, pre-merge, so the live page briefly carried a row that was not on <code>main</code>. Renumbered to A45 per the coordination noted below, and the pre-publish <code>--against-published</code> comparison was run again before republishing. Prior sync: Last synced <b>2026-08-11</b> against branch <code>docs/ops-register-2057-reconcile</code> (<a href="https://github.com/dudarenok-maker/Castwright/issues/2057">#2057</a>) — added <b>A44</b> (Russian XTTS quality: leading-dash pause by ear, <code>tts.coqui.degenGuard</code> live, neuter <code>-ее</code> invariant, <a href="https://github.com/dudarenok-maker/Castwright/issues/2026">#2026</a> / PR #2050). Owed count moves <b>62 → 63</b>; Group A moves 43 → 44 rows. Also, without changing any count: <b>A1's Section E self-contradiction is fixed</b> — the row said both “Section E remains entirely unrun” and “4 of 9 now run” in the same document; the former was stale. Corrected to <b>6 of 9 run</b> (runs 2 and 3; E-03/E-06/E-07 owed) and <b>run 3 recorded</b> for the first time — E-01 by-ear <b>NEGATIVE</b> with the cause isolated to the <em>source clip's language</em> (Russian-sourced clone 0.7824 vs English-sourced 0.2321 in the same chapter), E-05 <b>P</b>, E-04 <b>F</b> → #2017. Note this contradiction survived every CI run: <code>check:onbox-register</code> validates arithmetic, never prose against prose. <b>G1 partially discharged</b> — the Monday cron has dispatched the workflow for real twice (2026-08-03, 2026-08-10, both success, ffmpeg step ok, clean no-op summary rendered), so “never executed on Actions” was false; but both runs took the empty-register early return, so <code>gh issue view</code> under real <code>GH_TOKEN</code> auth is still unproven and the row stays owed. <b>Row-ID collision, avoided rather than survived:</b> the live page was already reading <b>63 owed / Group A 44</b> before this change, because <b>PR #2244 published its own A44 from a draft branch, pre-merge</b> — a phantom row not on <code>main</code>. The documented next-free-ID probe (<code>git grep "^### A" origin/main</code>) returns A44 and is blind to an in-flight branch, so taking it naively would have auto-merged two different A44 rows <em>and</em> two identical 62 → 63 bumps — the same silent-loss shape this log already records twice below. Coordinated on the PR: this lane takes <b>A44</b> and lands first; #2244 renumbers to <b>A45</b> and recomputes to 64 / 45 on rebase. Prior sync (2026-08-10, branch <code>feat/server-orphan-link-affordance</code>) — added <b>A43</b> (linking an orphaned <code>characterId</code> through the Cast screen actually reconnects its segments, <a href="https://github.com/dudarenok-maker/Castwright/issues/2238">#2238</a>). Owed count moves <b>61 → 62</b>; Group A moves 42 → 43 rows. The row carries a <b>negative</b> criterion as well as a positive one: <em>Exile</em>'s <code>unknown-male</code> row (21 segments across 3 chapters) must stay <b>disabled</b>, because the first implementation guarded only the alias TARGET and the review gate caught the SOURCE direction as a Critical — one click from routing five speakers onto one voice, the script having recorded that cache naming it <em>timkin, brant, dwarf, rex, lord cassius</em>. <b>The first version of this row said <em>Unlocked</em> and "three speakers" — both wrong</b>, caught by the scoped re-review: <em>Unlocked</em>'s backup names one occurrence and its cache names none, so it is the cache-blind case. A fabricated figure in a published register is the failure this log exists to make visible. Prior sync (2026-08-07, branch <code>fix/server-2187-aligner-anchored</code>) — added <b>C2</b> (srv-59 flagged-count target end to end, now that the <a href="https://github.com/dudarenok-maker/Castwright/issues/2187">#2187</a> aligner fix has landed). Alignment itself is <b>already discharged</b> and deliberately not part of that row: it was measured offline by replaying the 15,069 cached stage-2 sentences through the production parser and aligner (book 67.7 → 96.0%, every chapter now over the 80% floor), because the aligner is pure and needs no hardware. What remains is plan 247's flagged-count target, which is a property of the cross-examiner over a real stage-2 run and cannot be replayed from cache. Owed count moves <b>55 → 56</b>; Group C moves 1 → 2 rows. <b>Note the arithmetic:</b> this row was authored when the total read 54, so the branch changed it to 55 — but a concurrent lane added <b>A38</b> and changed the same line 54 → 55 for its own reason. Git saw identical text and auto-merged silently, leaving a register whose total said 55 while its groups summed to 56. <code>check:onbox-register</code> caught it in CI, not locally, because CI tests the branch merged with <code>main</code>. Two lanes bumping the same total to the same value is the counting analogue of the same-row-ID collision this log has recorded before: <b>after merging <code>main</code>, always re-run the check rather than trusting a clean merge.</b> Prior sync (2026-08-07, branch <code>docs/docs-b4-merge-base-acceptance</code>) — <b>discharged B4</b> (cast merge-base staleness detection, #2155 / #2185). Both criteria were <b>run on the box</b> 2026-08-07 against a real Gemini analyzer and a real 4-chapter book in an isolated scratch workspace: an uncontended fresh run attributed 311 sentences and reported <b>zero</b> advisories, and a run with a genuine concurrent <code>add-alias</code> landing mid-attribution reported <b>exactly one</b>, fingerprints rendered NUL-free. The concurrent edit was in fact overwritten, so <a href="https://github.com/dudarenok-maker/Castwright/issues/2015">#2015</a>'s rebuild keeps its motivation. Outcome recorded in the plan's Ship notes. Owed count moves <b>55 → 54</b>; Group B moves 4 → 3 rows. Prior sync (2026-08-06, branch <code>docs/docs-onbox-c1-c2-acceptance</code>, PR #2197): <b>discharged C1 and C2</b> from the one <span lang="ru">Ночной дозор</span> local pass — scene separators (plan 261) PASS, srv-59 attribution (plan 247) targets missed with the aligner named as root cause (<a href="https://github.com/dudarenok-maker/Castwright/issues/2187">#2187</a>), surviving cloud row renumbered C3 → C1. Owed count moved <b>57 → 55</b>; Group C moved 3 → 1 rows. <b>That publish went unlogged here</b> and is reconstructed above: the entry below it was the last one written, which is why the log briefly disagreed with the strip. Prior sync (2026-08-06, branch <code>fix/server-cast-merge-base-serialise</code>): added <b>B4</b> (cast merge-base staleness detection is real, not mocked, PR #2185 / #2155 / #2015). Group B moves 3 → 4 rows. Owed count moves <b>56 → 57</b>, not 55 → 56: <b>G2</b> (release body from the committed file, #2137 / PR #2168) landed on <code>main</code> concurrently and was merged in before this publish, taking 55 → 56 on its own. Caught by <code>check:onbox-register --against-published</code>, which refused the publish because the live page already carried G2 — publishing the pre-merge branch state would have silently deleted it, the exact <a href="https://github.com/dudarenok-maker/Castwright/issues/1931">#1931</a> incident this mode exists to prevent. Prior sync (2026-08-05, branch <code>fix/sidecar-main-residuals</code>): added <b>A35</b> (design-wins VRAM contention timeout, #2070), <b>A36</b> (ASR warm-reservation figure, #2094) and <b>A37</b> (catastrophic-WER language-collapse override, #2055). Owed count moves 52 → 55; Group A moves 34 → 37 rows. Prior sync (2026-08-05, branch <code>fix/server-2037-supervisor-respawn</code>): added <b>A34</b> (supervisor respawn survives a refused spawn attempt, #2037). Owed count moves 51 → 52; Group A moves 33 → 34 rows. Prior sync (2026-08-05, branch <code>feat/server-2040-wave3</code>): added <b>A33</b> (cast/analysis <code>characterId</code> drift, Wave 3 repair pass <code>--apply</code> run, #2040). Owed count moves 50 → 51; Group A moves 32 → 33 rows. Prior sync (2026-08-04, branch <code>feat/server-2040-wave2</code>): added <b>B3</b> (cast/analysis <code>characterId</code> drift, Wave 2 stops new drift, #2040). Owed count moved 49 → 50; Group B moved 2 → 3 rows. Prior to that (2026-08-02, branch <code>docs/docs-2040-cast-identity</code>): added <b>A32</b> (cast/analysis <code>characterId</code> drift, Wave 1 resolver, #2040). Owed count moved 48 → 49; Group A moved 31 → 32 rows. Prior to that (2026-08-01, <code>main</code> @ <code>c2e03c4a</code>): added <b>A30</b> (golden-audio bless guards, PR #2032) and <b>A31</b> (cast-time clone-readiness gate, #1980 / plan 276). Owed count moved 46 → 48; Group A moved 29 → 31 rows. <b>A19's 2026-07-31 datapoint is retracted</b> — it measured a foreign worktree's pytest suite holding ~5.4 GB, not an 8 GB card's limit; Qwen + Coqui together are 3.7 GB, so that row's question is fully open again, and the box's new <code>cuda:1</code> render pins must be undone before it runs. A1 amended twice: E-04 is unblocked by #2017/PR #2039, and C-05 gains sub-observations C-05a/C-05b (#2023 / PR #2041) without changing the Section C headcount.</p>
     <p><b>Formatting note.</b> Between 2026-07-31 22:09 UTC and 2026-08-01 03:09 UTC this page was published four times straight from the raw <code>.md</code> source instead of this styled twin, which replaced it with default markdown rendering. Publish the twin — this file — not the repo markdown.</p>
   </footer>
 

@@ -106,3 +106,54 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     expect(() => installForProfile('/py', 'amd', pip.run, 'win32', null)).toThrow(/CPU fallback/);
   });
 });
+
+describe('installForProfile ORT marker wiring', () => {
+  function harness(profile: string, { failSwap = false } = {}) {
+    const calls: string[] = [];
+    const runPip = (args: string[]) => {
+      calls.push(`pip ${args.join(' ')}`);
+      if (failSwap && args[0] === 'install' && args.includes('--force-reinstall')) return false;
+      return true;
+    };
+    const marker = {
+      del: () => { calls.push('marker:delete'); },
+      write: () => { calls.push('marker:write'); },
+    };
+    return { calls, runPip, marker, profile };
+  }
+
+  it('deletes the marker BEFORE any overlay install', () => {
+    const h = harness('cpu');
+    installForProfile('py', 'cpu', h.runPip, 'win32', '/venv', h.marker);
+    const delIdx = h.calls.indexOf('marker:delete');
+    const firstPip = h.calls.findIndex((c) => c.startsWith('pip install -r'));
+    expect(delIdx).toBeGreaterThanOrEqual(0); // positive control: the delete actually happened
+    expect(firstPip).toBeGreaterThanOrEqual(0); // positive control: an overlay install actually happened
+    expect(delIdx).toBeLessThan(firstPip);
+  });
+
+  it('writes the marker only after a successful nvidia swap', () => {
+    const h = harness('nvidia');
+    installForProfile('py', 'nvidia', h.runPip, 'win32', '/venv', h.marker);
+    const swapIdx = h.calls.findIndex((c) => c.includes('--force-reinstall'));
+    const writeIdx = h.calls.indexOf('marker:write');
+    expect(swapIdx).toBeGreaterThanOrEqual(0); // positive control: the swap step actually ran
+    expect(writeIdx).toBeGreaterThanOrEqual(0); // positive control: the write actually happened
+    expect(writeIdx).toBeGreaterThan(swapIdx);
+  });
+
+  it('never writes on cpu', () => {
+    const h = harness('cpu');
+    installForProfile('py', 'cpu', h.runPip, 'win32', '/venv', h.marker);
+    expect(h.calls).toContain('marker:delete'); // positive control: the seam IS wired on cpu
+    expect(h.calls).not.toContain('marker:write'); // and it correctly does not write
+  });
+
+  it('deletes the marker when the swap FAILS, before rethrowing', () => {
+    const h = harness('nvidia', { failSwap: true });
+    expect(() => installForProfile('py', 'nvidia', h.runPip, 'win32', '/venv', h.marker)).toThrow();
+    // one delete at entry, one on the failure path
+    expect(h.calls.filter((c) => c === 'marker:delete')).toHaveLength(2);
+    expect(h.calls).not.toContain('marker:write');
+  });
+});

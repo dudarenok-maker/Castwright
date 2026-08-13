@@ -20,7 +20,8 @@
    require no updates. */
 
 import { useEffect, useMemo, useState } from 'react';
-import { api, type WorkspaceInfo } from '../lib/api';
+import { api, ApiError, type WorkspaceInfo } from '../lib/api';
+import { recoveryHint } from '../lib/lan-recovery-hint';
 import { parseRuntime } from '../lib/time';
 import { useAppSelector, useAppDispatch } from '../store';
 import { startLinearTour } from '../store/tour-slice';
@@ -243,7 +244,11 @@ export function BookLibraryView({
       .getLibrary()
       .then((res) => dispatch(libraryActions.hydrate(res)))
       .catch((e) =>
-        dispatch(libraryActions.hydrateError(e instanceof Error ? e.message : String(e))),
+        dispatch(libraryActions.hydrateError({
+          message: e instanceof Error ? e.message : String(e),
+          status: e instanceof ApiError ? e.status : undefined,
+          fromServer: e instanceof ApiError ? e.fromServer : false,
+        })),
       );
   };
 
@@ -396,7 +401,24 @@ export function BookLibraryView({
       {loaded && error ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center" role="alert">
           <h3 className="font-serif text-2xl font-bold text-ink">Couldn&apos;t load your library</h3>
-          <p className="mt-2 text-sm text-ink/60">{error}</p>
+          <p className="mt-2 text-sm text-ink/60">
+            {error.status === 401
+              ? // #2278 review round 4, Finding 2 — COMPOSED, not chosen. The
+                // first sentence is this app's own plain-language account of
+                // what happened (#2247 Task 6) and always renders; only the
+                // pointer that follows it varies. /api/library sits behind the
+                // same requireLanToken guard as listDevices, so its 401 body
+                // carries pairingOriginHint()'s live-port guidance — prefer
+                // that when the body genuinely parsed, since recoveryHint()
+                // cannot know the port on the :443-forwarder path this issue
+                // exists for. The app's sentence deliberately stops before
+                // "where to go", which whichever pointer wins then supplies.
+                <>
+                  This browser is no longer authorized for Castwright on your network.{' '}
+                  {error.fromServer ? error.message : recoveryHint()}
+                </>
+              : error.message}
+          </p>
           <div className="mt-6">
             <PrimaryButton variant="dark" onClick={retry} icon={false}>Retry</PrimaryButton>
           </div>

@@ -63,61 +63,65 @@ vi.mock('./prosody-thunk', async (importOriginal) => {
 const getBookStateMock = vi.fn();
 const putBookStateMock = vi.fn();
 
-vi.mock('../lib/api', () => ({
-  api: {
-    /* Library + base infra */
-    getLibrary: vi.fn(async () => ({ books: [] })),
-    getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
-    getBaseVoices: vi.fn(async () => ({ voices: [] })),
-    getUserSettings: vi.fn(async () => ({})),
-    getBookState: (...args: unknown[]) => getBookStateMock(...args),
-    putBookState: (...args: unknown[]) => putBookStateMock(...args),
-    getAnalysisState: vi.fn(async () => null),
-    getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
-    pollRevisions: vi.fn(async () => ({ pending: [], drift: [] })),
-    pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
-    getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
-    getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
-    matchVoices: vi.fn(async () => ({ matches: [] })),
-    getSeriesRoster: vi.fn(async () => ({ characters: [] })),
-    getSetupReadiness: () =>
-      Promise.resolve({
-        ready: true,
-        completedAt: '2026-06-12T00:00:00.000Z',
-        blockers: {
-          sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-          ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-          tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-          analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-        },
-        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
-      }),
-    getTourStatus: vi.fn(async () => ({ completedAt: null })),
-    getChapterAudio: vi.fn(async () => ({
-      url: '/api/books/b1/chapters/1/audio.mp3',
-      durationSec: 600,
-      peaks: [],
-      sampleRate: 44100,
-      segments: [],
-    })),
-    getListenProgress: vi.fn(async () => null),
-    putListenProgress: vi.fn(async () => ({
-      chapterId: 1,
-      currentSec: 0,
-      updatedAt: new Date().toISOString(),
-    })),
-    putListenStats: vi.fn(async () => ({})),
-    setShelfStatus: vi.fn(async () => ({
-      chapterId: 1,
-      currentSec: 0,
-      updatedAt: new Date().toISOString(),
-    })),
-  },
-  AnalysisError: class extends Error {},
-  ExportIncompleteError: class extends Error {
-    missing: string[] = [];
-  },
-}));
+vi.mock('../lib/api', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../lib/api')>();
+  return {
+    ...mod,
+    api: {
+      /* Library + base infra */
+      getLibrary: vi.fn(async () => ({ authors: [] })),
+      getVoices: vi.fn(async () => ({ voices: [], dropped: [] })),
+      getBaseVoices: vi.fn(async () => ({ voices: [] })),
+      getUserSettings: vi.fn(async () => ({})),
+      getBookState: (...args: unknown[]) => getBookStateMock(...args),
+      putBookState: (...args: unknown[]) => putBookStateMock(...args),
+      getAnalysisState: vi.fn(async () => null),
+      getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
+      pollRevisions: vi.fn(async () => ({ pending: [], drift: [] })),
+      pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
+      getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
+      getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
+      matchVoices: vi.fn(async () => ({ matches: [] })),
+      getSeriesRoster: vi.fn(async () => ({ characters: [] })),
+      getSetupReadiness: () =>
+        Promise.resolve({
+          ready: true,
+          completedAt: '2026-06-12T00:00:00.000Z',
+          blockers: {
+            sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+            ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+            tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+            analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+          },
+          info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+        }),
+      getTourStatus: vi.fn(async () => ({ completedAt: null })),
+      getChapterAudio: vi.fn(async () => ({
+        url: '/api/books/b1/chapters/1/audio.mp3',
+        durationSec: 600,
+        peaks: [],
+        sampleRate: 44100,
+        segments: [],
+      })),
+      getListenProgress: vi.fn(async () => null),
+      putListenProgress: vi.fn(async () => ({
+        chapterId: 1,
+        currentSec: 0,
+        updatedAt: new Date().toISOString(),
+      })),
+      putListenStats: vi.fn(async () => ({})),
+      setShelfStatus: vi.fn(async () => ({
+        chapterId: 1,
+        currentSec: 0,
+        updatedAt: new Date().toISOString(),
+      })),
+    },
+    AnalysisError: class extends Error {},
+    ExportIncompleteError: class extends Error {
+      missing: string[] = [];
+    },
+  };
+});
 
 /* Route-prefetch stubs — avoid post-teardown EnvironmentTeardownError. */
 vi.mock('../routes/prefetch', () => ({

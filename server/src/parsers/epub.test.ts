@@ -58,6 +58,28 @@ describe('parseEpub', () => {
     expect(decodeEntities('&amp;amp;lt;')).toBe('&amp;lt;');
   });
 
+  /* #2310: decodeEntities now shares stripHtml's rules — decodeNamedEntities
+     runs before decodeNumericEntities. That reorders this specific case:
+     the named pass decodes `&amp;` to `&` first, turning `&amp;#39;` into
+     `&#39;`, and the numeric pass that follows then decodes THAT to `'`.
+     Previously this returned the literal `&#39;` — no named pass ran ahead
+     of the numeric one to expose it. Deliberate consequence of sharing
+     stripHtml's rules; pinned at its actual new value since the retained
+     case above (`&amp;amp;lt;`) never reaches this reordering. */
+  it('#2310: decodeEntities on &amp;#39; now fully decodes (named-before-numeric reorder)', () => {
+    expect(decodeEntities('&amp;#39;')).toBe("'");
+  });
+
+  it('#2310: decodeEntities decodes the full named set (titles carry them too)', () => {
+    expect(decodeEntities('L&rsquo;&Eacute;t&eacute; &mdash; Tome I')).toBe('L’Été — Tome I');
+  });
+  it('#2310: decodeEntities decodes hex numeric refs (the Coalfall gap, never fixed here)', () => {
+    expect(decodeEntities("Oduvan&#x27;s Forge")).toBe("Oduvan's Forge");
+  });
+  it('#2310: decodeEntities leaves a bare ampersand alone', () => {
+    expect(decodeEntities('Smith &amp; Sons, AT&T')).toBe('Smith & Sons, AT&T');
+  });
+
   it('uses dc:title from the OPF metadata', async () => {
     const buf = await readFile(fixturePath);
     const out = await parseEpub(buf, { fileName: 'sample.epub' });
