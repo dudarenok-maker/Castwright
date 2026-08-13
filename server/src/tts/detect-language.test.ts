@@ -5,7 +5,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
 import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
-import { countProseUnits, PROSE_UNIT_FLOOR } from './prose-units.js';
+import {
+  countProseUnits,
+  PROSE_UNIT_FLOOR,
+  guiraudR,
+  LEXICAL_RICHNESS_FLOOR,
+  digitTokenShare,
+  DIGIT_TOKEN_SHARE_CEILING,
+} from './prose-units.js';
 
 describe('detectManuscriptLanguage', () => {
   it('detects Russian via the Cyrillic pre-pass (supported)', () => {
@@ -566,5 +573,153 @@ describe('detectManuscriptLanguageFromChapters — #2276 chapter-count invarianc
       const [first, ...rest] = results;
       for (const r of rest) expect(r).toEqual(first);
     });
+  });
+});
+
+/* #2256 — PROSE_UNIT_FLOOR alone lets PUNCTUATED junk through: a long
+   numbered TOC or a periods-and-page-numbers index racks up enough
+   terminators to clear it purely by having many short, repetitive entries.
+   See prose-units.ts's own header for the corpus this was measured against
+   and the stated margins on both sides. */
+describe('guiraudR / digitTokenShare (#2256 pure helpers)', () => {
+  it('guiraudR is 0 for a token-less sample', () => {
+    expect(guiraudR('12345 000 --- !!! ???')).toBe(0);
+  });
+
+  it('guiraudR rewards a wide vocabulary and punishes verbatim repetition, at the same unit count', () => {
+    const repeated = Array(20).fill('Chapter One.').join(' '); // dedupes to 1 unit, 2 types / 2 tokens
+    const distinctWords = [
+      'apple', 'bridge', 'candle', 'desert', 'ember', 'forest', 'granite', 'harbor', 'island', 'jungle',
+      'kettle', 'lantern', 'meadow', 'nebula', 'orchard', 'pepper', 'quarry', 'river', 'summit', 'tundra',
+    ];
+    const varied = distinctWords.map((w) => `${w} Word.`).join(' '); // 20 distinct units, no dedup collapse
+    expect(guiraudR(varied)).toBeGreaterThan(guiraudR(repeated));
+  });
+
+  it('digitTokenShare ignores punctuation-only tokens and counts a token as "digit" if it merely CONTAINS one', () => {
+    expect(digitTokenShare('Chapter 12. See page 45, note 3.')).toBeGreaterThan(0);
+    expect(digitTokenShare('Chapter Twelve. See the note.')).toBe(0);
+  });
+
+  it('digitTokenShare is 0 for an empty sample', () => {
+    expect(digitTokenShare('')).toBe(0);
+  });
+});
+
+describe('detectManuscriptLanguageFromChapters — #2256 punctuated-junk residual (PROSE_UNIT_FLOOR alone is not enough)', () => {
+  // A numbered TOC — "N. Name." per entry, six cycling character names — is
+  // the exact shape #2251's own review comment measured (1200 units at
+  // scale). Sized here to comfortably clear PROSE_UNIT_FLOOR (80 units, 4x
+  // the floor) so this fixture exercises the NEW gate, not the old one —
+  // the un-punctuated version of this exact TOC (no periods at all, 0 prose
+  // units) already has its own regression above ("symptom 2").
+  function numberedToc(entries: number): string {
+    const names = ['Kaz', 'Inej', 'Nina', 'Matthias', 'Wylan', 'Jesper'];
+    const parts: string[] = [];
+    for (let i = 1; i <= entries; i++) parts.push(`${i}. ${names[i % names.length]}.`);
+    return parts.join(' ');
+  }
+
+  // Periods-and-page-numbers index — "Term, N." per entry, ten distinct head
+  // terms — the second punctuated shape from the same review comment.
+  function periodIndex(entries: number): string {
+    const terms = ['Aardvark', 'Abacus', 'Abandon', 'Abbey', 'Abbot', 'Abdicate', 'Abduct', 'Abeyance', 'Abhor', 'Abide'];
+    const parts: string[] = [];
+    for (let i = 1; i <= entries; i++) parts.push(`${terms[i % terms.length]}, ${i * 3}.`);
+    return parts.join(' ');
+  }
+
+  const repeatedHeadings = (entries: number) => Array(entries).fill('Chapter One.').join(' ');
+
+  it('fixture sanity: all three junk shapes clear PROSE_UNIT_FLOOR on their own — the OLD gate alone would have backfilled every one of them', () => {
+    expect(countProseUnits(numberedToc(40))).toBeGreaterThanOrEqual(PROSE_UNIT_FLOOR);
+    expect(countProseUnits(periodIndex(50))).toBeGreaterThanOrEqual(PROSE_UNIT_FLOOR);
+    expect(countProseUnits(repeatedHeadings(30))).toBeGreaterThanOrEqual(PROSE_UNIT_FLOOR);
+    // And all three clear the NEW gate's own PROSE_UNIT_FLOOR-adjacent input by
+    // enough margin that a passing test here is about the richness/digit
+    // gates, not an accidental floor miss.
+    expect(guiraudR(numberedToc(40))).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+    expect(guiraudR(periodIndex(50))).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+    expect(guiraudR(repeatedHeadings(30))).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+  });
+
+  it('a numbered TOC that franc mis-disambiguates with fallback:false (a repro of the "backfilled \'de\'" residual) still surrenders — never writes the wrong non-English language', () => {
+    const toc = numberedToc(40); // 80 prose units — 4x PROSE_UNIT_FLOOR
+    // Fixture sanity: franc is genuinely fooled here (fallback:false), so a
+    // gate keyed on fallback alone — or on PROSE_UNIT_FLOOR alone — would
+    // have backfilled this book with the WRONG non-English language.
+    const soloDetection = detectManuscriptLanguage(toc);
+    expect(soloDetection.fallback).toBe(false);
+    expect(soloDetection.language).not.toBe('en');
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: toc }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('a periods-and-page-numbers index (50 entries, digit-dense) surrenders via the digit-token-share ceiling', () => {
+    const idx = periodIndex(50);
+    expect(digitTokenShare(idx)).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING);
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: idx }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('repeated "Chapter One." headings (no digits at all) still surrenders via lexical richness alone', () => {
+    const headings = repeatedHeadings(30);
+    expect(digitTokenShare(headings)).toBe(0); // proves this shape needs the RICHNESS gate, not the digit one
+    expect(guiraudR(headings)).toBeLessThan(LEXICAL_RICHNESS_FLOOR);
+
+    const r = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: headings }]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('the SAME numbered-TOC junk surrenders identically whether it is 1 chapter or split across many (chapter-count invariance, #2276\'s own guarantee extended to the new gate)', () => {
+    const toc = numberedToc(40);
+    const words = toc.split(' ');
+    const third = Math.ceil(words.length / 3);
+    const asOneChapter = [{ title: 'Chapter One', body: toc }];
+    const asThreeChapters = [
+      { title: 'Chapter One', body: words.slice(0, third).join(' ') },
+      { title: 'Chapter Two', body: words.slice(third, third * 2).join(' ') },
+      { title: 'Chapter Three', body: words.slice(third * 2).join(' ') },
+    ];
+    const oneResult = detectManuscriptLanguageFromChapters(asOneChapter);
+    const threeResult = detectManuscriptLanguageFromChapters(asThreeChapters);
+    expect(oneResult.fallback).toBe(true);
+    expect(threeResult).toEqual(oneResult);
+  });
+
+  /* "Must not regress real books" — the corpus this gate was actually
+     measured against (server/src/tts/prose-units.ts's own header) is the 7
+     real Keeper of the Lost Cities books written by the 2026-08-11 repair
+     run, read-only, via a fresh manuscript re-parse: Guiraud's R ranged
+     14.6-24.8, all comfortably above LEXICAL_RICHNESS_FLOOR (3). That book
+     text can't be committed here, so this repo's own thinnest-shaped real
+     fixtures stand in as the regression lock — REAL_CJK_PROSE (a single
+     chapter) is the thinnest of ALL of them, measured at R=7.1, and it is
+     already exercised via detectManuscriptLanguageFromChapters in the
+     'real-shaped CJK sample' test above. This test asserts the SAME
+     invariant these two new gates must preserve, explicitly. */
+  it('the thinnest real-shaped fixtures this repo ships (REAL_ENGLISH_PROSE / REAL_CJK_PROSE, both already just above PROSE_UNIT_FLOOR) clear the new richness and digit gates too, with real margin', () => {
+    const EN_SENTENCE =
+      'Marcel Beaumont and Geneviève Dubois walked along the Champs-Élysées toward the Café de Flore, where Henri Toussaint waited beneath the awning with the morning papers.';
+    const ZH_SENTENCE =
+      '熔炉已经冷却到被灰烬覆盖的落日的颜色，当有人敲响她作坊的门时，雷恩正在刮掉最后的炉渣。';
+    const enSample = Array(25).fill(EN_SENTENCE).join(' '); // same shape as the file's own `repeat()` helper — 25 units
+    const zhSample = Array(25).fill(ZH_SENTENCE).join(''); // 25 units, no whitespace (real CJK shape)
+
+    expect(guiraudR(enSample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+    expect(guiraudR(zhSample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+    expect(digitTokenShare(enSample)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+    expect(digitTokenShare(zhSample)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+
+    expect(detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: enSample }])).toEqual({
+      language: 'en',
+      supported: true,
+      fallback: false,
+    });
+    const zhResult = detectManuscriptLanguageFromChapters([{ title: '第一章', body: zhSample }]);
+    expect(zhResult.language).toBe('zh');
+    expect(zhResult.fallback).toBe(false);
   });
 });
