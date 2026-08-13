@@ -5159,6 +5159,8 @@ export interface components {
             excludeFromSynthesis?: boolean;
             /** @description #1679 — read-only editorial flag: true on the first sentence after a word-free scene break (* * *, <hr>) in the source. Display-only; never spoken, never affects attribution. */
             sceneBreakBefore?: boolean;
+            /** @description #1984 D18 — the characterId this sentence carried before a post-stage-2 step overwrote it. Absent when nothing overwrote it. Written only by applyNarratorDefault and by the dialogue-structure engine's correction pass; never by the model. */
+            priorCharacterId?: string;
         };
         /**
          * @description fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly

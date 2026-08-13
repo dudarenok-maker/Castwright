@@ -138,6 +138,11 @@ export const sentenceSchema = z
        the post-attribution annotateSceneBreaks pass, never by the model, so
        .strict() validation of model output is unaffected. Additive. */
     sceneBreakBefore: z.boolean().optional(),
+    /* #1984 D18 — the characterId this sentence carried before a
+       post-stage-2 step overwrote it. Absent when nothing overwrote it.
+       Written only by applyNarratorDefault and by the dialogue-structure
+       engine's correction pass; never by the model. Additive. */
+    priorCharacterId: z.string().optional(),
   })
   .strict();
 

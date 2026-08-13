@@ -143,6 +143,10 @@ export function recoverTaggedNarratorLines<T extends Sentence>(
   const flipQ = (q: T, id: string) => {
     if (q.characterId !== NARRATOR_ID || q.characterId === id) return;
     q.characterId = id;
+    // #1984 D18 — this is a re-assignment, not a demotion. A stale
+    // priorCharacterId from an earlier site would misreport this sentence as
+    // engine-demoted narrator once this pass has since flipped it off narrator.
+    delete (q as unknown as { priorCharacterId?: string }).priorCharacterId;
     byId.set(id, (byId.get(id) ?? 0) + 1);
     flipped += 1;
   };

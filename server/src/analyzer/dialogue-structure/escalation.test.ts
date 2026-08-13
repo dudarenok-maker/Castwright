@@ -379,6 +379,25 @@ describe('escalateFlaggedWindows', () => {
     expect(flags).toEqual([]);
   });
 
+  // #1984 D18 — escalation is a re-assignment, not a demotion. A
+  // priorCharacterId set by an earlier site (e.g. reconcileSentenceCharacterIds)
+  // must not survive onto a sentence escalation has since re-attributed, or the
+  // attribution-health metric would report it as engine-demoted narrator when
+  // it is now correctly attributed.
+  it('clears a stale priorCharacterId when escalation re-assigns the sentence', async () => {
+    const { body, paras, sentences, flags } = buildFixture();
+    const flagged = sentences.find((s) => s.id === 4)!;
+    (flagged as SentenceOutput).priorCharacterId = 'dropped-char'; // stale, from an earlier demotion
+    const analyzer = fakeAnalyzer(() => ({
+      assignments: [{ line: 4, characterId: 'anton' }],
+    }));
+
+    await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    expect(sentences.find((s) => s.id === 4)).toMatchObject({ characterId: 'anton' });
+    expect(sentences.find((s) => s.id === 4)?.priorCharacterId).toBeUndefined();
+  });
+
   it('rejects an assignment whose characterId is NOT on the roster', async () => {
     const { body, paras, sentences, flags } = buildFixture();
     const analyzer = fakeAnalyzer(() => ({

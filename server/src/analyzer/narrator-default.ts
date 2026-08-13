@@ -88,8 +88,13 @@ export function applyNarratorDefault(
     if (s.characterId === NARRATOR_ID) return s; // already narrator — not an override
     if (!clampedThisRun) {
       clampedThisRun = true;
-      return { ...s, characterId: NARRATOR_ID, confidence: Math.min(s.confidence ?? 1, 0.5) };
+      return {
+        ...s,
+        characterId: NARRATOR_ID,
+        confidence: Math.min(s.confidence ?? 1, 0.5),
+        priorCharacterId: s.characterId, // #1984 D18 — record the id this demotion overwrote
+      };
     }
-    return { ...s, characterId: NARRATOR_ID };
+    return { ...s, characterId: NARRATOR_ID, priorCharacterId: s.characterId }; // #1984 D18
   });
 }
