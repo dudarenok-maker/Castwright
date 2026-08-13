@@ -1,6 +1,24 @@
 # Quote-delimiter validity in `findQuoteRuns` — design
 
-Status: proposed · Issue: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) · Blocks: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) / [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)
+Status: **shipped as M1** (PR [#2300](https://github.com/dudarenok-maker/Castwright/pull/2300), merged `e839a939`, 2026-08-13) · Issue: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288), still open for M2 · Related: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) / [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279), **still blocked**
+
+> **Shipped, and what it did not do.** This design covers M1 only — the
+> apostrophe-shaped closer, the rejection-anchored skip bound, and the
+> never-delete fallback. It landed with 938 clean repairs / 0 merged / 0 lost
+> over 140 English books.
+>
+> It does **not** unblock the quote-pair widening, and that was re-measured
+> against the shipped fix rather than assumed: the six-language widening sweep
+> reads **437 of 51,608 corrupted shapes both before and after M1 — zero
+> movement**. Partitioned, **0 of 2,456 well-formed shapes corrupt; all 437
+> need drifted delimiters** (a turn pairing an opener with a closer from
+> another pair), and scored one added pair at a time, **all nine are
+> individually disqualified**, so no subset of the widening is shippable
+> either. M2 — the general gap-seeded straddle, where nothing is rejected so
+> M1's bound never engages — remains owed, with executable acceptance criteria
+> in [#2288#issuecomment-5275015405](https://github.com/dudarenok-maker/Castwright/issues/2288#issuecomment-5275015405).
+> The header below said `Blocks: #2286 / #2279` while this was in design; that
+> is now `Related`, because shipping it did not lift the block.
 
 > **Revision 4.** Revision 3 (below) specified the resumed-skip bound as
 > **computed once per accepted opener occurrence, anchored at the opening
