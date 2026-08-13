@@ -39,7 +39,9 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
+import { buildMirrorContent } from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -277,4 +279,44 @@ test('intra-repo anchor links in the governance docs and skills resolve to real 
     }
   }
   assert.deepEqual(broken, [], `dangling intra-repo anchor links:\n  ${broken.join('\n  ')}`);
+});
+
+// The mirror lives OUTSIDE the repo, in the cross-agent store at
+// ~/.agents/skills/. Cline (and five other agents) read only that store —
+// verified 2026-08-13 by asking Cline in this workspace: it listed the 23
+// global skills and answered "pr-review-gate: NO".
+const AGENT_SKILL_STORE = join(homedir(), '.agents', 'skills');
+const MIRRORED_SKILL = 'pr-review-gate';
+
+test('the agent-store mirror matches its canonical source, when it exists', () => {
+  // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
+  // in $HOME: absent on a fresh clone and in CI. Making this a hard failure
+  // would turn every never-synced machine red. The trade is deliberate — but
+  // it means a GREEN run here proves nothing about a machine that has not
+  // synced, so never report this as "the mirror is in sync".
+  const mirrorRoot = join(AGENT_SKILL_STORE, MIRRORED_SKILL);
+  if (!existsSync(mirrorRoot)) {
+    // Not skipped silently: say why, so a reader of CI output can tell the
+    // difference between "verified" and "not checked".
+    console.log(`[skip] no agent-store mirror at ${mirrorRoot} — run npm run skills:sync`);
+    return;
+  }
+  const canonicalRoot = join(REPO_ROOT, '.claude', 'skills', MIRRORED_SKILL);
+  for (const rel of ['SKILL.md', 'references/reviewer-brief.md', 'references/findings-triage.md']) {
+    const mirrored = join(mirrorRoot, rel);
+    assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync`);
+    // Compare the whole mirrored file against what the sync script WOULD write
+    // for the current canonical source. Splitting on the provenance marker and
+    // comparing only the tail was the earlier approach, and it forced the
+    // script to duplicate SKILL.md's frontmatter block so that the tail would
+    // equal the canonical file exactly — a wart in the artifact a reviewing
+    // agent actually reads, to save this test one line. Comparing against the
+    // builder covers the header format as well as the body, and needs no
+    // magic delimiter.
+    assert.equal(
+      readNormalized(mirrored),
+      buildMirrorContent(readNormalized(join(canonicalRoot, rel)), rel),
+      `${rel} has drifted from its canonical copy — run npm run skills:sync`,
+    );
+  }
 });
