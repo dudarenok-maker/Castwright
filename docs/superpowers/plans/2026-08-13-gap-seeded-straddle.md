@@ -113,7 +113,7 @@ Additional constraints the design establishes:
 
 Pure data. No behaviour change; the suite must stay green with no test edited.
 
-- [ ] Add to `LanguageConventions` in `types.ts`, immediately under `quotePairs`:
+- [x] Add to `LanguageConventions` in `types.ts`, immediately under `quotePairs`:
 
 ```ts
   /** Conventions this language TOLERATES but does not typeset dialogue in.
@@ -128,14 +128,14 @@ Pure data. No behaviour change; the suite must stay green with no test edited.
   secondaryQuotePairs: Array<[string, string]>;
 ```
 
-- [ ] Add `secondaryQuotePairs: [],` to each of the seven tables, after `quotePairs`.
-- [ ] **Verify:** `cd server && npx tsc --noEmit` clean; `npx vitest run src/analyzer/dialogue-structure` green with no test edited. A red typecheck means a table was missed — the field is required deliberately.
+- [x] Add `secondaryQuotePairs: [],` to each of the seven tables, after `quotePairs`.
+- [x] **Verify:** `cd server && npx tsc --noEmit` clean; `npx vitest run src/analyzer/dialogue-structure` green with no test edited. A red typecheck means a table was missed — the field is required deliberately.
 
 ---
 
 ### Task 2: Extract the scan, changing nothing (characterisation first)
 
-- [ ] Add a characterisation test **before** touching `parser.ts`:
+- [x] Add a characterisation test **before** touching `parser.ts`:
 
 ```ts
 describe('parser — #2288 M2 Task 2: extracting the scan changes nothing', () => {
@@ -160,14 +160,14 @@ describe('parser — #2288 M2 Task 2: extracting the scan changes nothing', () =
 });
 ```
 
-- [ ] Rename the existing `findQuoteRuns` body to `scanQuoteRuns(line, pairs)` — **cut and paste, no edits** — and make `findQuoteRuns` a one-line delegation.
-- [ ] **Verify:** suite green; `git diff -w` on `parser.ts` shows only the rename plus a two-line wrapper.
+- [x] Rename the existing `findQuoteRuns` body to `scanQuoteRuns(line, pairs)` — **cut and paste, no edits** — and make `findQuoteRuns` a one-line delegation.
+- [x] **Verify:** suite green; `git diff -w` on `parser.ts` shows only the rename plus a two-line wrapper.
 
 ---
 
 ### Task 3: The gap tier
 
-- [ ] Replace the delegation:
+- [x] Replace the delegation:
 
 ```ts
 /** Two-tier scan (#2288 M2, rule B). Primary-pair runs are found first and
@@ -223,7 +223,7 @@ function findQuoteRuns(
 }
 ```
 
-- [ ] Update the single call site, `parseQuoteParagraph` (`parser.ts:460`):
+- [x] Update the single call site, `parseQuoteParagraph` (`parser.ts:460`):
 
 ```ts
   const runs = findQuoteRuns(line, conv.quotePairs, conv.secondaryQuotePairs);
@@ -235,7 +235,7 @@ function findQuoteRuns(
 > `import type { LanguageConventions, SpanEvidence } from './types.js';`.
 > `npm run typecheck`, not the Vitest run, is what will tell you.
 
-- [ ] Add the behaviour tests. No shipped table has a non-empty tier, so build the fixture from a real table — the test is live today rather than dormant until #2286:
+- [x] Add the behaviour tests. No shipped table has a non-empty tier, so build the fixture from a real table — the test is live today rather than dormant until #2286:
 
 ```ts
 describe('parser — #2288 M2: a secondary pair fills gaps but never straddles a primary turn', () => {
@@ -282,13 +282,13 @@ describe('parser — #2288 M2: a secondary pair fills gaps but never straddles a
 });
 ```
 
-- [ ] **Verify:** run the RED case with Task 3 reverted and confirm it fails **by swallowing the second turn** — check the received value, not just the redness.
+- [x] **Verify:** run the RED case with Task 3 reverted and confirm it fails **by swallowing the second turn** — check the received value, not just the redness.
 
 ---
 
 ### Task 4: Invariants and the suppression class, pinned under a declared tier
 
-- [ ] Add:
+- [x] Add:
 
 ```ts
 describe('parser — #2288 M2: invariants hold with a tier declared', () => {
@@ -364,7 +364,7 @@ describe('parser — #2288 M2: a quoted TITLE in narration must not suppress dia
 });
 ```
 
-- [ ] Add the two table guards to `lang/index.test.ts`:
+- [x] Add the two table guards to `lang/index.test.ts`:
 
 ```ts
   it('no language declares a pair in BOTH tiers', () => {
@@ -392,7 +392,7 @@ describe('parser — #2288 M2: a quoted TITLE in narration must not suppress dia
   });
 ```
 
-- [ ] **Verify:** suite green. Then **mutate**: delete the `straddles` check and confirm the `ru` straddle case goes red; delete the `out.some(...overlap...)` guard and confirm the disjointness case goes red. If either survives, the suite is not pinning the rule.
+- [x] **Verify:** suite green. Then **mutate**: delete the `straddles` check and confirm the `ru` straddle case goes red; delete the `out.some(...overlap...)` guard and confirm the disjointness case goes red. If either survives, the suite is not pinning the rule.
 
 ---
 
@@ -400,18 +400,18 @@ describe('parser — #2288 M2: a quoted TITLE in narration must not suppress dia
 
 The brief's five items are all satisfiable by a rule that never fixes a straddle — F1 contains zero destroyed turns. These are what close that, and F3 closes the `gap × nest` cross-product neither F1 nor F2 has.
 
-- [ ] New file `server/src/analyzer/dialogue-structure/tier-sweep.test.ts`, generating both families from the tables so a future table change re-derives its own coverage. Port `m2-sweep2.mts` (straddle) and `m2-sweep3.mts` (`gap × nest`) — scoring `ref` = the shipped table (which no tier can move), asserting **zero shapes with a destroyed turn** and **zero broken nests**, with a **control** that declares the same pair PRIMARY and must be non-zero.
-- [ ] Keep it to three languages (`es`, `ru`, `en`) and time it. If it exceeds ~2s, drop a language — **never thin a cross-product**, which is the coverage gap these files exist to close.
-- [ ] **Verify the control is real:** make `findQuoteRuns` ignore `secondary` and confirm the destroyed-turn assertions go red in both families.
+- [x] New file `server/src/analyzer/dialogue-structure/tier-sweep.test.ts`, generating both families from the tables so a future table change re-derives its own coverage. Port `m2-sweep2.mts` (straddle) and `m2-sweep3.mts` (`gap × nest`) — scoring `ref` = the shipped table (which no tier can move), asserting **zero shapes with a destroyed turn** and **zero broken nests**, with a **control** that declares the same pair PRIMARY and must be non-zero.
+- [x] Keep it to three languages (`es`, `ru`, `en`) and time it. If it exceeds ~2s, drop a language — **never thin a cross-product**, which is the coverage gap these files exist to close.
+- [x] **Verify the control is real:** make `findQuoteRuns` ignore `secondary` and confirm the destroyed-turn assertions go red in both families.
 
 ---
 
 ### Task 6: Pin what this does NOT fix, at current behaviour
 
-- [ ] Pin, each with a comment naming the design's residual:
+- [x] Pin, each with a comment naming the design's residual:
   - **Residual 1** — the straddle inside a language's PRIMARY pairs is untouched: `«Hola, dijo él. «Adiós», dijo ella.` (`es`, no tier) still reads as one run.
   - **Residual 2** — a spurious secondary run over narration on drifted input survives, with **no** turn destroyed. Use a shape from F1's remaining 284 so the pin is real behaviour, not a guess.
-- [ ] **Verify:** none passes for a different reason than stated — e.g. by producing no runs at all. A limit test that passes vacuously is worse than none.
+- [x] **Verify:** none passes for a different reason than stated — e.g. by producing no runs at all. A limit test that passes vacuously is worse than none.
 
 ---
 
@@ -419,14 +419,14 @@ The brief's five items are all satisfiable by a rule that never fixes a straddle
 
 Getting this wrong makes #2286 a silent half-delivery. See the design's "The second consumer".
 
-- [ ] In `server/src/analyzer/narrator-default.ts`, iterate both lists — one binding so the two loops cannot drift:
+- [x] In `server/src/analyzer/narrator-default.ts`, iterate both lists — one binding so the two loops cannot drift:
 
 ```ts
   const pairs = [...conventions.quotePairs, ...conventions.secondaryQuotePairs];
 ```
 
-- [ ] Update its doc comment (`:26-33`), which says `conventions.quotePairs` three times and would be false.
-- [ ] Add to `narrator-default.test.ts` (it imports `conventionsFor` but not the type — add `import type { LanguageConventions } from './dialogue-structure/types.js';`):
+- [x] Update its doc comment (`:26-33`), which says `conventions.quotePairs` three times and would be false.
+- [x] Add to `narrator-default.test.ts` (it imports `conventionsFor` but not the type — add `import type { LanguageConventions } from './dialogue-structure/types.js';`):
 
 ```ts
 describe('#2288 M2: isSpokenLine reads BOTH quote-pair tiers', () => {
@@ -450,7 +450,7 @@ describe('#2288 M2: isSpokenLine reads BOTH quote-pair tiers', () => {
 });
 ```
 
-- [ ] **Verify:** `npx vitest run src/analyzer/narrator-default.test.ts` green, including the existing #2245 cases (`fr` rejecting `"Bonjour"`, the zh/ja asymmetry). Those assert on tables with an empty tier and must not move.
+- [x] **Verify:** `npx vitest run src/analyzer/narrator-default.test.ts` green, including the existing #2245 cases (`fr` rejecting `"Bonjour"`, the zh/ja asymmetry). Those assert on tables with an empty tier and must not move.
 
 ---
 
@@ -458,7 +458,7 @@ describe('#2288 M2: isSpokenLine reads BOTH quote-pair tiers', () => {
 
 The design measured a prototype. This confirms the implementation reproduces it.
 
-- [ ] Point the scratchpad instruments at the implementation branch (`SRC.base` in `m2-setup.mjs`), `node m2-setup.mjs`, then run each **with its control**:
+- [x] Point the scratchpad instruments at the implementation branch (`SRC.base` in `m2-setup.mjs`), `node m2-setup.mjs`, then run each **with its control**:
 
 ```
 tsx m2-sweep.mts        T_gapSecondary            # F1  — expect 284, REGR 0, GAIN 1043
@@ -471,9 +471,9 @@ METRIC_LIB=1 tsx m2-identity.mts T_gapSecondary   # item 4 — 0 differing, cont
 METRIC_LIB=1 tsx m2-percandidate.mts T_gapSecondary  # 9 flagged, 0 DESTROY in every row
 ```
 
-- [ ] Run acceptance item 4 for real: `cd server && npx vitest run src/analyzer/dialogue-structure src/analyzer/narrator-default.test.ts`.
-- [ ] **Do not use `m2-classify437.mts` to score this rule** — it takes a `RULE` argument and ignores it (known instrument defect, recorded in the design).
-- [ ] **Verify:** every figure matches. A divergence means the implementation is not the rule that was measured — investigate; do not re-baseline the design to the code.
+- [x] Run acceptance item 4 for real: `cd server && npx vitest run src/analyzer/dialogue-structure src/analyzer/narrator-default.test.ts`.
+- [x] **Do not use `m2-classify437.mts` to score this rule** — it takes a `RULE` argument and ignores it (known instrument defect, recorded in the design).
+- [x] **Verify:** every figure matches. A divergence means the implementation is not the rule that was measured — investigate; do not re-baseline the design to the code.
 
 ---
 
