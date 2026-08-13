@@ -292,14 +292,14 @@ setup rather than repeatedly loading and evicting models.
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
-| **D** | Multi-language TTS render + ASR | 2 |
+| **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**68 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**69 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2785,6 +2785,34 @@ collisions across 101 files. Largely an unattended batch: render, then inspect.
 The Qwen VoiceDesign pipeline is merged, but the **zh/ja** Coalfall placeholder
 artifacts were never produced. Run the shipped pipeline against them. Distinct from
 D1's five languages, which are done.
+
+### D3 · The re-open bound's recovered turn actually sounds right when voiced ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), plan [`docs/superpowers/plans/2026-08-13-primary-pair-straddle.md`](../superpowers/plans/2026-08-13-primary-pair-straddle.md))
+
+The re-open bound (`scanQuoteRuns`, `server/src/analyzer/dialogue-structure/parser.ts`)
+changes run boundaries on real books in all seven supported languages — 1,231
+corpus paragraphs, dominated by `zh` (744) and `fr` (232). Every test in the PR
+scores the recovered span's *text* (never lost, never mid-word) and, separately,
+whether the tag-clause guard keeps a speaker attached — neither measures whether
+the recovered turn *sounds* acceptable once voiced, which is a judgement only a
+real render + a human ear can make.
+
+**What to observe:** generate a chapter of a `zh` or `ja` book that contains a
+continuation paragraph — the design doc's worked example
+(`docs/superpowers/specs/2026-08-13-primary-pair-straddle-design.md` § "What it
+fixes, on real books") quotes two, one already in the Gutenberg corpus this PR's
+own instruments read. Confirm the previously-swallowed inner turn now renders as
+its **own** speech turn, in the character's own cast voice rather than merged
+into the narration/tag reading of the turn before it, and that the boundary
+doesn't land mid-word or drop a syllable. A `ru` or `de` chapter containing one
+of the 3/97 `ru`/`de` corpus paragraphs this PR changes is a secondary, lower-
+priority check — `zh`/`ja` carry the bulk of the real-book delta (744+75 of
+1,231) and are also the two scripts with no case distinction for the CJK-blind
+part of defect 2's corpus proxy, so they are the shapes least covered by any
+other instrument in the PR.
+
+No hardware prerequisite beyond a working TTS engine (Kokoro/Coqui/Qwen, any) —
+listed here rather than under Group A because the debt is about *listening*
+to real output, not about VRAM or a specific card.
 
 ---
 
