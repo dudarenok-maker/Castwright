@@ -1,27 +1,24 @@
 # Attribution collapse visibility, Wave 1 — measure — Implementation Plan
 
-> ## ⚠ CONTINGENT ON THE OWNER APPROVING THE REVISED SPEC
+> ## ✅ APPROVED — revision 8, 2026-08-13. Dispatched.
 >
-> **Do not dispatch this plan yet.** It is written against **revision 8** of
-> `docs/superpowers/specs/2026-08-06-attribution-collapse-visibility-design.md`,
-> which rebaselines the design onto a tree that moved 559 commits under it and
-> **replaces the metric's central mechanism**. Revision 8 has not been approved.
+> Revision 8 of
+> `docs/superpowers/specs/2026-08-06-attribution-collapse-visibility-design.md`
+> is approved. Of the five owner decisions in spec §Open questions, three are
+> answered and two remain open without blocking this plan:
 >
-> Four owner decisions are owed before Task 1 (spec §Open questions). **Two of
-> them change this plan's task list:**
->
-> | # | Decision | If declined |
+> | # | Decision | Answer |
 > |---|---|---|
-> | 1 | **Does `SentenceOutput.priorCharacterId` land?** (spec D18) | **Task 1 and Task 6 are deleted**, acceptance criterion 5 is withdrawn, and the measurement reports one narrator column instead of three |
-> | 4 | **Is `parseChapterStructure`'s speech/tag split the D15 rule?** | Task 3 changes shape — the fallback is the case-based heuristic, which is Russian-specific and would need a per-language table this plan does not build |
-> | 2 | Does D13's banner scope land? | Wave 2 only. Does not block this plan |
-> | 3 | Is Wave 2's surface still right at this size? | Wave 2 only. Does not block this plan |
-> | 5 | **Does `unanswered` become a sixth state?** (spec R-9C4) | Wave 2 only. Does not block this plan — Task 8 prints `unattributedSpeech` either way, and that column is what the decision gets made from |
+> | 1 | **Does `SentenceOutput.priorCharacterId` land?** (spec D18) | **Answered 2026-08-13: yes.** Tasks 1 and 6 are in scope; acceptance criterion 5 is in scope |
+> | 4 | **Is `parseChapterStructure`'s speech/tag split the D15 rule?** | **Answered 2026-08-13: yes.** Task 3 keeps its planned shape; Wave 1 measures and reports how far `tagTotal` moves against the case heuristic |
+> | 2 | Does D13's banner scope land? | **Answered 2026-08-13: yes** — Wave 2 only, does not block this plan. Its numbers are re-measured under the current unit in this wave regardless (§D13 re-gated) |
+> | 3 | Is Wave 2's surface still right at this size? | **Still open.** Wave 2 only. Does not block this plan |
+> | 5 | **Does `unanswered` become a sixth state?** (spec R-9C4) | **Still open.** Wave 2 only. Does not block this plan — Task 8 prints `unattributedSpeech` either way, and that column is what the decision gets made from |
 >
-> **Revision 8 has since been through the Premium adversarial gate and did not
-> survive its first draft — five Criticals.** All are folded into both documents;
-> spec §Review findings round 8 records them. **Three land squarely in this
-> plan** and are already applied below, but read them before Task 1 rather than
+> **Revision 8 went through the Premium adversarial gate and did not survive its
+> first draft — five Criticals.** All are folded into both documents; spec
+> §Review findings round 8 records them. **Three land squarely in this plan**
+> and are already applied below, but read them before Task 1 rather than
 > trusting the steps: D18's write sites were the wrong two (R-9C1, Task 1);
 > criterion 3's mutation control was inert (R-9C2, Task 5); and the
 > punctuation-invariance property asserted something `alignSentences` cannot
