@@ -283,14 +283,16 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        yet; it is defence for the moment one lands unsupported, as
        es/fr/de/zh/ja each once were. NOT-A-FALLBACK: a detection that
        surrendered is a confidence-floor guess, not a decision, and this
-       route is a writer — see DetectionResult.fallback. Every
-       `detectManuscriptLanguage`/`detectManuscriptLanguageFromChapters`
-       surrender path stamps `language: 'en'` alongside `fallback: true`, so
-       both branches of this condition currently produce the SAME
-       `normaliseBookLanguage(entry.detectedLanguage)` result the
-       fallback-less path below would also produce — deleting this clause
-       changes no observable output today, which is why it is not
-       load-bearing yet. **#2337 review N2 (round 3): a prior version of this
+       route is a writer — see DetectionResult.fallback. `detectManuscriptLanguageFromChapters`'s
+       own surrender path — what this route actually calls, not the
+       single-call `detectManuscriptLanguage` it calls internally — stamps
+       `language: 'en'` alongside `fallback: true` on every branch (see the
+       N2 paragraph below for why `detectManuscriptLanguage` itself is NOT
+       this uniform since C1), so both branches of this condition currently
+       produce the SAME `normaliseBookLanguage(entry.detectedLanguage)`
+       result the fallback-less path below would also produce — deleting
+       this clause changes no observable output today, which is why it is
+       not load-bearing yet. **#2337 review N2 (round 3): a prior version of this
        paragraph claimed review C1 changed that** — that `entry.detectedLanguage`
        could now be a coerced guess (e.g. `'es'`) alongside
        `entry.detectedLanguageFallback: true`, making this clause load-bearing.
@@ -336,8 +338,13 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         supportedLanguages: supportedLanguages(),
       });
     }
-    const languageChosen =
-      typeof body.language === 'string' ? body.language.trim() !== '' : body.language != null;
+    // The C2 guard above already rejected every non-null, non-string
+    // `language` with a 400, so by this point a non-string value can only be
+    // `null`/`undefined` — the `: body.language != null` alternative a prior
+    // version had here was the exact pre-fix C2 bug expression (see
+    // import.test.ts's "#2337 review C2" describe block) kept on as dead
+    // code: always `false` post-guard, never reachable as `true`.
+    const languageChosen = typeof body.language === 'string' && body.language.trim() !== '';
     const language =
       !languageChosen && entry.detectedLanguageSupported && !entry.detectedLanguageFallback
         ? normaliseBookLanguage(entry.detectedLanguage)

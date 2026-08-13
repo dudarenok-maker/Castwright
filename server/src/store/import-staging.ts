@@ -48,11 +48,19 @@ export interface StagedImport {
       compatibility path. */
   detectedLanguage?: string;
   detectedLanguageSupported?: boolean;
-  /** True when the detection SURRENDERED rather than deciding it — no
-      letters to sample, no franc match, or (#2337 review C1) every candidate
-      chapter's franc match, restricted to the registry's Latin set, was a
-      coercion onto the nearest registered Latin language rather than a
-      genuine decision. Filled from `detectManuscriptLanguageFromChapters`
+  /** True when the detection SURRENDERED rather than deciding it — the RULE,
+      not an enumeration of `detectManuscriptLanguageFromChapters`'s surrender
+      branches (which has grown a new one at least once per review round;
+      re-listing them here is a copy that goes stale, the function itself is
+      the source of truth): any path through it or the `voteLanguage` it
+      delegates to that returns `resultFor(_, true)` — no candidate chapters
+      at all, no chapter whose own per-chapter detection didn't itself
+      surrender (including, since #2337 review C1, a franc match restricted
+      to the registry's Latin set that a second, unrestricted franc call
+      flags as a coercion rather than a genuine decision), no strict majority
+      of the non-surrendered mass, or a winning language whose combined
+      prose-unit count sits under `PROSE_UNIT_FLOOR`. Filled
+      from `detectManuscriptLanguageFromChapters`
       (not the single-call `detectManuscriptLanguage` C1 itself patched), and
       that function's `voteLanguage` filters every `fallback: true` ballot
       out of the vote before it runs, so ALL of its surrender branches —

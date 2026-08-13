@@ -1,9 +1,11 @@
 /* Server-side manuscript language detection (fs-41/fs-50 seam 2). Runs during
    POST /api/import. The script pre-pass is authoritative (Cyrillic⇒ru, CJK⇒
-   unsupported); franc disambiguates the Latin set (en/es/fr/de), restricted to
-   the registry's ISO-639-3 codes. Front-matter is stripped first so an English
-   copyright page can't mask a non-English body. Never silently returns `en` for
-   a confidently-detected other language — the `supported` flag rides along.
+   zh/ja — both `supported: true` since fs-59 W5, read through the registry
+   below rather than a literal); franc disambiguates the Latin set (en/es/fr/de),
+   restricted to the registry's ISO-639-3 codes. Front-matter is stripped first
+   so an English copyright page can't mask a non-English body. Never silently
+   returns `en` for a confidently-detected other language — the `supported`
+   flag rides along.
 
    #2263 — `detectManuscriptLanguage` samples the first SAMPLE_CHARS of the
    WHOLE document, which is exactly where front matter (title page, copyright,
