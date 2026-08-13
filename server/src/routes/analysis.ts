@@ -4890,8 +4890,8 @@ export async function runMainAnalyzerJob(
             1,
             `Chapter ${i + 1}/${totalChapters} — the same attribution failure reproduced exactly on ` +
               `attempt ${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
-              `deterministically, so re-running the same prompt cannot help — re-attributing it in ` +
-              `smaller sections instead.`,
+              `deterministically, so re-running the same prompt cannot help. Halting the retries ` +
+              `and re-attributing in smaller sections where the section can still be divided.`,
           ),
       });
       if (stage2ChunkCount > 1) {

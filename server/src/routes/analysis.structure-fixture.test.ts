@@ -37,7 +37,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Analyzer, StageCall } from '../analyzer/index.js';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { CONFIDENCE } from '../analyzer/dialogue-structure/cross-examine.js';
@@ -130,6 +130,33 @@ function baseOpts(sentences: SentenceOutput[]) {
     stageCall: { language: 'ru' } as StageCall,
   };
 }
+
+/* Both describes in this file are about the STRUCTURE ENGINE, and every fixture
+   here mocks only
+     the chapter's dialogue lines — never its narration — so the mocked output
+     covers a small fraction of `CHAPTER_BODY`. The stage-2 coverage guard reads
+     that, correctly, as a truncation, and reads it identically on every attempt
+     because the mock is constant. Before #2304 that verdict was inert here;
+     since #2304 a deterministic coverage failure is re-attributed as smaller
+     spans, and a body-blind mock answers each span with the SAME 14 sentences —
+     measured: 266 sentences at 14% alignment, i.e. the fixture measuring
+     chunking instead of the engine.
+
+     Disabling the guard is the honest fix rather than teaching the mock to
+     answer per-span: the prompt carries two paragraphs of preceding CONTEXT, so
+     a span-aware filter still double-counts every sentence that appears in a
+     neighbour's context window (measured: 57 sentences, 14% alignment). What
+     these tests need is for the remediation not to run at all. Coverage
+     behaviour itself is covered in stage2-coverage.test.ts and
+     stage2-chunk.test.ts, against mocks built for it. */
+const prevCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+beforeAll(() => {
+  process.env.STAGE2_COVERAGE_RETRIES = '0'; // registry: 0 disables the guard
+});
+afterAll(() => {
+  if (prevCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+  else process.env.STAGE2_COVERAGE_RETRIES = prevCoverageRetries;
+});
 
 describe('attributeChapterStage2 — dash-dialogue ru fixture (srv-59 Task 12)', () => {
   it('fixture sanity: 100% of the mocked sentences align against the real body (proves the fixture text matches verbatim)', async () => {

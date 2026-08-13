@@ -349,8 +349,17 @@ export async function runStage2ChapterChunked(
       return out;
     };
 
+    /* The guarded call is the ONLY thing inside this try. The deterministic
+       re-split below deliberately sits OUTSIDE it: a recursive `attributeSpan`
+       throws `AnalyzerTruncatedError` whenever a leaf is irreducible or hits
+       `maxSplitDepth`, and from inside the try that throw would land in this
+       frame's own catch, which would match and run the identical sub-tree a
+       SECOND time before rethrowing — up to ~14 futile model round trips per
+       top-level chunk at branching 2. Outside the try it propagates to the
+       caller's frame, which is where it belongs. */
+    let guarded;
     try {
-      const { result, deterministicFailure } = await runStage2WithCoverageGuard({
+      guarded = await runStage2WithCoverageGuard({
         body: span,
         maxRetries: opts.coverageRetries,
         call: () => opts.callForBody(span, preceding, lastSpeakerId),
@@ -358,22 +367,6 @@ export async function runStage2ChapterChunked(
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });
-      /* A coverage failure that reproduces EXACTLY is degeneration, the same
-         family as the truncation handled below — and it had the same remedy
-         available all along, just wired only to the throwing path. Retrying an
-         identical prompt cannot clear it; re-attributing in smaller sections
-         can. Without this the chapter keeps a known-bad take and is flagged
-         "for retry", advice that is false for a deterministic failure: a
-         user-triggered retry re-runs the same prompt and fails identically, so
-         the book can never be generated correctly from that chapter.
-         Depth-guarded, and falls back to the best take when the span will not
-         divide — so a genuinely irreducible failure is still reported, never
-         silently accepted. */
-      if (deterministicFailure && depth < maxSplitDepth) {
-        const split = await splitAndRetry();
-        if (split) return split;
-      }
-      return result.sentences;
     } catch (err) {
       if (err instanceof AnalyzerTruncatedError && depth < maxSplitDepth) {
         const split = await splitAndRetry();
@@ -381,6 +374,21 @@ export async function runStage2ChapterChunked(
       }
       throw err;
     }
+    /* A coverage failure that reproduces EXACTLY is degeneration, the same
+       family as the truncation handled above — and it had the same remedy
+       available all along, just wired only to the throwing path. Retrying an
+       identical prompt cannot clear it; re-attributing in smaller sections can.
+       Without this the chapter keeps a known-bad take and is flagged "for
+       retry", advice that is false for a deterministic failure: a user-triggered
+       retry re-runs the same prompt and fails identically, so the book can never
+       be generated correctly from that chapter. Depth-guarded, and falls back to
+       the best take when the span will not divide — so a genuinely irreducible
+       failure is still reported, never silently accepted. */
+    if (guarded.deterministicFailure && depth < maxSplitDepth) {
+      const split = await splitAndRetry();
+      if (split) return split;
+    }
+    return guarded.result.sentences;
   };
 
   /* Run a pre-split chunk list and stitch the result back into the single-call
@@ -419,7 +427,7 @@ export async function runStage2ChapterChunked(
        path already has. A body that's a single un-splittable paragraph has
        nowhere to split, so the truncation still surfaces loudly. */
     try {
-      const { result, coverage } = await runStage2WithCoverageGuard({
+      const { result, coverage, deterministicFailure } = await runStage2WithCoverageGuard({
         body: opts.body,
         maxRetries: opts.coverageRetries,
         call: () => opts.callForBody(opts.body, null, null),
@@ -427,6 +435,18 @@ export async function runStage2ChapterChunked(
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });
+      /* A deterministic coverage failure gets the SAME forced split as a
+         truncation two lines below. Leaving it out was the whole bug once
+         already: archive/187 §"single-call path" records the truncation
+         re-split shipping on the multi-chunk route only and needing a
+         follow-up. This is the "vast majority of chapters" branch, so a fix
+         wired only into `attributeSpan` is a fix almost nothing reaches — the
+         chapter would keep its partial take while the operator log claimed a
+         re-split that never ran. */
+      if (deterministicFailure) {
+        const forced = splitSpanForRetry(opts.body);
+        if (forced.length > 1) return runChunks(forced);
+      }
       opts.onSectionDone?.(0, result.sentences.length);
       return { sentences: result.sentences, coverage, chunkCount: 1 };
     } catch (err) {

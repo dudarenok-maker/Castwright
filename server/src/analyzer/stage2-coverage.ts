@@ -310,24 +310,33 @@ export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ 
   let coverage = validateStage2Coverage(opts.body, result.sentences, opts.thresholds);
   let attempts = 1;
   let deterministicFailure = false;
+  /* The signature of the attempt JUST MADE — tracked separately from `coverage`,
+     which is the running BEST and stops advancing as soon as a retry scores
+     worse. Comparing against `coverage` looks equivalent and is not: once
+     attempt 1 is the least-bad take, `coverage` freezes on it and every
+     subsequent identical repeat is compared against a verdict no attempt since
+     has produced, so the match never fires and the whole budget burns — the
+     exact behaviour this guard exists to stop. That shape is ordinary, not
+     exotic: a first attempt that merely truncates outscores repeat-loop takes,
+     which carry a duplicated block. */
+  let lastAttemptSignature = verdictSignature(coverage);
   while (!coverage.ok && attempts <= opts.maxRetries) {
-    /* The signature of the attempt we are retrying, captured BEFORE the retry
-       can replace `coverage` via isBetterCoverage below. */
-    const previousSignature = verdictSignature(coverage);
     opts.onRetry?.(attempts + 1, coverage);
     const retryResult = await opts.call();
     const retryCoverage = validateStage2Coverage(opts.body, retryResult.sentences, opts.thresholds);
+    const retrySignature = verdictSignature(retryCoverage);
     attempts += 1;
     if (isBetterCoverage(retryCoverage, coverage)) {
       result = retryResult;
       coverage = retryCoverage;
     }
     if (coverage.ok) break;
-    if (verdictSignature(retryCoverage) === previousSignature) {
+    if (retrySignature === lastAttemptSignature) {
       deterministicFailure = true;
       opts.onExhausted?.(attempts, retryCoverage);
       break;
     }
+    lastAttemptSignature = retrySignature;
   }
   return { result, coverage, attempts, deterministicFailure };
 }

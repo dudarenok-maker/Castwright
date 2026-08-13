@@ -300,6 +300,37 @@ describe('runStage2WithCoverageGuard', () => {
     expect(onExhausted).not.toHaveBeenCalled();
   });
 
+  it('stops on identical repeats even when the FIRST attempt remains the least-bad take', async () => {
+    /* The shape that made the early stop inert: the signature must be compared
+       against the attempt just made, NOT against the running best. Attempt 1 is
+       a plain truncation (no duplicated block, so it scores well); attempts 2+
+       are an identical repeat-loop, which scores WORSE and therefore never
+       replaces `coverage`. Comparing against `coverage` freezes on attempt 1's
+       signature, no repeat ever matches it, and the whole budget burns.
+
+       This is the ordinary case, not an exotic one — any run whose first attempt
+       is the least-bad hits it, which is why the two tests above cannot see it:
+       one makes every attempt byte-identical, the other makes them improve. */
+    const { sentences: full } = bodyOf(12);
+    const plainTruncation = () => ({ sentences: full.slice(0, 6) });
+    const repeatLoop = () => ({ sentences: [...full.slice(0, 5), ...full.slice(0, 5)] });
+    const call = vi
+      .fn()
+      .mockImplementationOnce(async () => plainTruncation())
+      .mockImplementation(async () => repeatLoop());
+    const onExhausted = vi.fn();
+
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 5, call, onExhausted });
+
+    /* Three calls: attempt 1, the first repeat-loop, and the second one that
+       proves it reproduces. Comparing against the running best gives 6. */
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(out.deterministicFailure).toBe(true);
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    /* The best take is still returned — the stop must not cost us attempt 1. */
+    expect(out.result.sentences.length).toBe(6);
+  });
+
   it('exhausts retries and returns the best (least-bad) take, still flagged', async () => {
     // attempt1: 3/12 (worse), attempt2: 8/12 (better but still <0.6? 0.67>0.6 ok) → use a clearer bad
     const veryShort = () => ({ sentences: bodyOf(12).sentences.slice(0, 2) }); // 0.17
