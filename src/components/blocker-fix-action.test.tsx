@@ -194,43 +194,43 @@ describe('BlockerFixAction', () => {
       restartSpy.mockRestore();
     });
 
-    it('preserves the in-band failure shape: body.ok === false surfaces body.error verbatim', async () => {
-      const restartSpy = vi
-        .spyOn(api, 'restartSidecar')
-        .mockResolvedValue({ ok: false, error: 'Sidecar is mid-generation.' });
-      render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={vi.fn()} />);
-      fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
-      await waitFor(() =>
-        expect(screen.getByText('Sidecar is mid-generation.')).toBeInTheDocument(),
-      );
-      restartSpy.mockRestore();
-    });
-
-    it('preserves the in-band failure default: body.ok === false with no error field falls back to "Restart failed."', async () => {
-      const restartSpy = vi.spyOn(api, 'restartSidecar').mockResolvedValue({ ok: false });
-      render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={vi.fn()} />);
-      fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
-      await waitFor(() => expect(screen.getByText('Restart failed.')).toBeInTheDocument());
-      restartSpy.mockRestore();
-    });
-
-    it('an HTTP-error response now surfaces realRestartSidecar\'s formatted throw, not the old generic "Restart failed."', async () => {
-      // Before #2344, a non-ok HTTP response still fell through to
-      // `res.json()` and read `body.ok`/`body.error` off whatever that
-      // produced. Now api.restartSidecar() (realRestartSidecar) throws
-      // before this component ever inspects a body, with its own
-      // `Sidecar restart failed (${status}): ...` wording — same catch
-      // block, different user-visible string. Pin that string here so a
+    it('an HTTP-error response surfaces realRestartSidecar\'s thrown message', async () => {
+      // api.restartSidecar() (realRestartSidecar) resolves ONLY on a 200; every
+      // failure branch of POST /api/sidecar/restart throws instead (409/503,
+      // #2348 review fix) — there is no 200-with-ok:false body for this
+      // component to inspect. Pin the string that reaches the user here so a
       // future change to either message is a deliberate, reviewed edit.
       const restartSpy = vi
         .spyOn(api, 'restartSidecar')
-        .mockRejectedValue(new Error('Sidecar restart failed (500): boom'));
+        .mockRejectedValue(new Error('No active supervisor — sidecar auto-start is disabled or the server is still booting.'));
       render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={vi.fn()} />);
       fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
       await waitFor(() =>
-        expect(screen.getByText('Sidecar restart failed (500): boom')).toBeInTheDocument(),
+        expect(
+          screen.getByText(
+            'No active supervisor — sidecar auto-start is disabled or the server is still booting.',
+          ),
+        ).toBeInTheDocument(),
       );
       restartSpy.mockRestore();
+    });
+
+    it('#2348 review fix — end-to-end through the real wrapper: a 409 from /api/sidecar/restart renders the server sentence, not the JSON envelope', async () => {
+      // No api.restartSidecar spy here — fetchMock stands in for the network,
+      // so this exercises the REAL realRestartSidecar (api.ts) the same way
+      // production does: fetch -> parse -> throw -> this component's catch.
+      const message = 'No sidecar child is currently running. If auto-start is on, the supervisor will spawn one shortly.';
+      fetchMock.mockImplementation((url: string) => {
+        if (typeof url === 'string' && url.includes('/api/sidecar/restart')) {
+          return Promise.resolve(jsonResponse({ ok: false, error: message }, { status: 409 }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
+      await waitFor(() => expect(screen.getByText(message)).toBeInTheDocument());
+      expect(screen.queryByText(/sidecar restart failed/i)).toBeNull();
+      expect(screen.queryByText(/\{"ok"/)).toBeNull();
     });
   });
 });

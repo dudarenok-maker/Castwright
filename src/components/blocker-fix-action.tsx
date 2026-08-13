@@ -156,15 +156,12 @@ export function BlockerFixAction({
     setError(null);
     try {
       /* Routed through api.restartSidecar() (#2344) rather than a raw fetch.
-         The server's in-band failure shape (HTTP 200, body.ok === false)
-         still surfaces via this same body.ok check — realRestartSidecar only
-         resolves (rather than throwing) when res.ok is true, and returns
-         that body verbatim. An actual HTTP-error response (e.g. 500) now
-         throws INSIDE realRestartSidecar with its own formatted message
-         instead of reaching this line at all; both cases land in the catch
-         below either way. */
-      const body = await api.restartSidecar();
-      if (!body.ok) throw new Error(body.error ?? 'Restart failed.');
+         realRestartSidecar resolves ONLY on a 200 (`{ ok: true }`) — every
+         failure branch of POST /api/sidecar/restart answers 409 or 503, so
+         realRestartSidecar throws for all of them, using the server's own
+         `error` sentence when the body carries one (#2348 review fix). There
+         is no 200-with-ok:false shape to check here. */
+      await api.restartSidecar();
       setBusy(false);
       onDone();
     } catch (e) {

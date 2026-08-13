@@ -8790,12 +8790,30 @@ async function realResetPrompt(id: string): Promise<PromptState> {
   return res.json();
 }
 
+/* #2348 review BLOCKING finding — every failure branch of POST
+   /api/sidecar/restart (server/src/routes/sidecar-health.ts) answers 409 or
+   503 with a populated `{ ok: false, error: "<human sentence>" }` body; there
+   is no 200-with-ok:false branch. Throwing the raw
+   `Sidecar restart failed (${status}): ${text}` wrapper — the same shape
+   configApiErrorMessage uses for /api/config — buried that sentence behind
+   a JSON blob for both callers of this wrapper (blocker-fix-action.tsx's
+   fix button and advanced.tsx's Settings restart button, #2221). Prefer the
+   server's own `error` string when the body parses as JSON and carries one;
+   fall back to the wrapper text only when the body is absent, isn't JSON
+   (e.g. a proxy's HTML error page), or has no usable `error` field. */
 async function realRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch('/api/sidecar/restart', { method: 'POST' });
-  if (!res.ok)
-    throw new Error(
-      `Sidecar restart failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+  if (!res.ok) {
+    const text = await res.text();
+    let parsedError: string | undefined;
+    try {
+      const body = JSON.parse(text) as { error?: unknown };
+      if (typeof body.error === 'string' && body.error) parsedError = body.error;
+    } catch {
+      /* not JSON (e.g. a proxy's HTML error page) — fall back below */
+    }
+    throw new Error(parsedError ?? `Sidecar restart failed (${res.status}): ${text || res.statusText}`);
+  }
   return res.json();
 }
 
