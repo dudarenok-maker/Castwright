@@ -235,6 +235,19 @@ describe('crossExamine — priorCharacterId (#1984 D18)', () => {
     expect(result.sentences[0].characterId).toBe('narrator');
     expect(result.sentences[0].priorCharacterId).toBe('anton'); // NOT 'someone-else'
   });
+
+  it('records nothing when a tag span RE-AFFIRMS a sentence already narrator — the discriminating case the narration-only trap above cannot catch (finding 3)', () => {
+    // decideTagSpanOnly() returns bucket: 'corrected' UNCONDITIONALLY (unlike
+    // decideNarrationOnly, which returns 'confirmed' for an already-narrator
+    // sentence). A `decision.bucket === 'corrected'` mutant is indistinguishable
+    // from the correct `characterId !==` check on every OTHER fixture in this
+    // block, including the narration-span trap at :207 — only a tag-only span
+    // on an already-narrator sentence tells them apart.
+    const s = mkSentence('narrator');
+    const result = run([aligned(s, [tagSpan()])]);
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].priorCharacterId).toBeUndefined();
+  });
 });
 
 describe('crossExamine — hard invariants', () => {

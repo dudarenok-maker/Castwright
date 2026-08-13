@@ -9,7 +9,14 @@
    count of SOURCE SPANS, never of model sentences. A field whose value can
    change when the model re-punctuates its output without changing any
    attribution is wrong — that is exactly the false-recovery #1984 was
-   raised to stop (D14).
+   raised to stop (D14). One field is a deliberate, documented exception:
+   `lumpedSpeech` measures ALIGNMENT shape — whether a model sentence's own
+   matched text straddles a speech/tag(narration) boundary — which is by
+   definition a property of how the model chose to sentence-boundary its
+   output, not of the source alone. It can move under re-punctuation with no
+   attribution change, same as the model's own choice to merge or split a
+   turn can. That is exactly why it is a diagnostic only: absent from
+   `COLUMNS`, never summed into the share, never gated on (finding 5).
 
    No new "is this dialogue" predicate is written here, for any reason —
    this module imports `parseChapterStructure` and `alignSentences` rather
@@ -39,7 +46,8 @@ export interface AttributionMeasurement {
   // ---- how much of the denominator the model actually answered (D17) ----
   unattributedSpeech: number; // speech spans NO aligned sentence covers
   splitSpeech: number; // >1 aligned sentence, disagreeing ids
-  lumpedSpeech: number; // aligned sentence straddles speech + tag/narration
+  lumpedSpeech: number; // aligned sentence straddles speech + tag/narration —
+  // the D14 "count of source spans" exception (finding 5), see header
 
   // ---- numerator, split by origin (D18) ----
   narratorIdSpoken: number; // speech spans resolving to NARRATOR_CHARACTER_IDS
@@ -221,15 +229,23 @@ export function computeAttributionMeasurement(
           result.splitSpeech += 1;
           // R-9C5 — orphanSpoken and splitSpeech OVERLAP: a span with two
           // disagreeing sentences, one of them unresolvable, is BOTH. Report
-          // every unresolvable id among the disagreeing set; this span never
+          // every unresolvable id among the disagreeing set (orphanIds), but
+          // orphanSpoken itself is a count of SPANS (D14) — increment it AT
+          // MOST ONCE for this span, not once per bogus id, else re-splitting
+          // one span into more model sentences with more bogus ids inflates
+          // it with no attribution change (finding 1). This span never
           // reaches attributableSpoken either way (a direct count, never a
           // subtraction — the overlap can't make it negative).
+          let sawOrphan = false;
           for (const id of idsForSpan) {
             if (!resolver.resolve(id)) {
-              result.orphanSpoken += 1;
-              chOrphanSpoken += 1;
               orphanIds.add(id);
+              sawOrphan = true;
             }
+          }
+          if (sawOrphan) {
+            result.orphanSpoken += 1;
+            chOrphanSpoken += 1;
           }
           continue;
         }

@@ -219,6 +219,40 @@ describe('loadMeasurementInputs', () => {
     expect(inputs.bodies[1]).toBe(RU_DIALOGUE_BODY);
     expect(inputs.sentences).toHaveLength(1);
   });
+
+  // #1984 Wave 1 review, finding 4 — cacheHasOriginFieldEvidence is the SOLE
+  // switch between modelNarrator and unknownOriginNarrator in the pure
+  // module, and had no direct test either direction (both "always true" and
+  // "always false" mutants survived the suite). Tested here through the
+  // public loadMeasurementInputs, which is the only way callers observe it.
+  it('cacheHasOriginField is true when ANY sentence anywhere in the cache carries priorCharacterId (finding 4)', async () => {
+    const { bookDir } = await buildBook({
+      language: 'ru',
+      castCharacters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: '#000' }],
+      chapters: [{ id: 1, title: 'Ch1', body: RU_DIALOGUE_BODY }],
+      cacheChapters: {
+        1: [
+          s('narrator', '— Ничего нет,'),
+          { ...s('egor', '— Значит,'), priorCharacterId: 'anton' } as SentenceOutput,
+        ],
+      },
+    });
+    const inputs = await loadMeasurementInputs(bookDir);
+    expect(inputs.cacheHasOriginField).toBe(true);
+  });
+
+  it('cacheHasOriginField is false when no sentence anywhere in the cache carries priorCharacterId (finding 4)', async () => {
+    const { bookDir } = await buildBook({
+      language: 'ru',
+      castCharacters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: '#000' }],
+      chapters: [{ id: 1, title: 'Ch1', body: RU_DIALOGUE_BODY }],
+      cacheChapters: {
+        1: [s('narrator', '— Ничего нет,'), s('egor', '— Значит,')],
+      },
+    });
+    const inputs = await loadMeasurementInputs(bookDir);
+    expect(inputs.cacheHasOriginField).toBe(false);
+  });
 });
 
 describe('resolveAttributionState — the nine-row fixture table (Wave 1 states only)', () => {

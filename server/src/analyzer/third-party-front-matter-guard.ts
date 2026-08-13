@@ -126,7 +126,13 @@ export async function stripThirdPartyFrontMatter(
   }
   const keptCharacters = characters.filter((c) => !strippedIds.has(c.id));
   const reroutedSentences = sentences.map((s) =>
-    strippedIds.has(s.characterId) ? { ...s, characterId: NARRATOR_ID } : s,
+    strippedIds.has(s.characterId)
+      ? // #1984 D18 — record the id this demotion overwrote. A live
+        // default-path narrator demotion (analysis.ts calls this
+        // unconditionally), so it must be instrumented like every other
+        // overwrite site (finding 2).
+        { ...s, characterId: NARRATOR_ID, priorCharacterId: s.characterId }
+      : s,
   );
   return { characters: keptCharacters, sentences: reroutedSentences, stripped: strippedNames };
 }

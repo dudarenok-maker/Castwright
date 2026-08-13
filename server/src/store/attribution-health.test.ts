@@ -185,6 +185,26 @@ describe('the join (Task 4, D16/D17) — what alignSentences cannot reach', () =
       m.attributableSpoken,
     );
   });
+
+  it('orphanSpoken counts SOURCE SPANS, not model ids — a span with TWO disagreeing unresolvable ids counts once (finding 1)', () => {
+    // One dash paragraph -> one speech span (no tag). Split into two pieces
+    // that both overlap that same span, with two DIFFERENT unresolvable
+    // ids. Before the fix, orphanSpoken incremented once PER unresolvable
+    // id in the disagreeing set, so this single span would score 2 — moving
+    // with how many bogus ids the model happened to emit, not with the
+    // source. `splitSpeech` already counts the span once (unaffected);
+    // `orphanSpoken` must too.
+    const body = '— Первая часть совсем неразрешимая, вторая часть тоже неразрешимая.\n';
+    const sentences: SentenceOutput[] = [
+      sent('ghost-a', 'Первая часть совсем неразрешимая,'),
+      sent('ghost-b', 'вторая часть тоже неразрешимая.'),
+    ];
+    const m = compute({ body, sentences });
+    expect(m.spokenTotal).toBe(1);
+    expect(m.splitSpeech).toBe(1);
+    expect(m.orphanSpoken).toBe(1); // ONE span — not one per bogus id
+    expect(m.orphanIds).toEqual(['ghost-a', 'ghost-b']); // both still reported
+  });
 });
 
 describe('numerator, origin split, and id drift (Task 5, D9/D18)', () => {
