@@ -38,8 +38,11 @@ import {
   buildStage2ChunkInbox,
   STAGE2_ATTRIBUTION_RULES,
   STAGE2_ATTRIBUTION_RULES_CHUNK,
+  selectStage2FailureCode,
+  attributeChapterStage2,
   type AnalysisJob,
 } from './analysis.js';
+import type { Stage2CoverageVerdict } from '../analyzer/stage2-coverage.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -50,7 +53,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCache, saveAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
@@ -3304,6 +3307,114 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
   );
 });
 
+describe('selectStage2FailureCode (#2342 item 2 — collapse vs. incomplete)', () => {
+  /* A dialogue collapse (every spoken line handed to the narrator, or the
+     dialogue markers lost outright) covered EVERY sentence — there is no gap
+     to fill, so `attribution-incomplete`'s copy ("did not cover every
+     sentence… retry usually fills the gaps") is false on every count for
+     this shape. `attribution-collapse` is the code that tells the truth: the
+     cast was ignored. A verdict that ALSO fails on coverage/duplication
+     keeps `attribution-incomplete` — missing prose is the more serious
+     problem, and that code's remediation (retry to fill the gap) is the one
+     that actually helps. */
+  function baseVerdict(): Stage2CoverageVerdict {
+    return {
+      ok: false,
+      coverageRatio: 1,
+      endingPresent: true,
+      duplicatedBlock: null,
+      narratedSpeech: null,
+      noSentences: false,
+      truncated: false,
+      excess: false,
+      markersLost: false,
+      issues: [],
+    };
+  }
+
+  it('markersLost alone (no coverage/duplication failure) -> attribution-collapse', () => {
+    const v = { ...baseVerdict(), markersLost: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-collapse');
+  });
+
+  it('a narratedSpeech collapse breach alone -> attribution-collapse', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      narratedSpeech: { speechHalves: 30, narrated: 25, pct: (25 / 30) * 100, evaluable: true },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-collapse');
+  });
+
+  it('an UN-evaluable narratedSpeech reading (too little dialogue) is not a collapse', () => {
+    /* evaluable: false — too few speech halves to judge; must not misread as
+       a breach. Deliberately NO other failing gate (no truncated/excess/
+       duplicatedBlock/noSentences) — `isIncomplete` must stay false here too,
+       or this assertion would pass via that branch regardless of whether the
+       evaluable gate is respected, proving nothing about it. */
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      narratedSpeech: { speechHalves: 2, narrated: 2, pct: 100, evaluable: false },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('truncated coverage failure alone -> attribution-incomplete', () => {
+    const v = { ...baseVerdict(), truncated: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('excess coverage (repeat-loop) alone -> attribution-incomplete', () => {
+    const v = { ...baseVerdict(), excess: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('a duplicated block alone -> attribution-incomplete', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      duplicatedBlock: { startIndex: 4, length: 3, offset: 5 },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('noSentences alone -> attribution-incomplete', () => {
+    const v = { ...baseVerdict(), noSentences: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('BOTH a coverage failure AND a collapse -> prefers attribution-incomplete (missing prose is worse)', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      truncated: true,
+      markersLost: true,
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('a duplicated block AND a narratedSpeech collapse breach -> prefers attribution-incomplete', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      duplicatedBlock: { startIndex: 4, length: 3, offset: 5 },
+      narratedSpeech: { speechHalves: 30, narrated: 25, pct: (25 / 30) * 100, evaluable: true },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  /* Review round 3 — `markersLost` is gated `!truncated && !excess` only, NOT
+     `!duplicatedBlock`, so a repeat-loop CAN also lose its dialogue markers
+     (see stage2-coverage.test.ts's own regression for a real
+     validateStage2Coverage take that produces exactly this combination).
+     This function's precedence — `isIncomplete` wins — must still hold, the
+     same as the collapse-breach overlap case above. */
+  it('a duplicated block AND markersLost -> prefers attribution-incomplete', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      duplicatedBlock: { startIndex: 4, length: 3, offset: 5 },
+      markersLost: true,
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+});
+
 describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggregation)', () => {
   function makeReport(overrides: Partial<EngineReport>): EngineReport {
     return {
@@ -4135,6 +4246,394 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
         process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+/* C4 on-box acceptance row (#2325/#2342) asks an operator to "record the
+   actual percentages" on a healthy dash-convention book, and to observe "the
+   source's dash-opening count and the attributed speech-half count... for at
+   least one chapter". Neither was ever emitted anywhere except inside the
+   `dialogueCollapse`/`markersLost` ISSUE STRINGS, which the job only logs on
+   `!coverage.ok` — so the row's own healthy-book case (the one it's chiefly
+   about) would discharge on a NULL observation. This pins the fix: a
+   `narrated-speech check` log line fires for EVERY chapter whose language has
+   a dialogue marker, on a PASSING chapter same as a failing one. */
+describe('runMainAnalyzerJob — narrated-speech check log line (#2325/#2342 C4 observability)', () => {
+  const SPEECH_HALVES_TOTAL = 22; // > STAGE2_MIN_SPEECH_HALVES (20)
+  const NARRATED_COUNT = 6; // 6/22 ≈ 27.3%, well under the 60% collapse threshold
+  const CHAPTER_BODY = Array.from(
+    { length: SPEECH_HALVES_TOTAL },
+    (_, i) => `- Реплика номер ${i} для проверки.`,
+  ).join('\n');
+
+  function stage1Roster(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'anton',
+        name: 'Anton',
+        role: 'lead',
+        color: '#111111',
+        gender: 'male',
+        evidence: [{ quote: 'Реплика' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentences(chapterId: number): SentenceOutput[] {
+    return Array.from({ length: SPEECH_HALVES_TOTAL }, (_, i) => ({
+      id: chapterId * 100 + i + 1,
+      chapterId,
+      characterId: i < NARRATED_COUNT ? 'narrator' : 'anton',
+      confidence: 0.9,
+      text: `- Реплика номер ${i} для проверки.`,
+    }));
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentences(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-narrated-speech-log-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_narrated_speech_log_test',
+        manuscriptId,
+        title: 'Narrated Speech Log Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        language: 'ru',
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  it(
+    'logs the narrated-speech measurement for a PASSING chapter, not only a failing one',
+    async () => {
+      const manuscriptId = `test-narrated-speech-log-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      // The synthetic repeated dash-lines are ambiguous enough to flag windows
+      // in the deterministic structure engine, which would then escalate —
+      // irrelevant to what this test pins (the coverage-guard log line), and
+      // the mock analyzer's `runAttributionEscalation` deliberately throws to
+      // catch an unexpected call. Off for this test only.
+      const originalEscalation = process.env.ATTRIBUTION_ESCALATION;
+      process.env.ATTRIBUTION_ESCALATION = 'off';
+      seedStateJson(bookDir, manuscriptId);
+      // `resolveBookLanguageForManuscript` scans the real BOOKS_ROOT tree, which
+      // this tmpdir-based test book is never part of — route it through the
+      // `../workspace/scan.js` mock's override hook instead (same pattern as
+      // the #2267 cached-chapter provenance test above).
+      (globalThis as Record<string, unknown>).__analysis_test_book_language_override = {
+        manuscriptId,
+        language: 'ru',
+      };
+      const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Narrated Speech Log Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: CHAPTER_BODY,
+        chapterHints,
+        bookDir,
+      });
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        
+        const narratedSpeechLog = job.replay.logs.find((l) => l.message.includes('narrated-speech check'));
+        expect(narratedSpeechLog, 'no narrated-speech check log line was emitted at all').toBeDefined();
+        // The measurement, not merely the fact that SOMETHING logged:
+        // 6/22 narrated, the pct, AND the source's own dash-opening count.
+        expect(narratedSpeechLog!.message).toContain('6/22');
+        expect(narratedSpeechLog!.message).toContain('27.3%');
+        expect(narratedSpeechLog!.message).toContain('source has 22 dash-opening speech lines');
+        // This chapter is a PASSING one — no `attribution-collapse` failure —
+        // proving the line isn't gated on `!coverage.ok`.
+        expect(job.replay.failedByChapterId.size).toBe(0);
+      } finally {
+        delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalEscalation === undefined) delete process.env.ATTRIBUTION_ESCALATION;
+        else process.env.ATTRIBUTION_ESCALATION = originalEscalation;
+      }
+    },
+    60_000,
+  );
+});
+
+/* #2342 review round 3 item 4 — the subset (Retry) job's stage-2 loop used to
+   discard `coverage` entirely: `clearFailedChapterId` fires unconditionally
+   once Phase 0 (cast detection) succeeds for a chapter, BEFORE Phase 1
+   attribution even runs, so a chapter whose Phase 1 attribution collapses
+   AGAIN on this very retry came back looking "resolved" with nothing
+   re-flagging it. That is exactly the promise the `attribution-collapse`
+   remediation copy makes when it tells the user to press Retry — this round
+   is what makes it a promise the job can break. */
+describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of silently clearing it (#2342 round 3 item 4)', () => {
+  const GOOD_CHAPTER_BODY = 'This is a perfectly ordinary paragraph of narration with no dialogue at all.';
+
+  function stage1Roster(): CharacterOutput[] {
+    return [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  /* The retry that STILL collapses — the exact shape item 4 is about. An
+     EMPTY sentence list is the simplest reliable trigger for `noSentences`
+     (→ `attribution-incomplete`), independent of any language's dialogue
+     marker, so this test pins the general coverage re-report, not the
+     RU-specific narrated-speech path (that path is covered separately by
+     the C4 log-line describe block above). */
+  function buildPhase1AnalyzerThatStillFails(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+        return { sentences: [] };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-subset-coverage-reflag-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_subset_coverage_reflag_test',
+        manuscriptId,
+        title: 'Subset Coverage Reflag Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  it(
+    'a chapter that STILL collapses on retry is re-flagged in failedChapterIds and chapter-failed, not silently cleared',
+    async () => {
+      const manuscriptId = `test-subset-coverage-reflag-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: GOOD_CHAPTER_BODY }];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Subset Coverage Reflag Test Book',
+        wordCount: 20,
+        byteSize: 200,
+        uploadedAt: new Date().toISOString(),
+        sourceText: GOOD_CHAPTER_BODY,
+        chapterHints,
+        bookDir,
+      });
+
+      /* Pre-seed cache.stage1 so the subset route takes the "book already
+         fully analysed" branch (stage1Existed === true), reaching Phase 1
+         attribution directly instead of deferring to the main route — same
+         setup as the sibling provenance-persistence subset test above.
+         Pre-seed `failedChapterIds` too: this chapter is the one the user
+         is retrying BECAUSE it previously failed. */
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: { characters: stage1Roster(), chapters: [{ id: 1, title: 'Chapter One' }] },
+        failedChapterIds: [1],
+      });
+
+      const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1AnalyzerThatStillFails(), 'phase1-model');
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: [1],
+        bookDir,
+        engine: selection.engine,
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          false,
+        );
+
+        // The SSE contract: a live subscriber sees the chapter re-fail.
+        expect(job.replay.failedByChapterId.has(1)).toBe(true);
+        expect(job.replay.failedByChapterId.get(1)!.code).toBe('attribution-incomplete');
+        // The bug this pins: `failedChapterIds` on the PERSISTED cache must
+        // still list chapter 1 — the whole defect was that Phase 0's
+        // `clearFailedChapterId` call left it looking resolved regardless of
+        // what Phase 1 did afterward.
+        const persisted = await loadAnalysisCache(manuscriptId);
+        expect(persisted.failedChapterIds).toContain(1);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
     },
     60_000,
@@ -7223,6 +7722,98 @@ describe('chunk-variant attribution rules (#1758)', () => {
     // byte-identical between the two constants — not just share a prefix.
     const leadIn = (block: string) => block.slice(0, block.indexOf('\n1. '));
     expect(leadIn(STAGE2_ATTRIBUTION_RULES_CHUNK)).toBe(leadIn(STAGE2_ATTRIBUTION_RULES));
+  });
+});
+
+/* #2324 last gap — `attributeChapterStage2`'s `callForBody` closure
+   (analysis.ts, just above `runStage2ChapterChunked`) is the wiring that
+   carries the per-call `callSeq` runStage2ChapterChunked generates onto the
+   `StageCall.stage2CallSeq` field the two engines' `runStage2Chapter` read
+   (see ollama.test.ts / gemini.test.ts "#2342 item 3"). The chunker's own
+   callSeq generation is covered in stage2-chunk.test.ts; the engines' READ
+   of `call.stage2CallSeq` is covered in ollama.test.ts/gemini.test.ts. This
+   is the one link nothing else exercises: the spread
+   `{ ...opts.stageCall, stage2CallSeq: callSeq }` vs. plain `opts.stageCall`.
+   Reverting that line to plain `opts.stageCall` leaves every other stage-2
+   suite green (verified) — this test is written to fail on that revert. */
+describe('attributeChapterStage2 — per-call stage2CallSeq wiring (#2324 final gap)', () => {
+  const originalCharBudget = process.env.STAGE2_CHUNK_CHAR_BUDGET;
+  const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+
+  afterEach(() => {
+    if (originalCharBudget === undefined) delete process.env.STAGE2_CHUNK_CHAR_BUDGET;
+    else process.env.STAGE2_CHUNK_CHAR_BUDGET = originalCharBudget;
+    if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+  });
+
+  // 'xx' has no conventions table — a plain pass-through, same as the
+  // structure-engine suite's (e) case, so this test stays about the call
+  // wiring and not about the dialogue-structure engine's own behaviour.
+  const STAGE1: Stage1Output = { characters: [], chapters: [{ id: 1, title: 'Chapter One' }] };
+
+  function fakeAnalyzer(calls: StageCall[]): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () => Promise.reject(new Error('not used')),
+      runStage2Chapter: (_manuscriptId, chapterId, _prompt, call) => {
+        calls.push(call);
+        return Promise.resolve({
+          sentences: [
+            { id: calls.length, chapterId, characterId: 'narrator', text: 'lorem ipsum dolor sit amet consectetur.' },
+          ],
+        });
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.resolve(null),
+    };
+  }
+
+  it("a chunked chapter's calls carry distinct stage2CallSeq values on their StageCall", async () => {
+    // Coverage retries off: keeps the call count pinned to exactly one call
+    // per section regardless of the fake sentences' coverage verdict — the
+    // sequencing under test, not coverage scoring, is the point here.
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    // Small enough that two ~60-char paragraphs can't share a chunk.
+    process.env.STAGE2_CHUNK_CHAR_BUDGET = '100';
+    const calls: StageCall[] = [];
+    const body =
+      'The old sailor walked slowly along the misty harbor at dawn.\n\n' +
+      'Gulls cried overhead as the fishing boats began to stir awake.';
+
+    await attributeChapterStage2({
+      analyzer: fakeAnalyzer(calls),
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body },
+      stageCall: { language: 'xx' } as StageCall,
+    });
+
+    expect(calls).toHaveLength(2); // sanity: the body really did chunk
+    expect(calls[0].stage2CallSeq).toBe(1);
+    expect(calls[1].stage2CallSeq).toBe(2);
+  });
+
+  it("the single-call (unchunked) path's call carries NO stage2CallSeq", async () => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    delete process.env.STAGE2_CHUNK_CHAR_BUDGET; // default 9000 — far over this short body
+    const calls: StageCall[] = [];
+    const body = 'The old sailor walked slowly along the misty harbor at dawn.';
+
+    await attributeChapterStage2({
+      analyzer: fakeAnalyzer(calls),
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body },
+      stageCall: { language: 'xx' } as StageCall,
+    });
+
+    expect(calls).toHaveLength(1); // sanity: the body really did NOT chunk
+    expect(calls[0].stage2CallSeq).toBeUndefined();
   });
 });
 

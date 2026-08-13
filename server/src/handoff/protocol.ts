@@ -47,10 +47,17 @@ export type HandoffKey =
 /** #2324 — the stage-2 handoff key for ONE model call. Shared by both engines
     so the naming rule has a single home (`gemini.ts` and `ollama.ts` had
     byte-identical copies of the old one-liner). `seq` is StageCall's
-    `stage2CallSeq`: absent means the single-call path, which keeps its
-    historical `2-ch{n}` filename byte-for-byte; present numbers the call, so a
-    chunked chapter reads `2-ch{n}-c1 … -c4` and you can tell from the
-    filenames alone that the chapter was sectioned. */
+    `stage2CallSeq`: absent means this call's first attempt, which keeps the
+    historical `2-ch{n}` filename byte-for-byte; present numbers the call.
+
+    #2342 item 6 made this NOT a chunked-vs-single-call signal: a single-call
+    chapter's own coverage retries are numbered from the same counter a
+    chunked chapter's sections use (`stage2-chunk.ts`'s shared `callSeq`), so
+    a single-call chapter that retried once also writes `2-ch{n}-c1` — you
+    can no longer tell from the filename alone whether `-c1` means "this
+    chapter's first section" or "this chapter's first retry". The suffix only
+    guarantees each call's own forensics survive without a later call
+    overwriting them; it says nothing about which call PRODUCED it. */
 export function stage2HandoffKey(chapterId: number, seq?: number): HandoffKey {
   return seq === undefined ? `2-ch${chapterId}` : `2-ch${chapterId}-c${seq}`;
 }

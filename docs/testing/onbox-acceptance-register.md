@@ -291,7 +291,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
-| **C** | One *Ночной дозор* re-analysis session | 3 |
+| **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -300,7 +300,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**71 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**72 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2534,7 +2534,7 @@ If the run instead happens on a book whose language was never declared (imported
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**Three rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Four rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2761,6 +2761,25 @@ Same setup as C1/C2, and it **batches with the C2 re-run** — that run replays
 this exact book and chapter, so this row needs no session of its own. Note C2 is
 itself waiting on [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306);
 this row is not, and can be taken on any local re-analysis that reaches ch8.
+
+---
+
+### C4 · The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book ([#2325](https://github.com/dudarenok-maker/Castwright/issues/2325), [#2342](https://github.com/dudarenok-maker/Castwright/issues/2342))
+
+**Why this cannot be closed by the unit tests.** The guard's whole calibration rests on **one** Cyrillic book, nine chapters, two runs — the 2026-08-06 pass (per-chapter narrated speech halves 32.4 18.0 3.8 39.3 3.2 2.0 27.6 33.8 20.8, **max 39.3%**) and the 2026-08-12/13 collapse (93.1 93.7 94.8 97.5 86.5 72.2 84.3 74.6 91.8, **min 72.2%**). The 60% threshold sits in a 33-point gap between two runs of the *same book*. Every automated test feeds the guard a fixture built to breach or not breach it; none can say whether a *different* real Russian, French or Spanish book lands in that gap. Replaying the metric over all 82 cached analyses on this box found **exactly one** with an evaluable speech population (4,240 speech halves, 19.9% narrated); the only other two Cyrillic books hold **19** and **15** speech halves, both under the 20 floor. No offline work can widen this — a second dash-language book has to be imported.
+
+**Observe, on a real local re-analysis:**
+
+- a **healthy** dash-convention book completes with no `attribution-collapse` chapter failure, and the per-chapter narrated-speech share logged for each chapter sits below 60%. Record the actual percentages — the distribution is worth far more than a pass/fail, because it is what says whether 60% has real headroom or got lucky;
+- the guard's **retry** fires on a section that breaches, and the kept take is the *less* collapsed one (#2342 made the scoring see the collapse dimension at all — confirm the better take survived, not merely that a retry happened);
+- a chapter that still breaches reports **`attribution-collapse`** with the cast-focused copy, **not** `attribution-incomplete`'s "did not cover every sentence / a retry usually fills the gaps" — that copy was factually wrong for this failure class until #2342, and this is the only place the corrected wiring is exercised end to end;
+- the **marker-loss** control does not false-positive: the source's dash-opening count and the attributed speech-half count are logged for at least one chapter, and the second is well above half the first. Both real runs measured ~246→213 and ~241→209, so near-parity is expected and a ratio approaching 0.5 is what to escalate.
+
+**Hardware prerequisite:** no GPU needed — local Ollama analyzer only, as with the rest of Group C. Best taken in the same session as C2/C3 rather than as its own long run.
+
+**Where the criteria live:** the max-39.3%/min-72.2% per-chapter narrated-speech-half figures this row cites are stated directly above, in this row (**Why this cannot be closed by the unit tests**) — no source file duplicates them at that granularity, so this row is their canonical home, not a pointer away from it. [`server/src/analyzer/stage2-coverage.ts`](../../server/src/analyzer/stage2-coverage.ts) carries two DIFFERENT calibration figures of its own, not this row's numbers: the module header's 95.7%/67.9% (lines ~160-161) is the same book's WHOLE-BOOK, ALL-SENTENCE narrator share, not the per-chapter SPEECH-HALF share the 60% threshold actually gates — reading 67.9% as "under the 60% threshold" would be wrong, since the good run's per-chapter figure this row measured is 3.2-39.3%, comfortably clear; and the `markersLost` comment's 246→213/241→209 (lines ~389-390) is an unrelated dialogue-marker-recovery calibration, not a narrated-share number at all. There is no dedicated plan doc for #2325/#2342, and plan 247 (dialogue-structure attribution) mentions neither the issue nor this calibration, so it was never the right pointer. Related but distinct: the #1984 attribution-collapse *visibility* strand measures and surfaces collapse; this guard *acts* on it during analysis. They share a name and nothing else — do not discharge one against the other.
+
+**Not discharged by:** a green `npm run test:server`. The guard's tests are fixture-driven by construction; that is the point of this row.
 
 ---
 
