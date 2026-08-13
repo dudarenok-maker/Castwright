@@ -2878,6 +2878,34 @@ live view all move in the shipping PR.
 None of these is a detail an implementer can settle, and each has more than one
 defensible answer. Listed in the order they block work.
 
+### Answered by the repo owner, 2026-08-13 — questions 1, 2 and 4
+
+**Wave 1 is unblocked.** Three of the five are decided; questions 3 and 5 stay
+open and neither blocks Wave 1.
+
+| # | decision | consequence |
+|---|---|---|
+| 1 | **`SentenceOutput.priorCharacterId` lands.** | Acceptance criterion 5 is **in scope**: the panel reports model-assigned, engine-demoted and unattributed narrator separately rather than one column. The only analyzer change revision 8 permits; additive, optional, absent by default. |
+| 4 | **`parseChapterStructure`'s speech/tag split is the D15 rule.** | One definition of a tag clause in the product, not two. Its stricter behaviour is accepted: a dialogue text whose tag clause carries no `speechVerbStems`/`beatVerbStems` verb collapses to one unanchored speech span. **Wave 1 measures how far `tagTotal` moves against the case heuristic and reports it** — the number is owed, the rule is not reopened by it. |
+| 2 | **D13's banner scope lands** — the Cast orphan banner gains a cache-sourced tier. | D13 is **not** dropped. Per §D13 re-gated this answer also governs `alsoCollapsed`, the fifth library state and `attributionVerdictKey`. R-8C1, open since 2026-08-11, is closed by this. |
+
+**What decided question 1**, recorded because the counts are the argument: the
+two narrator populations have different causes and different fixes, and are
+indistinguishable in the final `characterId`. "Re-run the analysis" and "your
+analyzer demoted these" are a warning and an instruction, and a single column
+cannot tell the user which one they are looking at.
+
+**Question 2 carries a caveat that survives the decision.** §D13 re-gated found
+the decision holds but **its numbers do not** — the round-7 order-of-magnitude
+gap was measured under the old unit. Landing the banner scope does not
+re-establish that evidence. **Wave 1 must re-measure D13 under the current unit**;
+if the gap does not survive, D13 is dropped despite this answer.
+
+**Still open, neither blocking Wave 1:** question 3 (is Wave 2's surface still
+right at this size) and question 5 (`unanswered` as a sixth state, its threshold,
+and the omission/alignment conflation). Wave 1 prints `unattributedSpeech`
+regardless, and that column is what question 5 gets decided from.
+
 1. **Does D18's `SentenceOutput.priorCharacterId` land?** It is the only analyzer
    change revision 8 permits, and it is the only way acceptance criterion 5 is
    satisfiable — the derivation alternative is F1 rebuilt (§D18). It is additive,
