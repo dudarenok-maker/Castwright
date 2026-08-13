@@ -338,7 +338,59 @@ function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>
   return best;
 }
 
-function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
+/** Two-tier scan (#2288 M2, rule B). Primary-pair runs are found first and
+    always win; secondary-pair candidates then fill the gaps BETWEEN them,
+    except one whose interior contains a primary OPENER glyph.
+
+    Why a gap and not a paragraph verdict: the earlier design deferred to the
+    primary tier for the whole paragraph whenever it produced ANY run. A
+    primary scan is not a convention detector, it is an any-run detector — so a
+    primary-convention title quoted in NARRATION (`Leía «Fausto» en la portada.
+    "Hola", dijo él.`) suppressed every genuine dialogue turn in the paragraph.
+    Measured: 21 of 21 such shapes lost BOTH turns. Gap scope loses none.
+
+    Why the primary-opener test: a stray `‘…’` containing a genuine `«Пока»`
+    turn and a legitimate nest `“He said ‘hi’ to me,”` are the same interval
+    geometry, so no rule local to a candidate PAIR can separate them — but a
+    SECONDARY candidate that swallowed a PRIMARY opener has straddled into that
+    turn, while one sitting in narration contains no primary opener. That is a
+    tier fact, not a geometry fact, which is why it works where the geometry
+    rules measured in the design all failed.
+
+    This cannot delete a primary run and cannot alter a table with an empty
+    tier — M1's never-delete invariant and the 270-test suite hold by
+    construction, not by measurement. */
+function findQuoteRuns(
+  line: string,
+  pairs: Array<[string, string]>,
+  secondary: Array<[string, string]>,
+): QuoteRun[] {
+  const primaryRuns = scanQuoteRuns(line, pairs);
+  if (!secondary.length) return primaryRuns;
+
+  const primaryOpeners = new Set(pairs.map(([open]) => open));
+  const all = scanQuoteRuns(line, [...pairs, ...secondary]);
+  const out = [...primaryRuns];
+  let cursor = -1;
+  for (const c of all) {
+    if (c.start < cursor) continue;
+    if (out.some((r) => c.start < r.end && r.start < c.end)) continue;
+    let straddles = false;
+    for (const open of primaryOpeners) {
+      const at = line.indexOf(open, c.start + c.openLen);
+      if (at >= 0 && at < c.end - c.closeLen) {
+        straddles = true;
+        break;
+      }
+    }
+    if (straddles) continue;
+    out.push(c);
+    cursor = c.end;
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
     const list = closersByOpener.get(open);
@@ -457,7 +509,7 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
     onto adjacent speech spans exactly like the dash path. */
 function parseQuoteParagraph(line: string, base: number, index: NameIndex): ParagraphEvidence {
   const conv = index.conventions;
-  const runs = findQuoteRuns(line, conv.quotePairs);
+  const runs = findQuoteRuns(line, conv.quotePairs, conv.secondaryQuotePairs);
   const spans: SpanEvidence[] = [];
   let cursor = 0;
   for (const run of runs) {

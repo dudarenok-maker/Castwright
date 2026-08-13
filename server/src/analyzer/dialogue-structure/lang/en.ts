@@ -8,6 +8,7 @@ export const en: LanguageConventions = {
     ['"', '"'],
     ['‘', '’'],
   ],
+  secondaryQuotePairs: [],
   speechVerbStems: [
     'said', 'say', 'ask', 'repli', 'whisper', 'shout', 'mutter', 'murmur', 'call', 'answer',
     'snap', 'sigh', 'groan', 'growl', 'hiss', 'yell', 'cried', 'cry', 'added', 'add', 'agree',

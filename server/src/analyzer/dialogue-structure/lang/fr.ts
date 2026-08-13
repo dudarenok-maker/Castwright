@@ -7,6 +7,7 @@ export const fr: LanguageConventions = {
   // and &ndash; alongside the literal dash glyphs, per the ru.ts precedent.
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»']],
+  secondaryQuotePairs: [],
   speechVerbStems: [
     'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanç', 'rétorqu',
     'continu', 'interromp', 'observ', 'remarqu', 'affirm', 'assur', 'promis', 'averti', 'déclara',

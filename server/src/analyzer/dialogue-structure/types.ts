@@ -26,6 +26,16 @@ export interface LanguageConventions {
   dialogueOpen: RegExp | null;
   /** ordered open/close quote pairs for embedded speech */
   quotePairs: Array<[string, string]>;
+  /** Conventions this language TOLERATES but does not typeset dialogue in.
+      Primary-pair runs are found first; these fill the gaps BETWEEN them, and a
+      secondary run whose interior contains a primary opener is declined — it
+      straddled into a primary turn rather than sitting beside it. Empty for
+      every language today; #2286's added pairs land here, not in `quotePairs`.
+      NOTE `isSpokenLine` (analyzer/narrator-default.ts) reads BOTH lists with
+      no tier — it computes no run boundary, so it cannot straddle, and a tier
+      there would hide these pairs from the narrator-default demotion entirely.
+      See docs/superpowers/specs/2026-08-13-gap-seeded-straddle-design.md. */
+  secondaryQuotePairs: Array<[string, string]>;
   /** lowercase stems: a tag clause must contain one to count as a tag */
   speechVerbStems: string[];
   /** action-beat stems that also anchor a speaker ("— Да, — кивнул Антон") */

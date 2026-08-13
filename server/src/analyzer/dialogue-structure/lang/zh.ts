@@ -12,6 +12,7 @@ export const zh: LanguageConventions = {
     ['『', '』'],
     ['“', '”'],
   ],
+  secondaryQuotePairs: [],
   speechVerbStems: ['说', '道', '问', '答', '喊', '叫', '回答', '说道', '问道', '喃喃', '低语'],
   beatVerbStems: ['点头', '笑', '皱眉', '叹'],
   nameStemmer: (t) => t,
