@@ -2,6 +2,7 @@
    chapter bodies as HTML strings, so the strip / heading-extract / generic-
    chapter-label logic is identical between them. */
 
+import { decodeHTMLStrict } from 'entities';
 import { tagHtmlEmphasis } from './audio-tags.js';
 import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
 
@@ -29,6 +30,48 @@ function codePointOr(original: string, codePoint: number): string {
   }
 }
 
+/* Decode the COMPLETE HTML5 named-entity set. #2310.
+
+   The previous five (`&nbsp; &lt; &gt; &quot; &amp;`) were the XML predefined
+   set plus `&nbsp;`, introduced whole in the first server commit (a922c075) as
+   the standard "unescape XML" idiom — never a curated judgement about which
+   entities are safe to decode in prose, and never widened on purpose.
+   Everything it missed (`&ndash;` `&mdash;` `&eacute;` `&rsquo;` `&laquo;`
+   `&hellip;` `&apos;` …) survived into body text AND chapter titles and was
+   READ ALOUD VERBATIM by the TTS engine.
+
+   Three deliberate constraints, all load-bearing — see
+   docs/superpowers/specs/2026-08-13-entity-decode-layer-design.md:
+
+   1. `decodeHTMLStrict`, not `decodeHTML`. The latter honours HTML5's legacy
+      semicolon-less references and would turn `Fish &notice this` into
+      `Fish ¬ice this` and `Copyright &copy 2026` into `Copyright © 2026`.
+      Requiring the semicolon leaves `AT&T` / `Smith & Sons` alone.
+   2. Scoped to NAMED references by regex. Called on a whole string,
+      `decodeHTMLStrict` would also take the numeric ones — and it maps
+      out-of-range references to U+FFFD, breaking `decodeNumericEntities`'s
+      contract above (and U+FFFD is not stripped before synthesis). Numerics
+      stay that function's job, and callers run it afterwards.
+   3. U+00A0 folds to a plain space. `&nbsp;` yielded U+0020 before #2310 and
+      must keep doing so; folding the CHARACTER rather than the spelling also
+      covers aliases such as `&NonBreakingSpace;`. Callers must run this
+      BEFORE `decodeNumericEntities` so `&#160;` still yields U+00A0 as it did
+      (constraint 3's OWN fold runs before that call, so it never touches the
+      numeric form). Because the fold runs over the WHOLE string rather than
+      only its own regex's matches, it also folds a source-literal U+00A0
+      byte that was never a decoded entity at all — common in French EPUBs —
+      to U+0020 too, which is new and wider than "preserve `&nbsp;`'s
+      meaning" strictly requires. Downstream impact is benign:
+      `src/tts/normalize/classifiers.ts` already treats U+00A0 as space.
+
+   A leftmost `replace` does not rescan its own output, so `&amp;lt;` yields
+   `&lt;` rather than double-unescaping to `<`. */
+export function decodeNamedEntities(s: string): string {
+  return s
+    .replace(/&[a-zA-Z][a-zA-Z0-9]*;/g, (m) => decodeHTMLStrict(m))
+    .replace(/\u00a0/g, ' ');
+}
+
 /* Strip HTML tags from a chapter body, decode common entities, and convert
    block-level breaks to plain-text newlines. Folds `<em>/<i>/<strong>` into
    `[emphasis]…[/emphasis]` tags via tagHtmlEmphasis before stripping so the
@@ -48,12 +91,7 @@ export function stripHtml(html: string): string {
     prev = s;
     s = s.replace(/<[^>]+>/g, '');
   } while (s !== prev);
-  s = s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&');
+  s = decodeNamedEntities(s);
   return decodeNumericEntities(s)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -69,15 +107,7 @@ const FIRST_HEADING_RE = /<h[1-3][^>]*>([\s\S]{0,400}?)<\/h[1-3]>/i;
 export function extractFirstHeading(html: string): string | null {
   const m = FIRST_HEADING_RE.exec(html);
   if (!m) return null;
-  const raw = decodeNumericEntities(
-    m[1]
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, '&'),
-  )
+  const raw = decodeNumericEntities(decodeNamedEntities(m[1].replace(/<[^>]+>/g, ' ')))
     .replace(/\s+/g, ' ')
     .trim();
   if (raw.length === 0 || raw.length > 200) return null;

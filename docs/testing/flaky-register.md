@@ -25,7 +25,7 @@ it never gates a merge.
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
 | #1981 — a stale cast PUT does not erase a concurrently /assign-planted voice | `server/src/routes/book-state-preserve-voices.test.ts` | intermittent under full-suite box contention | Fails intermittently in a full `test:server` run under box contention; passes 7/7 in isolation. Observed 2026-08-07: `1 failed / 6741 passed`, `[fail] test:server (exit 1, took 746.6s)`. | #2226 | Not quarantined — still gates |
-| #2235 — revokes the older same-format manifest when a re-export of the same format finishes | `server/src/routes/export.test.ts` | intermittent under full-suite box contention | Fails on its first attempt and passes on retry inside a full `npm run test:server` run; surfaced only as a `[retry-hazard]` warning because vitest's `retry:1` absorbs it. Observed 2026-08-11 in the `dbcf36c5` pre-commit run (506 files / 7079 tests passed). | #2235 | Not quarantined — still gates |
+| #2235 — revokes the older same-format manifest when a re-export of the same format finishes | `server/src/routes/export.test.ts` | intermittent under full-suite box contention | Fails on its first attempt and passes on retry inside a full `npm run test:server` run; surfaced only as a `[retry-hazard]` warning because vitest's `retry:1` absorbs it. Observed 2026-08-11 in the `dbcf36c5` pre-commit run (506 files / 7079 tests passed). | #2235 | Quarantined — routes through `quarantinedIt` (2026-08-13); runs only under `RUN_QUARANTINE=1` |
 
 _Otherwise empty — no other tests are currently quarantined or tracked here._
 

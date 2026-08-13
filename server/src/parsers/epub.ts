@@ -18,7 +18,14 @@ import type { ChapterHint } from '../store/manuscripts.js';
 import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
-import { stripHtml, extractFirstHeading, stripTitleHeading, GENERIC_NCX_RE } from './html-utils.js';
+import {
+  stripHtml,
+  extractFirstHeading,
+  stripTitleHeading,
+  GENERIC_NCX_RE,
+  decodeNamedEntities,
+  decodeNumericEntities,
+} from './html-utils.js';
 import { UnusableMediaError } from './errors.js';
 
 type EpubOpts = { fileName?: string; sourcePath?: string };
@@ -496,15 +503,13 @@ function readCalibreMeta(opf: string, name: string): string | null {
   return m ? decodeEntities(m[1]) : null;
 }
 
-/** Decode the small entity set the parsers care about (matches stripHtml). */
+/** Decode entities in OPF metadata (title / author / series) and NCX chapter
+    labels. Shares `stripHtml`'s decode rules BY CONSTRUCTION, via
+    `decodeNamedEntities` — the previous hand-rolled copy claimed to "match
+    stripHtml" and had already drifted (no numeric support at all, so the hex
+    apostrophe from the Coalfall regression stayed literal in titles long after
+    `stripHtml` was fixed). Three copies of one list is what produced #2310;
+    there is now one. */
 export function decodeEntities(s: string): string {
-  return s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    // Decode &amp; LAST so `&amp;lt;` -> `&lt;`, not `<` (double-unescaping).
-    .replace(/&amp;/g, '&')
-    .trim();
+  return decodeNumericEntities(decodeNamedEntities(s)).trim();
 }

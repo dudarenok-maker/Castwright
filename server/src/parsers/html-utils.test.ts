@@ -161,3 +161,108 @@ describe('stripHtml — scene-break preservation (#1679)', () => {
     expect(units).toContain('* * *');
   });
 });
+
+describe('stripHtml — named character references (#2310)', () => {
+  /* Why the complete HTML5 set and not a curated list: the curated list is
+     what this repo already tried twice and was bitten by both times — the
+     original five-entry set (XML-predefined + &nbsp;, copied wholesale in the
+     first server commit), and es/fr `dialogueOpen` carrying &mdash; but not
+     &ndash; (#2289). An enumeration of spellings loses a spelling per round. */
+  it('#2310: decodes the dash entities that opened this bug', () => {
+    expect(stripHtml('<p>&ndash; Un momento &mdash; dijo él.</p>')).toBe(
+      '– Un momento — dijo él.',
+    );
+  });
+
+  it('#2310: decodes accented letters — the case that corrupts whole words', () => {
+    expect(stripHtml('<p>&eacute;t&eacute; &agrave; la fen&ecirc;tre</p>')).toBe(
+      'été à la fenêtre',
+    );
+  });
+
+  it('#2310: decodes typographic punctuation and guillemets', () => {
+    expect(stripHtml('<p>&laquo;Привет&raquo;&hellip; &rsquo;tis</p>')).toBe(
+      '«Привет»… ’tis',
+    );
+  });
+
+  it('#2310: decodes &apos; — an XML-predefined entity the hand-rolled set dropped', () => {
+    expect(stripHtml('<p>&apos;tis</p>')).toBe("'tis");
+  });
+
+  /* decodeHTMLStrict vs decodeHTML. decodeHTML implements HTML5's legacy
+     semicolon-less rule and would render these `Fish ¬ice this` /
+     `Copyright © 2026`. This test is the ONLY thing pinning that choice —
+     swapping to decodeHTML turns it red. */
+  it('#2310: a bare ampersand in prose is never decoded (decodeHTMLStrict, not decodeHTML)', () => {
+    expect(stripHtml('<p>Fish &notice this</p>')).toBe('Fish &notice this');
+    expect(stripHtml('<p>Copyright &copy 2026</p>')).toBe('Copyright &copy 2026');
+    expect(stripHtml('<p>Smith & Sons, AT&T and R&D</p>')).toBe('Smith & Sons, AT&T and R&D');
+  });
+
+  it('#2310: an unknown entity is left literal', () => {
+    expect(stripHtml('<p>&unknownentity; stays</p>')).toBe('&unknownentity; stays');
+  });
+
+  it('#2310: &amp;ndash; single-passes to &ndash;, never to a dash', () => {
+    expect(stripHtml('<p>&amp;ndash;</p>')).toBe('&ndash;');
+  });
+
+  it('#2310: &nbsp; still yields U+0020, not U+00A0 — and so do its aliases', () => {
+    expect(stripHtml('<p>A&nbsp;B</p>')).toBe('A B');
+    expect(stripHtml('<p>A&NonBreakingSpace;B</p>')).toBe('A B');
+  });
+
+  /* The contract at html-utils.ts:15-16 — documented since the Coalfall fix
+     but never pinned by a test until now. decodeHTMLStrict maps these to
+     U+FFFD, which stripUnsafeForTts does NOT remove, so a whole-string
+     decodeHTMLStrict call would send a replacement char to the TTS engine.
+
+     ONLY these two, and this is measured, not assumed: `codePointOr` guards
+     `!Number.isFinite`, `< 0` and `> 0x10ffff`, so `&#0;` and `&#xD800;` DO
+     decode today (to NUL and a lone surrogate, both removed later by
+     `stripUnsafeForTts`). Adding those two here ships a RED test — an earlier
+     draft of this plan did exactly that, and probing is how it was caught. */
+  it('#2310: out-of-range numeric references are still left literal', () => {
+    for (const ref of ['&#99999999;', '&#x110000;']) {
+      const out = stripHtml(`<p>A${ref}B</p>`);
+      expect(out).toBe(`A${ref}B`);
+      expect(out).not.toContain('\ufffd');
+    }
+  });
+
+  /* Found by adversarial review: these decode BEFORE the `[ \t]+\n` and
+     `\n{3,}` collapses at html-utils.ts:58-59, and the parsers emit one
+     paragraph per line — so they DO change chapter STRUCTURE, not just
+     wording: `One&NewLine;Two` is one paragraph pre-fix and two after.
+     That is accepted, expected behaviour (the decode is correct; a bare
+     newline inside prose was always going to read as a paragraph break
+     once it exists at all) — this test pins what actually happens, not a
+     claim that structure is preserved. Vanishingly rare in real ebook
+     output; pinned anyway, because "rare" is not "handled". */
+  it('#2310: &NewLine; / &Tab; decode, and DO split a paragraph in two', () => {
+    expect(stripHtml('<p>A&Tab;B</p>')).toBe('A\tB');
+    expect(stripHtml('<p>One&NewLine;Two</p>').split('\n').filter(Boolean)).toEqual(['One', 'Two']);
+  });
+
+  /* Appendix B: three consecutive &NewLine; references decode to three
+     literal newlines BEFORE the `\n{3,}` -> `\n\n` collapse runs, so they
+     land inside that collapse's own input rather than escaping it. */
+  it('#2310: three consecutive &NewLine; feed the \\n{3,} -> \\n\\n collapse', () => {
+    expect(stripHtml('<p>A&NewLine;&NewLine;&NewLine;B</p>')).toBe('A\n\nB');
+  });
+});
+
+describe('extractFirstHeading — named entities (#2310)', () => {
+  /* The chapter title is spoken as its own title beat and — unlike body text —
+     never passes through the stage-2 model, so this path reproduces #2310
+     unconditionally, whatever the model does with dashes. */
+  it('#2310: decodes named entities in a heading', () => {
+    expect(extractFirstHeading('<h1>L&rsquo;&Eacute;t&eacute; &mdash; Tome I</h1>')).toBe(
+      'L’Été — Tome I',
+    );
+  });
+  it('#2310: still leaves a bare ampersand alone', () => {
+    expect(extractFirstHeading('<h1>Smith &amp; Sons, AT&T</h1>')).toBe('Smith & Sons, AT&T');
+  });
+});

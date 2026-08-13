@@ -1,15 +1,11 @@
 # Entity decode layer — implementation plan (#2310)
 
-> **⚠️ CONTINGENT ON AN OWNER DECISION.** This plan implements **Option 1** of
+> **✅ APPROVED 2026-08-13.** The owner approved **Option 1** of
 > `docs/superpowers/specs/2026-08-13-entity-decode-layer-design.md` — widen the
-> named-entity decode in `stripHtml`. Options 2 and 3 are refuted in the spec,
-> but the choice is the owner's and it has **not been approved yet**. Do not
-> start Task 1 until the owner has approved Option 1. If they pick another
-> option, this plan is void, not adaptable.
->
-> The decision also carries a **new production dependency** on `entities`
-> (spec, "Why a library rather than a curated table") — approving the plan
-> approves that dependency.
+> named-entity decode in `stripHtml` — along with the new production
+> dependency on `entities` this plan carries (spec, "Why a library rather than
+> a curated table"). Implemented in PR #2316 (`fix(server): widen
+> named-entity decode to the full HTML5 set (#2310)`), which closes #2310.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use
 > `superpowers:subagent-driven-development` to implement this plan task-by-task.

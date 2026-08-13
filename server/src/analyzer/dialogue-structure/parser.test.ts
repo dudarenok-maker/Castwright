@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { stripHtml } from '../../parsers/html-utils.js';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { anchorSpansFromTags, parseChapterStructure } from './parser.js';
@@ -706,12 +707,32 @@ describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;'
     const paras = parseChapterStructure('Ana caminó por la calle.', esIdx);
     expect(paras[0].kind).toBe('narration');
   });
-  it('#2289: negative control — an unrelated entity (&hellip;) does not open dialogue', () => {
-    // Guards against an over-broad fix such as /^\s*(?:&\w+;|[-–—])\s*/iu,
-    // which would match any entity. &hellip; survives stripHtml so this control
-    // is realistic end-to-end, not just a unit-level mutation guard.
-    const paras = parseChapterStructure('&hellip; Un momento — dijo él.', esIdx);
+  it('#2289: negative control — an unrelated entity (&zzz;) does not open dialogue', () => {
+    /* Guards against an over-broad fix such as a dialogueOpen pattern of the
+       shape `^\s*(?:&\w+;|[-–—])\s*` (case/unicode flags), which would match
+       any entity.
+
+       #2310 swapped this fixture from `&hellip;` to `&zzz;`. `&hellip;` used to
+       survive `stripHtml`, which is what made this control realistic body text;
+       since #2310 the full named set decodes, so it no longer would. An
+       UNKNOWN reference is left literal by `decodeHTMLStrict`, so `&zzz;` keeps
+       the control realistic end-to-end rather than demoting it to a unit-level
+       mutation guard. (`&nbsp;` was never a candidate — it was decoded even
+       before #2310, which is the vacuous-fixture bug #2289 shipped and had to
+       correct.) */
+    const paras = parseChapterStructure('&zzz; Un momento — dijo él.', esIdx);
     expect(paras[0].kind).toBe('narration');
+  });
+
+  /* #2310 — once stripHtml decodes the entity, `dialogueOpen`'s entity branch
+     stops firing on freshly-parsed text and the `[-–—]` character-class branch
+     carries the load instead. Pin that the handover is real, so the shims can
+     be retained as pure back-compat rather than silently doing the work. */
+  it('#2310: the DECODED dash still opens dialogue in es and fr', () => {
+    expect(parseChapterStructure(stripHtml('<p>&ndash; Un momento.</p>'), esIdx)[0].kind)
+      .toBe('dialogue');
+    expect(parseChapterStructure(stripHtml('<p>&mdash; Un instant.</p>'), frIdx)[0].kind)
+      .toBe('dialogue');
   });
 });
 

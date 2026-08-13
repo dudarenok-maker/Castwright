@@ -289,8 +289,8 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
@@ -299,7 +299,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2430,6 +2430,45 @@ conflated once already during triage.
 *Cost:* short — a handful of `/synthesize` probes plus one attempt at
 reproducing the degenerate collapse.
 
+### A45 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
+
+PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
+`stripHtml`/`extractFirstHeading`/`epub.ts`'s `decodeEntities` from a
+five-entity hand-rolled list to the complete HTML5 named set. Every layer of
+the fix is proved by unit and end-to-end tests fixing the sentence text
+explicitly (`html-utils.test.ts`, `entity-dialogue-e2e.test.ts`) — what those
+tests cannot prove is that a real, EPUB-sourced entity survives the whole
+pipeline the same way. Design spec's own "What I could not establish": whether
+the stage-2 analyzer model echoes a surviving entity into its returned
+sentence text, which decides whether the *body-line* symptom reproduced at all
+before this fix (a second thread observed, on a live run, that the current
+model sometimes strips a leading dash rather than echoing it verbatim — that
+would mean the body-path symptom already didn't reproduce pre-fix on today's
+model, which is a finding about the analyzer, not a failure of this fix).
+
+- **Lead with the chapter-title beat — the only criterion no model behaviour
+  can mask** (design spec Finding 0). On an EPUB whose first chapter heading
+  carries named entities (e.g. `<h1>L&rsquo;&Eacute;t&eacute;</h1>`), confirm
+  the spoken title beat says "L'Été" cleanly — no "ampersand … semicolon", no
+  gibberish.
+- **Secondary: a Spanish, French, or Russian EPUB using `&mdash;`/`&ndash;` or
+  accented named entities in body text.** Confirm a dash-opened dialogue line
+  renders with a pause (not spoken "ampersand n dash semicolon" or similar),
+  accented words render as the correct letters (not "e acute" spoken aloud),
+  and the manuscript view shows real glyphs rather than raw entity text.
+  **Record whether this symptom reproduced at all pre-fix** — per the design
+  spec, that is itself new information about the analyzer chain, not a gate on
+  this fix.
+- No real es/fr/ru EPUB with named (as opposed to numeric) HTML entities was
+  available in this workspace at design time — confirm one exists among the
+  on-box corpus, or construct a minimal one from a real chapter with `&mdash;`
+  hand-substituted for a literal dash, if none does.
+
+*Needs:* a real EPUB (or a hand-modified one) carrying named HTML entities in
+its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
+two bullets above. *Cost:* short — one import + one chapter-title listen, plus
+one body-line listen if a suitable entity-laden EPUB is available.
+
 ## Group B — local Ollama analyzer only
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 and B2 each have a **CPU-only sub-case** — the only checks here that want the analyzer *off* the GPU. Run those two together, and consider folding in E4. B3 uses its own real book fixture instead of the generic chapter and has no CPU-only case.
@@ -2471,6 +2510,24 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 - Spot-check the rest of the roster (13 characters) is otherwise intact — no duplicate row, no character silently renamed onto another's id.
 
 *Needs:* a real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering is required for this row's own criteria. *Criteria:* the run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7 (Wave 2). *Cost:* short — one re-analysis of an already-imported book, then a diff of two small JSON files.
+
+
+### B4 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
+
+`buildStage1ChapterInbox` never bound `name`/`aliases` to the book's script. `languagePreamble` already bound `tone`/`role`/`description`/`attributes` for a non-English book and still does — names were the one identifying field left free, and they drifted: *Ночной дозор*'s cast lists handed to stage-2 went from **0 of 75 Latin-named** (2026-08-06) to **42 of 71, 59%** (2026-08-13) across two runs of the same book with the same model weights and the same prompt; chapter 2 came back 15/15 Latin. A controlled 5× replay of the recorded stage-1 prompt reproduced 100% Latin 5/5 against the recorded response's 0/3.
+
+The fix is a prompt instruction, so **the three unit tests prove the rule renders — not that the model obeys it.** That gap is the whole reason this row exists: the defect was non-deterministic model behaviour, and only a real analyzer on a real non-English book can show the roster comes back in Cyrillic.
+
+**Fold this into B3's run** — B3 re-analyses *Заказ Коалфолла* (ru), which is exactly the fixture this needs, so both rows discharge from one re-analysis. Observe, on that same run:
+
+- Every character's `name` in the resulting `cast.json` is in **Cyrillic**, matching how the book's prose spells it — zero Latin transliterations (`Мэйрин`, not `Mairin`). The pre-fix failure looks like a roster that is *readable* but Latin.
+- Every `id` is still **ASCII kebab-case** — the carve-out. A roster that came back with a Cyrillic *id* (`борис-игнатьевич`, observed on the 2026-08-06 run) is a failure of this row even if every name is correct, because ids are the join key.
+- **No character gained a second id.** B3 already checks `mairin` / `coalfall-dragon` survive; this row adds that the roster has no *near-duplicate pair* (e.g. both `mairin` and `mayrin`, or a name-corrected character appearing twice). That is the split-identity risk the carve-back clause exists to prevent, and it is the one way this change could make things worse rather than better.
+- Note the roster size against B3's recorded 13 characters — a drop would mean the added block cost recall.
+
+If the run instead happens on a book whose language was never declared (imported before fs-2, or left undecided at the confirm screen), that is a **more** valuable observation, not a less valuable one: those books get an empty `languagePreamble`, so this block is their only protection.
+
+*Needs:* a real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering. *Criteria:* this row. *Cost:* none beyond B3, if run together.
 
 ---
 

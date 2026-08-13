@@ -1679,6 +1679,93 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
   });
 
+  /* #2313 — `name`/`aliases` were the one part of a non-English roster nothing
+     bound to the manuscript's script, so they drifted: a Russian book came back
+     59% Latin-named with the same weights and the same prompt. */
+  it('binds name/aliases to the prose\'s own script, unconditionally', () => {
+    /* Unconditional is the point. The rule takes no language argument, because
+       `resolveBookLanguageForManuscript` returns 'en' on a miss and
+       `normaliseBookLanguage` is `primary || 'en'` — so a language-gated rule
+       would go silent (or assert English) on exactly the books that drift:
+       those imported before fs-2 and those left undecided at the confirm
+       screen. Those books also get an EMPTY `languagePreamble`, so this block
+       is their only protection. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Untitled',
+      { id: 1, title: 'Chapter 1', body: 'Body.' },
+      [],
+    );
+    expect(inbox).toMatch(/use the manuscript's own script/i);
+    expect(inbox).toMatch(/exactly as this chapter'?s\s+prose spells them/i);
+    expect(inbox).toMatch(/never\s+transliterate, romanise, or translate/i);
+    /* No language is asserted ANYWHERE — stating one would be a guess. Pinning
+       a single spelling (`^- Language:`) would let `- Book language: en` or
+       `- Language (detected): en` reintroduce the defect untouched, so this
+       checks for any `<label>: ` language assertion in the prompt. Verified no
+       existing prompt text trips it. */
+    expect(inbox).not.toMatch(/\blanguage\s*:/i);
+  });
+
+  it('carves `id` OUT of the script rule so ids stay ASCII kebab-case', () => {
+    /* Regression for the other half of the same defect: the 2026-08-06 run
+       emitted `борис-игнатьевич` as an *id*. A rule that said only "use the
+       book's script" would bless that and break ids as stable join keys. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Ночной дозор',
+      { id: 1, title: 'Глава 1', body: 'Тело главы.' },
+      [],
+    );
+    expect(inbox).toMatch(/`id` is the ONE exception/);
+    expect(inbox).toMatch(/stays ASCII kebab-case/i);
+    expect(inbox).toContain('Антон Городецкий` → `anton-gorodetsky');
+  });
+
+  it('does NOT let the id rule override reuse-the-roster-id-verbatim', () => {
+    /* The transliterate-for-the-id sentence renders ABOVE the running-roster and
+       series-prior blocks, both of which require reusing an existing id
+       verbatim. Without the carve-back, a model correctly repairing a drifted
+       `"Anton Gorodovsky"` back to `"Антон Городецкий"` would then derive
+       `anton-gorodetsky` alongside the roster's existing `anton-gorodovsky`.
+       `mergeRosterChapter` merges by id, so that splits one character into two
+       roster rows, two voice profiles and two sets of lines — and it arrives
+       past retireCharacterId/buildCastResolver, which watch for an id that
+       CHANGED, not for a second one being minted. */
+    const inbox = buildStage1ChapterInbox(
+      'mns_test',
+      'Ночной дозор',
+      { id: 3, title: 'Глава 3', body: 'Тело главы.' },
+      [
+        {
+          id: 'anton-gorodovsky',
+          name: 'Anton Gorodovsky',
+          role: 'Protagonist',
+          color: '#c94f7c',
+        },
+      ],
+    );
+    /* The drifted id must be offered back verbatim, not "corrected". */
+    expect(inbox).toContain('"id": "anton-gorodovsky"');
+    expect(inbox).toMatch(/already appears in the running roster below/i);
+    /* whitespace-tolerant: the block is hard-wrapped, so a reflow must not
+       read as a missing rule */
+    expect(inbox).toMatch(/reuse that `id` exactly as\s+written\s+there/i);
+    expect(inbox).toMatch(/even when you are\s+correcting their `name`/i);
+    /* The carve-back must sit INSIDE the same `## Names` block as the id rule —
+       a structural check rather than a character budget, so rewording the
+       paragraph cannot break a test that is not about wording. */
+    const namesAt = inbox.indexOf("## Names — use the manuscript's own script");
+    const nextHeadingAt = inbox.indexOf('\n## ', namesAt + 1);
+    const idRuleAt = inbox.indexOf('`id` is the ONE exception');
+    const carveAt = inbox.indexOf('already appears in the running roster');
+    expect(namesAt).toBeGreaterThan(-1);
+    expect(nextHeadingAt).toBeGreaterThan(namesAt);
+    expect(idRuleAt).toBeGreaterThan(namesAt);
+    expect(carveAt).toBeGreaterThan(idRuleAt);
+    expect(carveAt).toBeLessThan(nextHeadingAt);
+  });
+
   it('carries the name-fidelity + no-spurious-merge guardrails (2026-06-16 Russian surname-smear / Игорь↔Илья)', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
