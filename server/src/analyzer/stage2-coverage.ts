@@ -60,6 +60,33 @@ export interface Stage2CoverageVerdict {
   /** The largest duplicated contiguous run, or null. `startIndex` is the index
       of the second copy's first sentence; `offset` is how far back its twin sits. */
   duplicatedBlock: { startIndex: number; length: number; offset: number } | null;
+  /** #2342 — the #2325 dialogue-collapse measurement, exposed rather than
+      collapsed into the `dialogueCollapse`-derived issue string alone. Three
+      states an operator (or the retry scorer below) needs to tell apart:
+      `null` — no `dialogueOpen` was supplied, i.e. a marker-less language;
+      `evaluable: false` — a marker language, but too few speech halves in
+      this span to judge (see `STAGE2_MIN_SPEECH_HALVES`); `evaluable: true`
+      — judged, with the measured `pct`. Populated whenever `dialogueOpen` is
+      given, even when `evaluable` is false — a caller that only ever saw this
+      field on a breach couldn't distinguish "little dialogue here" from "the
+      guard was blind here". */
+  narratedSpeech: { speechHalves: number; narrated: number; pct: number; evaluable: boolean } | null;
+  /** #2342 round 2 — the individual gates that feed `ok`, exposed so the
+      retry scorer (`isBetterCoverage`/`verdictSignature`, below) can rank
+      verdicts by SEVERITY TIER instead of summing terms into one score. An
+      additive scheme was tried first (#2342 round 1) and an independent
+      review found it produced two backwards orderings — see the tier
+      function's own comment for the detail. `duplicatedBlock` and
+      `coverageRatio` are not duplicated here; they already carry the
+      equivalent information. */
+  noSentences: boolean;
+  truncated: boolean;
+  excess: boolean;
+  /** #2342 defect B — the attribution lost the dialogue markers themselves
+      (see the "markers lost" check below), as distinct from `dialogueCollapse`
+      (the markers survived but went overwhelmingly to `narrator`). Always
+      `false` when `truncated` is true — see that check's own comment. */
+  markersLost: boolean;
   issues: string[];
 }
 
@@ -191,6 +218,36 @@ export function narratedSpeechShare(
   };
 }
 
+/** Whether a `narratedSpeechShare` measurement breaches the collapse
+    threshold. Shared between `validateStage2Coverage` (which builds the
+    `dialogueCollapse` issue) and the retry scorer below (which recomputes the
+    SAME condition from a `Stage2CoverageVerdict`'s `narratedSpeech` field) so
+    the definition can't drift into two copies that quietly disagree. */
+function isDialogueCollapseBreach(speech: { pct: number; evaluable: boolean } | null): boolean {
+  return !!(speech && speech.evaluable && speech.pct > STAGE2_MAX_NARRATED_SPEECH_PCT);
+}
+
+/* #2342 defect B — the guard above tests `dialogueOpen` against the
+   ATTRIBUTED sentence text, so it is blind to the one output shape most
+   likely to be broken: a model that drops or reformats the leading dash on
+   every spoken line. Every line then reads `indeterminate`, `speechHalves`
+   drops to (or towards) zero, `evaluable` goes false, and the collapse check
+   above passes SILENTLY — on output that lost more information than a
+   narrator-collapse, not less. The source's own dialogue-opening count is
+   the control: it doesn't depend on anything the model did, so a healthy
+   attribution should recover at least roughly half of it (production
+   compression legitimately drops SOME lines — see the calibration numbers on
+   the "markers lost" check below — but not nearly all of them). */
+
+/** How many of `bodyText`'s lines open with the dialogue marker AND are a
+    SPEECH half (not a narration tag) — the source-side control for the
+    "markers lost" check. Splits on newlines, same granularity a paragraph-
+    per-line manuscript source is written in. */
+export function sourceSpeechHalfCount(bodyText: string, dialogueOpen: RegExp): number {
+  return bodyText.split('\n').filter((line) => classifyDialogueLine(line, dialogueOpen) === 'speech')
+    .length;
+}
+
 /** Largest contiguous run of sentences whose normalised text repeats an earlier
     sentence's text at a CONSTANT offset (the loop signature). */
 function findDuplicatedBlock(
@@ -306,34 +363,154 @@ export function validateStage2Coverage(
   }
 
   /* #2325 — dialogue collapse. Gated on an evaluable population so a
-     dialogue-light span is never judged on three lines. */
+     dialogue-light span is never judged on three lines. Factored into
+     `isDialogueCollapseBreach` (below `narratedSpeechShare`) so the retry
+     scorer can recompute the SAME condition from a `Stage2CoverageVerdict`
+     alone, instead of the two definitions drifting apart. */
   const speech = dialogueOpen ? narratedSpeechShare(sentences, dialogueOpen) : null;
-  const dialogueCollapse = !!(
-    speech &&
-    speech.evaluable &&
-    speech.pct > STAGE2_MAX_NARRATED_SPEECH_PCT
-  );
+  const dialogueCollapse = isDialogueCollapseBreach(speech);
   if (dialogueCollapse) {
     issues.push(
       `Dialogue collapse — ${speech!.narrated}/${speech!.speechHalves} spoken lines (${speech!.pct.toFixed(1)}%) were attributed to the narrator, above ${STAGE2_MAX_NARRATED_SPEECH_PCT}%; the cast is being ignored.`,
     );
   }
 
+  /* #2342 defect B — dialogue markers lost. Independent of `dialogueCollapse`
+     above: that check asks "who got the spoken lines", this one asks "did the
+     attribution keep the dialogue markers AT ALL". Gated on the SOURCE'S own
+     count (not the attributed one) being past the noise floor, exactly like
+     `dialogueCollapse` is gated on its own population — the two use different
+     denominators on purpose, because a run that lost its markers has, by
+     definition, an unreliable ATTRIBUTED count.
+
+     The "at least half" bar is calibrated off two full-book runs of the same
+     Russian chapter, both healthy: recorded 246 source → 213 attributed
+     (86.6%), controlled replay 241 → 209 (86.7%) — comfortably clear of the
+     50% floor, which exists only to catch the shape where markers are mostly
+     GONE, not to police ordinary compression (`coverageRatio`'s job).
+
+     `!truncated` guards a misattribution the round-2 review caught (nit 7): a
+     take that is 88% MISSING also fails this ratio (a mostly-absent source
+     recovers "under half" of its own dash-openers trivially), but the cause
+     there is the missing prose, not a dropped marker — the message must not
+     claim the model mangled a marker it never got the chance to emit.
+     `truncated` already gates `ok` on its own, so nothing slips through by
+     suppressing this one here. */
+  const sourceSpeechHalves = dialogueOpen ? sourceSpeechHalfCount(bodyText, dialogueOpen) : 0;
+  const markersLost = !!(
+    !truncated &&
+    speech &&
+    sourceSpeechHalves >= STAGE2_MIN_SPEECH_HALVES &&
+    speech.speechHalves < sourceSpeechHalves / 2
+  );
+  if (markersLost) {
+    issues.push(
+      `Dialogue markers lost — the source has ${sourceSpeechHalves} dash-opening speech lines but only ` +
+        `${speech!.speechHalves} were recognised as speech in the attribution (below half); the model likely ` +
+        `dropped or reformatted the dialogue marker, not that the cast is being ignored.`,
+    );
+  }
+
   return {
-    ok: !noSentences && !truncated && !excess && !duplicatedBlock && !dialogueCollapse,
+    ok: !noSentences && !truncated && !excess && !duplicatedBlock && !dialogueCollapse && !markersLost,
     coverageRatio,
     endingPresent,
     duplicatedBlock,
+    narratedSpeech: speech,
+    noSentences,
+    truncated,
+    excess,
+    markersLost,
     issues,
   };
 }
 
-/** Between two failing verdicts, the "least bad" is the one with no duplicated
-    block, then the coverage ratio closest to 1.0. */
-function isBetterCoverage(a: Stage2CoverageVerdict, b: Stage2CoverageVerdict): boolean {
+/** Severity tier for `isBetterCoverage`, below. Lower is better.
+
+      3 — nothing attributed at all (`noSentences`) — nothing to compare;
+      2 — a duplicated block (repeat-loop, degenerate output);
+      1 — truncated or excess coverage (prose missing or looped);
+      0 — the prose survived; only the attribution itself is wrong
+          (dialogue collapse or lost markers).
+
+    #2342 round 1 replaced the original two-term SUM (`(duplicatedBlock ?
+    100 : 0) + |1 - coverageRatio|`) with a three-term sum that added a
+    collapse PENALTY, and an independent review caught two ways an additive
+    scheme hides a wrong ordering: the penalty was gated on `evaluable`,
+    which losing the dialogue markers entirely also defeats — so a
+    dash-stripped take (penalty 0) could beat an intact-but-collapsing one —
+    and the penalty floor (>1.0) exceeded the ENTIRE low-side range of
+    `|1 - coverageRatio|` (max ~1.0 for anything `truncated`/`excess`), so
+    gross truncation could outrank a collapsing-but-COMPLETE take — exactly
+    backwards from the module's own stated intent. A lexicographic tier +
+    tie-break (below) cannot exhibit either failure mode: a lower tier always
+    wins outright regardless of magnitude, and the two attribution-only
+    failures inside tier 0 are compared on one shared, correctly-ordered
+    scale instead of being summed into a ratio-shaped term.
+
+    This tier order matches the ORIGINAL (pre-#2342) sum for every pairing
+    except one: `noSentences` (tier 3) now loses to `duplicatedBlock` (tier
+    2), reversed from before. Under the original sum an empty attribution
+    scored `0 + |1 - 0| = 1.0` (a zero-word output makes the ratio 0) while
+    any dup take scored `≥100`, so the sum picked "nothing at all" over a
+    repeat-loop take — an accident of the `+100` constant, not a considered
+    decision: a repeat-loop take still contains real (if duplicated) prose,
+    where an empty one contains none, so tier 2 losing to tier 3 was
+    backwards and the new ordering is the intended one, not a regression to
+    guard against.
+
+    Every other pairing is unchanged: a dup take (tier 2) still always loses
+    to a `truncated`/`excess` take (tier 1) and to a clean-prose take (tier
+    0) — `truncated`/`excess` require `sourceEvaluable`, the only source of
+    an unbounded ratio term, so `|1 - coverageRatio|` stays under 100 for
+    every take that can reach tier 1, matching the original `+100` dup
+    constant exactly; two dup takes still order by `|1 - coverageRatio|`, as
+    before; a collapse-only take (tier 0) still beats a `truncated` take
+    (tier 1), as before (collapse contributed nothing to the original sum);
+    and `markersLost` — which the original sum had no term for at all — sits
+    inside tier 0 same as `dialogueCollapse`, so it likewise beats a
+    `truncated` take, consistent with "no term" behaving as "always tier 0". */
+function verdictTier(v: Stage2CoverageVerdict): 0 | 1 | 2 | 3 {
+  if (v.noSentences) return 3;
+  if (v.duplicatedBlock) return 2;
+  if (v.truncated || v.excess) return 1;
+  return 0;
+}
+
+/** Tie-break within a tier — only meaningful when both verdicts share a
+    tier (`isBetterCoverage` checks tier first). Tier 0's tie-break puts
+    `markersLost` (200) strictly above any `dialogueCollapse` `pct` (≤100):
+    losing the dialogue markers entirely is worse than misattributing SOME of
+    them, per #2342 round 2. Tiers 1 and 2 both use `|1 - coverageRatio|`,
+    identical to the original scoring. Tier 3 has nothing left to compare. */
+function verdictTieBreak(v: Stage2CoverageVerdict): number {
+  switch (verdictTier(v)) {
+    case 0:
+      if (v.markersLost) return 200;
+      return isDialogueCollapseBreach(v.narratedSpeech) ? v.narratedSpeech!.pct : 0;
+    case 1:
+    case 2:
+      return Math.abs(1 - v.coverageRatio);
+    default:
+      return 0;
+  }
+}
+
+/** Between two failing verdicts, the "least bad" is chosen by severity tier
+    first, then by the tier's own tie-break. See `verdictTier`'s comment for
+    the full rationale and the one deliberate ordering reversal from the
+    pre-#2342 baseline.
+
+    Exported (round 2) so the pairwise orderings themselves — the exact shape
+    an additive score hid two bugs inside — can be pinned directly against
+    hand-built verdicts, rather than reconstructed indirectly through
+    `runStage2WithCoverageGuard`'s single-shared-`body` constraint. */
+export function isBetterCoverage(a: Stage2CoverageVerdict, b: Stage2CoverageVerdict): boolean {
   if (a.ok !== b.ok) return a.ok;
-  const score = (v: Stage2CoverageVerdict) => (v.duplicatedBlock ? 100 : 0) + Math.abs(1 - v.coverageRatio);
-  return score(a) < score(b);
+  const ta = verdictTier(a);
+  const tb = verdictTier(b);
+  if (ta !== tb) return ta < tb;
+  return verdictTieBreak(a) < verdictTieBreak(b);
 }
 
 /** A failure's identity, for deciding whether re-running could possibly help.
@@ -343,13 +520,56 @@ function isBetterCoverage(a: Stage2CoverageVerdict, b: Stage2CoverageVerdict): b
     it in the fourth decimal has not found anything new.
 
     Deliberately NOT including sentence COUNT or text: the question is "did the
-    model fail the same way", not "did it emit the same bytes". */
+    model fail the same way", not "did it emit the same bytes".
+
+    #2342 round 1 added a collapse term to EVERY verdict (quantised to whole
+    percent). Round 2's independent review found this broke the deterministic-
+    failure stop for exactly the population the guard exists to serve: with a
+    realistic denominator (~100 speech halves, so ~1pp moves per flipped
+    `characterId`), `toFixed(0)` flips the signature on roughly HALF of all
+    single-line differences between two otherwise-identical repeat-loop
+    attempts, so `deterministicFailure` almost never fires when `dialogueOpen`
+    is supplied — measured on the ch8 repeat-loop shape: 2 calls and `true`
+    without a marker language, 5 calls and `false` with one, though the model's
+    failure was identical either way.
+
+    Two changes restore this:
+
+    (1) The term is appended ONLY when the verdict actually BREACHES on
+        collapse (`markersLost` or `isDialogueCollapseBreach`) — every other
+        verdict gets the same `collapse:n/a` a marker-less language always
+        got, INCLUDING a repeat-loop take whose narrated share happens to be
+        measurable but not over threshold. A repeat-loop's signature is then
+        identical across attempts exactly as it was before #2342 touched this
+        function at all, restoring the ch8 early stop.
+
+    (2) Breaching verdicts bucket `pct` to 10 percentage points
+        (`Math.round(pct / 10)`), not whole percent. 95% vs 65% still land in
+        different buckets (9 vs 6), so a retry that genuinely improves the
+        collapse rate is still recognised as different — but 95.2% vs 95.6%
+        collapse to the SAME bucket, so an identical repeat still stops, and a
+        single flipped line only crosses a bucket boundary near a multiple of
+        10%, not on roughly half of all single-line diffs.
+
+    `markersLost` gets its own token (`collapse:markersLost`), never a
+    percentage — the two failures are different KINDS of breach (see
+    `verdictTier`'s comment), so collapsing their signatures onto the same
+    numeric scale would let a markers-lost attempt and a collapse attempt that
+    happen to bucket to the same number look like a signature match when they
+    are not the same failure at all. */
 function verdictSignature(v: Stage2CoverageVerdict): string {
   const d = v.duplicatedBlock;
+  const breaching = v.markersLost || isDialogueCollapseBreach(v.narratedSpeech);
+  const collapseTerm = !breaching
+    ? 'collapse:n/a'
+    : v.markersLost
+      ? 'collapse:markersLost'
+      : `collapse:${Math.round(v.narratedSpeech!.pct / 10)}`;
   return [
     v.endingPresent ? 'end' : 'noend',
     d ? `dup:${d.startIndex}:${d.length}:${d.offset}` : 'nodup',
     `cov:${v.coverageRatio.toFixed(3)}`,
+    collapseTerm,
   ].join('|');
 }
 

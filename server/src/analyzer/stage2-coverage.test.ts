@@ -22,6 +22,8 @@ import {
   classifyDialogueLine,
   narratedSpeechShare,
   STAGE2_MAX_NARRATED_SPEECH_PCT,
+  isBetterCoverage,
+  type Stage2CoverageVerdict,
 } from './stage2-coverage.js';
 import * as us from '../workspace/user-settings.js';
 
@@ -479,5 +481,421 @@ describe('dialogue-collapse detection (#2325)', () => {
     expect(attempt).toBeGreaterThan(1); // it did not accept the collapsed take
     expect(out.coverage.ok).toBe(true);
     expect(out.result.sentences[0].characterId).toBe('anton');
+  });
+});
+
+/* #2342 — three follow-ups from the #2325 review gate (PR #2333):
+   (A) the retry's two scoring functions never learned about `dialogueCollapse`,
+       so a retry that halves the narrated share can lose to a worse-collapsed
+       first attempt AND get mistaken for "retrying can't help";
+   (B) the guard tests `dialogueOpen` against the ATTRIBUTED text, so a model
+       that drops/reformats the leading dash makes every line indeterminate and
+       the guard passes silently on the output shape most likely to be broken;
+   (C) nothing reported `speechHalves`/`pct` below the evaluable floor, so an
+       operator couldn't tell "little dialogue here" from "guard was blind
+       here". */
+describe('narratedSpeech scoring, signature and observability (#2342)', () => {
+  const RU_DIALOGUE_OPEN = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  /* Same shape as the #2325 describe block's `speech` helper, duplicated
+     locally rather than hoisted out of that block's closure — matches the
+     file's existing pattern of each describe owning its own fixtures. */
+  const speechAt = (narratedCount: number, total: number) =>
+    Array.from({ length: total }, (_, i) => ({
+      text: `- Реплика номер ${i} для проверки.`,
+      characterId: i < narratedCount ? 'narrator' : 'anton',
+    }));
+  const joinBody = (ss: Array<{ text: string }>) => ss.map((s) => s.text).join('\n\n');
+
+  describe('defect A — retry scoring learns the collapse dimension', () => {
+    it('prefers a less-collapsed retry over a more-collapsed first attempt when ratio/dup are tied', async () => {
+      /* Both takes share the SAME sentence text (only characterId differs), so
+         coverageRatio and duplicatedBlock are identical between them — before
+         the fix, `isBetterCoverage` is blind to the collapse axis entirely, so
+         a tie on those two terms means the retry is never preferred, no matter
+         how much less collapsed it is. */
+      const body = joinBody(speechAt(0, 100));
+      const heavilyCollapsed = speechAt(95, 100); // 95% narrated — breaches
+      const lessCollapsed = speechAt(61, 100); // 61% narrated — still breaches, far less so
+      const call = vi
+        .fn()
+        .mockImplementationOnce(async () => ({ sentences: heavilyCollapsed }))
+        .mockImplementationOnce(async () => ({ sentences: lessCollapsed }));
+
+      const out = await runStage2WithCoverageGuard({
+        body,
+        maxRetries: 1,
+        dialogueOpen: RU_DIALOGUE_OPEN,
+        call,
+      });
+
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(out.coverage.narratedSpeech?.pct).toBeCloseTo(61, 0);
+    });
+
+    it('does not treat two collapsed takes at materially different rates as the SAME failure (signature)', async () => {
+      /* All three attempts share ratio/dup/ending (same sentence text every
+         time), so before the fix `verdictSignature` is identical across all
+         three and the loop declares "deterministic" after just ONE retry
+         (attempt 2, at 65%, would already look like a repeat of attempt 1's
+         95% failure). The fix must let attempt 2 (65%) survive as "different
+         from attempt 1 (95%)" and only stop once attempt 3 repeats attempt
+         2's OWN rate exactly. */
+      const body = joinBody(speechAt(0, 100));
+      const call = vi
+        .fn()
+        .mockImplementationOnce(async () => ({ sentences: speechAt(95, 100) }))
+        .mockImplementationOnce(async () => ({ sentences: speechAt(65, 100) }))
+        .mockImplementationOnce(async () => ({ sentences: speechAt(65, 100) }));
+      const onExhausted = vi.fn();
+
+      const out = await runStage2WithCoverageGuard({
+        body,
+        maxRetries: 3,
+        dialogueOpen: RU_DIALOGUE_OPEN,
+        call,
+        onExhausted,
+      });
+
+      // 3 calls, not 2: attempt 1 (95%) and attempt 2 (65%) must NOT be
+      // treated as a signature match even though ratio/dup/ending agree.
+      expect(call).toHaveBeenCalledTimes(3);
+      expect(out.deterministicFailure).toBe(true);
+      expect(onExhausted).toHaveBeenCalledTimes(1);
+      expect(onExhausted.mock.calls[0][0]).toBe(3);
+      expect(out.coverage.narratedSpeech?.pct).toBeCloseTo(65, 0);
+    });
+  });
+
+  describe('defect B — the guard fails open when the output drops the dialogue marker', () => {
+    it('flags "dialogue markers lost" when the attribution strips the leading dash from a heavily-spoken source', () => {
+      // 60 source dash-opening speech lines; the attribution keeps the WORDS
+      // but drops the leading "- " on every one, so classifyDialogueLine reads
+      // them as indeterminate — the exact shape #2325's own check is blind to.
+      const sourceLines = Array.from(
+        { length: 60 },
+        (_, i) => `- Реплика номер ${i} для проверки.`,
+      );
+      const body = sourceLines.join('\n\n');
+      const sentences = sourceLines.map((line, i) => ({
+        text: line.replace(/^- /, ''),
+        characterId: i % 2 ? 'anton' : 'narrator',
+      }));
+
+      const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+
+      expect(v.ok).toBe(false);
+      expect(v.issues.join(' ')).toMatch(/marker/i);
+      // Distinct failure from "dialogue collapse" — the cast wasn't ignored,
+      // the marker just didn't survive, and the message must say so.
+      expect(v.issues.join(' ')).not.toMatch(/Dialogue collapse/);
+    });
+
+    it('does not fire below STAGE2_MIN_SPEECH_HALVES source openers (too little dialogue to judge)', () => {
+      const sourceLines = Array.from({ length: 10 }, (_, i) => `- Реплика номер ${i} тут.`);
+      const body = sourceLines.join('\n\n');
+      const sentences = sourceLines.map((line) => ({
+        text: line.replace(/^- /, ''),
+        characterId: 'narrator',
+      }));
+      const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v.issues.join(' ')).not.toMatch(/marker/i);
+    });
+
+    /* Calibration from two real full-book runs of the same Russian chapter
+       (recorded run: 246 source → 213 attributed; controlled replay: 241 →
+       209) — both far above the half-of-source bar. A healthy chapter at
+       these proportions must NOT trip the guard. */
+    it('does not flag markers lost at healthy real-run proportions (246→213, 241→209)', () => {
+      for (const [source, attributed] of [
+        [246, 213],
+        [241, 209],
+      ] as const) {
+        const sourceLines = Array.from(
+          { length: source },
+          (_, i) => `- Реплика номер ${i} для проверки.`,
+        );
+        const body = sourceLines.join('\n\n');
+        const sentences = sourceLines.slice(0, attributed).map((line, i) => ({
+          text: line,
+          characterId: i % 2 ? 'anton' : 'nadya',
+        }));
+        const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+        expect(v.issues.join(' ')).not.toMatch(/marker/i);
+      }
+    });
+  });
+
+  describe('defect C — narratedSpeech is exposed on the verdict in all three states', () => {
+    it('is null when no dialogue-marker language was supplied (unchanged behaviour)', () => {
+      const { body, sentences } = bodyOf(12);
+      const v = validateStage2Coverage(body, sentences);
+      expect(v.narratedSpeech).toBeNull();
+    });
+
+    it('is populated with evaluable:false (not omitted) when too few speech halves to judge', () => {
+      const ss = Array.from({ length: 5 }, (_, i) => ({
+        text: `- Реплика ${i} тут.`,
+        characterId: 'narrator',
+      }));
+      const body = joinBody(ss);
+      const v = validateStage2Coverage(body, ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v.narratedSpeech).not.toBeNull();
+      expect(v.narratedSpeech!.evaluable).toBe(false);
+      expect(v.narratedSpeech!.speechHalves).toBe(5);
+    });
+
+    it('is populated with evaluable:true and the measured pct when judged', () => {
+      const ss = speechAt(10, 30);
+      const body = joinBody(ss);
+      const v = validateStage2Coverage(body, ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v.narratedSpeech).not.toBeNull();
+      expect(v.narratedSpeech!.evaluable).toBe(true);
+      expect(v.narratedSpeech!.pct).toBeCloseTo(33.33, 1);
+    });
+  });
+});
+
+/* #2342 round 2 — an independent review of round 1's ADDITIVE scoring scheme
+   (isBetterCoverage summing a capped collapse penalty into the ratio/dup
+   score, verdictSignature appending a whole-percent collapse term to every
+   verdict) measured three concrete bugs:
+
+     1. the penalty was gated on `narratedSpeech.evaluable`, and losing the
+        dialogue markers entirely is exactly what drives `evaluable: false` —
+        so a dash-stripped take (penalty 0) could beat an intact-but-collapsing
+        take (penalty >0);
+     2. the penalty floor (>1.0) exceeded the ENTIRE low-side range of
+        `|1 - coverageRatio|` (max ~1.0 for `truncated`), so a take that lost
+        88% of the chapter could outrank a COMPLETE take that merely collapsed
+        — backwards from the module's stated intent;
+     3. the signature's collapse term was appended to EVERY verdict, and
+        `toFixed(0)` at a realistic denominator moves on roughly half of all
+        single-flipped-line diffs — so `deterministicFailure` almost never
+        fired once `dialogueOpen` was supplied, defeating #2304's early stop
+        for exactly the languages (ru/es/fr) this guard serves.
+
+   Round 2 replaces the sum with a severity TIER (see `verdictTier`'s own
+   comment for the ordering rationale) plus a tie-break, and gates/re-buckets
+   the signature term. These tests pin the three regressions directly, using
+   the reviewer's own measured shapes, PLUS the tier/tie-break pairwise
+   orderings an additive scheme cannot get wrong the same way. */
+describe('severity-tier scoring and gated signature (#2342 round 2)', () => {
+  const RU_DIALOGUE_OPEN = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  const speechAt = (narratedCount: number, total: number) =>
+    Array.from({ length: total }, (_, i) => ({
+      text: `- Реплика номер ${i} для проверки.`,
+      characterId: i < narratedCount ? 'narrator' : 'anton',
+    }));
+  const joinBody = (ss: Array<{ text: string }>) => ss.map((s) => s.text).join('\n\n');
+
+  /** Minimal, fully-specified fake verdict — lets the pairwise orderings be
+      pinned directly against `isBetterCoverage`, independent of
+      `runStage2WithCoverageGuard`'s single-shared-`body` constraint (which
+      makes it awkward to build two attempts with genuinely different tiers
+      against the same source text). */
+  const verdict = (overrides: Partial<Stage2CoverageVerdict>): Stage2CoverageVerdict => ({
+    ok: false,
+    coverageRatio: 1.0,
+    endingPresent: true,
+    duplicatedBlock: null,
+    narratedSpeech: null,
+    noSentences: false,
+    truncated: false,
+    excess: false,
+    markersLost: false,
+    issues: [],
+    ...overrides,
+  });
+
+  describe('isBetterCoverage — tier ordering (direct)', () => {
+    it('prefers a duplicated-block take over an empty one (reverses the pre-#2342 ordering, deliberately)', () => {
+      /* Old sum: empty scored `0 + |1-0| = 1.0`, any dup take scored `≥100`,
+         so the OLD code preferred nothing at all over a repeat-loop take —
+         an accident of the `+100` constant. A repeat-loop take still
+         contains real (if duplicated) prose; an empty one contains none.
+         The new tier order is the intended one, and this reversal is
+         deliberate, not a regression — see `verdictTier`'s own comment. */
+      const dupTake = verdict({ duplicatedBlock: { startIndex: 0, length: 5, offset: 3 } });
+      const emptyTake = verdict({ noSentences: true, coverageRatio: 0, endingPresent: false });
+      expect(isBetterCoverage(dupTake, emptyTake)).toBe(true);
+      expect(isBetterCoverage(emptyTake, dupTake)).toBe(false);
+    });
+
+    it('[bug 1 regression] a markers-intact collapsing take (61.7%) beats a dash-stripped (markersLost) take', () => {
+      /* Reviewer's measured shapes: dash-stripped take scored 0.00 under the
+         round-1 sum (markersLost drives evaluable:false, so the penalty term
+         vanished), a markers-intact 61.7%-collapsed take scored 1.617 — so
+         round 1 KEPT the dash-stripped take. Both are tier 0 (prose intact);
+         the tie-break must put markersLost (200) above any collapse pct. */
+      const collapsing = verdict({
+        narratedSpeech: { speechHalves: 100, narrated: 62, pct: 61.7, evaluable: true },
+      });
+      const dashStripped = verdict({ markersLost: true });
+      expect(isBetterCoverage(collapsing, dashStripped)).toBe(true);
+      expect(isBetterCoverage(dashStripped, collapsing)).toBe(false);
+    });
+
+    it('[bug 2 regression] a complete take collapsing at 61% beats a take with only 12% coverage', () => {
+      /* Reviewer's measured shapes: ratio 0.120 (88% of the chapter missing)
+         scored 0.880 under the round-1 sum; a COMPLETE take collapsing at 61%
+         scored 1.610 — so round 1 kept 12 sentences out of 100 over a
+         complete, faithfully-transcribed-but-miscast chapter. The 12%-ratio
+         take is `truncated` (tier 1); the 61%-collapse take is tier 0 —
+         tier 0 always wins, regardless of how large the ratio deviation is. */
+      const collapsing = verdict({
+        coverageRatio: 1.0,
+        narratedSpeech: { speechHalves: 100, narrated: 61, pct: 61, evaluable: true },
+      });
+      const gutted = verdict({ truncated: true, coverageRatio: 0.12 });
+      expect(isBetterCoverage(collapsing, gutted)).toBe(true);
+      expect(isBetterCoverage(gutted, collapsing)).toBe(false);
+    });
+
+    it('prefers a breaching take over a duplicated-block take (tier 0 vs tier 2)', () => {
+      const breaching = verdict({
+        narratedSpeech: { speechHalves: 100, narrated: 70, pct: 70, evaluable: true },
+      });
+      const dupTake = verdict({ duplicatedBlock: { startIndex: 5, length: 6, offset: 12 } });
+      expect(isBetterCoverage(breaching, dupTake)).toBe(true);
+    });
+
+    it('does not treat a too-small-to-judge sample as breaching in the tie-break (the evaluable gate)', () => {
+      /* 5/5 narrated is 100% — but only 5 speech halves, under
+         STAGE2_MIN_SPEECH_HALVES (20), so `evaluable: false`. Without the
+         evaluable gate the raw `pct` (100) would read as WORSE than a
+         genuine, evaluable 70% breach; with the gate this take reads as
+         non-breaching (tie-break 0) and wins. */
+      const tooSmallToJudge = verdict({
+        narratedSpeech: { speechHalves: 5, narrated: 5, pct: 100, evaluable: false },
+      });
+      const genuineBreach = verdict({
+        narratedSpeech: { speechHalves: 100, narrated: 70, pct: 70, evaluable: true },
+      });
+      expect(isBetterCoverage(tooSmallToJudge, genuineBreach)).toBe(true);
+      expect(isBetterCoverage(genuineBreach, tooSmallToJudge)).toBe(false);
+    });
+
+    it('still orders two duplicated-block takes by |1 - coverageRatio| (unchanged from the pre-#2342 baseline)', () => {
+      const closer = verdict({
+        duplicatedBlock: { startIndex: 0, length: 5, offset: 3 },
+        coverageRatio: 0.95,
+      });
+      const farther = verdict({
+        duplicatedBlock: { startIndex: 0, length: 5, offset: 3 },
+        coverageRatio: 1.4,
+      });
+      expect(isBetterCoverage(closer, farther)).toBe(true);
+    });
+  });
+
+  describe('verdictSignature — gated + coarsely-bucketed collapse term (via the guard)', () => {
+    it('[bug 3 regression] a repeat-loop take with one flipped (non-breaching) speaker still stops early with dialogueOpen supplied', async () => {
+      /* The ch8 shape: a repeat-loop (duplicatedBlock present) chapter whose
+         narratedSpeech is evaluable but NOT breaching (33% < 60% threshold).
+         Attempts differ by exactly one flipped characterId OUTSIDE the
+         duplicated block — under round 1's ungated whole-percent term this
+         could move the signature's collapse component and defeat the
+         deterministic-failure stop; round 2 only appends a collapse term
+         when the verdict actually BREACHES, so a non-breaching verdict's
+         term is 'n/a' regardless of the flip, restoring the pre-#2342 stop. */
+      const base = Array.from({ length: 24 }, (_, i) => ({
+        text: `- Реплика номер ${i} для проверки.`,
+        characterId: i < 8 ? 'narrator' : 'anton', // 8/24 = 33% before the loop duplicates any
+      }));
+      const loop = [...base, ...base.slice(2, 6)]; // duplicatedBlock: 4-run at offset 24
+      const body = loop.map((s) => s.text).join('\n\n');
+      const flipOneOutsideTheLoop = (id: string) =>
+        loop.map((s, i) => (i === 20 ? { ...s, characterId: id } : s));
+      const attempt1 = flipOneOutsideTheLoop('anton');
+      const attempt2 = flipOneOutsideTheLoop('narrator');
+      // Sanity: both attempts stay non-breaching (evaluable, well under 60%).
+      const v1 = validateStage2Coverage(body, attempt1, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      const v2 = validateStage2Coverage(body, attempt2, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v1.duplicatedBlock).not.toBeNull();
+      expect(v1.narratedSpeech?.evaluable).toBe(true);
+      expect(v1.narratedSpeech!.pct).toBeLessThan(STAGE2_MAX_NARRATED_SPEECH_PCT);
+      expect(v2.narratedSpeech!.pct).toBeLessThan(STAGE2_MAX_NARRATED_SPEECH_PCT);
+
+      const call = vi
+        .fn()
+        .mockImplementationOnce(async () => ({ sentences: attempt1 }))
+        .mockImplementation(async () => ({ sentences: attempt2 }));
+      const onExhausted = vi.fn();
+
+      const withMarkerLanguage = await runStage2WithCoverageGuard({
+        body,
+        maxRetries: 5,
+        dialogueOpen: RU_DIALOGUE_OPEN,
+        call,
+        onExhausted,
+      });
+
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(withMarkerLanguage.deterministicFailure).toBe(true);
+      expect(onExhausted).toHaveBeenCalledTimes(1);
+
+      // Parity check: the SAME shape without a marker language must behave
+      // identically — that parity is the whole point of the fix.
+      const callNoLang = vi
+        .fn()
+        .mockImplementationOnce(async () => ({ sentences: attempt1 }))
+        .mockImplementation(async () => ({ sentences: attempt2 }));
+      const withoutMarkerLanguage = await runStage2WithCoverageGuard({
+        body,
+        maxRetries: 5,
+        call: callNoLang,
+      });
+      expect(callNoLang).toHaveBeenCalledTimes(2);
+      expect(withoutMarkerLanguage.deterministicFailure).toBe(true);
+    });
+
+    it('buckets the collapse term to 10 percentage points, so a single flipped line inside one bucket still stops early', async () => {
+      /* 160/213 = 75.12%, 161/213 = 75.59% — a realistic ~0.47pp-per-line
+         denominator (the reviewer's own calibration). Both round to bucket 8
+         (`Math.round(pct/10)`), so the two attempts are the SAME signature
+         and the guard stops after one retry. Under whole-percent
+         quantisation (round 1) these are "75" vs "76" — DIFFERENT — and the
+         stop would be defeated. */
+      const total = 213;
+      const body = joinBody(speechAt(0, total));
+      const attempt1 = speechAt(160, total); // 75.12%, breaching
+      const attempt2 = speechAt(161, total); // 75.59%, breaching, same bucket
+      const call = vi
+        .fn()
+        .mockImplementationOnce(async () => ({ sentences: attempt1 }))
+        .mockImplementation(async () => ({ sentences: attempt2 }));
+      const onExhausted = vi.fn();
+
+      const out = await runStage2WithCoverageGuard({
+        body,
+        maxRetries: 5,
+        dialogueOpen: RU_DIALOGUE_OPEN,
+        call,
+        onExhausted,
+      });
+
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(out.deterministicFailure).toBe(true);
+      expect(onExhausted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('markersLost does not misattribute a truncated take (round 2 nit 7)', () => {
+    it('never sets markersLost when the take is truncated, and the message does not blame the marker', () => {
+      // 60 source dash-opening lines, but the attribution kept only 3 of
+      // them — drastically truncated, well under minCoverageRatio. The
+      // marker-recovery ratio (3/60) also fails the "under half" test, but
+      // the CAUSE here is missing prose, not a mis-emitted marker.
+      const sourceLines = Array.from({ length: 60 }, (_, i) => `- Реплика номер ${i} для проверки.`);
+      const body = sourceLines.join('\n\n');
+      const sentences = sourceLines.slice(0, 3).map((line, i) => ({
+        text: line,
+        characterId: i % 2 ? 'anton' : 'narrator',
+      }));
+      const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v.truncated).toBe(true);
+      expect(v.markersLost).toBe(false);
+      expect(v.issues.join(' ')).not.toMatch(/marker/i);
+    });
   });
 });
