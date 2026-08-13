@@ -34,6 +34,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure helper — exported for unit tests
@@ -156,6 +157,6 @@ export async function main(argv = process.argv.slice(2), booksRootOverride) {
 }
 
 // Run when executed directly (not imported in tests).
-if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('repair-narrator-credit.mjs')) {
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

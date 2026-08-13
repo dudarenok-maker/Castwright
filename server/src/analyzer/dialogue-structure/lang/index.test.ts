@@ -6,7 +6,8 @@ describe('conventionsFor', () => {
     // `ja` is deliberately NOT in this loop: it carries 9 speechVerbStems,
     // under the >10 bar below. (`zh` has 11 and would pass; it is left out
     // alongside its sibling rather than split across the two lists.) The
-    // duplicate-pair guard further down DOES cover both, since #2279.
+    // duplicate-pair guard further down DOES cover both — salvaged onto #2288's
+    // engine fix (#2300) while this branch was blocked.
     for (const lang of ['ru', 'en', 'es', 'fr', 'de']) {
       const c = conventionsFor(lang);
       expect(c, lang).not.toBeNull();
@@ -32,9 +33,6 @@ describe('conventionsFor', () => {
     expect(en.nameStemmer('halloran')).toBe('halloran');
   });
   it('quotePairs has no collapsed duplicate pairs for any supported language', () => {
-    // zh/ja joined this loop in #2279. `ja` genuinely could not collapse before
-    // then (two CJK brackets only); `zh` already carried three pairs, so its
-    // omission was simply a gap, not a reasoned exclusion.
     for (const lang of ['ru', 'en', 'es', 'fr', 'de', 'zh', 'ja']) {
       const c = conventionsFor(lang)!;
       const seen = new Set<string>();

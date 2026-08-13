@@ -23,7 +23,6 @@
 // pinned there, we install the latest.
 
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 import {
   existsSync,
   readdirSync,
@@ -33,6 +32,7 @@ import {
   rmSync,
   renameSync,
 } from 'node:fs';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { installRecipe, PROFILES } from './accelerator-profile.mjs';
 
@@ -350,7 +350,9 @@ function ortMarkerVersion(sitePackages) {
   return null;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   // Read + validate the venv python path FIRST — both the skip and the swap
   // branch below need venvDir (derived from it) to maintain the #2192 marker,
   // so it can no longer wait until after the skip branch has already exited.

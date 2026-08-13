@@ -3,6 +3,7 @@
 // for the spec and rationale.
 
 import { readFileSync } from 'node:fs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 export const TYPES = ['feat', 'fix', 'refactor', 'perf', 'test', 'docs', 'build', 'ci'];
 export const CHORE_TYPE = 'chore';
@@ -86,13 +87,9 @@ export function extractSubject(content) {
 }
 
 // CLI mode: `node scripts/validate-commit-msg.mjs <commit-msg-file>`
-// Detect via argv[1] so that `import` from tests does not trigger CLI behavior.
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/validate-commit-msg.mjs');
-
-if (invokedAsCli) {
+// Detect via isDirectlyInvoked() so that `import` from tests does not
+// trigger CLI behavior (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   const path = process.argv[2];
   if (!path) {
     console.error('Usage: validate-commit-msg.mjs <commit-msg-file>');

@@ -40,13 +40,14 @@ let audioRoot: string;
 let app: Express;
 let bookId: string;
 let resetJobs: () => void;
+let awaitInFlightJobs: () => Promise<void>;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-export-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
   const [
-    { exportRouter, _resetExportJobs },
+    { exportRouter, _resetExportJobs, _awaitInFlightExportJobs },
     { exportLanRouter },
     { makeBookId },
     { _resetUserSettingsCache },
@@ -58,6 +59,7 @@ beforeAll(async () => {
   ]);
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   resetJobs = _resetExportJobs;
+  awaitInFlightJobs = _awaitInFlightExportJobs;
   _resetUserSettingsCache();
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -102,7 +104,14 @@ beforeAll(async () => {
   app.use('/api/export', exportLanRouter);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  /* Drain (await) any job still in flight from the PREVIOUS test BEFORE
+     resetting the table and rm'ing exportsDir below. A test that
+     fires a job without awaiting it to completion (e.g. "returns the
+     book's jobs newest-first") used to leave it running fire-and-forget
+     right through this rmSync — a real race, not just a theoretical one:
+     the staging dir it reads/writes lives under exportsDir. */
+  await awaitInFlightJobs?.();
   resetJobs?.();
   /* Plan 79 — clear both the new and old staging dirs between tests so
      download checks hit a known artifact. The .audiobook/exports/<id>/
@@ -116,19 +125,40 @@ beforeEach(() => {
   if (existsSync(legacyExportsDir)) rmSync(legacyExportsDir, { recursive: true, force: true });
 });
 
-afterAll(() => {
+afterAll(async () => {
+  /* #2078-shaped macOS cross-os.yml flake (run 31588267496): teardown used
+     to rmSync the whole workspace root without waiting for the last
+     test's fire-and-forget job to finish writing into it — fast Linux/
+     Windows runners usually won the race, a loaded macOS runner sometimes
+     didn't. Drain every in-flight job first so there's nothing left to
+     race. */
+  await awaitInFlightJobs?.();
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
 });
 
+/* Poll the MANIFEST ON DISK, not the in-memory `jobs` map — same fix as
+   export-backstop.test.ts's waitForTerminal, and the same defect shape:
+   runExportJob flips job.status to 'done'/'failed' in memory (which a GET
+   reflects immediately) well before its own `finally` gets to `await
+   writeJsonAtomic(...)`, so a caller that treats a terminal GET as proof
+   the manifest is on disk can read stale/missing manifest state in that
+   window. Proven with an artificial delay inserted before that
+   writeJsonAtomic call: the in-memory-poll version of this helper failed
+   deterministically ("different-format re-exports DO NOT revoke each
+   other" — its second manifest existsSync check went false); this
+   disk-polling version keeps passing with that same delay in place. */
 async function waitForDone(
   exportId: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  const manifestFile = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
   for (let i = 0; i < 50; i++) {
-    const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
-    const body = res.body as { status?: string };
-    if (body.status === 'done' || body.status === 'failed') {
-      return { status: res.status, body: res.body as Record<string, unknown> };
+    if (existsSync(manifestFile)) {
+      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as { status?: string };
+      if (manifest.status === 'done' || manifest.status === 'failed') {
+        const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+        return { status: res.status, body: res.body as Record<string, unknown> };
+      }
     }
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -237,6 +267,45 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     const res = await request(app).get(`/api/books/${bookId}/exports/exp_doesnotexist`);
     expect(res.status).toBe(404);
   });
+
+  /* macOS cross-os.yml crash (run 31588267496): _resetExportJobs() only
+     ever dropped the in-memory jobs/jobControllers bookkeeping — it never
+     waited for a still-running runExportJob to actually stop touching
+     disk. Teardown (afterAll's rmSync of the whole workspace, and every
+     beforeEach's rmSync of exportsDir) could therefore race a job that
+     was still mid-write, which is exactly what _awaitInFlightExportJobs
+     now closes: it waits for each job's own promise (including its
+     `finally`, where the manifest is written) to settle before returning
+     — see that function's own doc comment for why it waits rather than
+     also aborting.
+
+     This test proves the SECOND half specifically: that awaiting really
+     does wait for the job's own tail-end fs work, not just for
+     job.status to flip. runExportJob flips job.status to 'done'/
+     'cancelled' partway through its try block, then still has to await
+     revokeStaleSameFormat AND write the manifest in `finally` — a drain
+     that only watched job.status could return before that manifest
+     write ever happens. Checking for the manifest file with NO extra
+     wait/poll immediately after the awaiter resolves is a direct,
+     deterministic proof that the whole job (not just its status) is
+     done: it fires straight off a fresh POST, with nothing in between —
+     the same "job created, teardown runs immediately after" shape the
+     original race had. */
+  it('awaiting in-flight jobs before teardown waits for the WHOLE job, not just its status flip', async () => {
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'm4b', destination: 'download' });
+    expect(create.status).toBe(201);
+    const exportId = create.body.id as string;
+
+    await awaitInFlightJobs();
+
+    const manifestPath = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
+    expect(existsSync(manifestPath)).toBe(true);
+
+    const after = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+    expect(['done', 'failed', 'cancelled']).toContain(after.body.status);
+  }, 15_000);
 
   it('DELETE cancels a running job and flips its status to cancelled', async () => {
     const create = await request(app)

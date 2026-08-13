@@ -26,6 +26,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 /**
  * Pure planner — returns the ordered op list WITHOUT touching disk, so the unit
@@ -127,5 +128,7 @@ function main() {
   log(args.apply ? '[setup] done.' : '[setup] dry-run complete — re-run with --apply to execute.');
 }
 
-const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// when the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) main();

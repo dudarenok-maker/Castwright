@@ -10,7 +10,13 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
-import { resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, keepAliveFor } from '../analyzer/ollama.js';
+import {
+  resolveAnalyzerNumCtx,
+  resolveAnalyzerNumGpu,
+  keepAliveFor,
+  ANALYZER_DISPATCHER,
+} from '../analyzer/ollama.js';
+import { fetch as undiciFetch } from 'undici';
 import { getLastKnownVram } from '../gpu/vram-state.js';
 import { configValue } from '../config/resolver.js';
 import {
@@ -272,11 +278,26 @@ async function callOllamaGenerate(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const signal = extSignal ? AbortSignal.any([controller.signal, extSignal]) : controller.signal;
   try {
-    const upstream = await fetch(target, {
+    /* undici's 300s `headersTimeout` would silently preempt `timeoutMs` above.
+       This call is `stream: false` against /api/generate, so Ollama sends no
+       headers until the model is fully resident — the whole cold load counts
+       against that hidden budget. Past 300s undici throws a bare
+       `TypeError: fetch failed`, which is not an AbortError, so `isAbort` is
+       false and the catch below reports `connError: true` → "Can't reach
+       Ollama … Is the daemon running?" about a daemon that is running and
+       still loading. That defeats the load_timeout-vs-unreachable split this
+       function exists to make, and it bites exactly when the operator has
+       RAISED analyzer.ollama.warmTimeoutMs past 300s — which the knob's own
+       help text invites for a large model on a slow disk (registry.ts has
+       `min: 1000` and no max). ANALYZER_DISPATCHER disables the hidden cap so
+       the AbortController above is the only budget, which is the one the
+       operator configured. Same fix as ollama.ts's two /api/chat sites. */
+    const upstream = await undiciFetch(target, {
       method: 'POST',
       signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      dispatcher: ANALYZER_DISPATCHER,
     });
     clearTimeout(timer);
     if (!upstream.ok) {

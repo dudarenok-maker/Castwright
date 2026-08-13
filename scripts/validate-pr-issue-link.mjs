@@ -4,6 +4,7 @@
 // (Decision 9 / Decision 11) for the spec and rationale.
 
 import { readFileSync } from 'node:fs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // GitHub's own auto-close keywords are case-insensitive; "Refs" is this
 // repo's own convention for a partial/multi-wave delivery (does not
@@ -88,12 +89,7 @@ export function helpMessage() {
 }
 
 // CLI mode: `node scripts/validate-pr-issue-link.mjs <pr-body-file>`
-const invokedAsCli =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].replace(/\\/g, '/').endsWith('scripts/validate-pr-issue-link.mjs');
-
-if (invokedAsCli) {
+if (isDirectlyInvoked(import.meta.url)) {
   const path = process.argv[2];
   if (!path) {
     console.error('Usage: validate-pr-issue-link.mjs <pr-body-file>');

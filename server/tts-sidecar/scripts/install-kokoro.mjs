@@ -24,7 +24,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> tts-sidecar/ -> server/ -> repo root
@@ -132,7 +133,9 @@ async function main() {
 
 // Run only when invoked directly (node install-kokoro.mjs); stay inert on import
 // so unit tests can exercise sha256File / kokoroHashes without triggering a download.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main().catch((err) => {
     process.stderr.write(`[install-kokoro] FAIL: ${err.message}\n`);
     process.exit(1);

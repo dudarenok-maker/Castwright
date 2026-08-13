@@ -22,6 +22,16 @@ let workspaceRoot: string;
 let audioDir: string;
 let runVoiceDesign: typeof import('./design-voice-core.js').runVoiceDesign;
 
+/* runVoiceDesign's POST to /qwen/design-voice moved to undici's fetch — it
+   needs DESIGN_DISPATCHER so the 600s ceiling and the liveness-extension
+   watchdog aren't preempted by undici's hidden 300s cap. Stubbing only the
+   global no longer intercepts it. `importOriginal` keeps the real `Agent`,
+   which the module constructs at import time. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: (...args: unknown[]) => fetchMock(...args) };
+});
+
 const fetchMock = vi.fn();
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
 const mockEvictIdleQwenBase = vi.mocked(evictIdleQwenBase);

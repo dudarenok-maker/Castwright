@@ -14,6 +14,7 @@
 
 import dgram from 'node:dgram';
 import mdnsFactory from 'multicast-dns';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const ANSWER_TTL_SECONDS = 120;
 
@@ -141,11 +142,9 @@ async function main() {
   process.stdout.write(`[mdns-responder] serving ${hostnames.join(', ')}\n`);
 }
 
-// CLI entrypoint — mirrors the invokedDirectly check scripts/setup-lan-certs.mjs
-// already uses, so both scripts stay consistent.
-if (
-  import.meta.url === `file://${process.argv[1]}` ||
-  process.argv[1]?.endsWith('mdns-responder.mjs')
-) {
+// CLI entrypoint. See scripts/lib/is-main-module.mjs — replaces the naive
+// `file://${argv[1]}` form (always false on Windows) and the basename
+// fallback with the shared, junction-safe check (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   await main();
 }

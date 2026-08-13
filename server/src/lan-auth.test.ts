@@ -15,7 +15,9 @@ import {
   extractToken,
   getLanAuthToken,
   ensureLanAuthToken,
+  pairingOriginHint,
 } from './lan-auth.js';
+import { setLanRuntime } from './lan-runtime.js';
 
 interface ReqOpts {
   ip?: string;
@@ -54,6 +56,34 @@ describe('lan-auth (srv-20)', () => {
     else process.env.LAN_HTTPS = origHttps;
     if (origToken === undefined) delete process.env.LAN_AUTH_TOKEN;
     else process.env.LAN_AUTH_TOKEN = origToken;
+    // #2278 review round 3 (nit) — resets to a fixed, known baseline for the
+    // NEXT test in this file, not literally "the module default": that
+    // default is `Number(process.env.PORT ?? 8080)` (lan-runtime.ts), which
+    // only happens to equal 8080 when PORT is unset.
+    setLanRuntime({ httpsActive: false, port: 8080 });
+  });
+
+  // #2278 review Finding 1/7 — PAIRING_ORIGIN_HINT used to be a hardcoded
+  // `https://localhost:8443` const; it's now a function reading the ACTUAL
+  // bound port off getLanRuntime(), never a requested/default one.
+  it('pairingOriginHint names the actually-bound port, not a hardcoded default', () => {
+    setLanRuntime({ httpsActive: true, port: 9443 });
+    expect(pairingOriginHint()).toBe(
+      'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+    );
+  });
+
+  // #2278 review round 4, Finding 4 — the httpsActive:false arm was reachable
+  // by no test at all: every other case sets httpsActive true or mocks
+  // pairingOriginHint wholesale, so collapsing the ternary to an
+  // unconditional `https://localhost:${port}` template left the suite green.
+  // A degraded box's bound port is an HTTP one, so naming it behind https://
+  // would be a dead link of a new kind — this pins that it names no address.
+  it('pairingOriginHint drops the address entirely when LAN HTTPS is not active', () => {
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    expect(pairingOriginHint()).toBe('Start pairing on the computer running Castwright.');
+    expect(pairingOriginHint()).not.toMatch(/https?:\/\//);
+    expect(pairingOriginHint()).not.toContain('8080');
   });
 
   it('is OFF unless LAN mode AND a token are both set', () => {
@@ -111,6 +141,23 @@ describe('lan-auth (srv-20)', () => {
       });
       expect(called).toBe(false);
       expect(res._res.statusCode).toBe(401);
+    });
+
+    // #2278 review Finding 1 — the 401 body itself carries the same
+    // port-correct pairing guidance a 403 from mayStartPairingSession does,
+    // so a caller (e.g. the LAN-access card's listDevices call) can render
+    // it straight from the response body instead of a separate client-side
+    // fetch of its own for the port (which would sit behind this exact same
+    // guard and could never actually resolve on this branch).
+    it('the 401 body carries port-correct pairing guidance, not just a bare message', () => {
+      setLanRuntime({ httpsActive: true, port: 9443 });
+      const res = mkRes();
+      requireLanToken(mkReq(), res as never, () => {});
+      expect(res._res.statusCode).toBe(401);
+      expect(res._res.body).toEqual({
+        error:
+          'Missing or invalid LAN access token. Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+      });
     });
 
     it('401s a non-loopback request with the wrong token', () => {

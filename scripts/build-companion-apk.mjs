@@ -33,6 +33,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -159,7 +160,9 @@ function main() {
   console.log(`  code  ${buildNumber} (strictly increases each build → update-installs)\n`);
 }
 
-// Only run when invoked directly (not when imported by the test).
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+// Only run when invoked directly (not when imported by the test). See
+// scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
+// the invocation crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

@@ -16,7 +16,8 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { loadSuggestions, dismissSuggestion } from '../store/cast-merge-suggestions.js';
-import { performCastMerge } from './cast-merge.js';
+import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import { performCastMerge, didCastMergeApply } from './cast-merge.js';
 
 export const castMergeSuggestionsRouter = Router();
 
@@ -91,11 +92,77 @@ castMergeSuggestionsRouter.post(
     try {
       await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
     } catch (err) {
+      /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
+         `performCastMerge` is DEFERRED, not aborting: it is parked at the
+         retirement site and rethrown only once cast.json, manuscript-edits
+         .json, the analysis cache and the `cast-merges` journal have all been
+         written (see that function's own deferred-rethrow comment, which
+         states this as a contract on its callers). So at THAT point the merge
+         is fully applied and `sourceId` is gone from cast.json — but the
+         `dismissSuggestion` below is skipped, and `loadSuggestions` does no
+         roster filtering, so the suggestion survives for a character that no
+         longer exists. Pressing Accept again then 404s on
+         `performCastMerge`'s own `if (!source)` guard and skips the dismiss
+         again: stuck until the user hits Dismiss or re-analyses.
+
+         Dismissing here is correct precisely BECAUSE the merge landed — this
+         is the same "finish the writes, then let it surface" shape
+         `performCastMerge` uses internally, applied at the frame that owns
+         this write. Run unconditionally it would be wrong: a merge that
+         genuinely failed (404 on an unknown id, an EPERM out of the cast.json
+         write) must keep its suggestion.
+
+         FINAL ROUND (B1) — but the ERROR CLASS alone does not say the merge
+         landed, and round 4's comment asserted that it did. `performCastMerge`
+         is itself `withCastLock(bookDir, …)`, so this class reaches here from
+         two opposite states: the OUTER acquisition expiring (the callback never
+         ran — cast.json untouched, `sourceId` still live) and the deferred
+         rethrow (fully applied). `dismissSuggestion` is a plain
+         load-filter-`writeJsonAtomic`, so on the first of those a user who hit
+         Accept while something else held `cast:<bookDir>` — ordinary
+         contention, the exact condition #2260 exists to surface — lost the
+         suggestion for a merge that never happened, with only a re-analysis to
+         bring it back. So the mark, not the class, is the condition:
+         `didCastMergeApply` is stamped on the parked error at the deferred
+         rethrow and nowhere else. It fails closed, which is the recoverable
+         direction — an unmarked timeout keeps its suggestion, and the user can
+         simply press Accept again once the other operation finishes.
+
+         Its own failure is swallowed deliberately — the timeout is the more
+         informative error and must be what the user sees, and a failed
+         dismiss is no worse than not attempting one. */
+      if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
+        try {
+          await dismissSuggestion(bookDir, sourceId, targetId);
+        } catch (dismissErr) {
+          console.warn(
+            '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
+            dismissErr,
+          );
+        }
+      }
       const e = err as { status?: number; error?: string };
       if (e.status && e.error) {
         return res.status(e.status).json({ error: e.error });
       }
-      throw err;
+      /* #2292 (owner decision), CORRECTED in review round 5 — mirrors the
+         sibling `POST /cast/merge` handler, including the retraction. The
+         claim recorded here through round 4 ("a throw without `{status,
+         error}` used to reach Express 5's default handler and come back as
+         `500 text/html`") was FALSE: `app.ts:350` registers `errorHandler`
+         last, so such a throw has always answered `500 {"error":"Internal
+         server error."}`. The `text/html` came from the fixtures' bare router.
+
+         The real delta was the words, and `err.message` was the wrong ones —
+         it hands a LAN client the lock key, hence the absolute path of the
+         user's workspace. Curated body for the lock-timeout class, generic
+         body for everything else; the full error still goes to the log. See
+         `cast-merge.ts`'s handler for the long version. */
+      console.error('[cast-merge-suggestions] accept failed', err);
+      if (isLockAcquisitionTimeout(err)) {
+        return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
+      }
+      return res.status(500).json({ error: 'Internal server error.' });
     }
 
     /* Drop the suggestion only after a successful merge. */

@@ -26,7 +26,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   classifyVenvState,
   readStamp,
@@ -37,6 +37,7 @@ import {
 import { resolveInstallProfile } from './accelerator-profile.mjs';
 import { planTorchPreinstall } from './install-torch.mjs';
 import { planOrtSwap, applyOrtMarkerDelete, applyOrtMarkerWrite } from './install-ort.mjs';
+import { isDirectlyInvoked } from '../../../scripts/lib/is-main-module.mjs';
 
 const REAL_MARKER = { del: applyOrtMarkerDelete, write: applyOrtMarkerWrite };
 
@@ -334,6 +335,8 @@ function runInstall(venvPy, profile, venvDir) {
 // Run only when invoked directly (node bootstrap-venv.mjs); stay inert on import
 // so unit tests can exercise venvPythonPath / venvAlreadyBootstrapped without
 // triggering a real venv creation.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// whenever the invocation path crosses a symlink/junction (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main();
 }

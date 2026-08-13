@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 export function sidecarCommand(platform, repoRoot) {
   const dir = join(repoRoot, 'server', 'tts-sidecar');
@@ -13,8 +14,9 @@ export function sidecarCommand(platform, repoRoot) {
     : { file: 'bash', args: [join(dir, 'start.sh')] };
 }
 
-const invokedDirectly =
-  process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+// See scripts/lib/is-main-module.mjs — a resolve()-only comparison misses
+// when the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const { file, args } = sidecarCommand(process.platform, repoRoot);

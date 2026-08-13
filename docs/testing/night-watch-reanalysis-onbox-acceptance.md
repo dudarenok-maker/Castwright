@@ -508,6 +508,50 @@ Also: Ollama auto-updated 0.32.6 → 0.32.7 on first invocation after the reboot
 A deferred auto-update is a landmine under a multi-hour measured run — trigger it
 deliberately at pre-flight rather than discovering it at hour three.
 
+**2026-08-12 10:00 → 2026-08-13 09:20 — attempt 3, the real run. COMPLETE, 9/9
+chapters.** Throwaway `mns_rKjCHx0vrS` ("Ночной дозор (C2C3 run 2)"), build
+`52a8fb97` (= `6f215063` plus the #2287 analyzer-timeout fix), local Ollama
+`qwen36-cw-iq4-32k`, structure engine on, `allowCloudFallback: false`.
+**12 h 27 m** of compute in two sittings — 10 h 00 for ch1–7, then a deliberate
+overnight pause and 2 h 27 for ch8–9. Resumed with `fresh: false`, which serves
+the seven cached chapters and continues at 8.
+
+Two attempts died before this one and both causes are now sheet gaps below:
+attempt 1 was killed at hour six by *another session merging into `main`* under a
+`tsx watch` server in the shared checkout; the run that succeeded used a pinned,
+non-watch worktree on plain HTTP :8080.
+
+Seven further gaps this attempt exposed, all folded into the sections above:
+
+1. **§1.2's quiet-box gate checks CPU but not *writes* to the checkout.** What
+   actually killed attempt 1 was a merge, not load. Require an isolated, pinned,
+   **non-watch** checkout — not merely an idle one.
+2. **Do not commit during a measured run.** The pre-commit hook detects the GPU
+   load, throttles to `LOW_CONCURRENCY=1`, then flakes — and contends for CPU
+   with the thing being measured.
+3. **An SSE client's `curl --max-time` bounds the *observation*, not the run.**
+   A 10 h `--max-time` expired mid-ch7 and was briefly misread as the run ending;
+   the server-side job survived the client disconnect and completed. Proved by
+   ch7 landing in the cache afterwards.
+4. **§1.1's premise is false: the eGPU does not make the model fit.** Ollama
+   reports **14.2 GiB** available on the 5070 Ti against a **16 GB** model, so
+   ~5 GB spills permanently to the 8 GB card over PCIe. The §1.1 figure of
+   15,995 MiB `memory.free` is what `nvidia-smi` reports, not what Ollama can
+   allocate. This is most of the wall-clock miss.
+5. **A UTF-8 BOM in `user-settings.json` silently defeats §2.2.** PowerShell's
+   `Out-File -Encoding utf8` writes `EF BB BF`; the settings parse then fails and
+   the server falls back to `DEFAULT_USER_SETTINGS`, where `allowCloudFallback`
+   is **`true`** — precisely the contamination §2.2 exists to prevent, arrived at
+   by following §2.2. Write it with `[System.IO.File]::WriteAllText($p, $json,
+   (New-Object System.Text.UTF8Encoding $false))` and **verify the live value off
+   the API**, not off the file.
+6. **The setting is cached in-process** (`user-settings.ts:342`) — editing the
+   file mid-session changes nothing until the server restarts.
+7. **Target 1c never emitted.** No `scope=book merged=` line appeared on the
+   resumed run. Since pause/resume is the only practical way to survive a 12 h
+   analysis, a metric that only emits on an unbroken run cannot be an acceptance
+   criterion. Tracked as its own row.
+
 ### Results
 
 - **C2 — flagged ≤ ~500/chapter:** _Result:_ **NOT MET, and the criterion is
@@ -521,10 +565,74 @@ deliberately at pre-flight rather than discovering it at hour three.
   book 47.4% → **96.0%**, chapters below the 80% floor **4 → 0**, so escalation
   is no longer skipped chapter-wide. Ch5 3.7% → 94.6%, ch6 1.7% → 92.7%.
   Control: ch9 reproduces at 471 vs the recorded 488.
-- **C2 — escalation runs, escalated/accepted counts:** _Result:_ still owed —
-  needs the real run (§2A.4). The replay proves escalation *would* run on every
-  chapter (`flagOnly=false` throughout), not that it executes.
-- **C2 — wall-clock vs target 5:** _Result:_ still owed — needs the real run.
+- **C2 — escalation runs, escalated/accepted counts:** _Result:_ **PASS**
+  (live run, 2026-08-13). Escalation **executes** on all nine chapters —
+  `flagOnly` false throughout, `escalated` non-zero everywhere. **61 windows
+  attempted, 21 lines applied**, book-wide.
+
+  ```
+  ch  aligned  confirmed  corrected  flagged  unresolved  escalated  accepted
+   1     98%       1517       1125        0          59         15         1
+   2     98%       1219        881        0          42          7         0
+   3     99%        493        339        0          10          6         0
+   4     99%        525        368        0           9          4         0
+   5     95%        799        818        0          87          7         0
+   6     91%       1001        517        0         146          3         1
+   7     94%        810        907        0         122          5         4
+   8     90%        790        572        0         164          8        15
+   9     98%        963        595        0          31          6         0
+  ```
+
+  **Read the last two columns carefully — they are in different units.**
+  `escalated` is `EscalationOutcome.attempted`, a count of **windows**;
+  `escalationAccepted` is `.applied`, a count of **individual lines**
+  (`escalation.ts:22`). So ch8's `escalated=8 escalationAccepted=15` is not a
+  contradiction — eight windows carried fifteen accepted lines between them. The
+  log line at `analysis.ts:2267` prints both without saying so, which reads as
+  impossible; that is a defect in the line, not in the numbers.
+
+- **C2 — wall-clock vs target 5:** _Result:_ **MISSED, by roughly 2.5–6×.**
+  **12 h 27 m** against a +2–5 h target: 10 h 00 for ch1–7 and 2 h 27 for ch8–9
+  after an overnight pause. Per chapter 35 m – 233 m; ≈121 s per 1,000 chars.
+  The dominant cause is §1.1's false premise — the 16 GB model does not fit the
+  5070 Ti's 14.2 GiB, so ~5 GB spills over PCIe for the whole run. Re-testing
+  this target means either a card that actually holds the model or a smaller
+  quantisation; re-running the same configuration will reproduce the miss.
+
+- **C3 — `unresolved` populated, `flagged` at conflict scale:** _Result:_
+  **PASS.** `unresolved` is populated on every chapter (9–164, 670 book-wide),
+  and `flagged` is **0** everywhere — under the "order 10²/chapter, not 10³" bar
+  rather than over it. `flagged=0` is a real reading, not a dead metric (five
+  unit tests assert `report.flagged === 1`): it means no model-vs-evidence
+  conflict landed on a **named roster character**. It says nothing about the
+  victim rate, because victims land in `corrected`.
+
+- **C3 — ch5's dash-opening sentences no longer rewritten to `narrator`:**
+  _Result:_ **FAIL.** ch5 went **69.7% → 87.2%** narrator on dash-opening lines;
+  book-wide **87.4%** (4131/4725) against a 30.3% baseline. This is the named
+  criterion and it did not hold end to end.
+
+  The engine is **exonerated** and this should not be re-litigated: replaying
+  today's engine over the 2026-08-06 cached stage-2 output reproduces **30.4%**
+  vs the recorded 30.3%, so the cause is upstream of `crossExamine`, in this
+  run's stage-2 output and/or roster. Filed as
+  [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306) with the
+  A/B, the six ruled-out hypotheses, and the confound that has to be settled
+  first — `stage2DurationsEngine` records the *selected* engine, not the engine
+  that served each call, so it cannot tell a pure-local run from one that
+  silently failed over to Gemini.
+
+- **C3 — target 1c legibility (`scope=book merged=`):** _Result:_ **NOT
+  EMITTED.** No such line appeared on the resumed run. Pause/resume is the only
+  practical way to survive a 12 h analysis, so a metric that emits only on an
+  unbroken run cannot serve as an acceptance criterion.
+
+- **C2/C3 — model-quality events observed (recorded, not a criterion):** four
+  stage-2 attribution coverage-check failures, all on ch8, all the same
+  `repeat-loop` at offset 19, across **two server lifetimes** — deterministic,
+  not sampling variance — plus one Ollama output truncation. ch8 did eventually
+  clear after ~2.5 h. Fixed under
+  [#2304](https://github.com/dudarenok-maker/Castwright/issues/2304).
 - **C1 — cloud pass on `gemma-4-31b-it` incl. script-review:** _Result:_
 - **C1 — per-minute 429 retried, not misclassified:** _Result:_
 - **C1 — working `localInputFraction` for zero truncation drops:** _Result:_

@@ -51,7 +51,12 @@ describe('withCastLocks', () => {
   it('does not deadlock when two callers pass the books in opposite orders', async () => {
     /* THE test for .sort(). Both hold their first lock across an await before
        asking for the second — the classic AB/BA setup. Without sorting this
-       hangs forever; withKeyLock has no timeout. */
+       deadlocks. Since #2260 withKeyLock bounds each acquisition at 10s and
+       throws, so the unsorted version fails rather than hangs forever — but
+       this test never gets that far: the 2000ms `DEADLOCK` sentinel below wins
+       the race long before either waiter's 10s budget expires, so the
+       observable pre-sort symptom here is unchanged (`'DEADLOCK'`), and the
+       timeout is not what this test proves. */
     const hold = async () => {
       await settle();
       return 'ok';

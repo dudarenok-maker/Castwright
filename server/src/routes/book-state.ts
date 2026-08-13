@@ -32,7 +32,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withKeyLock } from '../workspace/file-lock.js';
+import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
@@ -969,7 +969,12 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
       return res.status(409).json({ error: e.message });
     }
     console.error('[book-state] PUT failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to write book state.' });
+    /* #2260 FINAL ROUND (B2) — the `cast` slice above runs inside
+       `withCastLock`, whose key is the absolute path of this book's cast.json.
+       Curate that one class; every other body is unchanged. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to write book state.'),
+    });
   }
 });
 
@@ -1237,7 +1242,11 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     res.json(payload);
   } catch (e) {
     console.error('[book-state] reparse failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to re-parse manuscript.' });
+    /* #2260 FINAL ROUND (B2) — the reparse takes `withCastLock` for the
+       cast.json read+delete arm. Same curation. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to re-parse manuscript.'),
+    });
   }
 });
 
@@ -1283,9 +1292,15 @@ bookStateRouter.post(
       res.json(payload);
     } catch (e) {
       console.error('[book-state] replace-manuscript failed', e);
-      res
-        .status(500)
-        .json({ error: (e as Error).message || 'Failed to replace manuscript.' });
+      /* #2260 FINAL ROUND (B2) — replace-manuscript reaches the same
+         `withCastLock` cast.json read+delete arm through the shared
+         applyReparse() core as reparse above. Same curation. */
+      res.status(500).json({
+        error: requestFailureMessage(
+          e,
+          (e as Error).message || 'Failed to replace manuscript.',
+        ),
+      });
     }
   },
 );
@@ -1766,6 +1781,10 @@ bookStateRouter.put('/:bookId/listen-stats', async (req: Request, res: Response)
     res.json(written);
   } catch (e) {
     console.error('[book-state] PUT listen-stats failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to write listen-stats.' });
+    /* #2260 FINAL ROUND (B2) — the only `listen-stats:` key space in the app,
+       and the one non-cast key that reaches a client-facing 500. Same curation. */
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to write listen-stats.'),
+    });
   }
 });

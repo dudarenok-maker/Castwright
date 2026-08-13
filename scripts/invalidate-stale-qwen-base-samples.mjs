@@ -36,6 +36,7 @@ import { readFile, readdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const APPLY = process.argv.includes('--apply');
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -185,7 +186,10 @@ async function main() {
   console.log(`\nDeleted ${stale.length} stranded base sample(s). They re-render on the next Play.`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('invalidate-stale-qwen-base-samples.mjs')) {
+// See scripts/lib/is-main-module.mjs — replaces the naive
+// `file://${argv[1]}` form (always false on Windows) and the basename
+// fallback with the shared, junction-safe check (#2291).
+if (isDirectlyInvoked(import.meta.url)) {
   main().catch((e) => {
     console.error(e);
     process.exit(1);

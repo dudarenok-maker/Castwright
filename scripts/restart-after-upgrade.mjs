@@ -18,6 +18,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 /** True while `pid` is still alive. `process.kill(pid, 0)` throws ESRCH once
     it's gone (EPERM means alive-but-not-ours → still alive). */
@@ -74,5 +75,7 @@ async function main() {
   process.exit(0);
 }
 
-const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+// See scripts/lib/is-main-module.mjs — an un-realpathed comparison misses
+// when the invocation crosses a symlink/junction (#2291).
+const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) main();

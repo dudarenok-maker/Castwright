@@ -53,4 +53,31 @@ describe('api.createPairSession — wire contract', () => {
 
     await expect(api.createPairSession()).rejects.toThrow(/500/);
   });
+
+  // #2278 review Finding 2 — a 403 here means "pairing can only be started
+  // from the computer running Castwright"; PairDeviceModal renders the
+  // server's own message verbatim (pairingOriginHint(), already port-correct)
+  // instead of a hardcoded https://localhost:8443 string. This pins that the
+  // client actually extracts the JSON body's `error` field rather than
+  // embedding the raw response text.
+  it('surfaces the server\'s JSON error message on a 403, not the raw response text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error:
+              'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    await expect(api.createPairSession()).rejects.toMatchObject({
+      status: 403,
+      message:
+        'Start pairing from https://localhost:9443 or https://castwright.local on the computer running Castwright.',
+    });
+  });
 });

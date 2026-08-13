@@ -38,6 +38,22 @@ import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 
+/* Some calls this suite exercises moved to undici's fetch (they need a
+   dispatcher so a legitimate multi-minute wait isn't cut off at undici's
+   hidden 300s headersTimeout — see DERIVE_DISPATCHER / DESIGN_DISPATCHER),
+   while others legitimately stay on the global one. Delegating undici's fetch
+   to whatever this file stubs globally keeps every existing mock and
+   assertion working across both transports, with no per-test changes. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) =>
+      (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+  };
+});
+
+
 /* #1981 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the promote-voice-
    vs-assign race test far below can deterministically intercept
    qwen-voice.ts's OWN `readJson` call (bound at qwen-voice.ts's own

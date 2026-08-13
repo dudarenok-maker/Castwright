@@ -13,14 +13,17 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeScopes } from '../ci-scope.mjs';
+import { readNormalized } from '../lib/read-normalized.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, '.github', 'workflows', 'verify.yml');
-const source = readFileSync(workflowPath, 'utf8');
+// readNormalized, not a bare readFileSync: several assertions below scan for
+// a literal '\n' after a YAML key (e.g. 'if: ...\n'), which misses on a
+// CRLF checkout (#2291).
+const source = readNormalized(workflowPath);
 
 // Every key ci-scope.mjs can emit.
 const emitted = new Set(Object.keys(computeScopes([], { eventName: 'pull_request' })));

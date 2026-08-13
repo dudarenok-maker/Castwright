@@ -41,9 +41,8 @@
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
 import {
   checkBOM,
   checkConflictMarkers,
@@ -54,6 +53,7 @@ import {
 // before it falls back to discovery from `cwd`; scrubbed here for the same
 // reason bump-version.mjs's shared git() helper scrubs it (see git-env.mjs).
 import { scrubGitEnv } from './git-env.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 export const DEFAULT_NOTES_FILE = 'docs/release-notes-next.md';
 export const ANNOTATION_LABEL = 'the tag annotation';
@@ -152,8 +152,7 @@ function repoRootFromHere() {
 }
 
 // CLI: node scripts/release-body.mjs <tag> <outputPath>
-const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
-if (invokedHref && import.meta.url === invokedHref) {
+if (isDirectlyInvoked(import.meta.url)) {
   const tag = process.argv[2];
   const outPath = process.argv[3];
   if (!tag || !outPath) {

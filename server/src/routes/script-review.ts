@@ -41,6 +41,7 @@ import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/e
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
+import { itemFailureReason } from '../workspace/file-lock.js';
 import {
   chunkSentencesByBudget,
   ownsOp,
@@ -993,7 +994,16 @@ async function runScriptReviewJob(
           // ops were already broadcast live via the `ops` events above (if
           // any subscribers were attached), so nothing already-streamed is
           // lost — only the ledger persistence for this one chapter failed.
-          send({ kind: 'chapter-failed', chapterId, message: `Failed to save findings: ${(err as Error).message}` });
+          //
+          // #2292 (owner decision) — the SHAPE stays per-chapter (failing the
+          // whole review because one chapter hit `script-review-ledger:<id>`
+          // contention is worse), but the REASON must not imply the chapter is
+          // at fault when it isn't. `itemFailureReason` swaps only the words.
+          send({
+            kind: 'chapter-failed',
+            chapterId,
+            message: `Failed to save findings: ${itemFailureReason(err, (err as Error).message)}`,
+          });
         }
       }
     }

@@ -198,6 +198,28 @@ export const FAILURE_REMEDIATIONS = {
       'switch the book to the engine the voice was cloned for, re-attribute the affected sentence(s) ' +
       'in the Manuscript view, or reassign the character — then generate again.',
   },
+  'lock-contention': {
+    /* #2260 — one operation on a book waited too long for another to release
+       that book's file lock. Nothing is broken; the work simply queued behind
+       something else and gave up after ten seconds.
+
+       `userMessage` here is the OFFLINE HELP prose. The live analysis path
+       substitutes `LOCK_CONTENTION_REQUEST_ERROR` (workspace/file-lock.ts) —
+       the same sentence the merge routes return — because this file may not
+       import anything, so it cannot share that constant. Keep the two saying
+       the same thing; deliberately neither names a file, a key or a path,
+       which is the entire reason the curated copy exists. */
+    userMessage:
+      'Another operation on this book was still holding its file lock, so this one gave up waiting ' +
+      '— that is contention, not a problem with the book or with what you asked for.',
+    remediation:
+      'Wait for the other operation to finish (a large library makes removing a voice from My voices ' +
+      'the slowest one), then try again. Reload first to see whether the change landed anyway.',
+    helpDetail:
+      'Castwright takes a book aside while it changes anything about your cast, so two changes can ' +
+      'never overwrite each other. A second change waits its turn and gives up after ten seconds ' +
+      'rather than waiting forever. It is almost always over by the time you retry.',
+  },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */
     userMessage:
