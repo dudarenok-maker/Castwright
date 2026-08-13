@@ -995,6 +995,17 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    output has been observed looking entirely genuine — real timings, real test
    counts — while gating nothing. If it matters, run
    `npm run verify:fast:branch` by hand.
+5. **Create `server/.env`** with its own `PORT` and `WORKSPACE_DIR`. The server
+   reads `server/.env` relative to `server/`, so a worktree with none of its
+   own falls back to `PORT=8080` — the same default every other checkout's
+   server binds to, colliding the moment two are running at once. Pick an
+   unused port (e.g. increment by 10 per worktree, mirroring
+   `scripts/wt-new.mjs`'s own `PORT_STEP`) and point `WORKSPACE_DIR` at a
+   directory this worktree alone owns (e.g. `../castwright-workspace-<slug>`,
+   relative to `server/`) so two servers never share one
+   `cast.json`/`state.json`. Do not copy the primary checkout's `server/.env`
+   wholesale — that would leak secrets like `GEMINI_API_KEY` into the
+   worktree (#2345).
 
 ### Worktree teardown
 

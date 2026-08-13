@@ -154,25 +154,45 @@ describe('WhisperInstall', () => {
     });
 
     it('preserves the best-effort swallow: a rejected api.getConfig() keeps the registry-default label instead of erroring the card (PR #2008 review m1)', async () => {
-      fetchMock.mockImplementation((url: string) =>
-        url.includes('/detect')
-          ? Promise.resolve(jsonResponse({ state: 'not-installed', installed: false }))
-          : Promise.resolve(jsonResponse({})),
-      );
-      // realGetConfig throws (rather than resolving null) on a non-ok response
-      // — this simulates exactly that shape, reaching the component's own
-      // .catch(() => {}) rather than an unhandled rejection or a crashed card.
-      const getConfigSpy = vi
-        .spyOn(api, 'getConfig')
-        .mockRejectedValue(new Error('Config fetch failed (500): boom'));
-      render(<WhisperInstall />);
-      await waitFor(() =>
-        expect(screen.getByTestId('whisper-install-not-detected')).toBeInTheDocument(),
-      );
-      // Default label ('base') survives; no error surfaces on the card.
-      expect(screen.getByText('base')).toBeInTheDocument();
-      expect(screen.queryByTestId('whisper-install-error')).not.toBeInTheDocument();
-      getConfigSpy.mockRestore();
+      /* #2348 review finding 6: the DOM assertions below (label survives,
+         no error card) still pass even if the component's own
+         `.catch(() => {})` is deleted — they'd pass just as happily with
+         the rejection left dangling as an unhandled promise rejection.
+         Without the onUnhandled assertion at the end, this test is red
+         only via Vitest's own global unhandled-rejection reporter (which a
+         `dangerouslyIgnoreUnhandledErrors` config would silence), not via
+         anything this test itself checks. Registering a listener and
+         asserting on it directly makes the test own its own red. */
+      const onUnhandled = vi.fn();
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        fetchMock.mockImplementation((url: string) =>
+          url.includes('/detect')
+            ? Promise.resolve(jsonResponse({ state: 'not-installed', installed: false }))
+            : Promise.resolve(jsonResponse({})),
+        );
+        // realGetConfig throws (rather than resolving null) on a non-ok response
+        // — this simulates exactly that shape, reaching the component's own
+        // .catch(() => {}) rather than an unhandled rejection or a crashed card.
+        const getConfigSpy = vi
+          .spyOn(api, 'getConfig')
+          .mockRejectedValue(new Error('Config fetch failed (500): boom'));
+        render(<WhisperInstall />);
+        await waitFor(() =>
+          expect(screen.getByTestId('whisper-install-not-detected')).toBeInTheDocument(),
+        );
+        // Default label ('base') survives; no error surfaces on the card.
+        expect(screen.getByText('base')).toBeInTheDocument();
+        expect(screen.queryByTestId('whisper-install-error')).not.toBeInTheDocument();
+        // Give the microtask/macrotask queue a turn so a dangling rejection
+        // (if the .catch were missing) has actually surfaced as unhandled
+        // before we check.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(onUnhandled).not.toHaveBeenCalled();
+        getConfigSpy.mockRestore();
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
     });
   });
 });

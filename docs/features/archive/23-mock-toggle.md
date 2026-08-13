@@ -28,7 +28,7 @@ The whole frontend talks to one object: `api`. That object is built once at modu
   - `mockGetVoiceSample` returns `url: ''`; mock cannot synthesise (`api.ts:276-281`).
   - `mockReparseBook` returns empty arrays (`api.ts:513-516`).
 - Documented real-stub divergences:
-  - `real.getChapterAudio` throws "Chapter audio not wired yet. Set VITE_USE_MOCKS=true." (`api.ts:612-614`).
+  - `real.getChapterAudio` is fully wired — it `fetch`es `/api/books/{bookId}/chapters/{chapterId}/audio` and throws only on a non-ok response (`api.ts:9828-9835`).
   - `real.pollRevisions` returns `{ pending: [], drift: [] }` to keep the 30 s poll silent (`api.ts:615-619`).
 
 ## Acceptance walkthrough

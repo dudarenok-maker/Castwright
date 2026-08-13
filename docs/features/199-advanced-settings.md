@@ -28,7 +28,7 @@ owner: null
 
 **Invariants preserved:**
 
-- Components only import from `api.*` — never directly call fetch. The mock (`VITE_USE_MOCKS=true`) and real API paths remain transparent to the view.
+- Components only import from `api.*` — never directly call fetch, other than the bounded, deliberate exception set documented in CLAUDE.md (install/detect/provisioning surfaces, mini-player's unload flush, queue-thunks' own toggle branch); none of those apply to the Advanced Settings surface. The mock (`VITE_USE_MOCKS=true`) and real API paths remain transparent to the view.
 - Env-sourced knobs (`source: 'env'`, `locked: true`) are rendered read-only and are never sent in PUT bodies.
 - The `ui.stage` discriminated-union is untouched — `#/advanced` is a route inside `src/routes/` rendered independently of `stage`.
 

@@ -65,3 +65,19 @@ test('package.json defines dev:mock and dev:frontend:mock scripts wired to --mod
     '"dev:mock" must also run "npm:dev:server" — several components fetch(\'/api/...\') directly and 502 without a server (see #2344)',
   );
 });
+
+test('package.json defines predev:mock mirroring predev — npm pre-hooks key on the EXACT script name, so "dev:mock" gets no ffmpeg preflight from "predev" alone (#2348 review finding 2)', () => {
+  const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  const scripts = pkg.scripts ?? {};
+
+  assert.ok('predev' in scripts, 'package.json is missing the "predev" script (ffmpeg preflight)');
+  assert.ok(
+    'predev:mock' in scripts,
+    'package.json is missing the "predev:mock" script — without it, "npm run dev:mock" silently skips the ffmpeg preflight that "npm run dev" gets via "predev", and fails much later at first generation instead',
+  );
+  assert.equal(
+    scripts['predev:mock'],
+    scripts['predev'],
+    '"predev:mock" must run the same ffmpeg preflight as "predev"',
+  );
+});
