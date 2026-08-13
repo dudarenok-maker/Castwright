@@ -481,25 +481,50 @@ export function validateStage2Coverage(
     within that tier is then the old function BY CONSTRUCTION, so unlike
     round 2's prose claim, no argument is needed and none can go stale.
 
-    That leaves exactly TWO cross-tier reversals from the pre-#2342 sum, both
-    deliberate and both pinned by `isBetterCoverage — enumerated pairwise
-    orderings` in the test file:
+    What that leaves cross-tier is not a fixed count of exceptions to list —
+    a prior version of this comment claimed "exactly two reversals" and
+    review pass 2 found the enumeration test's own grid producing counter-
+    examples the list didn't cover (e.g. `excessOnly/5/none` vs
+    `noSentences`, `clean/110/collapseBreach` vs `noSentences`,
+    `truncatedOnly/0/none` vs `noSentences`) — none of them is reversal (a)
+    or (b) as previously written. The count was never the right frame:
+    tiering means a LOWER TIER ALWAYS WINS, unconditionally, regardless of
+    the old sum's magnitude — that unconditional precedence is the entire
+    reason the tiers exist (see the tier list above: 2 = nothing to compare,
+    1 = prose present but damaged, 0 = prose complete, only miscast). Every
+    cross-tier disagreement the enumeration test observes is that ONE rule
+    applied to a different pair of tiers and a different pair of families —
+    not a hand-picked list:
 
-      (a) `duplicatedBlock` beats `noSentences` (tier 1 < tier 2) — reversed
-          from the original sum, which scored an empty take `0 + |1-0| = 1.0`
-          against any dup take's `≥100` and so preferred "nothing at all"
-          over a repeat-loop take. Deliberate, unchanged from round 2: a
-          repeat-loop take still holds real (if duplicated) prose; an empty
-          one holds none.
-      (b) a tier-0 take (collapse or `markersLost`) beats a `truncated`/
-          `excess` take (tier 1), REGARDLESS of magnitude — reversed from the
-          original sum only in the overlapping band described above.
-          Deliberate: a complete-but-miscast chapter is more useful than one
-          missing a large fraction of its prose.
+      - any tier-1 verdict (duplicatedBlock alone, truncated, excess, or a
+        dup+truncated/dup+excess combination) beats `noSentences` (tier 1 <
+        tier 2) — deliberate, unchanged from round 2: a repeat-loop or
+        truncated take still holds real (if damaged) prose; an empty one
+        holds none;
+      - any tier-0 verdict (a collapse or `markersLost` breach on otherwise-
+        intact prose) beats ANY tier-1 verdict, regardless of magnitude
+        (tier 0 < tier 1) — deliberate: a complete-but-miscast chapter is
+        more useful than one missing a large fraction of its prose;
+      - and, transitively, a tier-0 verdict beats `noSentences` directly
+        (tier 0 < tier 2) — not a third decision, the same rule composed
+        with itself across both boundaries at once.
 
-    Do NOT trust a third claim of "every other pairing is unchanged" without
-    re-running the enumeration test — that is exactly the claim round 2 got
-    wrong twice. */
+    None of the three needs (or gets) its own proof; they are one invariant,
+    checked mechanically by the CROSS-TIER branch of the enumeration test's
+    assertion, not read off a list here.
+
+    What genuinely needs the enumeration test to hold the line is SAME-TIER
+    disagreement, which this rule says nothing about. Tier 1's tie-break is
+    the ORIGINAL two-term sum verbatim, so two tier-1 verdicts must always
+    agree with the old sum by construction — any disagreement there is a real
+    defect in the tie-break formula. Tier 0's tie-break has no term the old
+    sum ever computed (`markersLost` / collapse `pct`), so two tier-0
+    verdicts are expected to diverge from the old sum freely and carry no
+    obligation to match it. The test enforces exactly this split: same-tier-1
+    disagreement fails loudly (`expect.fail`); same-tier-0 disagreement is the
+    one documented no-assertion case. Do NOT trust a claim that "every
+    cross-tier pairing is covered" without re-running the enumeration test —
+    that is exactly the claim this comment got wrong twice before. */
 function verdictTier(v: Stage2CoverageVerdict): 0 | 1 | 2 {
   if (v.noSentences) return 2;
   if (v.duplicatedBlock || v.truncated || v.excess) return 1;

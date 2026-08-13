@@ -5053,21 +5053,26 @@ export async function runMainAnalyzerJob(
          a dialogue marker (`narratedSpeech !== null`), which also completes
          #2342 item 4's observability half — that item exposed the field on
          the verdict struct but nothing routed it into the operator log. */
-      if (coverageVerdict.narratedSpeech) {
+      /* `legibilityConventions?.dialogueOpen` is checked here too rather
+         than assumed: `coverageVerdict.narratedSpeech` is non-null exactly
+         when `fpConventions?.dialogueOpen` was truthy inside
+         `attributeChapterStage2WithEval`, and `fpConventions` there is
+         `conventionsFor(bookLanguage)` — the SAME pure call as
+         `legibilityConventions` here — so the two conditions are provably
+         equivalent. Spelling it out lets the type checker prove
+         `sourceHalves` below is always a number, rather than leaving a
+         `?? '?'` fallback for a null that can't actually occur. */
+      if (coverageVerdict.narratedSpeech && legibilityConventions?.dialogueOpen) {
         const ns = coverageVerdict.narratedSpeech;
-        const sourceHalves = legibilityConventions?.dialogueOpen
-          ? sourceSpeechHalfCount(ch.body, legibilityConventions.dialogueOpen)
-          : null;
+        const sourceHalves = sourceSpeechHalfCount(ch.body, legibilityConventions.dialogueOpen);
         log(
           1,
           `Chapter ${i + 1}/${totalChapters} — narrated-speech check: ${ns.narrated}/${ns.speechHalves} ` +
-            `spoken lines (${ns.pct.toFixed(1)}%) attributed to the narrator; source has ${
-              sourceHalves ?? '?'
-            } dash-opening speech lines${
+            `spoken lines attributed to the narrator (${ns.pct.toFixed(1)}%)${
               ns.evaluable
                 ? ''
-                : ` (below the ${STAGE2_MIN_SPEECH_HALVES}-line floor — population too small to judge)`
-            }.`,
+                : ` — attributed population below the ${STAGE2_MIN_SPEECH_HALVES}-line floor, too small to judge`
+            }; source has ${sourceHalves} dash-opening speech lines.`,
         );
       }
       if (!coverageVerdict.ok) {
@@ -6747,21 +6752,23 @@ export async function runSubsetAnalyzerJob(
       }
       /* C4 on-box acceptance (#2325/#2342) parity with the main route's
          equivalent log line above — see that block's own comment. */
-      if (subsetCoverageVerdict.narratedSpeech) {
+      /* `subsetLegibilityConventions?.dialogueOpen` checked here too, same
+         reasoning as the main route's equivalent block: it's provably
+         equivalent to the `dialogueOpen` that made `narratedSpeech`
+         non-null, so this lets the type checker prove `sourceHalves` below
+         is always a number rather than leaving a `?? '?'` fallback for a
+         null that can't occur. */
+      if (subsetCoverageVerdict.narratedSpeech && subsetLegibilityConventions?.dialogueOpen) {
         const ns = subsetCoverageVerdict.narratedSpeech;
-        const sourceHalves = subsetLegibilityConventions?.dialogueOpen
-          ? sourceSpeechHalfCount(ch.body, subsetLegibilityConventions.dialogueOpen)
-          : null;
+        const sourceHalves = sourceSpeechHalfCount(ch.body, subsetLegibilityConventions.dialogueOpen);
         log(
           1,
           `Chapter ${ch.id} — narrated-speech check: ${ns.narrated}/${ns.speechHalves} spoken lines ` +
-            `(${ns.pct.toFixed(1)}%) attributed to the narrator; source has ${
-              sourceHalves ?? '?'
-            } dash-opening speech lines${
+            `attributed to the narrator (${ns.pct.toFixed(1)}%)${
               ns.evaluable
                 ? ''
-                : ` (below the ${STAGE2_MIN_SPEECH_HALVES}-line floor — population too small to judge)`
-            }.`,
+                : ` — attributed population below the ${STAGE2_MIN_SPEECH_HALVES}-line floor, too small to judge`
+            }; source has ${sourceHalves} dash-opening speech lines.`,
         );
       }
       /* #2342 review round 3 — item 4. The subset (Retry) job's stage-2 loop

@@ -994,7 +994,14 @@ describe('isBetterCoverage — enumerated pairwise orderings against the pre-#23
   const LOW = [0, 0.3, 0.55, 0.59]; // truncated-consistent
   const IN_BAND = [1.0, 1.55, 1.6]; // clean/dupOnly-consistent (neither truncated nor excess)
   const TINY_SPAN = [110, 702]; // un-evaluable small span — excess forced off
-  const HIGH = [1.7, 5, 110, 702]; // excess-consistent
+  /* 60 closes a hole review pass 2 found: without a HIGH value in
+     `(51, 101]`, mutating the tier-1 tie-break's `+100` constant
+     (`verdictTieBreak` in stage2-coverage.ts) down to `+50` reversed
+     `dupOnly@1.0` vs `excessOnly@60` (mutated scores 50 vs 59, old sum 100.6
+     vs 59 — pass 1's exact reversal class) and the grid missed it entirely
+     (0 failures). With 60 present the same mutation reddens (92 failures,
+     measured against this file's own grid). */
+  const HIGH = [1.7, 5, 60, 110, 702]; // excess-consistent
 
   /** The pre-#2342 two-term sum, verbatim — `noSentences` forces the ratio
       term to `|1 - 0|` exactly as it did before any tier scheme existed
