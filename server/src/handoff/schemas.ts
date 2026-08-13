@@ -140,8 +140,11 @@ export const sentenceSchema = z
     sceneBreakBefore: z.boolean().optional(),
     /* #1984 D18 — the characterId this sentence carried before a
        post-stage-2 step overwrote it. Absent when nothing overwrote it.
-       Written only by applyNarratorDefault and by the dialogue-structure
-       engine's correction pass; never by the model. Additive. */
+       Written by every server-side step that can overwrite a stage-2
+       characterId (reconcileSentenceCharacterIds, applyNarratorDefault, the
+       dialogue-structure engine's correction pass) and cleared by steps
+       that re-assign rather than demote (escalation, tagged-line recovery);
+       never written by the model. Additive. */
     priorCharacterId: z.string().optional(),
   })
   .strict();
