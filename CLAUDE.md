@@ -318,7 +318,7 @@ Design rationale:
 ## Commands
 
 - `npm start` — frontend + server + TTS sidecar in one shot (plan 43). Server owns the sidecar child-process lifecycle (per-user `autoStartSidecar` preference, default on); Ctrl+C tears the sidecar down via `taskkill /T /F` on Windows.
-- `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
+- `npm run dev` — frontend (Vite, HMR, `:5173`) **and** server (`:8080`) together via `concurrently`; the server auto-starts the TTS sidecar same as `npm start` (per-user `autoStartSidecar`, default on) — it is not frontend-only.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
@@ -483,10 +483,17 @@ Design rationale:
   `--peach`, `--ink`, `--magenta`, etc.; `tailwind.config.ts` references those
   vars. No hex literals in component code.
 - **Mocks behind `VITE_USE_MOCKS`** — `src/lib/api.ts` exports
-  `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
-  they never know which is which. `.env.development` sets the flag **off**
-  (`VITE_USE_MOCKS=false`) — the default dev run talks to the real server;
-  opt into mocks with `VITE_USE_MOCKS=true npm run dev:frontend`.
+  `api = USE_MOCKS ? mock : real`. Components import from `api.*` with a
+  bounded, deliberate exception set: the install/detect/provisioning
+  surfaces (`/api/{ollama,qwen,kokoro,coqui,whisper}/{detect,install}`,
+  `/api/ollama/{pull,refresh}`, `/api/setup/venv/bootstrap`) talk to the
+  local machine and have no mock counterpart; `mini-player`'s `keepalive`
+  unload flush bypasses the mock api by design (must survive page unload);
+  `store/queue-thunks.ts` honours the toggle through its own branch rather
+  than through `api.*`. `.env.development` sets `VITE_USE_MOCKS=false` (real
+  backend, since commit `6b4b2e51`) — `npm run dev` drives the real server;
+  `npm run dev:mock` (`.env.mock`) is mock mode, and `.env.e2e`/
+  `.env.marketing` set it true for their Playwright harnesses.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 - **`server/src/gpu/` reaches a route module through a leaf gate, never an
   import** — a static import, a dynamic `import()`, and even `import type`
@@ -997,6 +1004,28 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    output has been observed looking entirely genuine — real timings, real test
    counts — while gating nothing. If it matters, run
    `npm run verify:fast:branch` by hand.
+5. **Create `server/.env`** with its own `PORT` and `WORKSPACE_DIR`, **and** a
+   root **`.env.local`** with matching `VITE_PORT` / `VITE_API_PORT` / `PORT`.
+   Both halves are required: `vite.config.ts` resolves its API-proxy target
+   from `VITE_API_PORT ?? PORT`, falling back to `8080` (no `strictPort`)
+   when neither is set — so a worktree with only `server/.env` filled in gets
+   a frontend that silently proxies `/api` to whatever's already listening on
+   `:8080` (typically the primary checkout's server and workspace) while its
+   own correctly-isolated server sits idle. A tool-made worktree
+   (`EnterWorktree`, Agent `isolation: "worktree"`) never has this file —
+   only `scripts/wt-new.mjs` writes one, and it's git-ignored — so this step
+   doesn't error when skipped, it just silently breaks isolation. Pick an
+   unused slot N (mirroring `scripts/wt-new.mjs`'s own `BASE_PORTS`/
+   `PORT_STEP`) and step each port by `10 × N` off its own base —
+   `VITE_PORT` off `5173`, `PORT`/`VITE_API_PORT` off `8080` — e.g. slot 1 is
+   `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`. Set all three in
+   `.env.local` and `PORT` in `server/.env`, and point `WORKSPACE_DIR`
+   at a directory this worktree alone owns (e.g.
+   `../castwright-workspace-<slug>`, relative to `server/`) so two servers
+   never share one `cast.json`/`state.json`. Do not copy the primary
+   checkout's `server/.env` wholesale — that would leak secrets like
+   `GEMINI_API_KEY` into the worktree (#2345); `.env.local` carries no
+   secrets, so writing it from scratch is fine.
 
 ### Worktree teardown
 

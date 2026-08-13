@@ -89,7 +89,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cast view of a Qwen book** → a "Pin higher quality to all cast" action is
    visible (≥1 Qwen member). No per-row "1.7B" badges yet.

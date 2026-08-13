@@ -59,7 +59,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Mock mode (`VITE_USE_MOCKS=true`). All steps assume a fresh import + Start clicked.
+Mock mode (`npm run dev:mock`). All steps assume a fresh import + Start clicked.
 
 1. **Cold boot at `#/books/<bookId>/analysing`** → expected stage `{ kind: 'analysing', ... }`. Visible: book title, word-count caption, Phase 0 card with the gemma chip + swap dropdown LIT (streaming state), Phase 1 card dimmed with "Warms up after chapter 10" hint, Phase 2 card dimmed.
 2. **Scroll the page down ~800px** → header (title + caption + analyst-engine pill) scrolls off. The sticky bar (Phase 0 · Detecting characters · gemma-4-31b-it · streaming + Pause button) pins under the 64px topbar with a soft backdrop blur.

@@ -500,7 +500,7 @@ down, each a deliberate controller ruling made during implementation:
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, i.e. plain `npm run dev`) — mock-mode
+Run in mock mode (`npm run dev:mock`) — mock-mode
 generation has no per-line attribution model, so the orphaned-fallback map is
 seeded directly via the real `cast/setOrphanedCharacterFallbacks` reducer through
 `window.__store__.dispatch(...)`, exactly as `e2e/orphaned-character-fallback-banner.spec.ts`

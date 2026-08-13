@@ -89,7 +89,7 @@ owner: dudarenok-maker
 
 ### Manual acceptance walkthrough
 
-Mock mode (`VITE_USE_MOCKS=true`):
+Mock mode (`npm run dev:mock`):
 
 1. Open any book at `#/books/<id>/generate` (or click a `generating`-status
    library card) → Generate view paints, queue modal reads **Empty**, no

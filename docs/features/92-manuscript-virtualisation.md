@@ -51,7 +51,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run `npm run dev` in mock mode (`VITE_USE_MOCKS=true`, on by default in `.env.development`).
+Run `npm run dev:mock` in mock mode (`VITE_USE_MOCKS=true`).
 
 1. Open `http://localhost:5173/#/books/sb/manuscript`. Solway Bay's chapter 3 has 14 sentences → flat render. Boundary drag works as today.
 2. Replace the mock manuscript fixture in `src/data/sentences.ts` with a 300+ sentence chapter (or load the canonical Marlow manuscript referenced in CLAUDE.md). The view should render quickly, scroll smoothly, and surface only a small windowed subset of sentence rows in the Elements panel of DevTools.

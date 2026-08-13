@@ -9,15 +9,21 @@ The app is a Vite + React SPA (`src/`) talking to a Node/Express server
 (`server/`) that owns a Python TTS sidecar. Tracked `.env.development` sets
 `VITE_USE_MOCKS=false` — **mocks are OFF by default**, so a bare `npm run
 dev:frontend` talks to the real server and errors loudly (502s) if it isn't
-running. To run the frontend **standalone in mock mode**, with no server or
-sidecar, opt in explicitly:
+running. To run the frontend in mock mode, use the dedicated script:
 
 ```bash
-VITE_USE_MOCKS=true npm run dev:frontend
+npm run dev:mock
 ```
 
-That's the fastest way to verify a frontend/stack change that doesn't need
-the real backend.
+This starts the frontend with `VITE_USE_MOCKS=true` (`.env.mock`) alongside
+the real server — including its TTS sidecar, which the server auto-starts by
+default (`autoStartSidecar`) the same as `npm run dev`/`npm start`; nothing
+about `dev:mock` opts out of it. Most components read through `api.*` and use
+canned data under mocks, but ~19 call `/api/…` directly with no mock
+counterpart — that's why the real server still needs to be running, and why
+a frontend-only mock launch (`npm run dev:frontend:mock`, see STEP 1's table)
+still 502s on those. `npm run dev:mock` is the fastest way to verify a
+frontend/stack change that doesn't need real TTS generation.
 
 ## STEP 0 — after pulling or switching branches: reinstall FIRST
 
@@ -46,9 +52,12 @@ react-router-dom 7, TypeScript 6.
 | Goal | Command | Ports |
 |---|---|---|
 | Frontend only, against the real server (mocks OFF, the default) | `npm run dev:frontend` | Vite `:5173` |
-| Frontend only, mock mode — best for a quick verify with no server/sidecar | `VITE_USE_MOCKS=true npm run dev:frontend` | Vite `:5173` |
-| Full dev (frontend + server + sidecar) | `npm run dev` | `:5173` + `:8080` |
+| Frontend only, mock mode — no server/sidecar, but the ~19 direct-`/api/`-fetch components below will still 502 | `npm run dev:frontend:mock` | Vite `:5173` |
+| Frontend (mock mode) + real server (sidecar still auto-starts) — the fastest full mock verify, covers those ~19 components | `npm run dev:mock` | `:5173` + `:8080` |
+| Full dev (frontend + server + sidecar), foregrounded via `concurrently`, Ctrl+C tears the whole stack down | `npm run dev` | `:5173` + `:8080` |
 | Production bundle smoke | `npm run build && npm run preview` | preview port |
+
+`npm start` brings up the same three processes, not a superset — the real difference from `npm run dev` is process lifecycle, not what's running. On Windows it runs `scripts/start-app.ps1`, which backgrounds frontend + server as detached, PID-tracked processes (`.run/*.pid`, logs under `logs/`), is idempotent on re-run, and needs `npm run stop` to tear down rather than Ctrl+C — better suited to "leave it running" than to this skill's launch/drive/cleanup flow, which is why the table above lists `npm run dev`.
 
 In a worktree, `scripts/wt-new.mjs` assigns per-worktree ports (e.g. `:5193`/`:8100`)
 via `.env.local` — check the wt-new output. The primary checkout uses `:5173`/`:8080`.
@@ -56,7 +65,7 @@ via `.env.local` — check the wt-new output. The primary checkout uses `:5173`/
 Launch in the background and wait for ready:
 
 ```bash
-VITE_USE_MOCKS=true npm run dev:frontend > /tmp/dev.log 2>&1 &
+npm run dev:mock > /tmp/dev.log 2>&1 &
 for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:5173/ && { echo ready; break; }; sleep 1; done
 ```
 
@@ -116,12 +125,14 @@ LOOK at it. Use that Windows-style path, not the Git-Bash POSIX form
 it as "File does not exist" — only the `cygpath -w` output works there.
 
 **What a healthy run looks like** (this is the regression net for the plan-167
-stack). The `ERRORS=0` bar below applies to **mock mode**
-(`VITE_USE_MOCKS=true npm run dev:frontend`) or the full `npm run dev` stack —
-i.e. any launch where the backend the frontend calls is actually present. Driving
-`npm run dev:frontend` (mocks off) against no server is expected to log 502
-console errors for every hydrate call; that is not a failed verify, it is the
-absent-backend case documented above:
+stack). The `ERRORS=0` bar below applies to **`npm run dev:mock`** or the full
+`npm run dev` stack — i.e. any launch where a real server is actually present.
+Frontend-only mock mode (`npm run dev:frontend:mock`) does NOT clear this bar:
+~19 components call `/api/…` directly with no mock counterpart, so they still
+502 with no server behind them. Driving `npm run dev:frontend` (mocks off)
+against no server is expected to log 502 console errors for every hydrate
+call too; neither is a failed verify, both are the absent-backend case
+documented above:
 - Heading renders (`Welcome back, Mike` on `#/`, or the view's heading) — proves
   **redux-persist rehydrated** (the Rolldown CJS-interop bug made `storage.getItem`
   undefined and broke boot; fixed by importing `redux-persist/es/storage`).

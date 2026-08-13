@@ -258,7 +258,7 @@ rendered book had no way to resume. Design spec:
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, the default for `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. Open a book's Listen view (`#/books/<id>/listen`) → the "Quality gate" card
    appears below the player region, above the download section, headlined

@@ -81,8 +81,8 @@ const qrPayload = `https://www.castwright.ai/pair?${q}`;
 - The modal (`src/modals/pair-device.tsx`) renders whatever string the API
   returns via `QRCode.toDataURL` — **no modal change**.
 - **The frontend mock must flip too.** `src/lib/api.ts` (`mockCreatePairSession`)
-  emits its own `CWP1*…` string, and with `VITE_USE_MOCKS` on (the default for
-  dev, e2e, and marketing screenshots) the **mock** — not the server — is what the
+  emits its own `CWP1*…` string, and with `VITE_USE_MOCKS` on (as it is for
+  `npm run dev:mock`, e2e, and marketing screenshots) the **mock** — not the server — is what the
   modal renders. It must build the identical `URLSearchParams` URL, or the
   shipped/demoed app keeps the old QR while only the server changes.
 

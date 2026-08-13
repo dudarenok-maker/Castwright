@@ -56,7 +56,7 @@ plan extends).
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`) unless probing real Ollama.
+Run in mock mode (`npm run dev:mock`) unless probing real Ollama.
 
 1. **Cold boot at `#/?setup=notready`** → redirected to `#/setup`, guided wizard, "Step 1 of 7".
 2. **Next → Next** → **Analysis** step (step 3): "Local via Ollama" card first (Ollama install + model list with Pull), then "Online via Gemini" card. Badge reflects the resolved engine's readiness.

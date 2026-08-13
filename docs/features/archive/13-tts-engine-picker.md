@@ -28,7 +28,7 @@ Two-tier engine + model selector. The user picks an engine (Local or Gemini), th
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true` for the UI parts; `VITE_USE_MOCKS=false` with TTS sidecar + Gemini key for the end-to-end parts.
+Run `npm run dev:mock` for the UI parts; `npm run dev` with TTS sidecar + Gemini key for the end-to-end parts.
 
 1. **Cold boot** → `ui.ttsModelKey === 'coqui-xtts-v2'`; engine dropdown shows "Local (free)"; model dropdown shows "Coqui XTTS v2".
 2. **Switch engine to Gemini** → engine dropdown shows "Gemini (cloud)"; model dropdown shows "Gemini 2.5 Flash TTS" by default (first option in the group). `ui.ttsModelKey === 'gemini-2.5-flash'`.

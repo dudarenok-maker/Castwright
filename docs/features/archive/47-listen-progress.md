@@ -55,7 +55,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`npm run dev` + `VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. Cold-boot at `#/` → library cards.
 2. Click into a complete book → `#/books/<id>/listen` → cover header + chapter list.

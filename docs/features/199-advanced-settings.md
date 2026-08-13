@@ -28,7 +28,7 @@ owner: null
 
 **Invariants preserved:**
 
-- Components only import from `api.*` — never directly call fetch. The mock (`VITE_USE_MOCKS=true`) and real API paths remain transparent to the view.
+- Components only import from `api.*` — never directly call fetch, other than the bounded, deliberate exception set documented in CLAUDE.md (install/detect/provisioning surfaces, mini-player's unload flush, queue-thunks' own toggle branch); none of those apply to the Advanced Settings surface. The mock (`VITE_USE_MOCKS=true`) and real API paths remain transparent to the view.
 - Env-sourced knobs (`source: 'env'`, `locked: true`) are rendered read-only and are never sent in PUT bodies.
 - The `ui.stage` discriminated-union is untouched — `#/advanced` is a route inside `src/routes/` rendered independently of `stage`.
 
@@ -71,7 +71,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, opt-in — mocks are OFF by default in dev) via `npm run dev`:
+Run in mock mode via `npm run dev:mock`:
 
 1. **Navigate to `#/advanced`** — heading "Advanced configuration" visible, "LLM sampling parameters" section open (no accordion collapse needed, it's the first registry group) with its "Ollama temperature" row rendered, and the separate "Per-sentence QA gates" section — also open by default — showing "Signal QA max re-records".
 2. **Edit "Signal QA max re-records"** from 2 to 5 and press Tab — the row shows `default: 2` + a "Revert" button; no banner (apply: live).

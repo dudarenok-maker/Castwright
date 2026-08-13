@@ -59,7 +59,7 @@ Spun off from a real low-confidence triage session on a series-Book-2 manuscript
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`npm run dev`):
+Run in mock mode (`npm run dev:mock`):
 
 1. **Cold boot at `#/`** → library list visible.
 2. **Start a new book** → upload a small markdown manuscript (heading + 2 chapters).

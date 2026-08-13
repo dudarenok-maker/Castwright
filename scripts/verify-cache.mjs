@@ -256,6 +256,21 @@ export const STEPS = [
         // are covered by that tree's own glob above (2026-08-13) instead of
         // being listed here as literals — see that glob's comment.
         'CLAUDE.md',
+        // #2348 review, finding 1: dev-mock-command.test.mjs readFileSync's
+        // both of these at RUNTIME (asserting .env.mock sets
+        // VITE_USE_MOCKS=true and .env.development keeps it false) — no
+        // module-graph edge, so without them here a diff touching only
+        // .env.mock or .env.development (precisely the regression the test
+        // exists to catch — e.g. flipping .env.development's flag back to
+        // true) prints test:hooks [cached] locally, and ci-scope.mjs derives
+        // cloud CI's legs from this same STEPS[] entry, so the cloud run
+        // skips it too. Same #1847 runtime-read trap as fixtures/** above.
+        // (package.json's dev:mock/dev:frontend:mock scripts are the test's
+        // third leg, but need no entry here: a root package.json edit is
+        // already `computeShared`'s global-override case, so it busts every
+        // step, this one included, without a dedicated entry.)
+        '.env.mock',
+        '.env.development',
       ],
       includeLockfiles: ['root'],
     },

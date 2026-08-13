@@ -53,7 +53,7 @@ Plan 120 first shipped (PR #283) as a click-opened **centered modal**. Real use 
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** (Books) → no Status pill (idle global view).
 2. **Open Solway Bay → `#/books/sb/cast`** → a neutral `◷ Status` pill appears top-right; the nav tabs sit left with room.

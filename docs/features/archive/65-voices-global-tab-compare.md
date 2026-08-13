@@ -67,7 +67,7 @@ After selection (exactly 2 voices), the `sharedBookId` derivation drives gating:
 
 ### Manual acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`.
+Run `npm run dev:mock`.
 
 1. **Open `#/voices`** → global tab loads with the full library of mock voices spanning `ns`, `sb`, `cc`.
 2. **Click the select checkbox on Captain Halloran (`ns`) and Eliza Gray (`ns`)** → pill renders with "different base voices" badge (Halloran → Charon, Eliza → Kore). Compare button enabled.

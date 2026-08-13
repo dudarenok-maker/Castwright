@@ -68,7 +68,7 @@ Numbered list of structural rules a refactor must not break.
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** → click "Solway Bay" library card → navigates to `#/books/sb/listen`.
 2. **Click "Play from the start"** → mini-player mounts at the bottom of the screen, chapter 1 audio starts playing, speed-toggle reads "1.0×".

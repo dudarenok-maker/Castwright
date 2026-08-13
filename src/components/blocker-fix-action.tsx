@@ -3,7 +3,7 @@
    loop (mirrors venv-bootstrap.tsx's pattern) so callers don't hand-roll
    button wiring per action kind. */
 import { useEffect, useRef, useState } from 'react';
-import type { BlockerAction, BlockerDiagnosis } from '../lib/api';
+import { api, type BlockerAction, type BlockerDiagnosis } from '../lib/api';
 
 interface Job {
   id: string;
@@ -155,9 +155,13 @@ export function BlockerFixAction({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch('/api/sidecar/restart', { method: 'POST' });
-      const body = (await res.json()) as { ok: boolean; error?: string };
-      if (!body.ok) throw new Error(body.error ?? 'Restart failed.');
+      /* Routed through api.restartSidecar() (#2344) rather than a raw fetch.
+         realRestartSidecar resolves ONLY on a 200 (`{ ok: true }`) — every
+         failure branch of POST /api/sidecar/restart answers 409 or 503, so
+         realRestartSidecar throws for all of them, using the server's own
+         `error` sentence when the body carries one (#2348 review fix). There
+         is no 200-with-ok:false shape to check here. */
+      await api.restartSidecar();
       setBusy(false);
       onDone();
     } catch (e) {

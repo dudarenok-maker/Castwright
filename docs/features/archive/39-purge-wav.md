@@ -224,7 +224,7 @@ These replace the analogous clauses in plan 28:
 
 ### Manual acceptance walkthrough
 
-1. Boot dev server with `VITE_USE_MOCKS=true` → `npm run dev`. Open any
+1. Boot dev server with `npm run dev:mock`. Open any
    mock book → Generate → footer reads **"Output: MP3 (VBR V2)"**.
 2. Listen view plays the mp3 stub fixture from
    `src/mocks/audio/stub-a.mp3`.
