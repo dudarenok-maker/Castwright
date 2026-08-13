@@ -56,6 +56,10 @@ interface PersistFailureHandler {
   /** Optional extra dispatch fired on persist failure — e.g. rolling back an
       optimistic local update. Returns the action to dispatch. */
   rollback?: (bookId: string) => { type: string };
+  /** Optional dispatch fired on a SUCCESSFUL flush — e.g. pruning a rollback
+      snapshot now that its optimistically-written value is confirmed on disk,
+      so the next commit snapshots a fresh baseline. Returns the action. */
+  onSuccess?: (bookId: string) => { type: string };
 }
 const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
   'manuscript/setSentencesCharacterBulk': {
@@ -67,15 +71,21 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
     dedupeKey: 'bulk-reassign-persist-failed',
   },
   /* #2230 — a refused rename (409: analysis running; or a folder path
-     collision) must surface the server's sentence and stop showing a title
-     that never saved. The server message rides on err.message (api.putBookState
-     unwraps `{ error }` from the 409 body), mirroring the library-side Edit
-     modal which surfaces err.message verbatim via showError. */
+     collision) must surface the server's sentence and not leave the persisted
+     value claiming a title that never saved. The server message rides on
+     err.message (api.putBookState unwraps `{ error }` from the 409 body);
+     we strip the api.ts envelope so the toast shows only the refusal sentence,
+     degrading gracefully to the raw message if that format ever changes. */
   'bookMeta/commitDraft': {
-    message: (err) =>
-      `Book details couldn't be saved: ${err instanceof Error ? err.message : 'unknown error'}`,
+    message: (err) => {
+      const raw = err instanceof Error ? err.message : '';
+      const sentence =
+        raw.replace(/^Book state PUT failed \(\d+\): /, '') || 'an unknown error occurred';
+      return `Book details couldn't be saved: ${sentence}`;
+    },
     dedupeKey: 'book-meta-persist-failed',
     rollback: (bookId) => bookMetaActions.rollbackCommitDraft({ bookId }),
+    onSuccess: (bookId) => bookMetaActions.commitDraftSucceeded({ bookId }),
   },
 };
 
@@ -360,21 +370,30 @@ export const persistenceMiddleware: Middleware = (store) => {
     const handler = toastPending.get(slice);
     toastPending.delete(slice);
     if (patch === undefined) return;
-    api.putBookState(bookId, { slice, patch }).catch((err) => {
-      console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
-      if (handler) {
-        store.dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message: handler.message(err),
-            dedupeKey: handler.dedupeKey,
-          }),
-        );
-        /* #2230 — a refused rename must not keep the header showing a value the
-           server rejected; roll the optimistic saved update back. */
-        if (handler.rollback) store.dispatch(handler.rollback(bookId));
-      }
-    });
+    api
+      .putBookState(bookId, { slice, patch })
+      .then(() => {
+        /* #2230 — a confirmed PUT makes any rollback snapshot for this slice
+           moot (e.g. prune the bookMeta lastCommitted so the next commit snaps
+           a fresh accepted baseline). No-op when the slice has no handler. */
+        if (handler?.onSuccess) store.dispatch(handler.onSuccess(bookId));
+      })
+      .catch((err) => {
+        console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
+        if (handler) {
+          store.dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: handler.message(err),
+              dedupeKey: handler.dedupeKey,
+            }),
+          );
+          /* #2230 — a refused rename must not leave the persisted value claiming
+             a title the server rejected; roll the optimistic saved update back
+             (and restore the draft so the user's text is preserved for retry). */
+          if (handler.rollback) store.dispatch(handler.rollback(bookId));
+        }
+      });
   };
 
   return (next) => (action) => {
@@ -391,7 +410,19 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     pending.set(rule.slice, rule.build(after, bookId));
     const failHandler = TOAST_ON_PERSIST_FAILURE[type];
-    if (failHandler) toastPending.set(rule.slice, failHandler);
+    if (failHandler) {
+      toastPending.set(rule.slice, failHandler);
+    } else if (rule.slice === 'state' && type !== 'bookMeta/commitDraft') {
+      /* #2230 — the `state` slice is shared by ui/confirmCast and
+         bookMeta/commitDraft (PERSIST_RULES above). When a non-bookMeta `state`
+         write (confirmCast) lands in the same debounce window it REPLACES the
+         pending patch, so a later failure concerns THAT write, not the
+         superseded book-meta rename. Drop the stale handler so we neither toast
+         nor roll back book-meta for an op that isn't book-meta. (Manuscript's
+         ride-along semantics are intentionally left untouched — only the shared
+         `state` slice has the cross-action mismatch.) */
+      toastPending.delete(rule.slice);
+    }
     const prev = timers.get(rule.slice);
     if (prev) clearTimeout(prev);
     timers.set(

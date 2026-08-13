@@ -48,12 +48,21 @@ export interface BookMetaState {
   draft: Partial<EditableBookMeta> | null;
   /** Last-saved snapshot for each book the user has opened this session. */
   saved: Record<string, EditableBookMeta>;
-  /** #2230 — pre-commit snapshot of `saved[bookId]`, captured so a refused save
-      (409 from the persistence PUT) can roll the optimistic update back and stop
-      the header showing a value the server rejected. Overwritten by the next
-      commit, cleared on hydrate. Present only for a book with an in-flight
-      commit that is still awaiting its PUT. */
-  lastCommitted?: Record<string, EditableBookMeta>;
+  /** #2230 — committed-edit snapshot for each book with an in-flight PUT.
+      Captured on `commitDraft` so a refused save (a 409 from the persistence
+      PUT) can (a) roll the optimistic `saved[bookId]` update back to the last
+      value the server accepted AND (b) keep the user's typed `draft` in the
+      editor for retry — a failed save must not silently erase their edits.
+      - `saved` is pinned on the FIRST commit in a debounce window (the true
+        server-accepted baseline); later commits in the same window merge their
+        drafts so a refused PUT always reverts to that baseline, never to an
+        unpersisted intermediate.
+      - `draft` accumulates the diff staged across those commits.
+      Cleared on `hydrateFromBookState` and on a successful PUT. */
+  lastCommitted?: Record<
+    string,
+    { saved: EditableBookMeta; draft: Partial<EditableBookMeta> }
+  >;
   /** fs-65 Phase 3 — per-book prosody annotation intent flag keyed by bookId.
       Eager-default: absent (undefined) ⇒ ON; only an explicit `false` opts out.
       The Task-13 trigger gate is `prosodyEnabled !== false`.
@@ -144,27 +153,42 @@ export const bookMetaSlice = createSlice({
         return;
       }
       if (s.draft) {
-        /* #2230 — snapshot the pre-commit saved value so a refused PUT (409)
-           can be rolled back, keeping the header off a title the server never
-           accepted. (s.lastCommitted ??= {}) is guarded by the recent-field
-           optionality — absent on older persisted/test state. */
+        /* #2230 — pin the server-accepted `saved` baseline on the FIRST commit
+           in a debounce window, and merge drafts across any subsequent commits
+           so a refused PUT can revert to that baseline without losing any typed
+           text. (s.lastCommitted ??= {}) guards the recent-field optionality. */
         const snapshot = (s.lastCommitted ??= {});
-        snapshot[bookId] = base;
-        s.saved[bookId] = { ...base, ...s.draft };
+        const pending = (snapshot[bookId] ??= { saved: base, draft: {} });
+        pending.draft = { ...pending.draft, ...s.draft };
+        s.saved[bookId] = { ...base, ...pending.draft };
       }
       s.draft = null;
     },
 
-    /* #2230 — restore `saved[bookId]` to the last-committed snapshot when the
-       persistence PUT was refused. Dispatched by persistence-middleware on a
-       bookMeta/commitDraft failure: the server left the book (folder / on-disk
-       state) untouched, so the editor must not keep showing the renamed value.
-       Last-wins means a successful later commit overwrites the snapshot, so a
-       rollback only ever reverts to the last value the server accepted. */
+    /* #2230 — recover from a refused save. Dispatched by persistence-middleware
+       on a bookMeta/commitDraft failure: the server left the book (folder /
+       on-disk state) untouched. We revert the OPTIMISTIC `saved` update to the
+       last value the server accepted, and restore the user's typed `draft` so
+       the editor keeps their text with the Save/Cancel affordances + the error
+       toast (esp. important for a transient network failure, where the content
+       was never actually refused). Snapshot is always cleared. */
     rollbackCommitDraft: (s, a: PayloadAction<{ bookId: string }>) => {
       const { bookId } = a.payload;
-      const prior = s.lastCommitted?.[bookId];
-      if (prior) s.saved[bookId] = prior;
+      const pending = s.lastCommitted?.[bookId];
+      if (pending) {
+        s.saved[bookId] = pending.saved;
+        s.draft = { ...pending.draft };
+      }
+      if (s.lastCommitted) delete s.lastCommitted[bookId];
+    },
+
+    /* #2230 — a successful PUT confirms the optimistically-written `saved`
+       value, so the pending snapshot is moot. Pruning it means the NEXT commit
+       (a new window) snaps a fresh, now-accepted baseline instead of a stale
+       one — which is what makes the first-write baseline logic in commitDraft
+       correct across consecutive save sessions. */
+    commitDraftSucceeded: (s, a: PayloadAction<{ bookId: string }>) => {
+      const { bookId } = a.payload;
       if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
   },

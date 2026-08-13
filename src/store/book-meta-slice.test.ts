@@ -150,10 +150,10 @@ describe('bookMetaSlice — commitDraft', () => {
     expect(next.saved.ns.notes).toBe('First line.\nSecond line.\n\nThird paragraph.');
   });
 
-  /* #2230 — the optimistic fold keeps a pre-commit snapshot so a refused 409
-     PUT can be rolled back; the header must not keep showing a rename the
-     server rejected. */
-  it('captures a pre-commit snapshot (lastCommitted) when folding the draft', () => {
+  /* #2230 — the optimistic fold keeps a `{ saved, draft }` snapshot so a refused
+     409 PUT can revert `saved` to the last server-accepted baseline AND restore
+     the user's typed draft (a failed save must not erase their edits). */
+  it('captures the server-accepted baseline and the staged draft on commit', () => {
     const start: BookMetaState = {
       draft: { title: 'Renamed', genre: 'Sci-fi' },
       saved: { ns: fullMeta() },
@@ -161,9 +161,28 @@ describe('bookMetaSlice — commitDraft', () => {
     };
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
     expect(next.saved.ns.title).toBe('Renamed');
-    /* Snapshot holds the pre-commit baseline — NOT the optimistic result. */
-    expect(next.lastCommitted?.['ns']).toEqual(fullMeta());
-    expect(next.lastCommitted?.['ns'].title).toBe('The Northern Star');
+    /* Snapshot pins the ORIGINAL saved baseline — NOT the optimistic result. */
+    expect(next.lastCommitted?.['ns']?.saved).toEqual(fullMeta());
+    /* …and keeps the staged draft so a failed save can put it back in the editor. */
+    expect(next.lastCommitted?.['ns']?.draft).toEqual({ title: 'Renamed', genre: 'Sci-fi' });
+  });
+
+  it('pins the baseline on the first commit and merges drafts on later commits in the window', () => {
+    /* Two saves inside one debounce window: the snapshot baseline must remain
+       the truly-accepted value, and the draft must accumulate both edits so a
+       single refused PUT never reverts to an unpersisted intermediate. */
+    let s: BookMetaState = {
+      draft: { title: 'Renamed' },
+      saved: { ns: fullMeta() },
+      prosodyEnabled: {},
+    };
+    s = reducer(s, bookMetaActions.commitDraft({ bookId: 'ns' }));
+    s = reducer(s, bookMetaActions.setDraftField({ field: 'title', value: 'Renamed Twice' }));
+    s = reducer(s, bookMetaActions.commitDraft({ bookId: 'ns' }));
+
+    expect(s.saved.ns.title).toBe('Renamed Twice');
+    expect(s.lastCommitted?.['ns']?.saved.title).toBe('The Northern Star'); // baseline never moves
+    expect(s.lastCommitted?.['ns']?.draft).toEqual({ title: 'Renamed Twice' }); // both edits preserved
   });
 
   it('does not snapshot on an empty draft (nothing to roll back)', () => {
@@ -175,20 +194,48 @@ describe('bookMetaSlice — commitDraft', () => {
     const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
     expect(next.lastCommitted?.['ns']).toBeUndefined();
   });
-});
 
-describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
-  it('restores saved[bookId] to the last committed snapshot and clears it', () => {
+  it('commitDraftSucceeded prunes the snapshot so the next window snaps a fresh baseline', () => {
     const start: BookMetaState = {
       draft: null,
       saved: { ns: fullMeta({ title: 'Renamed' }) },
-      lastCommitted: { ns: fullMeta() },
+      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'Renamed' } } },
+      prosodyEnabled: {},
+    };
+    const next = reducer(start, bookMetaActions.commitDraftSucceeded({ bookId: 'ns' }));
+    expect(next.saved.ns.title).toBe('Renamed'); // unaffected
+    expect(next.lastCommitted?.['ns']).toBeUndefined();
+  });
+});
+
+describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
+  it('reverts saved[bookId] to the accepted baseline AND restores the user draft', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'Renamed' }) },
+      lastCommitted: { ns: { saved: fullMeta(), draft: { title: 'Renamed' } } },
       prosodyEnabled: {},
     };
     const next = reducer(start, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
     expect(next.saved.ns).toEqual(fullMeta());
     expect(next.saved.ns.title).toBe('The Northern Star');
+    /* The user's typed text survives in the editor for retry. */
+    expect(next.draft).toEqual({ title: 'Renamed' });
     expect(next.lastCommitted?.['ns']).toBeUndefined();
+  });
+
+  it('merges the accumulated draft from a multi-commit window back into the editor', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'Renamed Twice' }) },
+      lastCommitted: {
+        ns: { saved: fullMeta(), draft: { title: 'Renamed Twice', genre: 'Sci-fi' } },
+      },
+      prosodyEnabled: {},
+    };
+    const next = reducer(start, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
+    expect(next.saved.ns.title).toBe('The Northern Star');
+    expect(next.draft).toEqual({ title: 'Renamed Twice', genre: 'Sci-fi' });
   });
 
   it('is a no-op (and clears the snapshot) when nothing was captured', () => {
@@ -207,7 +254,7 @@ describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
     const start: BookMetaState = {
       draft: null,
       saved: { ns: fullMeta() },
-      lastCommitted: { ns: fullMeta({ title: 'Old' }) },
+      lastCommitted: { ns: { saved: fullMeta({ title: 'Old' }), draft: { title: 'Old' } } },
       prosodyEnabled: {},
     };
     const next = reducer(
