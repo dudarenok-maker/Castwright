@@ -275,11 +275,19 @@ export interface Stage2ChunkRunOptions {
   coverageRetries: number;
   /** Build + run the stage-2 model call for a sub-body. `precedingContext` is
       null on the single-call path and the first chunk (preserves byte-identical
-      prompts); non-null on later chunks (prepend it as read-only context). */
+      prompts); non-null on later chunks (prepend it as read-only context).
+
+      `callSeq` (#2324) is the 1-based sequence of this call within the chapter,
+      or `undefined` for the ONE unchunked whole-body call. It exists only so
+      the caller can key the handoff forensics per call — a chunked chapter used
+      to write every section under the same `2-ch{n}` key, each write rm'ing the
+      previous response, so only the last section survived. Undefined on the
+      single-call path keeps that path's filenames byte-identical. */
   callForBody: (
     subBody: string,
     precedingContext: string | null,
     lastSpeakerId: string | null,
+    callSeq: number | undefined,
   ) => Promise<{ sentences: SentenceOutput[] }>;
   /** Preceding-context paragraph count. Default 2. */
   contextParagraphs?: number;
@@ -321,6 +329,21 @@ export async function runStage2ChapterChunked(
 ): Promise<Stage2ChunkRunResult> {
   const contextParagraphs = opts.contextParagraphs ?? 2;
   const maxSplitDepth = opts.maxSplitDepth ?? 3;
+
+  /* #2324 — per-CHAPTER call counter for the handoff forensics. Incremented on
+     every sectioned model call, including each coverage retry and each adaptive
+     re-split, so the failing attempt is preserved next to the one that replaced
+     it rather than deleted by it. Deliberately not the section index: two calls
+     for the same section must not collide, which is the whole defect. */
+  let callSeq = 0;
+  const callSectioned = (
+    span: string,
+    preceding: string | null,
+    lastSpeakerId: string | null,
+  ): Promise<{ sentences: SentenceOutput[] }> => {
+    callSeq += 1;
+    return opts.callForBody(span, preceding, lastSpeakerId, callSeq);
+  };
 
   /* Split an over-cap span for a retry: paragraph boundaries first (lossless),
      then — when the span is a single paragraph that won't divide — sentence
@@ -377,7 +400,7 @@ export async function runStage2ChapterChunked(
       guarded = await runStage2WithCoverageGuard({
         body: span,
         maxRetries: opts.coverageRetries,
-        call: () => opts.callForBody(span, preceding, lastSpeakerId),
+        call: () => callSectioned(span, preceding, lastSpeakerId),
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
@@ -449,7 +472,11 @@ export async function runStage2ChapterChunked(
       const { result, coverage, deterministicFailure } = await runStage2WithCoverageGuard({
         body: opts.body,
         maxRetries: opts.coverageRetries,
-        call: () => opts.callForBody(opts.body, null, null),
+        /* The ONE unchunked call: no sequence, so its forensics keep the
+           historical `2-ch{n}` filenames. If it truncates or fails
+           deterministically, the re-split below runs through `callSectioned`
+           and those attempts DO get numbered. */
+        call: () => opts.callForBody(opts.body, null, null, undefined),
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,

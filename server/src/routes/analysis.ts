@@ -2215,7 +2215,12 @@ export async function attributeChapterStage2(opts: {
   const firstPersonId = fpConventions
     ? findFirstPersonCharacter(stage1.characters, fpConventions)
     : null;
-  const callForBody = (subBody: string, preceding: string | null, lastSpeakerId: string | null) => {
+  const callForBody = (
+    subBody: string,
+    preceding: string | null,
+    lastSpeakerId: string | null,
+    callSeq: number | undefined,
+  ) => {
     const prompt =
       preceding === null && subBody === opts.chapter.body
         ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, stage1, opts.chapter, firstPersonId)
@@ -2233,7 +2238,12 @@ export async function attributeChapterStage2(opts: {
       opts.manuscriptId,
       opts.chapter.id,
       prompt,
-      opts.stageCall,
+      /* #2324 — carry this call's sequence so the analyzer keys its handoff
+         forensics per call. Spread rather than mutate: `stageCall` is created
+         once per chapter and shared across every section, so assigning to it
+         would race the concurrent chapter running in the other analyzer slot.
+         Undefined on the single-call path leaves the object shape unchanged. */
+      callSeq === undefined ? opts.stageCall : { ...opts.stageCall, stage2CallSeq: callSeq },
     );
   };
   const result = await runStage2ChapterChunked({
