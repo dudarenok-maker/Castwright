@@ -46,14 +46,16 @@
  * scripts from. Round 2 reverted to a single sample gated on a PROSE-SIGNAL
  * FLOOR instead (a non-fallback detection trusted only once the sample
  * clears `PROSE_UNIT_FLOOR` sentence-terminal-punctuated units); this round
- * keeps that floor, but it now only fires for the one case a chapter vote
- * can't corroborate itself — a book with exactly one usable body chapter
- * (see `detectManuscriptLanguageFromChapters`'s own single-chapter path, and
- * `server/src/tts/prose-units.ts` for the shared constant/helper it and this
- * script both import). Any of: no readable text, a surrendered (fallback)
- * detection, or (for a single-chapter book) a too-thin sample is a skip,
- * reported with a reason naming which. Skipping is fully recoverable;
- * writing a wrong language is what this script exists to prevent.
+ * keeps that floor, applied to the WINNING language's own combined prose
+ * units regardless of how many chapters contributed to it (see
+ * `detectManuscriptLanguageFromChapters`'s own comment, and
+ * `server/src/tts/prose-units.ts` for the shared constants/helpers it and
+ * this script both import — since #2256, two more floors live there
+ * alongside it). Any of: no readable text, a surrendered (fallback)
+ * detection, a too-thin sample, or (since #2256) a too-repetitive or
+ * too-numbered one is a skip, reported with a reason naming which.
+ * Skipping is fully recoverable; writing a wrong language is what this
+ * script exists to prevent.
  *
  * Text sample preference, per book (unchanged by this round — now a set of
  * chapters rather than one flat string):
@@ -66,18 +68,30 @@
  *   3. Neither readable → skip and name the book in the report. Never guess
  *      with no material to look at.
  *
- * KNOWN RESIDUAL (#2256) — the prose-unit floor (now reachable only via the
- * single-chapter path) rejects the three evidenced junk classes (a
- * TOC-only sample, a nav-only EPUB stub, an OCR-noise sample — all measured
- * at 1 prose unit, 20x under the floor). It does NOT separate *punctuated*
- * junk from a genuine CJK book on a single-chapter book — a repeated
- * numbered TOC ("1. Prologue. 2. Kaz.") and repeated "Chapter One."
- * headings score a median of 6 and 11 letters per prose unit, same as a
- * real CJK book. A median-prose-unit-length secondary test would exclude
- * real CJK books along with the junk it's meant to catch, so it isn't added
- * here. That residual stays open on #2256 for the single-chapter case; for
- * every multi-chapter book the #2263 vote is a stronger signal than a
- * length floor ever was, since a junk chapter simply loses the vote.
+ * #2256 (closed except for one named, tracked shape — see #2341 at the end
+ * of this note) — the prose-unit floor alone rejected the three original
+ * evidenced junk classes (a TOC-only sample, a nav-only EPUB stub, an
+ * OCR-noise sample — all measured at 1 prose unit, 20x under the floor) but
+ * not a *punctuated* one: a long numbered TOC or a periods-and-page-numbers
+ * index racks up enough terminators to clear the floor on entry count
+ * alone, and a median-prose-unit-LENGTH secondary test can't separate that
+ * from a real CJK book — a repeated numbered TOC ("1. Prologue. 2. Kaz.")
+ * and a real CJK book can sit at the same median letters-per-unit, because a
+ * CJK sentence really is that short in letters. Two LEXICAL floors close it
+ * instead (`server/src/tts/prose-units.ts`): `LEXICAL_RICHNESS_FLOOR`
+ * (Guiraud's R — a punctuated junk list repeats a tiny vocabulary; real
+ * prose, short-clause CJK included, keeps introducing new words) and
+ * `DIGIT_TOKEN_SHARE_CEILING` (a numbered list needs its numbers; real
+ * narrative prose is not digit-dense). Both apply to the same winning-
+ * language sample the prose-unit floor already checks, chapter-count-
+ * invariant the same way — and, since #2256 round 4, chapter-ORDER-
+ * invariant too: both this script and the detector build that sample via
+ * prose-units.ts's `joinSamplesForGates`, which closes each chapter's
+ * sample at a sentence terminator so the dedup step cannot glue one
+ * chapter's trailing text onto the next one's first sentence. See
+ * prose-units.ts's own header for the corpus both were measured against,
+ * the margins on each side, and the one real Chinese chapter-heading
+ * layout (`第N章<title>`) that still clears both gates, tracked as #2341.
  *
  * Write path: `writeStateJsonAtomic` (server/src/workspace/state-migrate.ts)
  * — the same schema-stamp + rotating-backup helper every other state.json
@@ -106,7 +120,15 @@ import {
   prepareSample,
 } from '../server/src/tts/detect-language.js';
 import { countWords } from '../server/src/parsers/front-matter.js';
-import { countProseUnits, PROSE_UNIT_FLOOR } from '../server/src/tts/prose-units.js';
+import {
+  countProseUnits,
+  PROSE_UNIT_FLOOR,
+  guiraudR,
+  LEXICAL_RICHNESS_FLOOR,
+  digitTokenShare,
+  DIGIT_TOKEN_SHARE_CEILING,
+  joinSamplesForGates,
+} from '../server/src/tts/prose-units.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
 import { parseManuscript } from '../server/src/parsers/index.js';
@@ -182,7 +204,9 @@ function shareLabel(entries: MassEntry[], totalMass: number): string {
 
 export type SurrenderDiagnostic =
   | { kind: 'no-majority'; split: string }
-  | { kind: 'too-thin'; language: string; split: string; units: number; floor: number };
+  | { kind: 'too-thin'; language: string; split: string; units: number; floor: number }
+  | { kind: 'too-repetitive'; language: string; split: string; richness: number; floor: number }
+  | { kind: 'too-numbered'; language: string; split: string; digitShare: number; ceiling: number };
 
 /* Diagnostic-only: replays the SAME body-chapter selection and MASS-weighted
    vote detectManuscriptLanguageFromChapters applies internally — reusing its
@@ -202,7 +226,25 @@ export type SurrenderDiagnostic =
    the real vote decides on: a winner over the strict-majority line (> 0.5)
    can only have surrendered via the floor, so that case is reported as too
    thin — naming the winning language's own prose-unit count and the floor —
-   never as a majority problem. */
+   never as a majority problem.
+
+   #2256 — a winner that clears PROSE_UNIT_FLOOR can still surrender on
+   either of the two junk-gate floors voteLanguage applies next (see
+   detect-language.ts's own comment): lexical richness (a small repeated
+   vocabulary — 'too-repetitive') or digit-token share (a numbered list —
+   'too-numbered'). Checked in the SAME order voteLanguage applies them, on
+   the SAME (unwindowed) sample — round-3's independent review (finding C3)
+   found this guarantee broken WHILE THE BRANCH WAS IN REVIEW, never in a
+   release: an unmerged round-2 revision had voteLanguage computing its two
+   lexical gates over a RICHNESS_SAMPLE_CHARS-truncated prefix while this
+   function kept computing over the full join, so a real surrender could
+   have been attributed to the wrong gate (or missed entirely) here. Round 3
+   retracted that windowing fix outright (see prose-units.ts's own
+   finding-3(a) retraction) rather than threading the same cap through both
+   call sites; round 4 (finding B1) then moved the join itself behind the
+   shared `joinSamplesForGates`, so the two sites no longer even spell the
+   sample construction independently — that is what makes this comment's
+   guarantee hold by construction rather than by two matching literals. */
 function describeSurrenderReason(
   chapters: ChapterSample[],
   meta: { author?: string | null; title?: string | null },
@@ -241,10 +283,24 @@ function describeSurrenderReason(
   }
   if (!winner || winnerMass / totalMass <= 0.5) return { kind: 'no-majority', split };
 
-  const winningUnits = nonSurrendered
+  const winningSamples = nonSurrendered
     .filter((b) => b.detection.language === winner)
-    .reduce((sum, b) => sum + countProseUnits(prepareSample(b.chapter.body, meta)), 0);
-  return { kind: 'too-thin', language: winner, split, units: winningUnits, floor: PROSE_UNIT_FLOOR };
+    .map((b) => prepareSample(b.chapter.body, meta));
+  const winningUnits = winningSamples.reduce((sum, s) => sum + countProseUnits(s), 0);
+  if (winningUnits < PROSE_UNIT_FLOOR) {
+    return { kind: 'too-thin', language: winner, split, units: winningUnits, floor: PROSE_UNIT_FLOOR };
+  }
+
+  const winningSample = joinSamplesForGates(winningSamples);
+  const richness = guiraudR(winningSample);
+  if (richness < LEXICAL_RICHNESS_FLOOR) {
+    return { kind: 'too-repetitive', language: winner, split, richness, floor: LEXICAL_RICHNESS_FLOOR };
+  }
+  const digitShare = digitTokenShare(winningSample);
+  if (digitShare > DIGIT_TOKEN_SHARE_CEILING) {
+    return { kind: 'too-numbered', language: winner, split, digitShare, ceiling: DIGIT_TOKEN_SHARE_CEILING };
+  }
+  return null;
 }
 
 /* Chapter-aware (#2263): one sample source only (analysis cache preferred,
@@ -296,8 +352,17 @@ export function planBookLanguage(input: {
           ? `${diag.language} won a clear majority across ${sample.source} body chapters (${diag.split}), but ` +
             `only ${diag.units} prose unit(s) — under the ${diag.floor}-unit floor — so the sample is too thin ` +
             'to trust; a guess is never written'
-          : `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
-            'chapters — a guess is never written';
+          : diag?.kind === 'too-repetitive'
+            ? `${diag.language} won a clear majority across ${sample.source} body chapters (${diag.split}), but ` +
+              `its vocabulary is too repetitive to trust as prose (Guiraud's R ${diag.richness.toFixed(2)} — ` +
+              `under the ${diag.floor} floor, e.g. a numbered list or a repeated heading); a guess is never written`
+            : diag?.kind === 'too-numbered'
+              ? `${diag.language} won a clear majority across ${sample.source} body chapters (${diag.split}), but ` +
+                `${(diag.digitShare * 100).toFixed(0)}% of its tokens carry a digit — over the ` +
+                `${(diag.ceiling * 100).toFixed(0)}% ceiling, the shape of a table of contents or an index, not ` +
+                'prose; a guess is never written'
+              : `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
+                'chapters — a guess is never written';
     return {
       bookId,
       action: 'skip-fallback',
