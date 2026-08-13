@@ -17,6 +17,12 @@ Status: **shipped as M1** (PR [#2300](https://github.com/dudarenok-maker/Castwri
 > either. M2 — the general gap-seeded straddle, where nothing is rejected so
 > M1's bound never engages — remains owed, with executable acceptance criteria
 > in [#2288#issuecomment-5275015405](https://github.com/dudarenok-maker/Castwright/issues/2288#issuecomment-5275015405).
+> **M2 is now designed** — [`2026-08-13-gap-seeded-straddle-design.md`](2026-08-13-gap-seeded-straddle-design.md),
+> plan [`2026-08-13-gap-seeded-straddle.md`](../plans/2026-08-13-gap-seeded-straddle.md).
+> One correction that design makes to the figures above: re-scored with
+> `2288-metric.mts`'s overlap classifier, the 437 are 430 GAINED + 7 MOVED and
+> **not one destroys a turn** — that sweep family cannot express the straddle,
+> so the M2 design carries a second family that can.
 > The header below said `Blocks: #2286 / #2279` while this was in design; that
 > is now `Related`, because shipping it did not lift the block.
 
