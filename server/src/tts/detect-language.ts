@@ -105,10 +105,16 @@ export function detectManuscriptLanguage(
      restricted answer was a coercion, not a decision, so this is a
      surrender — `fallback: true` — even though `language` still carries the
      restricted best guess (so the confirm screen has something to
-     pre-select and override). Measured against the live 20-book Latin-script
-     corpus (server/handoff/cache, 2026-08-13): the unrestricted answer
-     agrees with the restricted one for all 20, so this changes nothing for
-     any language the registry already supports. */
+     pre-select and override). This function runs once per CANDIDATE CHAPTER
+     in production (voteLanguage below calls it per chapter, not once per
+     book), so that is the unit the cross-check needs measuring against — a
+     whole-book figure understates the sample, since per-chapter samples are
+     smaller and more numerous. Measured per chapter against all 82 cached
+     analyses in the live corpus (server/handoff/cache, 2026-08-13): 607
+     franc ballots, 5 disagreements (0.8%), all of them real English prose
+     that unrestricted franc labels `sco` (Scots) rather than a genuine
+     coercion — absorbed by voteLanguage's mass vote, so 0 outcome changes
+     across all 77 books with chapters. */
   const latin = allLanguageEntries().filter((e) => e.detect.script === 'latin');
   const latinIso = latin.map((e) => e.detect.iso6393);
   const iso = franc(sample, { only: latinIso, minLength: 30 });

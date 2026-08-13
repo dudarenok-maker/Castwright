@@ -573,6 +573,93 @@ describe('POST /api/books — a non-string `language` is rejected with 400, neve
   });
 });
 
+/* #2337 review N2 (round 3) — C2 guarded ONLY `language` against a
+   non-string value. Three sibling fields on the same handler share the
+   identical shape: `(body.author ?? '').trim()`, `(body.title ?? '').trim()`,
+   and (when `!isStandalone`) `(body.series ?? '').trim()` all call `.trim()`
+   on whatever a non-string, non-null value slides past the `?? ''`. A
+   number/boolean/array/object reaches `.trim()` unguarded, throws a raw
+   TypeError, and the handler's generic `catch` at the bottom surfaces it as
+   an HTTP 500 carrying the internal message
+   ("(body.author ?? \"\").trim is not a function") on a client-facing body —
+   the same defect class C2 fixed for `language`, left open for its three
+   siblings. */
+describe('POST /api/books — a non-string author/title/series is rejected with 400, never a 500 (#2337 review N2)', () => {
+  const nonStringValues: [string, unknown][] = [
+    ['a number', 42],
+    ['a boolean', true],
+    ['an array', []],
+    ['an object', {}],
+  ];
+
+  it.each(nonStringValues)(
+    'rejects a non-string author (%s) with 400 naming the field, not a 500',
+    async (_label, value) => {
+      const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: md, fileName: 'nonstring-author.md' });
+
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: value,
+        title: 'Fallback Title',
+        seriesPosition: null,
+        isStandalone: true,
+      });
+
+      expect(confirmRes.status).toBe(400);
+      expect(confirmRes.body.error).toMatch(/author/i);
+      expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    },
+  );
+
+  it.each(nonStringValues)(
+    'rejects a non-string title (%s) with 400 naming the field, not a 500',
+    async (_label, value) => {
+      const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: md, fileName: 'nonstring-title.md' });
+
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: 'Fallback Author',
+        title: value,
+        seriesPosition: null,
+        isStandalone: true,
+      });
+
+      expect(confirmRes.status).toBe(400);
+      expect(confirmRes.body.error).toMatch(/title/i);
+      expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    },
+  );
+
+  it.each(nonStringValues)(
+    'rejects a non-string series (%s) with 400 naming the field, not a 500',
+    async (_label, value) => {
+      const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: md, fileName: 'nonstring-series.md' });
+
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: 'Fallback Author',
+        title: 'Fallback Title',
+        seriesPosition: null,
+        isStandalone: false,
+        series: value,
+      });
+
+      expect(confirmRes.status).toBe(400);
+      expect(confirmRes.body.error).toMatch(/series/i);
+      expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    },
+  );
+});
+
 /* Plan 105 — multer 2.x guard. The import route mounts
    `upload.single('file')` with no bespoke MulterError branch, so an
    upload riding an unexpected field name raises a MulterError

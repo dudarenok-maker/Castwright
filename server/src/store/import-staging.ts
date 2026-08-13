@@ -49,18 +49,26 @@ export interface StagedImport {
   detectedLanguage?: string;
   detectedLanguageSupported?: boolean;
   /** True when the detection SURRENDERED rather than deciding it — no
-      letters to sample, no franc match, or (#2337 review C1) franc's
-      restricted-to-the-registry match was a coercion onto the nearest
-      registered Latin language rather than a genuine decision, in which
-      case `detectedLanguage` is that coerced guess, NOT `'en'`. `supported`
-      cannot distinguish a surrender from a real decision (a surrender's
-      guessed language is itself `supported: true`), and
-      DetectionResult.fallback's own doc says a caller that must "never write
-      a language they only guessed" (#2246) needs this field. This route is
-      such a writer, so a surrendered detection is NOT used as the fallback —
-      the confirm route falls through to `normaliseBookLanguage(body.language)`
-      instead, which keeps the historical English default when the caller
-      also said nothing. */
+      letters to sample, no franc match, or (#2337 review C1) every candidate
+      chapter's franc match, restricted to the registry's Latin set, was a
+      coercion onto the nearest registered Latin language rather than a
+      genuine decision. Filled from `detectManuscriptLanguageFromChapters`
+      (not the single-call `detectManuscriptLanguage` C1 itself patched), and
+      that function's `voteLanguage` filters every `fallback: true` ballot
+      out of the vote before it runs, so ALL of its surrender branches —
+      including the all-coerced one — are hardcoded to `language: 'en'` (see
+      `detect-language.ts`, pinned by `detect-language.test.ts`'s "#2337
+      review N3" test). So `detectedLanguage` is `'en'` whenever this field is
+      `true`, same as before C1 — C1 changed what a single
+      `detectManuscriptLanguage` call can return, not what this field ends up
+      holding. `supported` cannot distinguish a surrender from a real
+      decision regardless (a surrender's guessed language is itself
+      `supported: true`), and DetectionResult.fallback's own doc says a
+      caller that must "never write a language they only guessed" (#2246)
+      needs this field. This route is such a writer, so a surrendered
+      detection is NOT used as the fallback — the confirm route falls
+      through to `normaliseBookLanguage(body.language)` instead, which keeps
+      the historical English default when the caller also said nothing. */
   detectedLanguageFallback?: boolean;
   createdAt: number;
 }

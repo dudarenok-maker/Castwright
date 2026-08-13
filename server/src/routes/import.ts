@@ -218,12 +218,28 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         .json({ error: 'Import expired or already consumed. Please re-upload.' });
     }
 
+    /* #2337 review N2 — `author`, `title` and `series` share the identical
+       shape as the `language` field C2 guarded: `(body.X ?? '').trim()`
+       only catches null/undefined via `??`; a number, boolean, array or
+       object sails past it and hits `.trim()` unguarded, throwing a raw
+       TypeError the handler's generic `catch` below surfaces as an HTTP 500
+       carrying an internal message. Reject the whole non-string, non-null
+       shape here, per field, before any `.trim()` runs — never a 500. */
+    if (body.author != null && typeof body.author !== 'string') {
+      return res.status(400).json({ error: 'author must be a string.' });
+    }
+    if (body.title != null && typeof body.title !== 'string') {
+      return res.status(400).json({ error: 'title must be a string.' });
+    }
     const author = (body.author ?? '').trim();
     const title = (body.title ?? '').trim();
     if (!author || !title) {
       return res.status(400).json({ error: 'author and title are required.' });
     }
     const isStandalone = !!body.isStandalone;
+    if (!isStandalone && body.series != null && typeof body.series !== 'string') {
+      return res.status(400).json({ error: 'series must be a string.' });
+    }
     const series = isStandalone ? STANDALONES_SERIES : (body.series ?? '').trim();
     if (!isStandalone && !series) {
       return res.status(400).json({ error: 'series is required (or set isStandalone=true).' });
@@ -274,12 +290,27 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        `normaliseBookLanguage(entry.detectedLanguage)` result the
        fallback-less path below would also produce — deleting this clause
        changes no observable output today, which is why it is not
-       load-bearing yet. **#2337 review C1 changes this**: a franc match
-       coerced onto the registry's nearest Latin neighbour now stamps
-       `fallback: true` alongside a language OTHER than `'en'` (e.g. an
-       Italian manuscript surrendering with `language: 'es'`), so this clause
-       is the only thing stopping that guess from being written as a
-       decision. The condition is no longer inert.
+       load-bearing yet. **#2337 review N2 (round 3): a prior version of this
+       paragraph claimed review C1 changed that** — that `entry.detectedLanguage`
+       could now be a coerced guess (e.g. `'es'`) alongside
+       `entry.detectedLanguageFallback: true`, making this clause load-bearing.
+       That is false for the path this field is actually populated from. C1's
+       coercion check lives inside `detectManuscriptLanguage` (the single-call
+       detector), but this route stores whatever
+       `detectManuscriptLanguageFromChapters` returns, and that function's
+       surrender branches — including the one an all-coerced book takes,
+       since `voteLanguage` filters every `fallback: true` ballot out of the
+       vote before it runs — are ALL hardcoded `resultFor('en', true)` (see
+       `detect-language.ts`). A coerced ballot lives only transiently inside
+       that per-chapter filtering; it is never this function's own return
+       value. So `entry.detectedLanguageFallback: true` still always pairs
+       with `entry.detectedLanguage === 'en'`, exactly as before C1, and this
+       clause is still inert for this route — matching openapi.yaml's
+       documented rule (`language`'s description above `excludedSlugs`), which
+       names only the SUPPORTED gate and says nothing about a surrender ever
+       carrying a non-`'en'` language. See
+       `detect-language.test.ts`'s "#2337 review N3" test for the pinned
+       all-coerced-surrenders-to-en behaviour.
 
        "No choice" is the CLASS, not one spelling of it: absent, `null`, `''`
        and whitespace all mean the caller did not pick a language, and

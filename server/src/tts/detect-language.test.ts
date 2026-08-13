@@ -298,6 +298,31 @@ describe('detectManuscriptLanguageFromChapters (#2263)', () => {
   it('an empty chapter list surrenders rather than throwing', () => {
     expect(detectManuscriptLanguageFromChapters([])).toEqual({ language: 'en', supported: true, fallback: true });
   });
+
+  it('an ALL-COERCED book (every chapter a franc coercion) surrenders to en, never the coerced language (#2337 review N3)', () => {
+    // #2337 review C1 made a single coerced detection carry `fallback: true`
+    // alongside a non-'en' `language` (e.g. Italian -> 'es'). import.ts's own
+    // NOT-A-FALLBACK comment claimed this made its guard clause "no longer
+    // inert" — but THIS route calls detectManuscriptLanguageFromChapters, and
+    // voteLanguage filters every `fallback: true` ballot out of
+    // nonSurrendered BEFORE the vote runs (a coerced ballot never enters
+    // massByLanguage). A book that is ENTIRELY coerced chapters never
+    // reaches the vote with a non-'en' winner: nonSurrendered ends up empty
+    // and voteLanguage surrenders straight to resultFor('en', true). Confirm
+    // the fixture is a genuine coercion first (matching the #2337 C1 test
+    // above), then that the chapter-voting entry point still lands on 'en'.
+    const it_ =
+      "Il forno si era raffreddato fino al colore di un tramonto coperto di cenere, e Wren raschiava l'ultima scoria quando qualcuno bussò alla porta della sua officina.";
+    const solo = detectManuscriptLanguage(it_);
+    expect(solo).toEqual({ language: 'es', supported: true, fallback: true });
+
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: repeat(it_) },
+      { title: 'Chapter Two', body: repeat(it_) },
+      { title: 'Chapter Three', body: repeat(it_) },
+    ]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
+  });
 });
 
 /* #2276 — regressions for the three symptoms of the ONE root cause: the old
