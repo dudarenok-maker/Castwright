@@ -232,6 +232,30 @@ test('githubAnchor matches GitHub slugging, including runs of spaces', () => {
   );
 });
 
+test('model-routing/SKILL.md no longer carries the moved PR-review sections', () => {
+  // The move exists to end a rule living in two places. Without this, a future
+  // edit can paste either section back and both files drift apart silently —
+  // the exact failure the move was meant to fix.
+  const src = readNormalized(ROUTING_SKILL_PATH);
+  assert.doesNotMatch(
+    src,
+    /^## Mandatory independent review \(PRs\)$/m,
+    'model-routing/SKILL.md still carries "## Mandatory independent review (PRs)" — ' +
+      'it moved to pr-review-gate/SKILL.md; two copies will drift',
+  );
+  assert.doesNotMatch(
+    src,
+    /^## PR-gate issue verification$/m,
+    'model-routing/SKILL.md still carries "## PR-gate issue verification" — ' +
+      'it moved to pr-review-gate/SKILL.md; two copies will drift',
+  );
+  assert.match(
+    src,
+    /pr-review-gate/,
+    'model-routing/SKILL.md must keep a pointer to where the PR sections went',
+  );
+});
+
 test('intra-repo anchor links in the governance docs and skills resolve to real headings', () => {
   // CLAUDE.md:716 links model-routing/SKILL.md#mandatory-independent-review-prs.
   // Moving that section breaks the anchor while the existing string-match
