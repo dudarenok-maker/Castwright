@@ -21,6 +21,8 @@
 - **Every pass posts a comment** — including one that finds nothing (`### ✅ No findings`) and including a docs-only PR's exemption note.
 - **The mirror is conditional on Task 1.** "No agent needs a mirror" is a valid outcome that cancels Task 8 entirely.
 - **`CLAUDE.md` and `model-routing/SKILL.md` edits land last**, in one commit, rebased immediately before — they are high-contention files across 17 live worktrees.
+- **Derive every edit list with `git grep`, never from a read.** The first draft of this plan named one link into a moved section; a sweep found four. Any step that says "fix the reference at X" runs the sweep first and treats its own table as a floor.
+- **`## Issue verification at PR creation` in `SKILL.md` is a load-bearing heading name** — two `CLAUDE.md` links anchor to its slug. Changing its wording breaks them, and Task 5's assertion is what catches it.
 - Commit subjects follow `<type>(<scope>): <subject>`; this work is `docs(docs)` for skill/doc-only commits and `test(scripts)` / `chore(scripts)` for guard and cache changes.
 
 ---
@@ -199,6 +201,12 @@ Post one comment on the PR with `gh pr comment <number> --body-file <file>`
 BEFORE returning your report. Do not hand it to the dispatching session to
 publish — nothing would compare what it posts against what you found.
 
+**The PR number and head SHA come from the dispatch prompt.** Do not infer
+them: `gh pr view` on the wrong branch, or in a worktree whose HEAD moved,
+posts a review onto someone else's PR. If the prompt did not give you both,
+stop and say so rather than guessing — a review comment on the wrong PR cannot
+be quietly withdrawn.
+
 Heading: `## PR review — pass N (head <sha>, effort <level>)`. The head SHA is
 required; without it the comment is uninterpretable once the branch moves.
 
@@ -328,11 +336,30 @@ And Cline's mapping, gated on Task 1's `CLINE_SUBAGENT_COLD`:
 Run: `npm run test:hooks`
 Expected: PASS.
 
-- [ ] **Step 5: Mutation-verify**
+- [ ] **Step 5: Confirm the section regexes bound to the sections you meant**
+
+`(?=\n## )` correctly stops at the next `## ` and does not match `### `, but
+binding to the *wrong* section is the exact error this file's own header
+documents — the first version of the Mechanism assertion silently matched a
+different bullet and never exercised what it existed to check. Prove it, don't
+assume it: temporarily insert a decoy `## Dispatch notes` section elsewhere in
+`SKILL.md`, run, and confirm the assertion still reads the real `## Dispatch`.
+Remove the decoy.
+
+- [ ] **Step 6: Confirm the old cross-link is gone**
+
+The pre-rewrite `SKILL.md:11` linked
+`../model-routing/SKILL.md#mandatory-independent-review-prs` — an anchor Task 6
+deletes. The full rewrite should have removed it; confirm rather than assume:
+
+Run: `git grep -n "model-routing/SKILL.md#" -- .claude/skills/pr-review-gate/`
+Expected: no output.
+
+- [ ] **Step 7: Mutation-verify**
 
 Delete the `## Effort level` heading, run, confirm RED. Restore. Change `non-fork` to `forked` in the Dispatch section, run, confirm RED. Restore.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add .claude/skills/pr-review-gate/SKILL.md scripts/tests/review-gate-mechanism.test.mjs
@@ -442,20 +469,50 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 - [ ] **Step 2: Write the failing test**
 
+Add `readdirSync` to the `node:fs` import alongside `readFileSync, existsSync`.
+
 ```js
 // Markdown links of the form ](some/relative/path.md#anchor) — http(s) links
 // are skipped, and so are bare #anchor links (no file part to resolve).
 const INTRA_REPO_ANCHOR_LINK = /\]\((?!https?:)([^)#\s]+\.md)#([^)\s]+)\)/g;
 
-/** GitHub's heading-anchor slug: strip backticks, lowercase, drop punctuation,
- *  spaces to hyphens. Good enough for the headings in these four files. */
+/**
+ * GitHub's heading-anchor slug: strip backticks, lowercase, drop everything
+ * that is not a word char / space / hyphen, trim the ends, then replace each
+ * REMAINING SPACE WITH ONE HYPHEN.
+ *
+ * The one-for-one replacement is the whole subtlety, and an earlier draft of
+ * this helper got it wrong with `.replace(/ +/g, '-')`. GitHub does not
+ * collapse runs of spaces: `### Scope discipline > merge magic` drops the `>`
+ * and leaves TWO spaces, which slug to the DOUBLE hyphen in
+ * CONTRIBUTING.md#scope-discipline--merge-magic. A collapsing version reports
+ * that correct, live link as broken — a guard that fails on valid input, which
+ * is worse than no guard: it trains its reader to "fix" correct documents.
+ * The unit test below pins exactly that case GREEN.
+ */
 function githubAnchor(heading) {
   return heading
     .replace(/`/g, '')
     .toLowerCase()
     .replace(/[^\w\- ]+/g, '')
-    .trim()
-    .replace(/ +/g, '-');
+    .replace(/^ +| +$/g, '')
+    .replace(/ /g, '-');
+}
+
+/** Blank out fenced code blocks — a ```js sample containing a markdown-link
+ *  literal is not a link. Measured: without this, scanning this repo's own
+ *  plan docs reports their example snippets as dangling. */
+function stripFencedBlocks(text) {
+  const out = [];
+  let inFence = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    out.push(inFence ? '' : line);
+  }
+  return out.join('\n');
 }
 
 function headingAnchors(file) {
@@ -467,15 +524,43 @@ function headingAnchors(file) {
   return anchors;
 }
 
-test('intra-repo anchor links in CLAUDE.md and both gate skills resolve to real headings', () => {
+/** The scan set is DERIVED, not hand-listed: the two root governance docs plus
+ *  every markdown file under .claude/skills/**. A hand-list would reproduce the
+ *  enumeration trap Task 4 exists to close — the next skill doc added would be
+ *  unprotected for exactly the same reason the three extraFiles literals were.
+ *  Historical plan docs under docs/ are deliberately OUT of scope: measured
+ *  2026-08-13, they carry 15 pre-existing dangling links (relative paths
+ *  written as if from the repo root), none of which this work touches. */
+function linkScanSet() {
+  const skillsRoot = join(REPO_ROOT, '.claude', 'skills');
+  const skillDocs = readdirSync(skillsRoot, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.md'))
+    .map((d) => join(d.parentPath ?? d.path, d.name));
+  return [join(REPO_ROOT, 'CLAUDE.md'), join(REPO_ROOT, 'CONTRIBUTING.md'), ...skillDocs];
+}
+
+test('githubAnchor matches GitHub slugging, including runs of spaces', () => {
+  // The green-on-awkward-input case. Without it, the collapsing bug that this
+  // helper shipped with in draft is invisible: every OTHER assertion here is a
+  // true-positive check, and a helper that over-reports passes all of them.
+  assert.equal(githubAnchor('Scope discipline > merge magic'), 'scope-discipline--merge-magic');
+  assert.equal(githubAnchor('Mandatory independent review (PRs)'), 'mandatory-independent-review-prs');
+  assert.equal(
+    githubAnchor('Incidental findings: report, fix, record'),
+    'incidental-findings-report-fix-record',
+  );
+});
+
+test('intra-repo anchor links in the governance docs and skills resolve to real headings', () => {
   // CLAUDE.md:716 links model-routing/SKILL.md#mandatory-independent-review-prs.
   // Moving that section breaks the anchor while the existing string-match
   // assertion ("step 10 references pr-review-gate") stays GREEN — the guard
   // would certify the very line it broke. Presence of a word is not integrity
   // of a link.
   const broken = [];
-  for (const source of [CLAUDE_MD_PATH, GATE_SKILL_PATH, ROUTING_SKILL_PATH]) {
-    for (const [, relPath, anchor] of readNormalized(source).matchAll(INTRA_REPO_ANCHOR_LINK)) {
+  for (const source of linkScanSet()) {
+    const text = stripFencedBlocks(readNormalized(source));
+    for (const [, relPath, anchor] of text.matchAll(INTRA_REPO_ANCHOR_LINK)) {
       const target = resolve(dirname(source), relPath);
       if (!existsSync(target)) {
         broken.push(`${basename(source)} -> ${relPath} (file does not exist)`);
@@ -490,20 +575,22 @@ test('intra-repo anchor links in CLAUDE.md and both gate skills resolve to real 
 });
 ```
 
-- [ ] **Step 3: Run it — and triage what it reports**
+- [ ] **Step 3: Run it against a measured baseline**
 
 Run: `npm run test:hooks`
+Expected: **PASS.** This is measured, not predicted — the scan set was executed against this branch on 2026-08-13 and reported *4 files scanned, 19 anchor links, 0 broken*, with all three `githubAnchor` spot-checks correct.
 
-This assertion scans three long, much-edited files, so it may surface **pre-existing** dangling links that have nothing to do with this work. Triage before touching anything, per CLAUDE.md's hook-failure rule:
+**If it goes red, suspect the helper before the documents.** The first draft of this assertion reported `CLAUDE.md -> CONTRIBUTING.md#scope-discipline--merge-magic` as broken; that link is correct and the helper was wrong. Only after the unit test above passes is a red from the second assertion evidence about a document.
 
-- A link this branch broke → fix it here.
-- A link already broken on `main` → **stop and surface it to the user.** Do not silently fold unrelated fixes into this commit. Confirm with `git stash && git switch main && npm run test:hooks` (after temporarily copying the new test in), then restore.
+If a genuine pre-existing dangling link does appear, triage per CLAUDE.md's hook-failure rule: a link this branch broke gets fixed here; one already broken on `main` gets surfaced to the user, not silently folded into this commit.
 
-Expected at this point: PASS, because Task 6 has not yet moved the sections. If it passes, that is the correct baseline — the assertion's value is proven in step 4.
+- [ ] **Step 4: Mutation-verify in both directions**
 
-- [ ] **Step 4: Mutation-verify against the real defect**
+Both halves are required. A guard verified only for true positives is exactly how the collapsing bug survived into the draft.
 
-Temporarily rename `## Mandatory independent review (PRs)` in `model-routing/SKILL.md` to `## Mandatory independent review`, run `npm run test:hooks`, and confirm RED naming `CLAUDE.md -> .claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs`. Restore the heading. **This is the mutation that matters** — it reproduces exactly the defect Task 6 would otherwise ship.
+**Red on a real break:** temporarily rename `## Mandatory independent review (PRs)` in `model-routing/SKILL.md` to `## Mandatory independent review`, run `npm run test:hooks`, and confirm RED naming `CLAUDE.md -> .claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs`. Restore. This reproduces exactly the defect Task 6 would otherwise ship.
+
+**Green on awkward-but-correct input:** confirm the `githubAnchor` unit test passes with `CONTRIBUTING.md:99`'s `### Scope discipline > merge magic` slugging to a double hyphen. Then temporarily restore the collapsing `.replace(/ +/g, '-')` and confirm BOTH the unit test and the link test go red. Restore.
 
 - [ ] **Step 5: Commit**
 
@@ -585,15 +672,56 @@ The judgment-call carve-out below is shared by both review loops and stays here.
 
 Keep `## Routing table`, `## Escalation (subagent dispatch)`, `## Session-level drift`, `## Mandatory adversarial review (specs & plans)`, and `## Judgment-call carve-out`.
 
-- [ ] **Step 5: Fix `CLAUDE.md:716`**
+- [ ] **Step 5: Sweep for every link into the moved anchors — do not work from a read**
 
-Change step 10's link so it no longer points at the moved section:
+An earlier draft of this plan named one affected link. A mechanical sweep found
+**four**. Derive the list rather than recalling it:
+
+```bash
+git grep -n "model-routing/SKILL.md#"
+```
+
+Expected today — four live sites, plus historical plan docs:
+
+| Site | Anchor | Disposition |
+|---|---|---|
+| `CLAUDE.md:712` | `#pr-gate-issue-verification` | re-point (step 6) |
+| `CLAUDE.md:716` | `#mandatory-independent-review-prs` | re-point (step 6) |
+| `CLAUDE.md:1053` | `#pr-gate-issue-verification` | re-point (step 6) |
+| `.claude/skills/pr-review-gate/SKILL.md:11` | `#mandatory-independent-review-prs` | **already gone** — Task 3 rewrote this file wholesale; confirm, don't re-edit |
+| `docs/superpowers/plans/2026-07-01-…md` ×4 | both | **out of scope, already broken** |
+
+Those four historical links resolve their *file* relative to
+`docs/superpowers/plans/`, so they point at `docs/superpowers/plans/.claude/…`
+and are dangling **today, before this change** — verified 2026-08-13. This work
+neither creates nor worsens them. Do not fix them here; that is unrelated
+pre-existing rot, and folding it in couples the scope.
+
+- [ ] **Step 6: Re-point all three CLAUDE.md links**
+
+`CLAUDE.md:716` — step 10:
 
 ```markdown
 10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [the PR review runbook](.claude/skills/pr-review-gate/SKILL.md). Triage and fold findings before merge.
 ```
 
-- [ ] **Step 6: Fix `CLAUDE.md:301-306`**
+`CLAUDE.md:712` — inside before-shipping step 6, change the parenthetical link target only, leaving the sentence intact:
+
+```markdown
+(a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [PR review → issue verification](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation))
+```
+
+`CLAUDE.md:1053` — in the Branching workflow section:
+
+```markdown
+Full mechanics: [`.claude/skills/pr-review-gate/SKILL.md`](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation).
+```
+
+Both new anchors must match Task 3's `## Issue verification at PR creation`
+heading exactly — the link-integrity assertion from Task 5 is what proves it,
+and it will fail this commit if the heading text drifted.
+
+- [ ] **Step 7: Fix `CLAUDE.md:301-306`**
 
 The bullet restates the effort ladder inline and closes with "see the model-routing skill for the full split." Keep the restatement — CLAUDE.md's quick-reference layer is deliberate — and re-aim the pointer:
 
@@ -602,17 +730,38 @@ The bullet restates the effort ladder inline and closes with "see the model-rout
   `pr-review-gate` skill for the full split.
 ```
 
-- [ ] **Step 7: Run tests and verify they pass**
+- [ ] **Step 8: Verify the moved text is the SAME text**
+
+Every assertion in this plan checks that headings exist and that `low`/`medium`/
+`high` appear somewhere. **None of them would notice a ladder rewritten from
+memory with a changed threshold** — a move that silently edits what it moves
+passes the whole suite. Diff the moved content against its pre-move original:
+
+```bash
+git show origin/main:.claude/skills/model-routing/SKILL.md > /tmp/mr-before.md
+# The effort ladder and issue-verification bullets as they were:
+sed -n '/^## Mandatory independent review (PRs)/,/^## Judgment-call carve-out/p' /tmp/mr-before.md
+# ...against where they landed:
+sed -n '/^## Effort level/,/^## Dispatch/p' .claude/skills/pr-review-gate/SKILL.md
+```
+
+Read both. Wording may be re-flowed for the new context; **the `low`/`medium`/
+`high` criteria, the multi-scope rule, the mixed-type "highest tier wins" rule,
+the docs-only file-set test, and the `ultra` opt-in-only rule must be unchanged
+in substance.** If any threshold moved, that is a behaviour change smuggled
+inside a move — revert it and raise it separately.
+
+- [ ] **Step 9: Run tests and verify they pass**
 
 Run: `npm run test:hooks`
-Expected: PASS — including the link-integrity assertion from Task 5, which is the one proving step 5 actually fixed the anchor rather than moving it.
+Expected: PASS — including the link-integrity assertion from Task 5, which is the one proving steps 6-7 actually fixed the anchors rather than moving them.
 
-- [ ] **Step 8: Run the branch battery**
+- [ ] **Step 10: Run the branch battery**
 
 Run: `npm run verify:fast:branch`
 Expected: green, or every red leg triaged as pre-existing per CLAUDE.md.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add CLAUDE.md .claude/skills/model-routing/SKILL.md scripts/tests/review-gate-mechanism.test.mjs
@@ -661,7 +810,15 @@ Body must contain a literal `Closes #NN` (not backticked — a code-span `Closes
 
 - [ ] **Step 5: Run the gate on itself**
 
-This PR is not docs-only, so it takes its own review pass — the first real exercise of the runbook it ships. Dispatch per the new `SKILL.md`, at effort `high` (multi-scope: `docs` + `scripts`). Capture the tree check before and after. The reviewer posts its own comment.
+This PR is not docs-only, so it takes its own review pass — the first real exercise of the runbook it ships. Dispatch per the new `SKILL.md`, at effort `high` (multi-scope: `docs` + `scripts`).
+
+Order matters and the dispatch prompt must carry two values the reviewer cannot safely infer:
+
+1. `gh pr create` first, so a PR number exists.
+2. Capture the tree check: `git rev-parse HEAD` and `git status --porcelain`.
+3. Dispatch, passing **the PR number and the head SHA explicitly** in the prompt. A reviewer left to run `gh pr view` itself can resolve the wrong PR from a worktree whose HEAD moved — and a review comment on someone else's PR cannot be quietly withdrawn.
+4. Re-run the tree check when it returns; any delta is a gate failure.
+5. Confirm the comment landed (`gh pr view <number> --json comments`) before triaging. A pass that returned a report but posted nothing did not complete.
 
 ---
 
@@ -711,6 +868,28 @@ git commit -m "chore(scripts): mirror pr-review-gate into the agent skill paths 
 ```
 
 ---
+
+## Resolved by adversarial review
+
+The pass over the first draft of this plan is folded above. What changed, and
+the evidence that settled it:
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| `githubAnchor()` collapsed runs of spaces — reported a **correct** link as broken | One hyphen per space; a unit test pins `Scope discipline > merge magic` → `scope-discipline--merge-magic` **green** | Ran the draft helper: it flagged `CONTRIBUTING.md#scope-discipline--merge-magic`, which `CONTRIBUTING.md:99` shows is right |
+| "Expected: PASS" was a prediction | Now a measurement | Scoped set executed on this branch: **4 files, 19 anchor links, 0 broken** |
+| Plan named 1 affected link; there were 4 | Sweep step added; all three `CLAUDE.md` sites listed; 4th confirmed dissolved by Task 3 | `git grep -n "model-routing/SKILL.md#"` |
+| Scan set hand-listed — the enumeration trap Task 4 closes | Derived: two root docs + `readdirSync` over `.claude/skills/**` | — |
+| Historical plan links treated as this work's breakage | Out of scope, with evidence: they are dangling **today** | Repo-wide run: 15 pre-existing, all relative-path rot in `docs/` |
+| Code fences scanned as real links | `stripFencedBlocks()` | Repo-wide run flagged this plan's own example snippet |
+| Mutation verified in one direction only | Both directions required, incl. restoring the collapsing bug and observing red | — |
+| Nothing checked the moved text was the *same* text | Task 6 step 8 diffs against `origin/main` and names the five criteria that must be unchanged | — |
+| Reviewer had no defined source for the PR number | Dispatch prompt supplies PR number + head SHA; reviewer stops rather than inferring | — |
+| Section regex could bind to the wrong section | Decoy-section check (Task 3 step 5) — the failure this file's own header documents | — |
+
+Two claims the review could not settle stay marked as such: whether Task 3's
+section regexes bind correctly (the sections do not exist yet — hence the decoy
+check), and Cline's subagent independence (Task 1's probe).
 
 ## Self-Review
 
