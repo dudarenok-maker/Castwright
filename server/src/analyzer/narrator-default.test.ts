@@ -138,6 +138,14 @@ describe('isSpokenLine', () => {
     // ranks in a `findQuoteRuns` run boundary.
     expect(isSpokenLine('“おはよう”', JA)).toBe(true);
     expect(isSpokenLine('"おはよう"', JA)).toBe(true);
+    // #2286 also widened `de.secondaryQuotePairs` (unlike es/ru/en, which
+    // #2279 widened directly) — `isSpokenLine` unions both tiers (see its own
+    // doc comment), so all three straight-glyph German forms read as spoken
+    // too, even though the SAME opener stays banned from `de.quotePairs`
+    // (primary) — see de.ts's comment for why the two tables differ here.
+    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(true);
+    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(true);
+    expect(isSpokenLine('«Lass das.»', DE)).toBe(true);
   });
   it('#2279 (c): what is still excluded, and why', () => {
     // Straight-single stays out of EVERY table — asserted for all seven, not a
@@ -148,15 +156,6 @@ describe('isSpokenLine', () => {
     }
     expect(isSpokenLine("'I'm lost,' she said.", EN)).toBe(false);
     expect(isSpokenLine("'Komm her' sagte er.", DE)).toBe(false);
-    // #2288 — `de` gains NO new opener, and this is the exclusion that costs
-    // real dialogue: a German book typeset with anything but `„` or `»` has
-    // none of it recognised. Every candidate destroys a turn instead, because
-    // German pairs `„` with three closers while any new opener carries one, so
-    // its run runs on past the next turn's opener. The three counter-examples
-    // are in de.ts and pinned on the engine path in parser.test.ts.
-    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false);
-    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(false);
-    expect(isSpokenLine('«Lass das.»', DE)).toBe(false);
     // A convention belonging to a DIFFERENT language stays out: German „…“
     // inside a Spanish or Japanese book is not Spanish or Japanese typography.
     expect(isSpokenLine('„Ven aquí“ dijo él.', ES)).toBe(false);
