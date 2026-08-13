@@ -645,3 +645,33 @@ describe('parser — #2288 deep nesting stays one turn (design-alternative pin)'
     expect(speech).toEqual(['He said ‘hi’ and ‘bye’ and ‘hi’ to me,']);
   });
 });
+
+describe('parser — #2288 round 4: crossGlyphBound guards a multi-closer opener (forward-cover for #2286)', () => {
+  // No shipped table pairs an apostrophe-shaped closer alongside a SIBLING
+  // closer for the same opener (see the `crossGlyphBound` comment above
+  // `nearestOpenerAtOrAfter` in parser.ts — de's `„` is the only shipped
+  // multi-closer opener, and none of its closers is apostrophe-shaped), so
+  // this `quotePairs` table is SYNTHETIC, not any shipped convention. It
+  // exists only to reach the OPENER-OCCURRENCE-WIDE bound this branch
+  // guards, which #2286's table widening (pairing `‘`/`’` alongside another
+  // closer on one opener) would otherwise make reachable with no test
+  // covering it — the same forward-cover shape as the zh nesting
+  // characterisation above; this is not coverage of any shipped table.
+  it("a sibling closer's un-rejected first occurrence cannot skip past a rejected apostrophe-shaped closer's bound", () => {
+    const synth = {
+      ...conventionsFor('en')!,
+      quotePairs: [['«', '’'], ['«', '»'], ['“', '”']] as [string, string][],
+    };
+    const idx = buildNameIndex([{ id: 'tom', name: 'Tom' }], synth);
+    const body = '«He said don’t go. “Stop,” said Tom. Later» he left.';
+    const speech = parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+    // Measured against `parseChapterStructure`, not predicted. Without
+    // `crossGlyphBound`, `»`'s un-rejected first occurrence would win `end`
+    // past "Stop,"'s turn entirely, merging all three sentences into one run
+    // and destroying Tom's line and its speaker attribution.
+    expect(speech).toEqual(['He said don', 'Stop,']);
+  });
+});
