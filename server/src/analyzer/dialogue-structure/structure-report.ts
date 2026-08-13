@@ -68,7 +68,7 @@ export function assessParagraphStructure(body: string, conv: LanguageConventions
     paragraphCount: paras.length,
     pctCharsInLongParas: Math.round((over500 / total) * 100),
     pctCharsInVeryLongParas: Math.round((over1500 / total) * 100),
-    largestParagraphChars: lens.length ? Math.max(...lens) : 0,
+    largestParagraphChars: lens.length ? lens.reduce((a, b) => (b > a ? b : a), 0) : 0,
     paraInitialDashes,
     hiddenDashes,
     hiddenTurnCandidates,

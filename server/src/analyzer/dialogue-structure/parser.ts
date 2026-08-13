@@ -90,7 +90,11 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
 export interface ParseChapterOptions {
   /** Opt-in recovery for degraded manuscripts: run splitEvidencedInteriorTurns
       first so dialogue turns hidden inside narration-open merges become
-      line-starting dashes. Default OFF → byte-identical to prior behavior. */
+      line-starting dashes. Default OFF → byte-identical to prior behavior.
+      NOTE (offset contract): when enabled, spans are keyed to the TRANSFORMED
+      body — any caller that also aligns structure to model sentence output must
+      feed this same transformed body to the aligner/model side (see the
+      splitEvidencedInteriorTurns doc). */
   recoverMidParagraphTurns?: boolean;
 }
 

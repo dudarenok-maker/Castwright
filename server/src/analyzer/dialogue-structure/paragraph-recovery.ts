@@ -5,7 +5,7 @@ import type { LanguageConventions } from './types.js';
    into a single <p>, so dash-dialogue no longer opens a line and the parser's
    paragraph-start detection can't see it.
 
-   This is a BODY TRANSFORMANCE on narration-open lines: it inserts a line break
+   This is a BODY TRANSFORMATION on narration-open lines: it inserts a line break
    before a mid-paragraph dash ONLY when the turned-out segment carries ending
    dialogue EVIDENCE — i.e. a tag clause with a speech/beat verb (the same bar
    parseDialogueSpans applies, parser.ts). That single gate makes fabrication
@@ -16,6 +16,20 @@ import type { LanguageConventions } from './types.js';
        split (no tag, no verb) → it stays glued and is never mis-detected;
      • an apposition dash (X — это Y) is never preceded by a sentence end, so it
        is not even a candidate.
+
+   A verb-bearing tag WITHOUT a roster name/pronoun is accepted on purpose —
+   identical to parseDialogueSpans, which keeps such turns as unanchored speech.
+   So recovery can restore COVERAGE (the turn is surfaced and aligned) even when
+   no speaker name anchors it; attribution of those spans is downstream's job.
+
+   OFFSET CONTRACT: this is a body transformation, so the returned string has
+   DIFFERENT offsets than the input. Any caller that also aligns structure
+   spans to model sentence outputs (the aligner) MUST feed it this SAME
+   transformed body, and the model side reads the same text — otherwise the
+   span/sentence offsets silently disagree. parseChapterStructure recomputes
+   offsets from the transformed text it is handed, so structure-vs-structure is
+   internally consistent; the contract only binds the caller that couples
+   recovery with external (model) alignment.
 
    The inserted break makes the turn a line-starting dash, which the existing
    parseChapterStructure / parseDashParagraph machinery then handles normally

@@ -65,6 +65,12 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (opt-in, conservati
     expect(speech[1].speaker?.characterId).toBe('olga');
   });
 
+  it('standalone transform: inserts a line break at BOTH evidenced turns (asserts the intermediate body)', () => {
+    const body = 'Он вошёл. — Привет, — сказал Антон. — Здравствуй, — ответила Ольга. Он сел.';
+    const out = splitEvidencedInteriorTurns(body, ru);
+    expect(out).toBe('Он вошёл.\n— Привет, — сказал Антон.\n— Здравствуй, — ответила Ольга. Он сел.');
+  });
+
   it('rejects a candidate whose tag lacks a speech/beat verb (no split, no fabrication)', () => {
     const body = 'Он вошёл. — Привет, — Ольга насмешливо посмотрела в окно.';
     const paras = parseChapterStructure(body, idx, { recoverMidParagraphTurns: true });
