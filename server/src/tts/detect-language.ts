@@ -33,13 +33,18 @@ export interface DetectionResult {
   /** Whether that language has passed its validation gate (registry `supported`). */
   supported: boolean;
   /**
-   * True on a surrender path (no letters to sample, or franc found no Latin
-   * match) where `language: 'en'` is a confidence-floor guess, not a decision.
-   * False whenever the language was genuinely decided (script pre-pass match,
-   * or a real franc match) — including the `en` case where franc/pre-pass
-   * actually decided English. `supported` cannot distinguish these cases
-   * because 'en' is itself `supported: true`; callers that must "never write
-   * a language they only guessed" (#2246) need this field, not `supported`.
+   * True on a surrender path — no letters to sample, franc found no Latin
+   * match, or franc's restricted-to-the-registry answer was a coercion (an
+   * unrestricted franc call landed outside the registry's Latin set, so the
+   * restricted match was forced onto the nearest registered language rather
+   * than genuinely decided) — where `language` is a confidence-floor guess,
+   * not a decision. On the coercion path `language` still carries the
+   * restricted best guess, not `'en'`. False whenever the language was
+   * genuinely decided (script pre-pass match, or a real franc match) —
+   * including the `en` case where franc/pre-pass actually decided English.
+   * `supported` cannot distinguish these cases because 'en' is itself
+   * `supported: true`; callers that must "never write a language they only
+   * guessed" (#2246) need this field, not `supported`.
    */
   fallback: boolean;
 }
@@ -89,12 +94,30 @@ export function detectManuscriptLanguage(
     return resultFor(kana > han ? 'ja' : 'zh', false);
   }
 
-  /* 3. franc disambiguates Latin, restricted to the registry's Latin codes. */
+  /* 3. franc disambiguates Latin, restricted to the registry's Latin codes.
+     Restricting franc's `only` set to the four registered Latin languages
+     means franc MUST answer with one of them — a book written in a Latin
+     language outside that set (Italian, Portuguese, Dutch, …) gets coerced
+     onto its nearest registered neighbour (Italian → 'es', Portuguese →
+     'es', Dutch → 'de', measured 2026-08-13) and returned as if it were a
+     genuine decision. Cross-check with an UNRESTRICTED franc call: if the
+     unrestricted answer isn't one of the registry's Latin codes, the
+     restricted answer was a coercion, not a decision, so this is a
+     surrender — `fallback: true` — even though `language` still carries the
+     restricted best guess (so the confirm screen has something to
+     pre-select and override). Measured against the live 20-book Latin-script
+     corpus (server/handoff/cache, 2026-08-13): the unrestricted answer
+     agrees with the restricted one for all 20, so this changes nothing for
+     any language the registry already supports. */
   const latin = allLanguageEntries().filter((e) => e.detect.script === 'latin');
-  const iso = franc(sample, { only: latin.map((e) => e.detect.iso6393), minLength: 30 });
+  const latinIso = latin.map((e) => e.detect.iso6393);
+  const iso = franc(sample, { only: latinIso, minLength: 30 });
   const match = latin.find((e) => e.detect.iso6393 === iso);
   // 'und' or no match → fall back to English (the confidence floor).
-  return match ? resultFor(match.code, false) : resultFor('en', true);
+  if (!match) return resultFor('en', true);
+  const unrestrictedIso = franc(sample, { minLength: 30 });
+  const coerced = !latinIso.includes(unrestrictedIso);
+  return resultFor(match.code, coerced);
 }
 
 /* Chapters that look like front/back matter by title, or that are too short

@@ -48,14 +48,19 @@ export interface StagedImport {
       compatibility path. */
   detectedLanguage?: string;
   detectedLanguageSupported?: boolean;
-  /** True when the detection SURRENDERED to `'en'` rather than deciding it —
-      no letters to sample, or no match. `supported` cannot distinguish that
-      from a real English decision (`'en'` is itself supported), and
+  /** True when the detection SURRENDERED rather than deciding it — no
+      letters to sample, no franc match, or (#2337 review C1) franc's
+      restricted-to-the-registry match was a coercion onto the nearest
+      registered Latin language rather than a genuine decision, in which
+      case `detectedLanguage` is that coerced guess, NOT `'en'`. `supported`
+      cannot distinguish a surrender from a real decision (a surrender's
+      guessed language is itself `supported: true`), and
       DetectionResult.fallback's own doc says a caller that must "never write
       a language they only guessed" (#2246) needs this field. This route is
-      such a writer, so a surrendered detection is NOT used as the fallback;
-      those keep the historical English default, which is the same value the
-      surrender produced anyway. */
+      such a writer, so a surrendered detection is NOT used as the fallback —
+      the confirm route falls through to `normaliseBookLanguage(body.language)`
+      instead, which keeps the historical English default when the caller
+      also said nothing. */
   detectedLanguageFallback?: boolean;
   createdAt: number;
 }

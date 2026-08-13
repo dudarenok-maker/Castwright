@@ -3840,7 +3840,7 @@ export interface components {
              *     no language preamble, so names came back romanised and dash-marked
              *     dialogue was read as narration.
              */
-            language?: string;
+            language?: string | null;
             /** @description Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match. */
             excludedSlugs?: string[];
         };

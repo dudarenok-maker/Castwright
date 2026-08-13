@@ -258,16 +258,28 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        English one (#2306) — no language preamble, so stage 1 romanised every
        name and stage 2 read dash-marked dialogue as narration.
 
-       Two conditions gate the fallback, and only the second is load-bearing
-       today. SUPPORTED: an unsupported detection would turn a
-       previously-succeeding request into a 400 below — a breaking change for a
-       caller that never asked about language. Every registry entry is
-       currently `supported: true`, so this cannot fire yet; it is defence for
-       the moment one lands unsupported, as es/fr/de/zh/ja each once were.
-       NOT-A-FALLBACK: a detection that surrendered to 'en' is a
-       confidence-floor guess, not a decision, and this route is a writer —
-       see DetectionResult.fallback. Both cases keep the historical English
-       default.
+       Two conditions gate the fallback, and NEITHER is load-bearing today
+       (#2337 review N1 — an earlier version of this comment claimed the
+       second was; it is not, see below). SUPPORTED: an unsupported detection
+       would turn a previously-succeeding request into a 400 below — a
+       breaking change for a caller that never asked about language. Every
+       registry entry is currently `supported: true`, so this cannot fire
+       yet; it is defence for the moment one lands unsupported, as
+       es/fr/de/zh/ja each once were. NOT-A-FALLBACK: a detection that
+       surrendered is a confidence-floor guess, not a decision, and this
+       route is a writer — see DetectionResult.fallback. Every
+       `detectManuscriptLanguage`/`detectManuscriptLanguageFromChapters`
+       surrender path stamps `language: 'en'` alongside `fallback: true`, so
+       both branches of this condition currently produce the SAME
+       `normaliseBookLanguage(entry.detectedLanguage)` result the
+       fallback-less path below would also produce — deleting this clause
+       changes no observable output today, which is why it is not
+       load-bearing yet. **#2337 review C1 changes this**: a franc match
+       coerced onto the registry's nearest Latin neighbour now stamps
+       `fallback: true` alongside a language OTHER than `'en'` (e.g. an
+       Italian manuscript surrendering with `language: 'es'`), so this clause
+       is the only thing stopping that guess from being written as a
+       decision. The condition is no longer inert.
 
        "No choice" is the CLASS, not one spelling of it: absent, `null`, `''`
        and whitespace all mean the caller did not pick a language, and
@@ -276,6 +288,23 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        would have left `{"language": ""}` — an unfilled form field, or
        `detected ?? ''` — silently persisting English over a Russian detection,
        i.e. this exact defect surviving under a different spelling. */
+    /* #2337 review C2 — a caller sending a non-string, non-null `language`
+       (a number, boolean, array, object) used to reach `normaliseBookLanguage`
+       unguarded below, which calls `.trim()` on whatever it was handed and
+       throws a raw TypeError that surfaced as an HTTP 500 carrying an
+       internal message on a client-facing body. `null`/`undefined` are
+       handled below (the "no choice" class); anything else non-string is
+       simply not a language the caller could have meant, so it gets the same
+       400 `unsupported_language` an unsupported STRING gets. */
+    if (body.language != null && typeof body.language !== 'string') {
+      return res.status(400).json({
+        error: 'unsupported_language',
+        message: `Unsupported language "${JSON.stringify(body.language)}". Supported languages: ${supportedLanguages()
+          .map((l) => l.code)
+          .join(', ')}.`,
+        supportedLanguages: supportedLanguages(),
+      });
+    }
     const languageChosen =
       typeof body.language === 'string' ? body.language.trim() !== '' : body.language != null;
     const language =

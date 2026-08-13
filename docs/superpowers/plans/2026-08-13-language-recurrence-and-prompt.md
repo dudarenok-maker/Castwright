@@ -126,28 +126,60 @@ Expected: `finalize-chapter-write.ts:398`, `cover/store.ts:97,107`, `cover/uploa
 
 **Files:** `routes/import.ts`, `routes/import.test.ts`.
 
-The highest-value change in the branch. `import.ts:239` is `normaliseBookLanguage(body.language)` — an import omitting `body.language` gets `'en'` written as a decision.
-
-**Carry `fallback` to confirm first.** Detection runs in the **staging** handler (`:130`, wired out at `:147-149`); the **confirm** handler (`:195`, `:239`) has no access to `detected`. Without this, an absent `body.language` cannot be distinguished from "detection surrendered", and any non-web client earns a spurious prompt on a confidently-detected book.
-
-- [ ] Persist `detected.fallback` (and the detected language) on the staging entry, or re-run `detectManuscriptLanguageFromChapters` in the confirm handler.
-- [ ] Failing tests:
-
-```ts
-it('writes language: null when detection surrendered and the request states none', async () => {
-  const state = JSON.parse(await readFile(stateJsonPath(bookDir), 'utf8'));
-  expect(state.language).toBeNull();      // not 'en'
-  expect('language' in state).toBe(true); // stated absence, not a missing key
-});
-it('writes the DETECTED language when the request states none but detection was confident', async () => {
-  expect(state.language).toBe('ru');     // fallback:false — no prompt is owed
-});
-it('still writes and validates an explicitly stated language', async () => { /* 'ru' → 'ru' */ });
-it('still rejects an explicitly stated unsupported language with 400', async () => { /* #1955 gate intact */ });
-```
-
-- [ ] Implement: `body.language` stated → today's normalise-then-gate, verbatim. Absent + `fallback: true` → `null`, skipping `isSupportedLanguage` (nothing to validate). Absent + `fallback: false` → the detected language.
-- [ ] **Verify:** `cd server && npx vitest run src/routes/import.test.ts`, including the pre-existing #1955 cases.
+> **#2337 review N4 (2026-08-13) — this PR already shipped the first bullet and
+> HALF the implement line, before this task was ever dispatched.** `#2335`/PR
+> `#2337` landed independently of this plan and covers the confident-detection
+> half of this task's scope. **What is already done, verbatim against the
+> bullets below:**
+>
+> - [x] **"Persist `detected.fallback` (and the detected language) on the
+>   staging entry"** — done. `StagedImport` (`store/import-staging.ts`) carries
+>   `detectedLanguage` / `detectedLanguageSupported` / `detectedLanguageFallback`,
+>   written at `routes/import.ts:135-136` (`detected.supported` /
+>   `detected.fallback`) and read back in the confirm handler at
+>   `routes/import.ts:308-313`.
+> - [x] **Implement, "Absent + `fallback: false` → the detected language"** —
+>   done: `!languageChosen && entry.detectedLanguageSupported &&
+>   !entry.detectedLanguageFallback ? normaliseBookLanguage(entry.detectedLanguage)
+>   : …` (`routes/import.ts:310-313`).
+> - [x] Failing test **"writes the DETECTED language when the request states
+>   none but detection was confident"** — **this is now GREEN before this
+>   task's implementer would ever write a line**, because the behaviour it
+>   pins already shipped. A scaffolded red-phase test that is already green is
+>   a defect in the plan itself (a test that cannot fail proves nothing) — it
+>   is not evidence Task 3 is complete, only that ONE of its four sub-cases
+>   is. It stayed in the plan as a regression pin, not a red-phase target.
+> - [x] "still writes and validates an explicitly stated language" and "still
+>   rejects an explicitly stated unsupported language with 400" — pre-existing
+>   #1955 behaviour, untouched by #2337, already covered by
+>   `import.test.ts`'s `describe('POST /api/books — unsupported language
+>   rejected at the import boundary (#1955)', …)`.
+>
+> **What is NOT done — the only thing an implementer still needs to build:**
+>
+> - [ ] **"Absent + `fallback: true` → `null`."** Today the fallback-gate
+>   condition at `routes/import.ts:310-313` falls through to
+>   `normaliseBookLanguage(body.language)` on a surrendered detection, and
+>   `normaliseBookLanguage(undefined)` is `'en'` — the historical default, not
+>   `null`. This is a **deliberate, documented** interim choice (see
+>   `routes/import.ts`'s "NOT-A-FALLBACK" comment, and #2337 review N1, which
+>   corrected that comment's claim about which conditions are load-bearing),
+>   not an oversight — but it is exactly what this plan's `R1` design (state
+>   an explicit `null` rather than silently deciding `'en'`) still calls for.
+> - [ ] Failing test **"writes language: null when detection surrendered and
+>   the request states none"** is still red and is this task's real
+>   remaining target.
+>
+> **Re-scoped implement step:** `body.language` stated → today's
+> normalise-then-gate, verbatim (unchanged). Absent + `fallback: true` → `null`,
+> skipping `isSupportedLanguage` (nothing to validate). Absent + `fallback:
+> false` → the detected language (**already shipped, do not re-implement —
+> just don't regress it**).
+> - [ ] **Verify:** `cd server && npx vitest run src/routes/import.test.ts`,
+>   including the pre-existing #1955 cases AND #2337's own new cases (the
+>   blank-language class test, the non-string-`language` 400 test, and the
+>   coerced-Latin-detection fallback tests in `tts/detect-language.test.ts`) —
+>   this task must not regress any of them.
 
 ---
 

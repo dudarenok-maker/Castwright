@@ -5228,6 +5228,7 @@ components:
         isStandalone: { type: boolean }
         language:
           type: string
+          nullable: true
           description: |
             fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected,
             user-overridable). Persisted to `BookStateJson.language`.

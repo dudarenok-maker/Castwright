@@ -228,11 +228,24 @@ const REAL_CJK_PROSE_2 = [
 const NO_LETTERS_TEXT = '12345 000 --- !!! ??? 000000 111 222 333 444 555 666 777 888';
 
 // #2246 C1 (confirmed review finding): a genuinely English table of contents
-// that franc mis-disambiguates to 'es' with `fallback: false` — a fluent,
-// WRONG, non-fallback result. Real repro, reproduced against the real
-// detectManuscriptLanguage before writing this fixture. It also has ZERO
-// sentence-terminal punctuation → 0 prose units — below the single-chapter
-// floor.
+// that franc's restricted-to-the-registry call mis-disambiguates to 'es'. It
+// also has ZERO sentence-terminal punctuation → 0 prose units — below the
+// single-chapter floor.
+//
+// #2337 review C1 (2026-08-13) changed WHERE this gets caught, not THAT it
+// gets caught. Before: franc's restricted call returned 'es' with
+// `fallback: false` — a fluent, WRONG, non-fallback result — so it took the
+// single-chapter prose-unit floor to catch it (this fixture's whole reason
+// for existing). After: an UNRESTRICTED franc call over this same sample
+// lands outside the registry's Latin set too (measured: 'jav', not 'spa'),
+// which C1 treats as a coercion — so `detectManuscriptLanguage` itself now
+// returns `fallback: true` directly, and this fixture surrenders one layer
+// earlier than the floor, without ever reaching it. Real repro either way,
+// reproduced against the real detectManuscriptLanguage before writing this
+// fixture and again before updating it. The floor mechanism itself is still
+// exercised elsewhere (see the "too thin" / "under the 20-unit floor" tests
+// below) by fixtures whose franc call stays confident within the registry's
+// Latin set — this one just no longer needs it as a backstop.
 const TOC_MISDETECTED_AS_SPANISH =
   'Prologue 1 Kaz 2 Inej 3 Kaz 4 Jesper 5 Nina 6 Matthias 7 Inej 8 Wylan 9 Kaz 10 Nina';
 
@@ -373,13 +386,24 @@ test('planBookLanguage: the only available sample surrenders (letter-less single
   assert.match(plan.reason, /surrendered/);
 });
 
-test('planBookLanguage: single chapter, franc confidently wrong but 0 prose units → skip-fallback via the floor, reason names the too-thin winner (#2246 C1 shape, folded into detectManuscriptLanguageFromChapters; #2251 F3 — n=1 gets the same explanation n>=2 does)', () => {
-  // The exact C1 repro: an English TOC-shaped sample franc mis-disambiguates
-  // to 'es' with fallback:false. It cannot corroborate itself (one
-  // chapter), so the single-chapter prose-unit floor catches it — and,
-  // since n=1 is just the n=1 case of the same vote, the reason names the
-  // winner and the floor rather than falling through to the generic
-  // "detection surrendered" message.
+test('planBookLanguage: single chapter, TOC-shaped franc-coercion sample → skip-fallback, surrendered at detection rather than needing the floor (#2246 C1 shape, folded into detectManuscriptLanguageFromChapters; #2337 review C1 moved WHERE this is caught)', () => {
+  // #2246 C1's original repro: franc's restricted call landed on 'es' with
+  // `fallback: false` — a fluent, WRONG, non-fallback result the
+  // single-chapter prose-unit floor had to catch as a backstop (that used to
+  // produce the "es won a clear majority ... under the 20-unit floor"
+  // reason this test asserted).
+  //
+  // #2337 review C1 changed the mechanism: an unrestricted franc call over
+  // this same sample lands outside the registry's Latin set (measured:
+  // 'jav'), so `detectManuscriptLanguage` now flags the coercion directly
+  // and returns `fallback: true` — the ballot never enters `voteLanguage`'s
+  // non-surrendered pool at all, so the floor is never reached and the
+  // generic "detection surrendered" message applies, same as any other
+  // surrendered single chapter (see the NO_LETTERS_TEXT test above). The
+  // observable OUTCOME is unchanged (skip-fallback, nothing written) — only
+  // the reason text is more generic now. The floor mechanism itself remains
+  // covered by the "too thin" / "under the 20-unit floor" tests below,
+  // whose fixtures franc stays confident and IN-registry about.
   const plan = planBookLanguage({
     bookId: 'book-f',
     hasLanguageKey: false,
@@ -387,8 +411,7 @@ test('planBookLanguage: single chapter, franc confidently wrong but 0 prose unit
     manuscriptChapters: null,
   });
   assert.equal(plan.action, 'skip-fallback');
-  assert.match(plan.reason, /es won a clear majority across analysis-cache body chapters/);
-  assert.match(plan.reason, /under the 20-unit floor/);
+  assert.match(plan.reason, /surrendered/);
 });
 
 // ---------------------------------------------------------------------------
@@ -910,8 +933,13 @@ test('main: single sample surrenders (letter-less manuscript, no cache) → --ap
 
 test('main: single-chapter cache sample below the prose floor → --apply does NOT write, folded into "skipped (detection surrendered)" (#2263 — skip-thin-sample retired)', async () => {
   // The C1 TOC regression fixture, exercised through main() end to end —
-  // proof the single-chapter floor path is wired all the way through, even
-  // though it no longer has its own distinct action/summary bucket.
+  // proof this sample never gets written, wired all the way through, even
+  // though it no longer has its own distinct action/summary bucket. Since
+  // #2337 review C1 (see TOC_MISDETECTED_AS_SPANISH's own comment above)
+  // this fixture surrenders at detection rather than at the floor
+  // specifically, but the observable outcome under test here — nothing
+  // written, reported as "skipped (detection surrendered)" — is identical
+  // either way, so this test's assertions are unaffected.
   const tmp = mkdtempSync(join(tmpdir(), 'repair-book-language-thin-'));
   const manuscriptId = `mns_${randomUUID()}`;
   const cacheFilePath = cachePath(manuscriptId);

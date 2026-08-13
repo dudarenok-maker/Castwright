@@ -158,8 +158,11 @@ dependency, not a guarantee.
 - Server `server/src/workspace/book-state-language.test.ts` +
   `state-migrate.test.ts` — resolver default + language survives migration at
   schema 1 (no bump).
-- Server `server/src/routes/import.test.ts` — confirm with `'ru'` persists,
-  omitted → `'en'`.
+- Server `server/src/routes/import.test.ts` — confirm with `'ru'` persists;
+  an omitted/blank language falls back to what `/import` detected (`'en'`
+  only when that detection itself surrendered or is unsupported) — renamed
+  from "defaults to `en`" by #2335/#2337, which stopped that route from
+  discarding its own just-computed detection.
 - Server `server/src/routes/qwen-voice.test.ts` — design proxy sends
   `'Russian'` for a `ru` book, `'English'` for legacy/default.
 - Server `server/src/tts/synthesise-chapter.test.ts` — `forbidKokoroFallback`
