@@ -460,9 +460,10 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
 
   it('NOT FIXED: same-glyph nesting splits into two truncated fragments, not one long turn', () => {
     // The inner `‘dare’` is a second occurrence of the SAME opener/closer
-    // glyphs as the outer run, so the round-2 skip bound (#2288 Critical: a
-    // rejected closer's resumed skip stops at the next opener of any class)
-    // treats the second `‘` as the boundary of the outer run's search. The
+    // glyphs as the outer run, so the rejected-closer resumed-skip bound
+    // (#2288 Critical: a rejected closer's resumed skip stops at the next
+    // opener of any class) treats the second `‘` as the boundary of the
+    // outer run's search. The
     // outer run's only closer candidate before that boundary is the rejected
     // `Don’t` apostrophe, so NEVER-DELETE falls back to it, truncating to
     // "Don". The second `‘` then starts its OWN run, whose first closer
@@ -506,15 +507,16 @@ describe('parser — #2288 known limits (asserted at CURRENT behaviour, not desi
   });
 
   it('NOT FIXED: an inch mark between the elided contraction and the closer still caps the scan', () => {
-    // Neither anchor (round 2's interior-start bound or round 3's
-    // at-rejection bound) fixes this: the bound is computed from the raw
-    // OPENER GLYPH TABLE, not from `openerValid` — and `MAIN_TABLES.en`
-    // carries `"` as an opener (it pairs with itself), so the `"` in `6"`
-    // caps the search exactly like a real opener would, regardless of where
-    // the bound is anchored. Desired output is ["It’s 6" long,"]; flip this
-    // test when that is fixed. A unit-mark opener rule (rejecting `"`/`'`/`’`
-    // as an opener when digit-preceded) was measured and rejected earlier in
-    // this design: 0 repairs, 4 losses.
+    // Neither anchor (an interior-start-anchored bound or the shipped
+    // at-rejection-anchored bound) fixes this: `nearestOpenerAtOrAfter`
+    // (parser.ts) computes the bound from the raw opener set —
+    // `conventionsFor('en').quotePairs`'s openers — with no validity check of
+    // its own, and `en`'s table carries `"` as an opener (it pairs with
+    // itself), so the `"` in `6"` caps the search exactly like a real opener
+    // would, regardless of where the bound is anchored. Desired output is
+    // ["It’s 6" long,"]; flip this test when that is fixed. A unit-mark
+    // opener rule (rejecting `"`/`'`/`’` as an opener when digit-preceded)
+    // was measured and rejected earlier in this design: 0 repairs, 4 losses.
     expect(speechOf('‘It’s 6" long,’ he said.')).toEqual(['It']);
   });
 });
