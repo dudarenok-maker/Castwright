@@ -25,6 +25,7 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
+  RICHNESS_SAMPLE_CHARS,
 } from './prose-units.js';
 
 const SAMPLE_CHARS = 20_000;
@@ -175,7 +176,16 @@ function voteLanguage(
   const winningProseUnits = winningSamples.reduce((sum, s) => sum + countProseUnits(s), 0);
   if (winningProseUnits < PROSE_UNIT_FLOOR) return resultFor('en', true);
 
-  const winningSample = winningSamples.join('\n');
+  /* #2256 review round 2 (finding 3) — joining every winning chapter's own
+     (already per-chapter-capped) sample leaves the TOTAL uncapped, so a book
+     with many chapters can still hand guiraudR/digitTokenShare a
+     multi-hundred-thousand-character sample. Guiraud's R decays with N once
+     a script's per-token vocabulary saturates (see prose-units.ts's own
+     RICHNESS_SAMPLE_CHARS comment); capping the joined sample to the same
+     window prepareSample() already uses per chapter keeps richness
+     comparisons at a length where the corpus this gate is measured against
+     stays representative, regardless of how many chapters the book has. */
+  const winningSample = winningSamples.join('\n').slice(0, RICHNESS_SAMPLE_CHARS);
   if (guiraudR(winningSample) < LEXICAL_RICHNESS_FLOOR) return resultFor('en', true);
   if (digitTokenShare(winningSample) > DIGIT_TOKEN_SHARE_CEILING) return resultFor('en', true);
 
