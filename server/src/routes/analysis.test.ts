@@ -1425,6 +1425,29 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
     expect(JSON.stringify(sentences)).toBe(before);
   });
 
+  // #1984 D18 — this is the site that matters: it runs by default,
+  // knob-independently, and is the #1984 incident's own mechanism
+  // (a roster-shrink demotion). `priorCharacterId` must record the id it
+  // overwrote so the attribution-health metric can tell "engine demoted this"
+  // apart from "the model said narrator".
+  it('records the roster-shrink demotion, which is the #1984 incident mechanism', () => {
+    const r = reconcileSentenceCharacterIds(
+      [makeSentence(1, 1, 'dropped-char', '— Никого здесь не было.')],
+      new Set(['egor', 'narrator']),
+    );
+    expect(r.sentences[0].characterId).toBe('narrator');
+    expect(r.sentences[0].priorCharacterId).toBe('dropped-char');
+    expect(r.demotedCount).toBe(1);
+  });
+
+  it('a sentence that is not demoted carries no priorCharacterId', () => {
+    const r = reconcileSentenceCharacterIds(
+      [makeSentence(1, 1, 'egor')],
+      new Set(['egor', 'narrator']),
+    );
+    expect(r.sentences[0].priorCharacterId).toBeUndefined();
+  });
+
   it('empty input is a no-op (zero counts, empty output)', () => {
     const result = reconcileSentenceCharacterIds([], new Set(['narrator']));
     expect(result.demotedCount).toBe(0);

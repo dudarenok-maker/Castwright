@@ -30,6 +30,23 @@ describe('recoverTaggedNarratorLines', () => {
     expect(byId.get('behnam')).toBe(1);
   });
 
+  // #1984 D18 — flipQ is a re-assignment off narrator, not a demotion. A
+  // priorCharacterId set by an earlier site must not survive onto a sentence
+  // this pass has since flipped to a real speaker, or the attribution-health
+  // metric would report a correctly-recovered line as engine-demoted narrator.
+  it('clears a stale priorCharacterId on the flipped quote', () => {
+    const sentences: Array<ReturnType<typeof s> & { priorCharacterId?: string }> = [
+      {
+        ...s(313, 16, 'narrator', '“That would be easier to believe if you weren’t wearing your circlet,”'),
+        priorCharacterId: 'dropped-char',
+      },
+      s(314, 16, 'narrator', 'Behnam noted.'),
+    ];
+    const out = recoverTaggedNarratorLines(sentences, roster).sentences;
+    expect(out[0].characterId).toBe('behnam');
+    expect(out[0].priorCharacterId).toBeUndefined();
+  });
+
   it('matches by first name ("Wren said" → wren-sparrow)', () => {
     const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
     expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('wren-sparrow');

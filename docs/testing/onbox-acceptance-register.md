@@ -293,13 +293,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**68 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -3086,6 +3086,61 @@ whole setup with E2 and E3, so run the three together. *Criteria:* PR
 [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280) body and PR
 [#2294](https://github.com/dudarenok-maker/Castwright/pull/2294) body; plan 225
 §Invariants item 6.
+
+### E11 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
+
+New read-only `scripts/measure-attribution.mjs` — every unit test mocks its
+inputs; nothing automated runs it against the real `C:\AudiobookWorkspace`
+library, and the spec's own acceptance criteria are stated as properties of
+that run, not of a fixture. Partially run 2026-08-13 from a **feature
+worktree**, which is the reason this row exists rather than closes:
+`server/handoff/cache/` is per-checkout and git-ignored (CLAUDE.md's own
+`CACHE_DIR` note), so a worktree's freshly-built `server/dist` reads an empty
+cache for every book until its analyses are copied in from the checkout that
+actually ran them — every book that has never been re-analysed in the
+worktree itself reads `ok (not analysed)`, indistinguishable from a
+genuinely-fresh import.
+
+**What was observed** (21 of 23 real books' caches copied in, read-only, from
+the primary checkout; copies deleted afterward — nothing written to
+`C:\AudiobookWorkspace`, and the primary checkout's own `server/handoff/cache/`
+was only ever read, never written): a row for every book, none blank; both
+live CJK books (`煤落的委托`, `コールフォールの依頼`) at `spokenTotal > 0`;
+`dashOnlySpoken` non-zero on both Russian books (`Юный дрессировщик` 17,
+`Ночной дозор` 1719); `orphanSpoken` non-zero on several books, concentrated
+in the *Coalfall Commission* family (2–62 across its five language
+editions); `unattributedSpeech` printed for every book. **Re-verified
+2026-08-13** after a #2328 review-gate fix to `orphanSpoken` (it was
+double-counting per unresolvable model id sharing one split span, instead
+of once per span — finding 1): across this same corpus the fix moved
+exactly one book's figure (`Ночной дозор (Tetralogy)`, 30→29), everything
+else above is unchanged; see the acceptance doc's own §1/§5 for the
+corrected per-book table and D13 percentages. **`modelNarrator` and
+`demotedNarrator` read 0 on every book — this is the D18 trap doing its job,
+not the R-9C1 finding recurring:** none of these 21 caches have been
+re-analysed since `priorCharacterId` shipped, so every narrator-speech span
+correctly lands in `unknownOriginNarrator` (verified non-zero, e.g. 193 of
+193 on `Юный дрессировщик`) rather than being defaulted to `modelNarrator`.
+The mutation-tested proof that site 1 (`reconcileSentenceCharacterIds`) *is*
+instrumented lives in `server/src/routes/analysis.test.ts`, not in this run —
+this row is what's left: confirming a **freshly re-analysed** real book
+actually produces a non-zero `demotedNarrator`/`modelNarrator` split, which
+requires GPU time this pass did not spend.
+
+**Still owed:** (1) the full run from the **primary checkout** (or with its
+`server/dist` build), so `hasCacheFile`/`state` reflect every book's real
+analysis history rather than a worktree's copied subset; (2) the dash-stripped
+re-run invariance check (Task 9's paired assertion — run twice, second time
+over scratch-path copies of each cache with every leading dash stripped,
+diff every field of every row); (3) re-analysing one book post-D18 to confirm
+`demotedNarrator`/`modelNarrator` actually populate outside a unit fixture.
+
+*Needs:* a checkout (or worktree with `server/handoff/cache/` populated from
+one) whose cache holds the real 20-book library's analyses, `cd server && npm
+run build`, then `WORKSPACE_DIR=C:\AudiobookWorkspace node
+scripts/measure-attribution.mjs`. *Cost:* under 5 minutes once `server/dist`
+exists. *Criteria:* spec §On-box acceptance
+(`docs/superpowers/specs/2026-08-06-attribution-collapse-visibility-design.md`).
 
 ## Group F — a real Android device
 

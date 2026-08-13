@@ -1439,7 +1439,10 @@ export function reconcileSentenceCharacterIds(
     }
     demotedCount += 1;
     demotedByOriginalId.set(s.characterId, (demotedByOriginalId.get(s.characterId) ?? 0) + 1);
-    out.push({ ...s, characterId: fallbackId });
+    // #1984 D18 — record the id this demotion overwrote. This is the site that
+    // matters: it runs by default and knob-independently, and is the #1984
+    // incident's own mechanism (roster-shrink demotion).
+    out.push({ ...s, characterId: fallbackId, priorCharacterId: s.characterId });
     options.onDemote?.({ sentence: s, originalId: s.characterId });
   }
   return { sentences: out, demotedCount, demotedByOriginalId };

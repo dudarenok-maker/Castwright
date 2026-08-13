@@ -21,6 +21,11 @@ describe('stripThirdPartyFrontMatter', () => {
     expect(r.stripped).toEqual(['Радий Погодин']);
     expect(r.characters.find((c) => c.id === 'pogodin')).toBeUndefined();
     expect(r.sentences.find((s) => s.id === 1)!.characterId).toBe('narrator');
+    // #1984 D18 (finding 2) — a live default-path narrator demotion must
+    // record what it overwrote, same as every other overwrite site.
+    expect(r.sentences.find((s) => s.id === 1)!.priorCharacterId).toBe('pogodin');
+    // The already-narrator sentence is untouched — not itself an overwrite.
+    expect(r.sentences.find((s) => s.id === 2)!.priorCharacterId).toBeUndefined();
   });
 
   it('strips via Signal 2 when title does not classify but chapter is front-region', async () => {
