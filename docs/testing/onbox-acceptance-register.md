@@ -2594,39 +2594,40 @@ Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night W
 > segmentation**, so a pass taken before it lands measures a moving target and has to
 > be repeated. Wait for it, then take C2 and C3 in one session.
 >
-> **#2306's cause IS now identified (2026-08-13): the book was analysed as
-> English.** `POST /api/books` read only `body.language` and defaulted to `'en'`
-> when the field was absent, discarding the `ru` that `POST /api/import` had
-> detected from the chapter bodies seconds earlier. This run was driven over the
-> API and its confirm payload carries no `language` field (`book-req3.json`, still
-> on disk). Marked `en`, the book gets no `languagePreamble` — so stage 1
-> romanises every name (#2313's symptom) and stage 2's rule *"Only words inside
-> quote marks belong to a character"* stands unopposed over dash-marked dialogue —
-> and `conventionsFor('en').dialogueOpen` is `null`, which makes the #2253
-> convention invariant and the #2325 collapse guard both inert.
+> **#2306's cause is still NOT identified (2026-08-13).** A strong candidate was
+> raised and then refuted by measurement, and both halves are recorded here so it
+> is not raised a third time.
 >
-> Confirmed against the books on disk — same manuscript, same engine,
-> `state.language` the only difference:
+> The candidate: this run was driven over the API and its confirm payload carries
+> no `language` field (`book-req3.json`, on disk), so the book persisted as
+> `state.language = "en"` while `POST /import` had detected `ru` seconds earlier.
+> Marked `en` a book gets no `languagePreamble`, and
+> `conventionsFor('en').dialogueOpen` is `null`, which makes the #2253 convention
+> invariant inert. The correlation is real and verified — the 2026-08-06 book that
+> attributed well is `ru`; the 2026-08-12 book that collapsed is `en`, same
+> manuscript and same engine.
 >
-> | book | `state.language` | narrator share |
-> |---|---|---|
-> | `The Night Watch Tetralogy\Ночной дозор` (2026-08-06) | `ru` | 30.3% |
-> | `Standalones\Ночной дозор (C2C3 run 2)` (2026-08-12) | `en` | 95.7% |
+> **The mechanism does not survive testing.** Replaying the captured ch3 chunk-1
+> prompt varying ONLY `StageCall.language` gives 0.0% narrated on both `ru` and
+> `en`; pushing the captured raw model output through `crossExamine` with
+> `dialogueOpen: undefined` (the `en` configuration) gives 5.6%, against a
+> recorded 94.8%. Neither path reproduces the collapse. Every `en` book was
+> created by the same harness in the same sessions as the collapsed runs, so
+> `state.language` may be a marker of provenance rather than the operative
+> difference.
 >
-> Fixed in #2335: the detection is stored on the staging entry and used whenever
-> the confirm body says nothing (absent, `null`, empty or whitespace).
+> The language default is fixed anyway (#2335) — stamping a Russian book English
+> is wrong on its own terms — but it is **not** recorded here as #2306's cause.
 >
-> The earlier hypothesis recorded here — that swapping the roster
-> `reconcileSentenceCharacterIds` validates against moved the victim rate
-> 38.0% → 76.3% — is **withdrawn as the cause**: the run's own logs record zero
-> demotions on that path, and controlled replays of the real chunker with
-> `language: 'ru'` attribute the collapsed chapter at 0.5% against a recorded
-> 94.8%. It remains a latent hazard that did not fire here.
+> The earlier roster-reconcile hypothesis is also withdrawn: the run's own logs
+> record zero demotions on that path, and controlled replays of the real chunker
+> attribute the collapsed chapter at 0.5%. It remains a latent hazard that did
+> not fire here.
 >
 > **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down a run's
-> checkout** — still good practice, though #2324 now numbers each call's forensics
-> so a chunked chapter no longer overwrites its own prompts and responses as it
-> runs (which is why only last chunks survived this one).
+> checkout** — #2324 now numbers each call's forensics, so a chunked chapter no
+> longer overwrites its own prompts and responses as it runs (which is why only
+> last chunks survived this one).
 
 ### C1 · Free-tier Gemma cloud pass completes end to end ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
