@@ -434,8 +434,7 @@ describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
     // The invariant activates for THREE languages. es/fr have no book in the
     // workspace corpus and no fixture, so this unit case is their ONLY
     // coverage — see Global Constraints.
-    const ES_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu; // lang/es.ts:8, identical in lang/fr.ts:8
-    const ES_OPTS = { ...BASE_OPTS, dialogueOpen: ES_DASH };
+    const ES_OPTS = { ...BASE_OPTS, dialogueOpen: conventionsFor('es')!.dialogueOpen };
     const res = run([aligned(mkText('anton', '—No vale la pena'), [tagSpan()])], 100, ES_OPTS);
     expect(res.sentences[0].characterId).toBe('anton');
     expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });

@@ -706,11 +706,11 @@ describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;'
     const paras = parseChapterStructure('Ana caminó por la calle.', esIdx);
     expect(paras[0].kind).toBe('narration');
   });
-  it('#2289: negative control — an unrelated entity (&nbsp;) does not open dialogue', () => {
+  it('#2289: negative control — an unrelated entity (&hellip;) does not open dialogue', () => {
     // Guards against an over-broad fix such as /^\s*(?:&\w+;|[-–—])\s*/iu,
-    // which would also match &mdash;/&ndash; but wrongly treat &nbsp; as a
-    // dialogue opener too.
-    const paras = parseChapterStructure('&nbsp; Un momento — dijo él.', esIdx);
+    // which would match any entity. &hellip; survives stripHtml so this control
+    // is realistic end-to-end, not just a unit-level mutation guard.
+    const paras = parseChapterStructure('&hellip; Un momento — dijo él.', esIdx);
     expect(paras[0].kind).toBe('narration');
   });
 });
