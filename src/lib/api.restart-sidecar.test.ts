@@ -87,4 +87,40 @@ describe('api.restartSidecar — refusal messages', () => {
 
     await expect(api.restartSidecar()).resolves.toEqual({ ok: true });
   });
+
+  /* #2348 review Minor finding N7 — realRestartSidecar surfaced the
+     server's own error text with no length cap (measured: a 40,056-char
+     body rendered raw into the UI). describeConfigSaveError's sibling
+     /api/config path already caps at 500 chars via
+     MAX_SAVE_ERROR_MESSAGE_LENGTH/finalizeSaveErrorMessage
+     (override-row.tsx) — this pins the same cap, applied the same way,
+     for both the parsed `error` field and the raw wrapper-text fallback. */
+  it("caps a pathological server error sentence at 500 chars, same as describeConfigSaveError", async () => {
+    const pathological = 'x'.repeat(40_056);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ ok: false, error: pathological }), { status: 409 }),
+        ),
+      ),
+    );
+
+    const err = await api.restartSidecar().catch((e: Error) => e);
+    const message = (err as Error).message;
+    expect(message.length).toBe(501); // 500 chars + the "…" suffix
+    expect(message.endsWith('…')).toBe(true);
+    expect(message.startsWith('x'.repeat(500))).toBe(true);
+  });
+
+  it('caps a pathological non-JSON wrapper body at 500 chars too', async () => {
+    const pathological = '<html>' + 'y'.repeat(40_056) + '</html>';
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(pathological, { status: 502 }))));
+
+    const err = await api.restartSidecar().catch((e: Error) => e);
+    const message = (err as Error).message;
+    expect(message.length).toBe(501);
+    expect(message.endsWith('…')).toBe(true);
+    expect(message.startsWith('Sidecar restart failed (502): <html>')).toBe(true);
+  });
 });

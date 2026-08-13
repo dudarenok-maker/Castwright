@@ -8790,6 +8790,23 @@ async function realResetPrompt(id: string): Promise<PromptState> {
   return res.json();
 }
 
+/* #2348 review Minor finding N7 — this function surfaces the server's own
+   error text (the parsed `error` field, or the raw wrapper body as a
+   fallback) with no length cap; a pathological body renders raw into the
+   UI (measured: 40,056 chars) via either caller (blocker-fix-action.tsx's
+   `error` state or advanced.tsx's `restartFailureMessage` toast).
+   describeConfigSaveError's sibling /api/config path already caps this
+   exact input class at 500 chars via
+   MAX_SAVE_ERROR_MESSAGE_LENGTH/finalizeSaveErrorMessage
+   (components/settings/override-row.tsx) — mirror that cap here, same
+   value and same truncation shape, rather than inventing a second one. */
+const MAX_RESTART_ERROR_MESSAGE_LENGTH = 500;
+function capRestartErrorMessage(message: string): string {
+  return message.length > MAX_RESTART_ERROR_MESSAGE_LENGTH
+    ? `${message.slice(0, MAX_RESTART_ERROR_MESSAGE_LENGTH)}…`
+    : message;
+}
+
 /* #2348 review BLOCKING finding — every failure branch of POST
    /api/sidecar/restart (server/src/routes/sidecar-health.ts) answers 409 or
    503 with a populated `{ ok: false, error: "<human sentence>" }` body; there
@@ -8812,7 +8829,11 @@ async function realRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
     } catch {
       /* not JSON (e.g. a proxy's HTML error page) — fall back below */
     }
-    throw new Error(parsedError ?? `Sidecar restart failed (${res.status}): ${text || res.statusText}`);
+    throw new Error(
+      capRestartErrorMessage(
+        parsedError ?? `Sidecar restart failed (${res.status}): ${text || res.statusText}`,
+      ),
+    );
   }
   return res.json();
 }
