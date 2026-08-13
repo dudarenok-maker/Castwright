@@ -132,9 +132,11 @@ describe('isSpokenLine', () => {
     // carries ['“','”'] and ja.quotePairs does not.
     expect(isSpokenLine('“你好”', ZH)).toBe(true);
     expect(isSpokenLine('“おはよう”', JA)).toBe(false);
-    // #2289: es/fr dialogueOpen now carry &ndash; alongside &mdash; (ru
-    // precedent) — this used to pin the exclusion as deliberate; it now pins
-    // the fix instead.
+  });
+  it('#2289: es/fr dialogueOpen carries &ndash; alongside &mdash;', () => {
+    // es/fr dialogueOpen now carry &ndash; alongside &mdash; (ru precedent)
+    // — this used to pin the exclusion as deliberate; it now pins the fix
+    // instead.
     expect(isSpokenLine('&ndash; Un momento', ES)).toBe(true);
     expect(isSpokenLine('&ndash; Un instant', FR)).toBe(true);
     expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that was already carried, as the control

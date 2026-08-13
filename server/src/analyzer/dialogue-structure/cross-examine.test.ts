@@ -434,11 +434,20 @@ describe('#2253 — dialogue-convention invariant (decideSentence)', () => {
     // The invariant activates for THREE languages. es/fr have no book in the
     // workspace corpus and no fixture, so this unit case is their ONLY
     // coverage — see Global Constraints.
-    const ES_DASH = /^\s*(?:&mdash;|[-–—])\s*/iu; // lang/es.ts:5, identical in lang/fr.ts:5
+    const ES_DASH = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu; // lang/es.ts:8, identical in lang/fr.ts:8
     const ES_OPTS = { ...BASE_OPTS, dialogueOpen: ES_DASH };
     const res = run([aligned(mkText('anton', '—No vale la pena'), [tagSpan()])], 100, ES_OPTS);
     expect(res.sentences[0].characterId).toBe('anton');
     expect(res.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
+
+    // #2289: &ndash; must be rescued the same way as the literal dash glyph.
+    const resNdash = run(
+      [aligned(mkText('anton', '&ndash; No vale la pena'), [tagSpan()])],
+      100,
+      ES_OPTS,
+    );
+    expect(resNdash.sentences[0].characterId).toBe('anton');
+    expect(resNdash.flags).toContainEqual({ index: 0, reason: 'dash-line-keep-flag:anton' });
   });
 
   it('a speech span still wins — the invariant never overrides real evidence', () => {

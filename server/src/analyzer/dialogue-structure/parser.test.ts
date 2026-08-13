@@ -696,10 +696,21 @@ describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;'
     const paras = parseChapterStructure('&ndash; Un instant — dit-il.', frIdx);
     expect(paras[0].kind).toBe('dialogue');
   });
-  it('#2289: positive control — &mdash; still opens dialogue in es and fr (proves the test is not vacuous)', () => {
+  it('#2289: positive control — &mdash; still opens dialogue in es and fr', () => {
     const esParas = parseChapterStructure('&mdash; Un momento — dijo él.', esIdx);
     const frParas = parseChapterStructure('&mdash; Un instant — dit-il.', frIdx);
     expect(esParas[0].kind).toBe('dialogue');
     expect(frParas[0].kind).toBe('dialogue');
+  });
+  it('#2289: negative control — ordinary narration is not dialogue', () => {
+    const paras = parseChapterStructure('Ana caminó por la calle.', esIdx);
+    expect(paras[0].kind).toBe('narration');
+  });
+  it('#2289: negative control — an unrelated entity (&nbsp;) does not open dialogue', () => {
+    // Guards against an over-broad fix such as /^\s*(?:&\w+;|[-–—])\s*/iu,
+    // which would also match &mdash;/&ndash; but wrongly treat &nbsp; as a
+    // dialogue opener too.
+    const paras = parseChapterStructure('&nbsp; Un momento — dijo él.', esIdx);
+    expect(paras[0].kind).toBe('narration');
   });
 });
