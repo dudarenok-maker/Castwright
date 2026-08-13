@@ -2,7 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> ## ⛔ Task 0 is an OWNER DECISION. Do not start Task 1 without it.
+> ## ✅ Task 0 — ANSWERED by the repo owner, 2026-08-13: **rule B (gap tier)**.
+>
+> The reading of record is **"no destroyed turns"**. Implement B, as this plan
+> already does; Tasks 1–9 stand as written and the A variant below is now
+> historical context only. **Do not re-impose acceptance items 1–2** (0 of
+> 51,608 / 0 of 9 pairs): the same pass that measured them proved they contain
+> zero destroyed turns, so they are passable without fixing the ticket and the
+> design formally supersedes them. Bind instead to the turns-destroyed columns
+> across all three families, the suppression class (0 of 21), the corpus result,
+> nesting, and the 270-test suite.
+>
+> *Original framing, retained because it is why the plan is shaped this way:*
 >
 > The design pass produced **two** rules. Both pass the ticket's five stated
 > acceptance items or fail them in ways the items cannot see, and they differ on

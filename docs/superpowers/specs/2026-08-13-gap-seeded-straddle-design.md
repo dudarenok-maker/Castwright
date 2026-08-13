@@ -1,6 +1,7 @@
 # The gap-seeded straddle, and what actually blocks the `quotePairs` widening — design
 
-Status: **draft — an owner decision is owed before implementation** · Issue: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) (M2) · Blocks: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) / [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279) · Follows: M1, [`2026-08-12-quote-delimiter-validity-design.md`](2026-08-12-quote-delimiter-validity-design.md) (shipped `e839a939`, PR [#2300](https://github.com/dudarenok-maker/Castwright/pull/2300))
+Status: **active — owner decided 2026-08-13: rule B (gap tier). "No destroyed
+turns" is the reading.** · Issue: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) (M2) · Blocks: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) / [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279) · Follows: M1, [`2026-08-12-quote-delimiter-validity-design.md`](2026-08-12-quote-delimiter-validity-design.md) (shipped `e839a939`, PR [#2300](https://github.com/dudarenok-maker/Castwright/pull/2300))
 
 Implementation plan: [`docs/superpowers/plans/2026-08-13-gap-seeded-straddle.md`](../plans/2026-08-13-gap-seeded-straddle.md)
 
@@ -92,6 +93,33 @@ That is the decision, stated as the design owes it: **does the "no corruption
 on drifted input" rule mean "no spurious speech spans", or "no destroyed
 turns"?** #1601 is consistent with either reading; the two have never had to be
 distinguished before.
+
+### Decided, 2026-08-13 — "no destroyed turns". Rule B (gap tier) ships.
+
+The repo owner selected **B**, presented with the priced table above. The
+reading of record is now explicit: **a rule must never destroy a turn; a
+spurious narration-read-as-speech span is a lesser harm and is accepted where
+eliminating it would cost turns or benefit.**
+
+The two residuals are accepted with it, and each is asymmetric in the way that
+decided it: B's residual is **narration spoken aloud** — audible, attributable,
+and recoverable by a later rule; A's residual is **dialogue silently lost** —
+inaudible, and invisible to every instrument built for this ticket, which is
+how it nearly shipped. That asymmetry, not the raw counts, is what the standing
+German answer was actually protecting against.
+
+**This does not reopen #1601 or contradict the standing answer.** German
+answered "drifted input must not corrupt" against a case that *destroyed
+turns*; B destroys none. What the decision settles is the ambiguity nobody had
+had to resolve before, not the earlier ruling.
+
+**Item 1–2 of the ticket's acceptance criterion are formally superseded**, and
+must not be re-imposed on the implementation: they measure spurious spans, and
+the same measurement pass proved they contain zero destroyed turns — so they
+were passable without fixing the ticket. The binding criteria are now the
+turns-destroyed columns across all three families, the suppression class
+(0 of 21), the corpus result (938 repairs / 0 merged / 0 lost), nesting, and
+the 270-test suite.
 
 ---
 
