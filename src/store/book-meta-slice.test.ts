@@ -149,6 +149,77 @@ describe('bookMetaSlice — commitDraft', () => {
     expect(next.draft).toBeNull();
     expect(next.saved.ns.notes).toBe('First line.\nSecond line.\n\nThird paragraph.');
   });
+
+  /* #2230 — the optimistic fold keeps a pre-commit snapshot so a refused 409
+     PUT can be rolled back; the header must not keep showing a rename the
+     server rejected. */
+  it('captures a pre-commit snapshot (lastCommitted) when folding the draft', () => {
+    const start: BookMetaState = {
+      draft: { title: 'Renamed', genre: 'Sci-fi' },
+      saved: { ns: fullMeta() },
+      prosodyEnabled: {},
+    };
+    const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
+    expect(next.saved.ns.title).toBe('Renamed');
+    /* Snapshot holds the pre-commit baseline — NOT the optimistic result. */
+    expect(next.lastCommitted?.['ns']).toEqual(fullMeta());
+    expect(next.lastCommitted?.['ns'].title).toBe('The Northern Star');
+  });
+
+  it('does not snapshot on an empty draft (nothing to roll back)', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'Bumped' }) },
+      prosodyEnabled: {},
+    };
+    const next = reducer(start, bookMetaActions.commitDraft({ bookId: 'ns' }));
+    expect(next.lastCommitted?.['ns']).toBeUndefined();
+  });
+});
+
+describe('bookMetaSlice — rollbackCommitDraft (#2230)', () => {
+  it('restores saved[bookId] to the last committed snapshot and clears it', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta({ title: 'Renamed' }) },
+      lastCommitted: { ns: fullMeta() },
+      prosodyEnabled: {},
+    };
+    const next = reducer(start, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
+    expect(next.saved.ns).toEqual(fullMeta());
+    expect(next.saved.ns.title).toBe('The Northern Star');
+    expect(next.lastCommitted?.['ns']).toBeUndefined();
+  });
+
+  it('is a no-op (and clears the snapshot) when nothing was captured', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta() },
+      lastCommitted: {},
+      prosodyEnabled: {},
+    };
+    const next = reducer(start, bookMetaActions.rollbackCommitDraft({ bookId: 'ns' }));
+    expect(next.saved.ns).toEqual(fullMeta());
+    expect(next.lastCommitted).toEqual({});
+  });
+
+  it('hydrateFromBookState clears the stale snapshot for the refreshed book', () => {
+    const start: BookMetaState = {
+      draft: null,
+      saved: { ns: fullMeta() },
+      lastCommitted: { ns: fullMeta({ title: 'Old' }) },
+      prosodyEnabled: {},
+    };
+    const next = reducer(
+      start,
+      bookMetaActions.hydrateFromBookState({
+        bookId: 'ns',
+        state: { title: 'Authoritative', author: 'A', series: 'S' },
+      }),
+    );
+    expect(next.saved.ns.title).toBe('Authoritative');
+    expect(next.lastCommitted?.['ns']).toBeUndefined();
+  });
 });
 
 describe('selectors', () => {

@@ -48,6 +48,12 @@ export interface BookMetaState {
   draft: Partial<EditableBookMeta> | null;
   /** Last-saved snapshot for each book the user has opened this session. */
   saved: Record<string, EditableBookMeta>;
+  /** #2230 — pre-commit snapshot of `saved[bookId]`, captured so a refused save
+      (409 from the persistence PUT) can roll the optimistic update back and stop
+      the header showing a value the server rejected. Overwritten by the next
+      commit, cleared on hydrate. Present only for a book with an in-flight
+      commit that is still awaiting its PUT. */
+  lastCommitted?: Record<string, EditableBookMeta>;
   /** fs-65 Phase 3 — per-book prosody annotation intent flag keyed by bookId.
       Eager-default: absent (undefined) ⇒ ON; only an explicit `false` opts out.
       The Task-13 trigger gate is `prosodyEnabled !== false`.
@@ -59,6 +65,7 @@ export interface BookMetaState {
 const initialState: BookMetaState = {
   draft: null,
   saved: {},
+  lastCommitted: {},
   prosodyEnabled: {},
 };
 
@@ -94,6 +101,9 @@ export const bookMetaSlice = createSlice({
       };
       s.prosodyEnabled[bookId] = state.prosodyEnabled;
       s.draft = null;
+      /* #2230 — a fresh authoritative state from disk supersedes any pending
+         commit snapshot (the server is now the truth, rollback is moot). */
+      if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
 
     /* Stage a single-field edit into the draft buffer. Triggered on every
@@ -130,12 +140,32 @@ export const bookMetaSlice = createSlice({
         /* No baseline — refuse to corrupt state. Still clear the draft so the
            user's intent (commit & close) is honoured. */
         s.draft = null;
+        if (s.lastCommitted) delete s.lastCommitted[bookId];
         return;
       }
       if (s.draft) {
+        /* #2230 — snapshot the pre-commit saved value so a refused PUT (409)
+           can be rolled back, keeping the header off a title the server never
+           accepted. (s.lastCommitted ??= {}) is guarded by the recent-field
+           optionality — absent on older persisted/test state. */
+        const snapshot = (s.lastCommitted ??= {});
+        snapshot[bookId] = base;
         s.saved[bookId] = { ...base, ...s.draft };
       }
       s.draft = null;
+    },
+
+    /* #2230 — restore `saved[bookId]` to the last-committed snapshot when the
+       persistence PUT was refused. Dispatched by persistence-middleware on a
+       bookMeta/commitDraft failure: the server left the book (folder / on-disk
+       state) untouched, so the editor must not keep showing the renamed value.
+       Last-wins means a successful later commit overwrites the snapshot, so a
+       rollback only ever reverts to the last value the server accepted. */
+    rollbackCommitDraft: (s, a: PayloadAction<{ bookId: string }>) => {
+      const { bookId } = a.payload;
+      const prior = s.lastCommitted?.[bookId];
+      if (prior) s.saved[bookId] = prior;
+      if (s.lastCommitted) delete s.lastCommitted[bookId];
     },
   },
 });

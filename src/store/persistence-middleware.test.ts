@@ -12,6 +12,7 @@ import { persistenceMiddleware } from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
+import { bookMetaSlice, bookMetaActions } from './book-meta-slice';
 
 function makeStore(state: Record<string, unknown>) {
   return {
@@ -560,5 +561,86 @@ describe('bulk-reassign persistence', () => {
     await vi.runAllTimersAsync();
     const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
     expect(toasts.length).toBe(0);
+  });
+});
+/* #2230 — a refused rename (409) from the Listen-view book-meta editor must
+   surface the server's sentence AND roll back the optimistic saved update so
+   the header stops showing a title the server rejected. Unlike makeReduxStore
+   above (whose bookMeta is a no-op stub), this builder wires the REAL bookMeta
+   reducer so setDraftField → commitDraft → rollbackCommitDraft actually mutate
+   state. */
+function makeBookMetaStore() {
+  const meta = {
+    title: 'The Northern Star',
+    author: 'Marin Vale',
+    series: '',
+    narratorCredit: 'Anders Vale',
+    genre: 'Literary fiction',
+    publicationDate: '2026-05-09',
+    description: null,
+    notes: null,
+  };
+  return configureStore({
+    reducer: {
+      bookMeta: bookMetaSlice.reducer,
+      ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
+    } as never,
+    preloadedState: {
+      ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+      bookMeta: { draft: null, saved: { b1: meta }, prosodyEnabled: {} },
+    } as never,
+    middleware: (gDM) => gDM().concat(persistenceMiddleware),
+  });
+}
+
+describe('bookMeta/commitDraft persist failure (#2230)', () => {
+  it('surfaces the server refusal sentence and rolls the optimistic title back', async () => {
+    putBookState.mockRejectedValueOnce(
+      new Error(
+        'Book state PUT failed (409): Analysis is running for this book. Wait for it to finish before renaming it.',
+      ),
+    );
+    const store = makeBookMetaStore();
+    /* Stage + commit a rename exactly as the Listen editor does. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Renamed Book' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.runAllTimersAsync();
+
+    const state = store.getState() as {
+      notifications: { toasts: { kind: string; message: string; dedupeKey?: string }[] };
+      bookMeta: { saved: Record<string, { title: string }> };
+    };
+
+    /* The toast carries the server's own message — NOT the bulk-reassign copy. */
+    const toast = state.notifications.toasts.find((t) => t.dedupeKey === 'book-meta-persist-failed');
+    expect(toast?.kind).toBe('error');
+    expect(toast?.message).toContain('Analysis is running for this book');
+    expect(toast?.message).not.toContain('Line reassignment');
+
+    /* The optimistic update is reverted so the header shows the accepted title. */
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+  });
+
+  it('surfaces a path-collision refusal without losing the server message', async () => {
+    putBookState.mockRejectedValueOnce(
+      new Error(
+        'Book state PUT failed (409): A book already exists at that Author/Series/Title path.',
+      ),
+    );
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Clashing' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.runAllTimersAsync();
+
+    const state = store.getState() as {
+      notifications: { toasts: { message: string }[] };
+      bookMeta: { saved: Record<string, { title: string }> };
+    };
+    const toast = state.notifications.toasts.find((t) =>
+      t.message.includes('already exists at that Author/Series/Title path'),
+    );
+    expect(toast).toBeTruthy();
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
   });
 });
