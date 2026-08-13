@@ -675,3 +675,31 @@ describe('parser — #2288 round 4: crossGlyphBound guards a multi-closer opener
     expect(speech).toEqual(['He said don', 'Stop,']);
   });
 });
+
+// #2289 — es/fr.dialogueOpen carried &mdash; but not &ndash;, so an EPUB
+// toolchain that left the entity literal in the body text (stripHtml only
+// decodes a small named-entity set, per ru.ts's precedent comment) opened no
+// dialogue paragraph at all: `&ndash; Un momento` parsed as narration while
+// `&mdash; Un momento` — the exact same dash, just the other entity — parsed
+// as dialogue. Exercised against `parseChapterStructure` itself (not
+// `isSpokenLine`), since `dialogueOpen` drives the paragraph split there
+// directly and `isSpokenLine` alone would not prove the fix reaches it.
+describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;', () => {
+  const esIdx = buildNameIndex([{ id: 'ana', name: 'Ana' }], conventionsFor('es')!);
+  const frIdx = buildNameIndex([{ id: 'anne', name: 'Anne' }], conventionsFor('fr')!);
+
+  it('#2289: es — &ndash; opens a dialogue paragraph (was narration)', () => {
+    const paras = parseChapterStructure('&ndash; Un momento — dijo él.', esIdx);
+    expect(paras[0].kind).toBe('dialogue');
+  });
+  it('#2289: fr — &ndash; opens a dialogue paragraph (was narration)', () => {
+    const paras = parseChapterStructure('&ndash; Un instant — dit-il.', frIdx);
+    expect(paras[0].kind).toBe('dialogue');
+  });
+  it('#2289: positive control — &mdash; still opens dialogue in es and fr (proves the test is not vacuous)', () => {
+    const esParas = parseChapterStructure('&mdash; Un momento — dijo él.', esIdx);
+    const frParas = parseChapterStructure('&mdash; Un instant — dit-il.', frIdx);
+    expect(esParas[0].kind).toBe('dialogue');
+    expect(frParas[0].kind).toBe('dialogue');
+  });
+});

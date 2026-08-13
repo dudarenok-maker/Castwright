@@ -132,10 +132,12 @@ describe('isSpokenLine', () => {
     // carries ['“','”'] and ja.quotePairs does not.
     expect(isSpokenLine('“你好”', ZH)).toBe(true);
     expect(isSpokenLine('“おはよう”', JA)).toBe(false);
-    // es/fr dialogueOpen carry &mdash; but not &ndash; (ru carries both).
-    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false);
-    expect(isSpokenLine('&ndash; Un instant', FR)).toBe(false);
-    expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that IS carried, as the control
+    // #2289: es/fr dialogueOpen now carry &ndash; alongside &mdash; (ru
+    // precedent) — this used to pin the exclusion as deliberate; it now pins
+    // the fix instead.
+    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(true);
+    expect(isSpokenLine('&ndash; Un instant', FR)).toBe(true);
+    expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that was already carried, as the control
   });
   it('a single quote used as an apostrophe does NOT make narration spoken', () => {
     expect(isSpokenLine('She didn’t know where she was.', EN)).toBe(false); // smart apostrophe (lone U+2019)

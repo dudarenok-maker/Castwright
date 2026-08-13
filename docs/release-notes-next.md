@@ -275,6 +275,7 @@ Two chains land together. The first stops a refusal being issued against a pessi
   Measured over the 140-book English corpus arm: the unbounded rule merged 8
   paragraphs and swallowed 18 turns; bounding the skip brings both to 0,
   leaving 938 clean repairs. (#2288, PR #2300)
+- **`es`/`fr` `dialogueOpen` now carries `&ndash;` alongside `&mdash;`, matching the `ru` table** (#2289). Both tables carried the literal HTML entity `&mdash;` but not `&ndash;`; `stripHtml` (`server/src/parsers/html-utils.ts`) only decodes a small named-entity set, so some EPUB toolchains leave the entity literal in the body text, and a Spanish or French manuscript whose dash dialogue survived conversion as `&ndash;` opened no dialogue paragraph at all — `ru.ts` already carried both, with a comment explaining why. Regression test exercises `parseChapterStructure` directly (not just `isSpokenLine`), since `dialogueOpen` drives the paragraph split there. Honesty note: the two es/fr manuscripts available in this workspace (`El Encargo de Coalfall`, `La Commande de Coalfall`) use guillemet-quote dialogue exclusively — zero `&mdash;`/`&ndash;`/dash-paragraph-openers in either — so no real-manuscript corpus replay is possible for this fix; the generated regression test is the only evidence.
 
 ---
 
