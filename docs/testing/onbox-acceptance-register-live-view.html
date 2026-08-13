@@ -181,8 +181,8 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">69</div><div class="l">Owed</div></div>
-    <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
+    <div class="stat"><div class="n owed">71</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n">8</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">2</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 60)</div></div>
@@ -200,6 +200,7 @@
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>11</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
+      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td>2</td></tr>
     </tbody>
   </table>
   </div>
@@ -1352,6 +1353,39 @@
         <p><b>Pre-merge evidence, gathered rather than asserted</b> — the shipped <code>resolveReleaseBody()</code> replayed against the last 12 real tags: <code>v1.14.0</code>…<code>v1.9.0</code> (9 releases) → publish from FILE; <code>v1.8.0</code> → BLOCKED (placeholder annotation, 18 B, vs. a stale 3,060 B file still headed <code>v1.7.0</code>); <code>v1.7.0</code> → BLOCKED (3,060 B file vs. 6,757 B annotation); <code>v1.6.0</code> → file absent at that ref → publish from ANNOTATION. <b>Two real historical releases genuinely diverged</b> — this is not hypothetical.</p>
         <p><b>Observe, at the next real release cut:</b> the release-body step exits 0 and logs the FILE as its source; the published body matches <code>git show &lt;tag&gt;:docs/release-notes-next.md</code> exactly, not the one-line placeholder; the annotation checks visibly ran rather than being silently skipped. A failure here is a real signal — read what it names before overriding anything.</p>
         <p class="src">Nothing beyond a real vX.Y.Z tag push — the next release cut · zero extra cost, observed as part of a cut that was happening anyway · <a href="https://github.com/dudarenok-maker/Castwright/issues/2137">#2137</a>, PR #2168</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- H -->
+  <section class="group is-soft" id="gh">
+    <header>
+      <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real CJK manuscript this corpus lacks <span class="gcount">2 rows</span></h3>
+      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists.</p>
+    </header>
+    <details class="item">
+      <summary><span class="num">H1</span><span class="iname">Kana trigram gate at real-book scale</span><span class="risk">Synthetic only</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The kana tokenizer (overlapping character <b>trigrams</b>, replacing per-character tokenization) is verified only against a hand-authored synthetic fixture — 30 distinct hiragana base words composed into 1,500 sentences — <b>not a genuine all-kana book</b>. The fix closes the specific real failure #2256 reported (a real book at N≈4,843 characters measured R = 1.72 under the old scheme, and was refused), but this repo cannot reproduce that book to re-measure it.</p>
+        <p class="flag">Round 3 additionally found the richness gate is <b>close to inert for kana</b> beyond what <code>dedupeProseUnits</code> already catches. That is recorded honestly in <code>prose-units.ts</code> rather than implied away — which is part of why this row exists.</p>
+        <p><b>What to observe</b>, once a real all-kana manuscript is available (a children's or early-reader text with no kanji — note this repo's two real Coalfall translations are <i>mixed</i> kanji+kana, not this case):</p>
+        <ul>
+          <li>Detection returns <code>{ language: 'ja', supported: true, fallback: false }</code>.</li>
+          <li><code>guiraudR</code> on the deduped winning sample, recorded as a real number against the floor of 3 — not the 30-word fixture's.</li>
+          <li>The combined character count the gate actually saw (no cap applies since round 3).</li>
+        </ul>
+        <p class="src">A real, legally usable all-kana Japanese manuscript. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 3, finding C5</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">H2</span><span class="iname">Richness floor on a full-length real Han book</span><span class="risk">Claim retracted</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>voteLanguage</code> measures both gates over the whole joined sample with <b>no length cap</b>. Round 2 added one; round 3 removed it because the cap made the verdict chapter-<i>order</i>-dependent. Removing it is right for that reason — which is measured. What is <b>not</b> measured is the thing the cap was added for: Guiraud's R is <code>V / √N</code>, and V saturates while N keeps growing, so R decays with book length.</p>
+        <p class="flag">Round 3 justified the removal with "the corpus's 815k-char worst case → R ≈ 4.4". <b>Round 4 could not reproduce that number from anything in this repo, and it was deleted rather than restated.</b> This row is what replaces it.</p>
+        <p>What this repo can actually reach: the two real Coalfall translations measure R = <b>12.078</b> (zh, 4,425 Han characters, 795 distinct) and <b>27.302</b> (ja mixed). There is no synthetic substitute — a 30-word-pool zh narrative at 21,711 characters measures R = <b>1.581</b> and is <i>refused</i>, because a hand-authored pool reaches ~250 distinct Han characters where real Chinese prose reaches thousands. A synthetic large-N fixture measures its own vocabulary, not the gate.</p>
+        <p>So the largest real Han sample measurable here is ~4.4k characters — one to two orders of magnitude short of a book.</p>
+        <p><b>What to observe:</b> import a full-length real Chinese manuscript, confirm <code>{ language: 'zh', supported: true, fallback: false }</code>, and record the joined sample's combined character count alongside the observed <code>guiraudR</code> against the floor of 3. Vocabulary growth is the thing being checked: at chapter scale V still outruns √N, so R <i>rises</i> — the exposure is only in the saturation regime.</p>
+        <p class="src">A full-length real Chinese book. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 4, finding B3</p>
       </div>
     </details>
   </section>
