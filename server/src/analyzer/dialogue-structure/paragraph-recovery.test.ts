@@ -72,6 +72,17 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (opt-in, conservati
     expect(speechOf(paras)).toHaveLength(0);
   });
 
+  it('does NOT promote a narration prefix that precedes a later verb-tagged turn (blocking regression)', () => {
+    const body = 'Он вошёл. — Толик молчал, глядя в окно. — Привет, — сказал Антон.';
+    const paras = parseChapterStructure(body, idx, { recoverMidParagraphTurns: true });
+    const speech = speechOf(paras);
+    // the narration prefix "Толик молчал…" must NOT become speech; only the
+    // later verb-tagged turn recovers
+    expect(speech).toHaveLength(1);
+    expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
+    expect(body.slice(speech[0].start, speech[0].end)).toContain('Привет');
+  });
+
   it('clean chapter (fine-grained, all lines dash-open) recovers +0 spans', () => {
     const body = [
       '— Привет, — сказал Антон.',

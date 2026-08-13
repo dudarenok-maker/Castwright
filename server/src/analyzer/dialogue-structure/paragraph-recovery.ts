@@ -68,15 +68,21 @@ export function splitEvidencedInteriorTurns(body: string, conv: LanguageConventi
     if (!line.trim()) { out.push(line); continue; }
     // skip lines that already open dialogue (nothing hidden to recover there)
     if (conv.dialogueOpen.test(line)) { out.push(line); continue; }
-    // collect candidate turn-start dash offsets (at the DASH GLYPH, so the new
-    // line begins with the dash and the prior piece ends cleanly before it)
-    const cuts: number[] = [];
+    // collect ALL candidate turn-start dash offsets first, so each candidate is
+    // evidenced only against ITS OWN turn (up to the next candidate or end),
+    // never the whole remainder (a later turn's verb tag must not promote an
+    // earlier narration segment).
+    const candidates: { dash: number; start: number }[] = [];
     for (const m of line.matchAll(CANDIDATE)) {
-      const seg = line.slice((m.index ?? 0) + m[0].length);
-      if (!hasTurnEvidence(seg, conv)) continue;
       const punctLen = m[1].length;
       const dashRel = m[0].slice(punctLen).search(/(?:&mdash;|&ndash;|[-–—])/);
-      cuts.push((m.index ?? 0) + punctLen + dashRel);
+      candidates.push({ dash: (m.index ?? 0) + punctLen + dashRel, start: (m.index ?? 0) + m[0].length });
+    }
+    const cuts: number[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const segEnd = i + 1 < candidates.length ? candidates[i + 1].start : line.length;
+      const seg = line.slice(candidates[i].start, segEnd);
+      if (hasTurnEvidence(seg, conv)) cuts.push(candidates[i].dash);
     }
     if (cuts.length === 0) { out.push(line); continue; }
     changed = true;
