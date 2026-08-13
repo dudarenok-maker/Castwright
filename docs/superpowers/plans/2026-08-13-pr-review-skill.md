@@ -832,50 +832,143 @@ Order matters and the dispatch prompt must carry two values the reviewer cannot 
 
 ---
 
-### Task 8 — CONDITIONAL: mirror script and guard
+### Task 8: mirror into the global agent skill store
 
-**Run only if Task 1 recorded `MIRROR_NEEDED:` with at least one agent.** If it recorded `none`, mark this task skipped in the plan and in the probe doc, and do not create any of these files. Shipping a synchronization mechanism with zero consumers is how #2314's three-copy problem started.
+**Task 1 settled the target and it is NOT what the spec assumed.** Cline was
+probed directly (`cline -p -c <repo> "list your skills"`) and reported the 23
+**global** skills from `~/.agents/skills/` with `pr-review-gate: NO`. It does
+not resolve workspace `.claude/skills/` at all. So the mirror destination is
+`~/.agents/skills/pr-review-gate/` — **outside the repo**, shared with the five
+other agents that read that store.
 
-**Files (only if warranted):**
+The owner chose the per-machine install step over dropping the mirror. Two
+consequences follow, and both are stated in the deliverable rather than hidden:
+
+**Consequence A — this guard cannot be a merge gate, and it fails open.** The
+target lives in `$HOME`, so it is absent on a fresh clone and in CI. The
+assertion therefore SKIPS when the directory does not exist. That is *exactly*
+defect shape #1 in this PR's own rubric — a guard that fails open on absent
+evidence — and it is unavoidable here rather than accidental: the alternative
+is a required check that fails on every machine that has never run the sync.
+**Say so in the test's own comment and in the PR body.** A skipped guard must
+never be reported as a passing one.
+
+**Consequence B — relative links break in the mirrored copy.** `reviewer-brief.md`
+links `../../../CLAUDE.md` and `../model-routing/SKILL.md`; from
+`~/.agents/skills/` those resolve nowhere. The sync injects a provenance header
+so the reading agent knows the paths are relative to the repo it is reviewing,
+not to the file it is reading.
+
+**Files:**
 - Create: `scripts/sync-agent-skills.mjs`
 - Modify: `scripts/tests/review-gate-mechanism.test.mjs`
-- Modify: `package.json` (a `skills:sync` script)
+- Modify: `package.json` (add `skills:sync`)
+- **Not committed:** the mirror itself. It is outside the repo — do not try to `git add` it.
 
 - [ ] **Step 1: Write the failing test**
 
 ```js
-test('each agent-skill mirror matches its canonical source', () => {
-  // A mirror that silently drifts is worse than no mirror: the other agent
-  // reviews against a rubric this repo no longer believes in.
-  for (const [mirrorRel, canonicalRel] of MIRRORED_SKILL_PAIRS) {
-    const mirror = join(REPO_ROOT, mirrorRel);
-    const canonical = join(REPO_ROOT, canonicalRel);
-    assert.ok(existsSync(mirror), `missing mirror ${mirrorRel} — run npm run skills:sync`);
+// The mirror lives OUTSIDE the repo, in the cross-agent store at
+// ~/.agents/skills/. Cline (and five other agents) read only that store —
+// verified 2026-08-13 by asking Cline in this workspace: it listed the 23
+// global skills and answered "pr-review-gate: NO".
+const AGENT_SKILL_STORE = join(homedir(), '.agents', 'skills');
+const MIRRORED_SKILL = 'pr-review-gate';
+
+test('the agent-store mirror matches its canonical source, when it exists', () => {
+  // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
+  // in $HOME: absent on a fresh clone and in CI. Making this a hard failure
+  // would turn every never-synced machine red. The trade is deliberate — but
+  // it means a GREEN run here proves nothing about a machine that has not
+  // synced, so never report this as "the mirror is in sync".
+  const mirrorRoot = join(AGENT_SKILL_STORE, MIRRORED_SKILL);
+  if (!existsSync(mirrorRoot)) {
+    // Not skipped silently: say why, so a reader of CI output can tell the
+    // difference between "verified" and "not checked".
+    console.log(`[skip] no agent-store mirror at ${mirrorRoot} — run npm run skills:sync`);
+    return;
+  }
+  const canonicalRoot = join(REPO_ROOT, '.claude', 'skills', MIRRORED_SKILL);
+  for (const rel of ['SKILL.md', 'references/reviewer-brief.md', 'references/findings-triage.md']) {
+    const mirrored = join(mirrorRoot, rel);
+    assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync`);
+    // Compare only the body BELOW the injected provenance header.
+    const body = readNormalized(mirrored).split(PROVENANCE_END)[1] ?? '';
     assert.equal(
-      readNormalized(mirror),
-      readNormalized(canonical),
-      `${mirrorRel} has drifted from ${canonicalRel} — run npm run skills:sync`,
+      body,
+      readNormalized(join(canonicalRoot, rel)),
+      `${rel} has drifted from its canonical copy — run npm run skills:sync`,
     );
   }
 });
 ```
 
-`MIRRORED_SKILL_PAIRS` is derived from the probe's agent list, declared at the top of the test file next to the other path constants.
+Add `import { homedir } from 'node:os';` and export `PROVENANCE_END` from the
+sync script so the test and the writer agree on one delimiter rather than two
+copies of a magic string.
 
-- [ ] **Step 2: Run it and verify it fails** — Run: `npm run test:hooks`. Expected: FAIL, missing mirror.
+- [ ] **Step 2: Run it and verify it fails**
 
-- [ ] **Step 3: Write `scripts/sync-agent-skills.mjs`** — copies the canonical directory to each mirror path, exits non-zero on write failure. Add `"skills:sync": "node scripts/sync-agent-skills.mjs"` to `package.json`.
+Run: `npm run test:hooks`
 
-- [ ] **Step 4: Run the sync, then the tests** — `npm run skills:sync && npm run test:hooks`. Expected: PASS.
+**Expected: the skip line, not a failure** — you have not synced yet, so the
+guard fails open. That is the behaviour under test. To see it actually assert,
+create `~/.agents/skills/pr-review-gate/` containing an empty `SKILL.md` and
+re-run: it must now go RED with `mirror is missing references/reviewer-brief.md`.
+Delete the stub afterwards. **Do not skip this half** — a guard whose asserting
+path was never observed is a guard nobody has tested.
 
-- [ ] **Step 5: Mutation-verify** — append a character to one mirrored file, run, confirm RED naming that file. Re-sync.
+- [ ] **Step 3: Write `scripts/sync-agent-skills.mjs`**
 
-- [ ] **Step 6: Commit**
+Copies `.claude/skills/pr-review-gate/` to `~/.agents/skills/pr-review-gate/`,
+creating directories as needed, prepending this header to every file:
+
+```
+<!-- MIRRORED COPY — do not edit here.
+     Canonical source: <repo>/.claude/skills/pr-review-gate/<rel>
+     Regenerate with `npm run skills:sync` from that repo.
+     Relative links below resolve against the REPOSITORY YOU ARE REVIEWING,
+     not against this file's location. -->
+```
+
+Export the closing `-->` line as `PROVENANCE_END`. Exit non-zero on any write
+failure. Print each path written, and a one-line reminder that this is a
+per-machine step CI cannot perform.
+
+Add `"skills:sync": "node scripts/sync-agent-skills.mjs"` to `package.json`.
+
+- [ ] **Step 4: Run the sync, then the tests**
+
+Run: `npm run skills:sync && npm run test:hooks`
+Expected: PASS, with the guard now asserting rather than skipping.
+
+- [ ] **Step 5: Verify Cline actually sees it now**
+
+The whole point of this task. Run:
 
 ```bash
-git add scripts/sync-agent-skills.mjs package.json scripts/tests/review-gate-mechanism.test.mjs <mirror paths>
-git commit -m "chore(scripts): mirror pr-review-gate into the agent skill paths that need it"
+cline -p -c "<worktree>" -t 240 "List your available skill names. Do you see one named pr-review-gate? Answer only with the list and YES or NO."
 ```
+
+Expected: `pr-review-gate: YES`. **If it still says NO, the mirror is in the
+wrong place and this task has failed** — report that rather than declaring the
+sync done because the file copy succeeded. Copying a file is not the
+deliverable; Cline seeing the skill is. (If `cline` is missing from PATH, it
+self-updated and broke itself — `npm i -g cline` repairs it. Run it from
+PowerShell if Bash cannot find it.)
+
+- [ ] **Step 6: Mutation-verify** — append a character to a mirrored file, run, confirm RED naming that file. Re-sync.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add scripts/sync-agent-skills.mjs package.json scripts/tests/review-gate-mechanism.test.mjs
+git commit -m "chore(scripts): sync pr-review-gate into the cross-agent skill store"
+```
+
+Note for the PR body and for #2314: this adds a fourth consumer to
+`~/.agents/skills/`, the store whose consolidation #2314 is already open about.
+The sync script is the mechanism that ticket may later absorb.
 
 ---
 

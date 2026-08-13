@@ -339,9 +339,44 @@ silently outdated copy, and the mirror paths join `test:hooks`'s inputs in
 `scripts/verify-cache.mjs` — without that, a diff touching only mirrored files
 prints `[cached]` and skips the guard it would break.
 
-**The probe (plan task 1) answers two things, not one:** which workspace paths
-each agent actually resolves, and — for Cline specifically — whether its
-subagent starts cold, per the portability section above. `npx skills list --json` reports this repo's
+### Probe result (2026-08-13) — the assumption was wrong
+
+The probe ran. Cline was asked directly, headlessly, inside this repo's
+worktree (`cline -p -c <dir> "list your skills"`). It returned the 23 **global**
+skills from `~/.agents/skills/` and answered `pr-review-gate: NO`. **Cline does
+not resolve workspace `.claude/skills/` at all** — the earlier belief that it
+did was read off `npx skills list` showing the path, whose `agents` field is
+the shared CLI's install bookkeeping.
+
+So there is no workspace path to mirror into. The only store Cline reads is
+`~/.agents/skills/`, **outside the repo**, shared with five other agents.
+
+**Owner decision (2026-08-13): ship the per-machine install step** —
+`npm run skills:sync` copies the canonical skill into that store — rather than
+dropping the mirror and accepting Claude-Code-only. Two consequences are
+carried openly in the deliverable:
+
+- **The drift guard fails open.** Its target is in `$HOME`, absent on a fresh
+  clone and in CI, so it skips when the directory is missing. That is this
+  design's own rubric entry #1 — *a guard that fails open on absent evidence* —
+  and here it is unavoidable rather than accidental: the alternative is a
+  required check that reddens every machine that never ran the sync. It prints
+  a visible skip line, and a green run must never be reported as "the mirror is
+  in sync."
+- **Relative links do not resolve from the mirror.** The sync injects a
+  provenance header telling the reading agent that paths resolve against the
+  repository under review, not against the mirrored file.
+
+**A Cline-run pass is independent but flash-tier.** Asked directly, Cline
+dispatches via `spawn_agent` with a **fresh empty context** (satisfying the
+independence requirement), but **cannot select the subagent's model**; its own
+stderr disclosed `deepseek-v4-flash`. The capability phrasing above — *strongest
+tier available to that agent* — is satisfied, but the probe record states the
+actual model so a Cline pass is never recorded as equivalent to an Opus one.
+
+This adds a fourth consumer to `~/.agents/skills/`, the store #2314 is already
+open about consolidating; the sync script is the mechanism that ticket may
+later absorb. `npx skills list --json` reports this repo's
 three project skills with `"agents": ["Claude Code"]`, but that may be the
 shared CLI's install bookkeeping rather than what Cline resolves at project
 scope. Measured against `@cline/cli-windows-x64/bin/cline.exe` on 2026-08-13,
