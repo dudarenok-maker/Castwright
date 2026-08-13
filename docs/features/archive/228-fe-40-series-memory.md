@@ -116,7 +116,7 @@ Tasks 1–14 landed the following test files:
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, i.e. `npm run dev`). No server or sidecar needed.
+Run in mock mode (`npm run dev:mock`). No sidecar or real library needed.
 
 1. **Cold boot at `#/`** → stage = `{ kind: 'books' }`. Library grid shows book cards. Find the "Northern Coast Trilogy" card. Expected: a "Series memory · 3 characters" chip in the card header. *(If running against a real library with a multi-book confirmed series, the chip appears on that series instead.)*
 

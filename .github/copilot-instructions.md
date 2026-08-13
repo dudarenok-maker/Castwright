@@ -68,7 +68,7 @@ Pester (PowerShell scripts tests):
 
 Design notes Copilot should know:
 - OpenAPI is authoritative for shapes; avoid hand-editing api types.
-- Mocks behind VITE_USE_MOCKS — components import from src/lib/api.ts and don't care which implementation is active.
+- Mocks behind VITE_USE_MOCKS — components import from src/lib/api.ts's `api.*`, with a bounded exception set (local install/detect/provisioning surfaces with no mock counterpart, mini-player's unload flush, queue-thunks' own toggle branch) — see CLAUDE.md for the full list.
 - Brand assets (brand/, mockups/) are local-only (git-ignored); public/ contains generated runtime assets.
 
 ---

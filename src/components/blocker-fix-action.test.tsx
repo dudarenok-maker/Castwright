@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { BlockerFixAction } from './blocker-fix-action';
-import type { BlockerDiagnosis } from '../lib/api';
+import { api, type BlockerDiagnosis } from '../lib/api';
 
 const fetchMock = vi.fn();
 function jsonResponse(body: unknown, init: { status?: number } = {}) {
@@ -173,5 +173,64 @@ describe('BlockerFixAction', () => {
     expect(screen.queryByText(/working…/i)).toBeNull(); // not stuck polling
     fireEvent.click(screen.getByRole('button', { name: /recheck/i }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  });
+
+  describe('#2344 — sidecar-restart routed through api.restartSidecar(), not a raw fetch', () => {
+    const SIDECAR_RESTART_ACTION: BlockerDiagnosis = {
+      status: 'fail',
+      cause: 'supervisor-exhausted',
+      message: 'x',
+      remediation: 'y',
+      action: { kind: 'sidecar-restart', label: 'Reset & restart voice engine' },
+    };
+
+    it('calls api.restartSidecar() and onDone on success', async () => {
+      const onDone = vi.fn();
+      const restartSpy = vi.spyOn(api, 'restartSidecar').mockResolvedValue({ ok: true });
+      render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={onDone} />);
+      fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+      expect(restartSpy).toHaveBeenCalledTimes(1);
+      restartSpy.mockRestore();
+    });
+
+    it('an HTTP-error response surfaces realRestartSidecar\'s thrown message', async () => {
+      // api.restartSidecar() (realRestartSidecar) resolves ONLY on a 200; every
+      // failure branch of POST /api/sidecar/restart throws instead (409/503,
+      // #2348 review fix) — there is no 200-with-ok:false body for this
+      // component to inspect. Pin the string that reaches the user here so a
+      // future change to either message is a deliberate, reviewed edit.
+      const restartSpy = vi
+        .spyOn(api, 'restartSidecar')
+        .mockRejectedValue(new Error('No active supervisor — sidecar auto-start is disabled or the server is still booting.'));
+      render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            'No active supervisor — sidecar auto-start is disabled or the server is still booting.',
+          ),
+        ).toBeInTheDocument(),
+      );
+      restartSpy.mockRestore();
+    });
+
+    it('#2348 review fix — end-to-end through the real wrapper: a 409 from /api/sidecar/restart renders the server sentence, not the JSON envelope', async () => {
+      // No api.restartSidecar spy here — fetchMock stands in for the network,
+      // so this exercises the REAL realRestartSidecar (api.ts) the same way
+      // production does: fetch -> parse -> throw -> this component's catch.
+      const message = 'No sidecar child is currently running. If auto-start is on, the supervisor will spawn one shortly.';
+      fetchMock.mockImplementation((url: string) => {
+        if (typeof url === 'string' && url.includes('/api/sidecar/restart')) {
+          return Promise.resolve(jsonResponse({ ok: false, error: message }, { status: 409 }));
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      render(<BlockerFixAction diagnosis={SIDECAR_RESTART_ACTION} onDone={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: /reset & restart voice engine/i }));
+      await waitFor(() => expect(screen.getByText(message)).toBeInTheDocument());
+      expect(screen.queryByText(/sidecar restart failed/i)).toBeNull();
+      expect(screen.queryByText(/\{"ok"/)).toBeNull();
+    });
   });
 });

@@ -39,7 +39,7 @@ Two related surfaces. **Revisions** are pending audio re-renders awaiting user a
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to a `ready` book view.
+Run `npm run dev:mock`, navigate to a `ready` book view.
 
 1. **Wait 30 s** → polling fires; revisions slice updates from the canned fixture. Pending count badge updates in the toolbar.
 2. **Open revision diff view** → list of pending drafts renders with character + chapter info; accept-all / reject-all CTAs visible.

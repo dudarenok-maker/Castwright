@@ -202,7 +202,7 @@ were never resumable across a reload, before or after this change).
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, the default for `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. Open a book's manuscript view (`#/books/<id>/manuscript`) with more than
    one chapter → click **Detect emotions** → confirm the modal. Expected:

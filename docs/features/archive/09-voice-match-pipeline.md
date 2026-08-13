@@ -71,7 +71,7 @@ When the auto-matcher's `nameScore < 0.34` floor drops a legitimate link — e.g
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`. Upload and analyse a book until confirm-cast loads.
+Run `npm run dev:mock`. Upload and analyse a book until confirm-cast loads.
 
 1. **Land on `#/books/:bookId/confirm`** → voice-match request fires (or in mock mode is canned). Each character row shows either (a) the suggested voice with a confidence badge, or (b) "No match — assign manually" if `candidates` is empty.
 2. **Click "see details" on a matched character** → MatchDetail modal opens. Lists each factor (id, label, score 0–1, detail string). The modal title shows the character name + the source book.

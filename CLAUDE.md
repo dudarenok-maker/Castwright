@@ -304,8 +304,8 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
   entirely. Otherwise effort scales with the PR's commit type/scope
   (CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
   `chore`/`test`/`build`/`ci`, `medium` for a single-scope `feat`/`fix`,
-  `high` for `refactor`/`perf` or any multi-scope PR — see the model-routing
-  skill for the full split.
+  `high` for `refactor`/`perf` or any multi-scope PR — see the
+  `pr-review-gate` skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the
@@ -318,7 +318,7 @@ Design rationale:
 ## Commands
 
 - `npm start` — frontend + server + TTS sidecar in one shot (plan 43). Server owns the sidecar child-process lifecycle (per-user `autoStartSidecar` preference, default on); Ctrl+C tears the sidecar down via `taskkill /T /F` on Windows.
-- `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
+- `npm run dev` — frontend (Vite, HMR, `:5173`) **and** server (`:8080`) together via `concurrently`; the server auto-starts the TTS sidecar same as `npm start` (per-user `autoStartSidecar`, default on) — it is not frontend-only.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
@@ -421,6 +421,15 @@ Design rationale:
   Run from a checkout that has `apps/android/android/key.properties` + `upload-keystore.jks`
   (git-ignored). Pure helpers unit-tested in `scripts/tests/build-companion-apk.test.mjs`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
+- `npm run skills:sync` — mirror `.claude/skills/pr-review-gate/` into
+  `~/.agents/skills/`, the only skill store Cline (and the five other agents
+  sharing it) resolves — it does **not** read a workspace `.claude/skills/`
+  (probed 2026-08-13, `docs/testing/agent-skill-resolution-probe.md`). A
+  **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
+  fresh clone has no mirror. Re-run after any change under that directory; the
+  drift guard in `scripts/tests/review-gate-mechanism.test.mjs` catches a stale
+  mirror **only on a machine that has one** — it skips, loudly, where the path
+  is absent.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
@@ -474,8 +483,17 @@ Design rationale:
   `--peach`, `--ink`, `--magenta`, etc.; `tailwind.config.ts` references those
   vars. No hex literals in component code.
 - **Mocks behind `VITE_USE_MOCKS`** — `src/lib/api.ts` exports
-  `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
-  they never know which is which. `.env.development` sets the flag on.
+  `api = USE_MOCKS ? mock : real`. Components import from `api.*` with a
+  bounded, deliberate exception set: the install/detect/provisioning
+  surfaces (`/api/{ollama,qwen,kokoro,coqui,whisper}/{detect,install}`,
+  `/api/ollama/{pull,refresh}`, `/api/setup/venv/bootstrap`) talk to the
+  local machine and have no mock counterpart; `mini-player`'s `keepalive`
+  unload flush bypasses the mock api by design (must survive page unload);
+  `store/queue-thunks.ts` honours the toggle through its own branch rather
+  than through `api.*`. `.env.development` sets `VITE_USE_MOCKS=false` (real
+  backend, since commit `6b4b2e51`) — `npm run dev` drives the real server;
+  `npm run dev:mock` (`.env.mock`) is mock mode, and `.env.e2e`/
+  `.env.marketing` set it true for their Playwright harnesses.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 - **`server/src/gpu/` reaches a route module through a leaf gate, never an
   import** — a static import, a dynamic `import()`, and even `import type`
@@ -709,11 +727,11 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
    `npm run check:onbox-register` (`.github/workflows/onbox-register-check.yml`, ops-43) mechanically backstops the register's own internal arithmetic — glance-table counts vs. body row headings, and the stated total vs. the glance table — on every PR touching the file. It cannot tell you a row is missing, only that the ones already there don't add up.
 4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
-6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
+6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [PR review → issue verification](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
 7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
 8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
-10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
+10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [the PR review runbook](.claude/skills/pr-review-gate/SKILL.md). Triage and fold findings before merge.
 
 ## Out of scope until told otherwise
 
@@ -986,6 +1004,28 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    output has been observed looking entirely genuine — real timings, real test
    counts — while gating nothing. If it matters, run
    `npm run verify:fast:branch` by hand.
+5. **Create `server/.env`** with its own `PORT` and `WORKSPACE_DIR`, **and** a
+   root **`.env.local`** with matching `VITE_PORT` / `VITE_API_PORT` / `PORT`.
+   Both halves are required: `vite.config.ts` resolves its API-proxy target
+   from `VITE_API_PORT ?? PORT`, falling back to `8080` (no `strictPort`)
+   when neither is set — so a worktree with only `server/.env` filled in gets
+   a frontend that silently proxies `/api` to whatever's already listening on
+   `:8080` (typically the primary checkout's server and workspace) while its
+   own correctly-isolated server sits idle. A tool-made worktree
+   (`EnterWorktree`, Agent `isolation: "worktree"`) never has this file —
+   only `scripts/wt-new.mjs` writes one, and it's git-ignored — so this step
+   doesn't error when skipped, it just silently breaks isolation. Pick an
+   unused slot N (mirroring `scripts/wt-new.mjs`'s own `BASE_PORTS`/
+   `PORT_STEP`) and step each port by `10 × N` off its own base —
+   `VITE_PORT` off `5173`, `PORT`/`VITE_API_PORT` off `8080` — e.g. slot 1 is
+   `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`. Set all three in
+   `.env.local` and `PORT` in `server/.env`, and point `WORKSPACE_DIR`
+   at a directory this worktree alone owns (e.g.
+   `../castwright-workspace-<slug>`, relative to `server/`) so two servers
+   never share one `cast.json`/`state.json`. Do not copy the primary
+   checkout's `server/.env` wholesale — that would leak secrets like
+   `GEMINI_API_KEY` into the worktree (#2345); `.env.local` carries no
+   secrets, so writing it from scratch is fine.
 
 ### Worktree teardown
 
@@ -1050,7 +1090,7 @@ check on every PR that skips this, mirroring `pr-title-lint.yml`, and (since
 2026-07-06) a missing link blocks merge outright — wired into `main`'s
 required status checks alongside `verify.yml` in the same ruleset action;
 see [docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md).
-Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
+Full mechanics: [`.claude/skills/pr-review-gate/SKILL.md`](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation).
 
 **Requesting a clean-room CI run on a PR.** CI now runs automatically on
 every PR push (see "Commit gate" above) and is the real, required gate —

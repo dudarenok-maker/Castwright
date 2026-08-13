@@ -292,14 +292,15 @@ setup rather than repeatedly loading and evicting models.
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
-| **D** | Multi-language TTS render + ASR | 2 |
+| **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
+| **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**69 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**72 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2761,6 +2762,8 @@ this exact book and chapter, so this row needs no session of its own. Note C2 is
 itself waiting on [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306);
 this row is not, and can be taken on any local re-analysis that reaches ch8.
 
+---
+
 ### C4 · The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book ([#2325](https://github.com/dudarenok-maker/Castwright/issues/2325), [#2342](https://github.com/dudarenok-maker/Castwright/issues/2342))
 
 **Why this cannot be closed by the unit tests.** The guard's whole calibration rests on **one** Cyrillic book, nine chapters, two runs — the 2026-08-06 pass (per-chapter narrated speech halves 32.4 18.0 3.8 39.3 3.2 2.0 27.6 33.8 20.8, **max 39.3%**) and the 2026-08-12/13 collapse (93.1 93.7 94.8 97.5 86.5 72.2 84.3 74.6 91.8, **min 72.2%**). The 60% threshold sits in a 33-point gap between two runs of the *same book*. Every automated test feeds the guard a fixture built to breach or not breach it; none can say whether a *different* real Russian, French or Spanish book lands in that gap. Replaying the metric over all 82 cached analyses on this box found **exactly one** with an evaluable speech population (4,240 speech halves, 19.9% narrated); the only other two Cyrillic books hold **19** and **15** speech halves, both under the 20 floor. No offline work can widen this — a second dash-language book has to be imported.
@@ -2802,6 +2805,34 @@ collisions across 101 files. Largely an unattended batch: render, then inspect.
 The Qwen VoiceDesign pipeline is merged, but the **zh/ja** Coalfall placeholder
 artifacts were never produced. Run the shipped pipeline against them. Distinct from
 D1's five languages, which are done.
+
+### D3 · The re-open bound's recovered turn actually sounds right when voiced ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), plan [`docs/superpowers/plans/2026-08-13-primary-pair-straddle.md`](../superpowers/plans/2026-08-13-primary-pair-straddle.md))
+
+The re-open bound (`scanQuoteRuns`, `server/src/analyzer/dialogue-structure/parser.ts`)
+changes run boundaries on real books in all seven supported languages — 1,231
+corpus paragraphs, dominated by `zh` (744) and `fr` (232). Every test in the PR
+scores the recovered span's *text* (never lost, never mid-word) and, separately,
+whether the tag-clause guard keeps a speaker attached — neither measures whether
+the recovered turn *sounds* acceptable once voiced, which is a judgement only a
+real render + a human ear can make.
+
+**What to observe:** generate a chapter of a `zh` or `ja` book that contains a
+continuation paragraph — the design doc's worked example
+(`docs/superpowers/specs/2026-08-13-primary-pair-straddle-design.md` § "What it
+fixes, on real books") quotes two, one already in the Gutenberg corpus this PR's
+own instruments read. Confirm the previously-swallowed inner turn now renders as
+its **own** speech turn, in the character's own cast voice rather than merged
+into the narration/tag reading of the turn before it, and that the boundary
+doesn't land mid-word or drop a syllable. A `ru` or `de` chapter containing one
+of the 3/97 `ru`/`de` corpus paragraphs this PR changes is a secondary, lower-
+priority check — `zh`/`ja` carry the bulk of the real-book delta (744+75 of
+1,231) and are also the two scripts with no case distinction for the CJK-blind
+part of defect 2's corpus proxy, so they are the shapes least covered by any
+other instrument in the PR.
+
+No hardware prerequisite beyond a working TTS engine (Kokoro/Coqui/Qwen, any) —
+listed here rather than under Group A because the debt is about *listening*
+to real output, not about VRAM or a specific card.
 
 ---
 
@@ -3333,6 +3364,112 @@ block on the next cut is unlikely, but not proven until observed.
 *Cost:* zero extra; it is observed as part of a cut that was happening anyway.
 *Discharges when:* one real release publishes with a body sourced from the file
 and the observations above are recorded here.
+
+---
+
+## Group H — no hardware, needs a real CJK manuscript this corpus lacks
+
+Not a hardware prerequisite at all — the blocker is a real-book fixture this
+repo's corpus doesn't currently have. `detectManuscriptLanguageFromChapters`
+needs no GPU, sidecar, or analyzer; it is a pure function over chapter text,
+runnable on any machine (`npx tsx` against a real manuscript's chapters, or a
+dry-run `npm run repair:book-language` pass over a real imported book).
+
+### H1 · Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)
+
+`server/src/tts/prose-units.ts`'s kana tokenizer (overlapping character
+trigrams, replacing per-character tokenization) is verified only against an
+own hand-authored synthetic all-kana fixture — 30 distinct hiragana base
+words composed into 1,500 sentences, `detect-language.test.ts`'s
+`finding 3(b)` fixture — not a genuine all-kana book. The fix closes the
+SPECIFIC real
+failure the original #2256 finding reported (a real book at N≈4,843
+characters, old per-character scheme measured R=1.72, refused) using the
+finding's own reported number as an anchor, but this repo cannot reproduce
+that exact book to re-measure it directly, and the synthetic fixture's
+margin is known to be vocabulary-dependent and thinner than Han-based CJK's
+(round-3 finding C5 additionally found the richness gate is close to inert
+for kana beyond what `dedupeProseUnits` already catches — see
+`prose-units.ts`'s own finding-3(b) block for the honest numbers, all of
+which round 4 re-measured against the fixture actually in the tree).
+
+**What to observe, once a real all-kana Japanese manuscript is available**
+(a children's book or early-reader text with no kanji at all is the
+realistic shape — this repo's two real Coalfall Commission translations at
+`C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+コールフォールの依頼}\manuscript.md` are real CJK text but MIXED kanji+kana,
+not the all-kana case this row is about):
+
+1. Run the manuscript's chapters through `detectManuscriptLanguageFromChapters`
+   (or a full `POST /api/import`) and record the result — expected:
+   `{ language: 'ja', supported: true, fallback: false }`.
+2. Separately call `guiraudR` on the same (deduped, per
+   `dedupeProseUnits`) winning sample and record the actual value against
+   `LEXICAL_RICHNESS_FLOOR` (3) — a real number at real scale, not the
+   30-word synthetic fixture's.
+3. If the book has multiple chapters, note the total combined character
+   count the richness gate actually saw (no cap applies post-#2256 round 3 —
+   see `prose-units.ts`'s finding-3(a) retraction) — the margin at that
+   real scale is the actual thing this row exists to confirm.
+
+*Needs:* a real, legally usable all-kana (no kanji) Japanese manuscript —
+no GPU, sidecar, or analyzer.
+*Cost:* one `detectManuscriptLanguageFromChapters` call plus recording the
+observed `R`/`digitTokenShare` numbers here.
+*Discharges when:* a real all-kana manuscript has been run through
+detection, the result and the observed `R` are recorded in this row (or a
+dedicated run sheet this row is updated to point at), and either the
+current trigram fix is confirmed sufficient at real scale or a follow-up
+issue is filed with the real numbers that show it isn't.
+
+### H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
+
+`voteLanguage` measures the two lexical gates over the whole joined winning
+sample with **no length cap** — round 2 added one, round 3 removed it
+because the cap made the verdict chapter-order-dependent. Removing it is
+right for that reason, which is measured. What is NOT measured is the thing
+the cap was originally added for: Guiraud's R is `V / sqrt(N)`, and `V`
+saturates while `N` keeps growing, so R decays with book length.
+
+Round 3 recorded a direct measurement of "the corpus's 815k-char worst case
+→ R≈4.4" as the justification for removing the cap. **Round 4 could not
+reproduce that number from anything in this repo, and it has been deleted
+rather than restated.** What this repo can actually reach:
+
+- the two real Coalfall Commission translations (read-only,
+  `C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+  コールフォールの依頼}\manuscript.md`) — R = **12.078** (zh, 4,425 Han
+  characters, 795 distinct) and **27.302** (ja mixed, 7,797 chars);
+- no synthetic substitute: a 30-word-pool zh narrative at 21,711 characters
+  measures R = **1.581** and is *refused*, because a hand-authored pool
+  reaches ~250 distinct Han characters where real Chinese prose reaches
+  thousands. A synthetic large-N fixture measures its own vocabulary, not
+  the gate.
+
+So the largest real Han sample this repo can measure is ~4.4k characters,
+one to two orders of magnitude short of a book.
+
+**What to observe, once a full-length real Chinese manuscript is available:**
+
+1. Import it (or run `detectManuscriptLanguageFromChapters` over its
+   chapters) and record the result — expected
+   `{ language: 'zh', supported: true, fallback: false }`.
+2. Record the **combined character count** of the joined winning sample the
+   gates actually saw (every winning chapter's `prepareSample` output, each
+   capped at 20,000 chars, joined) and the **observed `guiraudR`** on it,
+   against `LEXICAL_RICHNESS_FLOOR` (3).
+3. Record the **distinct-Han-character count** at that scale. That is the
+   `V` in `V / sqrt(N)` and it is the whole question: at N = 400,000, R
+   clears the floor only if V is above ~1,900.
+
+*Needs:* one real, legally usable full-length Chinese (Han) manuscript —
+no GPU, sidecar, or analyzer.
+*Cost:* one detection call plus recording three numbers here.
+*Discharges when:* a full-length real Han book has been run through
+detection and its N, V and R are recorded in this row — either confirming
+the uncapped gate clears the floor at book scale, or showing it does not,
+in which case a follow-up issue owns re-introducing a length correction
+that is NOT a chapter-order-dependent prefix.
 
 ---
 

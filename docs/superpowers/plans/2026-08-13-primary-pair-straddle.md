@@ -607,4 +607,381 @@ reads 0 with both tier guards deleted. **Do not reuse that family as a gate.**
 
 ## Ship notes
 
-*(filled at merge)*
+Implemented Tasks 1–11 in the `fix/server-2315-reopen-bound` worktree, off
+`main` at `090168a5`. All measured figures reproduced against the shipped
+code exactly, confirmed by an over-and-above equivalence check
+(`scratchpad/s2315/equivalence.mts`, re-pointed at this worktree): the
+engine.mjs prototype of `R1c_plainPrefix+G` is byte-identical to the shipped
+`parser.ts` over all 1,190,634 corpus paragraphs (`DIFFERING 0`), so every
+figure below is a genuine measurement of the shipped code, not the prototype.
+
+- Family: **172 of 805** (de 24, en 30, es 4, fr 0, ja 4, ru 92, zh 18;
+  no-stray control 0 destroyed everywhere).
+- Anchors: **19/22** (the three residual cross-glyph/symmetric-delimiter
+  failures, as designed).
+- Arm A (140-book English, M1's tuple): **938 / 0 MERGED / 0 LOST / 0
+  GAINED**, SPLIT 34 — `NOT MET` on the literal `0 SPLIT` bar per Decision A,
+  met on every other clause.
+- Arm B (7 languages, own tables): **1,231 changed / 1,231 text-preserving /
+  0 characters lost / 0 mid-word**.
+- Attribution family: positive control 42/42, shipped guard **0/42** lost,
+  firing control (mutation (d)) **21/42** lost — matches the design exactly.
+- M2 pairwise (F1/F2/F3/SUPP): **+1,762 repaired / −20 regressed**, 0 nesting
+  regressions, suppression 0 of 21 — matches the design exactly.
+- **Tag-cut corpus proxy — DIVERGES from the design doc, and this is not a
+  bug.** The design's cited "156 across 71" is `RULE=shipped+G` — the
+  tag-clause guard measured **in isolation**, without the re-open bound.
+  What's actually shipped is both rules together
+  (`R1c_plainPrefix+G`), which measures **162 across 76**: combining the
+  two rules shifts primary-run boundaries in the `main`-table baseline the
+  proxy diffs against, which moves where a handful of tag spans fall. Both
+  numbers reproduced directly (`s2315/tagcut.mts shipped+G` → 156/71 exactly;
+  `s2315/tagcut.mts R1c_plainPrefix+G` → 162/76). Doesn't change the
+  criterion this residual is measured against — Decision C already binds
+  acceptance to the attribution-aware family (0 of 42), not this proxy — so
+  no re-decision is owed, only the correction that 162/76, not 156/71, is
+  the number that describes what shipped.
+- Task 10 mutations (a)–(e): all five went RED for the predicted reason, all
+  five reverted; full detail in the PR body and the implementation report.
+- On-box acceptance: row **D3** added to
+  [`docs/testing/onbox-acceptance-register.md`](../../testing/onbox-acceptance-register.md)
+  (generate a `zh`/`ja` chapter with a continuation paragraph; confirm the
+  recovered inner turn voices as its own turn in its own cast voice). The
+  live view was mirrored by the coordinating thread in `520bc81f`, which owns
+  the pre-publish comparator run: comparator green against the live page
+  (68 owed / group D 2 rows) before publishing, then published to the
+  register's recorded artifact URL at **69 owed / group D 3 rows**.
+- Design doc moved to `status: stable` in the same diff.
+
+### Round 2 — PR #2340 Premium review gate, 3 correctness fixes + 4 nits
+
+The mandatory review gate found the interval arithmetic, the mutation
+sensitivity, and the 162/76-vs-156/71 correction above all sound, but found
+the tag-clause guard itself **polarity-inverted for verb-before-quote
+languages (zh/ja)** — the half of this PR that exists to unblock #2286 — plus
+one robustness gap and one perf regression it introduced. All fixed in the
+same branch/commit history (not a new PR), TDD throughout: every new test
+below reproduced the reviewer's exact failure shape RED before the fix.
+
+1. **MAJOR — `cutsATagClause` was polarity-inverted for zh/ja, declining
+   93.7% of one real Chinese book's (`pg/zh/23835.txt`) speech spans.** The
+   guard's clause-before-candidate model assumes a tag ATTRIBUTES an
+   already-captured turn (Latin trailing-tag: `"Hi," said Anton`) — correct
+   for that shape, backwards for zh/ja's canonical VERB-then-quote order
+   (`他说，"你好"`), where the verb INTRODUCES the turn rather than naming an
+   already-parsed one. Compounded by zh/ja's single-character verb stems
+   matching as substrings inside unrelated words with no word boundary (道
+   inside 道路/知道, 息 inside 息子, 笑 inside 微笑/苦笑い). **Fix, not a
+   per-language property**: `cutsATagClause` now requires a PRIMARY run to
+   actually precede the candidate before it even evaluates a verb — the
+   guard's own docstring always claimed this ("the adjacent real turn loses
+   its speaker"), the original implementation never checked it.
+   **CORRECTED, PR #2340 round 2 (was stated wrong here — see "Round 2,
+   continued" below for the measurement and the two things this claim got
+   wrong):** does not change behaviour on the CONSTRUCTED Latin defect-2
+   family (a primary run always precedes by construction there, so the
+   family stays at 0/42 lost), fixes every zh/ja case in the corpus because
+   the affected book's dialogue paragraphs carry no primary-tier quote at
+   all — **but it is not fully language-agnostic and it is not a complete
+   fix**: on real es/fr corpus paragraphs it measurably changes 271 spans
+   across 203 paragraphs (reduced over-suppression, not lost speakers), and
+   it leaves a real, measured gap — any paragraph typed WHOLLY in a
+   secondary-tier convention, in any language including Latin ones, still
+   has no primary run for the guard to check against, so defect 2 stays live
+   there. New committed regression: a generated CJK leading-tag/false-cognate
+   family (`reopen-sweep.test.ts`) plus 6 unit tests (`parser.test.ts`),
+   including one confirming a genuine leading-tag turn is BOTH admitted and
+   correctly attributed end-to-end via the existing narration→tag mechanism,
+   unmodified.
+2. **MEDIUM — the `SENTENCE_END` backward scan was defeated by any
+   non-terminal `.`, `;` or `…`, re-opening defect 2 itself.** A decimal
+   point (`3.30`), an abbreviation period (`Mr.`), a semicolon, or a
+   mid-clause ellipsis reset the clause boundary past the verb, un-declining
+   a candidate that should have stayed declined. Original fix:
+   `isGuardSentenceEnd`
+   excludes a `.` with digits on both sides (decimal) or a short
+   UPPERCASE-led run of letters before it (abbreviation-shaped — keyed on
+   capitalisation specifically, so an ordinary short lowercase word like
+   `он.`/`it.` still counts, which the existing "second turn recovered" test
+   already pinned and still passes); `;`/`；` are dropped entirely (a
+   semicolon joins one sentence's clauses, it doesn't end one); `…` is
+   dropped entirely too (indistinguishable from a mid-clause pause right
+   before this guard's own candidate — errs toward extending the clause, the
+   same "never delete, extend instead" bias as the rest of this file). 4 new
+   unit tests, all RED before, GREEN after. **The abbreviation-shaped
+   exclusion above was ITSELF removed one review pass later — see finding F1
+   under "Round 2, continued" below; the decimal-point exclusion and the
+   `;`/`…` removals described here are unaffected and still stand as
+   written.**
+3. **MEDIUM — `pos = cut` made `scanQuoteRuns` quadratic in paragraph length
+   on the synchronous analyzer path.** A truncated run resumes only 2 chars
+   past the re-open, so N consecutive same-glyph re-opens each pay a full
+   O(remaining-length) closer scan: O(n²). Measured pre-fix,
+   `'“a'.repeat(N)+'”'`: len 64,001 → 4,625ms (×10,381 over pre-#2315).
+   Fix: `REOPEN_CHAIN_LIMIT = 200` caps consecutive re-open cuts per opener
+   class before falling back to the pre-#2315 accept-and-resume behaviour —
+   converts the adversarial case to bounded-linear without touching the
+   closer-search machinery. Real quote density (~1/75 chars, per the
+   review's own representative-damage measurement) never approaches the cap.
+   New committed perf regression test at the same 4 lengths, threshold 750ms
+   (generous, to avoid CI flakiness — the point is bounding catastrophic
+   growth, not a specific figure).
+4. **4 nits, all applied**: `cutsATagClause` now calls the existing
+   `hasStem()` helper instead of re-implementing it with a redundant
+   per-stem `.toLowerCase()`; the M2 `findQuoteRuns` JSDoc (which had been
+   pushed off its function by the `SENTENCE_END`/`cutsATagClause` insertion)
+   moved back directly above `findQuoteRuns`; the duplicate "es worked
+   example" test removed from the `#2315: the re-open bound` describe block
+   (the M2-era "residual 1" test the plan required keeping already pins the
+   identical input/output); `reopen-sweep.test.ts`'s "generates a non-trivial
+   shape set" now pins the exact measured count (de 176 / en 117 / ru 336)
+   instead of `toBeGreaterThan(0)`.
+
+**Mutation verification (red before, green after), each fix reverted
+individually and reconfirmed on the FULL suite before moving to the next:**
+
+| fix | reverted to | result |
+|---|---|---|
+| 1 (polarity) | `precededByPrimaryRun` gate removed | RED — 7 tests fail (PR #2340 round 2 nit 2 corrected the split: the finding-1 describe block holds 7 `it` cases and 5 of them fail — its control and "a trailing name-tag … is still declined" case are *designed* to stay green under this mutation, and do — plus 2 tests in the generated CJK family, `every genuine turn survives`/`…is also correctly attributed`) |
+| 2 (clause boundary) | `isGuardSentenceEnd` → naive `/[.!?…。！？；;]/u.test` | RED — all 4 new unit tests fail, each showing the candidate re-admitted as its own null-speaker span |
+| 3 (perf) | `REOPEN_CHAIN_LIMIT` cap removed | RED — len 32,001/64,001 perf tests fail at ~1,000–4,450ms vs the 750ms bound (reproducing the review's own ~4,625ms figure at len 64,001) |
+
+**Corpus re-pricing against #2286's actual tables (not the proxy), the
+review's own explicit request.** New instrument
+`scratchpad/s2315/reprice-tagcut.mts` (not `tagcut.mts`, which counts a
+different population — gained runs overlapping a `main` tag span, not
+genuine guard declines) compares `wide/` (this worktree's fixed code +
+#2286's real `secondaryQuotePairs`) against `wide-noguard/` (byte-identical,
+guard call removed) over all 726,385 wide-table corpus paragraphs:
+
+```
+DECLINED SECONDARY SPANS (guard on vs guard off): 101 across 48 paragraphs
+lang   paras   declined-paras   declined-spans
+de     63941                0                0
+en    389020                0                0
+es     89854                0                0
+fr     85206                0                0
+ja      3187                1                1
+ru      2073                0                0
+zh     93104               47              100
+```
+
+Down from the review's measured **7,438 across 1,489** (pre-fix). The
+review's own flagged book, `pg/zh/23835.txt` (7,090 of 7,570 spans falsely
+declined pre-fix, 93.7%), now measures **0 declined of 7,570** — guard-on and
+guard-off produce byte-identical output. The 101-span residual is
+concentrated in one classical-Chinese novel (`pg/zh/24264.txt`, 紅樓夢) whose
+dialogue paragraphs DO carry primary-tier quotes elsewhere in the same
+paragraph — the one shape this fix does not fully resolve (a second genuine
+turn, introduced by a colon after an EARLIER primary run in the same
+paragraph, can still trip the verb check) — named here as a known,
+much-smaller residual rather than claimed away. Family/anchors/Arm A
+re-confirmed unmoved by these three fixes (172/805, 19/22, both re-measured
+against the real code after the round-2 changes) — expected, since the guard
+is inert on `main`-only tables and the perf cap never fires below hundreds of
+consecutive re-opens.
+
+**New perf numbers** (`'“a'.repeat(N)+'”'`, same four lengths):
+
+```
+len    8001 : 8.9ms   (was 79ms)
+len   16001 : 16.2ms  (was 279ms)
+len   32001 : 26.2ms  (was 1051ms)
+len   64001 : 53.7ms  (was 4625ms)
+```
+
+Linear, not quadratic (roughly doubling per doubling of N, not
+quadrupling) — an 86× improvement at the largest measured length, and the
+corpus's own longest real paragraph (165,173 chars) now extrapolates to
+~140ms rather than ~30s.
+
+### Round 2, continued — a second review pass on PR #2340: 1 fix (F1), 1 filed decision (F2), 4 nits
+
+**F1 — MEDIUM, fixed.** The abbreviation-shaped exclusion added above (item
+2) is a NAME filter, not a title filter: a short capitalised name (`Ana.`,
+`Jean.`, `Иван.`) matches the identical `\p{Lu}\p{L}{0,3}` shape as `Mr.`/
+`Dr.`, so it ALSO stopped a genuine period from ending a clause — and unlike
+the title-abbreviation case, this one loses a SECOND TURN entirely rather
+than merely over-declining. Reproduced exactly: `«Hola», dijo Ana. "Adiós",
+dijo Ana.` (and the `fr`/`ru` equivalents) lost `Adiós`/`Au revoir`/`Пока` as
+a speech span altogether. Measured with a new short-name replica of the
+42-case attribution family (`es`/`fr`/`ru`/`en`, 22 cases, 11 carrying a
+genuine second turn): **11 of 11** second-turn shapes lost, before the fix.
+Corpus prevalence of the abbreviation shape itself: **0 of 726,385**
+paragraphs. **Fix: removed the abbreviation exclusion outright**, keeping
+only the decimal-point one — the corpus cost of removing it is zero
+(nothing measured depends on it) and the family cost of keeping it was 11 of
+21 real second-turn losses. `“Hi,” said Mr. «Anton».` (`parser.test.ts`) is
+re-pinned as a known, accepted residual instead of silently reworked to keep
+passing. **The metric itself was also fixed**, not just the heuristic: the
+existing "0 of 42" test only ever checked the FIRST turn's speaker, which is
+a primary run this bug structurally can't touch either way — it read 0
+whether or not the second turn survived, which is exactly why it didn't
+catch this. It's now "0 turns lost … 63 turn-checks: 42 first-turn +
+21 second-turn", checking both.
+
+Mutation (abbreviation exclusion reinstated): **RED**, 2 tests fail — the
+`"Mr."` residual test (now expecting the OLD "both attributed" shape, which
+no longer holds) and the short-name family's comprehensive check, with
+exactly **11** second-turn failures listed by name — es ×2, fr ×2, ru ×4,
+en ×3, matching the measured figure precisely. Reverted, full suite green
+(383 tests before this fix → 386 after, +3 for the new short-name family's
+2 tests and the "generates the 22-case family" count pin).
+
+**F2 — MEDIUM, NOT fixed — filed as
+[#2346](https://github.com/dudarenok-maker/Castwright/issues/2346).** The
+`precededByPrimaryRun` precondition (F1 of round 1, the MAJOR fix) turns the
+guard off entirely for a paragraph with no primary-tier run ANYWHERE — which
+is exactly the population a book typed wholly in a secondary-tier convention
+produces, i.e. exactly what #2286 exists to support:
+
+```
+‘Привет’, сказал ‘Антон’.        (ru, secondary ‘’)  shipped: Привет=NULL | Антон=NULL
+«Hi», said «Anton».               (en, secondary «»)  shipped: Hi=NULL | Anton=NULL
+Said «Anton», "Hi there."         (en, leading tag)   shipped: Anton=NULL | Hi there.=NULL
+```
+
+**Two claims above were false as stated, corrected in place (item 1):** "does
+not change behaviour on any Latin defect-2 shape" is true only of the
+CONSTRUCTED family (a primary run always precedes there by construction);
+measured against #2286's real tables it changes **271 non-CJK spans across
+203 real paragraphs (es 264, fr 7)** — quoted phrases in narration the guard
+used to suppress and now admits, reduced over-suppression rather than lost
+speakers, but a real behaviour change nonetheless. And "language-agnostic" is
+true of the MECHANISM, not of the residual it leaves: the residual this
+decision is about is not CJK-specific either — it hits any language whose
+dialogue happens to be typed wholly in a secondary pair.
+
+**Not fixed, because the obvious repair reintroduces round 1's MAJOR
+finding.** Passing `out` (primary + already-accepted secondary runs) instead
+of `primaryRuns` fixes all three rows above and keeps every round-1 CJK unit
+case green — but at corpus scale it **re-declines 5,892 spans in
+`pg/zh/23835.txt`**, the same book round 1 fixed. The real discriminator has
+to separate "the verb belongs to the PRECEDING turn's trailing tag" (Latin —
+decline) from "the verb introduces the FOLLOWING turn" (CJK, and the `ru`
+row above — admit), which is word-order typology with more than one
+defensible encoding (a per-language tag-position property on
+`LanguageConventions`; the punctuation immediately before the candidate —
+`：`/`、` vs `,`; something else) — not guessed here, filed as #2346 instead.
+
+**Condition, stated correctly (PR #2340 round 3 finding C2 — this doc, the
+design doc, `parser.test.ts` and #2346 all understated it before this
+correction):** `precededByPrimaryRun` is set only for a primary run whose
+`end <= cand.start` — the real condition is **"no primary run ENDS BEFORE
+this candidate"**, not "no primary run anywhere in the paragraph". A
+paragraph can carry a primary run and still be fully inert for a candidate
+that happens to sit before it — `Said «Anton», "Hi there."` (the third pinned
+case below: `"…"` **is** an `en` primary pair, so this paragraph does have a
+primary run, just one that comes after «Anton» rather than before it).
+Measured at the RUN level over the same corpus (new instrument
+`scratchpad/s2315/reprice-f2-runlevel.mts`, cross-referencing `wide` speech
+spans against `main` primary-run boundaries directly, rather than the
+paragraph-level "main finds zero speech" proxy `reprice-f2-exposed.mts`
+used): **2,221 inert paragraphs, 8,802 inert secondary runs** — of which the
+paragraph-level definition catches only **2,202**, an under-count (paragraphs
+where a primary run exists but sits AFTER an inert candidate aren't counted
+paragraph-level, but ARE run-level). The direction is conservative — it
+doesn't argue against merging — but "typed wholly in a secondary-tier
+convention" is the wrong description of the population; corrected everywhere
+it appeared to "no primary run precedes the candidate".
+
+Measured exposed population against #2286's actual tables (instrument
+`scratchpad/s2315/reprice-f2-exposed.mts`, reusing the `wide`/`wide-noguard`
+trees, paragraph-level as above): **2,202** real corpus paragraphs carry a
+secondary-tier-only turn with no primary run before it; a raw proxy (two
+secondary speech spans with a verb-bearing gap directly between them) fires
+on **1,164** of them:
+
+```
+lang    paras   exposed   proxy-fires
+de      63941         0            0
+en     389020         0            0
+es      89854       787           69
+fr      85206        14            1
+ja       3187         1            0
+ru       2073         0            0
+zh      93104      1400         1094
+```
+
+**PR #2340 round 3 finding C1 (BLOCKING, corrected here) — the raw 1,164 is
+not the harm figure and overstates it by ~100×.** `speech → tag → speech`
+fires on the harmful shape (a NAME inside the secondary quotes) **and** on an
+ordinary correct two-turn paragraph where each turn carries its own leading
+tag — the proxy cannot tell them apart, and for 94% of its mass it fires on
+the SECOND kind. Classifying the second span of each firing (generous upper
+bound: short, unpunctuated, ≤3 words / ≤5 CJK characters counts as
+NAME-shaped) gives **≤21 of 1,164 (1.8%)** — es 12/69, fr 1/1, zh 8/1094 —
+and manual inspection narrows that further: the flagged CJK "names" read as
+`怪物` ("monster"), `官球台`, `光照天下` — quoted terms, not speaker names, and
+the concrete `pg/zh/23835.txt` paragraph this proxy counts as "would lose a
+speaker" is `…高颎道："…"不肯发遣。高德弘道："…"` — **two correctly-parsed turns,
+each with its own leading tag, nothing loses a speaker.** Making the guard
+fire there is exactly the 5,892-span regression the naive `out`-based repair
+above was rejected for — this paragraph is evidence AGAINST that repair, not
+for the harm of leaving it unfixed. **Do not target the raw 1,164 for
+reduction; #2346 says this explicitly.** The corrected, classified figure —
+≤21 of 1,164, generously — is what to cite as F2's measured cost, not the raw
+proxy count.
+
+**94% (1,094 of 1,164) is one book, `pg/zh/23835.txt`** — round 1's own
+flagship example — but per the classification above, only ≤8 of that
+book's 1,094 firings are plausibly the harmful shape; the other 1,086+ are
+correctly-declined-nothing false positives of the proxy. **The `es` figure's
+"sampled and confirmed genuinely Spanish" claim was also wrong (same PR
+finding C1)**: two of the ~10 contributing books — `pg/es/16119.txt` and
+`pg/es/23206.txt`, together 8 of the 69 `es` firings — are English-language
+Gutenberg works *about* Spanish literature, not Spanish-language books; their
+own printed corpus excerpts read in English ("The accounts of the printing
+of two Doctrinas…", "As has been already observed, the dramas of Juan del
+Encina…"). Small in magnitude, but the claim was stated as verified and
+wasn't. Full detail, the discriminator question, and the candidate
+encodings: issue #2346, corrected to carry the classified figure and an
+explicit "do not target the raw proxy" note.
+
+**Pinned as a known, tracked gap** (`parser.test.ts`, describe block
+re-titled "#2315 / #2346 known gap: the tag-clause guard is inert when no
+primary run precedes the candidate" — PR #2340 round 3 finding C2 corrected
+the title too): the three rows above, asserted against their CURRENT (buggy)
+output, labelled to fail loudly and be deleted — not adjusted — the moment
+#2346 lands a fix.
+
+**4 nits (round 2), all applied:** `REOPEN_CHAIN_LIMIT` moved from inside the
+per-opener loop body to module level, alongside the file's other tunables;
+the mutation-table row above corrected (5 unit + 2 family, not "6 unit +
+family"); `reopenChain` now resets on the `end === null` continue path too,
+consistent with the accept path; the release note's and this doc's own
+"decimal point, an abbreviation period, and a semicolon" summaries corrected
+for both F1's removal and the missing `…` mention.
+
+### Round 3 — a third review pass on PR #2340: docs-and-issue-only, no code change
+
+The code was found sound (F1's removal confirmed corpus-neutral — 0
+paragraphs change on #2286's tables with the exclusion reinstated and
+diffed against shipped span signatures over all 726,385 paragraphs — and
+both new gates confirmed genuinely discriminating). Three corrections, all
+documentation/issue text: **C1 (blocking)** — the F2 "would-lose-a-speaker:
+1,164" figure overstated the harm by ~100×, corrected above and in #2346 to
+the classified ≤21-of-1,164 figure with an explicit "do not target the raw
+proxy" note, and the `es` "sampled and confirmed genuinely Spanish" claim
+corrected (2 of ~10 contributing books, 8 of 69 firings, are English-language
+works *about* Spanish literature). **C2 (disclose)** — F2's condition was
+mis-stated as "no primary run anywhere in the paragraph"; corrected
+everywhere (this doc, the design doc, `parser.test.ts`'s describe-block
+title, #2346) to "no primary run precedes the candidate", with the run-level
+measurement (2,221 paragraphs / 8,802 runs, vs. the paragraph-level 2,202)
+disclosing the paragraph-level figure as a conservative under-count. **C3
+(disclose)** — `RELEASE_NOTES.md`'s brand-voice line made an unconditional
+promise F2 falsifies; qualified in place, and `docs/release-notes-next.md`
+now names #2346. **N1** — "11 of 21" corrected to "all 11 of 11" (the
+short-name family's own second-turn count) in `parser.ts` and
+`parser.test.ts`; the 21 was the 42-case family's second-turn count, wrongly
+carried over. **N2** — the `scratchpad/s2315/{main,wide,wide-noguard}`
+copies used for every corpus measurement in this document predate the
+`reopenChain = 0` reset on the `end === null` path (a round-2 nit fix,
+provably behaviour-neutral: once an opener class hits `end === null`, no
+later occurrence of that class can take an accept-or-cut path, so the
+counter is dead from there) — no re-measurement owed, noted here as
+provenance only. The PR body's residuals section is owned by the
+coordinating/reviewing thread, not this plan.
+
+Ship date / merge SHA: *(filled by the coordinating thread at merge)*.

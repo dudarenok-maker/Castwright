@@ -14,6 +14,7 @@ import {
   parseArgs,
   renderEnvLocal,
   renderLaunchBlock,
+  renderServerEnv,
 } from '../wt-new.mjs';
 import { parseEnvLocal, parseWorktreePorcelain } from '../wt-list.mjs';
 
@@ -144,6 +145,106 @@ test('renderEnvLocal is round-trippable via parseEnvLocal', () => {
   assert.equal(parsed.PORT, String(ports.PORT));
   assert.equal(parsed.LOCAL_TTS_PORT, String(ports.LOCAL_TTS_PORT));
   assert.equal(parsed.PLAYWRIGHT_PORT, String(ports.PLAYWRIGHT_PORT));
+});
+
+// ---- renderServerEnv (#2345 — server/.env isolation) ------------------------
+
+test('renderServerEnv PORT matches renderEnvLocal PORT for the same slot (must not drift)', () => {
+  for (const slot of [0, 1, 2, 5, 9]) {
+    const ports = computePorts(slot);
+    const envLocal = parseEnvLocal(renderEnvLocal({ slot, branch: 'feat/server-x', ports }));
+    const serverEnv = parseEnvLocal(renderServerEnv({ slot, branch: 'feat/server-x', ports }));
+    assert.equal(
+      serverEnv.PORT,
+      envLocal.PORT,
+      `slot ${slot}: server/.env PORT must match .env.local PORT`,
+    );
+  }
+});
+
+test('renderServerEnv sets an isolated WORKSPACE_DIR (not the primary checkout, relative to server/)', () => {
+  const ports = computePorts(1);
+  const serverEnv = parseEnvLocal(renderServerEnv({ slot: 1, branch: 'feat/server-x', ports }));
+  assert.ok(serverEnv.WORKSPACE_DIR, 'WORKSPACE_DIR must be set');
+  // Relative (not absolute) — resolves against THIS worktree's own server/
+  // per server/src/workspace/paths.ts, so it's isolated purely by virtue of
+  // living inside this worktree, without hardcoding a disk path.
+  assert.ok(
+    !/^[A-Za-z]:[\\/]/.test(serverEnv.WORKSPACE_DIR) && !serverEnv.WORKSPACE_DIR.startsWith('/'),
+    `WORKSPACE_DIR should be relative, got ${serverEnv.WORKSPACE_DIR}`,
+  );
+});
+
+test('renderServerEnv still carries PORT and WORKSPACE_DIR', () => {
+  const ports = computePorts(2);
+  const serverEnv = parseEnvLocal(renderServerEnv({ slot: 2, branch: 'feat/server-x', ports }));
+  assert.equal(serverEnv.PORT, String(ports.PORT));
+  assert.ok(serverEnv.WORKSPACE_DIR, 'WORKSPACE_DIR must be set');
+});
+
+// #2348 review, finding 2: LOCAL_TTS_PORT must NOT appear in the generated
+// server/.env. The Node side never reads it — spawn-sidecar.ts hardcodes
+// DEFAULT_PORT=9000, sidecar-owner.ts hardcodes SIDECAR_PORT=9000, and every
+// request path resolves through LOCAL_TTS_URL (default localhost:9000) — but
+// start.ps1/start.sh DO read it to choose the sidecar's bind port. Setting it
+// here would make the sidecar bind the slot port while the server keeps
+// polling :9000, breaking TTS in every worktree created after this change.
+test('renderServerEnv does NOT set LOCAL_TTS_PORT (the sidecar bind port and the server poll port would diverge)', () => {
+  const ports = computePorts(1);
+  const env = renderServerEnv({ slot: 1, branch: 'feat/server-x', ports });
+  const parsed = parseEnvLocal(env);
+  assert.equal(
+    parsed.LOCAL_TTS_PORT,
+    undefined,
+    'server/.env must not carry LOCAL_TTS_PORT — the sidecar (start.ps1/start.sh) would bind it as its OWN port while the server keeps polling the hardcoded :9000, breaking TTS',
+  );
+  assert.doesNotMatch(env, /^LOCAL_TTS_PORT=/m);
+});
+
+test('renderServerEnv never carries secret-shaped keys copied from a primary .env', () => {
+  const ports = computePorts(0);
+  const env = renderServerEnv({ slot: 0, branch: 'feat/server-x', ports });
+  const parsed = parseEnvLocal(env);
+  for (const secretKey of [
+    'GEMINI_API_KEY',
+    'OLLAMA_MODEL',
+    'GEMINI_MODEL',
+    'VOICE_STYLE_MODEL',
+    'ANALYZER',
+  ]) {
+    assert.equal(parsed[secretKey], undefined, `${secretKey} must not appear in generated server/.env`);
+  }
+  // Belt-and-suspenders: no line is an ASSIGNMENT of a key containing
+  // API_KEY (the header prose legitimately explains "no GEMINI_API_KEY" as
+  // text — that's not a config line, so a bare substring match would be a
+  // false positive; anchor to line-start so only a real `KEY=` counts).
+  assert.doesNotMatch(env, /^[A-Z_]*API_KEY=/m);
+});
+
+test('renderServerEnv header names the source script and slot (matches renderEnvLocal convention)', () => {
+  const env = renderServerEnv({ slot: 3, branch: 'fix/frontend-x', ports: computePorts(3) });
+  assert.match(env, /scripts\/wt-new\.mjs/);
+  assert.match(env, /slot 3/);
+  assert.match(env, /fix\/frontend-x/);
+});
+
+test('renderLaunchBlock server port matches renderServerEnv PORT for the same slot', () => {
+  for (const slot of [0, 1, 4]) {
+    const ports = computePorts(slot);
+    const serverEnv = parseEnvLocal(renderServerEnv({ slot, branch: 'feat/server-x', ports }));
+    const block = renderLaunchBlock({
+      worktreePath: 'C:/Claude/Projects/wt-foo',
+      branch: 'feat/server-x',
+      ports,
+      slot,
+      install: true,
+    });
+    assert.match(
+      block,
+      new RegExp(`server :${serverEnv.PORT}\\b`),
+      `slot ${slot}: printed launch block server port must match generated server/.env PORT`,
+    );
+  }
 });
 
 // ---- parseWorktreePorcelain (consumed by wt-list) ---------------------------

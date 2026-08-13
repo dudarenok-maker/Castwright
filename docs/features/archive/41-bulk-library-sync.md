@@ -94,7 +94,7 @@ owner: dudarenok-maker
 
 > **Historical — superseded.** Steps 4–7 below assume the v1 "Sync N profiles from library" label and the original tick-everything behaviour. Bug C renamed the pill and widened the apply path to include the Reuse decision; Bug D narrowed the auto-tick to confidence `< 0.9`. For a current walkthrough, see Verification step 3 in `~/.claude/plans/twinkling-wobbling-stonebraker.md` (or simply run the seeded mock cast — Narrator 0.94 / Eliza 0.89 / Marcus 0.86 — and observe that Apply All leaves Narrator's sync unticked).
 
-Run in mock mode (`npm run dev` + `VITE_USE_MOCKS=true`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** → library cards visible.
 2. **Click "Start a new book"** → `#/new`, upload modal opens.

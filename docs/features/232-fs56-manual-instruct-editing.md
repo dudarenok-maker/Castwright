@@ -46,7 +46,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`). Navigate to a book's manuscript view.
+Run in mock mode (`npm run dev:mock`). Navigate to a book's manuscript view.
 
 1. **Ungated chip on every line** — scroll through the manuscript. Verify a faint 🎬 icon reveals on row hover/focus for both narrator and dialogue lines (empty state is opacity-0/hover-reveal on desktop, faint on touch via `coarse-pointer:opacity-40`).
 2. **Open and edit an LLM-proposed instruct** — find a line that Stage-3 proposed an `instruct` for (if any in the mock data). Click its chip. Verify the popover textarea pre-fills with the LLM suggestion. Edit it (e.g. "a sharp, startled whisper"), click Save. Verify the chip updates to show the first ~24 chars of the new text with an ellipsis.

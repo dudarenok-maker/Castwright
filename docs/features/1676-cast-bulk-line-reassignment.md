@@ -255,7 +255,7 @@ selection path regresses in practice.
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Roster entry point.** Analyse a fresh book, confirm the cast, land on
    `#/books/<id>/cast`. Open a character's profile drawer, click

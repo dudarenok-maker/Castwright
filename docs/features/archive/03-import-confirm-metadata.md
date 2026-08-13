@@ -39,7 +39,7 @@ Two-step write to the workspace: `POST /api/import` parses a manuscript in memor
 
 ## Acceptance walkthrough
 
-Run with both `VITE_USE_MOCKS=false` (server on `:8080`) and `VITE_USE_MOCKS=true` for the mock-only steps.
+Run with both `npm run dev` (real backend, server on `:8080`) and `npm run dev:mock` for the mock-only steps.
 
 1. **Drop file `Dudarenok - Northern Star 1 - The Cliff.md`** → import fires → dialog opens with `author='Dudarenok'`, `series='Northern Star'`, `seriesPosition=1`, `title='The Cliff'`.
 2. **Drop file `random.txt` containing `# Frostfall\n…`** → dialog opens with `title='Frostfall'`, `author=null`, `series=null`, `seriesPosition=null`.

@@ -53,7 +53,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode unless noted: `VITE_USE_MOCKS=true npm run dev`.
+Run in mock mode unless noted: `npm run dev:mock`.
 
 1. Cold boot at `#/books/<id>/listen` → ListenView loads, expected URL hash matches, chapters list visible.
 2. Click "Restructure chapters" button in the listen header → URL becomes `#/books/<id>/restructure`. The panel renders one row per chapter with title + sentence count + first + last sentence excerpts.

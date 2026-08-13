@@ -172,7 +172,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`) unless otherwise
+Run in mock mode (`npm run dev:mock`) unless otherwise
 noted. The `?setup=notready` query param (consumed on `#/`, latched into
 `sessionStorage` so it survives the redirect to `#/setup`) puts the app into
 the not-ready mock state.

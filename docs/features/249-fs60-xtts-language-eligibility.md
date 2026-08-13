@@ -59,7 +59,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`) for the UI-seam parts; the render-time fallback itself needs the real sidecar (see above).
+Run in mock mode (`npm run dev:mock`) for the UI-seam parts; the render-time fallback itself needs the real sidecar (see above).
 
 1. **Open a Russian-language book's cast view** (`#/books/<id>/cast`) with an undesigned speaking character → banner reads "Undesigned characters fall back to a generic Coqui voice" (not the old hard-block "can't be generated" copy).
 2. **Open the same character's profile drawer, engine picker** → Coqui is selectable (not disabled/hidden) alongside Qwen.

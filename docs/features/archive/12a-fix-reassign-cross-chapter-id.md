@@ -63,7 +63,7 @@ Plan 12's invariants documented the _public_ shape of reassignment (action name,
 
 ### Manual acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript`.
+Run `npm run dev:mock`, navigate to `#/books/<id>/manuscript`.
 
 1. **Pick a multi-chapter book** → sidebar shows ≥ 2 chapters.
 2. **Click chapter 2** in the sidebar → URL becomes `…?chapter=2`; sentences for chapter 2 render.

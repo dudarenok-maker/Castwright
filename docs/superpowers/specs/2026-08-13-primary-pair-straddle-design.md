@@ -1,6 +1,8 @@
 # The primary-pair straddle, and the tag-clause cut — design
 
-Status: **active — recommendation made, three owner decisions owed (Task 0)** ·
+Status: **stable — shipped**, all three owner decisions answered (Task 0) and
+implemented per
+[the plan](../plans/2026-08-13-primary-pair-straddle.md)'s Ship notes ·
 Issue: [#2315](https://github.com/dudarenok-maker/Castwright/issues/2315) ·
 Blocks: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) (held in
 draft until this lands) ·
@@ -297,6 +299,68 @@ sentence starts here" for a candidate sitting mid-clause several sentences later
 (all `secondaryQuotePairs` are empty): the family, the anchors and both corpus
 arms are byte-identical with and without it. It costs nothing until #2286 lands,
 and #2286 is the consumer waiting on it.
+
+### Corrected by the PR #2340 review gate (implementation-time)
+
+The rule above, as first implemented, was **polarity-inverted for any
+language whose canonical dialogue-tag order is VERB then quote** (zh, ja:
+`他说，"你好"`) — the mirror image of the Latin trailing-tag shape (`"Hi," said
+Anton`) this section's own worked example is built from. The
+clause-before-candidate model read a leading verb as proof of a name-tag
+regardless of whether any turn had actually been captured to attribute,
+which on one real Chinese book falsely declined 93.7% of its speech spans.
+**Fix, not a re-decision**: the guard now requires a PRIMARY run to actually
+precede the candidate before it evaluates a verb at all — the sentence above
+("the adjacent real turn loses its speaker") always presupposed this; the
+implementation simply hadn't checked it. **Correction (a second review pass
+on this same PR found the sentence below stated too broadly — see the "F2"
+paragraph after this one for what it actually does):** ~~This doesn't change
+the rule's behaviour on the shape this section documents (a primary run
+always precedes in the Latin trailing-tag construction), and it isn't a
+per-language property — the same structural check is language-agnostic.~~
+True only of the CONSTRUCTED family; against #2286's real tables it measurably
+changes 271 non-CJK spans across 203 real es/fr paragraphs (reduced
+over-suppression of quoted narration phrases, not lost speakers), and it
+leaves a real gap that is not CJK-specific either. Separately, the
+sentence-boundary scan was hardened against a decimal point, a semicolon,
+and a mid-clause ellipsis defeating it (none of `.!?…` was previously
+excluded for these cases). Full measurement, the corrected corpus figure
+against #2286's actual tables (101 across 48 paragraphs, down from an
+unfixed 7,438 across 1,489), and the mutation evidence: the implementation
+plan's Ship notes, "Round 2 — PR #2340 Premium review gate".
+
+**F2 — a known, filed gap, PR #2340 round 2 (not fixed here); condition and
+harm figure both corrected in round 3 (findings C2, C1).** The primary-run
+precondition above turns the guard off for a candidate with **no primary run
+ending before it** — corrected from an earlier, looser statement of this
+("typed WHOLLY in a secondary-tier convention") that missed the case where a
+primary run exists but comes AFTER the candidate; that shape is inert too.
+Not CJK-specific either — it hits any language whose dialogue happens to sit
+before the paragraph's only primary run, or has none. The obvious repair
+(check the accepted-run list instead of the primary-run list alone) fixes
+that but re-declines 5,892 spans in the same real Chinese book this
+section's own MAJOR finding was about, at corpus scale — the real
+discriminator is a word-order typology question ("does the verb attribute
+the PRECEDING turn, or introduce the FOLLOWING one") with more than one
+defensible encoding, not decided here.
+
+Measured exposed population against #2286's real tables: 2,202 real
+paragraphs carry a secondary-tier-only turn (paragraph-level; 2,221
+paragraphs / 8,802 runs at the run level, confirming 2,202 under-counts
+rather than over-counts). A raw two-secondary-spans-around-a-tag proxy fires
+on 1,164 of the 2,202 — **but that raw count overstates the harm by ~100×**:
+it cannot distinguish the harmful shape (a name inside the quotes) from an
+ordinary correctly-parsed two-turn paragraph where each turn carries its own
+leading tag, and 94% of its mass is the latter, from one book. Classified
+(generous upper bound), the true figure is **≤21 of 1,164 (1.8%)**. **The
+raw proxy is not the target** — driving it to zero would mean re-declining
+exactly the correctly-parsed paragraphs it's mostly counting, which is the
+same 5,892-span regression the naive repair above was already rejected for.
+Full detail, the two candidate encodings, the classification method, and the
+measured cost of the naive repair: implementation plan Ship notes, "Round 2,
+continued" and "Round 3", and issue
+[#2346](https://github.com/dudarenok-maker/Castwright/issues/2346), which
+carries the classified figure as its stated target.
 
 ---
 

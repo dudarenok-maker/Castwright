@@ -34,7 +34,7 @@ Renders the manuscript a chapter at a time, sentence-by-sentence, with each sent
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to `#/books/<id>/manuscript`.
+Run `npm run dev:mock`, navigate to `#/books/<id>/manuscript`.
 
 1. **Land on the view** → sentences for `currentChapterId` (default 3) render; each carries a coloured left-border indicating the speaker.
 2. **Hover a sentence with low confidence** → tooltip / badge surfaces "low confidence" or a numeric score.
