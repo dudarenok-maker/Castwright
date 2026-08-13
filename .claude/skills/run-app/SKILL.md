@@ -6,9 +6,18 @@ description: Launch and drive the Audiobook Generator app to verify a change wor
 # Running & verifying the Audiobook Generator app
 
 The app is a Vite + React SPA (`src/`) talking to a Node/Express server
-(`server/`) that owns a Python TTS sidecar. The frontend can run **standalone
-in mock mode** (`VITE_USE_MOCKS`, set in `.env.development`) with no server or
-sidecar — that's the fastest way to verify a frontend/stack change.
+(`server/`) that owns a Python TTS sidecar. Tracked `.env.development` sets
+`VITE_USE_MOCKS=false` — **mocks are OFF by default**, so a bare `npm run
+dev:frontend` talks to the real server and errors loudly (502s) if it isn't
+running. To run the frontend **standalone in mock mode**, with no server or
+sidecar, opt in explicitly:
+
+```bash
+VITE_USE_MOCKS=true npm run dev:frontend
+```
+
+That's the fastest way to verify a frontend/stack change that doesn't need
+the real backend.
 
 ## STEP 0 — after pulling or switching branches: reinstall FIRST
 
@@ -36,7 +45,8 @@ react-router-dom 7, TypeScript 6.
 
 | Goal | Command | Ports |
 |---|---|---|
-| Frontend only (mock mode — best for a quick verify) | `npm run dev:frontend` | Vite `:5173` |
+| Frontend only, against the real server (mocks OFF, the default) | `npm run dev:frontend` | Vite `:5173` |
+| Frontend only, mock mode — best for a quick verify with no server/sidecar | `VITE_USE_MOCKS=true npm run dev:frontend` | Vite `:5173` |
 | Full dev (frontend + server + sidecar) | `npm run dev` | `:5173` + `:8080` |
 | Production bundle smoke | `npm run build && npm run preview` | preview port |
 
@@ -105,7 +115,13 @@ LOOK at it. Use that Windows-style path, not the Git-Bash POSIX form
 *inside* Git Bash itself, but the Read tool runs outside Git Bash and measures
 it as "File does not exist" — only the `cygpath -w` output works there.
 
-**What a healthy run looks like** (this is the regression net for the plan-167 stack):
+**What a healthy run looks like** (this is the regression net for the plan-167
+stack). The `ERRORS=0` bar below applies to **mock mode**
+(`VITE_USE_MOCKS=true npm run dev:frontend`) or the full `npm run dev` stack —
+i.e. any launch where the backend the frontend calls is actually present. Driving
+`npm run dev:frontend` (mocks off) against no server is expected to log 502
+console errors for every hydrate call; that is not a failed verify, it is the
+absent-backend case documented above:
 - Heading renders (`Welcome back, Mike` on `#/`, or the view's heading) — proves
   **redux-persist rehydrated** (the Rolldown CJS-interop bug made `storage.getItem`
   undefined and broke boot; fixed by importing `redux-persist/es/storage`).
@@ -129,9 +145,6 @@ screenshot — don't trust the exit code alone.
 # This is a FRESH shell — $VERIFY_DIR from STEP 2 is unset here. Paste the
 # VERIFY_DIR_WIN value STEP 2 printed (the directory, not the screenshot):
 VERIFY_DIR_WIN="C:\Users\...\AppData\Local\Temp\tmp.XXXXXXXXXX"   # <- paste STEP 2's printed VERIFY_DIR_WIN
-if [ -z "$VERIFY_DIR_WIN" ]; then
-  echo "VERIFY_DIR_WIN is empty -- refusing to rm -rf" >&2
-else
-  rm -rf "$VERIFY_DIR_WIN"   # unconditional once non-empty — a failed run (the case you're cleaning up FOR) must not skip this
-fi
+[ -d "$VERIFY_DIR_WIN" ] || { echo "VERIFY_DIR_WIN does not exist -- refusing to rm -rf" >&2; exit 1; }
+rm -rf "$VERIFY_DIR_WIN"   # only reached once the directory is confirmed to exist
 ```

@@ -4,7 +4,12 @@ What happens after a review pass's comment lands. This file is read by the
 shipping session, not the reviewer — the reviewer's contract for producing
 findings lives in [`reviewer-brief.md`](reviewer-brief.md).
 
-## The fix-now bar
+## Fix in this round (the report-fix-record rule)
+
+CLAUDE.md retired the old four-conjunct "fix-now bar" name: that bar
+*licensed deferral*, whereas [the current rule](../../../../CLAUDE.md#incidental-findings-report-fix-record)
+gates deferring instead — a historical doc that cites "the fix-now bar" is
+not precedent under this rule.
 
 Triage the report by hand, then **fix in this round**. Every finding gets a
 dispatched fix agent — one finding, one fix, one paired test — committed and

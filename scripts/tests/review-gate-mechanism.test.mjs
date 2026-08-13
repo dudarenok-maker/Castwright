@@ -442,10 +442,18 @@ test('syncOneFile throws when SKILL.md frontmatter is not the first line, and le
     const preExisting = '---\nname: pr-review-gate\n---\nA previously-good mirror.\n';
     writeFileSync(destPath, preExisting, 'utf8');
 
+    // Pinned to the CANONICAL SOURCE path specifically, not just the message
+    // text: the regex alone matches regardless of which path the error
+    // names, so reverting the srcPath->destPath identifier in
+    // sync-agent-skills.mjs (naming the mirrored destination instead of the
+    // canonical source that is actually malformed) would leave this green.
     assert.throws(
       () => syncOneFile(srcPath, destPath, 'SKILL.md'),
-      /frontmatter is not the first line/,
-      'syncOneFile did not throw for a canonical source missing frontmatter',
+      (err) =>
+        /frontmatter is not the first line/.test(err.message) &&
+        err.message.startsWith(`${srcPath}:`) &&
+        !err.message.includes(destPath),
+      'syncOneFile did not throw naming the canonical source path (srcPath), not the mirrored destination',
     );
     assert.equal(
       readFileSync(destPath, 'utf8'),

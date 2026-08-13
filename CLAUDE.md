@@ -484,7 +484,9 @@ Design rationale:
   vars. No hex literals in component code.
 - **Mocks behind `VITE_USE_MOCKS`** — `src/lib/api.ts` exports
   `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
-  they never know which is which. `.env.development` sets the flag on.
+  they never know which is which. `.env.development` sets the flag **off**
+  (`VITE_USE_MOCKS=false`) — the default dev run talks to the real server;
+  opt into mocks with `VITE_USE_MOCKS=true npm run dev:frontend`.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 - **`server/src/gpu/` reaches a route module through a leaf gate, never an
   import** — a static import, a dynamic `import()`, and even `import type`
