@@ -402,7 +402,7 @@ The brief's five items are all satisfiable by a rule that never fixes a straddle
 
 - [x] New file `server/src/analyzer/dialogue-structure/tier-sweep.test.ts`, generating both families from the tables so a future table change re-derives its own coverage. Port `m2-sweep2.mts` (straddle) and `m2-sweep3.mts` (`gap × nest`) — scoring `ref` = the shipped table (which no tier can move), asserting **zero shapes with a destroyed turn** and **zero broken nests**, with a **control** that declares the same pair PRIMARY and must be non-zero.
 - [x] Keep it to three languages (`es`, `ru`, `en`) and time it. If it exceeds ~2s, drop a language — **never thin a cross-product**, which is the coverage gap these files exist to close.
-- [x] **Verify the control is real:** make `findQuoteRuns` ignore `secondary` and confirm the destroyed-turn assertions go red in both families.
+- [x] **Verify the control is real:** the destroyed-turn/nest-broken assertions alone do NOT go red here — with `secondary` ignored, `tiered` parses identically to `ref`, so `destroyed`/`nestBrokenCount` are trivially 0 either way (confirmed: 18/18 pass under all three mutants below). The `tiered differs from ref on N scored shapes` assertion (added per #2288 M2 gap-tier PR #2319's review-gate finding) is what controls for this: it pins the count of scored shapes where `tiered` actually diverges from `ref`, so a no-op tier reads as 0 and fails. Confirmed red under all three mutants — ignore `secondary` outright (`return primaryRuns` before the tiering block runs), delete the `out.some(...overlap...)` guard, and delete the `if (straddles) continue;` guard — each turns every one of the six `tiered differs from ref` assertions red, then reverted clean.
 
 ---
 

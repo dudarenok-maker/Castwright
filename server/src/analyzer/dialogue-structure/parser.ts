@@ -371,9 +371,7 @@ function findQuoteRuns(
   const primaryOpeners = new Set(pairs.map(([open]) => open));
   const all = scanQuoteRuns(line, [...pairs, ...secondary]);
   const out = [...primaryRuns];
-  let cursor = -1;
   for (const c of all) {
-    if (c.start < cursor) continue;
     if (out.some((r) => c.start < r.end && r.start < c.end)) continue;
     let straddles = false;
     for (const open of primaryOpeners) {
@@ -385,7 +383,6 @@ function findQuoteRuns(
     }
     if (straddles) continue;
     out.push(c);
-    cursor = c.end;
   }
   return out.sort((a, b) => a.start - b.start);
 }

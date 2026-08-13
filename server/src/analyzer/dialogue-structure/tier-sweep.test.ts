@@ -240,6 +240,28 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
         }
         expect(destroyed).toBeGreaterThan(0);
       });
+
+      /* The two assertions above both pass on a `findQuoteRuns` that ignores
+         `secondary` outright: with the tier never applied, `tiered` parses
+         identically to `ref`, so `destroyed` is trivially 0 for every shape —
+         the step cannot go red no matter how thoroughly the rule has been
+         gutted. This assertion controls for exactly that: it requires
+         `tiered` to actually produce a DIFFERENT parse than the untouched
+         `ref` table on a measured number of scored shapes, so a no-op
+         (secondary ignored, `tiered === ref` everywhere) reads as 0 and
+         fails outright. Value pinned by direct measurement against this
+         file's own shapes, not copied from any other report. */
+      it(`tiered differs from ref on ${lang === 'es' ? 88 : lang === 'ru' ? 225 : 114} scored shapes (proves the tier is actually engaged)`, () => {
+        let differs = 0;
+        for (const body of shapes) {
+          const r = speechOf(body, ref);
+          const ok = r.includes(t.t1) || r.includes(t.t2);
+          if (!ok) continue;
+          const cand = speechOf(body, tiered);
+          if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
+        }
+        expect(differs).toBe(lang === 'es' ? 88 : lang === 'ru' ? 225 : 114);
+      });
     });
 
     describe(`F3 gap x nest — ${lang}`, () => {
@@ -280,6 +302,24 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           if (lost) destroyed++;
         }
         expect(destroyed).toBeGreaterThan(0);
+      });
+
+      /* Same control as F2's (see its comment): a `findQuoteRuns` that ignores
+         `secondary` entirely makes `tiered` parse identically to `ref`, so
+         `destroyed`/`nestBrokenCount` are trivially 0 above and cannot go red.
+         This requires `tiered` to actually differ from `ref` on a measured
+         number of scored shapes. Value pinned by direct measurement against
+         this file's own shapes. */
+      it(`tiered differs from ref on ${lang === 'es' ? 116 : lang === 'ru' ? 618 : 258} scored shapes (proves the tier is actually engaged)`, () => {
+        let differs = 0;
+        for (const { body, outer } of shapes) {
+          const r = speechOf(body, ref);
+          const refNestOK = r.includes(outer);
+          if (!(refNestOK || r.includes(t.t2))) continue;
+          const cand = speechOf(body, tiered);
+          if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
+        }
+        expect(differs).toBe(lang === 'es' ? 116 : lang === 'ru' ? 618 : 258);
       });
     });
   }
