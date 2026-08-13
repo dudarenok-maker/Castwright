@@ -165,15 +165,83 @@ function parseDashParagraph(
   return { start: base, end: base + line.length, kind: 'dialogue', spans };
 }
 
-function escapeRegExp(ch: string): string {
-  return ch.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-}
-
 interface QuoteRun {
   start: number;
   end: number;
   openLen: number;
   closeLen: number;
+}
+
+/** Scripts with no inter-word spacing, where a delimiter with letters on both
+    sides is ordinary text rather than a mis-read apostrophe.
+    FORWARD-COVER, not live protection: `en` is the only shipped table pairing
+    an apostrophe-shaped glyph as a closer, so today this branch is never
+    reached and removing it leaves 725,066 corpus paragraphs byte-identical.
+    It matters when #2286 adds ['‘','’'] to `zh` and `ru`, at which point the
+    inner `’` of `“他说‘你好’然后走了”` becomes exactly the both-sides shape the
+    first clause rejects. No test can make this fail yet; do not delete it as
+    dead code. Hangul is deliberately absent: modern Korean uses inter-word
+    spacing like English, so a `’` with Hangul on both sides is not ordinary
+    unspaced text — it's exactly the mis-read-apostrophe shape the first
+    clause exists to catch. See `isSpacedLetter`'s comment for a gap this
+    exclusion does NOT close: a decomposed combining mark's own script reads
+    as `Inherited`, not the base character's script, so it can slip past this
+    regex regardless of how far this set is widened. */
+const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Thai}]/u;
+/** Only `’` is reachable today: `en` is the sole table pairing an
+    apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
+    nothing stops a future table pairing them, and because this is the exact
+    set the corpus and the sweep were measured against. Do not narrow it
+    without re-measuring. */
+const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
+
+/** `\p{M}` alongside `\p{L}`: this path has no NFC-normalisation guarantee,
+    and in decomposed (NFD) form a base letter and its combining mark are two
+    separate code points — `André` decomposes to `Andr` + `e` + U+0301. Testing
+    `\p{L}` alone misses the mark, so the character immediately before a
+    closer reads as "not a letter" and the contraction clause in
+    `isRealCloser` never fires for decomposed input — the #2288 bug,
+    unfixed, whenever the manuscript arrives NFD.
+
+    Known gap this widening opens in `UNSPACED_SCRIPT` above: `\p{M}` matches
+    a combining mark's OWN script property, which for a great many marks
+    (including the kana voicing mark U+3099 in decomposed が, and variation
+    selectors like U+FE0F) is `Inherited` — not the script of whatever base
+    character it's attached to. `UNSPACED_SCRIPT` tests the mark itself, so it
+    cannot see the base character's script and cannot exclude these marks no
+    matter how it's widened; a decomposed CJK sequence's combining mark reads
+    as a "spaced letter" here. Unreachable today for the same reason
+    `UNSPACED_SCRIPT` itself is (`en`, the only table this function's caller
+    matters for today, has no CJK content to decompose) — a documented gap,
+    not a live bug. Do not close it by narrowing `\p{M}` without re-verifying
+    the `André`-shaped NFD case above stays covered. */
+function isSpacedLetter(ch: string | undefined): boolean {
+  return ch !== undefined && /[\p{L}\p{M}]/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
+}
+
+/** Is `line[k]` really a closing delimiter, or an apostrophe? English writes
+    both `’`, and `en`'s table carries ['‘','’'], so without this every
+    contraction ends the run early: `‘I don’t know,’ she said.` yields the
+    speech "I don" (#2288). Three shapes, all local to the glyph's neighbours:
+      don’t / O’Brien   a letter on both sides
+      ’em / ’cause      whitespace (or a bracket) then a letter, MID-LINE — a
+                        real closer is never preceded by whitespace, it closes
+                        onto the last character of the speech it terminates
+      ‘’Tis             its own opener, then a letter — accepting it would
+                        close on an empty interior and yield NO speech span,
+                        destroying the turn rather than truncating it
+    The `before === undefined` arm can't fire at the only call site (`k` is
+    always `>= start + open.length >= 1`, so `line[k - 1]` always exists) —
+    it's kept so the function stays total if that ever changes, not as a
+    stand-in for a line-initial `’em`, which isn't reachable either. */
+function isRealCloser(line: string, k: number, closer: string, openers: Set<string>): boolean {
+  if (!APOSTROPHE_SHAPED.has(closer)) return true;
+  const before = line[k - 1];
+  const after = line[k + 1];
+  if (isSpacedLetter(before) && isSpacedLetter(after)) return false;
+  if ((before === undefined || /[\s([{]/u.test(before)) && isSpacedLetter(after)) return false;
+  if (before !== undefined && openers.has(before) && isSpacedLetter(after)) return false;
+  return true;
 }
 
 /** Find non-overlapping quoted runs for any of the language's quote pairs,
@@ -182,13 +250,94 @@ interface QuoteRun {
     glyph that pairs with its opener — not at a same-glyph closer sitting past
     a nearer, different-glyph one. Without this, German (the only language
     whose `„` opener maps to several closers — `“`/`”`/`"`) over-merges a
-    mixed-closer paragraph: the per-pair `„…"` regex would lazily run the first
-    `„` past an intervening `“` to a later ASCII `"`, swallowing the beat and
-    the next turn (#1601). The run ends at the nearest closer POSITION; a run's
+    mixed-closer paragraph: scanning the first `„` all the way to a later ASCII
+    `"` while skipping past an intervening `“` would swallow the beat and the
+    next turn (#1601). For each opener occurrence, the run ends at the NEAREST
+    closer position across that opener's whole closer set; on a tie (two
+    closers found at the same position) the earlier entry in the opener's
+    closer list wins — so if a future language ever pairs prefix-related
+    multi-char closers with one opener, order them longest-first there. A run's
     `closeLen` is the actually-matched closer's length (all current closers are
-    one code unit). NOTE: alternation matches the leftmost alternative, not the
-    longest — if a future language ever pairs prefix-related multi-char closers
-    with one opener, order them longest-first here. */
+    one code unit).
+    Rejecting an apostrophe-shaped closer (#2288) means the scan may resume
+    looking for a LATER occurrence of that same glyph — and that resumed skip
+    is bounded to the nearest following opener of ANY class, never crossing
+    into a different turn. Without the bound, `Tom said the ‘phone wasn’t
+    working. “I agree,” said Mary. It was the boys’ fault.` rejects the
+    apostrophe in "wasn't", and with nothing to stop the skip it keeps hunting
+    for another `’` straight through Mary's whole turn, landing on the
+    "boys’" apostrophe and destroying "I agree," on the way there. The bound
+    applies only to that resumed skip — a closer's FIRST occurrence is always
+    eligible, unbounded, exactly as it was before #2288. This property is
+    COMMENT-ENFORCED, not test-enforced: it cannot be pinned through
+    `parseChapterStructure` alone. `nearestAny` (which feeds the never-delete
+    fallback) is recorded on the first occurrence BEFORE any `limit` is
+    consulted, so even a mutant that bounded the first occurrence too would
+    still restore the identical position through the fallback whenever that
+    first occurrence is the one actually accepted — every nesting/repair test
+    below stays green. Catching such a leak needs a double mutation (bound the
+    first occurrence AND disable the never-delete fallback in the same build)
+    to force a difference through to the public surface.
+
+    The bound is anchored at the REJECTED closer's own index, and recomputed
+    at every rejection — not anchored once at the opening quote's interior
+    start. An opener INSIDE the turn (a legitimately nested one, e.g. the “
+    in `‘He said “yes,” but I don’t believe him,’`) must not cap the search;
+    only an opener strictly after the point the scan is still hunting from can
+    belong to a different turn. This is provably safe, not merely measured: a
+    following turn always begins at an opener, so after a rejection at index k
+    the bound sits at the nearest opener at index >= k, and an accepted closer
+    must land strictly before it — half-open intervals, so a run ending at the
+    bound never overlaps a run starting there. No `main` run can start inside
+    the extension either: by construction there is no opener glyph between the
+    rejection and the bound, so the extension can only ever reclaim text
+    `main` classified as narration, never swallow a turn. And the
+    recomputation cannot walk the bound forward: the next occurrence of this
+    glyph, if any, sits in `[k, bound)` — there is no opener in that range by
+    definition of the bound — so recomputing from it returns the identical
+    index.
+
+    That proof's precondition: it is a per-GLYPH argument. It bounds the
+    resumed scan for the one closer glyph that rejected — it says nothing
+    about a DIFFERENT closer glyph paired with the same opener. `end` is a
+    minimum taken across every closer in the opener's set, so an unrejected
+    SIBLING closer's first occurrence (first occurrences are always eligible,
+    per above) can win `end` regardless of a bound another glyph's rejection
+    established. `crossGlyphBound` in the scan below closes that gap by
+    applying the earliest such rejection's bound to the OPENER OCCURRENCE as a
+    whole, not to one glyph's scan — the never-delete fallback fires if the
+    finally-chosen `end`, from whichever glyph, doesn't clear it.
+    FORWARD-COVER, not live protection, same shape as `UNSPACED_SCRIPT`
+    below: no shipped table pairs an apostrophe-shaped closer alongside a
+    sibling closer for the same opener (German's `„` is the only shipped
+    opener with several closers — `“`/`”`/`"` — and none is apostrophe-
+    shaped). `crossGlyphBound` itself IS set on every rejection — `en`
+    rejects on every contraction, so it is routinely non-null on shipped
+    tables — but the GUARD below (`end.at >= crossGlyphBound`) never FIRES on
+    any shipped table: verified by construction, from the precondition above,
+    and by a 1,400,000-string differential fuzz across all seven shipped
+    tables in which the guard fired 0 times with 0 output differences. Do not
+    delete this as dead code — same rationale as `UNSPACED_SCRIPT`'s comment
+    above. It matters once #2286 pairs `‘`/`’` alongside another closer on
+    one opener — the precondition this guard exists for. Reviewer's synthetic
+    case (`quotePairs
+    = [['«','’'], ['«','»'], ['“','”']]`, not any shipped table):
+    `«He said don’t go. “Stop,” said Tom. Later» he left.` — without
+    `crossGlyphBound`, `»`'s un-rejected first occurrence wins `end` past
+    `“Stop,”`'s turn entirely, producing one merged run and destroying Tom's
+    line; with it, `’`'s rejection (inside `don’t`) bounds the opener
+    occurrence as a whole, `»` fails to clear it, and the fallback restores
+    `’` as the closer — `["He said don", "Stop,"]`, matching the two-run
+    reading a per-glyph-only bound cannot reach. */
+function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>): number {
+  let best = line.length;
+  for (const o of openers) {
+    const at = line.indexOf(o, from);
+    if (at >= 0 && at < best) best = at;
+  }
+  return best;
+}
+
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
@@ -196,12 +345,98 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
     if (list) list.push(close);
     else closersByOpener.set(open, [close]);
   }
+  const openers = new Set(closersByOpener.keys());
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
-    const closerClass = closers.map(escapeRegExp).join('|');
-    const re = new RegExp(`${escapeRegExp(open)}[\\s\\S]*?(${closerClass})`, 'gu');
-    for (const m of line.matchAll(re)) {
-      candidates.push({ start: m.index!, end: m.index! + m[0].length, openLen: open.length, closeLen: m[1].length });
+    let pos = 0;
+    for (;;) {
+      const start = line.indexOf(open, pos);
+      if (start < 0) break;
+      const interiorStart = start + open.length;
+      /* Nearest closer POSITION across the opener's closer set; ties go to the
+         earlier entry in `closers`, matching the old alternation's
+         leftmost-alternative rule. */
+      let end: { at: number; glyph: string } | null = null;
+      let nearestAny: { at: number; glyph: string } | null = null;
+      /* OPENER-OCCURRENCE-WIDE bound (Task 1, #2288 round 4 review — forward-
+         cover, see the doc comment above `nearestOpenerAtOrAfter`): the
+         earliest bound produced by a rejection on ANY closer glyph for this
+         opener occurrence, not just the glyph that is finally accepted. A
+         per-glyph `limit` alone only bounds a resumed skip within the SAME
+         glyph's own scan; it does nothing for a SIBLING closer whose first
+         occurrence is never rejected. */
+      let crossGlyphBound: number | null = null;
+      for (const closer of closers) {
+        let from = interiorStart;
+        let firstOfGlyph = true;
+        /* Bound for a REJECTED closer's resumed skip only (see the doc
+           comment above): starts unbounded — a closer's first occurrence is
+           never bounded — and is REPLACED (not narrowed) at each rejection
+           with the nearest opener glyph at or after that rejection's own
+           index. */
+        let limit = line.length;
+        for (;;) {
+          const at = line.indexOf(closer, from);
+          if (at < 0) break;
+          if (firstOfGlyph) {
+            if (nearestAny === null || at < nearestAny.at) nearestAny = { at, glyph: closer };
+            firstOfGlyph = false;
+          } else if (at >= limit) {
+            /* A later occurrence, reached only because an earlier one of the
+               same glyph was rejected: at or past the current bound it
+               belongs to a different turn. Positions only increase from
+               here, so no later occurrence of this closer is eligible
+               either. */
+            break;
+          }
+          if (isRealCloser(line, at, closer, openers)) {
+            if (end === null || at < end.at) end = { at, glyph: closer };
+            break;
+          }
+          limit = nearestOpenerAtOrAfter(line, at, openers);
+          /* `nearestOpenerAtOrAfter` is monotonic non-decreasing in its `from`
+             argument, so the smallest `crossGlyphBound` across every rejection
+             (any glyph) is always the one produced by the EARLIEST rejection —
+             tracking the running minimum here is equivalent to anchoring on
+             that earliest rejection specifically. */
+          if (crossGlyphBound === null || limit < crossGlyphBound) crossGlyphBound = limit;
+          from = at + closer.length;
+        }
+      }
+      /* NEVER DELETE A RUN. If every closer after this opener is an
+         apostrophe, fall back to the nearest one — i.e. exactly what this
+         function chose before #2288. Truncating a turn is bad; deleting it
+         turns dialogue into narration, which is worse and is the same harm
+         class this change exists to fix. Measured: without this fallback the
+         change loses speech in 90 real paragraphs, 74 of them entirely.
+         This is also the multi-closer fallback: once ANY closer has been
+         rejected for this opener occurrence, whichever glyph `end` ended up
+         coming from must clear the bound from the EARLIEST such rejection —
+         otherwise it is a sibling closer's un-rejected first occurrence that
+         slipped past a bound scoped to a different glyph, and the fallback
+         applies exactly as if nothing had validated at all. */
+      if (end === null || (crossGlyphBound !== null && end.at >= crossGlyphBound)) end = nearestAny;
+      if (end === null) {
+        /* No closer after this opener — and by the same shrinking-window
+           argument, none after any LATER occurrence of it either: the
+           closer-search window only shrinks as `start` increases, so once one
+           occurrence of this opener has no closer, no later one can. Scanning
+           still continues rather than stopping outright, so openers of OTHER
+           classes still get their turn. */
+        pos = start + open.length;
+        continue;
+      }
+      candidates.push({
+        start,
+        end: end.at + end.glyph.length,
+        openLen: open.length,
+        closeLen: end.glyph.length,
+      });
+      /* Scanning resumes at the END of the accepted run: a second opener of
+         the same class INSIDE a run yields no candidate. (Task 2 may move that
+         end LATER than the old regex would have — the resume point follows the
+         run, not the regex.) */
+      pos = end.at + end.glyph.length;
     }
   }
   candidates.sort((a, b) => a.start - b.start || b.end - a.end);
