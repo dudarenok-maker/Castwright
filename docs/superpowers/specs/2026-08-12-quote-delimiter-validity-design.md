@@ -2,6 +2,55 @@
 
 Status: proposed · Issue: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) · Blocks: [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) / [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)
 
+> **Revision 4.** Revision 3 (below) specified the resumed-skip bound as
+> **computed once per accepted opener occurrence, anchored at the opening
+> quote's interior start.** That rule is safe on both known-bug fixtures but
+> is stricter than it needs to be: an opener sitting *inside* the turn — a
+> legitimately nested one, e.g. the `“` in `‘He said “yes,” but I don’t
+> believe him,’` — caps the search exactly as if it were a different turn's
+> opener, so the rejected `don’t` apostrophe falls straight through to the
+> never-delete fallback and the standard British shape (a single-quoted turn
+> nesting a double-quoted one) never repairs; it comes out byte-identical to
+> `main`'s truncation. **The bound now anchors at the REJECTED closer's own
+> index and is recomputed at every rejection**, not computed once at the
+> interior start — see "The bound on the resumed skip" below for the full
+> rule and why anchoring later is still provably safe. This is a **narrower**
+> claim than revision 3's, not a stronger one: it only ever lets the search
+> pass an opener the rejection point has already moved past, and it is what
+> the British-shape repair actually needs. Re-measured over the same 140-book
+> English corpus: clean repairs rise from 936 under revision 3's originally
+> specified (interior-start-anchored) rule to **938** under the rejection
+> anchor that actually ships — see "Result — the merge axis" for the
+> three-way comparison (unbounded 935 / bound at the opener 936 / bound at
+> the rejection 938) and the PR body for the as-measured figures.
+>
+> A second, independent review finding this revision: the per-glyph `limit`
+> only bounds a resumed skip within the SAME closer glyph's own scan. When an
+> opener pairs with several closers (German's `„` → `“`/`”`/`"` is the one
+> shipped example) and only some are apostrophe-shaped, a sibling closer's
+> un-rejected FIRST occurrence — first occurrences are never bounded, by
+> design — can still win the opener occurrence's `end` past a bound a
+> *different* closer's rejection established, because that bound was scoped
+> to the rejected glyph's own scan, not to the opener occurrence as a whole.
+> The fix makes the bound a property of the **opener occurrence**: once any
+> closer has been rejected for it, the finally-chosen `end` — from whichever
+> glyph — must clear the bound from the *earliest* such rejection, or the
+> never-delete fallback applies. **No shipped table has this shape** — German's
+> `„` closer set has no apostrophe-shaped member — so this is FORWARD-COVER,
+> not a live fix: it changes nothing on any measurement in this document. It
+> matters once `#2286` pairs `‘`/`’` alongside another closer on one opener,
+> which is exactly the shape this precondition names. See "The bound on the
+> resumed skip" for the mechanism and the code's own doc comment
+> (`parser.ts`, above `nearestOpenerAtOrAfter`) for the synthetic
+> counter-example (`quotePairs = [['«','’'], ['«','»'], ['“','”']]`) that
+> demonstrates the gap and its fix.
+>
+> Revision 3's banner, evidence, and rejected alternatives are kept below
+> unchanged except where this revision's two findings require a correction —
+> each such place is marked. Nothing else in revision 3 moved: the clause,
+> the never-delete invariant, and the truncation-repair axis (949 repaired)
+> are all unaffected by either finding.
+
 > **Revision 3.** Revision 2 shipped clause D (an apostrophe-shaped glyph
 > inside a word is not a closer) plus the never-delete-a-run invariant. An
 > independent review of that PR found a **Critical**: when a closer was
@@ -138,12 +187,53 @@ that glyph — accepting one three turns away is no different, mechanically,
 from accepting one three characters away.
 
 **The bound: a resumed skip may not cross the nearest following opener glyph
-of any class.** Concretely, for each accepted opener occurrence, compute once
-the position of the nearest following opener glyph in the table (its own class
-included) — call it `limit`. A closer's **first** occurrence at any position is
-tested by clause D exactly as before, unbounded; only a **later** occurrence of
-the same glyph, reached because an earlier one was rejected, is refused once
-its position is `>= limit`.
+of any class, anchored at the point of REJECTION and recomputed at every
+further rejection.** *(Revision 4 correction: revision 3 originally specified
+this bound as computed once per accepted opener occurrence, anchored at the
+opening quote's interior start. That rule is not what ships — see the
+revision-4 banner above for why the anchor moved.)* A closer's **first**
+occurrence at any position is tested by clause D exactly as before, unbounded;
+only a **later** occurrence of the same glyph, reached because an earlier one
+was rejected, is bounded. Concretely: at the point a closer occurrence is
+rejected — index `k` — compute the position of the nearest following opener
+glyph in the table (its own class included), call it `limit`, and refuse the
+next occurrence of the same glyph once its position is `>= limit`. If that
+next occurrence is also rejected, `limit` is recomputed from ITS index, not
+narrowed from the previous one — though this can never move `limit` earlier
+than the search has already reached: the next occurrence of the glyph, if any,
+lies in `[k, limit)`, which by construction contains no opener, so recomputing
+from a point inside that range returns the identical `limit`.
+
+**Anchoring at the rejection rather than at the opening quote's interior start
+is what lets a legitimately nested opener stay inside the same turn.** An
+opener sitting *inside* the turn — e.g. the `“` in `‘He said “yes,” but I
+don’t believe him,’` — must not cap the search; only an opener strictly after
+the point the scan is still hunting from can belong to a *different* turn. The
+interior-start anchor cannot tell these apart (it caps at the FIRST opener
+after the turn's start, nested or not); the rejection anchor can, because by
+the time a rejection happens the scan has necessarily moved past any opener
+that legitimately nests inside the turn up to that point.
+
+**Precondition this bound does not by itself cover: an opener paired with
+SEVERAL closers, only some apostrophe-shaped.** The argument above is
+per-glyph — it bounds the resumed scan for the one closer glyph that
+rejected, and says nothing about a *different* closer glyph paired with the
+same opener. Because the finally-accepted `end` is a minimum taken across
+every closer in the opener's set, an unrejected SIBLING closer's first
+occurrence — never bounded, by the rule above — can still win `end` past a
+bound a *different* closer's rejection established. The fix scopes the bound
+to the OPENER OCCURRENCE rather than to one glyph's scan: once any closer has
+been rejected for this opener occurrence, the finally-chosen `end` must clear
+the bound from the *earliest* such rejection (by the monotonicity argument
+above, the earliest rejection always yields the tightest bound), regardless of
+which glyph `end` came from, or the never-delete fallback applies instead.
+**No shipped table has this shape** — German's `„` is the only shipped opener
+with several closers (`“`/`”`/`"`), and none of them is apostrophe-shaped —
+so this is FORWARD-COVER, not a live fix, exercised only by a synthetic table
+(`quotePairs = [['«','’'], ['«','»'], ['“','”']]`; see `parser.ts`'s doc
+comment above `nearestOpenerAtOrAfter`), never by any corpus or sweep number
+in this document. It matters once `#2286` pairs `‘`/`’` alongside another
+closer on the same opener.
 
 **Never bounding the first occurrence is what keeps nesting correct without
 depending on the never-delete fallback.** `“He said ‘hi’ to me,”` has its outer
@@ -370,37 +460,55 @@ changes nothing on it: the bound only ever affects a resumed skip, and a
 paragraph counted here either never rejected a closer or found its accepted
 closer before any bound could apply.
 
-### Result — the merge axis (this revision: what the containment metric could not see)
+### Result — the merge axis (what the containment metric could not see)
 
 Same English 140-book corpus (174,267 paragraphs with runs on either side),
-scored by the overlap classifier:
+scored by the overlap classifier, across three variants: no bound; the bound
+computed once at the opener's interior start (revision 3's originally
+specified rule, never shipped); and the bound anchored at each rejection,
+recomputed per rejection (**shipped**, revision 4):
 
-| | unbounded (D + invariant, no bound) | bounded (shipped) |
-|---|---:|---:|
-| `MERGED` paragraphs | **8** | **0** |
-| baseline turns swallowed | **18** | **0** |
-| `repairedBoundary` | 943 | 936 |
-| — of which also `MERGED` | 8 | 0 |
-| **clean repairs** | 935 | **936** |
-| repair shapes fixed (the 5 canonical cases) | 5/5 | 5/5 |
-| known-bug fixtures identical to `main` | 0/2 | **2/2** |
+| | unbounded (D + invariant, no bound) | bound at the opener (interior start) | **bound at the rejection (shipped)** |
+|---|---:|---:|---:|
+| `MERGED` paragraphs | **8** | **0** | **0** |
+| baseline turns swallowed | **18** | **0** | **0** |
+| `repairedBoundary` | 943 | 936 | **938** |
+| — of which also `MERGED` | 8 | 0 | 0 |
+| **clean repairs** | 935 | 936 | **938** |
+| repair shapes fixed (the 5 canonical cases) | 5/5 | 5/5 | 5/5 |
+| British nesting shape (turn nesting a different-quote turn) repaired | — | no | **yes** |
+| known-bug fixtures identical to `main` | 0/2 | 2/2 | **2/2** |
 
 **Six of the eight unbounded merges sit inside revision 2's own "949 repaired"
 headline** — the old metric counted them as wins because containment cannot
 see a swallow. The other two are in paragraphs longer than 4,000 characters,
 which the old harness's length cap skipped outright; it never saw them at all.
-The bound eliminates all eight, at a net **gain** of one clean repair (935 →
-936): three of the eight formerly-merged paragraphs resolve to a correct
-repair once the bound stops the over-run at the right place; the other five
-revert to `main`'s original truncation — not fixed, but not worse than before
-clause D existed either.
+Both bounded variants eliminate all eight: at the opener anchor, a net
+**gain** of one clean repair over unbounded (935 → 936) — three of the eight
+formerly-merged paragraphs resolve to a correct repair once the bound stops
+the over-run at the right place; the other five revert to `main`'s original
+truncation, not fixed but not worse than before clause D existed either.
+
+**The rejection anchor adds two further clean repairs over the opener anchor
+(936 → 938).** The two bounded variants are otherwise identical on this axis —
+same zero merges, same 5/5 canonical repair shapes, same known-bug fixtures —
+and diverge only on paragraphs where the turn legitimately nests a
+different-quote-style inner turn: the opener anchor caps the resumed search at
+that inner opener (treating it exactly like a different turn's boundary) and
+falls back to `main`'s truncation, where the rejection anchor lets the search
+pass it and land on the turn's real closer. See "The bound on the resumed
+skip" above for the mechanism and why passing a legitimately-nested opener is
+still provably safe.
 
 ### Bounding the resumed skip: what else was tried
 
 The bound that shipped stops a resumed skip at the next opener glyph of *any*
-class in the table (`B_opener` in the measurement scripts). Two more
-restrictive bounds and one widening were built and scored against the same
-corpus and are not shipped:
+class in the table, anchored at the rejection (`B_opener` in the measurement
+scripts named the STOP CONDITION — next opener of any class — not the anchor;
+the anchor-point correction is this revision's own finding, above, and these
+alternatives were evaluated against that stop condition regardless of which
+anchor was live when each was measured). Two more restrictive bounds and one
+widening were built and scored against the same corpus and are not shipped:
 
 - **A sentence-boundary bound** (stop at `/[.!?]\s/`) looked safer on paper —
   it leaves only 267 `OVERRUN` paragraphs (a `>22`-character-growth flag used

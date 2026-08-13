@@ -685,3 +685,94 @@ characterisation block); `npm run typecheck` clean. No changes were needed to
 `server/src/analyzer/dialogue-structure/lang/*.ts`; no `--no-verify`; each
 commit run in the foreground; production code and test/doc changes kept in
 separate commits per the branching workflow's commit-convention rules.
+
+---
+
+## Round 3 — the anchor point was wrong, and a dash-preceded under-repair
+
+An independent review of round 2 found that the bound's interior-start anchor
+(computed once per accepted opener occurrence, per round 2's text) caps the
+resumed search at ANY opener between a turn's start and its close — including
+one that legitimately nests inside the same turn — so the standard British
+shape (a single-quoted turn nesting a double-quoted one,
+`‘He said “yes,” but I don’t believe him,’`) never repairs: the round-2 bound
+stops at the nested `“` and the rejected `don’t` apostrophe falls through to
+the never-delete fallback, identical to `main`'s truncation.
+
+**Commits, in order:**
+
+- `4b235c5e` — `fix(server): anchor the rejected-closer bound at the rejection, not the opener`.
+  The production fix: the resumed-skip bound now anchors at the REJECTED
+  closer's own index and is recomputed at every rejection, not computed once
+  at the opening quote's interior start. `server/src/analyzer/dialogue-structure/parser.ts`
+  only (66 insertions / 15 deletions) — the doc comment above
+  `nearestOpenerAtOrAfter` is rewritten to state the new anchor and its
+  structural safety proof.
+- `b0d16b95` — `test(server): pin the British nesting repair and the inch-mark known limit (#2288)`.
+  Adds the `describe('parser — #2288 round 3: the bound is anchored at the
+  rejection, not the interior start')` block: the British-shape repair
+  (asserted against measured output), both round-2 known-bug fixtures
+  re-asserted under the new anchor, and a nesting-unharmed control. Also adds
+  the inch-mark known-limit pin. `parser.test.ts` only (63 insertions / 10
+  deletions).
+- `c45c41ff` — `docs(docs): correct the #2288 release-notes scope and the spec's stale citations`.
+  Corrected two phantom scratch-file citations and a line number that had
+  moved in the design spec, and a scope correction in
+  `docs/release-notes-next.md`. Did **not** update the spec's normative bound
+  description or the merge-axis figures to match `4b235c5e`'s anchor move —
+  that gap is what round 4 below closes.
+
+**Suite state after `b0d16b95`:** `parser.test.ts` + `lang/index.test.ts`
+green (round 3's additions on top of round 2's 73/73); `npm run typecheck`
+clean.
+
+---
+
+## Round 4 — a multi-closer hole in the bound, and the stale docs round 3 left behind
+
+An independent review of round 3 found a second gap in the resumed-skip
+bound, distinct from the anchor-point issue round 3 fixed: the per-glyph
+`limit` only bounds a resumed skip within the SAME closer glyph's own scan.
+When an opener pairs with several closers and only some are apostrophe-shaped,
+a sibling closer's un-rejected FIRST occurrence — never bounded, by design —
+can still win the opener occurrence's `end` past a bound a *different*
+closer's rejection established. No shipped table has this shape (German's `„`
+is the only shipped multi-closer opener, and none of its closers is
+apostrophe-shaped), so this is FORWARD-COVER for `#2286`'s table widening, not
+a live defect. The same review also found `docs/release-notes-next.md` and
+the design spec still reporting 936 clean repairs — the round-2
+(opener-anchored) figure — where the round-3 anchor move actually ships 938,
+and found the design spec's normative bound text itself still describing the
+round-2 (interior-start-anchored, computed-once) rule `c45c41ff` left
+uncorrected.
+
+**Commits, in order:**
+
+- Fix: `server/src/analyzer/dialogue-structure/parser.ts` — the bound is now
+  a property of the OPENER OCCURRENCE, not of one closer glyph: once any
+  closer has been rejected for an opener occurrence, the finally-chosen `end`
+  must clear the bound from the *earliest* such rejection (any glyph) or the
+  never-delete fallback applies. Verified against a synthetic three-pair table
+  (`quotePairs = [['«','’'], ['«','»'], ['“','”']]`, not any shipped table) via
+  a temporary `export` + scratch probe, both reverted; the dialogue-structure
+  suite is unaffected since no shipped table reaches this path.
+- Docs: `docs/superpowers/specs/2026-08-12-quote-delimiter-validity-design.md`
+  brought to revision 4 — the bound section rewritten to state the
+  rejection-anchor (not interior-start) rule and the multi-closer
+  precondition; the merge-axis table corrected to the three-way comparison
+  (unbounded 935 / bound at the opener 936 / bound at the rejection,
+  shipped, 938).
+- Docs: `docs/release-notes-next.md` — "936 clean repairs" corrected to 938.
+- Docs: this section, recording rounds 3 and 4's commits in the ledger.
+- Test comments: `server/src/analyzer/dialogue-structure/parser.test.ts` — the
+  inch-mark known-limit comment's phantom `openerValid`/`MAIN_TABLES.en`
+  citation replaced with the real `conventionsFor('en').quotePairs` /
+  `nearestOpenerAtOrAfter` mechanism; the same-glyph-nesting known-limit
+  comment's stale "the round-2 skip bound" label replaced with what the bound
+  actually is.
+
+See `.superpowers/sdd/2026-08-12-quote-delimiter-validity/round4-report.md`
+for the round's full report, including the exact commit-to-file mapping (this
+round's changes were authored in one worktree pass and split into separate
+commits by the coordinator per the branching workflow's commit-convention
+rules, so the SHAs above are assigned at commit time, not authored here).

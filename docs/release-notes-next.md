@@ -274,7 +274,7 @@ Two chains land together. The first stops a refusal being issued against a pessi
   apostrophe between turns can no longer swallow the turns that follow.
   Measured over the 140-book English corpus arm: the unbounded rule merged 8
   paragraphs and swallowed 18 turns; bounding the skip brings both to 0,
-  leaving 936 clean repairs. (#2288, PR #2300)
+  leaving 938 clean repairs. (#2288, PR #2300)
 
 ---
 
