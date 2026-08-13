@@ -1000,8 +1000,39 @@ describe('isBetterCoverage — enumerated pairwise orderings against the pre-#23
      `dupOnly@1.0` vs `excessOnly@60` (mutated scores 50 vs 59, old sum 100.6
      vs 59 — pass 1's exact reversal class) and the grid missed it entirely
      (0 failures). With 60 present the same mutation reddens (92 failures,
-     measured against this file's own grid). */
-  const HIGH = [1.7, 5, 60, 110, 702]; // excess-consistent
+     measured against this file's own grid).
+
+     100.5 and 101.5 close a NARROWER hole review pass 2's own follow-up
+     found: 60 is far enough from the `+100` constant that a ±1 mutation
+     (`100->99`, `100->101`) still leaves every pairing's ORDER unchanged, so
+     the grid stayed green for either. The tier-1 same-tier tie-break for a
+     dup-vs-nondup pair is `(K + d_dup)` vs `d_nondup` (`d = |1 - ratio|`).
+     Paired against `dupOnly@1.0` (`d_dup = 0`), NEW compares mutated `K`
+     directly against `d_nondup`. OLD, however, NEVER mutates: its
+     `duplicatedBlock` term is the pre-#2342 reference sum's literal `100`,
+     so OLD always compares the FIXED `100.0` against `d_nondup`, regardless
+     of what `K` is. A single `d_nondup` therefore only ever catches ONE
+     mutation direction — whichever one crosses `K` from the fixed-`100.0`
+     side OLD already lives on to the other side — never both, which is
+     the asymmetry a first pass missed:
+
+       - `100.5` (`d_nondup = 99.5`, BELOW 100.0): OLD prefers `excessOnly`
+         (99.5 < 100.0). `K=99` (< 99.5) flips NEW to prefer the dup take
+         instead — reversal, red. `K=101` (still > 99.5) does not flip it
+         — green. This value's job is the DOWNWARD mutation only.
+       - `101.5` (`d_nondup = 100.5`, ABOVE 100.0): OLD prefers `dupOnly`
+         (100.0 < 100.5). `K=101`: NEW's dup score (101) now EXCEEDS the
+         nondup score (100.5), so NEW prefers `excessOnly` instead —
+         reversal, red. `K=99`: NEW's dup score (99) stays below 100.5, so
+         NEW still prefers `dupOnly`, same as OLD — green. This value's
+         job is the UPWARD mutation only.
+
+     The two are a matched pair straddling the fixed `100.0` from opposite
+     sides, each DERIVED from where its own mutation direction's crossing
+     point actually falls — not tuned by trial-and-error, and neither
+     substitutes for the other: `100.5` catches `100->99`, `101.5` catches
+     `100->101`. */
+  const HIGH = [1.7, 5, 60, 100.5, 101.5, 110, 702]; // excess-consistent
 
   /** The pre-#2342 two-term sum, verbatim — `noSentences` forces the ratio
       term to `|1 - 0|` exactly as it did before any tier scheme existed
