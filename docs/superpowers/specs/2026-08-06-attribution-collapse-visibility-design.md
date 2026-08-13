@@ -146,7 +146,7 @@ prose" has recurred four times in this strand.
 | F3 | **`blindSpoken`** — *"conventions say dialogue, `isSpokenLine` does not"*, carried as "the permanent regression signal"; *"104 lines on the live `ja` book and 122 on the live `zh` book"* | **DEAD BY CONSTRUCTION.** The two definitions are now one function, so the column is 0 for every book in every language, forever. It cannot regress and cannot signal. Deleted |
 | F4 | **`overcountSpoken`** — *"`isSpokenLine` says dialogue, conventions do not … the dash class; a substantial minority of books"* | **DEAD BY CONSTRUCTION**, same reason. Its motivating case — "`isSpokenLine` returns true for **any** sentence beginning `-`" — is gone: `en.dialogueOpen` and `de.dialogueOpen` are `null`, so a leading dash is not dialogue in those languages any more |
 | F5 | **`pipelineSpoken`** — *"`isSpokenLine`'s count — the comparand"* | **DEAD.** Identical to the conventions count by construction. Deleted |
-| F6 | *"`applyNarratorDefault`'s guard is a knob AND the table"* (R-7M3), quoted as `const conventions = configValue<boolean>('analyzer.structure.enabled') ? conventionsFor(...) : null; // analysis.ts:2214-2216` | **FALSE TODAY.** #2245 split them deliberately. `analysis.ts:2210` reads `const conventions = conventionsFor(opts.stageCall.language);` **outside** the knob; the branch is `if (configValue<boolean>('analyzer.structure.enabled') && conventions)`. The `else` branch now gets the right per-language rules with the engine off — which is exactly what the #2245 split was for |
+| F6 | *"`applyNarratorDefault`'s guard is a knob AND the table"* (R-7M3), quoted as `const conventions = configValue<boolean>('analyzer.structure.enabled') ? conventionsFor(...) : null; // analysis.ts:2214-2216` | **FALSE TODAY.** #2245 split them deliberately. `analysis.ts:2209` reads `const conventions = conventionsFor(opts.stageCall.language);` **outside** the knob; the branch is `if (configValue<boolean>('analyzer.structure.enabled') && conventions)`. The `else` branch now gets the right per-language rules with the engine off — which is exactly what the #2245 split was for |
 | F7 | Wave 1 criterion 11 — *"`blindSpoken` drops to 0 on both live CJK books once criterion 10 lands, and no other book's value changes"*, with its on-box `isSpokenLine` corpus replay | **UNSATISFIABLE.** The before/after has no "before": #2245 is merged. The owed register row is discharged by #2245's own acceptance, not by this spec |
 | F8 | *"Run `isSpokenLine` over every sentence of all 20 live books before and after, and assert the classification differs on **exactly** the two CJK books"* (R-5Mi1's fix) | **SPENT**, same reason as F7 |
 | F9 | Fixture rows 5 and 6 and their mutation controls (*"denominator reverted to `isSpokenLine`"*; *"denominator reverted **and** part 2 reverted"*) | **INERT.** Reverting the denominator to `isSpokenLine` is now a no-op and there is no "part 2" to revert. Both rows survive as language-coverage fixtures, with new controls — §Testing |
@@ -593,7 +593,7 @@ manufacture the collapse the metric is being built to detect.
 
 - **This is the opt-out path, not the default.** `analyzer.structure.enabled`
   defaults `true` (`registry.ts:1267-1273`) and the `applyNarratorDefault` call
-  is the **`else`** of that branch (`analysis.ts:2210`/`:2280`/`:2287`). With the
+  is the **`else`** of that branch (`analysis.ts:2209` resolves conventions, `:2210` is the `if`, `:2280` the `else`, `:2287` the call). With the
   engine on, this code does not run.
 - **It is NOT offered as #2306's cause.** #2306 places its cause upstream of the
   dialogue-structure engine — a different mechanism. Nothing here competes with
@@ -626,13 +626,85 @@ would mislabel it as an overwrite.
 | `demotedNarrator` | stage-2 returned a character; a post-stage-2 step overwrote it with `narrator` | an analyzer problem — `isSpokenLine` or `crossExamine` acting on text it read wrongly. Re-running analysis reproduces it |
 | `unknownOriginNarrator` | the sentence predates the record | **not** foldable into either. See below |
 
-**This needs one new persisted field, and that is the only analyzer change
-revision 8 permits.** The origin is knowable only at the moment of overwrite;
-`analysis.ts:2287` runs after stage-2, so the pre-demotion assignment is
-available *there* and nowhere afterwards. `SentenceOutput` gains an optional
-`priorCharacterId?: string`, written at exactly the two sites that overwrite an
-attribution — `applyNarratorDefault`'s demotion branch and `crossExamine`'s
-correction branch — and absent on every sentence neither touched.
+### D18's write sites: FIVE, not two, and the two named first were the wrong two (R-9C1)
+
+**The round-8 gate's headline finding, and it is a Critical of this document's
+signature shape.** Revision 8's first draft instrumented
+`applyNarratorDefault` and `crossExamine`, on the owner's own pointer at
+`analysis.ts:2287`. Enumerated against the tree, that pair reports **identically
+zero on every default-configuration book** — the exact outcome the widening
+paragraph above said it existed to prevent:
+
+- `applyNarratorDefault` is the **`else`** of the structure branch and
+  `analyzer.structure.enabled` defaults `true`, so it does not run.
+- `crossExamine` **cannot put `narrator` on a sentence that aligns to a `speech`
+  span.** `NARRATOR_ID` is returned only by `decideTagSpanOnly`
+  (`cross-examine.ts:261`, tag spans) and `decideNarrationOnly` (`:274`/`:279`/
+  `:286`, narration spans). Every speech path returns `modelId` unchanged or
+  `span.speaker.characterId`, which can never be `narrator` — `buildNameIndex`
+  skips `c.id === 'narrator'` (`name-matcher.ts:34`) and `windows.ts` stamps
+  only roster ids.
+
+Since the numerator is over **speech spans** (D14), the intersection is empty.
+A column that cannot vary is the fourth instance of this document's recurring
+defect (R-4Mi3, R-7M3, F3/F4/F5, now this).
+
+**The site that actually produces engine demotion on the default path is
+`reconcileSentenceCharacterIds` (`analysis.ts:1423`), and it is the motivating
+incident's own mechanism.** Verified 2026-08-13:
+
+- It demotes any sentence whose `characterId` is not in the stage-1 roster to
+  `'narrator'`, and it runs on **both** the main path (`:5286`) and the subset
+  path (`:6787`), **regardless of the structure knob.**
+- **It is how "16 dropped quotes produced a 72% collapse."**
+  `verifyEvidenceAgainstSource` + `dropEvidencelessCast` (`analysis.ts:3580-3587`)
+  shrink the roster; every sentence already attributed to a dropped character
+  then fails `validIds.has(...)` and the validator demotes it. That is the
+  number §Problem is built on. **Instrumenting the other two would have reported
+  the incident as `modelNarrator` — "a prompt/model problem, re-run analysis" —
+  which is the wrong instruction, from the one column added to give the right
+  one.**
+- **It already carries the value.** Its `onDemote` hook is
+  `(info: { sentence: SentenceOutput; originalId: string }) => void`
+  (`analysis.ts:1428`). `originalId` **is** `priorCharacterId`. No new plumbing.
+
+Two further sites overwrite an attribution and must be handled, or the field is
+*wrong* on a real corpus rather than merely absent:
+
+- **`escalateFlaggedWindows` (`escalation.ts:277`)** — `opts.sentences[idx].characterId = assignment.characterId`,
+  **in place**, and `analyzer.structure.escalation` defaults `'local'`
+  (`registry.ts:1277-1285`), so it runs by default. A `priorCharacterId` set by
+  an earlier site survives onto a sentence escalation has since re-assigned,
+  leaving a stale pairing that reads as a demotion that did not happen.
+- **`recoverTaggedNarratorLines` (`recover-tagged-lines.ts`, `flipQ`)** —
+  `q.characterId = id`, the same hazard.
+
+**So the rule is stated over the property, not over a site list**, because a
+site list is what got this wrong:
+
+> **Every code path that assigns a `characterId` a stage-2 response did not
+> return must leave `priorCharacterId` correct for the value it just wrote** —
+> setting it to the id being replaced, or clearing it when the write is not a
+> demotion. A path that changes `characterId` and leaves `priorCharacterId`
+> alone is a defect, and the paired test is that the two fields are never
+> inconsistent after a full pipeline run.
+
+`SentenceOutput` gains an optional `priorCharacterId?: string`, and it is absent
+on every sentence no such path touched.
+
+**The five sites, ordered by how much they matter on the default configuration:**
+
+| # | Site | Runs by default? | Produces `narrator` on a speech span? |
+|---|---|---|---|
+| 1 | `reconcileSentenceCharacterIds` `analysis.ts:1423` (`:5286`, `:6787`) | **yes, both paths, knob-independent** | **yes — the incident's mechanism** |
+| 2 | `escalateFlaggedWindows` `escalation.ts:277` | **yes** (`escalation` defaults `'local'`) | no, but invalidates the field |
+| 3 | `crossExamine` `cross-examine.ts:393` | yes (engine on) | **no** — proven above |
+| 4 | `applyNarratorDefault` `analysis.ts:2287` | **no** (engine `else`) | yes, when the engine is off |
+| 5 | `recoverTaggedNarratorLines` `flipQ` | yes | no, but invalidates the field |
+
+**Sites 3 and 4 are still instrumented**, because the column must be right in
+both configurations and a knob-off run is a real run. They are simply not where
+the signal lives.
 
 - **Optional, additive, and absent by default**, so no existing reader changes
   and no cache migration is needed.
@@ -893,7 +965,7 @@ it wipes chapter-bearing history and invalidates the audio (D10).
 **This is the single defect that D13's first draft turned on, and it is a
 consequence of the very fact used to justify D13's scope.** The Cast view's
 orphan banner is populated by `collectOrphanedCharacterFallbacks`
-(`server/src/audio/segments-io.ts:338`), whose first act is
+(`server/src/audio/segments-io.ts:371`), whose first act is
 `await loadSegmentsFiles(bookDir, chapters)` — **it enumerates rendered segment
 files.** D13's `orphanSpoken` is measured from the **analysis cache**. Those are
 different populations, and on this corpus they are close to disjoint:
@@ -1145,7 +1217,7 @@ and this is F11.** R-7M3 named `analyzer.structure.enabled` — a user-settable
 boolean defaulting `true` (`registry.ts:1267-1273`) — as a run-dependent
 explanation: with the engine off, the `else` branch ran `applyNarratorDefault`,
 which for a CJK book demoted *all* of its dialogue. **#2245 removed that
-consequence.** The knob still selects the branch, but `analysis.ts:2210` now
+consequence.** The knob still selects the branch, but `analysis.ts:2209` now
 resolves `conventions` outside the knob, so the `else` branch reads CJK dialogue
 correctly and demotes nothing. Knob-off can no longer produce total attribution
 loss on a CJK book, so it can no longer be the mechanism — for a run *today*.
@@ -1610,7 +1682,7 @@ displayed field ("last analysed"), it just stops being the cache key.
 did** (R-8M4). The draft argued that "linking an orphan is a Cast-view action,
 and R-M4's rule is that a detail-surface fetch patches that book's state in
 `library-slice`", so clearing was free. It is not: `handleLinkOrphanMatch`
-(`src/views/cast.tsx:583`) calls `api.linkOrphanMatch`, dispatches
+(`src/views/cast.tsx:755`) calls `api.linkOrphanMatch`, dispatches
 `castActions.applyOrphanLink` and raises a toast — **there is no attribution
 refetch and no library patch.** Nothing recomputes the verdict after a link, so
 acceptance criterion 12 as written had no mechanism behind it.
@@ -1636,8 +1708,8 @@ gave it no consumer.
 ### Write sites at analysis completion
 
 `persistDroppedQuotesBatch`'s three call sites in `server/src/routes/analysis.ts`
-— `:3568`, `:4209`, `:6208` — are where the stamp is refreshed too. The third,
-`:6208`, is the `'analysis-chapters'` site: a **subset** re-run, which must
+— `:3614`, `:4266`, `:6425` — are where the stamp is refreshed too. The third,
+`:6425`, is the `'analysis-chapters'` site: a **subset** re-run, which must
 recompute over the **whole book**, not the chapters it just did. (Revision 5
 corrected these three line numbers and then named `:5740` for
 `analysis-chapters` in the next sentence — R-6N4.)
@@ -1849,7 +1921,7 @@ fires directly.
 
 Revision 1 proposed grouping batches by a new `runId`. **A run writes exactly
 one batch.** `persistDroppedQuotesBatch` has three call sites, none in a loop;
-`:3568` and `:4209` are mutually exclusive branches of `runMainAnalyzerJob` — the
+`:3614` and `:4266` are mutually exclusive branches of `runMainAnalyzerJob` — the
 Phase-0 cache-hit path and the Phase-0b consolidation path — and both tag their
 batch `'analysis-stream'` (R-6N5: revision 5 still cited the pre-correction
 `:3184`/`:3824` here, in the document that corrected them);
@@ -2655,7 +2727,7 @@ live view all move in the shipping PR.
     issue's named first task**: R-7M3 said "check what
     `analyzer.structure.enabled` was set to for those two runs", on the reasoning
     that knob-off sent a CJK book's whole dialogue to the narrator. #2245 removed
-    that consequence — with the knob off, `analysis.ts:2210` still resolves
+    that consequence — with the knob off, `analysis.ts:2209` still resolves
     conventions, so the `else` branch reads CJK correctly. The knob is no longer
     a sufficient explanation, and the books are deleted, so the issue keeps its
     subject and loses its lead. **`blindSpoken` was already withdrawn as its
