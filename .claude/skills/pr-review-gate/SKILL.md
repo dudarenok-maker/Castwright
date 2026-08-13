@@ -101,11 +101,25 @@ tool names, so the mechanism ports:
 
 - **Claude Code** — a non-fork `Agent` dispatch at the routing table's
   Premium tier.
-- **Cline** — dispatches subagents. Whether that subagent starts cold is
-  recorded in `docs/testing/agent-skill-resolution-probe.md`. Until it reads
-  `CLINE_SUBAGENT_COLD: yes`, a Cline-run pass is labelled a **self-run**,
-  not the independent gate: reporting a fork as the gate is exactly the
-  substitution the standing rule forbids.
+- **Cline** — dispatches subagents via `spawn_agent`, and they start cold
+  (recorded in `docs/testing/agent-skill-resolution-probe.md`). **That is not
+  sufficient on its own.** Cline cannot select its subagent's model — the
+  probe records `CLINE_TIER_SELECTABLE: no`, observed running
+  `deepseek-v4-flash` — so a Cline-run pass is independent but **flash-tier**,
+  and this section's Premium requirement is unmet. Two conditions, both
+  required, and the tier one is the easier to forget because independence is
+  the property people check:
+
+  | Condition | Cline today |
+  |---|---|
+  | Fresh context, not a fork | yes (self-reported, not independently reproduced) |
+  | Premium tier | **no** |
+
+  So a Cline pass is recorded as a **flash-tier independent pass**, never as
+  this gate. It is worth running and worth reading; it does not discharge the
+  merge gate, and a summary that calls it "the review gate" is a false
+  completion claim. Same outcome if `CLINE_SUBAGENT_COLD` ever reads anything
+  but `yes` — then it is a self-run as well as untiered.
 - **Any agent that genuinely cannot dispatch** runs the rubric in-session and
   reports it as a **self-run pass, never as the independent gate** — the same
   rule that forbids reporting a gate as having run when it did not.

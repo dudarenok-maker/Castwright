@@ -421,6 +421,15 @@ Design rationale:
   Run from a checkout that has `apps/android/android/key.properties` + `upload-keystore.jks`
   (git-ignored). Pure helpers unit-tested in `scripts/tests/build-companion-apk.test.mjs`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
+- `npm run skills:sync` — mirror `.claude/skills/pr-review-gate/` into
+  `~/.agents/skills/`, the only skill store Cline (and the five other agents
+  sharing it) resolves — it does **not** read a workspace `.claude/skills/`
+  (probed 2026-08-13, `docs/testing/agent-skill-resolution-probe.md`). A
+  **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
+  fresh clone has no mirror. Re-run after any change under that directory; the
+  drift guard in `scripts/tests/review-gate-mechanism.test.mjs` catches a stale
+  mirror **only on a machine that has one** — it skips, loudly, where the path
+  is absent.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not

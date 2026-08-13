@@ -5,34 +5,32 @@
 // user-invocable only — `disable-model-invocation`), and nothing catches the
 // wiring rotting apart from prose review.
 //
-// Four assertions, each independently falsifiable:
-//   1. .claude/skills/pr-review-gate/SKILL.md exists and does NOT disable
-//      model invocation (the entire point of routing the gate through it).
-//   2. pr-review-gate/SKILL.md's frontmatter `name:` matches its directory
-//      basename (`pr-review-gate`) — the convention is that the directory is
-//      the skill's identifier and `name:` must agree with it. Assertion 1
-//      above only checks the path exists and reads its frontmatter for
-//      disable-model-invocation, so it stays green even if `name:` drifts to
-//      something else; assertion 1 catches half of the "stays resolvable"
-//      invariant (the path), this assertion catches the other half (the
-//      frontmatter agreeing with it).
-//   3. model-routing/SKILL.md's Mechanism bullet actually references
-//      pr-review-gate, rather than silently drifting back to naming
-//      code-review directly.
-//   4. CLAUDE.md's before-shipping step 10 references pr-review-gate too,
-//      so the checklist entry point agrees with the routing spec.
+// **Assertions are referred to elsewhere BY NAME, never by number.** This
+// header used to enumerate "four assertions" in an order that did not match
+// the order the test() calls appear in, so a plan saying "retarget assertion
+// 3" was ambiguous between two different tests. Do not reintroduce a numbered
+// list here — `git grep "^test(" scripts/tests/review-gate-mechanism.test.mjs`
+// is the authoritative inventory and cannot drift.
 //
-//   Assertions are referred to elsewhere BY NAME, never by number — this
-//   header and the test() order disagreed until 2026-08-13, and a plan that
-//   said "retarget assertion 3" was ambiguous between two different tests.
+// What this file locks, in themes rather than numbers:
+//   - the gate skill stays model-invocable and resolvable (path exists, no
+//     disable-model-invocation, frontmatter `name:` == directory basename);
+//   - pr-review-gate/SKILL.md — not model-routing — carries the dispatch
+//     mechanism and the effort ladder, and model-routing carries no second
+//     copy of the sections that moved out of it on 2026-08-13;
+//   - CLAUDE.md's before-shipping step 10 still names the skill;
+//   - both references/*.md exist AND are named by SKILL.md, so the dispatch
+//     prompt cannot point a reviewer at a file it never learns about;
+//   - every intra-repo .md link in the governance docs and skills resolves;
+//   - the cross-agent mirror matches what sync-agent-skills.mjs would write.
 //
-// Run via `npm run test:hooks` (node --test). All three source files are
-// `extraFiles` on the `test:hooks` step in scripts/verify-cache.mjs — none
-// of them sit under the step's existing globs (scripts/**, pinokio-scripts/**,
-// .github/**, .husky/**), so without those entries a diff touching only
-// .claude/skills/** or CLAUDE.md would print test:hooks [cached] and skip
-// the very guard that diff would break (the #1847 trap the comments there
-// document at length).
+// Run via `npm run test:hooks` (node --test). CLAUDE.md is an `extraFiles`
+// entry on the `test:hooks` step in scripts/verify-cache.mjs, and
+// `.claude/skills/**` is one of that step's globs (added 2026-08-13, replacing
+// three hand-listed literals that could not see a file which did not exist
+// yet). Without both, a diff touching only those paths would print
+// test:hooks [cached] and skip the very guard that diff would break — the
+// #1847 trap the comments there document at length.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

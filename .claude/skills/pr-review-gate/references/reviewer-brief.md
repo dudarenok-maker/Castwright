@@ -87,6 +87,12 @@ every report after it.
 
 ## Post your own findings before returning
 
+**Write that body file to the OS temp directory, NEVER inside the repository.**
+A scratch file in the worktree dirties `git status --porcelain`, and the
+dispatching session treats any delta as a gate failure — so a clean review
+would be reported as a failed one, *after* you had already posted it. Use
+`$env:TEMP` / `$TMPDIR` (Node: `os.tmpdir()`), and delete it when done.
+
 Post one comment on the PR with `gh pr comment <number> --body-file <file>`
 BEFORE returning your report. Do not hand it to the dispatching session to
 publish — nothing would compare what it posts against what you found.

@@ -40,7 +40,7 @@ const FILES = ['SKILL.md', 'references/reviewer-brief.md', 'references/findings-
 // it was briefly exported so the guard test could split a mirrored file on it,
 // but the guard now compares against buildMirrorContent's own output instead,
 // so nothing outside this file needs the marker.
-const PROVENANCE_END = "     not against this file's location. -->\n";
+const PROVENANCE_END = "     this file's location. Some point at sibling skills. -->\n";
 
 function header(rel) {
   // <repo> is deliberately left as a literal placeholder, not the absolute
@@ -53,7 +53,7 @@ function header(rel) {
     '<!-- MIRRORED COPY — do not edit here.\n' +
     `     Canonical source: <repo>/.claude/skills/${SKILL_NAME}/${rel}\n` +
     '     Regenerate with `npm run skills:sync` from that repo.\n' +
-    '     Relative links below resolve against the REPOSITORY YOU ARE REVIEWING,\n' +
+    '     Relative links below resolve against a CASTWRIGHT CHECKOUT, not against\n' +
     PROVENANCE_END
   );
 }
