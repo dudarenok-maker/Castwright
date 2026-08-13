@@ -1102,9 +1102,20 @@ describe('parser — #2315 PR #2340 review, finding 2: a non-terminal . or ; mus
     ]);
   });
 
-  it('en: an abbreviation period ("Mr.") in the tag clause does not reset the scan', () => {
+  /* RESIDUAL, accepted (PR #2340 round 2 finding F1): an earlier revision
+     excluded a period preceded by a short capitalised word ("Mr.", "Dr.")
+     from counting as a sentence boundary, to keep this case declining. That
+     exclusion is a NAME filter, not a title filter — a short capitalised
+     name ("Ana.", "Jean.", "Иван.") matches the identical shape, and
+     excluding it lost a genuine SECOND turn entirely in 11 of 21 short-name
+     family shapes (see reopen-sweep.test.ts's SHORT-name attribution
+     family) — a materially worse harm than this one. Corpus prevalence
+     settled it: 0 of 726,385 real paragraphs exhibit the abbreviation shape
+     at all, so the exclusion bought nothing measured. Pinned here as a
+     known, accepted gap rather than silently reworked to keep passing. */
+  it('en: an abbreviation period ("Mr.") in the tag clause is NOT specially handled — a known, accepted residual (PR #2340 F1)', () => {
     expect(speakersOf('“Hi,” said Mr. «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
-      ['Hi,', 'anton'],
+      ['Hi,', null], ['Anton', null],
     ]);
   });
 
@@ -1124,11 +1135,62 @@ describe('parser — #2315 PR #2340 review, finding 2: a non-terminal . or ; mus
     ]);
   });
 
-  /* MUST STILL WORK: a genuine sentence-ending period — a short LOWERCASE
-     word before it ("он.") must still count as a real boundary, since the
-     abbreviation exclusion is keyed on capitalisation, not length. Already
-     covered by the existing "a genuine secondary-convention second turn is
-     still recovered" test above; not re-duplicated here. */
+  /* MUST STILL WORK: a genuine sentence-ending period, short word or not
+     ("он.", "Ana.") must still count as a real boundary — already covered by
+     the existing "a genuine secondary-convention second turn is still
+     recovered" test above (`он.`) and by the short-name attribution family
+     in reopen-sweep.test.ts (`Ana.`/`Jean.`/`Иван.`/`Ann.`); not
+     re-duplicated here. */
+});
+
+describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert with no primary run anywhere in the paragraph', () => {
+  /* PR #2340 round 2 finding F2. The precededByPrimaryRun precondition
+     (finding 1's fix, correct for what it fixes) has a side effect finding
+     1's own measurement never covered: a paragraph typed WHOLLY in a
+     secondary-tier convention has no primary run anywhere for that
+     precondition to find, so the guard can never decline anything in it —
+     defect 2 stays unfixed exactly in the population #2286 exists to serve.
+     The obvious repair (check `out`, i.e. primary + already-accepted
+     secondary runs, instead of `primaryRuns` alone) fixes these three cases
+     but re-declines 5,892 genuine spans in one real Chinese book
+     (`pg/zh/23835.txt`) at corpus scale — reinstating round 1's MAJOR
+     finding under a different trigger. The real fix needs a discriminator
+     that separates "the verb belongs to the PRECEDING turn's trailing tag"
+     (decline) from "the verb introduces the FOLLOWING turn" (admit) — a
+     word-order typology question with more than one defensible encoding,
+     which is why this is filed rather than guessed:
+     https://github.com/dudarenok-maker/Castwright/issues/2346. Measured
+     exposed population against #2286's actual tables: 2,202 real corpus
+     paragraphs carry a secondary-tier-only turn; a would-lose-a-speaker
+     proxy fires on 1,164 of them, 94% from that same one book (issue #2346
+     has the full breakdown). Pinned here as a KNOWN, TRACKED gap — this
+     test is expected to start FAILING the moment #2346 is fixed, at which
+     point it should be deleted, not adjusted to pass again. */
+  const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
+  const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
+  const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  it('ru: a whole paragraph in one secondary pair loses both speakers (#2346)', () => {
+    expect(speakersOf('‘Привет’, сказал ‘Антон’.', ruTier, [{ id: 'anton', name: 'Антон' }])).toEqual([
+      ['Привет', null], ['Антон', null],
+    ]);
+  });
+
+  it('en: a whole paragraph in one secondary pair loses both speakers (#2346)', () => {
+    expect(speakersOf('«Hi», said «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Hi', null], ['Anton', null],
+    ]);
+  });
+
+  it('en: a leading-tag secondary-only turn loses its speaker too (#2346)', () => {
+    expect(speakersOf('Said «Anton», "Hi there."', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Anton', null], ['Hi there.', null],
+    ]);
+  });
 });
 
 describe('parser — #2315 residuals, accepted (design § Residuals)', () => {

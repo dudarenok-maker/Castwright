@@ -367,26 +367,26 @@ function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>
     rest of this file). */
 const SENTENCE_END_CHARS = new Set(['.', '!', '?', '。', '！', '？']);
 
-/** Is `line[i]` a genuine sentence terminator, or a decimal point /
-    abbreviation period that only LOOKS like one (PR #2340 review finding 2)?
-    Two exclusions, both local to the glyph's neighbours:
-      `3.30`      a digit on both sides -> a decimal point, never a boundary.
-      `Mr.`/`Dr.` a short (<=4 char) run of letters immediately before it,
-                  STARTING WITH AN UPPERCASE LETTER, itself preceded by
-                  start-of-line or a non-letter -> abbreviation-shaped, not a
-                  boundary. Keyed on capitalisation, not just length: an
-                  ordinary short LOWERCASE word ending a real sentence
-                  (`он.`, `it.`) must still count, and does — `он`/`it` don't
-                  start with an uppercase letter, so this exclusion doesn't
-                  fire for them (needed for "a genuine secondary-convention
-                  second turn is still recovered", which pins exactly `он.`
-                  through `сказал он.` as a boundary). A short CAPITALISED
-                  word that is a genuine name rather than a title abbreviation
-                  (`Kim.`) is a false exclusion this leaves in place; it errs
-                  toward extending the clause, the same direction as the
-                  never-delete fallback elsewhere in this file — the guard
-                  staying engaged one clause too long costs a declined
-                  admission, not a lost speaker. */
+/** Is `line[i]` a genuine sentence terminator, or a decimal point that only
+    LOOKS like one (PR #2340 review finding 2)? `3.30` — a digit on both
+    sides — is never a boundary.
+
+    PR #2340 round 2 finding F1 (fixed): an earlier revision also excluded a
+    period preceded by a short (<=4 char) capitalised run of letters, to stop
+    `Mr.`/`Dr.` resetting the clause. Measured, that exclusion is a name
+    filter, not a title filter: `«Hola», dijo Ana. "Adiós", dijo Ana.` (and
+    the `fr`/`ru` equivalents, `Jean`/`Иван`) lost the SECOND turn entirely —
+    `Ana.` matched the same pattern as `Mr.` and the clause search for the
+    second candidate walked straight through it, back into the first turn's
+    own tag, declining a genuine second turn. A short capitalised name is far
+    more common than a title abbreviation, and corpus prevalence settles it
+    either way: 0 of 726,385 real paragraphs exhibit the abbreviation shape
+    at all, so excluding it bought nothing measured and cost 11 of a
+    21-shape family (`server/src/analyzer/dialogue-structure/reopen-sweep
+    .test.ts`'s short-name attribution family). Removing it is a residual,
+    not a fix-in-place: `“Hi,” said Mr. «Anton».` (`parser.test.ts`) is
+    re-pinned as a known gap the guard doesn't close, rather than silently
+    reworked to keep passing. */
 function isGuardSentenceEnd(line: string, i: number): boolean {
   const ch = line[i];
   if (!SENTENCE_END_CHARS.has(ch)) return false;
@@ -394,7 +394,6 @@ function isGuardSentenceEnd(line: string, i: number): boolean {
   const before = line[i - 1];
   const after = line[i + 1];
   if (before !== undefined && after !== undefined && /\d/.test(before) && /\d/.test(after)) return false;
-  if (/(?:^|[^\p{L}])\p{Lu}\p{L}{0,3}$/u.test(line.slice(0, i))) return false;
   return true;
 }
 
@@ -526,6 +525,21 @@ function reopenCut(
   return at;
 }
 
+/* #2315 perf (PR #2340 review finding 3): bounds how many CONSECUTIVE
+   re-open cuts (below, in `scanQuoteRuns`) one opener class may take before
+   falling back to the pre-#2315 accept-and-resume behaviour for the rest of
+   its chain. Each cut re-scans the remaining line for a closer, and
+   `pos = cut` resumes only two characters past the last one — so a
+   paragraph with N consecutive same-glyph re-opens and no real closer until
+   the very end pays a full closer scan N times, each almost as expensive as
+   the last: O(n^2). Real quote density is ~1 opener per 75 chars; even
+   badly garbled prose measured at ~1 per 75 (400 joined real paragraphs,
+   every closer retyped as an opener) never approaches this bound. It exists
+   for the adversarial case, not the real one — capping it converts an
+   unbounded quadratic blowup on adversarial input into a bounded linear
+   one, without touching the closer-search machinery below at all. */
+const REOPEN_CHAIN_LIMIT = 200;
+
 function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
@@ -537,21 +551,9 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
     let pos = 0;
-    /* #2315 perf (PR #2340 review finding 3): bounds how many CONSECUTIVE
-       re-open cuts (below) this opener class may take before falling back to
-       the pre-#2315 accept-and-resume behaviour for the rest of its chain.
-       Each cut re-scans the remaining line for a closer, and `pos = cut`
-       resumes only two characters past the last one — so a paragraph with N
-       consecutive same-glyph re-opens and no real closer until the very end
-       pays a full closer scan N times, each almost as expensive as the last:
-       O(n^2). Real quote density is ~1 opener per 75 chars; even badly
-       garbled prose measured at ~1 per 75 (400 joined real paragraphs, every
-       closer retyped as an opener) never approaches this bound. It exists
-       for the adversarial case, not the real one — capping it converts an
-       unbounded quadratic blowup on adversarial input into a bounded linear
-       one, without touching the closer-search machinery below at all. */
+    /* Per-opener-class chain counter — reset for each `open` glyph, unlike
+       REOPEN_CHAIN_LIMIT above which is the shared, module-level bound. */
     let reopenChain = 0;
-    const REOPEN_CHAIN_LIMIT = 200;
     for (;;) {
       const start = line.indexOf(open, pos);
       if (start < 0) break;
@@ -627,6 +629,7 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
            still continues rather than stopping outright, so openers of OTHER
            classes still get their turn. */
         pos = start + open.length;
+        reopenChain = 0; // PR #2340 nit 3: consistent with the accept path below
         continue;
       }
       /* #2315: end the run at a re-open rather than letting it swallow the next

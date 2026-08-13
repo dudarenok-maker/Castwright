@@ -312,16 +312,39 @@ which on one real Chinese book falsely declined 93.7% of its speech spans.
 **Fix, not a re-decision**: the guard now requires a PRIMARY run to actually
 precede the candidate before it evaluates a verb at all — the sentence above
 ("the adjacent real turn loses its speaker") always presupposed this; the
-implementation simply hadn't checked it. This doesn't change the rule's
-behaviour on the shape this section documents (a primary run always precedes
-in the Latin trailing-tag construction), and it isn't a per-language
-property — the same structural check is language-agnostic. Separately, the
-sentence-boundary scan was hardened against a decimal point, an abbreviation
-period, and a semicolon defeating it (none of `.!?…` was previously excluded
-for these cases). Full measurement, the corrected corpus figure against
-#2286's actual tables (101 across 48 paragraphs, down from an unfixed 7,438
-across 1,489), and the mutation evidence: the implementation plan's Ship
-notes, "Round 2 — PR #2340 Premium review gate".
+implementation simply hadn't checked it. **Correction (a second review pass
+on this same PR found the sentence below stated too broadly — see the "F2"
+paragraph after this one for what it actually does):** ~~This doesn't change
+the rule's behaviour on the shape this section documents (a primary run
+always precedes in the Latin trailing-tag construction), and it isn't a
+per-language property — the same structural check is language-agnostic.~~
+True only of the CONSTRUCTED family; against #2286's real tables it measurably
+changes 271 non-CJK spans across 203 real es/fr paragraphs (reduced
+over-suppression of quoted narration phrases, not lost speakers), and it
+leaves a real gap that is not CJK-specific either. Separately, the
+sentence-boundary scan was hardened against a decimal point, a semicolon,
+and a mid-clause ellipsis defeating it (none of `.!?…` was previously
+excluded for these cases). Full measurement, the corrected corpus figure
+against #2286's actual tables (101 across 48 paragraphs, down from an
+unfixed 7,438 across 1,489), and the mutation evidence: the implementation
+plan's Ship notes, "Round 2 — PR #2340 Premium review gate".
+
+**F2 — a known, filed gap, PR #2340 round 2 (not fixed here).** The primary-
+run precondition above turns the guard off entirely for a paragraph typed
+WHOLLY in a secondary-tier convention — no primary run anywhere means
+nothing for the precondition to find, in ANY language, not only CJK. The
+obvious repair (check the accepted-run list instead of the primary-run list
+alone) fixes that but re-declines 5,892 spans in the same real Chinese book
+this section's own MAJOR finding was about, at corpus scale — the real
+discriminator is a word-order typology question ("does the verb attribute
+the PRECEDING turn, or introduce the FOLLOWING one") with more than one
+defensible encoding, not decided here. Measured exposed population against
+#2286's real tables: 2,202 real paragraphs carry a secondary-tier-only turn,
+1,164 of which a would-lose-a-speaker proxy fires on, 94% of that from the
+same one book. Full detail, the two candidate encodings, and the measured
+cost of the naive repair: implementation plan Ship notes, "Round 2,
+continued", and issue
+[#2346](https://github.com/dudarenok-maker/Castwright/issues/2346).
 
 ---
 

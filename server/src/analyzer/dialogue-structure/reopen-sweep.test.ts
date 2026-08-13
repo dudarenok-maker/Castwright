@@ -229,15 +229,27 @@ describe('parser — #2315 Task 10: the attribution-aware family (generated, rea
     expect(attributed).toBe(42);
   });
 
-  it('the shipped tag-clause guard: 0 of 42 cases lose their speaker', () => {
-    let speakersLost = 0;
+  /* PR #2340 round 2 finding F1: this metric used to check ONLY the first
+     turn's speaker — which is a PRIMARY run and structurally can't be lost
+     by this guard either way, so it read 0 in every run regardless of
+     whether the guard actually worked. It now checks every turn the case
+     constructs, first AND second, so a regression that vanishes the second
+     turn entirely (as the short-name family below reproduces) shows up
+     here too, not only in the separately-named "MUST STILL WORK" test. */
+  it('the shipped tag-clause guard: 0 turns lost across all 42 cases (63 turn-checks: 42 first-turn + 21 second-turn)', () => {
+    let turnsLost = 0;
     for (const c of cases) {
       const wide: LanguageConventions = { ...conventionsFor(c.lang)!, secondaryQuotePairs: WIDE_SECONDARY[c.lang] };
       const r = attribResult(c, wide);
-      const first = r.spoken.indexOf(ATTRIB_TEXT[c.lang].t1);
-      if (first < 0 || r.speakers[first] !== 'anton') speakersLost++;
+      const t = ATTRIB_TEXT[c.lang];
+      const first = r.spoken.indexOf(t.t1);
+      if (first < 0 || r.speakers[first] !== 'anton') turnsLost++;
+      if (c.body.includes(t.second)) {
+        const second = r.spoken.indexOf(t.second);
+        if (second < 0 || r.speakers[second] !== 'anton') turnsLost++;
+      }
     }
-    expect(speakersLost).toBe(0);
+    expect(turnsLost).toBe(0);
   });
 
   it('MUST STILL WORK: the genuine secondary-convention second turn in every case keeps its own speaker too', () => {
@@ -265,6 +277,84 @@ describe('parser — #2315 Task 10: the attribution-aware family (generated, rea
      design's measured firing control exactly — then reverted. Not committed
      as a standing assertion because there is nothing in shipped code for it
      to assert against without that removal. */
+});
+
+/* ------------------------------------------------------------------ */
+/* PR #2340 review round 2, finding F1 — the SHORT-NAME (<=4 letter)        */
+/* attribution family. The 42-case family above uses names that are all    */
+/* >=5 letters (Antonio/Antoine/Антон/Anton) or CJK, which never exercises */
+/* the shape an earlier revision's abbreviation exclusion broke: a period  */
+/* after a SHORT capitalised name ("Ana.", "Jean.", "Иван.") matched the   */
+/* same pattern as a title abbreviation ("Mr."), so the clause search for  */
+/* a genuine SECOND turn walked straight through it and declined a turn    */
+/* that should have been admitted. Latin-alphabet languages only — a CJK   */
+/* name isn't capitalised-Latin-letter shaped, so it can't trigger this. */
+/* ------------------------------------------------------------------ */
+
+const SHORT_NAME_LANGS = ['es', 'fr', 'ru', 'en'] as const;
+const SHORT_ATTRIB_TEXT: Record<string, { t1: string; verb: string; name: string; tail: string; second: string }> = {
+  es: { t1: 'Hola', verb: ', dijo ', name: 'Ana', tail: '.', second: 'Adiós' },
+  fr: { t1: 'Bonjour', verb: ', dit ', name: 'Jean', tail: '.', second: 'Au revoir' },
+  ru: { t1: 'Привет', verb: ', сказал ', name: 'Иван', tail: '.', second: 'Пока' },
+  en: { t1: 'Hi', verb: ', said ', name: 'Ann', tail: '.', second: 'Bye' },
+};
+
+function shortAttribCases(lang: string): AttribCase[] {
+  const t = SHORT_ATTRIB_TEXT[lang];
+  const prim = conventionsFor(lang)!.quotePairs as Array<[string, string]>;
+  const sec = WIDE_SECONDARY[lang];
+  const out: AttribCase[] = [];
+  for (const [po, pc] of prim) {
+    for (const [so, sc] of sec) {
+      out.push({ lang, body: `${po}${t.t1}${pc}${t.verb}${so}${t.name}${sc}${t.tail}` });
+      out.push({
+        lang,
+        body: `${po}${t.t1}${pc}${t.verb}${t.name}${t.tail} ${so}${t.second}${sc}${t.verb}${t.name}${t.tail}`,
+      });
+    }
+  }
+  return out;
+}
+
+function shortAttribResult(c: AttribCase, conv: LanguageConventions) {
+  const index = buildNameIndex([{ id: 'anton', name: SHORT_ATTRIB_TEXT[c.lang].name }] as never, conv);
+  const spans = parseChapterStructure(c.body, index).flatMap((p) => p.spans);
+  const speech = spans.filter((s) => s.kind === 'speech');
+  return {
+    spoken: speech.map((s) => c.body.slice(s.start, s.end)),
+    speakers: speech.map((s) => s.speaker?.characterId ?? null),
+  };
+}
+
+describe('parser — #2315 PR #2340 review round 2, finding F1: the short-name (<=4 letter) attribution family', () => {
+  const cases = SHORT_NAME_LANGS.flatMap((l) => shortAttribCases(l));
+  const secondTurnCases = cases.filter((c) => c.body.includes(SHORT_ATTRIB_TEXT[c.lang].second));
+
+  it('generates the 22-case family (11 of which carry a genuine second turn)', () => {
+    expect(cases.length).toBe(22);
+    expect(secondTurnCases.length).toBe(11);
+  });
+
+  /* COMPREHENSIVE metric — checks BOTH the first turn (a primary run,
+     structurally unaffected by this bug either way) and the second turn
+     (the one this bug actually vanished). The 42-case family's own
+     "speakersLost" used to check only the first turn, which is exactly why
+     it read 0 while this shape was broken — see that test's own comment. */
+  it('every expected turn is present AND attributed — first turn and second turn both', () => {
+    const failures: string[] = [];
+    for (const c of cases) {
+      const wide: LanguageConventions = { ...conventionsFor(c.lang)!, secondaryQuotePairs: WIDE_SECONDARY[c.lang] };
+      const r = shortAttribResult(c, wide);
+      const t = SHORT_ATTRIB_TEXT[c.lang];
+      const first = r.spoken.indexOf(t.t1);
+      if (first < 0 || r.speakers[first] !== 'anton') failures.push(`${c.lang} FIRST turn: ${c.body}`);
+      if (c.body.includes(t.second)) {
+        const second = r.spoken.indexOf(t.second);
+        if (second < 0 || r.speakers[second] !== 'anton') failures.push(`${c.lang} SECOND turn: ${c.body}`);
+      }
+    }
+    expect(failures, failures.join('\n')).toHaveLength(0);
+  });
 });
 
 /* ------------------------------------------------------------------ */
