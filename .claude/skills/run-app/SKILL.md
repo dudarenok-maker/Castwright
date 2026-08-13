@@ -52,7 +52,7 @@ react-router-dom 7, TypeScript 6.
 | Frontend only, against the real server (mocks OFF, the default) | `npm run dev:frontend` | Vite `:5173` |
 | Frontend only, mock mode — no server/sidecar, but the ~19 direct-`/api/`-fetch components below will still 502 | `npm run dev:frontend:mock` | Vite `:5173` |
 | Frontend (mock mode) + real server, no sidecar — the fastest full mock verify, covers those ~19 components | `npm run dev:mock` | `:5173` + `:8080` |
-| Full dev (frontend + server + sidecar) | `npm run dev` | `:5173` + `:8080` |
+| Full dev (frontend + server + sidecar) | `npm start` | `:5173` + `:8080` |
 | Production bundle smoke | `npm run build && npm run preview` | preview port |
 
 In a worktree, `scripts/wt-new.mjs` assigns per-worktree ports (e.g. `:5193`/`:8100`)

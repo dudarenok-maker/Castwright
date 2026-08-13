@@ -1,7 +1,7 @@
 /* #2344 / #2348 — static guard against a re-introduced direct
-   `fetch('/api/...')` call under src/components/ or src/views/ that
-   bypasses the mock/real seam (`api.*` in src/lib/api.ts — see CLAUDE.md
-   "Mocks behind VITE_USE_MOCKS"). This mirrors
+   `fetch('/api/...')` call under src/components/, src/views/, src/modals/,
+   src/routes/, or src/hooks/ that bypasses the mock/real seam (`api.*` in
+   src/lib/api.ts — see CLAUDE.md "Mocks behind VITE_USE_MOCKS"). This mirrors
    server/src/workspace/cast-lock.guard.test.ts's house style: a syntactic
    scan (not a parser) over raw source text, with a file+count allowlist
    pinning the CURRENT, deliberately-documented direct-fetch surface. A
@@ -26,6 +26,15 @@
    leading-slash-free literal (`fetch('api/x')`, which still resolves to
    `/api/x` from the SPA root).
 
+   #2348 review pass 2 (finding N2) widened the scan again, to src/modals/,
+   src/routes/, and src/hooks/ — the header below previously claimed those
+   were out of scope without saying so. A scan of all three at the time of
+   that widening found zero `fetch(` call sites of any shape (verified with
+   both the full matcher and a bare `\bfetch\s*\(` sweep), so no new
+   allowlist entries were needed; the widening exists to keep the BLIND
+   SPOTS list honest and to catch a future regression in those directories
+   too.
+
    MATCHER: the literal token "fetch" immediately followed (modulo optional
    whitespace on both sides of the paren) by an opening paren, NOT preceded
    by a word character — that lookbehind is what rules out `refetch(` /
@@ -35,11 +44,18 @@
    characters `api/`. `fetch(endpoint, …)` or a template literal built from
    an interpolated variable never matches at all, because nothing at the
    position right after the opening paren is a quote character followed by
-   that literal prefix text. Proven below: a fixture containing only
-   `refetch()`/`onRefetch()` (spaced and unspaced) is asserted NOT flagged,
-   and further tests confirm the guard reddens on a genuine new
-   literal-prefixed fetch call, on `fetch (` with a space, and on a
-   leading-slash-free `api/` literal.
+   that literal prefix text. Proven below: an inline fixture containing
+   `refetch('/api/x')` / `onRefetch('/api/y')` (spaced and unspaced) —
+   i.e. the lookbehind's actual target: the full `fetch(` + quote + `api/`
+   shape, just preceded by the word character that makes it `refetch(`
+   rather than `fetch(` — is asserted NOT flagged, and further tests
+   confirm the guard reddens on a genuine new literal-prefixed fetch call,
+   on `fetch (` with a space, and on a leading-slash-free `api/` literal.
+   (An earlier version of the false-positive fixture used bare
+   `refetch()`/`onRefetch()` with no `/api/` argument at all — that fixture
+   never matched the matcher's `['"`]\/?api\/` suffix regardless of the
+   lookbehind, so the test passed vacuously and pinned nothing; see the
+   test's own comment below.)
 
    BLIND SPOTS (this scan is syntactic, not semantic — same caveat as
    cast-lock.guard's own header, applied to a different invariant):
@@ -53,12 +69,13 @@
        not.
      - A fetch reached through a shared helper function defined elsewhere
        (no call-graph tracing — same limitation as cast-lock.guard).
-     - Anything outside src/components/ and src/views/ — out of scope by
-       design. In particular `src/store/queue-thunks.ts` already honours the
-       VITE_USE_MOCKS toggle through its OWN branch (a `USE_MOCKS` check +
-       `mockQueueRequest`), not through `api.*`, and is a documented,
-       correct exception (see CLAUDE.md); this guard has nothing to say
-       about it either way.
+     - Anything outside src/components/, src/views/, src/modals/,
+       src/routes/, and src/hooks/ — out of scope by design (src/store/,
+       src/lib/, src/data/, src/mocks/). In particular
+       `src/store/queue-thunks.ts` already honours the VITE_USE_MOCKS toggle
+       through its OWN branch (a `USE_MOCKS` check + `mockQueueRequest`), not
+       through `api.*`, and is a documented, correct exception (see
+       CLAUDE.md); this guard has nothing to say about it either way.
      - A comment or string that merely quotes the pattern is deliberately
        NOT opaque-token-aware the way cast-lock.guard's `skipOpaqueToken` is
        — there is no legitimate reason for this codebase's runtime source
@@ -75,6 +92,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COMPONENTS_ROOT = __dirname; // src/components
 const VIEWS_ROOT = join(__dirname, '..', 'views'); // src/views
+const MODALS_ROOT = join(__dirname, '..', 'modals'); // src/modals
+const ROUTES_ROOT = join(__dirname, '..', 'routes'); // src/routes
+const HOOKS_ROOT = join(__dirname, '..', 'hooks'); // src/hooks
 
 /** Every non-test `.ts`/`.tsx` file under `dir`, recursively. */
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
@@ -180,14 +200,17 @@ const ALLOWED_DIRECT_FETCH = new Map<string, { count: number; why: string }>([
 
 /* Roots this guard scans, each with the key-prefix its relative paths get
    in ALLOWED_DIRECT_FETCH — src/components/ entries keep their bare
-   filename (unchanged since #2344); src/views/ entries are prefixed
-   'views/' so a same-named file in either directory can't collide. */
+   filename (unchanged since #2344); every other root is prefixed with its
+   own directory name so a same-named file in any two roots can't collide. */
 const SCAN_ROOTS: Array<{ dir: string; prefix: string }> = [
   { dir: COMPONENTS_ROOT, prefix: '' },
   { dir: VIEWS_ROOT, prefix: 'views/' },
+  { dir: MODALS_ROOT, prefix: 'modals/' },
+  { dir: ROUTES_ROOT, prefix: 'routes/' },
+  { dir: HOOKS_ROOT, prefix: 'hooks/' },
 ];
 
-describe('src/components + src/views direct fetch(\'/api/...\') — static guard (#2344, #2348)', () => {
+describe('src/components + src/views + src/modals + src/routes + src/hooks direct fetch(\'/api/...\') — static guard (#2344, #2348)', () => {
   it('every direct fetch(\'/api/...\') site matches the pinned allowlist, file+count', () => {
     const problems: string[] = [];
     const matchedAllowlistKeys = new Set<string>();
@@ -231,16 +254,22 @@ describe('src/components + src/views direct fetch(\'/api/...\') — static guard
     expect(problems, problems.join('\n\n')).toEqual([]);
   });
 
-  it('does not flag refetch()/onRefetch(), spaced or not — the false positive that produced #2344\'s overstated issue body', () => {
+  it('does not flag refetch(\'/api/...\')/onRefetch(\'/api/...\'), spaced or not — the false positive that produced #2344\'s overstated issue body', () => {
+    // Each call below carries the matcher's FULL positive shape after the
+    // word "fetch" — `(`, an optional space, a quote, an optional leading
+    // slash, and the literal `api/` — so that if the `(?<![\w$])`
+    // lookbehind were ever dropped, `fetch('/api/...` inside `refetch(` /
+    // `onRefetch(` would match and this test would go red. A fixture with
+    // no `/api/` argument (e.g. bare `refetch()`) never exercises that
+    // lookbehind at all — nothing after the paren matches the required
+    // quote+`api/` suffix either way — so it would pass whether or not the
+    // lookbehind is present, pinning nothing.
     const fixture = [
       'function useThing() {',
-      '  const refetch = () => {};',
-      '  const onRefetch = () => {};',
-      '  refetch();',
-      '  onRefetch();',
-      '  refetch ();',
-      '  onRefetch ();',
-      '  return { refetch, onRefetch };',
+      '  refetch(\'/api/x\');',
+      '  onRefetch(\'/api/y\');',
+      '  refetch (\'/api/x\');',
+      '  onRefetch (\'/api/y\');',
       '}',
     ].join('\n');
     expect(scanFile(fixture)).toBeNull();
