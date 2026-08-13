@@ -2,7 +2,7 @@
    Script pre-pass is authoritative; franc disambiguates Latin; front-matter
    stripped before detecting; es/fr/de detected but not yet `supported`. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters } from './detect-language.js';
+import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters, prepareSample } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
 import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
 import {
@@ -12,6 +12,7 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
+  joinSamplesForGates,
 } from './prose-units.js';
 
 describe('detectManuscriptLanguage', () => {
@@ -848,6 +849,20 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
     'ちいさなふねがみずうみをゆっくりとすすんでいった。',
   ];
 
+  /* Han numerals for the numbered-TOC / dated-chronicle fixtures below.
+     ONE copy (#2256 review round 4, nit N7 — this was pasted into three
+     separate tests, and a fourth pair of near-identical `chronicleChapter`
+     helpers disagreed on their own EVENTS array). Covers 1-99, which is all
+     any fixture here needs. */
+  function toHanNumeral(n: number): string {
+    const digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+    if (n < 10) return digits[n];
+    if (n < 20) return '十' + (n % 10 === 0 ? '' : digits[n % 10]);
+    const tens = Math.floor(n / 10),
+      ones = n % 10;
+    return digits[tens] + '十' + (ones === 0 ? '' : digits[ones]);
+  }
+
   const cases = [
     { label: 'en', join: ' ', pool: EN_POOL, expectLanguage: 'en' },
     { label: 'zh', join: '', pool: ZH_POOL, expectLanguage: 'zh' },
@@ -928,14 +943,6 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
       '白露','秋分','寒露二','霜降二','立冬','小雪二','大雪二','冬至二','小寒二','大寒二',
       '尾声','后记','附录','番外','终章','别篇','外传','余话','跋','附言',
     ];
-    function toHanNumeral(n: number): string {
-      const digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-      if (n < 10) return digits[n];
-      if (n < 20) return '十' + (n % 10 === 0 ? '' : digits[n % 10]);
-      const tens = Math.floor(n / 10),
-        ones = n % 10;
-      return digits[tens] + '十' + (ones === 0 ? '' : digits[ones]);
-    }
     const fullwidth = (n: number) =>
       String(n)
         .split('')
@@ -977,26 +984,24 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
       '白露', '秋分', '寒露二', '霜降二', '立冬', '小雪二', '大雪二', '冬至二', '小寒二', '大寒二',
       '尾声', '后记', '附录', '番外', '终章', '别篇', '外传', '余话', '跋', '附言',
     ];
-    // 60 distinct 4-character titles (pairing adjacent 2-char titles) —
-    // the standard Chinese chapter-title length; the finding-2 fixture's
-    // 2-char titles alone do NOT reproduce this gap (their digit share
-    // stays above the ceiling even with "第...章" markers).
+    // 60 distinct titles, MOSTLY 4 characters (pairing adjacent 2-char
+    // titles: 43 are 4 chars, 14 are 5, 2 are 3, 1 is 6 — #2256 review
+    // round 4, nit N3: this used to claim a uniform 4-character length,
+    // which the mechanism argument in prose-units.ts was then stated
+    // against). Roughly the standard Chinese chapter-title length; the
+    // finding-2 fixture's 2-char titles alone do NOT reproduce this gap
+    // (their digit share stays above the ceiling even with "第...章"
+    // markers).
     const titles4 = titles2.map((t, i) => t + titles2[(i + 7) % titles2.length]);
-    function toHanNumeral(n: number): string {
-      const digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-      if (n < 10) return digits[n];
-      if (n < 20) return '十' + (n % 10 === 0 ? '' : digits[n % 10]);
-      const tens = Math.floor(n / 10),
-        ones = n % 10;
-      return digits[tens] + '十' + (ones === 0 ? '' : digits[ones]);
-    }
     const toc = titles4.map((t, i) => `第${toHanNumeral(i + 1)}章${t}。`).join('');
 
-    // Fixture sanity: both gates individually look like they SHOULD catch
-    // this (richness is unremarkable, digit share is well under 0.36 —
-    // the range finding 4 called "evidenced junk") -- the point of this
-    // test is that digitTokenShare specifically stays UNDER the ceiling.
+    // Fixture sanity: neither gate fires. Richness is unremarkable (the
+    // titles are all distinct, so R clears the floor easily) and the digit
+    // share lands at ~0.17 — under the 0.2 ceiling, and well under the
+    // 0.36+ range finding 4 called "evidenced junk". THAT is the gap: this
+    // shape reads as junk to a human and as prose to both gates.
     expect(digitTokenShare(toc)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+    expect(guiraudR(toc)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
 
     const result = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: toc }]);
     // KNOWN GAP, tracked by #2341 -- this is the CURRENT (imperfect)
@@ -1012,38 +1017,22 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
      大事记/Zeittafel) could refuse a whole book that reads fine once every
      chapter is counted, and the SAME chapter set in a DIFFERENT order could
      reach a DIFFERENT verdict. Retracted — see prose-units.ts's own
-     finding-3(a) retraction. Two regression locks below replace the old
-     finding-3(a) windowing test, which no longer applies (the mechanism it
-     tested was removed): a real-content-scale repro (must resolve
-     correctly regardless of order) and a >20,000-character-scale repro
-     (must resolve IDENTICALLY regardless of order, at the exact scale
-     where the retracted windowing bug would have mattered — mutation-
-     verified by reintroducing the slice). */
+     finding-3(a) retraction. The test below is the real-content-scale
+     regression lock for that: the numeral-dense chapter must not poison the
+     book in EITHER position. The SEPARATE, deeper order dependence round 3
+     missed (dedup glue at the join seam) is locked by the "finding B1" test
+     that follows it. */
   it('finding C1 (real-content scale) — a legitimate numeral-dense chapter (a dated chronicle) does not poison the whole book, in either chapter order', () => {
     // A "大事记"-shaped chronicle chapter: real Han-numeral dates, high
     // digit density (~0.43 alone, well over DIGIT_TOKEN_SHARE_CEILING) --
     // exactly the shape finding C1 named. 25 entries clears
     // FRONT_MATTER_WORD_THRESHOLD on its own.
-    function toHanNumeral(n: number): string {
-      const digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-      if (n < 10) return digits[n];
-      if (n < 20) return '十' + (n % 10 === 0 ? '' : digits[n % 10]);
-      const tens = Math.floor(n / 10),
-        ones = n % 10;
-      return digits[tens] + '十' + (ones === 0 ? '' : digits[ones]);
-    }
     const EVENTS = ['筑', '修', '通', '建', '毁', '成', '迁', '并', '立', '废'];
-    function chronicleChapter(entries: number): string {
-      const parts: string[] = [];
-      for (let i = 1; i <= entries; i++) {
-        const year = 1 + (i % 99),
-          month = 1 + (i % 12),
-          day = 1 + (i % 28);
-        parts.push(`${toHanNumeral(year)}年${toHanNumeral(month)}月${toHanNumeral(day)}日，${EVENTS[i % EVENTS.length]}。`);
-      }
-      return parts.join('');
-    }
-    const chronicle = chronicleChapter(25);
+    const chronicle = Array.from(
+      { length: 25 },
+      (_, k) =>
+        `${toHanNumeral(1 + ((k + 1) % 99))}年${toHanNumeral(1 + ((k + 1) % 12))}月${toHanNumeral(1 + ((k + 1) % 28))}日，${EVENTS[(k + 1) % EVENTS.length]}。`,
+    ).join('');
     expect(digitTokenShare(chronicle)).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING); // fixture sanity: genuinely digit-dense alone
     const narrative1 = ZH_POOL.slice(0, 15).join('');
     const narrative2 = ZH_POOL.slice(15, 30).join('');
@@ -1062,61 +1051,105 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
     expect(chronicleLast).toEqual(chronicleFirst);
   });
 
-  it('finding C1 (>20,000-character scale, mutation-sensitive) — the joined sample resolves IDENTICALLY regardless of chapter order', () => {
-    // Deliberately synthetic (not claiming realism) -- a large,
-    // non-colliding (bijective index) ZH narrative sized so the TOTAL,
-    // joined with a chronicle chapter, exceeds RICHNESS_SAMPLE_CHARS's old
-    // 20,000-character value. What matters here is not that this
-    // particular fixture accepts or refuses, but that BOTH orderings reach
-    // the SAME verdict -- reintroducing the retracted `.slice(0, 20_000)`
-    // in voteLanguage makes this fixture's two orderings DISAGREE (see the
-    // mutation note in the PR).
-    function toHanNumeral(n: number): string {
-      const digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-      if (n < 10) return digits[n];
-      if (n < 20) return '十' + (n % 10 === 0 ? '' : digits[n % 10]);
-      const tens = Math.floor(n / 10),
-        ones = n % 10;
-      return digits[tens] + '十' + (ones === 0 ? '' : digits[ones]);
-    }
-    const EVENTS = ['筑', '修', '通', '建', '毁', '成', '迁', '并', '立', '废', '扩', '疏'];
-    function chronicleChapter(entries: number): string {
-      const parts: string[] = [];
-      for (let i = 1; i <= entries; i++) {
-        const year = 1 + (i % 99),
-          month = 1 + (i % 12),
-          day = 1 + (i % 28);
-        parts.push(`${toHanNumeral(year)}年${toHanNumeral(month)}月${toHanNumeral(day)}日，${EVENTS[i % EVENTS.length]}。`);
-      }
-      return parts.join('');
-    }
-    const SUBJ = ['马塞尔', '雷恩', '伊内伊', '亨利', '罗莎琳', '奥托', '伊利亚', '比阿特丽克斯', '安杰伊', '纪子', '托拜厄斯', '娜莱迪', '威廉', '英格丽', '卡西米尔', '奥达丽丝', '彼得罗', '马伦', '卡勒姆', '阿努什卡', '贝特朗', '芬威克', '丽泽尔', '奥塞', '佩尔佩图亚', '安布罗斯', '多维莱', '优素福', '康斯坦丝', '拉多米尔'];
-    const VERB = ['注视着', '跟随着', '记起了', '躲避着', '描述了', '想象着', '丈量了', '放弃了', '重建了', '质疑了', '信任了', '怀疑了', '迎接了', '携带着', '描摹着', '数着', '折起了', '按住了', '聆听着', '装载着'];
-    const OBJ = ['港口', '灯笼', '账本', '果园', '楼梯间', '余烬', '采石场', '信号', '门槛', '水流', '档案', '船只', '山脊', '庭院', '罗盘', '铸造厂', '蓄水池', '钟楼', '堤道', '谷仓', '脚手架', '水车道', '纤道', '历书', '女墙'];
-    const ADJ = ['安静的', '遥远的', '狭窄的', '金色的', '苦涩的', '微弱的', '突然的', '破旧的', '歪斜的', '苍白的', '固执的', '不安的', '空荡的', '稳固的', '易碎的', '银色的', '生锈的', '沉寂的', '疲惫的', '参差的'];
-    const TAIL = ['在暴风雨来临之前', '在其他人离开很久之后', '一言不发地', '在光线开始暗下来的时候', '趁着小镇还在沉睡', '不顾她曾受到的每一次警告', '出于谁也不明白的原因', '直到最后一刻', '像她母亲曾经那样', '比她本意更加小心地', '尽管没有人要求她这样做', '和往年一样'];
-    function makeSentence(i: number): string {
-      const s = SUBJ[i % SUBJ.length];
-      const v = VERB[(i * 7 + 3) % VERB.length];
-      const o = OBJ[(i * 11 + 5) % OBJ.length];
-      const a = ADJ[(i * 17 + 2) % ADJ.length];
-      const t = TAIL[(i * 13 + 9) % TAIL.length];
-      return `${s}${v}${a}${o}，${t}。`;
-    }
-    const bigNarrative = Array.from({ length: 1000 }, (_, i) => makeSentence(i)).join('');
-    const chronicle = chronicleChapter(600);
-    const combined = [chronicle, bigNarrative].join('\n');
-    expect(combined.length).toBeGreaterThan(20_000); // the scale where the retracted windowing fix would have mattered
+  /* #2256 independent review round 4, finding B1 (HIGH) — round 3 removed
+     the RICHNESS_SAMPLE_CHARS prefix (finding C1 above) and asserted, in a
+     comment, a release note AND a test, that the resulting
+     `winningSamples.join('\n')` was "mathematically ORDER-INVARIANT". It
+     was not. Neither gate tokenizes the join directly: both go through
+     dedupeProseUnits, which segments on SENTENCE_TERMINAL_RE, and '\n' is
+     not a terminator — so a chapter whose prepared sample does not END at a
+     terminal mark GLUES its trailing residue onto the next chapter's first
+     unit, changing that unit's dedup key and therefore which units collapse.
+     The verdict then depends on chapter order, which is the exact defect
+     finding C1 was filed for.
 
+     The round-3 test that replaced the windowing lock could not see this:
+     both its chapters ended in '。' and shared no units, so the glue never
+     fired, and its ONLY assertion was that two results are equal — which two
+     surrenders satisfy just as well as two correct answers (and it WAS two
+     surrenders). This replaces it on both counts: the fixture triggers the
+     glue (asserted below, not assumed) and the assertion names an ACCEPTED
+     verdict, not just agreement.
+
+     Fixture: a chronicle chapter that ends mid-entry (no terminator — the
+     shape prepareSample also produces whenever it cuts a chapter at
+     SAMPLE_CHARS, and that a chapter closing on `…。”` produces in
+     miniature) whose trailing entry is repeated as the opening SENTENCE of
+     the narrative chapter. Chronicle-first, the residue glues onto that
+     opening sentence, so the entry's digit-dense tokens are counted TWICE
+     and digitTokenShare crosses DIGIT_TOKEN_SHARE_CEILING (0.2059);
+     narrative-first, the residue dedupes against the same sentence and the
+     share stays under it (0.1915). Both chapters are real zh prose, and the
+     correct answer in either order is zh. */
+  it('finding B1 (mutation-sensitive) — a chapter whose sample does not end at a sentence terminal cannot change the verdict by its position', () => {
+    const CHRONICLE = [
+      '一八九三年七月十四日筑港。',
+      '一八九四年三月二十日修桥。',
+      '一八九五年十一月五日通渠。',
+      '一八九六年九月八日建仓。',
+      '一八九七年五月十七日毁堤。',
+    ];
+    // The seam: the chronicle's last entry, left UNTERMINATED at the end of
+    // its chapter and repeated as the narrative chapter's opening sentence.
+    const SEAM = '一八九九年六月十二日迁窑';
+    const NARRATIVE = [
+      '海鸥在码头上空盘旋。',
+      '雨点敲打着铁皮屋顶。',
+      '雷恩刮掉了最后的炉渣。',
+      '她再次折起了那封信。',
+      '电车摇晃着驶过广场。',
+    ];
+    // Repeated to clear FRONT_MATTER_WORD_THRESHOLD (150 words) per chapter;
+    // dedup collapses the repeats, which is why the deduped token total
+    // stays small enough for one extra copy of SEAM to matter.
+    const chronicleBody = CHRONICLE.join('').repeat(6) + SEAM;
+    const narrativeBody = SEAM + '。' + NARRATIVE.join('').repeat(6);
+
+    /* Fixture sanity — these are the assertions that keep this test from
+       quietly becoming a no-op the way its predecessor did. (1) The
+       chronicle's prepared sample really does end mid-unit, so the glue
+       path is live; (2) the seam unit really is shared by both chapters, so
+       dedup has something to collapse; and (3) a BARE '\n' join really does
+       give the two orders different digit shares, straddling the ceiling —
+       i.e. the mechanism under test is present in this fixture, not merely
+       hoped for. If a future edit terminates the chronicle or breaks the
+       seam, (1)-(3) fail loudly rather than leaving a green test that
+       proves nothing. */
+    const preparedChronicle = prepareSample(chronicleBody, {});
+    const preparedNarrative = prepareSample(narrativeBody, {});
+    expect(/[.!?…。！？]$/u.test(preparedChronicle)).toBe(false);
+    expect(preparedNarrative.startsWith(SEAM + '。')).toBe(true);
+    const bareChronicleFirst = digitTokenShare([preparedChronicle, preparedNarrative].join('\n'));
+    const bareNarrativeFirst = digitTokenShare([preparedNarrative, preparedChronicle].join('\n'));
+    expect(bareChronicleFirst).toBeGreaterThan(DIGIT_TOKEN_SHARE_CEILING);
+    expect(bareNarrativeFirst).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+
+    /* The property under test, through the real entry point FIRST: both
+       orders must reach the SAME, ACCEPTED verdict. Two surrenders would
+       satisfy an equality-only assertion, which is exactly how the round-3
+       version of this test stayed green while the defect was live — so the
+       expectation names the verdict rather than comparing the two results
+       to each other. */
     const chronicleFirst = detectManuscriptLanguageFromChapters([
-      { title: 'Chapter One', body: chronicle },
-      { title: 'Chapter Two', body: bigNarrative },
+      { title: 'Chapter One', body: chronicleBody },
+      { title: 'Chapter Two', body: narrativeBody },
     ]);
     const chronicleLast = detectManuscriptLanguageFromChapters([
-      { title: 'Chapter One', body: bigNarrative },
-      { title: 'Chapter Two', body: chronicle },
+      { title: 'Chapter One', body: narrativeBody },
+      { title: 'Chapter Two', body: chronicleBody },
     ]);
-    expect(chronicleLast).toEqual(chronicleFirst); // the property under test: order must not change the verdict
+    expect(chronicleFirst).toEqual({ language: 'zh', supported: true, fallback: false });
+    expect(chronicleLast).toEqual({ language: 'zh', supported: true, fallback: false });
+
+    // Same property one level down, so a regression says WHY: the sample
+    // joinSamplesForGates builds is the same token population either way,
+    // so both gates read identically off it.
+    expect(digitTokenShare(joinSamplesForGates([preparedChronicle, preparedNarrative]))).toBe(
+      digitTokenShare(joinSamplesForGates([preparedNarrative, preparedChronicle])),
+    );
+    expect(guiraudR(joinSamplesForGates([preparedChronicle, preparedNarrative]))).toBe(
+      guiraudR(joinSamplesForGates([preparedNarrative, preparedChronicle])),
+    );
   });
 
   /* #2256 review round 2, finding 3(b) — Hiragana/Katakana are a ~90-glyph
@@ -1137,7 +1170,9 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
      tokenization sustain genuine variety at length" (the actual finding).
      Fixed: 3 word-slots (30^3 = 27,000 comfortably exceeds any n used
      here, so decomposition stays genuinely bijective — see prose-units.ts
-     for why 6 slots over a 30-word pool couldn't). */
+     for why 6 slots over a 30-word pool couldn't). Round 4 (finding B4)
+     then restored the LENGTH the fix had traded away — see the comment on
+     the fixture itself. */
   it('finding 3(b) (fixed fixture) — a long all-kana (no kanji) chapter with genuinely varied content still resolves to ja', () => {
     const words = [
       'あさひが', 'まどから', 'さしこんで', 'いた', 'ねこは', 'まだ', 'ねむって', 'かぜが', 'そよそよと', 'ふいて',
@@ -1153,10 +1188,30 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
       }
       return picked.join('') + '。';
     }
-    // 500 units, ~6,100 chars -- matches (exceeds) the real-book scale
-    // finding 3 reported (N=4,843) where the OLD per-character tokenizer
-    // measured R=1.72, refused.
-    const sample = Array.from({ length: 500 }, (_, i) => makeSentence(i)).join('');
+    /* #2256 review round 4, finding B4 — round 3 shortened this fixture
+       from 1,500 units to 500 while fixing its index decomposition, and in
+       doing so DELETED the regression lock the test exists to be. Measured
+       by re-running this fixture's own tokenization with KANA_NGRAM_SIZE
+       varied, R at 500 units (6,127 chars) is 0.560 / 3.715 / 9.615 for
+       n = 1 / 2 / 3 — so at that size BIGRAMS clear LEXICAL_RICHNESS_FLOOR
+       too, and changing prose-units.ts's `KANA_NGRAM_SIZE` from 3 to 2 left
+       the whole file green. R = V/sqrt(N) decays as N grows once a
+       tokenization's vocabulary saturates, and bigrams saturate far sooner
+       than trigrams, so the separation only appears at length: at 1,500
+       units (18,610 chars, still under prepareSample's 20,000-char cut so
+       the number below IS the number the gate sees) the same fixture
+       measures 0.321 / 2.553 / 7.871. n=2 is now genuinely under the floor
+       and n=3 genuinely over it, which is what makes reverting the trigram
+       fix a RED test rather than a silent no-op. */
+    const units = Array.from({ length: 1500 }, (_, i) => makeSentence(i));
+    // Fixture sanity: 30^3 = 27,000 combinations, so a 3-slot mixed-radix
+    // decomposition of i is injective over this range -- asserted, not
+    // argued, because an aliasing period in exactly this kind of index is
+    // what made two earlier versions of this fixture measure nothing (see
+    // prose-units.ts's own note, and round 4's finding B3).
+    expect(new Set(units).size).toBe(units.length);
+    const sample = units.join('');
+    expect(sample.length).toBeLessThan(20_000); // prepareSample must not truncate: the assertion below measures the gate's real input
     expect(guiraudR(sample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR); // fixture sanity: genuinely clears the floor, not just non-empty
 
     const result = detectManuscriptLanguageFromChapters([{ title: '第一章', body: sample }]);
@@ -1183,7 +1238,19 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
     expect(new Set(HEADINGS).size).toBeGreaterThan(1);
     expect(guiraudR(headingJunk)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR); // NOT refused -- the residual
 
-    const exactDuplicateJunk = Array(2000).fill(HEADINGS[0]).join('') + '。';
+    /* #2256 review round 4, finding B5 — this control used to be
+       `Array(2000).fill(HEADINGS[0]).join('') + '。'`, with NO terminator
+       between the copies: one 14,000-character prose unit that
+       dedupeProseUnits leaves entirely untouched, refused at R=0.0592 by
+       the RICHNESS gate. So the control for "dedup is the only real
+       backstop for kana" was demonstrating the opposite of its own claim.
+       Terminating each copy is what makes dedup the mechanism: 2,000 units
+       collapse to ONE 7-character unit, R=2.2361 — the number
+       prose-units.ts cites. The unit count is asserted so a future edit
+       that drops the terminator again fails here instead of silently
+       swapping the mechanism back. */
+    const exactDuplicateJunk = Array(2000).fill(HEADINGS[0] + '。').join('');
+    expect(countProseUnits(exactDuplicateJunk)).toBe(2000);
     expect(guiraudR(exactDuplicateJunk)).toBeLessThan(LEXICAL_RICHNESS_FLOOR); // IS refused -- dedup alone does this
   });
 

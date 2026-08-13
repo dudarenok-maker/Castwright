@@ -25,6 +25,7 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
+  joinSamplesForGates,
 } from './prose-units.js';
 
 const SAMPLE_CHARS = 20_000;
@@ -187,11 +188,18 @@ function voteLanguage(
      chapter last (whole join). No windowing is applied here: real CJK
      content does not need it (see prose-units.ts's own
      LEXICAL_RICHNESS_FLOOR/DIGIT_TOKEN_SHARE_CEILING block, finding 3's
-     retraction of the windowing sub-fix) and the whole-join computation is
-     mathematically ORDER-INVARIANT (guiraudR/digitTokenShare reduce to a
-     token SET size and a total count, neither of which depends on
-     concatenation order), which a prefix is not. */
-  const winningSample = winningSamples.join('\n');
+     retraction of the windowing sub-fix).
+
+     #2256 review round 4 (finding B1) — removing the cap did NOT by itself
+     make this order-invariant, which is what round 3 claimed here. Joining
+     with a bare '\n' left a second, older order dependence in place: '\n'
+     is not a sentence terminator, so a chapter whose sample does not end at
+     one glued its trailing residue onto the next chapter's first unit and
+     changed which units dedupeProseUnits collapses. joinSamplesForGates
+     closes each sample first, which is what actually makes the two gates
+     order-invariant — see its own comment for the measured verdict flip and
+     the full argument. */
+  const winningSample = joinSamplesForGates(winningSamples);
   if (guiraudR(winningSample) < LEXICAL_RICHNESS_FLOOR) return resultFor('en', true);
   if (digitTokenShare(winningSample) > DIGIT_TOKEN_SHARE_CEILING) return resultFor('en', true);
 

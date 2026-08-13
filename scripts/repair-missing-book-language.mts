@@ -68,7 +68,8 @@
  *   3. Neither readable → skip and name the book in the report. Never guess
  *      with no material to look at.
  *
- * #2256 (closed) — the prose-unit floor alone rejected the three original
+ * #2256 (closed except for one named, tracked shape — see #2341 at the end
+ * of this note) — the prose-unit floor alone rejected the three original
  * evidenced junk classes (a TOC-only sample, a nav-only EPUB stub, an
  * OCR-noise sample — all measured at 1 prose unit, 20x under the floor) but
  * not a *punctuated* one: a long numbered TOC or a periods-and-page-numbers
@@ -83,8 +84,14 @@
  * `DIGIT_TOKEN_SHARE_CEILING` (a numbered list needs its numbers; real
  * narrative prose is not digit-dense). Both apply to the same winning-
  * language sample the prose-unit floor already checks, chapter-count-
- * invariant the same way. See prose-units.ts's own header for the corpus
- * both were measured against and the margins on each side.
+ * invariant the same way — and, since #2256 round 4, chapter-ORDER-
+ * invariant too: both this script and the detector build that sample via
+ * prose-units.ts's `joinSamplesForGates`, which closes each chapter's
+ * sample at a sentence terminator so the dedup step cannot glue one
+ * chapter's trailing text onto the next one's first sentence. See
+ * prose-units.ts's own header for the corpus both were measured against,
+ * the margins on each side, and the one real Chinese chapter-heading
+ * layout (`第N章<title>`) that still clears both gates, tracked as #2341.
  *
  * Write path: `writeStateJsonAtomic` (server/src/workspace/state-migrate.ts)
  * — the same schema-stamp + rotating-backup helper every other state.json
@@ -120,6 +127,7 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
+  joinSamplesForGates,
 } from '../server/src/tts/prose-units.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
@@ -225,17 +233,18 @@ export type SurrenderDiagnostic =
    detect-language.ts's own comment): lexical richness (a small repeated
    vocabulary — 'too-repetitive') or digit-token share (a numbered list —
    'too-numbered'). Checked in the SAME order voteLanguage applies them, on
-   the SAME (unwindowed) `winningSamples.join('\n')` sample — round-2's
-   independent review (finding C3) found this guarantee broken for one
-   release: voteLanguage briefly computed its two lexical gates over a
-   RICHNESS_SAMPLE_CHARS-truncated prefix while this function kept
-   computing over the full join, so a real surrender could be attributed to
-   the wrong gate (or missed entirely) here. Round 3 retracted that
-   windowing fix outright (see prose-units.ts's own finding-3(a)
-   retraction) rather than threading the same cap through both call sites,
-   which restores this comment's guarantee by construction: there is only
-   ONE sample-preparation path (the unwindowed join) for either function to
-   diverge from. */
+   the SAME (unwindowed) sample — round-3's independent review (finding C3)
+   found this guarantee broken WHILE THE BRANCH WAS IN REVIEW, never in a
+   release: an unmerged round-2 revision had voteLanguage computing its two
+   lexical gates over a RICHNESS_SAMPLE_CHARS-truncated prefix while this
+   function kept computing over the full join, so a real surrender could
+   have been attributed to the wrong gate (or missed entirely) here. Round 3
+   retracted that windowing fix outright (see prose-units.ts's own
+   finding-3(a) retraction) rather than threading the same cap through both
+   call sites; round 4 (finding B1) then moved the join itself behind the
+   shared `joinSamplesForGates`, so the two sites no longer even spell the
+   sample construction independently — that is what makes this comment's
+   guarantee hold by construction rather than by two matching literals. */
 function describeSurrenderReason(
   chapters: ChapterSample[],
   meta: { author?: string | null; title?: string | null },
@@ -282,7 +291,7 @@ function describeSurrenderReason(
     return { kind: 'too-thin', language: winner, split, units: winningUnits, floor: PROSE_UNIT_FLOOR };
   }
 
-  const winningSample = winningSamples.join('\n');
+  const winningSample = joinSamplesForGates(winningSamples);
   const richness = guiraudR(winningSample);
   if (richness < LEXICAL_RICHNESS_FLOOR) {
     return { kind: 'too-repetitive', language: winner, split, richness, floor: LEXICAL_RICHNESS_FLOOR };
