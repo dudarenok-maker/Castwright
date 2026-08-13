@@ -26,7 +26,6 @@ const DASH = String.raw`(?:&mdash;|&ndash;|[-–—])`;
 
 /** Candidate turn start: a sentence end followed by a dash (excludes the
     apposition “X — это Y”, which follows a word, not a period). */
-// eslint-disable-next-line no-control-regex
 const CANDIDATE = new RegExp(String.raw`([.!?…]|\.{3})\s*${DASH}\s*`, 'gu');
 
 /** Interior tag opener: punctuation + dash + lowercase, same as parser.TAG_OPEN. */
