@@ -338,6 +338,29 @@ const paras = parseChapterStructure(ch.body, index); // parser.ts:89
 `tagTotal` is the count of `tag` spans (D15). Both are properties of the
 **text**, computed before any model output is read at all.
 
+**Measured, not asserted — run against the real modules on 2026-08-13**, because
+"the model cannot move it" is exactly the kind of claim this document has been
+wrong about before. Body `'— Ничего нет, — сказал Егор.\n— Значит, ищем дальше.\n'`
+through `conventionsFor('ru')` → `buildNameIndex` → `parseChapterStructure`:
+
+```
+withRoster  | paras dialogue,dialogue | speech 2 | tag 1
+    speech:"Ничего нет,"  tag:" — сказал Егор."  speech:"Значит, ищем дальше."
+emptyRoster | paras dialogue,dialogue | speech 2 | tag 1
+    speech:"Ничего нет,"  tag:" — сказал Егор."  speech:"Значит, ищем дальше."
+```
+
+**The two rows are identical, and that is the load-bearing result.**
+`buildNameIndex` is built from `stage1.characters`, which **is** model output, so
+a denominator that varied with the roster would be a denominator the model still
+controls — F1 half-fixed. It does not vary: the roster reaches only
+`SpanEvidence.speaker`, through `anchorSpansFromTags` → `findRosterName` /
+`findSubjectName`, and never `SpanEvidence.kind`. Span kinds are cut by the
+language's own `TAG_OPEN`/`SPEECH_RESUME` and validated against
+`conv.speechVerbStems`/`beatVerbStems`. **Wave 1 ships this as a standing test**
+(plan Task 3, step 3), because the property is not enforced by anything today and
+a future change could quietly acquire the dependency.
+
 Three things make this the right structure rather than a heavier one:
 
 - **The model cannot move it.** F1's whole mechanism was a punctuation change in
@@ -391,6 +414,27 @@ windowed-then-unbounded `findMatch`). A sentence whose leading dash has been
 stripped is still a substring of its source span; the located span simply starts
 after the dash. **That is criterion 1's dash-insensitive join, and it is already
 written.**
+
+**Measured on both F1 arms, 2026-08-13.** The same body and paragraphs, joined
+against the model's output as it was on Aug-6 and as it is today:
+
+```
+dashes    alignedPct 100
+    "— Ничего нет,"          -> speech
+    "— сказал Егор."         -> tag
+    "— Значит, ищем дальше." -> speech
+stripped  alignedPct 100
+    "Ничего нет,"            -> speech
+    "сказал Егор."           -> tag
+    "Значит, ищем дальше."   -> speech
+```
+
+**Byte-identical span assignments, 100% aligned in both arms.** That is
+acceptance criteria 1 and 3 demonstrated on the exact transform that produced
+F1's phantom 26-point recovery — and it is demonstrated against running code
+rather than argued from the aligner's docstring. Note also that every needle here
+is **under the 24-character anchor floor**, so this is the Pass-B regime; the
+anchored regime needs its own fixture tier (below).
 
 `cross-examine.ts:18` and `:268-269` record why the engine abandoned the
 `isSpokenLine` text heuristic for exactly this: _"the old `isSpokenLine` trap

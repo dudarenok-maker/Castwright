@@ -355,6 +355,18 @@ the denominator and the tag half sat in it too. Under D14 they are two speech
 spans and one tag span, and `sentences: []` — the model contributed nothing at
 all and the denominator is still 2. That is criterion 1 stated as a test.
 
+**These numbers are measured, not predicted.** Run against the real modules
+2026-08-13:
+
+```
+paras dialogue,dialogue | speech 2 | tag 1
+  speech:"Ничего нет,"  tag:" — сказал Егор."  speech:"Значит, ищем дальше."
+```
+
+So `expect(m.spokenTotal).toBe(2)` and `expect(m.tagTotal).toBe(1)` are the
+right assertions and will not need adjusting on first run. If they do, something
+changed in `parser.ts` and that is the finding.
+
 - [ ] **Step 2: GREEN — walk paragraphs, count spans by kind**
 
 Excluded chapters are removed from the body map by the caller (Task 7), not
@@ -373,12 +385,25 @@ it('scores identically with an empty roster — the denominator is not model-der
 
 **This is the direct proof of D14's independence claim and it can genuinely
 fail.** `buildNameIndex` is built from `stage1.characters`, which **is** model
-output, and `parseChapterStructure` takes the index. Verified 2026-08-13 that
-the roster affects only `SpanEvidence.speaker` and never `SpanEvidence.kind` —
-span kinds are cut by the language's `TAG_OPEN`/`SPEECH_RESUME` and validated
-against `conv.speechVerbStems`/`beatVerbStems`. **This test is what keeps that
-true.** If it goes red at any point in the future, the denominator has acquired
-a model dependency and F1 is back.
+output, and `parseChapterStructure` takes the index.
+
+**Measured 2026-08-13 against the real modules — it holds today:**
+
+```
+withRoster  | paras dialogue,dialogue | speech 2 | tag 1
+emptyRoster | paras dialogue,dialogue | speech 2 | tag 1
+```
+
+The roster reaches only `SpanEvidence.speaker`, via `anchorSpansFromTags` →
+`findRosterName`/`findSubjectName`; span kinds are cut by the language's
+`TAG_OPEN`/`SPEECH_RESUME` and validated against
+`conv.speechVerbStems`/`beatVerbStems`. **Nothing in the tree enforces that
+today, which is why this test exists.** If it ever goes red, the denominator has
+acquired a model dependency and F1 is back.
+
+Add the same assertion at the **anchored tier** (Task 4 step 2) and for at least
+one quote-convention language, since the roster reaches quote paragraphs through
+a different path (`parseQuoteParagraph`).
 
 - [ ] **Step 4: RED — per-language coverage**
 
