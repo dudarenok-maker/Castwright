@@ -647,8 +647,10 @@ figure below is a genuine measurement of the shipped code, not the prototype.
   [`docs/testing/onbox-acceptance-register.md`](../../testing/onbox-acceptance-register.md)
   (generate a `zh`/`ja` chapter with a continuation paragraph; confirm the
   recovered inner turn voices as its own turn in its own cast voice). The
-  live view is **not** updated by this PR — owed to the coordinating/shipping
-  thread, which owns the pre-publish comparator run.
+  live view was mirrored by the coordinating thread in `520bc81f`, which owns
+  the pre-publish comparator run: comparator green against the live page
+  (68 owed / group D 2 rows) before publishing, then published to the
+  register's recorded artifact URL at **69 owed / group D 3 rows**.
 - Design doc moved to `status: stable` in the same diff.
 
 Ship date / merge SHA: *(filled by the coordinating thread at merge)*.
