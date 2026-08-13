@@ -308,13 +308,19 @@ function isRealCloser(line: string, k: number, closer: string, openers: Set<stri
     whole, not to one glyph's scan — the never-delete fallback fires if the
     finally-chosen `end`, from whichever glyph, doesn't clear it.
     FORWARD-COVER, not live protection, same shape as `UNSPACED_SCRIPT`
-    below: no shipped table pairs an apostrophe-shaped closer alongside
-    another closer on the same opener (German's `„` is the only shipped
+    below: no shipped table pairs an apostrophe-shaped closer alongside a
+    sibling closer for the same opener (German's `„` is the only shipped
     opener with several closers — `“`/`”`/`"` — and none is apostrophe-
-    shaped), so `crossGlyphBound` is never non-null on any shipped table and
-    removing it changes none of the 725,066 corpus paragraphs. It matters
-    once #2286 pairs `‘`/`’` alongside another closer on one opener — the
-    precondition this guard exists for. Reviewer's synthetic case (`quotePairs
+    shaped). `crossGlyphBound` itself IS set on every rejection — `en`
+    rejects on every contraction, so it is routinely non-null on shipped
+    tables — but the GUARD below (`end.at >= crossGlyphBound`) never FIRES on
+    any shipped table: verified by construction, from the precondition above,
+    and by a 1,400,000-string differential fuzz across all seven shipped
+    tables in which the guard fired 0 times with 0 output differences. Do not
+    delete this as dead code — same rationale as `UNSPACED_SCRIPT`'s comment
+    above. It matters once #2286 pairs `‘`/`’` alongside another closer on
+    one opener — the precondition this guard exists for. Reviewer's synthetic
+    case (`quotePairs
     = [['«','’'], ['«','»'], ['“','”']]`, not any shipped table):
     `«He said don’t go. “Stop,” said Tom. Later» he left.` — without
     `crossGlyphBound`, `»`'s un-rejected first occurrence wins `end` past
