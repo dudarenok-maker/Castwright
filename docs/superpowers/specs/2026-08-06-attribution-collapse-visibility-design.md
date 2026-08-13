@@ -105,6 +105,60 @@ the effect."_
 > dismissal key is over the measurement's **outputs**, not the resolver's inputs,
 > and "Not the same character" now counts as an acknowledgement, because
 > otherwise a book whose orphans name nobody is gated forever with no exit.
+>
+> **Revision 8 (2026-08-13) — rebaseline.** The document sat unmerged for a week
+> while its branch fell **559 commits** behind `main`, and the tree moved under
+> it in one specific direction: **#2245 made `isSpokenLine` conventions-driven**,
+> #2253 landed the dialogue-convention invariant, #2289 added `&ndash;` to `es`/
+> `fr` `dialogueOpen`, and #2288 M1 landed quote-delimiter validity in
+> `findQuoteRuns`. Two of revision 7's headline changes are **already in the
+> tree**, and its central measurement idea is now **known to be unsafe**.
+> Revision 8 deletes what shipped elsewhere, moves the denominator from the
+> model's returned text to the **source prose**, and splits the numerator two
+> ways — speech vs. tag, and model-assigned vs. engine-demoted. §Revision 8
+> rebaseline is the normative account; §Review findings round 8 records the
+> adversarial pass on it.
+
+## Revision 8 rebaseline
+
+### What shipped elsewhere while this document sat
+
+| Revision-7 change | Status today | Consequence |
+|---|---|---|
+| **`isSpokenLine` gains `「…」`/`『…』`** (§The CJK denominator defect, part 2) | **Shipped in #2245**, and more broadly than proposed: `isSpokenLine(text, conventions)` (`narrator-default.ts:34`) now reads the same `LanguageConventions` tables the structure engine uses, so CJK, German and every other language's marks come from `lang/*.ts` rather than a hardcoded bundle | The analyzer change is **withdrawn** from this spec. Wave 1 criterion 10 is discharged, not implemented |
+| **`DetectionResult.fallback`** (§Language resolution, step 4) | **Shipped in #2246.** `detect-language.ts:44` declares it; both surrender branches set it — `:81` (`letters === 0`) and `:98` (`franc` miss / no match) — exactly the two-branch semantics R-6N1 specified | The second permitted analyzer change is **withdrawn**. The corroboration design that consumes it stands unchanged |
+| **The German `»…«` gap** (§The gap column, R-5M2 / R-6C4) | **Closed by #2245**, whose own header names it: the old bundle "carried only one of German's four `quotePairs` forms and recognised no CJK quote glyphs at all" | The recorded known limitation is deleted, not carried forward |
+| **`&ndash;` in `es`/`fr` `dialogueOpen`** | **Shipped in #2289.** Both tables read `/^\s*(?:&mdash;\|&ndash;\|[-–—])\s*/iu` | Nothing here depended on it; recorded so a reader does not re-derive it. **#2310 is open and adjacent** — the entity opens dialogue correctly but is still read aloud verbatim. Out of scope |
+
+**So this spec once again changes no analyzer behaviour for the reasons revisions
+4–7 gave.** It acquires exactly one new analyzer change, for a different reason —
+D18.
+
+### The revision-7 claims this rebaseline falsifies
+
+Listed rather than overwritten, because "a stale claim survives into shipped
+prose" has recurred four times in this strand.
+
+| # | Revision-7 claim | Verdict |
+|---|---|---|
+| F1 | *"The denominator is sentences that are dialogue under the book's own language conventions"* — i.e. a predicate over **cached sentence text** | **FALSE AS A DESIGN.** Cached sentence text is the model's returned text, so the model chooses the denominator. Replaying the recorded Aug-6 stage-2 prompt (`handoff/inbox/mns_oyK7Po6BiT-stage2-ch1.md`) byte-for-byte through today's analyzer: **80** dash-opening lines then, **45** today, score 28.8% → 2.2%. Today's model returns the same lines with the leading dash stripped (`- сказал Егор.` → `сказал Егор.`), so 35 correctly-narrated lines silently left the denominator and the metric reported a 26-point recovery that did not happen. Superseded by D14 |
+| F2 | *"`isDialogueLine(text, conventions)` … importing them rather than authoring an eighth definition of 'what is dialogue' is the point"* | **SUPERSEDED.** The eighth-definition problem is solved — by #2245, at the source, not here. `isDialogueLine` **is** `isSpokenLine` now, and this spec must not mint a second name for it |
+| F3 | **`blindSpoken`** — *"conventions say dialogue, `isSpokenLine` does not"*, carried as "the permanent regression signal"; *"104 lines on the live `ja` book and 122 on the live `zh` book"* | **DEAD BY CONSTRUCTION.** The two definitions are now one function, so the column is 0 for every book in every language, forever. It cannot regress and cannot signal. Deleted |
+| F4 | **`overcountSpoken`** — *"`isSpokenLine` says dialogue, conventions do not … the dash class; a substantial minority of books"* | **DEAD BY CONSTRUCTION**, same reason. Its motivating case — "`isSpokenLine` returns true for **any** sentence beginning `-`" — is gone: `en.dialogueOpen` and `de.dialogueOpen` are `null`, so a leading dash is not dialogue in those languages any more |
+| F5 | **`pipelineSpoken`** — *"`isSpokenLine`'s count — the comparand"* | **DEAD.** Identical to the conventions count by construction. Deleted |
+| F6 | *"`applyNarratorDefault`'s guard is a knob AND the table"* (R-7M3), quoted as `const conventions = configValue<boolean>('analyzer.structure.enabled') ? conventionsFor(...) : null; // analysis.ts:2214-2216` | **FALSE TODAY.** #2245 split them deliberately. `analysis.ts:2210` reads `const conventions = conventionsFor(opts.stageCall.language);` **outside** the knob; the branch is `if (configValue<boolean>('analyzer.structure.enabled') && conventions)`. The `else` branch now gets the right per-language rules with the engine off — which is exactly what the #2245 split was for |
+| F7 | Wave 1 criterion 11 — *"`blindSpoken` drops to 0 on both live CJK books once criterion 10 lands, and no other book's value changes"*, with its on-box `isSpokenLine` corpus replay | **UNSATISFIABLE.** The before/after has no "before": #2245 is merged. The owed register row is discharged by #2245's own acceptance, not by this spec |
+| F8 | *"Run `isSpokenLine` over every sentence of all 20 live books before and after, and assert the classification differs on **exactly** the two CJK books"* (R-5Mi1's fix) | **SPENT**, same reason as F7 |
+| F9 | Fixture rows 5 and 6 and their mutation controls (*"denominator reverted to `isSpokenLine`"*; *"denominator reverted **and** part 2 reverted"*) | **INERT.** Reverting the denominator to `isSpokenLine` is now a no-op and there is no "part 2" to revert. Both rows survive as language-coverage fixtures, with new controls — §Testing |
+| F10 | §Out of scope: *"Revision 5 permits exactly two [analyzer changes]"* | **FALSE.** It permits neither of those two; both shipped. It permits one different one (D18) |
+| F11 | *"the run-dependent trigger behind the two historical 97–99% CJK collapses … the follow-up issue's first task is to check what `analyzer.structure.enabled` was set to for those runs"* | **STILL OPEN, LEADING HYPOTHESIS WEAKENED.** Under #2245 the `else` branch is no longer language-blind, so knob-off can no longer produce total attribution loss on a CJK book. The historical collapses predate #2245 and remain unexplained; the follow-up stands, its named first task does not |
+| F13 | *"the stage-2 coverage guard"* was never leaned on explicitly, but the document nowhere says it **cannot** catch this | **GAP, now closed.** Measured on the real data: a run whose dash-opening population **halved** scores `coverageRatio 1.000, ok=true`. See §What the coverage guard cannot catch |
+| F12 | Line citations: `buildCastResolver` `cast-resolve.ts:147`; `collectOrphanedCharacterFallbacks` `segments-io.ts:338`; `handleLinkOrphanMatch` `cast.tsx:583`; `persistDroppedQuotesBatch` `:3568`/`:4209`/`:6208`; `isSpokenLine` `narrator-default.ts:29` and its dash class `:32`; detection surrender branches `detect-language.ts:44`/`:60` | **ALL STALE.** Re-derived 2026-08-13 against `ee79fc7d`: **`:91`**, **`:371`**, **`:755`**, **`:3614`/`:4266`/`:6425`**, **`:34`** (the `:32` dash class no longer exists as a literal), **`:81`/`:98`**. Re-verified as still correct: `analysis.ts:2287`, `:5079`, `:6618`; `registry.ts:1267-1273`; `phase-card.tsx:252`; `narrator-identity.ts:26`; `analysis-state.ts:85`; `analysis-cache.ts:79`; `schemas.ts:135`; `scan.ts:77`; `stage2-coverage`'s `0.6`/`1.6`; `generation-stream-middleware.ts:72`; `library-status-ui.tsx:24`; `start-generation-flow.ts:83`/`:93` |
+
+**Nothing about D9, D11 or the five-state machine is falsified here.** Those turn
+on identity resolution and on `spokenTotal === 0`, neither of which the
+punctuation strand touches. What changes for them is the **unit** the denominator
+counts (D14) — and therefore their calibration, not their design.
 
 ## Problem
 
@@ -164,7 +218,12 @@ analyzer remains untouched.
 | D9 | **The collapse figure counts both members of `NARRATOR_CHARACTER_IDS`. Unresolvable ids are measured and reported alongside it, never summed into it.** Added in revision 2 (R-C2), narrowed in revision 6 (R-6C1). |
 | D10 | **The Cast-view re-run confirms first when rendered audio exists.** |
 | D11 | **"Cast built, nothing attributed" is its own alarm state**, not a quiet one. Added in revision 3 — see R-O1. |
-| D13 | **Id drift is its own state — `drifted` — which badges and gates, and whose notice points at the Cast orphan banner, not at re-analysis.** Added in revision 7 — see R-7C4. |
+| D13 | **Id drift is its own state — `drifted` — which badges and gates, and whose notice points at the Cast orphan banner, not at re-analysis.** Added in revision 7 — see R-7C4. **Re-gated in revision 8: the decision holds, its numbers do not** — see §D13 re-gated. |
+| D14 | **The denominator is the SOURCE PROSE, and the unit is a `speech` span, not a sentence.** The model can no longer move it. Added in revision 8 — supersedes D12. |
+| D15 | **Speech spans and tag spans are reported in separate columns.** Narration is a defect in one and correct in the other. Added in revision 8. |
+| D16 | **The join from source span to model attribution is `alignSentences` — the engine's own normalised substring search — not a text predicate.** Added in revision 8. |
+| D17 | **A speech span with no aligned sentence is reported as `unattributedSpeech`, never as a denominator that quietly shrank.** Added in revision 8. |
+| D18 | **The narrator numerator splits into model-assigned, engine-demoted and unknown.** Requires one new persisted field. Added in revision 8. |
 
 ---
 
@@ -239,64 +298,317 @@ bug and the fix.
 
 New pure module `server/src/store/attribution-health.ts`. No I/O, no model call.
 
-**Universe.** Sentences from the book's analysis cache
-(`cache.chapters: Record<number, SentenceOutput[]>`,
-`server/src/store/analysis-cache.ts:79`), minus chapters marked `excluded` in
-`state.json` (`server/src/workspace/scan.ts:77`) — EPUB back-matter would
-otherwise skew the denominator — and minus sentences flagged
-`excludeFromSynthesis` (`server/src/handoff/schemas.ts:135`).
+**Universe (revision 8).** Two inputs, joined — not one.
 
-**Denominator (D12, revision 4).** Sentences that are dialogue **under the
-book's own language conventions** — not under `isSpokenLine`.
+1. The book's **source prose**: `ChapterHint.body` (`server/src/store/manuscripts.ts:20`
+   — _"Normalised plain text body, with paragraph breaks preserved as `\n\n`"_),
+   for every chapter not marked `excluded` in `state.json`
+   (`server/src/workspace/scan.ts:77`). This is what the denominator is built
+   from, and it is the half the model cannot touch.
+2. The book's **attribution**: sentences from the analysis cache
+   (`cache.chapters: Record<number, SentenceOutput[]>`, `analysis-cache.ts:79`),
+   minus sentences flagged `excludeFromSynthesis` (`schemas.ts:135`). This is
+   what the numerator is built from.
+
+**Revision 7 had only input 2, and that is F1.** A universe of cached sentences
+is a universe the model writes. Excluding a chapter still excludes it from
+**both** halves; `excludeFromSynthesis` now only removes an *attribution*, and a
+speech span whose only sentence is excluded reads as `unattributedSpeech` (D17)
+rather than vanishing — which is the correct answer, because that line is not
+going to be spoken by anyone.
+
+### Denominator (D14) — the source prose, and the unit is a span
+
+**The denominator is the set of `speech` spans that `parseChapterStructure`
+finds in `ch.body`.** Not sentences. Not a predicate over model text.
 
 ```ts
-isDialogueLine(text, conventions)  // conventions.dialogueOpen matches at start,
-                                   // OR a conventions.quotePairs opener starts
-                                   // the line, OR an embedded open…close span
+const conv  = conventionsFor(language)!;            // lang/index.ts:14
+const index = buildNameIndex(roster, conv);         // name-matcher.ts:23
+const paras = parseChapterStructure(ch.body, index); // parser.ts:89
+// ParagraphEvidence[] — each { start, end, kind: 'dialogue' | 'narration',
+//                             spans: SpanEvidence[] }
+// SpanEvidence.kind is 'speech' | 'tag' | 'narration', with absolute
+// offsets into ch.body (types.ts:3-16).
 ```
+
+`spokenTotal` is the count of `speech` spans across those paragraphs.
+`tagTotal` is the count of `tag` spans (D15). Both are properties of the
+**text**, computed before any model output is read at all.
+
+Three things make this the right structure rather than a heavier one:
+
+- **The model cannot move it.** F1's whole mechanism was a punctuation change in
+  the returned text redefining the denominator. There is no returned text in the
+  denominator any more, so a model that strips every dash, adds every dash, or
+  re-punctuates wholesale changes this number by exactly zero.
+- **It is already in the tree, tested, and used in production.** `analysis.ts:2212`
+  calls `parseChapterStructure` on every chapter of every book with the structure
+  engine on. This spec imports it; it does not re-derive "what is dialogue" for
+  the ninth time.
+- **It gives D15 for free and correctly.** The speech/tag split is not a
+  post-hoc heuristic here — the parser cuts a dash paragraph at its own
+  dash-tag toggle points and validates that a tag span carries a
+  `speechVerbStems`/`beatVerbStems` verb (`parser.ts`'s `parseDialogueSpans`).
+  The reconnaissance instrument (`victim-metric-audit.mts`) approximated the
+  same split by the case of the first letter after the dash, which works for
+  Russian and is not a general rule. **Use the parser, not the case heuristic.**
+
+**`spokenTotal` is not the same number revision 7's `spokenTotal` was**, and
+that matters for calibration rather than for design: a dash paragraph
+`— Ничего нет, — сказал Егор.` is **one** dialogue paragraph, **one** speech
+span and **one** tag span, where revision 7 counted **two** dash-opening
+sentences and put both in the denominator. Every threshold in this document is
+therefore uncalibrated against the new unit, and Wave 1's run is what
+re-calibrates it. See §D13 re-gated for the one place that was already
+half-calibrated.
+
+**What this costs: the metric now needs the manuscript body, and revision 7's
+did not.** `ChapterHint.body` lives in the manuscript record, not in the
+analysis cache, so `resolveBookLanguage`'s sibling — the impure caller of Wave 1
+criterion 2 — gains a second read. That is I/O the pure module still never does;
+the bodies are passed in with the sentences. It also means **a book whose
+manuscript record is gone cannot be measured**, which is a new `unmeasurable`
+producer and is specified as one below.
+
+### The join (D16) — align, do not judge
+
+The numerator needs to know which model sentence speaks each source speech span.
+**Join with `alignSentences`, the function the engine already uses**, not with a
+text predicate:
+
+```ts
+const { aligned } = alignSentences(sentences, paras, ch.body);  // aligner.ts:310
+// AlignedSentence { sentence, spans: SpanEvidence[], lumped: boolean }
+```
+
+`alignSentences` normalises both sides — collapsing whitespace, `…`→`...`,
+`&mdash;`→`-`, a run of ASCII hyphens → `-` — and locates each sentence by
+**substring search over the normalised body** (`aligner.ts:174-178`, the
+windowed-then-unbounded `findMatch`). A sentence whose leading dash has been
+stripped is still a substring of its source span; the located span simply starts
+after the dash. **That is criterion 1's dash-insensitive join, and it is already
+written.**
+
+`cross-examine.ts:18` and `:268-269` record why the engine abandoned the
+`isSpokenLine` text heuristic for exactly this: _"the old `isSpokenLine` trap
+this replaces"_, _"replicated here via structural evidence instead of the old
+`isSpokenLine` text heuristic"_. The metric should join the way the aligner
+joins, not the way `isSpokenLine` judges.
+
+**`isSpokenLine` therefore has no role in this metric at all.** It remains the
+right predicate for what it does — deciding whether the analyzer should demote a
+sentence — and it is a **defect surface this metric measures** (D18), not a tool
+it uses.
+
+**A speech span may align to more than one sentence, and to zero.** Both are
+real and both are reported:
+
+- **More than one** — the sentence segmenter split a long turn. The span counts
+  once; its attribution is the resolved id of its aligned sentences when they
+  agree, and `split` when they do not. A `split` span is counted into the
+  denominator and into neither narrator column; the count is reported so it can
+  never quietly become a rounding difference.
+- **Zero** — D17. The span is `unattributedSpeech`.
+
+`AlignedSentence.lumped` (a sentence overlapping both a speech span and a
+tag/narration span) is carried through as its own column too, for the same
+reason: it is a real population that a naive join would silently assign to one
+side.
+
+### Speech halves and tag halves (D15)
+
+A dash-convention paragraph produces two spans that revision 7 counted as two
+dialogue sentences:
+
+```
+- Ничего нет, - сказал Егор.
+    speech span   "Ничего нет,"     ->  a character.  Narration here is a BUG.
+    tag    span   "сказал Егор."    ->  narrator.     Narration here is CORRECT.
+```
+
+Measured over ch1–4 of _Ночной дозор_ (`victim-metric-audit.mts`, 2026-08-13):
+
+| run | speech halves — narration is a BUG | tag halves — narration is CORRECT | a combined figure would read |
+|---|---|---|---|
+| Aug-6 (healthy) | 411/1683 = **24.4%** | 169/232 = 72.8% | 580/1915 = 30.3% |
+| Aug-13 (collapsed) | 1601/1702 = **94.1%** | 185/191 = 96.9% | 1786/1893 = 94.3% |
+
+**Only the speech column is a defect, and the collapsed run scores *better* on
+tag halves than the healthy one.** A combined figure mixes damage with correct
+behaviour, and — since tag halves are ~12% of that denominator — its "correct"
+value is not 0 but some book-specific number nobody can state. That is a
+threshold set against a bar that was never right.
+
+**So the headline share is over speech spans only.** `tagNarratorSpan` is
+reported as a sibling column, because a *low* tag-narration rate is its own
+signal — it means named characters are being credited with the narrator's
+attribution verbs — but nothing badges on it in Wave 2 and Wave 1 sets no
+threshold for it.
+
+These figures are from cached sentences under the old unit, so they are
+**motivating evidence, not calibration.** Wave 1's run over source spans is the
+calibration, and the two numbers will not match.
+
+### What the coverage guard cannot catch (F13)
+
+`validateStage2Coverage` (`stage2-coverage.ts:164`,
+`minCoverageRatio: 0.6` / `maxCoverageRatio: 1.6`) compares **word counts**.
+Run against the real data:
+
+```
+recorded Aug-6 response   258 sents,  80 dash | coverageRatio 1.001 | ok=true
+replay today (arm A)      234 sents,  45 dash | coverageRatio 1.000 | ok=true
+replay today (arm B)      238 sents,  49 dash | coverageRatio 1.000 | ok=true
+```
+
+A run whose dash-opening population **halved** scores 1.000 and passes clean.
+That is correct on its own terms — no words went missing — and it is why the
+guard is structurally incapable of seeing a change in how dialogue is punctuated
+or attributed. **It is a truncation/loop detector. It cannot be the thing that
+catches attribution collapse, and no part of this spec may lean on it.**
+Recorded here because the absence of such a statement is what let three
+revisions treat coverage as ambient safety.
+
+### Omission is latent, not observed (D17)
+
+Worth recording precisely, and worth *not* overstating. A chapter's sentences
+are **only** what stage-2 returned:
+
+- `analysis.ts:5079` — `if (arr) allSentences.push(...arr);` stitches the
+  per-chapter results. There is no independent segmentation of `ch.body` and no
+  fill for anything absent. Same shape at `analysis.ts:6618` in
+  `runSubsetAnalyzerJob`.
+- `recover-tagged-lines.ts:130` — `recoverTaggedNarratorLines` does
+  `const out = sentences.map((s) => ({ ...s }));`. It only *flips* ids; it
+  cannot re-add a sentence.
+
+So a genuinely omitted sentence does not become narrated — it leaves the book,
+and no user-facing surface says so. **Measured: this did not happen in either
+real run.** Word-multiset survival against the EPUB was 99.4–100% per chapter for
+both Aug-6 and Aug-13 (`prose-loss.mts`); the dash-stripping in F1 preserves
+every word, which is why coverage stays clean.
+
+**This is exactly why the denominator must be source-anchored even though the
+observed failure was punctuation.** Under a cached-sentence denominator an
+omission is invisible by construction: the line is not in the numerator and not
+in the denominator, and the share is unchanged. Under D14 the source speech span
+exists whether or not a sentence came back for it, so an omission surfaces as
+`unattributedSpeech` — the one column that can distinguish "the model got this
+wrong" from "the model never answered". That is acceptance criterion 4, and it
+is a property of the design rather than a test bolted onto it.
+
+### Model-assigned vs. engine-demoted narrator (D18)
+
+**A `characterId` of `narrator` has two producers with different fixes, and they
+are indistinguishable in the final value.** Making collapse *actionable* — which
+is what #1984 exists for — means saying which one produced it. A figure that
+shows collapse without saying which tells the user something is wrong and
+nothing about what to do.
+
+**The demotion path is live and it is reachable.** `isSpokenLine` judges the
+model's returned text (`narrator-default.ts:34`; both callers pass `s.text`, at
+`:62` and `:84`), and `applyNarratorDefault` (`analysis.ts:2287`) forces every
+non-spoken sentence to `narrator`. For a dash-convention book a returned line
+whose leading dash has been stripped matches no `dialogueOpen`, starts with no
+`quotePairs` opener and contains no embedded pair — so `isSpokenLine` returns
+false and the line is demoted, **including a speech half, where narration is the
+defect.** The same model behaviour that fooled the metric can, on this path,
+manufacture the collapse the metric is being built to detect.
+
+**Two bounds, stated plainly rather than borrowed as urgency:**
+
+- **This is the opt-out path, not the default.** `analyzer.structure.enabled`
+  defaults `true` (`registry.ts:1267-1273`) and the `applyNarratorDefault` call
+  is the **`else`** of that branch (`analysis.ts:2210`/`:2280`/`:2287`). With the
+  engine on, this code does not run.
+- **It is NOT offered as #2306's cause.** #2306 places its cause upstream of the
+  dialogue-structure engine — a different mechanism. Nothing here competes with
+  that finding. (#2306's own step-1 conclusion is that the 2026-08-11 Ollama
+  upgrade flipped stage-1 to Latin-transliterated names for a Cyrillic book; the
+  dash-stripping documented here is a *second*, independent model-version
+  change observed in the same replay.)
+
+**The engine-on path has its own reassigning step**, and the spec must not
+pretend otherwise: `crossExamine` (`analysis.ts:2217`) corrects attributions
+against structural evidence, and a `corrected` decision can land on `narrator`
+too. That is a *better-evidenced* reassignment than `applyNarratorDefault`'s,
+but it is still not the model's answer, and a user debugging a collapsed book
+needs to know which of the three they are looking at.
+
+**So the measurement carries three narrator populations, never one:**
+
+| Column | Meaning | What the user does about it |
+|---|---|---|
+| `modelNarrator` | stage-2 returned `narrator` (or a narrator alias) for this span | a prompt/model problem — re-run analysis, or the book genuinely narrates here |
+| `demotedNarrator` | stage-2 returned a character; a post-stage-2 step overwrote it with `narrator` | an analyzer problem — `isSpokenLine` or `crossExamine` acting on text it read wrongly. Re-running analysis reproduces it |
+| `unknownOriginNarrator` | the sentence predates the record | **not** foldable into either. See below |
+
+**This needs one new persisted field, and that is the only analyzer change
+revision 8 permits.** The origin is knowable only at the moment of overwrite;
+`analysis.ts:2287` runs after stage-2, so the pre-demotion assignment is
+available *there* and nowhere afterwards. `SentenceOutput` gains an optional
+`priorCharacterId?: string`, written at exactly the two sites that overwrite an
+attribution — `applyNarratorDefault`'s demotion branch and `crossExamine`'s
+correction branch — and absent on every sentence neither touched.
+
+- **Optional, additive, and absent by default**, so no existing reader changes
+  and no cache migration is needed.
+- **`openapi.yaml` is edited first**, then `npm run openapi:types` — it is the
+  type source of truth (`schemas.ts:117-142` mirrors it).
+- **Every cache written before this field exists reads
+  `unknownOriginNarrator`, and that value must be visibly distinct from
+  `modelNarrator`.** Folding an absent field into "the model said so" is the
+  metric-blind-to-its-own-blind-spot trap this document has hit in four
+  different forms; the honest answer for an old cache is "I don't know", and it
+  clears itself on the next analysis rather than needing a backfill.
+
+**This is the one place revision 8 knowingly adds surface**, and the alternative
+was considered and rejected: deriving the split at measure time by re-running
+`isSpokenLine` over the cached text. That derivation is wrong in both directions
+— it cannot see a `crossExamine` correction at all, and it cannot distinguish
+"the model said `narrator` and the line is not spoken" from "the model said
+Егор and got demoted", which is the entire distinction being drawn. **Deriving
+it would rebuild the metric out of the model's returned text, which is F1.**
 
 `LanguageConventions` and `conventionsFor` come from
 `server/src/analyzer/dialogue-structure/lang/index.ts:14` — seven tested tables
 (`ru`, `en`, `es`, `fr`, `de`, `zh`, `ja`) already carrying exactly the
-open/close pairs and paragraph-dash markers this needs. Importing them rather
-than authoring an eighth definition of "what is dialogue" is the point.
+open/close pairs and paragraph-dash markers `parseChapterStructure` consumes.
+`buildNameIndex` (`name-matcher.ts:23`) wraps a table with the book's roster and
+is what the parser actually takes.
 
-**Revision 3 mandated reusing `isSpokenLine` verbatim, on the reasoning that
-measuring anything else would report a number the analyzer does not act on.
-That reasoning is what produced the CJK defect** (§The CJK denominator defect):
-a detector that shares its subject's definition of dialogue can only ever report
-collapse its subject is capable of seeing. Where the analyzer's view is wrong,
-the metric must be able to say so — that is the whole thesis of #1984.
+> **Superseded — D12's framing, revisions 4–7 (F2, F3, F4, F5).** This section
+> used to argue at length that the metric must use "the language's conventions"
+> rather than `isSpokenLine`, and carried three columns (`pipelineSpoken`,
+> `blindSpoken`, `overcountSpoken`) measuring the gap between the two. **#2245
+> merged them: `isSpokenLine` now reads these same tables.** The gap is
+> identically zero, in every language, forever, so all three columns are deleted
+> — a column that cannot vary cannot signal.
+>
+> The reasoning that produced them survives and is worth keeping: *a detector
+> that shares its subject's definition of dialogue can only ever report collapse
+> its subject is capable of seeing.* Revision 8 satisfies it a level deeper than
+> revision 4 did. The analyzer's blind spot is no longer *which marks* it
+> recognises — it is *which text* it reads. `isSpokenLine` judges the model's
+> output; D14's denominator reads the source. That independence is what F1
+> proves is necessary and what D12 never had: revision 4 replaced one predicate
+> over model text with another predicate over the same model text, and both
+> would have reported F1's phantom 26-point recovery identically.
 
-Reconnaissance over the 20 live books found the two denominators agreeing
-**exactly (Δ 0.0) on every Russian, Spanish, French and German book**, and
-diverging in two places, both of them the point: CJK, where `isSpokenLine`
-counts nothing at all; and English, where `isSpokenLine` counts any leading dash
-as dialogue but `en.dialogueOpen` is `null`.
-
-**Every share figure previously quoted here has been deleted, and this is a
-finding, not tidying** (R-6C3). Revisions 4 and 5 each stated how far the
-denominator change moves individual books — "±0.2 points on every large book",
-then "13.6% → 14.6% on _Unlocked_". Both were wrong, and the second was wrong in
-*direction*: the pair it quoted was not two denominators at all, it was one
-denominator computed with and without the excluded-chapter filter §Universe
-mandates. The change on that book is a **drop**, not a rise, because the 58
-dash-only lines leave the denominator.
-
-The honest statement this document can make without re-deriving anything is
-structural: **the two columns are not interchangeable at the margin, so the
-threshold is set from the D12 column.** Whether any book sits near a plausible
-boundary is a question for Wave 1's script, which computes it from the real
-modules. Asserting it here is what has gone wrong three times.
-
-**Language resolution.** The denominator now depends on knowing the language, so
+**Language resolution.** The denominator depends on knowing the language, so
 resolution is its own tested function with an explicit chain:
 
 1. `state.json`'s `language` field **read raw**, when present;
 2. otherwise `detectManuscriptLanguage(sample)`
-   (`server/src/tts/detect-language.ts:25` — pure, synchronous, script pre-pass
-   for Cyrillic/CJK plus `franc` for the Latin set) over the cached sentence
-   text, sampling its own `SAMPLE_CHARS` (20,000);
+   (`server/src/tts/detect-language.ts` — pure, synchronous, script pre-pass
+   for Cyrillic/CJK plus `franc` for the Latin set, restricted to the registry's
+   Latin codes at `:94`) over the **source prose**, sampling its own
+   `SAMPLE_CHARS` (`:23`, 20,000). **Revision 8 changes the input here** from
+   cached sentence text to `ch.body`, for D14's reason and for a second one:
+   `selectBodyChapters` (`:105`, added by #2263) drops front/back matter from
+   the voting pool, and it keys on `{ title, body }` — which the cache does not
+   carry. Use it;
 3. **corroboration**, on the `missing` path only — see below;
 4. detection **surrendering rather than matching** ⇒ `unmeasurable`;
 5. `conventionsFor()` returning `null` ⇒ `unmeasurable`.
@@ -386,32 +698,36 @@ Three further properties make this the right shape rather than a wider one:
   precedence machinery below would be decoration — the exact charge revision 5
   levelled at revision 4.
 
-**Step 4 still needs the additive analyzer change, and its definition was too
-narrow** (R-6N1). `detectManuscriptLanguage` ends
-`return match ? result(match.code) : result('en')` (`detect-language.ts:60`) —
-an unmatched manuscript is answered `'en'`, and because English *is* a supported
-registry language the existing `supported` flag is `true` on that path.
-**`supported` cannot distinguish a decision from a surrender.** So:
+**Step 4's analyzer change already shipped — #2246 (revision 8).** Revisions 5–7
+specified `DetectionResult.fallback` as an additive change this spec would make.
+It is in the tree, and its semantics are exactly what R-6N1 required.
+`detect-language.ts:44` declares it, with a docstring that states the reasoning
+independently: _"`supported` cannot distinguish these cases because 'en' is
+itself `supported: true`; callers that must 'never write a language they only
+guessed' (#2246) need this field, not `supported`."_
 
 ```ts
+// detect-language.ts:30-45, as shipped
 interface DetectionResult {
   language: string;
-  supported: boolean;
-  fallback: boolean;   // true on EVERY surrender branch, not just one
+  supported: boolean;   // registry `supported` — TRUE on the surrender path too
+  fallback: boolean;    // true on EVERY surrender branch
 }
 ```
 
-There are **two** surrender branches, and revision 5 named only the second:
+**Both surrender branches set it**, verified 2026-08-13:
 
 | Line | Branch | Meaning |
 |---|---|---|
-| `detect-language.ts:44` | `if (letters === 0) return result('en')` | the sample has no letters at all — no evidence whatsoever |
-| `detect-language.ts:60` | `: result('en')` | `franc` returned `und`, or matched nothing in the Latin registry |
+| `detect-language.ts:81` | `if (letters === 0) return resultFor('en', true)` | the sample has no letters at all — no evidence whatsoever |
+| `detect-language.ts:98` | `return match ? resultFor(match.code, false) : resultFor('en', true)` | `franc` returned `und`, or matched nothing in the Latin registry |
 
-Both must set `fallback: true`. Revision 5's "true ONLY on the `: result('en')`
-branch" would have left a book of pure punctuation, numerals or unhandled script
-answering `en` with `fallback: false` — confidently, from zero evidence. The
-change is additive and no existing caller reads the field.
+So this spec **consumes** the field and changes nothing. Revision 5's "true ONLY
+on the `: result('en')` branch" would have left a book of pure punctuation,
+numerals or unhandled script answering `en` with `fallback: false` —
+confidently, from zero evidence; the shipped implementation does not have that
+hole, and the fixture rows that prove it (rows 7 and 8 below) are still owed
+**here**, because nothing in #2246 tests the *corroboration* consumer.
 
 The measurement carries `languageSource: 'declared' | 'detected' | 'unknown'`.
 `'unknown'` is a real value with real producers — a surrender at step 4, or a
@@ -425,13 +741,15 @@ lands in `unmeasurable` this way is *reported*, not repaired — the fix is for
 the user to re-import it under a language the product supports, or for the
 registry to gain that language, and neither is this spec's to do.
 
-**Numerator (D9, narrowed in revision 6).** Of those, sentences **whose resolved
-`characterId` is a member of `NARRATOR_CHARACTER_IDS`**
+**Numerator (D9, narrowed in revision 6; re-based on spans in revision 8).**
+Of the source **speech spans**, those whose aligned sentence's resolved
+`characterId` is a member of `NARRATOR_CHARACTER_IDS`
 (`server/src/analyzer/narrator-identity.ts:26` — `['narrator', 'char-narrator']`,
 centralised in #1895 precisely because it had been inline-copied across server
-modules). Nothing else.
+modules). Nothing else. **The unit changed from a sentence to a span; the rule
+did not.** D18 then splits this count three ways by origin.
 
-Resolution goes through `buildCastResolver` (`server/src/store/cast-resolve.ts:147`)
+Resolution goes through `buildCastResolver` (`server/src/store/cast-resolve.ts:91`)
 per the CLAUDE.md rule that an analyzer `characterId` is only an alias into
 `cast.json`. That is what makes a **drifted-but-recorded** id resolve correctly
 instead of counting as damage.
@@ -564,32 +882,80 @@ that have it.
 
 **Shape (Wave 1):**
 
+**Every count below is a count of SOURCE SPANS** (D14), not of model sentences.
+That is the one sentence an implementer must carry into every field.
+
 ```ts
 interface AttributionMeasurement {
   language: string | null;       // resolved BCP-47 primary subtag; null iff 'unknown'
   languageSource: 'declared' | 'detected' | 'unknown';
-  spokenTotal: number;           // isDialogueLine under the book's conventions
-  pipelineSpoken: number;        // isSpokenLine's count — the comparand
-  blindSpoken: number;           // conventions say dialogue, isSpokenLine does not
-  overcountSpoken: number;       // isSpokenLine says dialogue, conventions do not
-  narratorIdSpoken: number;      // resolved to a NARRATOR_CHARACTER_IDS member
-                                 // — THE numerator
+
+  // ---- denominator: parsed from ch.body, independent of the model (D14) ----
+  spokenTotal: number;           // `speech` spans in dialogue paragraphs
+  tagTotal: number;              // `tag` spans — the D15 sibling column
+
+  // ---- how much of the denominator the model actually answered (D17) ----
+  unattributedSpeech: number;    // speech spans NO aligned sentence covers.
+                                 // The omission signal. NEVER a silent shrink.
+  splitSpeech: number;           // >1 aligned sentence, disagreeing ids
+  lumpedSpeech: number;          // aligned sentence straddles speech + tag/narration
+
+  // ---- numerator, split by origin (D18) ----
+  narratorIdSpoken: number;      // speech spans resolving to NARRATOR_CHARACTER_IDS
+                                 // — THE numerator. = the three below, summed.
+  modelNarrator: number;         // stage-2 returned narrator
+  demotedNarrator: number;       // stage-2 returned a character; a post-stage-2
+                                 // step overwrote it (priorCharacterId present)
+  unknownOriginNarrator: number; // cache predates priorCharacterId. NOT foldable
+                                 // into modelNarrator — see D18.
+
+  // ---- id drift (D9/D13), unchanged in rule, re-based on spans ----
   orphanSpoken: number;          // unresolvable id; reported, NEVER summed in (D9)
   orphanIds: string[];           // the distinct unresolvable ids, for the drift surface
-  attributableSpoken: number;    // spokenTotal - orphanSpoken — the DENOMINATOR
-                                 // of the share; see D9. Not the same as spokenTotal.
+  attributableSpoken: number;    // spokenTotal - orphanSpoken - unattributedSpeech
+                                 // - splitSpeech — the DENOMINATOR of the share.
+                                 // NOT the same as spokenTotal; see below.
+
+  // ---- sibling signals ----
+  tagNarratorSpan: number;       // tag spans attributed to narrator — SHOULD be
+                                 // near tagTotal. Reported, never alarmed on (D15)
   dashOnlySpoken: number;        // diagnostic — see below
-  quietCastCount: number;        // non-narrator cast members with < 2 spoken lines
+  quietCastCount: number;        // non-narrator cast members with < 2 spoken spans
   castCount: number;             // non-narrator cast members, from cast.json
+
   chapters: {
     chapterId: number;
     spokenTotal: number;
     attributableSpoken: number;
     narratorIdSpoken: number;
+    unattributedSpeech: number;
     orphanSpoken: number;
   }[];
 }
 ```
+
+**`unattributedSpeech` and `splitSpeech` leave `attributableSpoken` for the same
+reason orphans do, and leaving them in would reopen D9's hole one level down.**
+A span nobody attributed cannot be evidence that the narrator took it, and a
+span whose sentences disagree cannot be evidence either way. Counting them in
+the denominator would make a book whose stage-2 output went missing wholesale
+read *healthier* the more it lost — which is #1984's own failure shape, for the
+fourth time in this document. Counting them in the numerator would be worse: it
+would report an omission as a collapse and send the user to a re-analysis for a
+defect a re-analysis will not name.
+
+**They are therefore mandatory columns, exactly as `orphanSpoken` is**, and the
+share is `null` when `attributableSpoken` falls under `MIN_SPOKEN_FOR_VERDICT`.
+A book whose speech spans are mostly unattributed has a metric that has nothing
+to say about it, and saying so is the honest output.
+
+**`unknownOriginNarrator` is not `modelNarrator`, and this is the D18 trap.**
+Every cache written before `priorCharacterId` exists lands entirely in this
+column. An implementation that defaults an absent field to "the model said so"
+reports 100% model-assigned on every historical book — confidently, from no
+evidence — which is the same shape as `supported` being unable to distinguish a
+decision from a surrender (R-5C3). The column is separate, it is displayed, and
+it clears itself on the next analysis.
 
 **There is deliberately no `narratorSpoken` field.** Revision 5 had one, defined
 as `narratorIdSpoken + orphanSpoken`, and it is what let the measurement backing
@@ -626,205 +992,104 @@ There is no `languageCorroborated` field. It appears in §Failure modes' step 4
 as a *branch*, computed and discarded there; putting it on
 `AttributionMeasurement` would push I/O into the pure module, which is R-6M1.
 
-**`dashOnlySpoken` is the calibration diagnostic.** `isSpokenLine` returns true
-for **any** sentence beginning `-`, `–`, `—`, `&mdash;` or `&ndash;`
-(`narrator-default.ts:32`), not only for quote marks. In a Russian or French
-novel — or any EPUB whose conversion prefixes continuation lines with a dash —
-narration asides land in **both** numerator and denominator and inflate the
-share. Counting how much of each book's denominator is dash-only, with no quote
-mark present, is what tells us whether 40% is a sane line or a trap. The second
-known-damaged book is Russian, where the em-dash is both the dialogue mark and
-ordinary punctuation.
+**`dashOnlySpoken` is the calibration diagnostic, and revision 8 narrows both
+its definition and its claim.** Revision 4 justified it by `isSpokenLine`'s
+language-blind dash rule at `narrator-default.ts:32` — **that literal is gone**
+(F4/F12): a leading dash is dialogue only where the language's own
+`dialogueOpen` says so, i.e. in `ru`, `es` and `fr`, and never in `en`, `de`,
+`zh` or `ja`.
 
-**`dashOnlySpoken` survives revision 4.** `ru.dialogueOpen` matches dashes too,
-so Russian denominators carry the same dash-inflation under the conventions
-denominator as under `isSpokenLine` — the diagnostic is still what tells us
-whether a threshold is sane on the language that most stresses it.
+What survives is the real hazard, and it is narrower and still live: **in a
+dash-convention language the paragraph-opening dash is also ordinary
+punctuation.** An EPUB whose conversion prefixes continuation lines with a dash,
+or a Russian novel using the em-dash as an ordinary aside marker, produces
+paragraphs `parseChapterStructure` reads as dialogue when they are narration.
+Those become `speech` spans, land in the denominator, are correctly attributed to
+`narrator`, and inflate the share.
 
-## The CJK denominator defect
+`dashOnlySpoken` counts the speech spans in dash-opened paragraphs that carry no
+quote mark at all. **It is the column that tells us whether any given threshold
+is a sane line or a trap on the language that most stresses it** — which is
+Russian, and is both known-damaged books' language.
 
-Found 2026-08-09 by measuring the live corpus. `isSpokenLine`
-(`server/src/analyzer/narrator-default.ts:29`) tests these openers: dash entities
-and literal dashes, then `[«„"“‘']`, then embedded `«»` / `„“` / `""` / `“”` /
-`‘’` / word-anchored straight-single. **It contains no CJK corner brackets.** A
-Chinese or Japanese dialogue line — `「别管。」`, `「放っておけ」と、…` — returns
-`false`.
+**D14 does not remove this false positive; it moves it.** Under revision 7 a
+dash-prefixed narration line was one dialogue sentence in the denominator; under
+D14 it is one speech span in the denominator. The magnitude is the thing that
+changed, and nobody has measured it. That is Wave 1's job, and the threshold is
+still calibrated against this column.
 
-Seven CJK **caches** carry 28–122 bracket-quoted dialogue lines each and **every
-one scores `spokenTotal: 0`.** Of those seven, **two have live books** — the
-`ja` and `zh` Coalfall translations, with 104 and 122 dialogue lines and casts of
-10 and 9. The other five are orphan caches whose books have been deleted
-(R-5C1). The branch `feat/server-fs59-cjk-w5` does not fix this; its copy of the
-file is byte-identical to `main`'s.
+## The CJK denominator defect — DISCHARGED by #2245
 
-**Why that breaks revision 3.** A healthy, fully-analysed CJK book satisfies all
-three clauses of `missing`:
+**Revision 8: this whole section is history.** It is retained in outline because
+its reasoning is the reason D14 exists, and because deleting it would lose the
+record of a defect this document found and did not itself fix.
 
-| Clause | CJK reality |
+**What it was.** Revision 4 found, by measuring the live corpus 2026-08-09, that
+`isSpokenLine` carried a hardcoded opener bundle with **no CJK corner brackets**.
+A Chinese or Japanese dialogue line — `「别管。」`, `「放っておけ」と、…` — returned
+`false`. Seven CJK caches carried 28–122 bracket-quoted dialogue lines each and
+every one scored `spokenTotal: 0`; of those seven, two had live books (the `ja`
+and `zh` Coalfall translations, 104 and 122 dialogue lines, casts of 10 and 9),
+and the other five were orphan caches whose books had been deleted (R-5C1).
+
+**Why it mattered.** A healthy CJK book satisfied all three clauses of `missing`
+— a real cast, `spokenTotal === 0`, and a completed run's deleted snapshot — so
+the fix for #1984 would have **badged every Chinese and Japanese book as damaged
+and blocked its generation.** The mirror of R-O1: that finding was a damaged book
+reading as healthy, this was a healthy book reading as damaged, and both came
+from a denominator that could not see the dialogue it was counting.
+
+**Who fixed it.** #2245, merged into `main` while this document sat on its
+branch. `isSpokenLine(text, conventions)` now reads the same `LanguageConventions`
+tables the structure engine uses, so `zh`/`ja` corner brackets, all four German
+`quotePairs` forms, and every other language's marks come from `lang/*.ts`. The
+file's own header states the motive in the same terms this section used: _"the
+old bundle carried only one of German's four `quotePairs` forms and recognised no
+CJK quote glyphs at all."_
+
+**What that discharges, and what it does not.**
+
+| Revision-7 item | Status |
 |---|---|
-| `castCount > 0` | casts of 10 and 9 on the two live books, measured |
-| `spokenTotal === 0` | lexical blindness, not damage |
-| `readAnalysisState() === null` | `deleteAnalysisState` fires on terminal success of a main run (`server/src/routes/analysis.ts:2743`) |
+| Part 1 — language-aware denominator (D12) | **Superseded by D14**, which goes further: source-anchored, not merely conventions-aware. See F1/F2 |
+| Part 2 — `isSpokenLine` gains `「」`/`『』` | **Shipped in #2245.** Withdrawn from this spec |
+| The German `»…«` gap and its three-of-four table (R-5M2, R-6C4) | **Closed by #2245.** Deleted as a known limitation |
+| `blindSpoken` / `overcountSpoken` / `pipelineSpoken` | **Deleted.** F3/F4/F5 — the two definitions are one function, so the gap is identically zero forever |
+| Wave 1 criteria 10 and 11, the corpus replay, fixture-row mutation controls | **Discharged / respecified.** F7/F8/F9 |
+| The two historical 97–99% CJK collapses | **STILL UNEXPLAINED.** Both predate #2245; their books are deleted, so no live evidence remains. The follow-up issue stands |
 
-So the fix for #1984 would **badge every Chinese and Japanese book as damaged and
-block its generation**. Revision 3 argues (§Failure modes) that `castCount` is
-what separates a damaged book from legitimate pure narration. CJK defeats that
-argument: a real cast *and* a zero spoken count, for a reason that has nothing to
-do with the book.
+**The leading hypothesis for those two collapses is weaker than revision 7 said,
+and this is F11.** R-7M3 named `analyzer.structure.enabled` — a user-settable
+boolean defaulting `true` (`registry.ts:1267-1273`) — as a run-dependent
+explanation: with the engine off, the `else` branch ran `applyNarratorDefault`,
+which for a CJK book demoted *all* of its dialogue. **#2245 removed that
+consequence.** The knob still selects the branch, but `analysis.ts:2210` now
+resolves `conventions` outside the knob, so the `else` branch reads CJK dialogue
+correctly and demotes nothing. Knob-off can no longer produce total attribution
+loss on a CJK book, so it can no longer be the mechanism — for a run *today*.
+Whether it was the mechanism in 2026-07 is unfalsifiable now that the books are
+gone. The follow-up issue keeps its subject and loses its named first task.
 
-**The fix is two-part.**
+**One claim from this section survives intact and is load-bearing for D14.**
+A detector that shares its subject's definition of dialogue can only ever report
+collapse its subject is capable of seeing. #2245 fixed the *marks*; it did not
+fix the *text*. `isSpokenLine` still judges what the model returned, which is
+precisely the blindness F1 measures. D14 is that argument applied one level
+deeper, and the fact that revision 4's version of it was closed by someone else's
+PR is not evidence the argument was wrong — it is evidence it was too shallow.
 
-1. **The denominator becomes language-aware** (D12 above), so `zh`/`ja` resolve
-   against their own `quotePairs` and the count is never zero for a book with
-   dialogue.
-2. **`isSpokenLine` gains the CJK pair at the source** — `「` and `『` join the
-   opener class, and `「…」` / `『…』` join the embedded-span alternatives.
-
-Part 2 is in scope because the blindness is not only a measurement problem.
-`server/src/routes/analysis.ts:2281` runs `applyNarratorDefault` — which demotes
-every line `isSpokenLine` rejects, i.e. for a CJK book all of its dialogue —
-whenever the structure engine does not take the branch above it. **That guard is
-not "the conventions table is null"; it is a knob AND the table** (R-7M3):
-
-```ts
-const conventions = configValue<boolean>('analyzer.structure.enabled')
-  ? conventionsFor(opts.stageCall.language)
-  : null;                                   // analysis.ts:2214-2216
-```
-
-Revisions 4 through 6 all stated this as `conventionsFor(language) === null` and
-built an argument on it — that `zh`/`ja` have tables, so the branch should have
-been unreachable, so "nobody knows why it was reached." **With the knob in view
-there is an obvious candidate.** `analyzer.structure.enabled`
-(`registry.ts:1267`, env `STRUCTURE_ENGINE`) defaults `true` but is a
-user-settable boolean, so a run with it off takes the `else` branch **for every
-language**, table or no table, and produces exactly the observed shape: total
-attribution loss on a book whose only defence is `isSpokenLine`, on some runs and
-not others, with a clean sibling book minutes later.
-
-**Be precise about the evidence for this, because revision 4 was not** (R-5C1).
-The two caches observed at **99.2%** and **97.8%** narrator share are **orphans
-whose books no longer exist in the workspace.** The damage was real and the
-mechanism is real, but it is **historical**: the two CJK books that do exist both
-went through the structure-engine branch and are healthy.
-
-So part 2 is **defence in depth against an undiagnosed trigger**, not a repair of
-present damage — and the spec says so rather than borrowing urgency it no longer
-has. The justification that survives is: `zh`/`ja` have convention tables, so
-that `null` branch should never have been reached for those books, and **nobody
-knows why it was.** Until that is understood the same path can be reached again,
-and when it is, `isSpokenLine` is the last thing standing between a CJK book and
-total attribution loss. The change is small, its blast radius is provably
-CJK-only, and the alternative is leaving a known-blind guard in front of an
-unknown trigger.
-
-**Blast radius is confined to CJK.** `「』` and their partners do not occur in
-Latin or Cyrillic text, so no existing `en`/`ru`/`es`/`fr`/`de` book can change
-attribution — confirmed by counting them: zero `「` or `『` in any non-CJK cache.
-**The fix is also not retroactive to stored attributions:** the metric
-recomputes over cached sentence *text*, so denominators correct immediately even
-for old caches, but a collapsed book keeps its stored `characterId`s until
-re-analysed. (Revision 5 added "Wave 1 will correctly report them at ~99%" — of
-the two *deleted* books, which Wave 1 will not report at all, because the script
-walks the library. Deleted with the rest of the pre-computed numbers.)
-
-**What produced those two collapses is still not this spec's to fix, but it now
-has a named leading hypothesis.** `zh` and `ja` both have convention tables
-(landed `a2f507d1`, 2026-07-13 16:03), and both collapses post-date that commit
-with a clean sibling book 21 minutes later — run-dependent, exactly as a **knob**
-would be. Revision 6 guessed "a language that never reached `stageCall`";
-`analyzer.structure.enabled` is a simpler, in-tree, run-dependent explanation
-that requires nothing unknown. It is **not proven** — nobody has checked what the
-knob was set to for those runs — and proving it is the follow-up issue's job.
-
-**`blindSpoken` is not the evidence for it, and revision 6 wrongly deputised it**
-(R-7M3). `blindSpoken` compares two *lexical* verdicts over the same text —
-"conventions say dialogue, `isSpokenLine` does not". Turning the structure engine
-off changes which `characterId` a sentence ends up with and **changes no sentence
-text at all**, so `blindSpoken` is identical either way. Worse, after part 2 it
-reads 0 on CJK by design. A column that is invariant under the mechanism cannot
-be that mechanism's regression signal; §Out of scope is corrected accordingly.
-What `blindSpoken` *does* catch is its own class — the analyzer's definition of
-dialogue drifting from the language's — which is why it is still worth carrying.
-
-### The gap column
-
-The two definitions disagree in **both** directions, and a signed difference
-would net them into one number that hides each. They are counted separately:
-
-| Field | Meaning | Expected |
-|---|---|---|
-| `blindSpoken` | conventions say dialogue, `isSpokenLine` does not | **0 on today's corpus** after part 2 — but not a universal invariant; see the German gap |
-| `overcountSpoken` | `isSpokenLine` says dialogue, conventions do not | **non-zero and fine** — the dash class; a substantial minority of books |
-
-**`blindSpoken` is the regression signal.** It is what CJK produced — **104
-lines on the live `ja` book and 122 on the live `zh` book**, invisible to
-`isSpokenLine` — and after part 2 both must read 0, with no other row moving.
-Those two figures are **the only per-book numbers this document still states**,
-because they are the only ones two independent adversarial reviews re-derived
-and agreed on; everything else is Wave 1's script's to print (R-6C3).
-That is what makes it worth carrying permanently rather than deleting once CJK
-is closed: **a newly non-zero value means the analyzer's definition of dialogue
-has drifted from the language's again**, which is the failure class that
-produced this entire revision.
-
-**It is not a universal invariant, and revision 4 wrongly made it one**
-(R-5M2). German is the counter-example, and **the gap is three times wider than
-revision 5 said** (R-6C4). All four `de.quotePairs` forms, run through
-`isSpokenLine` on 2026-08-11 in both positions:
-
-| Form | Leading — `»Lass das.«` | Embedded — `Er sagte »Lass das.« und ging.` |
-|---|---|---|
-| `„…“` | spoken | spoken |
-| `„…”` | spoken | **missed** |
-| `„…"` | spoken | **missed** |
-| `»…«` | **missed** | **missed** |
-
-Only `„…“` is caught in both positions. The opener class carries `„` but not
-`»`, so three of four are caught when the turn starts the sentence; the embedded
-alternatives carry only `„[^“]+“` for German, so three of four are missed when
-narration comes first. **This matters more than the count suggests**, because
-`de.ts:7-9` says the ASCII `"` and the `”` glyph are what "real-world
-manuscripts (incl. our translated demo books) **routinely**" use — so the two
-forms that fail in embedded position are the common ones, not exotica.
-
-**Revision 5 asserted "only `»…«` is missed, in both leading and embedded
-position", explicitly overruling the round-4 reviewer who had said four forms
-were affected.** The overrule was wrong and the reviewer was closer to right.
-The measurement above is the correction, and §Out of scope and Wave 2 criterion
-10 are widened to match — both previously named one form of three.
-
-`blindSpoken` reads 0 on today's German book only because _Der Auftrag von
-Coalfall_ opens every line with `„` at position 0. The next German import in any
-other form would alarm permanently on a gap this spec declines to fix.
-
-So the criterion is **"0 for the languages `isSpokenLine` covers, and any
-*change* from the recorded per-language baseline is a finding"** — not "0
-everywhere". The German gap is recorded as a known limitation below rather than
-silently treated as a defect on every run.
-
-**`overcountSpoken` is not a defect and must not be alarmed on.** It is the
-leading-dash rule counting narration as dialogue in languages whose
-`dialogueOpen` is `null`, and reconnaissance found it non-zero on half the
-corpus. It is reported so the dash false positive is visible per book rather than
-inferred, and it overlaps `dashOnlySpoken` by construction; both are kept
-because `dashOnlySpoken` is scoped to the dash rule specifically while
-`overcountSpoken` catches any divergence in that direction.
-
-Netting these into one signed field was a real defect in revision 4's own first
-draft, caught in self-review: it would have made the acceptance criterion
-"`blindSpoken` is 0 across the corpus" **false on healthy English books**, which
-is the same shape of error as everything else in this document's history — a
-number that cannot distinguish two conditions being asked to prove one of them.
 
 ## The measurement script
 
 `scripts/measure-attribution.mjs` — read-only, writes nothing to any book.
 Walks the workspace, prints one row per book (title, `language`,
-`languageSource`, `spokenTotal`, `narratorIdSpoken`, share, `orphanSpoken`,
-`dashOnlySpoken`, `pipelineSpoken`, `blindSpoken`, `overcountSpoken`,
-`castCount`) sorted by share descending, plus the worst chapter per book, and
-writes a JSON report to the scratch path for follow-up.
+`languageSource`, `spokenTotal`, `tagTotal`, `narratorIdSpoken`, share,
+`modelNarrator`, `demotedNarrator`, `unknownOriginNarrator`,
+`unattributedSpeech`, `splitSpeech`, `orphanSpoken`, `tagNarratorSpan`,
+`dashOnlySpoken`, `castCount`) sorted by share descending, plus the worst
+chapter per book, and writes a JSON report to the scratch path for follow-up.
+**The three revision-7 gap columns are gone** — `pipelineSpoken`, `blindSpoken`
+and `overcountSpoken` are identically zero after #2245 (F3/F4/F5).
 
 **This script is the only place the distribution exists.** Everything it prints
 was, in some earlier revision, hand-computed into this document instead — and
@@ -840,73 +1105,144 @@ and are requirements, not style:
   dedupes by `manuscriptId` to *a* copy — not necessarily the live one. That is
   how a draft of revision 5 produced cast counts from a backup.
 - **It calls `computeAttributionMeasurement`, and applies §Universe.** No
-  re-implementation of the filters, the resolver or `isSpokenLine` — the whole
-  point is that the number in the report is the number the product computes.
-  Revision 5's measurement skipped the excluded-chapter filter and changed two
-  books' denominators by doing so.
+  re-implementation of the filters, the resolver, the parser or the aligner —
+  the whole point is that the number in the report is the number the product
+  computes. Revision 5's measurement skipped the excluded-chapter filter and
+  changed two books' denominators by doing so.
+- **It reads the manuscript record, not only the cache** (revision 8, D14). A
+  book whose cache exists but whose manuscript record is gone has no source
+  prose, so it has no denominator; the script reports it as `no manuscript`
+  rather than as a blank row or a zero. That is a real corpus state — the
+  workspace and the cache directory have already been shown to diverge by a
+  factor of three — and it is the newest way this feature can turn itself off
+  silently.
 
-Three rows must be **visibly distinct from a healthy book and from each other**,
+Four rows must be **visibly distinct from a healthy book and from each other**,
 because each is a state an earlier revision could not express: a book with a
-cast and nothing attributed; a book whose language could not be corroborated;
-and a book that has never been analysed. None may render as a blank row.
+cast and nothing attributed; a book whose language could not be corroborated; a
+book that has never been analysed; and a book whose source prose is gone. None
+may render as a blank row.
 
 Its output is the input to the Wave 2 threshold decision. Pure helpers
 unit-tested in `scripts/tests/`, matching the `build-companion-apk.test.mjs`
 pattern.
 
+**Every threshold in this document is uncalibrated against D14's unit.** The
+share is now over source speech spans, and revision 7's was over dash-opening
+cached sentences; a Russian dash paragraph contributes **one** span where it
+contributed **two** sentences. Wave 2's `COLLAPSE_SHARE_THRESHOLD`,
+`DRIFT_SHARE_THRESHOLD` and all four floors are therefore set from this run and
+from nothing earlier — including the round-7 gate's "an order-of-magnitude gap
+separates the drifted books", which was measured under the old unit and is
+**motivating evidence, not calibration** (see §D13 re-gated).
+
 ## Wave 1 acceptance criteria
 
-1. `computeAttributionMeasurement` is pure, has **no I/O**, and **imports** its
-   building blocks rather than re-implementing any of them: `conventionsFor` /
-   `LanguageConventions` for the denominator, `NARRATOR_CHARACTER_IDS` and
-   `buildCastResolver` for the numerator, and `isSpokenLine` for
-   `pipelineSpoken`. No second copy of anything.
-2. **The language and the snapshot are resolved by an impure caller and passed
-   in.** `detectManuscriptLanguage` is pure but reading `state.json` is not, and
-   revision 5 put the whole chain inside the module that acceptance criterion 1
-   requires to be pure (R-6M1). The split is the same one §Failure modes draws
-   for `readAnalysisState`: one impure resolver does the file reads, the pure
-   metric receives `{ language, languageSource }` and a sentence list.
-3. **The share is `narratorIdSpoken / attributableSpoken`** (D9) — orphans are
-   out of the numerator *and* out of the denominator. Asserted by a fixture
-   whose orphan count is large enough to move the share under either mistake — a
-   fixture with zero orphans proves nothing here. **A book whose dialogue is
-   entirely orphaned reports `share: null`, never `0%`**, which is the assertion
-   that catches the denominator half; without it, taking orphans out of the
-   numerator alone reads a wholly-drifted book as perfectly healthy.
-4. **`orphanSpoken` and `orphanIds` are non-zero and correct on the books that
-   have unresolvable ids**, resolved through `buildCastResolver` with each
-   book's real `cast-id-history.json`. A run that reports 0 everywhere means the
-   resolver was bypassed, not that the corpus is clean.
-5. **The orphan share is printed per book**, since D13's `DRIFT_SHARE_THRESHOLD`
-   is set off this column exactly as the collapse threshold is set off the other.
-   Wave 1 ships no threshold for either.
-6. The script runs against the live workspace and prints a row for every book,
-   reporting — never silently skipping — books with no cache.
-7. The script **flags a book with a cast and no attributed sentences
-   distinctly** from a never-analysed one (D11), and prints whether an
-   `analysis-state.json` snapshot exists, since that is what separates an
-   abandoned run from a resumable one.
-8. No threshold constant, no UI, no persisted state exists yet.
-9. **Every book's language resolves**, and the row records `declared` /
-   `detected` / `unknown`. A book that reaches `unknown` is reported distinctly
-   from both a damaged book and a never-analysed one.
-10. **`isSpokenLine` recognises `「…」` and `『…』`**, with a paired regression
-   asserting `applyNarratorDefault` no longer demotes a CJK dialogue line to
-   `narrator`.
-11. **`blindSpoken` drops to 0 on both live CJK books** once criterion 9 lands,
-    **and no other book's value changes.** Not "0 across the corpus" — the
-    German gap is a recorded limitation, not a regression.
-12. **`unmeasurable` is reachable from a real book shape**: a declared language
-    contradicted by detection over the book's own text resolves there rather
-    than to `missing`, proven by the fixture rows and their mutation controls.
+### The five criteria, verbatim
 
-**Criterion 11's control is an on-box acceptance item, not a CI test** (R-6M2).
-It is a before/after replay of `isSpokenLine` over every sentence of every live
-book, and the corpus is gitignored, machine-local and absent from a fresh clone
-— a CI job asserting over it would pass vacuously wherever the books are not,
-which is the failure shape this repo has hit before. CI gets the fixture-level
-tests in §Testing; the corpus replay gets a register row and is run on the box.
+These are the repo owner's own words from
+[#1984#issuecomment-5275487278](https://github.com/dudarenok-maker/Castwright/issues/1984#issuecomment-5275487278)
+and
+[#1984#issuecomment-5275507915](https://github.com/dudarenok-maker/Castwright/issues/1984#issuecomment-5275507915).
+They are reproduced unedited and they govern; everything else in this section is
+subordinate to them.
+
+> 1. Denominator comes from the **source prose**, never from the model's returned
+>    text; the join to model output is dash-insensitive.
+> 2. Speech halves and tag halves are reported **separately**, per the book's
+>    language conventions.
+> 3. A regression test that feeds the metric a run with leading dashes stripped
+>    from tag halves and asserts the score **does not move** — that is the exact
+>    false-recovery in §1, and without it the metric can be gamed by a
+>    punctuation change.
+> 4. A test that a sentence absent from stage-2's output is visible to the metric
+>    as absent rather than as a denominator that quietly shrank.
+> 5. **The panel distinguishes model-assigned `narrator` from engine-demoted
+>    `narrator`.** These are different defects with different fixes — the first is
+>    a prompt/model problem, the second is `applyNarratorDefault` firing on text
+>    it cannot read — and they are indistinguishable in the final `characterId`
+>    alone. #1984 exists to make collapse visible; a figure that shows collapse
+>    without saying which of the two produced it tells the user something is
+>    wrong and nothing about what to do. The demotion site already knows:
+>    `analysis.ts:2287` runs after stage-2, so the pre-demotion assignment is
+>    available at that point.
+
+**Criterion 5's scope is widened here and the widening is declared, not
+smuggled** (see D18): with the structure engine ON — the default —
+`applyNarratorDefault` does not run, and the reassigning step is `crossExamine`.
+Reporting only `applyNarratorDefault`'s demotions would report zero on every
+default-configuration book, which is criterion 5 satisfied on paper and blind in
+production. Both overwrite sites record `priorCharacterId`. Criterion 5's stated
+mechanism is a floor, not a ceiling.
+
+**Criterion 3's assertion is strengthened for free**, per the owner: feed the
+metric a run with leading dashes stripped and assert **both** that the score does
+not move **and** that the demoted lines are reported as engine-demoted rather
+than model-assigned.
+
+### The rest of Wave 1's criteria
+
+Renumbered from 6 so the five above keep their numbers.
+
+6. `computeAttributionMeasurement` is pure, has **no I/O**, and **imports** its
+   building blocks rather than re-implementing any of them: `parseChapterStructure`
+   + `buildNameIndex` + `conventionsFor` for the denominator, `alignSentences`
+   for the join, and `NARRATOR_CHARACTER_IDS` + `buildCastResolver` for the
+   numerator. No second copy of anything, and **no new "is this dialogue"
+   predicate** — that is F2's whole lesson.
+7. **The language, the snapshot, the sentences and the chapter bodies are
+   resolved by an impure caller and passed in.** Revision 5 put the language
+   chain inside the module criterion 6 requires to be pure (R-6M1); revision 8
+   adds a second file read (`ChapterHint.body`) and must not repeat it. One
+   impure resolver does the reads; the pure metric receives
+   `{ language, languageSource }`, the sentence list, and the bodies.
+8. **The share is `narratorIdSpoken / attributableSpoken`** (D9) — orphans,
+   unattributed spans and split spans are out of the numerator *and* out of the
+   denominator. Asserted by a fixture whose orphan count is large enough to move
+   the share under either mistake; a fixture with zero orphans proves nothing
+   here. **A book whose dialogue is entirely orphaned reports `share: null`,
+   never `0%`.**
+9. **`orphanSpoken` and `orphanIds` are non-zero and correct on the books that
+   have unresolvable ids**, resolved through `buildCastResolver` with each book's
+   real `cast-id-history.json`. A run reporting 0 everywhere means the resolver
+   was bypassed, not that the corpus is clean.
+10. **The orphan share is printed per book**, since D13's `DRIFT_SHARE_THRESHOLD`
+    is set off this column exactly as the collapse threshold is set off the other.
+    Wave 1 ships no threshold for either.
+11. The script runs against the live workspace and prints a row for every book,
+    reporting — never silently skipping — books with no cache, and books whose
+    **manuscript record is gone** (the new `unmeasurable` producer D14 creates).
+12. The script **flags a book with a cast and no attributed sentences
+    distinctly** from a never-analysed one (D11), and prints whether an
+    `analysis-state.json` snapshot exists, since that is what separates an
+    abandoned run from a resumable one.
+13. No threshold constant, no UI, no persisted state exists yet — **except
+    `SentenceOutput.priorCharacterId`**, which is persisted by construction and is
+    D18's single permitted analyzer change. `openapi.yaml` is edited first, then
+    `npm run openapi:types`.
+14. **Every book's language resolves**, and the row records `declared` /
+    `detected` / `unknown`. A book that reaches `unknown` is reported distinctly
+    from both a damaged book and a never-analysed one.
+15. **`unmeasurable` is reachable from a real book shape**: a declared language
+    contradicted by detection over the book's own text resolves there rather than
+    to `missing`, proven by the fixture rows and their mutation controls.
+16. **The measurement is invariant under a punctuation-only rewrite of the
+    model's output.** This is criterion 3 stated as a property rather than as a
+    test: strip every leading dash, add a leading dash to every line, or replace
+    `—` with `-` throughout, and `spokenTotal`, `tagTotal`, `narratorIdSpoken`
+    and the share must all be byte-identical. **Anything that varies under that
+    transform is reading model text and is a defect.**
+
+**Criteria 10 and 11 of revision 7 are gone** — `isSpokenLine`'s CJK brackets and
+`blindSpoken`'s corpus replay. Both shipped in #2245; see F7/F8. Their on-box
+register row is discharged with them and must not be carried into the shipping
+PR as owed.
+
+**No acceptance criterion here names a share figure, and that is deliberate**
+(R-6C3, unchanged). Three revisions hand-computed a distribution into this
+document and got three different wrong answers. Producing it is the script's job,
+using the real modules.
+
 
 ---
 
@@ -914,6 +1250,73 @@ tests in §Testing; the corpus replay gets a register row and is run on the box.
 
 Built only after the Wave 1 numbers are read. Everything below is settled
 **except** the numeric threshold, which Wave 1 sets.
+
+## D13 re-gated (revision 8)
+
+D13 — the `drifted` state — was added after the round-6 gate, went through its
+own scoped gate as revision 7, and was then **reworked in the fold without being
+re-reviewed.** Five things changed in that fold: the cache-sourced banner tier
+(R-8C1), the gate's move to `enqueueQueueEntries` (R-8C2), `alsoCollapsed`
+(R-8C3), `unacknowledgedOrphanSpoken` (R-8M1), and `attributionVerdictKey`
+moving from the resolver's inputs to the measurement's outputs (R-8M2). None of
+those five has been read by anyone but their author. This section is the
+re-gating.
+
+**Verdict: the decision holds; its numbers do not; one owner question is still
+open and is now more expensive to answer late.**
+
+**What holds, and why the rebaseline does not touch it.** D13 is about
+**identity**, not punctuation. `buildCastResolver` resolves a `characterId`
+against `cast.json` plus `cast-id-history.json`; nothing in #2245, #2253, #2289
+or #2288 M1 touches that path, and nothing in F1's dash-stripping can create or
+destroy an orphaned id. Every mechanism the fold introduced was verified against
+today's tree:
+
+| Mechanism | Verified 2026-08-13 | Verdict |
+|---|---|---|
+| The banner is fed from rendered segments, not the cache | `collectOrphanedCharacterFallbacks` at `segments-io.ts:371` (was `:338` — F12), still `await loadSegmentsFiles(...)`-first | **Holds.** R-8C1's premise is intact |
+| `enqueueQueueEntries` is the real chokepoint | `ENQUEUE_TRIGGER_TYPES = new Set(['ui/requestStartGeneration'])` at `generation-stream-middleware.ts:72`, unchanged | **Holds.** R-8C2's bypass is still open |
+| Linking does not refetch | `handleLinkOrphanMatch` at `cast.tsx:755` (was `:583` — F12), still no attribution refetch | **Holds.** R-8M4's gap is still there |
+| The three files sit under three locking regimes | `cast.json` under `withCastLock`, `cast-id-history.json` under `withKeyLock`, cache unlocked — and #2260 has since bounded every acquisition at 10 s with a `LockAcquisitionTimeoutError` | **Holds, and is stronger than revision 7 knew.** Input-keying's torn-read hazard is now *also* a lock-timeout hazard. Output-keying still avoids both |
+
+**What does not hold: D13's calibration.** The round-7 gate's one
+could-have-been-fatal check was that a workable threshold pair exists —
+_"the orphan share is strongly bimodal: a small group of badly-drifted books,
+then an order-of-magnitude gap, then everything else at or near zero."_ That was
+measured with `spokenTotal` as **dash-opening cached sentences.** Under D14
+`spokenTotal` is **source speech spans**, roughly halving on a dash-convention
+book and moving by an unmeasured amount elsewhere, while `orphanSpoken` — a
+count of *attributions* — moves differently again. **The gap may still be there;
+nobody has looked at it in the new unit.** The claim is downgraded from "checked,
+and the answer was yes" to "checked under a unit this spec has since replaced".
+
+Practically that means: **D13 cannot be approved on the round-7 evidence.** Wave
+1's run re-establishes it or it does not, and if the bimodality does not survive
+the re-basing, D13 is dropped rather than shipped with a threshold picked off a
+book. That is the same bar §Trigger already sets for `COLLAPSE_SHARE_THRESHOLD`;
+D13 was simply believed to have cleared it already.
+
+**One further consequence the fold did not draw.** `unacknowledgedOrphanSpoken`
+is now a fraction over `spokenTotal`, but three *other* populations have since
+been carved out of `attributableSpoken` — `unattributedSpeech`, `splitSpeech`
+and the orphans themselves. A book with heavy stage-2 omission would have a
+large `spokenTotal`, a small attributable slice, and a drift share diluted by
+spans nobody attributed at all. **The drift share must be over
+`spokenTotal - unattributedSpeech`**, not over `spokenTotal`: an unattributed
+span is not evidence the id drifted, and leaving it in the denominator lets an
+omission suppress a drift warning. Recorded here because it is exactly the
+shape of R-8C3 — a field whose definition was correct when written and stopped
+being correct when a sibling changed.
+
+**Still owed from the owner, unchanged and now more expensive.** R-8C1 put a
+scope question to the owner: the `drifted` notice points at the Cast orphan
+banner, but that banner has **zero rows on every book D13 fires on**, so D13
+requires the banner to gain a cache-sourced tier — _"if the owner declines this
+scope, D13 must be dropped rather than shipped without it."_ **That question is
+still unanswered**, and Wave 2 has grown since it was asked: the answer now also
+decides whether `alsoCollapsed`, the fifth library state, the fifth notice
+variant and `attributionVerdictKey` are built at all. It is the first of the
+four owner decisions listed in §Open questions.
 
 ## Trigger (D2, revised)
 
@@ -1660,19 +2063,131 @@ design away.
 **Wave 1 — pure metric (Vitest, server).** `narratorIdSpoken` counts **both**
 `narrator` and `char-narrator` — the `char-narrator` case is asserted explicitly,
 since matching only `'narrator'` is the exact regression #1895 centralised the
-constant to prevent; excluded chapters and `excludeFromSynthesis` removed from
-both numerator and denominator; zero spoken → `0/0` handled; `quietCastCount` at
-exactly 1 and 2 lines; `dashOnlySpoken` counts a dash-prefixed sentence with no
-quote mark and does not count a dash-prefixed sentence that also contains one.
+constant to prevent; excluded chapters removed from **both** halves of the
+universe; a quoted `excludeFromSynthesis` sentence removes the *attribution*
+without removing the source span, so its span reads `unattributedSpeech`; zero
+spoken → `0/0` handled; `quietCastCount` at exactly 1 and 2 spans;
+`dashOnlySpoken` counts a dash-opened paragraph with no quote mark and does not
+count one that also contains one.
+
+### Wave 1 — the five criteria, each with a test that can fail
+
+**Criterion 1 — source-anchored denominator, dash-insensitive join.** One
+fixture, two arms, built from a Russian dash paragraph:
+
+```ts
+// server/src/store/attribution-health.criteria.test.ts
+const body = '— Ничего нет, — сказал Егор.\n— Значит, ищем дальше.\n';
+
+const withDashes = [
+  { text: '— Ничего нет,',      characterId: 'egor'     },
+  { text: '— сказал Егор.',     characterId: 'narrator' },
+  { text: '— Значит, ищем дальше.', characterId: 'anton' },
+];
+// The EXACT F1 transform: the model returns the same lines, dashes stripped.
+const stripped = withDashes.map((s) => ({
+  ...s,
+  text: s.text.replace(/^\s*[-–—]\s*/u, ''),
+}));
+
+it('scores identically whether or not the model returned leading dashes', () => {
+  const a = computeAttributionMeasurement({ body, sentences: withDashes, ...ctx });
+  const b = computeAttributionMeasurement({ body, sentences: stripped,  ...ctx });
+  expect(b.spokenTotal).toBe(a.spokenTotal);           // denominator unmoved
+  expect(b.tagTotal).toBe(a.tagTotal);
+  expect(b.narratorIdSpoken).toBe(a.narratorIdSpoken); // numerator unmoved
+  expect(b.unattributedSpeech).toBe(0);                // and nothing fell out
+});
+```
+
+**The `unattributedSpeech` assertion is what makes this test able to fail for
+the right reason**, and without it the test is a placebo of a familiar shape: an
+implementation that loses the join entirely scores `narratorIdSpoken: 0` on
+*both* arms and passes the equality. The suite must distinguish "the score did
+not move" from "there is no score".
+
+**Criterion 2 — speech and tag reported separately.** The same fixture asserts
+`spokenTotal === 2` and `tagTotal === 1`, and that the correctly-narrated tag
+half is in `tagNarratorSpan` and **not** in `narratorIdSpoken`. **Mutation:**
+fold tag spans into the denominator and this book's share moves from 0% to 33%
+— the exact impurity §Speech halves and tag halves measured at 12% of a real
+book's denominator. A per-language row is added for `en` (quote convention: a
+tag clause is `narration`, not `tag`, so `tagTotal` is 0 and the assertion is
+that the *rule is the parser's*, not a case heuristic ported from Russian).
+
+**Criterion 3 — the score does not move under a punctuation-only rewrite**, and
+the demoted lines are reported as engine-demoted rather than model-assigned.
+Criterion 1's test above is half of it; the second half needs `priorCharacterId`:
+
+```ts
+it('reports a dash-stripped demotion as engine-demoted, not model-assigned', () => {
+  // What applyNarratorDefault does to a stripped speech half:
+  const demoted = [
+    { text: 'Ничего нет,', characterId: 'narrator', priorCharacterId: 'egor' },
+    { text: 'сказал Егор.', characterId: 'narrator' },
+  ];
+  const m = computeAttributionMeasurement({ body, sentences: demoted, ...ctx });
+  expect(m.demotedNarrator).toBe(1);
+  expect(m.modelNarrator).toBe(0);
+  expect(m.unknownOriginNarrator).toBe(0);
+});
+```
+
+**Mutation:** default an absent `priorCharacterId` to "model-assigned" and the
+third assertion goes red. That mutation is the whole point of the column — see
+D18 — and it is the one an implementer is most likely to make, because it reads
+as a harmless default.
+
+**Criterion 4 — an omitted sentence is visible AS absent.** The fixture is
+criterion 1's, with one sentence deleted from the model's output:
+
+```ts
+it('reports a stage-2 omission as unattributed, not as a smaller denominator', () => {
+  const missingOne = withDashes.filter((s) => s.characterId !== 'anton');
+  const m = computeAttributionMeasurement({ body, sentences: missingOne, ...ctx });
+  expect(m.spokenTotal).toBe(2);          // the source still has two speech spans
+  expect(m.unattributedSpeech).toBe(1);   // and one of them nobody answered
+  expect(m.attributableSpoken).toBe(1);   // so the share speaks for half the book
+});
+```
+
+**Mutation:** build the denominator from the sentence list and `spokenTotal`
+drops to 1 while `unattributedSpeech` reads 0 — the "denominator that quietly
+shrank" the criterion names, reproduced exactly.
+
+**Criterion 5 — the panel distinguishes the two narrators.** Wave 1's half is
+the measurement (criterion 3's test above); Wave 2's half is the render, and it
+asserts three distinct strings for the three columns, with the
+`unknownOriginNarrator` case rendering a legible "analysed before this was
+recorded" rather than a zero.
+
+**Cross-cutting: criterion 16's invariance is a property test.** Over a small
+generated corpus of dash and quote fixtures, apply each of three
+punctuation-only transforms to the model output — strip every leading dash, add
+one to every line, replace `—` with `-` — and assert every field of
+`AttributionMeasurement` is unchanged. **The fixture set must include at least
+one book per convention family** (`dialogueOpen`-bearing: `ru`/`es`/`fr`;
+quote-only: `en`/`de`; CJK: `zh`/`ja`), because a property test locks only what
+its fixture reaches, and a dash-only corpus proves nothing about the quote
+languages the same transform is a no-op on.
+
+### Wave 1 — the pre-existing suite, updated
 
 **Wave 1 — D9's exclusion, and it needs a fixture built to fail** (R-6C1). The
 assertion is that `orphanSpoken` is populated **and the share does not move**.
-A fixture with one orphan among a hundred lines cannot distinguish the two
+A fixture with one orphan among a hundred spans cannot distinguish the two
 formulas at the precision anyone will read, so the fixture is built with the
 orphan count comparable to the narrator-id count — summing them changes the
 share by tens of points, and the test observably goes red when D9 is mutated
 back to a sum. The paired assertion is that `orphanIds` lists the distinct
 unresolvable ids, since a count alone cannot drive the drift surface.
+
+**Revision 8 adds a third mistake this fixture must catch.** `attributableSpoken`
+now subtracts three populations, not one, and each has its own way of being
+forgotten: leave `unattributedSpeech` in and an omission-heavy book reads
+healthier the more it lost; leave `splitSpeech` in and a segmenter change moves
+the share. The fixture carries a non-trivial count of each, and each is mutated
+on its own line.
 
 The resolver half needs its own care: **the cast-resolver test passes with
 `buildCastResolver` removed entirely unless the retired id is the narrator's
@@ -1680,47 +2195,33 @@ own.** The fixture therefore retires `char-narrator` → `narrator`, not an
 ordinary character, so deleting the resolver changes the numerator rather than
 merely the orphan column.
 
-**Wave 1 — the denominator and the language chain.** `isDialogueLine` returns
-true for each language's own pairs and false for another language's (a `「」` line
-is dialogue under `ja`, not under `en`); a declared `state.json` language wins
-over detection and sets `languageSource: 'declared'`; a book with no declared
-language resolves through `detectManuscriptLanguage` and sets `'detected'`; a
+**Wave 1 — the denominator and the language chain.** `parseChapterStructure`
+finds `speech` spans in each language's own convention (a `「」` line is dialogue
+under `ja`, not under `en`); a declared `state.json` language wins over detection
+and sets `languageSource: 'declared'`; a book with no declared language resolves
+through `detectManuscriptLanguage` over its **bodies** and sets `'detected'`; a
 language with no conventions table yields `unmeasurable` **and never `missing`**,
 asserted with a `castCount > 0` fixture so the precedence is what the test is
-actually proving.
+actually proving. **A book with a cache and no manuscript record yields
+`unmeasurable`** — D14's new producer.
 
-**Wave 1 — corroboration.** `detectManuscriptLanguage` is asserted to set
-`fallback: true` on **both** surrender branches — the `letters === 0` pre-pass
-(`:44`) and the `franc` miss (`:60`) — and `false` on a real match, with the
-zero-letter case exercised by a sample of pure punctuation and numerals.
+**Wave 1 — corroboration.** `detectManuscriptLanguage`'s `fallback` is asserted
+on **both** surrender branches — the `letters === 0` pre-pass
+(`detect-language.ts:81`) and the `franc` miss (`:98`) — and `false` on a real
+match, with the zero-letter case exercised by a sample of pure punctuation and
+numerals. **These now pin behaviour #2246 already shipped**, which is the point:
+this spec consumes the field, so a regression in it is a regression here.
 Corroboration itself is asserted to run **only** on the `missing` path: a healthy
 book with a wrongly declared language stays `ok`/`collapsed` on its measured
 share and does not become `unmeasurable`, because the guard must not be able to
 suppress a real verdict.
 
-**Wave 1 — `isSpokenLine` CJK.** A `「…」` line and a `『…』` line classify as
-spoken; `applyNarratorDefault` leaves a CJK dialogue line's `characterId`
-untouched (**fails before the change, passes after**).
+> **Deleted in revision 8 (F7, F8, F9).** *"Wave 1 — `isSpokenLine` CJK"* and
+> *"The blast-radius control must be the corpus replay"* are gone: #2245 shipped
+> the CJK brackets, so there is no "before" to replay and no change of this
+> spec's to blast-radius. The on-box register row they were owed is discharged
+> with them and must not appear in the shipping PR as owed acceptance.
 
-**The blast-radius control must be the corpus replay, not a fixture** (R-5Mi1).
-Revision 4 specified "a set of `en`/`ru` lines classify identically before and
-after" — but a hand-authored Latin or Cyrillic fixture contains no `「『` by
-construction, so it holds for *any* change to those characters and proves
-nothing. The claim being tested is about the **real corpus**, so the control is:
-run `isSpokenLine` over every sentence of all 20 live books before and after,
-and assert the classification differs on **exactly** the two CJK books and
-**nowhere else**. (The underlying claim is confirmed on today's data — zero
-`「`/`『` in any non-CJK cache — which is what makes the assertion safe to gate
-on.)
-
-**That replay is an on-box acceptance item, not a CI test** (R-6M2). The corpus
-is gitignored and machine-local, so on any runner or fresh clone the walk finds
-no books, the "differs on exactly two" assertion holds over an empty set, and the
-check reports green having tested nothing — a vacuous pass, which is a failure
-mode this repo has shipped before. It gets a register row and is run on the box.
-CI's blast-radius coverage is the narrower, honest claim a fixture *can* carry:
-that the new alternatives are anchored to `「」`/`『』` specifically, asserted by
-mutating each new alternative in turn.
 
 **Wave 2 — trigger.** Book-level at threshold ±1 sentence; a chapter trigger
 firing while the book-level share is far below it; a chapter at 100% with 19
@@ -1780,14 +2281,34 @@ revision teaches `isSpokenLine` to read `「…」`, so after both changes land 
 reverted denominator still returns `spokenTotal > 0` and **row 5 does not move.**
 One change in the revision disarmed the control of another.
 
+**Revision 8 rewrites the first two rows of this table, and the reason is F9.**
+Both were controls over the D12-vs-`isSpokenLine` distinction, and #2245 merged
+the two sides: reverting the denominator to `isSpokenLine` is now a **no-op**,
+and there is no "part 2" to revert. Left as written they would be the third
+generation of placebo in the table added to stop placebos.
+
+The replacement control is the one D14 actually turns on — **build the
+denominator from the model's sentence list instead of from `ch.body`** — and it
+is stronger than either it replaces, because it moves every row that has source
+prose rather than only the two language rows.
+
 | Mutation | Row 5 (`ja`) | Row 6 (`de`) | Row 7 (wrong lang) | Row 8 (no letters) | Row 9 (empty cache) |
 |---|---|---|---|---|---|
-| Denominator reverted to `isSpokenLine` | **unchanged** — part 2 covers `「」` | **flips to `missing`** | unchanged | unchanged | unchanged |
-| Denominator reverted **and** part 2 reverted | flips to `missing` | flips to `missing` | unchanged | unchanged | unchanged |
+| **Denominator built from the sentence list, not `ch.body`** (D14 reverted) | **flips to `missing`** if its sentences are dash-stripped; `spokenTotal` moves on **every** row with prose | flips on the same input | unchanged | unchanged | **unchanged** — no sentences either way, which is what makes row 9 still worth its own control |
+| **The join uses a text predicate instead of `alignSentences`** (D16 reverted) | criterion 1's arms diverge; `unattributedSpeech` reads 0 where it should read the stripped count | same | unchanged | unchanged | unchanged |
+| **`unattributedSpeech` folded back into `attributableSpoken`** (D17 reverted) | criterion 4's fixture reads `attributableSpoken: 2` instead of `1` and its share halves | same | unchanged | unchanged | unchanged |
+| **Absent `priorCharacterId` defaulted to model-assigned** (D18's trap) | criterion 3's `unknownOriginNarrator` assertion goes red | same | unchanged | unchanged | unchanged |
 | Corroboration arm (step 4b) deleted entirely | unchanged | unchanged | **flips to `missing`** | **flips to `missing`** | unchanged |
 | **Only the *disagreement* half of 4b deleted**, `fallback` half kept | unchanged | unchanged | **flips to `missing`** | unchanged | unchanged |
-| `fallback` set on `:60` only, not `:44` | unchanged | unchanged | unchanged | **flips to `missing`** | unchanged |
+| `fallback` set on `:98` only, not `:81` | unchanged | unchanged | unchanged | **flips to `missing`** | unchanged |
 | **Empty-cache carve-out (step 4a) deleted** | unchanged | unchanged | unchanged | unchanged | **flips to `unmeasurable`** |
+
+**The `fallback` row is now a mutation of shipped code, not of this spec's
+code** (#2246). It stays in the table because this spec's `unmeasurable`
+producer *consumes* it: an implementation of corroboration that reads
+`supported` instead of `fallback` passes every other row, and that is the R-5C3
+defect one level downstream. Mutating it means mutating `detect-language.ts` in
+the test, which is what a stub is for.
 
 **Two rows in this table were placebos in revision 6's first draft, and the way
 they failed is the same way everything else in this document has failed**
@@ -1819,34 +2340,28 @@ the text and not on the language** (R-7M1, R-7m1):
 | 5 | `「」`-quoted dialogue, attributed to real cast members, and **kana-dominant** | `detectManuscriptLanguage` returns `kana > han ? 'ja' : 'zh'`; a kanji-heavy fixture detects `zh`, contradicts the declared `ja`, and the two-mutation control lands on `unmeasurable` instead of `missing` |
 | 7 | **well over `franc`'s `minLength: 30`**, and verified to detect as something *other* than the declared language | A short sample surrenders instead of contradicting, so row 7 passes for row 8's reason and the disagreement check is never exercised |
 
-**Row 6 is why the German fixture exists, and its text is now constrained**
-(R-6C5). `»…«` is dialogue under `de.quotePairs` and invisible to `isSpokenLine`
-even after part 2, which makes it the only row a *single* mutation can move —
-but that property is a property of the **text**, not of the language, and
-revision 5 constrained row 5's text while leaving row 6's free. Measured
-2026-08-11:
+**Row 6's German constraint is spent, and revision 8 says so rather than
+carrying it** (F9). R-6C5 constrained row 6's text to exactly one `»…«` per
+sentence with no mid-line attribution, because `isSpokenLine`'s embedded rule
+`/«[^»]+»/` matched the attribution span *between two turns* and made the
+idiomatic shapes read as spoken. **#2245 replaced that rule with the language's
+own `quotePairs`, so `»…«` is no longer missed in any position** and the
+constraint has nothing left to protect.
 
-| Fixture text | `isSpokenLine` |
-|---|---|
-| `»Lass das.«` | **missed** ✔ usable |
-| `»Lass das«, sagte er, »sofort.«` | spoken ✘ |
-| `»Ja.« »Nein.«` | spoken ✘ |
+Row 6 survives as a **language-coverage** fixture — German dialogue in `»…«`
+must score `spokenTotal > 0` and read `ok` — and its constraint is inverted:
+**write it naturally, including a mid-line `sagte` and a two-turn sentence**,
+because those are the shapes the old rule got wrong and the regression this row
+now guards is a re-narrowing of `de.quotePairs`. Its control is the D14 row of
+the mutation table above, which moves it; it no longer has a control of its own,
+and pretending otherwise is what R-5C2 was.
 
-The embedded rule `/«[^»]+»/` matches the **attribution span between two turns** —
-`«, sagte er, »` — so any sentence carrying a mid-line `sagte`, or two turns in
-one sentence, is already spoken and the control is a placebo again, one level
-down, in the row promoted to be the real proof. **Those are the idiomatic German
-shapes**, so an implementer writing natural German reproduces R-5C2 by writing
-well.
-
-> Row 6's fixture sentences each contain **exactly one `»` and one `«`, in that
-> order, with no second turn and no mid-line attribution.** The test asserts
-> `isSpokenLine` is `false` on each of them *directly*, as a precondition, so the
-> fixture fails loudly if someone later makes it read more naturally.
-
-Row 5's fixture text must likewise contain **real `「」`-quoted dialogue attributed
-to real cast members** — not merely CJK prose — or even the two-mutation control
-does not move it.
+Row 5's fixture text must still contain **real `「」`-quoted dialogue attributed
+to real cast members** — not merely CJK prose — and must still be
+**kana-dominant**, for R-7m1's reason (`kana > han ? 'ja' : 'zh'`, so a
+kanji-heavy fixture detects `zh` and contradicts the declared `ja`). That
+constraint is about *detection*, not about `isSpokenLine`, so #2245 does not
+touch it.
 
 **Wave 2 — the `drifted` state (D13).** Four fixtures and a mutation apiece:
 
@@ -1971,20 +2486,41 @@ What the run must show, all of it structural and none of it a share:
    implementation rendering all three identically passed it. The distinctness
    claim moves to the fixture suite, where it can fail; what the on-box run
    checks is that every real book produces a row.
-2. **`blindSpoken` non-zero on exactly the two live CJK books before the part-2
-   change, and zero on both after, with no other row moving.** This is the direct
-   measurement of R-4C1 and the only acceptance figure that survives — because it
-   was independently re-derived twice, by the round-4 and round-5 reviewers,
-   agreeing.
+2. **~~`blindSpoken` non-zero on exactly the two live CJK books before the
+   part-2 change~~ — DELETED in revision 8 (F7).** #2245 shipped the change, so
+   there is no "before". Its register row is discharged and must not appear in
+   the shipping PR as owed acceptance. **Replaced by:** the two live CJK books
+   produce a non-blank row with `spokenTotal > 0` and state `ok` or `collapsed`
+   on their real share — the same claim R-4C1 was raised on, stated in a form
+   that is checkable after the fix rather than across it.
+2b. **Criterion 16's invariance holds on the real corpus, not only on fixtures.**
+   Run the script twice, the second time over a copy of each book's cache with
+   every leading dash stripped from every sentence, and diff the two reports:
+   **every field of every row must be identical.** This is the on-box form of
+   the F1 defect, it is the only check that exercises the join against real
+   segmentation, and it cannot pass vacuously — a corpus with no dash-convention
+   book would make it trivial, and the corpus has two Russian books, one of them
+   the one F1 was measured on. **The cache copies are written to the scratch
+   path, never to the workspace.**
 3. **`orphanSpoken` non-zero on the books that carry unresolvable ids** — 8 of
    the 20 as of 2026-08-11 — **and the share unaffected by it** (D9). A run
    reporting orphans everywhere-zero means the resolver was bypassed.
-4. **`overcountSpoken` non-zero on _Unlocked_ at a magnitude that matters**, and
-   alarmed on nowhere. "Non-zero on a substantial minority" is near-unfalsifiable
-   and revision 6 should not have written it (R-7m4): it is non-zero on half the
-   corpus, but nine of those ten books are 1–6 sentences out of thousands —
-   statistical dust that any implementation reproduces. One book carries a
-   real dash population, and that is the row the threshold has to survive.
+4. **~~`overcountSpoken` non-zero on _Unlocked_~~ — DELETED in revision 8
+   (F4).** The column is identically zero after #2245 and no longer exists.
+   **Replaced by:** `dashOnlySpoken` non-zero on the two Russian books at a
+   magnitude that matters, and reported alongside their shares, since that is
+   the false positive the collapse threshold has to survive and it is the one
+   §Known false positives still admits. Revision 6's "non-zero on a substantial
+   minority" phrasing is not reused — R-7m4 called it near-unfalsifiable and it
+   was.
+4b. **`unattributedSpeech` and `demotedNarrator` are printed for every book, and
+   at least one is non-zero somewhere.** Both are new columns, and both have the
+   same failure mode: an implementation that never populates them reports a clean
+   corpus and is indistinguishable from a clean corpus. **A run that reports 0 in
+   both columns on all 20 books is a finding to investigate, not a pass** — the
+   Aug-13 replay says at least one Russian book's stage-2 output is dash-stripped
+   today, so `demotedNarrator` should be visibly non-zero there unless that book
+   ran with the structure engine on. Record which.
 5. **The two historical CJK collapses do not appear**, because their books are
    deleted and the script walks the library. Their absence is the check that the
    script did not start from the cache directory.
@@ -2000,32 +2536,42 @@ live view all move in the shipping PR.
 
 ## Out of scope
 
-- **Any analyzer change beyond the two named ones.** Revision 5 permits exactly
-  two, both small and both argued in place: the CJK bracket pair on
-  `isSpokenLine` (§The CJK denominator defect), and the additive
-  `DetectionResult.fallback` field (§Language resolution). Nothing else. In
-  particular the branch that runs `applyNarratorDefault` is **not** changed, and
-  the run-dependent trigger behind the two historical 97–99% collapses is **not**
-  diagnosed here — it gets its own issue, whose first task is to check what
-  `analyzer.structure.enabled` was set to for those two runs (§The CJK
-  denominator defect). **`blindSpoken` is explicitly *not* that issue's
-  evidence** — it is invariant under the knob, which revision 6 missed (R-7M3).
-- **The German gap in `isSpokenLine` — three of the four `de.quotePairs` forms,
-  not one.** `»…«` is missed in both positions; `„…”` and `„…"` are missed when
-  the turn is embedded rather than leading, and `de.ts:7-9` records those two
-  ASCII/`”` closers as what real manuscripts routinely use. Recorded as a known
-  limitation (R-5M2, widened by R-6C4), not fixed: fixing it means touching the
-  quote rules the analyzer acts on for a language with a live book, which is the
-  wider blast radius this spec has consistently declined. Revision 5 named one
-  form of three here, which understated a limitation the reader is being asked to
-  accept. **Filed as
-  [#2245](https://github.com/dudarenok-maker/Castwright/issues/2245)** — the
-  deciding factor is that `isSpokenLine` takes no language, so the repair is a
-  choice between global patterns with an unmeasured cross-language blast radius
-  and a signature change that overlaps `conventionsFor`; two defensible options
-  with an interface decision between them is design work, not an incidental fix.
-  A limitation recorded only here is a limitation being lost, which is why it now
-  has a ticket rather than a paragraph.
+- **Any analyzer change beyond the ONE named one** (revision 8, F10). Revisions
+  5–7 permitted two — the CJK bracket pair on `isSpokenLine`, and the additive
+  `DetectionResult.fallback` field. **Both shipped elsewhere** (#2245, #2246), so
+  this spec permits neither. It permits exactly one, argued in place: the
+  additive, optional `SentenceOutput.priorCharacterId`, written at the two sites
+  that overwrite a model attribution (D18). Nothing else. In particular:
+  - **`isSpokenLine` is not changed**, and this spec does not use it. It is a
+    surface the metric *measures* (D18), not a tool the metric *calls* (D16).
+  - **The branch that runs `applyNarratorDefault` is not changed** — only
+    instrumented. Whether `applyNarratorDefault` should be demoting a
+    dash-stripped speech half at all is a real question with a real answer, and
+    it is not this one; recording that it happened is what makes it askable.
+  - **The run-dependent trigger behind the two historical 97–99% CJK collapses
+    is not diagnosed here.** It gets its own issue. **Revision 8 withdraws that
+    issue's named first task**: R-7M3 said "check what
+    `analyzer.structure.enabled` was set to for those two runs", on the reasoning
+    that knob-off sent a CJK book's whole dialogue to the narrator. #2245 removed
+    that consequence — with the knob off, `analysis.ts:2210` still resolves
+    conventions, so the `else` branch reads CJK correctly. The knob is no longer
+    a sufficient explanation, and the books are deleted, so the issue keeps its
+    subject and loses its lead. **`blindSpoken` was already withdrawn as its
+    evidence (R-7M3) and is now deleted outright (F3).**
+- **~~The German gap in `isSpokenLine`~~ — CLOSED by #2245** (revision 8).
+  Revisions 5–7 recorded three of four `de.quotePairs` forms as a permanent known
+  limitation and filed [#2245](https://github.com/dudarenok-maker/Castwright/issues/2245)
+  for it, on the reasoning that `isSpokenLine` "takes no language, so the repair
+  is a choice between global patterns with an unmeasured cross-language blast
+  radius and a signature change that overlaps `conventionsFor`". **#2245 took the
+  signature change**, and is closed. The limitation is deleted rather than carried
+  — a stale limitation is as misleading as a stale claim, and it would have the
+  reader accepting a cost that no longer exists.
+- **#2310 — the `&ndash;` entity being read aloud verbatim.** Adjacent (#2289
+  added the entity to `es`/`fr` `dialogueOpen`, and this spec's parser consumes
+  those tables), open, and a design pass in its own right: which layer decodes
+  is the decision owed. Nothing here depends on the answer, because the metric
+  reads the entity the same way the parser does.
 - **Repairing id drift automatically.** D13 badges, gates and *points at* the
   orphan banner; it does not link anything on the user's behalf. Auto-aliasing is
   `repair-cast-id-drift.mjs`'s territory and it declines the ambiguous cases
@@ -2036,6 +2582,44 @@ live view all move in the shipping PR.
 - **Threshold configurability.** No registry knob.
 - **Live mid-run collapse warning** — the figure swings wildly over a novel's
   opening chapters.
+
+## Open questions — owner decisions owed before Wave 1 is dispatched
+
+None of these is a detail an implementer can settle, and each has more than one
+defensible answer. Listed in the order they block work.
+
+1. **Does D18's `SentenceOutput.priorCharacterId` land?** It is the only analyzer
+   change revision 8 permits, and it is the only way acceptance criterion 5 is
+   satisfiable — the derivation alternative is F1 rebuilt (§D18). It is additive,
+   optional and absent by default, so its blast radius is `openapi.yaml` plus two
+   write sites. **If it is declined, criterion 5 is declined with it** and the
+   panel reports one narrator column, not three. *Recommendation: land it.*
+   *Benefit (user): the difference between "re-run analysis" and "your analyzer
+   demoted these" is the difference between a warning and an instruction.*
+2. **Does D13's banner scope land?** R-8C1's question, asked on 2026-08-11 and
+   still open: the `drifted` notice points at a Cast orphan banner that has zero
+   rows on every book D13 fires on, so D13 requires that banner to gain a
+   cache-sourced tier. **The spec's own position is that D13 is dropped rather
+   than shipped without it.** §D13 re-gated adds that the answer now also governs
+   `alsoCollapsed`, the fifth library state and `attributionVerdictKey`.
+   *Benefit (user): a book one Generate away from routing 63 lines to the wrong
+   voice says so, and points at the control that fixes it.*
+3. **Does Wave 2's surface still look right at this size?** It has grown every
+   revision — five states, two notice variants, a badge in two library files, a
+   gate at two chokepoints, a dismissal key, a backfill script and a banner tier.
+   Wave 1 is now larger too. This is worth one look before Wave 2 is planned,
+   because the cheapest moment to cut it is before Wave 1's plan assumes it.
+   *Benefit (technical): a smaller Wave 2 is a Wave 2 that ships.*
+4. **Is `parseChapterStructure`'s speech/tag split accepted as the D15 rule?**
+   The alternative on the table is the case-based heuristic the reconnaissance
+   instrument used (a Russian tag half continues the sentence, so it opens
+   lowercase). The parser is the better answer — it is the engine's own rule, it
+   is tested, and it generalises past Russian — but it is also **stricter**: it
+   downgrades a whole dialogue text to one unanchored speech span when the tag
+   clause carries no `speechVerbStems`/`beatVerbStems` verb, which will move
+   `tagTotal` on books the heuristic would have split. Nobody has measured how
+   often. *Recommendation: take the parser and let Wave 1 measure the difference.*
+   *Benefit (technical): one definition of a tag clause in the product, not two.*
 
 ## Wave 2 acceptance criteria
 
