@@ -11,6 +11,7 @@ export const ja: LanguageConventions = {
     ['「', '」'],
     ['『', '』'],
   ],
+  secondaryQuotePairs: [],
   speechVerbStems: ['言', '話', '答', '尋', '叫', '呟', '囁', '続け', '応え'],
   beatVerbStems: ['頷', '笑', '頬', '息'],
   nameStemmer: (t) => t,

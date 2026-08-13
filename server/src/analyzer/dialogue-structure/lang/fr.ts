@@ -17,6 +17,7 @@ export const fr: LanguageConventions = {
      and aligner.ts's 7-char atom. */
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»']],
+  secondaryQuotePairs: [],
   speechVerbStems: [
     'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanç', 'rétorqu',
     'continu', 'interromp', 'observ', 'remarqu', 'affirm', 'assur', 'promis', 'averti', 'déclara',

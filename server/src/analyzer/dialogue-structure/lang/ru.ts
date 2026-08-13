@@ -21,6 +21,7 @@ export const ru: LanguageConventions = {
      and aligner.ts's 7-char atom. */
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»'], ['„', '“'], ['“', '”'], ['"', '"']],
+  secondaryQuotePairs: [],
   speechVerbStems: [
     'сказа', 'говор', 'ответ', 'спрос', 'переспрос', 'прошепта', 'шепн', 'шепта', 'крикн', 'крича',
     'воскликн', 'произнес', 'произнос', 'поинтерес', 'пробормота', 'бормота', 'буркн', 'отрез',

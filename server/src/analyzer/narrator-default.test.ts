@@ -7,6 +7,7 @@ import {
 } from './narrator-default.js';
 import { foldMinorCast } from './fold-minor-cast.js';
 import { conventionsFor } from './dialogue-structure/lang/index.js';
+import type { LanguageConventions } from './dialogue-structure/types.js';
 
 // #2245 — isSpokenLine is now driven by the same LanguageConventions tables
 // the structure engine uses, not a separate language-blind regex bundle.
@@ -183,6 +184,26 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('他说「你好」很大声', ZH)).toBe(true);
     expect(isSpokenLine('「おはよう」', JA)).toBe(true);
     expect(isSpokenLine('彼は「おはよう」と言った。', JA)).toBe(true);
+  });
+});
+
+describe('#2288 M2: isSpokenLine reads BOTH quote-pair tiers', () => {
+  /* The tier stops a run STRADDLING; isSpokenLine computes no run boundary, so
+     it cannot straddle and must not inherit the restriction — otherwise #2286's
+     pairs land in a field it never reads and real dialogue is demoted to
+     narrator. Its failure direction here is a false POSITIVE ("do not demote"),
+     the safe one for a demote-only heuristic. */
+  const ruTier: LanguageConventions = {
+    ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']],
+  };
+  it('a line in the SECONDARY convention still reads as spoken', () => {
+    expect(isSpokenLine('‘Привет,’ сказал он.', ruTier)).toBe(true);
+  });
+  it('CONTROL: the same line is NOT spoken with the pair in neither tier', () => {
+    expect(isSpokenLine('‘Привет,’ сказал он.', conventionsFor('ru')!)).toBe(false);
+  });
+  it('an unrelated line is still not spoken', () => {
+    expect(isSpokenLine('Он молча вышел из комнаты.', ruTier)).toBe(false);
   });
 });
 

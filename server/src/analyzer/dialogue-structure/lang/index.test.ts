@@ -46,4 +46,27 @@ describe('conventionsFor', () => {
     expect(ru.quotePairs).toContainEqual(['“', '”']); // “ ”
     expect(ru.quotePairs).toContainEqual(['„', '“']); // „ “
   });
+  it('no language declares a pair in BOTH tiers', () => {
+    for (const lang of ['ru', 'en', 'es', 'fr', 'de', 'zh', 'ja']) {
+      const c = conventionsFor(lang)!;
+      const inPrimary = (o: string, x: string) => c.quotePairs.some(([a, b]) => a === o && b === x);
+      for (const [o, x] of c.secondaryQuotePairs) {
+        expect(inPrimary(o, x), `${lang} declares ${o}${x} in both tiers`).toBe(false);
+      }
+    }
+  });
+
+  /* The gap tier's straddle test keys on the primary OPENER SET, so a secondary
+     pair sharing an opener with a primary pair would decline itself. None of
+     #2286's nine additions does — verified per language in the design. Loosen
+     this only together with a re-measurement. */
+  it('no secondary pair shares an opener glyph with a primary pair', () => {
+    for (const lang of ['ru', 'en', 'es', 'fr', 'de', 'zh', 'ja']) {
+      const c = conventionsFor(lang)!;
+      const primaryOpeners = new Set(c.quotePairs.map(([o]) => o));
+      for (const [o] of c.secondaryQuotePairs) {
+        expect(primaryOpeners.has(o), `${lang}: secondary opener ${o} is also a primary opener`).toBe(false);
+      }
+    }
+  });
 });

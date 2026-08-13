@@ -3,7 +3,7 @@ import { stripHtml } from '../../parsers/html-utils.js';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { anchorSpansFromTags, parseChapterStructure } from './parser.js';
-import type { SpanEvidence } from './types.js';
+import type { LanguageConventions, SpanEvidence } from './types.js';
 
 const ru = conventionsFor('ru')!;
 const idx = buildNameIndex([{ id: 'anton', name: 'Антон' }, { id: 'olga', name: 'Ольга' }], ru);
@@ -733,5 +733,189 @@ describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;'
       .toBe('dialogue');
     expect(parseChapterStructure(stripHtml('<p>&mdash; Un instant.</p>'), frIdx)[0].kind)
       .toBe('dialogue');
+  });
+});
+
+describe('parser — #2288 M2 Task 2: extracting the scan changes nothing', () => {
+  const idx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
+  const speechOf = (body: string) =>
+    parseChapterStructure(body, idx)
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('keeps every shape the shipped scan produces', () => {
+    expect(speechOf('“He said ‘hi’ to me,” she reported.')).toEqual(['He said ‘hi’ to me,']);
+    expect(speechOf('‘I don’t know,’ she said.')).toEqual(['I don’t know,']);
+    expect(speechOf('“First turn,” he said. “Second turn,” she said.')).toEqual([
+      'First turn,',
+      'Second turn,',
+    ]);
+    expect(
+      speechOf('Tom said the ‘phone wasn’t working. “I agree,” said Mary. It was the boys’ fault.'),
+    ).toContain('I agree,');
+  });
+});
+
+describe('parser — #2288 M2: a secondary pair fills gaps but never straddles a primary turn', () => {
+  const ru = conventionsFor('ru')!;
+  const tiered: LanguageConventions = { ...ru, secondaryQuotePairs: [['‘', '’']] };
+  const flat: LanguageConventions = {
+    ...ru, quotePairs: [...ru.quotePairs, ['‘', '’']], secondaryQuotePairs: [],
+  };
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  const straddle = '«Привет», сказал он, глядя на ‘Фауста. «Пока», сказала она О’Брайену.';
+
+  it('RED WITHOUT THE TIER: the pair as a PRIMARY destroys the second turn', () => {
+    /* asserts the BUG, so the case below cannot pass vacuously */
+    expect(speechOf(straddle, flat)).toEqual(['Привет', 'Фауста. «Пока», сказала она О']);
+  });
+
+  it('declared SECONDARY, both turns survive', () => {
+    expect(speechOf(straddle, tiered)).toEqual(['Привет', 'Пока']);
+  });
+
+  it('a paragraph written WHOLLY in the secondary convention still parses', () => {
+    expect(speechOf('‘Привет,’ сказал он. ‘Пока,’ сказала она.', tiered)).toEqual([
+      'Привет,', 'Пока,',
+    ]);
+  });
+
+  it('a secondary turn BESIDE a primary turn is kept — the gap tier’s whole point', () => {
+    expect(speechOf('«Привет», сказал он. ‘Пока,’ сказала она.', tiered)).toEqual([
+      'Привет', 'Пока,',
+    ]);
+  });
+
+  it('an empty tier leaves the shipped table exactly as it reads today', () => {
+    /* NOT expect(x).toEqual(x) — the right-hand side is the literal shipped
+       reading, so this asserts that adding the field changed nothing. */
+    expect(ru.secondaryQuotePairs).toEqual([]);
+    expect(speechOf(straddle, ru)).toEqual(['Привет', 'Пока']);
+  });
+
+  it('a secondary candidate straddling an UNCLOSED primary opener is declined — isolates the straddle check from the overlap guard', () => {
+    /* Unlike `straddle` above, the primary « here never closes (no » anywhere
+       in the string), so scanQuoteRuns(pairs) produces NO primary run for it
+       to overlap against — only the straddle check (not the disjointness
+       guard `out.some(...)`) can catch this candidate. Disabling `straddles`
+       accepts it and yields one wrong speech span instead of zero. */
+    expect(speechOf('‘Он сказал «Привет и ушёл.’ Она молчала.', tiered)).toEqual([]);
+  });
+});
+
+describe('parser — #2288 M2: invariants hold with a tier declared', () => {
+  const enTier: LanguageConventions = {
+    ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']],
+  };
+  const zhTier: LanguageConventions = {
+    ...conventionsFor('zh')!, secondaryQuotePairs: [['‘', '’'], ['"', '"']],
+  };
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([{ id: 'mary', name: 'Mary' }], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('en: nesting resolves to the OUTER run (acceptance item 5)', () => {
+    expect(speechOf('“He said ‘hi’ to me,” she reported.', enTier)).toEqual(['He said ‘hi’ to me,']);
+  });
+  it('zh: nesting resolves to the OUTER run (acceptance item 5)', () => {
+    expect(speechOf('“他说‘你好’然后走了”', zhTier)).toEqual(['他说‘你好’然后走了']);
+  });
+  it('en: M1’s apostrophe repair survives', () => {
+    expect(speechOf('‘I don’t know,’ she said.', enTier)).toEqual(['I don’t know,']);
+  });
+  it('en: M1’s rejection bound survives — Mary’s turn is not swallowed', () => {
+    expect(
+      speechOf('Tom said the ‘phone wasn’t working. “I agree,” said Mary. It was the boys’ fault.', enTier),
+    ).toContain('I agree,');
+  });
+  it('en: the ticket’s « straddle counter-example keeps both turns', () => {
+    expect(
+      speechOf('“Hi,” he said, passing the «Faust poster. “Bye,” she said, near the «gallery».', enTier),
+    ).toEqual(['Hi,', 'Bye,']);
+  });
+  it('de: #1601 nearest-closer split is untouched', () => {
+    expect(speechOf('„Guten Tag“, sagte er. „Und du?", fragte sie.', conventionsFor('de')!)).toEqual([
+      'Guten Tag', 'Und du?',
+    ]);
+  });
+  it('runs stay disjoint under the tier', () => {
+    const spans = parseChapterStructure(
+      '«Привет», сказал он, глядя на ‘Фауста. «Пока», сказала она О’Брайену.',
+      buildNameIndex([], { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] }),
+    ).flatMap((p) => p.spans).sort((a, b) => a.start - b.start);
+    for (let i = 1; i < spans.length; i++) expect(spans[i].start).toBeGreaterThanOrEqual(spans[i - 1].end);
+  });
+});
+
+describe('parser — #2288 M2: a quoted TITLE in narration must not suppress dialogue', () => {
+  /* THE case that disqualified the paragraph-scoped tier. A primary scan is an
+     any-run detector, not a convention detector: under a paragraph verdict this
+     paragraph lost BOTH turns, 21 of 21 such shapes across six languages.
+     Guillemet and corner-bracket titles are routine in exactly the books
+     typeset in the secondary convention. */
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('es: a «title» in narration leaves both "…" turns intact', () => {
+    const es: LanguageConventions = { ...conventionsFor('es')!, secondaryQuotePairs: [['"', '"']] };
+    expect(speechOf('Leía «Fausto» en la portada. "Hola", dijo él. "Adiós", dijo ella.', es)).toEqual([
+      'Fausto', 'Hola', 'Adiós',
+    ]);
+  });
+  it('ja: a 「title」 in narration leaves both “…” turns intact', () => {
+    const ja: LanguageConventions = { ...conventionsFor('ja')!, secondaryQuotePairs: [['“', '”']] };
+    expect(
+      speechOf('彼は表紙の「ファウスト」を読んだ。“おはよう”と彼は言った。“さようなら”と彼女は言った。', ja),
+    ).toEqual(['ファウスト', 'おはよう', 'さようなら']);
+  });
+});
+
+describe('parser — #2288 M2: residuals accepted with rule B (design doc § Residuals)', () => {
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it("residual 1: the straddle inside a language's own PRIMARY pairs is untouched (design residual 1)", () => {
+    // M2 only adds a tier BELOW primary; Task 3 never touched scanQuoteRuns or
+    // the leftmost-accept loop. es's primary quotePairs leads with «»; an
+    // unclosed « (no » after "Hola") makes the primary scan skip past the
+    // beat straight to the NEXT » — the one closing the second turn's own
+    // quote — merging beat + second turn's opening tag into one run. This is
+    // exactly `main`'s behaviour today (design doc's own worked example) —
+    // 579 of 2,456 well-formed straddle shapes corrupt this way, and M2
+    // moves none of that.
+    const es = conventionsFor('es')!;
+    const merged = speechOf('«Hola, dijo él. «Adiós», dijo ella.', es);
+    expect(merged).toEqual(['Hola, dijo él. «Adiós']);
+    // Prove it's a genuine MERGE, not an absence of runs or two clean turns:
+    // the single run's text must contain both halves.
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toContain('dijo él');
+    expect(merged[0]).toContain('Adiós');
+  });
+
+  it("residual 2: a spurious secondary run over narration survives, with BOTH real turns intact (design residual 2, F1's 284)", () => {
+    // "Stop" sits in the gap between two real turns, framed by the secondary
+    // «» pair. It contains no primary opener, so the gap tier accepts it as
+    // a (spurious) third run — narration read as speech — but BOTH real
+    // turns ("Hi" and "Bye") survive untouched. That's the residual the
+    // owner decision (rule B) accepted: audible, attributable, recoverable —
+    // never a lost turn.
+    const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
+    const spans = speechOf('“Hi”, he said. The sign said «Stop». “Bye”, she said.', enTier);
+    expect(spans).toEqual(['Hi', 'Stop', 'Bye']);
   });
 });

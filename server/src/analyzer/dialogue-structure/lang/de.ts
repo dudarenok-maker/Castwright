@@ -17,6 +17,7 @@ export const de: LanguageConventions = {
     ['„', '"'],
     ['»', '«'],
   ],
+  secondaryQuotePairs: [],
   speechVerbStems: [
     'sagt', 'fragt', 'antwortet', 'flüstert', 'rief', 'murmelt', 'erwidert', 'ergänzt', 'bemerkt', 'meint',
     'verkündet', 'ruft', 'stammelt', 'quietscht', 'grollt', 'heult', 'beharrt', 'äußert', 'beteuert', 'versichert',
