@@ -403,6 +403,33 @@ right predicate for what it does — deciding whether the analyzer should demote
 sentence — and it is a **defect surface this metric measures** (D18), not a tool
 it uses.
 
+**The aligner's own known residual is inherited, and it is stated rather than
+assumed away.** `alignSentences` anchors on **length alone**:
+`ANCHOR_MIN_LEN = FUZZY_MIN_NEEDLE = 24` normalised characters (`aligner.ts:45`).
+A shorter needle never anchors and is placed by the interval-bounded Pass B
+infill. `aligner.ts`'s own header records the consequence precisely — a needle
+at or over the floor that *recurs* can still anchor at a later occurrence and
+strand the rest of the chapter, and #2187 changed who can trigger that (a
+5-character `- Да.` no longer can) without removing it.
+
+**For this metric that residual shows up as `unattributedSpeech`, which is the
+right place for it** — a span the aligner could not place is reported as
+unplaced rather than silently attributed to whoever was nearest. But it means
+the column mixes two causes: *the model omitted the line* and *the aligner could
+not place it*. **They are not separated, and Wave 1 does not separate them.**
+That is an accepted limitation, recorded here rather than discovered later, and
+it is bounded in the honest direction: both causes mean "the metric cannot speak
+for this line", which is what the column is for. If Wave 1's run shows
+`unattributedSpeech` large on a book whose prose survived (measurable against
+the EPUB, as `prose-loss.mts` already does), the aligner is the cause and that
+is its own finding.
+
+**A fixture consequence follows and the plan carries it:** a dash-dialogue
+fixture's sentences are typically well under 24 characters, so a single-tier
+fixture set exercises Pass B only. The suite needs a short tier **and** an
+anchored tier, or it proves the join works in a regime the real corpus is not
+in.
+
 **A speech span may align to more than one sentence, and to zero.** Both are
 real and both are reported:
 
