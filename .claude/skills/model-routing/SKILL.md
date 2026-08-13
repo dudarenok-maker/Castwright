@@ -79,94 +79,15 @@ for subagent dispatch above.
   — do not keep looping automatically past the cap.
 - **Judgment-call carve-out**: see below.
 
-## Mandatory independent review (PRs)
+## PR review
 
-- **Sequence**: finalize implementation → local `npm run verify:fast:branch`
-  (cloud `verify.yml` is the enforcing gate) → `gh pr
-  create` → work through `CLAUDE.md`'s before-shipping checklist item by
-  item (each done or explicitly marked not-applicable), committing and
-  pushing along the way → once every applicable item is addressed and
-  everything is pushed, that is "fully staged" and this review triggers on
-  that state (not on an earlier, incomplete push).
-- **Exemption**: a docs-only PR — changed-file set entirely under `docs/**`,
-  root-level `*.md`, or `.github/*.md` (the same file-set test
-  CONTRIBUTING.md's "Doc-only PR fast-path" already uses for the `verify.yml`
-  `paths-ignore` skip) — is exempt from this gate entirely; no review
-  pass runs.
-- **Effort level**: for every other PR, scales with the PR's commit
-  type/scope, reusing CONTRIBUTING.md's existing commit-convention
-  vocabulary rather than a new classification:
-  - **`low`** — single-scope `chore`, `test`, `build`, or `ci` (mechanical,
-    no user-facing behavior change).
-  - **`medium`** — single-scope `feat` or `fix`.
-  - **`high`** — `refactor`, `perf`, or any multi-scope PR (CONTRIBUTING.md's
-    own "use sparingly" multi-scope guidance already flags these as
-    higher-risk) — today's unchanged default.
+Moved out of this file 2026-08-13. The sequence, the docs-only exemption, the
+effort ladder, dispatch, the PR comment, findings triage, the re-review trigger
+and loop cap, and issue verification at PR creation all live in
+[`pr-review-gate`](../pr-review-gate/SKILL.md). Routing keeps routing; that file
+owns the PR process.
 
-  A PR whose commits mix types takes the highest tier any single commit
-  would earn on its own (e.g. one `fix` commit + one `refactor` commit →
-  `high`). `ultra` is never auto-selected here — it is billed and requires
-  explicit user opt-in (`/code-review ultra`, or the user asking for it by
-  name), per the Workflow tool's own rule.
-- **Mechanism**: invoke the `pr-review-gate` skill, which dispatches a
-  **non-fork** subagent at this table's **Premium** tier carrying the
-  adversarial gate brief, at the effort level determined above, once fully
-  staged — a findings report only, triaged by hand; the subagent edits nothing.
-  The same bar applies when the user runs `/code-review` themselves: no `--fix`.
-  `--fix` applies whatever the pass surfaced wholesale, and there's no per-finding
-  confidence filter to gate it on, so triage happens by hand instead — see
-  Findings handling. This is a working/branch-diff review — not the separate
-  `/review` PR-comment slash command, and not the
-  `code-review@claude-plugins-official` plugin command either: that plugin
-  reviews a GitHub PR, discards every finding below 80% confidence, and
-  posts a public comment on the PR instead of returning a report to triage.
-  - **Why not invoke the built-in `code-review` skill directly**: it is
-    user-invocable only — `Skill(skill: "code-review")` fails with "cannot
-    be used with Skill tool due to disable-model-invocation", and a
-    dispatched subagent hits the same wall, so "dispatch an agent and have
-    it invoke the skill" is not a workaround. It remains available and is
-    the *better* reviewer: the user may type `/code-review <level>` at any
-    point, and when they do it supersedes the agent pass for that round.
-  - **Never report the gate as having run when it did not.** If the agent
-    pass was substituted, or skipped, say so plainly in the user-facing
-    summary.
-- **Findings handling**: triage the report by hand, then **fix in this round**.
-  Every finding gets a dispatched fix agent — one finding, one fix, one paired
-  test — committed and pushed before merge. Clear-cut findings (unambiguous
-  bug, obvious dead code, a straightforward CLAUDE.md violation) are the
-  ordinary case, not the only case. **Cleanup-only findings are in scope too** —
-  a reuse/simplification/efficiency nit, a staled derived artifact, a missing
-  index or register row, an unwired knob. They are cheaper to dispatch than a
-  bug, not a lesser class of work, and "it's only a chore" / "it's not
-  user-visible" is not a deferral. (This is a *fixing* rule, not a re-review
-  rule: cleanup-only findings still do not re-trigger a pass — see below.) The
-  one exception stays taste: a reviewer preferring a different shape for code
-  that is correct and consistent with its neighbours is declined, not filed.
-  **The single finding allowed to leave the round unfixed is one needing a
-  design pass** — more than one defensible outcome, a decision the user has a
-  stake in — which routes through the judgment-call carve-out below and gets an
-  issue naming that decision as its deliverable. Everything else is fixed now:
-  "it expands the PR's scope", "it's pre-existing", "it needs its own test",
-  and "we can batch these" are **not** deferral grounds — see [CLAUDE.md →
-  Incidental
-  findings](../../../CLAUDE.md#incidental-findings-report-fix-record) for the
-  full void-reasons list and the defect/chore/taste seam. A ten-finding report
-  ends as ten fix commits, not a follow-up epic. None of this licenses `--fix`:
-  the fixes are dispatched and reviewed per finding, never applied wholesale.
-- **Re-review trigger**: only when the initial pass surfaced ≥1 finding
-  that is an actual correctness bug (wrong behavior, crash, security issue —
-  not a reuse/simplification/efficiency-only cleanup nit). Fixing and
-  pushing those re-triggers a pass. If the initial pass came back empty, or
-  surfaced only cleanup-only findings, fix-and-push (or push nothing) does
-  **not** re-trigger a re-review — re-running it in that case just burns
-  tokens for no new signal. This mirrors the spec/plan loop's severity-gated
-  shape (above), rather than firing on every push. Re-review re-derives the
-  effort level from the PR's current commit set (above) rather than
-  reusing the initial pass's tier — a fix commit can raise the tier the
-  same way any other commit would.
-- **Loop cap**: 2 re-review rounds, same numeric cap as the spec/plan loop
-  above (initial pass + up to 2 re-review rounds, 3 total).
-- **Judgment-call carve-out**: see below.
+The judgment-call carve-out below is shared by both review loops and stays here.
 
 ## Judgment-call carve-out (shared by both review loops)
 
@@ -176,34 +97,3 @@ and routes through the normal ask-first behavior in `CLAUDE.md`'s "Think
 before coding" — it does not get silently resolved just to keep the loop
 moving. This is the same failure mode in both loops: an automated loop
 mistaking a decision for a defect.
-
-## PR-gate issue verification
-
-- **Trigger**: every `gh pr create` for non-trivial work, including
-  bug-shaped work.
-- **Check**: the PR body must contain `Closes #NN` or `Refs #NN` referencing
-  an existing GitHub issue, outside of any inline-code/fenced-code span (a
-  backtick-wrapped `` `Closes #NN` `` does not actually auto-close on
-  GitHub — write it plain).
-- **Missing case**: auto-file a new issue capturing the work, then add
-  `Closes #NN` to the PR body — proceed without pausing to ask, in every
-  case including bug-shaped work (a deliberate, explicit override of
-  `CLAUDE.md`'s general "user files bugs" convention, scoped to this one
-  gate). Label per `CONTRIBUTING.md`'s actual two-shape convention:
-  - **Bug-shaped** (fixing existing broken behavior, no design decision):
-    standalone `bug` label, plain descriptive title. No `area:`/`type:`/
-    `moscow:`.
-  - **Backlog-shaped** (new/changed behavior): `area:<prefix>` +
-    (`type:feature` or `type:chore`). `moscow:` left unset for the user.
-    Use `type:chore` when the work matches this repo's commit-type-`chore`
-    shape (codegen, version bumps, tidy-up — no user-facing behavior
-    change); `type:feature` otherwise.
-- **Timing**: at PR creation — distinct from, and prior to, the mandatory
-  independent review above, which reviews code + docs combined once the PR
-  (and its issue link) already exist.
-- **Mechanical backstop**: `.github/workflows/pr-issue-link.yml` fails the
-  PR check if neither `Closes #\d+` nor `Refs #\d+` appears in the body
-  (outside code spans) — the one gate in this file with a real, external
-  enforcement, not just this convention. It does not check labeling or
-  whether the auto-file step above ran correctly, only that some issue
-  reference exists.

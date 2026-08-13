@@ -444,6 +444,21 @@ test('stepTouchedByDiff: a hook-script diff matches test:hooks via extraFiles', 
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+test('stepTouchedByDiff: a pr-review-gate reference-file diff is in scope for test:hooks', () => {
+  // The three .claude/skills literals this replaced could not see a file that
+  // did not exist when they were written — defect shape "a guard that
+  // enumerates loses one spelling per round". A reference file added later
+  // would print test:hooks [cached] and leave review-gate-mechanism.test.mjs
+  // stale-green on exactly the diff that breaks it.
+  const diff = ['.claude/skills/pr-review-gate/references/reviewer-brief.md'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+test('stepTouchedByDiff: a brand-new skill file is in scope for test:hooks', () => {
+  const diff = ['.claude/skills/pr-review-gate/references/some-future-file.md'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
 // PR #2007 review, Minor 9 — bump-version.test.mjs mirrors bump-version.mjs's
 // TEXT into a throwaway repo at RUNTIME (no module-graph edge), the same
 // #1847 trap release-notes-gate.mjs's own extraFiles entry already guards

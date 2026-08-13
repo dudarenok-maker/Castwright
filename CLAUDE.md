@@ -304,8 +304,8 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
   entirely. Otherwise effort scales with the PR's commit type/scope
   (CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
   `chore`/`test`/`build`/`ci`, `medium` for a single-scope `feat`/`fix`,
-  `high` for `refactor`/`perf` or any multi-scope PR — see the model-routing
-  skill for the full split.
+  `high` for `refactor`/`perf` or any multi-scope PR — see the
+  `pr-review-gate` skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the
@@ -421,6 +421,15 @@ Design rationale:
   Run from a checkout that has `apps/android/android/key.properties` + `upload-keystore.jks`
   (git-ignored). Pure helpers unit-tested in `scripts/tests/build-companion-apk.test.mjs`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
+- `npm run skills:sync` — mirror `.claude/skills/pr-review-gate/` into
+  `~/.agents/skills/`, the only skill store Cline (and the five other agents
+  sharing it) resolves — it does **not** read a workspace `.claude/skills/`
+  (probed 2026-08-13, `docs/testing/agent-skill-resolution-probe.md`). A
+  **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
+  fresh clone has no mirror. Re-run after any change under that directory; the
+  drift guard in `scripts/tests/review-gate-mechanism.test.mjs` catches a stale
+  mirror **only on a machine that has one** — it skips, loudly, where the path
+  is absent.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
@@ -475,7 +484,9 @@ Design rationale:
   vars. No hex literals in component code.
 - **Mocks behind `VITE_USE_MOCKS`** — `src/lib/api.ts` exports
   `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
-  they never know which is which. `.env.development` sets the flag on.
+  they never know which is which. `.env.development` sets the flag **off**
+  (`VITE_USE_MOCKS=false`) — the default dev run talks to the real server;
+  opt into mocks with `VITE_USE_MOCKS=true npm run dev:frontend`.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 - **`server/src/gpu/` reaches a route module through a leaf gate, never an
   import** — a static import, a dynamic `import()`, and even `import type`
@@ -709,11 +720,11 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
    `npm run check:onbox-register` (`.github/workflows/onbox-register-check.yml`, ops-43) mechanically backstops the register's own internal arithmetic — glance-table counts vs. body row headings, and the stated total vs. the glance table — on every PR touching the file. It cannot tell you a row is missing, only that the ones already there don't add up.
 4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
-6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
+6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [PR review → issue verification](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
 7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
 8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
-10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
+10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [the PR review runbook](.claude/skills/pr-review-gate/SKILL.md). Triage and fold findings before merge.
 
 ## Out of scope until told otherwise
 
@@ -1050,7 +1061,7 @@ check on every PR that skips this, mirroring `pr-title-lint.yml`, and (since
 2026-07-06) a missing link blocks merge outright — wired into `main`'s
 required status checks alongside `verify.yml` in the same ruleset action;
 see [docs/features/235-model-routing-review-gates.md](docs/features/235-model-routing-review-gates.md).
-Full mechanics: [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification).
+Full mechanics: [`.claude/skills/pr-review-gate/SKILL.md`](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation).
 
 **Requesting a clean-room CI run on a PR.** CI now runs automatically on
 every PR push (see "Commit gate" above) and is the real, required gate —
