@@ -2,7 +2,10 @@ import type { LanguageConventions } from '../types.js';
 
 export const fr: LanguageConventions = {
   language: 'fr',
-  dialogueOpen: /^\s*(?:&mdash;|[-–—])\s*/iu,
+  // #2289: some EPUB toolchains leave the entity literal in the body text
+  // (stripHtml only decodes a small named-entity set) — carry both &mdash;
+  // and &ndash; alongside the literal dash glyphs, per the ru.ts precedent.
+  dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»']],
   speechVerbStems: [
     'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanç', 'rétorqu',
