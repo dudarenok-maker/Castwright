@@ -1070,13 +1070,27 @@
         <b>ch8</b>, <code>repeat-loop</code> at offset <b>19</b>, reproduced identically five times
         across two server lifetimes on 2026-08-12/13. Observe:</p>
         <ul>
-          <li>the retry <b>halts on the repeated signature</b> — attempt 2, not the full
-          <code>coverageRetries</code> budget — and the operator line names the deterministic failure;</li>
-          <li>the span is then re-attributed as smaller sections: <code>chunkCount</code> for that
-          chapter exceeds 1, or the section-done log shows more sections than before;</li>
+          <li>the retry <b>halts on the repeated signature</b> before the
+          <code>coverageRetries</code> budget is spent — <em>"the same attribution failure reproduced
+          exactly on attempt N"</em>. <b>Do not pin N to 2:</b> for the ch8 shape (attempt 1 a plain
+          truncation, attempts 2+ an identical repeat-loop) the stop lands on <b>attempt 3</b>,
+          because the first repeat is the first thing there is anything to match against. Any N below
+          the budget is a pass;</li>
+          <li>the log then shows <b><code>re-attributing a &lt;N&gt;-char section as &lt;M&gt; smaller
+          ones (split depth D)</code></b>. That line exists only because nothing else can see the
+          split: it happens inside a recursion firing neither <code>onChunk</code> nor
+          <code>onSectionDone</code>, and <code>chunkCount</code> is fixed before any of it runs — so
+          on a multi-chunk chapter, which ch8 is, <b>both counters read identically whether the
+          escalation fires or is reverted outright</b>. An earlier draft of this row asked for exactly
+          those counters and would have recorded a PASS on a null observation;</li>
           <li><b>ch8's sentence count is whole</b>, not the partial take. This is the criterion that
-          matters; the rest is corroboration.</li>
+          matters; the two above establish that the mechanism under test produced it, rather than
+          luck.</li>
         </ul>
+        <p><b>Absence of the re-split line is not a failure on its own</b> — the split declines for an
+        indivisible span or at <code>maxSplitDepth</code>, and <code>onExhausted</code> fires either
+        way. If the stop line appears without the split line, record that: it means the chapter
+        reached the depth limit, which is its own result.</p>
         <div class="flag"><b>Record the outcome either way — a NEGATIVE result here is valuable and
         must not be quietly dropped.</b> It would mean the escalation spends model calls without
         recovering the chapter, and that this failure class needs a remedy other than a shorter

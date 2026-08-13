@@ -2671,13 +2671,28 @@ The reproducer is already known and specific, which is the only reason this is
 cheap: Ночной дозор **ch8**, `repeat-loop` at offset **19**, which reproduced
 identically five times across two server lifetimes on 2026-08-12/13. Observe:
 
-- the `[analysis:structure]` / analyzer log shows the retry halting on the
-  repeated signature (attempt 2, not the full `coverageRetries` budget), and the
-  operator line naming the deterministic failure;
-- the span is then re-attributed as smaller sections — `chunkCount` for that
-  chapter exceeds 1, or the section-done log shows more sections than before;
+- the analyzer log shows the retry **halting on the repeated signature** before
+  the `coverageRetries` budget is spent — *"the same attribution failure
+  reproduced exactly on attempt N"*. Do **not** pin N to 2: for the ch8 shape
+  (attempt 1 a plain truncation, attempts 2+ an identical repeat-loop) the stop
+  lands on **attempt 3**, because the first repeat is the first thing there is
+  anything to match against. Any N below the budget is a pass;
+- the log then shows **`re-attributing a <N>-char section as <M> smaller ones
+  (split depth D)`**. This line exists only because nothing else can see the
+  split: it happens inside a recursion that fires neither `onChunk` nor
+  `onSectionDone`, and `chunkCount` is fixed before any of it runs — so on a
+  multi-chunk chapter, which ch8 is, **both of those counters read identically
+  whether the escalation fires or is reverted outright**. An earlier draft of
+  this row asked for exactly those counters and would have recorded a PASS on a
+  null observation;
 - **ch8's sentence count is whole**, not the partial take. This is the criterion
-  that matters; the rest is corroboration.
+  that matters; the two above establish that the mechanism under test is what
+  produced it, rather than luck.
+
+Absence of the re-split line is **not** a failure on its own — the split
+declines for an indivisible span or at `maxSplitDepth`, and `onExhausted` fires
+either way. If the stop line appears without the split line, record that: it
+means the chapter reached the depth limit, which is its own result.
 
 Record the outcome either way. A **negative** result here is valuable and must
 not be quietly dropped: it would mean the escalation costs model calls without

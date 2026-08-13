@@ -297,6 +297,21 @@ export interface Stage2ChunkRunOptions {
       (exact) numerator; the streamed marker count only ever covers the
       in-flight section. */
   onSectionDone?: (index: number, sentenceCount: number) => void;
+  /** #2304 — fired when a DETERMINISTIC coverage failure actually proceeds to a
+      re-split, with the number of pieces the span was divided into.
+
+      This exists because nothing else in the pipeline can see it. The
+      deterministic re-split happens inside `attributeSpan`'s recursion, which
+      fires neither `onChunk` nor `onSectionDone`; both of those are top-level
+      counters, and `chunkCount` is `chunks.length`, fixed before any of this
+      runs. So on a multi-chunk chapter — which the ch8 reproducer is, being far
+      over the ~9,000-char local budget — those counters read identically
+      whether the escalation fires or is reverted outright, and an on-box
+      acceptance run reading them would record a PASS on a null observation.
+      `onExhausted` proves only that the retry STOPPED, never that the split
+      followed; the split declines for an indivisible span or at
+      `maxSplitDepth`. */
+  onDeterministicSplit?: (info: { parts: number; chars: number; depth: number }) => void;
 }
 
 /** Attribute a chapter's sentences, transparently chunking when the body is
@@ -385,8 +400,12 @@ export async function runStage2ChapterChunked(
        the best take when the span will not divide — so a genuinely irreducible
        failure is still reported, never silently accepted. */
     if (guarded.deterministicFailure && depth < maxSplitDepth) {
-      const split = await splitAndRetry();
-      if (split) return split;
+      const sub = splitSpanForRetry(span);
+      if (sub.length > 1) {
+        opts.onDeterministicSplit?.({ parts: sub.length, chars: span.length, depth });
+        const split = await splitAndRetry();
+        if (split) return split;
+      }
     }
     return guarded.result.sentences;
   };
@@ -445,7 +464,10 @@ export async function runStage2ChapterChunked(
          re-split that never ran. */
       if (deterministicFailure) {
         const forced = splitSpanForRetry(opts.body);
-        if (forced.length > 1) return runChunks(forced);
+        if (forced.length > 1) {
+          opts.onDeterministicSplit?.({ parts: forced.length, chars: opts.body.length, depth: 0 });
+          return runChunks(forced);
+        }
       }
       opts.onSectionDone?.(0, result.sentences.length);
       return { sentences: result.sentences, coverage, chunkCount: 1 };

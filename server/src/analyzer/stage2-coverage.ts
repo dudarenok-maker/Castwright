@@ -283,10 +283,18 @@ function verdictSignature(v: Stage2CoverageVerdict): string {
 
     So: if a retry reproduces the PREVIOUS attempt's failure signature exactly,
     stop and report it. One identical repeat is the signal — the retry's whole
-    premise is sampling variance, and an identical structural verdict is direct
-    evidence there is none at this temperature. `onExhausted` fires only on that
-    path, so a caller can distinguish "we ran out of attempts" from "more
-    attempts provably cannot help". */
+    premise is sampling variance, and two consecutive identical structural
+    verdicts are strong evidence there is too little of it here to help.
+
+    Deliberately NOT claimed: that variance is absent. The comparison is against
+    the immediately preceding attempt, so a sequence like A,B,A,A stops on the
+    third-and-fourth pair having ALREADY observed variance at B. That is the
+    intended trade — the escalation this feeds (a re-split, i.e. a different
+    prompt) is a better use of the remaining budget than another identical call
+    either way, and a false stop costs a split rather than a lost retry.
+
+    `onExhausted` fires only on that path, so a caller can distinguish "we ran
+    out of attempts" from "more attempts are very unlikely to help". */
 export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ text: string }> }>(opts: {
   body: string;
   maxRetries: number;
@@ -319,24 +327,27 @@ export async function runStage2WithCoverageGuard<T extends { sentences: Array<{ 
      exact behaviour this guard exists to stop. That shape is ordinary, not
      exotic: a first attempt that merely truncates outscores repeat-loop takes,
      which carry a duplicated block. */
-  let lastAttemptSignature = verdictSignature(coverage);
+  let lastAttemptVerdict = coverage;
   while (!coverage.ok && attempts <= opts.maxRetries) {
-    opts.onRetry?.(attempts + 1, coverage);
+    /* `lastAttemptVerdict`, not `coverage` — otherwise `onRetry` and
+       `onExhausted` describe DIFFERENT attempts and the operator log reads as
+       two contradictory issue strings for one moment (e.g. a ratio message from
+       attempt 1 followed by "reproduced exactly … (repeat-loop at 19)"). */
+    opts.onRetry?.(attempts + 1, lastAttemptVerdict);
     const retryResult = await opts.call();
     const retryCoverage = validateStage2Coverage(opts.body, retryResult.sentences, opts.thresholds);
-    const retrySignature = verdictSignature(retryCoverage);
     attempts += 1;
     if (isBetterCoverage(retryCoverage, coverage)) {
       result = retryResult;
       coverage = retryCoverage;
     }
     if (coverage.ok) break;
-    if (retrySignature === lastAttemptSignature) {
+    if (verdictSignature(retryCoverage) === verdictSignature(lastAttemptVerdict)) {
       deterministicFailure = true;
       opts.onExhausted?.(attempts, retryCoverage);
       break;
     }
-    lastAttemptSignature = retrySignature;
+    lastAttemptVerdict = retryCoverage;
   }
   return { result, coverage, attempts, deterministicFailure };
 }

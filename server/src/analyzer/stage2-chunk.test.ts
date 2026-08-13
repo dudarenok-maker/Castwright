@@ -355,6 +355,60 @@ describe('runStage2ChapterChunked', () => {
     expect(out.chunkCount).toBeGreaterThan(1); // it really did re-split
   });
 
+  /* Without this callback the escalation is INVISIBLE. `onChunk`/`onSectionDone`
+     fire per top-level chunk and `chunkCount` is `chunks.length`, fixed before
+     any re-split runs — so on a multi-chunk chapter they read identically
+     whether the escalation fires or is reverted outright. An acceptance run
+     reading them would record a pass on a null observation. */
+  it('reports a deterministic re-split that top-level counters cannot see', async () => {
+    const body = makeBody(6);
+    const splits: Array<{ parts: number; depth: number }> = [];
+    const call = vi.fn(async (subBody: string) => {
+      if (subBody.length > 60) {
+        const full = fakeAttribute(subBody);
+        return { ...full, sentences: full.sentences.slice(0, 1) };
+      }
+      return fakeAttribute(subBody);
+    });
+
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 80, // multi-chunk route — the one where the counters are blind
+      coverageRetries: 1,
+      callForBody: call,
+      onDeterministicSplit: ({ parts, depth }) => splits.push({ parts, depth }),
+    });
+
+    expect(splits.length, 'the escalation must announce itself').toBeGreaterThan(0);
+    for (const s of splits) expect(s.parts).toBeGreaterThan(1);
+    /* The point of the callback: chunkCount is blind to what just happened. */
+    expect(out.chunkCount).toBe(splitBodyIntoChunks(body, 80).length);
+    expect(out.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('does NOT report a split when the span is indivisible (no false positive)', async () => {
+    /* The control. `onExhausted` fires here but no split follows, which is
+       exactly the case a criterion built on `onExhausted` alone would misread. */
+    const body = 'A single unsplittable blob with no sentence end';
+    const splits: number[] = [];
+    const exhausted: number[] = [];
+    const call = vi.fn(async () => ({
+      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A single' }],
+    }));
+
+    await runStage2ChapterChunked({
+      body,
+      charBudget: 10_000,
+      coverageRetries: 3,
+      callForBody: call,
+      onDeterministicSplit: ({ parts }) => splits.push(parts),
+      onExhausted: (attempts) => exhausted.push(attempts),
+    });
+
+    expect(exhausted.length, 'the retry must still stop').toBeGreaterThan(0);
+    expect(splits, 'an indivisible span must not claim a split').toEqual([]);
+  });
+
   /* A deterministic re-split whose sub-tree throws must NOT be re-run by the
      truncation catch at the same depth. Before the guarded call was hoisted out
      of the `try`, the throw escaping `splitAndRetry()` landed in that frame's

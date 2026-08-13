@@ -2102,6 +2102,12 @@ export async function attributeChapterStage2(opts: {
   /** Fired when the coverage retry stopped early because the failure was
       reproduced exactly — deterministic, so more attempts cannot help. */
   onCoverageExhausted?: (attempts: number, verdict: { issues: string[] }) => void;
+  /** #2304 — fired when a deterministic coverage failure actually PROCEEDS to a
+      re-split. `onCoverageExhausted` only says the retry stopped; the split
+      still declines for an indivisible span or at the depth limit, and it
+      happens inside a recursion that touches neither `chunkCount` nor
+      `onSectionDone`. Without this the escalation is unobservable. */
+  onDeterministicSplit?: (info: { parts: number; chars: number; depth: number }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
   onSectionDone?: (index: number, sentenceCount: number) => void;
   /* srv-59 Task 9b — per-BOOK escalation-window budget, shared/mutable
@@ -2182,6 +2188,7 @@ export async function attributeChapterStage2(opts: {
     callForBody,
     onRetry: opts.onCoverageRetry,
     onExhausted: opts.onCoverageExhausted,
+    onDeterministicSplit: opts.onDeterministicSplit,
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
@@ -4890,14 +4897,20 @@ export async function runMainAnalyzerJob(
             1,
             `Chapter ${i + 1}/${totalChapters} — the same attribution failure reproduced exactly on ` +
               `attempt ${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
-              `deterministically, so re-running the same prompt cannot help. Halting the retries ` +
-              `and re-attributing in smaller sections where the section can still be divided.`,
+              `deterministically, so re-running the same prompt cannot help. Halting the retries; ` +
+              `a re-split follows unless the section is indivisible or already at the split-depth limit.`,
+          ),
+        onDeterministicSplit: ({ parts, chars, depth }) =>
+          log(
+            1,
+            `Chapter ${i + 1}/${totalChapters} — re-attributing a ${chars.toLocaleString()}-char ` +
+              `section as ${parts} smaller ones (split depth ${depth}).`,
           ),
       });
       if (stage2ChunkCount > 1) {
         log(
           1,
-          `Chapter ${i + 1}/${totalChapters} — large chapter attributed in ${stage2ChunkCount} sections to stay under the model output cap.`,
+          `Chapter ${i + 1}/${totalChapters} — attributed in ${stage2ChunkCount} sections.`,
         );
       }
       if (!coverageVerdict.ok) {
@@ -6548,14 +6561,20 @@ export async function runSubsetAnalyzerJob(
               1,
               `Chapter ${ch.id} — the same attribution failure reproduced exactly on attempt ` +
                 `${attempts} (${verdict.issues[0] ?? 'coverage'}); this section fails ` +
-                `deterministically, so re-running the same prompt cannot help — re-attributing it in ` +
-                `smaller sections instead.`,
+                `deterministically, so re-running the same prompt cannot help. Halting the retries; ` +
+                `a re-split follows unless the section is indivisible or already at the split-depth limit.`,
+            ),
+          onDeterministicSplit: ({ parts, chars, depth }) =>
+            log(
+              1,
+              `Chapter ${ch.id} — re-attributing a ${chars.toLocaleString()}-char section as ` +
+                `${parts} smaller ones (split depth ${depth}).`,
             ),
         });
       if (subsetChunkCount > 1) {
         log(
           1,
-          `Chapter ${ch.id} — large chapter attributed in ${subsetChunkCount} sections to stay under the model output cap.`,
+          `Chapter ${ch.id} — attributed in ${subsetChunkCount} sections.`,
         );
       }
       for (const s of chapterSentences) s.chapterId = ch.id;
