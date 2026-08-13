@@ -295,7 +295,34 @@ function isRealCloser(line: string, k: number, closer: string, openers: Set<stri
     recomputation cannot walk the bound forward: the next occurrence of this
     glyph, if any, sits in `[k, bound)` — there is no opener in that range by
     definition of the bound — so recomputing from it returns the identical
-    index. */
+    index.
+
+    That proof's precondition: it is a per-GLYPH argument. It bounds the
+    resumed scan for the one closer glyph that rejected — it says nothing
+    about a DIFFERENT closer glyph paired with the same opener. `end` is a
+    minimum taken across every closer in the opener's set, so an unrejected
+    SIBLING closer's first occurrence (first occurrences are always eligible,
+    per above) can win `end` regardless of a bound another glyph's rejection
+    established. `crossGlyphBound` in the scan below closes that gap by
+    applying the earliest such rejection's bound to the OPENER OCCURRENCE as a
+    whole, not to one glyph's scan — the never-delete fallback fires if the
+    finally-chosen `end`, from whichever glyph, doesn't clear it.
+    FORWARD-COVER, not live protection, same shape as `UNSPACED_SCRIPT`
+    below: no shipped table pairs an apostrophe-shaped closer alongside
+    another closer on the same opener (German's `„` is the only shipped
+    opener with several closers — `“`/`”`/`"` — and none is apostrophe-
+    shaped), so `crossGlyphBound` is never non-null on any shipped table and
+    removing it changes none of the 725,066 corpus paragraphs. It matters
+    once #2286 pairs `‘`/`’` alongside another closer on one opener — the
+    precondition this guard exists for. Reviewer's synthetic case (`quotePairs
+    = [['«','’'], ['«','»'], ['“','”']]`, not any shipped table):
+    `«He said don’t go. “Stop,” said Tom. Later» he left.` — without
+    `crossGlyphBound`, `»`'s un-rejected first occurrence wins `end` past
+    `“Stop,”`'s turn entirely, producing one merged run and destroying Tom's
+    line; with it, `’`'s rejection (inside `don’t`) bounds the opener
+    occurrence as a whole, `»` fails to clear it, and the fallback restores
+    `’` as the closer — `["He said don", "Stop,"]`, matching the two-run
+    reading a per-glyph-only bound cannot reach. */
 function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>): number {
   let best = line.length;
   for (const o of openers) {
@@ -325,6 +352,14 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
          leftmost-alternative rule. */
       let end: { at: number; glyph: string } | null = null;
       let nearestAny: { at: number; glyph: string } | null = null;
+      /* OPENER-OCCURRENCE-WIDE bound (Task 1, #2288 round 4 review — forward-
+         cover, see the doc comment above `nearestOpenerAtOrAfter`): the
+         earliest bound produced by a rejection on ANY closer glyph for this
+         opener occurrence, not just the glyph that is finally accepted. A
+         per-glyph `limit` alone only bounds a resumed skip within the SAME
+         glyph's own scan; it does nothing for a SIBLING closer whose first
+         occurrence is never rejected. */
+      let crossGlyphBound: number | null = null;
       for (const closer of closers) {
         let from = interiorStart;
         let firstOfGlyph = true;
@@ -353,6 +388,12 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
             break;
           }
           limit = nearestOpenerAtOrAfter(line, at, openers);
+          /* `nearestOpenerAtOrAfter` is monotonic non-decreasing in its `from`
+             argument, so the smallest `crossGlyphBound` across every rejection
+             (any glyph) is always the one produced by the EARLIEST rejection —
+             tracking the running minimum here is equivalent to anchoring on
+             that earliest rejection specifically. */
+          if (crossGlyphBound === null || limit < crossGlyphBound) crossGlyphBound = limit;
           from = at + closer.length;
         }
       }
@@ -361,8 +402,14 @@ function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
          function chose before #2288. Truncating a turn is bad; deleting it
          turns dialogue into narration, which is worse and is the same harm
          class this change exists to fix. Measured: without this fallback the
-         change loses speech in 90 real paragraphs, 74 of them entirely. */
-      if (end === null) end = nearestAny;
+         change loses speech in 90 real paragraphs, 74 of them entirely.
+         This is also the multi-closer fallback: once ANY closer has been
+         rejected for this opener occurrence, whichever glyph `end` ended up
+         coming from must clear the bound from the EARLIEST such rejection —
+         otherwise it is a sibling closer's un-rejected first occurrence that
+         slipped past a bound scoped to a different glyph, and the fallback
+         applies exactly as if nothing had validated at all. */
+      if (end === null || (crossGlyphBound !== null && end.at >= crossGlyphBound)) end = nearestAny;
       if (end === null) {
         /* No closer after this opener — and by the same shrinking-window
            argument, none after any LATER occurrence of it either: the
