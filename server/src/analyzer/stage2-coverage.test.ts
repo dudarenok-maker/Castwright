@@ -19,6 +19,9 @@ import {
   validateStage2Coverage,
   runStage2WithCoverageGuard,
   DEFAULT_STAGE2_COVERAGE_THRESHOLDS,
+  classifyDialogueLine,
+  narratedSpeechShare,
+  STAGE2_MAX_NARRATED_SPEECH_PCT,
 } from './stage2-coverage.js';
 import * as us from '../workspace/user-settings.js';
 
@@ -368,5 +371,113 @@ describe('config resolver wiring — analyzer-chunking', () => {
     // With override 0.75, ratio 0.70 should be flagged as truncated
     expect(v.ok).toBe(false);
     expect(v.issues.some((s) => s.includes('truncated') || s.includes('dropped'))).toBe(true);
+  });
+});
+
+/* #2325 — dialogue collapse. The 2026-08-12 Ночной дозор run persisted a book
+   at 95.7% narrator with a coverage ratio of ~1.00 and `ok: true`, because
+   handing every spoken line to the narrator re-emits the prose verbatim and so
+   is invisible to all three prose-survival signals. */
+describe('dialogue-collapse detection (#2325)', () => {
+  const RU_DIALOGUE_OPEN = /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu;
+  /* A speech half opens with the marker then a CAPITAL; a tag half opens with
+     the marker then lowercase and is legitimately the narrator. */
+  const speech = (n: number, characterId: string) =>
+    Array.from({ length: n }, (_, i) => ({
+      text: `- Реплика номер ${i} для проверки.`,
+      characterId,
+    }));
+  const tags = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ text: `- сказал Егор ${i}.`, characterId: 'narrator' }));
+  const body = (ss: Array<{ text: string }>) => ss.map((s) => s.text).join('\n\n');
+
+  describe('classifyDialogueLine', () => {
+    it('splits speech from tag by the case of the first cased letter', () => {
+      expect(classifyDialogueLine('- Ничего нет,', RU_DIALOGUE_OPEN)).toBe('speech');
+      expect(classifyDialogueLine('- сказал Егор.', RU_DIALOGUE_OPEN)).toBe('tag');
+    });
+    it('is indeterminate without the marker or without a cased letter', () => {
+      expect(classifyDialogueLine('Просто проза.', RU_DIALOGUE_OPEN)).toBe('indeterminate');
+      expect(classifyDialogueLine('- 123 456 …', RU_DIALOGUE_OPEN)).toBe('indeterminate');
+    });
+  });
+
+  it('breaches when the spoken lines were handed to the narrator', () => {
+    const ss = speech(30, 'narrator');
+    const v = validateStage2Coverage(body(ss), ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+    expect(v.ok).toBe(false);
+    expect(v.issues.join(' ')).toMatch(/Dialogue collapse/);
+    // The prose-survival signals are all clean — that is the whole point.
+    expect(v.coverageRatio).toBeGreaterThan(0.9);
+    expect(v.duplicatedBlock).toBeNull();
+  });
+
+  it('passes when the same lines carry real speakers', () => {
+    const ss = speech(30, 'anton');
+    const v = validateStage2Coverage(body(ss), ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+    expect(v.ok).toBe(true);
+    expect(v.issues.join(' ')).not.toMatch(/Dialogue collapse/);
+  });
+
+  it('does NOT breach on tag halves, which are correctly the narrator', () => {
+    /* The false positive that would make this guard unusable: `- сказал Егор.`
+       lines open with the same marker but ARE narration. */
+    const ss = tags(40);
+    const v = validateStage2Coverage(body(ss), ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+    expect(v.issues.join(' ')).not.toMatch(/Dialogue collapse/);
+    expect(v.ok).toBe(true);
+  });
+
+  it('is inert for a language with no dialogue marker (English)', () => {
+    const ss = speech(30, 'narrator');
+    const v = validateStage2Coverage(body(ss), ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS);
+    expect(v.ok).toBe(true);
+    expect(v.issues.join(' ')).not.toMatch(/Dialogue collapse/);
+  });
+
+  it('does not judge a span with too few spoken lines to be meaningful', () => {
+    const ss = speech(5, 'narrator');
+    const v = validateStage2Coverage(body(ss), ss, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+    expect(v.issues.join(' ')).not.toMatch(/Dialogue collapse/);
+  });
+
+  it('treats sentences with no characterId as un-evaluable, not as clean', () => {
+    /* Counting them would read as "not narrator" and drag the share DOWN, so a
+       caller passing unattributed sentences would get a silent vacuous pass. */
+    const ss = Array.from({ length: 30 }, (_, i) => ({ text: `- Реплика ${i} тут.` }));
+    const share = narratedSpeechShare(ss, RU_DIALOGUE_OPEN);
+    expect(share.speechHalves).toBe(0);
+    expect(share.evaluable).toBe(false);
+  });
+
+  it('sits below the threshold for the good run and above it for the collapsed one', () => {
+    /* Calibration from two full-book runs of the same first-person novel:
+       good run's worst chapter 39.3%, collapsed run's best 72.2%. */
+    const mix = (narratedPct: number) => {
+      const total = 100;
+      const n = Math.round((narratedPct / 100) * total);
+      return [...speech(n, 'narrator'), ...speech(total - n, 'anton')];
+    };
+    expect(narratedSpeechShare(mix(39.3), RU_DIALOGUE_OPEN).pct).toBeLessThan(
+      STAGE2_MAX_NARRATED_SPEECH_PCT,
+    );
+    expect(narratedSpeechShare(mix(72.2), RU_DIALOGUE_OPEN).pct).toBeGreaterThan(
+      STAGE2_MAX_NARRATED_SPEECH_PCT,
+    );
+  });
+
+  it('retries a collapsed section through the coverage guard', async () => {
+    let attempt = 0;
+    const collapsed = speech(30, 'narrator');
+    const good = speech(30, 'anton');
+    const out = await runStage2WithCoverageGuard({
+      body: body(collapsed),
+      maxRetries: 2,
+      dialogueOpen: RU_DIALOGUE_OPEN,
+      call: async () => ({ sentences: (attempt++ === 0 ? collapsed : good) }),
+    });
+    expect(attempt).toBeGreaterThan(1); // it did not accept the collapsed take
+    expect(out.coverage.ok).toBe(true);
+    expect(out.result.sentences[0].characterId).toBe('anton');
   });
 });

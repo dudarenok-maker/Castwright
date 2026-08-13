@@ -57,6 +57,15 @@ export interface StageCall {
       tear down the in-flight Ollama/Gemini request instead of running on
       as a zombie that holds the model busy for the next session. */
   signal?: AbortSignal;
+  /** #2324 — 1-based sequence of this stage-2 call WITHIN its chapter, set by
+      runStage2ChapterChunked and used only to key the handoff forensics so a
+      chunked chapter doesn't overwrite its own prompts/responses. Carried on
+      StageCall rather than as a method parameter so the `Analyzer` interface
+      (and every implementation and test double) is untouched. Absent for the
+      single-call path, which therefore keeps its existing filenames exactly.
+      Counts CALLS, not sections: a coverage retry gets its own number, so the
+      failing attempt survives alongside the one that replaced it. */
+  stage2CallSeq?: number;
   /** Fired when the limiter has to delay this request — RPM/TPM cap hit
       locally, or `retry-delay` honored after a 429. Only emitted when
       the wait exceeds ~1s so sub-second jitter doesn't spam the UI.

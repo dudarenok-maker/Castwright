@@ -23,17 +23,37 @@ const OUTBOX = join(HANDOFF_ROOT, 'outbox');
    `escalation-ch{n}-w{n}` is the srv-59 flagged-window attribution-escalation
    pass (Task 9) — the window suffix keys each of a chapter's escalated
    conversation windows separately, so a chapter with N queried windows
-   leaves N sets of forensics on disk instead of only the last one (#1483). */
+   leaves N sets of forensics on disk instead of only the last one (#1483).
+   `2-ch{n}-c{n}` is the SAME fix for stage 2 (#2324): a large chapter is
+   attributed in sections by runStage2ChapterChunked, and every section — plus
+   every coverage retry and every adaptive re-split — used to call writeInbox
+   under a bare `2-ch{n}`, whose first act is to rm the previous response. So a
+   chapter attributed in 4 sections left forensics for section 4 only, and the
+   #2306 investigation found every recorded prompt was a LAST chunk (the ones
+   that don't fail). The suffix is the per-chapter CALL sequence, not the
+   section index, so a retried section and its original are both preserved. */
 export type HandoffKey =
   | '1'
   | `1-ch${number}`
   | '2'
   | `2-ch${number}`
+  | `2-ch${number}-c${number}`
   | `emotion-ch${number}`
   | `review-ch${number}`
   | `instruct-ch${number}`
   | `escalation-ch${number}-w${number}`
   | `nonstory-ch${number}`;
+
+/** #2324 — the stage-2 handoff key for ONE model call. Shared by both engines
+    so the naming rule has a single home (`gemini.ts` and `ollama.ts` had
+    byte-identical copies of the old one-liner). `seq` is StageCall's
+    `stage2CallSeq`: absent means the single-call path, which keeps its
+    historical `2-ch{n}` filename byte-for-byte; present numbers the call, so a
+    chunked chapter reads `2-ch{n}-c1 … -c4` and you can tell from the
+    filenames alone that the chapter was sectioned. */
+export function stage2HandoffKey(chapterId: number, seq?: number): HandoffKey {
+  return seq === undefined ? `2-ch${chapterId}` : `2-ch${chapterId}-c${seq}`;
+}
 
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });
