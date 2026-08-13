@@ -89,36 +89,31 @@ test("pr-review-gate/SKILL.md's frontmatter name: matches its directory", () => 
   );
 });
 
-test("model-routing/SKILL.md's PR-review Mechanism bullet references pr-review-gate", () => {
-  // readNormalized: the section regex below requires a literal '\n## ',
-  // which misses on a CRLF checkout (#2291).
-  const src = readNormalized(ROUTING_SKILL_PATH);
-  // The file has TWO "- **Mechanism**:" bullets (the spec/plan review's
-  // assumption-checker one, and the PR review's one) — scope to the section
-  // heading first so a naive first-match regex can't silently grab the wrong
-  // one (it did, the first time this test was written: it matched the
-  // assumption-checker bullet and never actually exercised the PR-review
-  // wording this guard exists to check).
-  const sectionMatch = /## Mandatory independent review \(PRs\)\n([\s\S]*?)(?=\n## )/.exec(src);
-  assert.ok(
-    sectionMatch,
-    'could not find the "## Mandatory independent review (PRs)" section in ' +
-      'model-routing/SKILL.md — it may have been renamed or moved',
-  );
-  const mechanismMatch = /- \*\*Mechanism\*\*:[\s\S]*?(?=\n- \*\*[A-Z]|\n## )/.exec(
-    sectionMatch[1],
-  );
-  assert.ok(
-    mechanismMatch,
-    'could not find the "- **Mechanism**:" bullet under "Mandatory independent ' +
-      'review (PRs)" in model-routing/SKILL.md — it may have been reworded or moved',
-  );
+test('pr-review-gate/SKILL.md carries the dispatch mechanism and the effort ladder', () => {
+  // Retargeted 2026-08-13: this assertion used to read model-routing's
+  // "## Mandatory independent review (PRs)" section, which has moved into this
+  // skill. It must read the file that now OWNS the rule, or it certifies a
+  // section that no longer exists.
+  const src = readNormalized(GATE_SKILL_PATH);
+
+  const dispatch = /\n## Dispatch\n([\s\S]*?)(?=\n## )/.exec(src);
+  assert.ok(dispatch, 'pr-review-gate/SKILL.md has no "## Dispatch" section');
   assert.match(
-    mechanismMatch[0],
-    /pr-review-gate/,
-    'the Mechanism bullet no longer references pr-review-gate — the gate it ' +
-      'documents must be the one that is actually model-invocable',
+    dispatch[1],
+    /non-fork/,
+    'the Dispatch section no longer requires a non-fork reviewer — a fork ' +
+      'inherits the dispatching session, which is the opposite of independent review',
   );
+
+  const ladder = /\n## Effort level\n([\s\S]*?)(?=\n## )/.exec(src);
+  assert.ok(ladder, 'pr-review-gate/SKILL.md has no "## Effort level" section');
+  for (const level of ['low', 'medium', 'high']) {
+    assert.match(
+      ladder[1],
+      new RegExp('`' + level + '`'),
+      `the effort ladder no longer names \`${level}\``,
+    );
+  }
 });
 
 test("CLAUDE.md's before-shipping step 10 references pr-review-gate", () => {
