@@ -88,13 +88,11 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
     length; the aligner is overlap-based and tolerant of these
     micro-gaps. */
 export interface ParseChapterOptions {
-  /** Opt-in recovery for degraded manuscripts: run splitEvidencedInteriorTurns
-      first so dialogue turns hidden inside narration-open merges become
-      line-starting dashes. Default OFF → byte-identical to prior behavior.
-      NOTE (offset contract): when enabled, spans are keyed to the TRANSFORMED
-      body — any caller that also aligns structure to model sentence output must
-      feed this same transformed body to the aligner/model side (see the
-      splitEvidencedInteriorTurns doc). */
+  /** Recovery for degraded manuscripts: run splitEvidencedInteriorTurns first so
+      dialogue turns hidden inside narration-open merges become line-starting
+      dashes. ON BY DEFAULT (length-preserving, offset-safe — see the
+      splitEvidencedInteriorTurns doc). Pass `false` to disable. Quotes-only
+      languages (no dialogueOpen) are a no-op either way. */
   recoverMidParagraphTurns?: boolean;
 }
 
@@ -104,7 +102,7 @@ export function parseChapterStructure(
   opts?: ParseChapterOptions,
 ): ParagraphEvidence[] {
   const conv = index.conventions;
-  const text = opts?.recoverMidParagraphTurns
+  const text = (opts?.recoverMidParagraphTurns ?? true)
     ? splitEvidencedInteriorTurns(body, index)
     : body;
   const out: ParagraphEvidence[] = [];

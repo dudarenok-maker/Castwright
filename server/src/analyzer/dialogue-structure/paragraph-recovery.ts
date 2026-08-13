@@ -31,14 +31,14 @@ import { findRosterName } from './name-matcher.js';
    turns it can attribute (named or first-person); everything else is left glued
    rather than fabricated.
 
-   OFFSET CONTRACT: this is a body transformation, so the returned string has
-   DIFFERENT offsets than the input. Any caller that also aligns structure
-   spans to model sentence outputs (the aligner) MUST feed it this SAME
-   transformed body, and the model side reads the same text — otherwise the
-   span/sentence offsets silently disagree. parseChapterStructure recomputes
-   offsets from the transformed text it is handed, so structure-vs-structure is
-   internally consistent; the contract only binds the caller that couples
-   recovery with external (model) alignment.
+   OFFSET GUARANTEE: this transformation is STRICTLY LENGTH-PRESERVING — it only
+   replaces the single whitespace char before an evidenced dash with '\n' (1:1)
+   and never removes/trims anything else. The returned body has the SAME LENGTH
+   and IDENTICAL span offsets as the input, so recovery can run ON BY DEFAULT
+   without disturbing the aligner/model: structure spans, the aligner, and
+   downstream all stay in the original body's coordinate space. (The only
+   change is whitespace type at recovered boundaries, which the aligner's
+   whisper-normalization treats as equivalent.)
 
    The inserted break makes the turn a line-starting dash, which the existing
    parseChapterStructure / parseDashParagraph machinery then handles normally
@@ -115,11 +115,17 @@ export function splitEvidencedInteriorTurns(body: string, index: NameIndex): str
     }
     if (cuts.length === 0) { out.push(line); continue; }
     changed = true;
-    let cursor = 0;
-    const pieces: string[] = [];
-    for (const c of cuts) { pieces.push(line.slice(cursor, c)); cursor = c; }
-    pieces.push(line.slice(cursor));
-    out.push(pieces.map((p, i) => (i < pieces.length - 1 ? p.trimEnd() : p)).join('\n'));
+    /* LENGTH-PRESERVING split: replace the single whitespace char immediately
+       before each evidenced dash with '\n' (1:1), and NOTHING else. This keeps
+       the body the SAME LENGTH and every span offset UNCHANGED, so recovery can
+       run by default without the aligner/model seeing shifted offsets even when
+       the whole pipeline is fed the original body. A dash with no whitespace
+       before it (rare) is skipped rather than risking a length change. */
+    const chars = [...line];
+    for (const c of cuts) {
+      if (c > 0 && /\s/u.test(chars[c - 1])) chars[c - 1] = '\n';
+    }
+    out.push(chars.join(''));
   }
   return changed ? out.join('\n') : body;
 }

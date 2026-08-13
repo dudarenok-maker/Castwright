@@ -37,12 +37,12 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (opt-in, conservati
 
   it('recovery path surfaces the interior turn as a dialogue paragraph with speaker', () => {
     const body = 'Он вошёл. — Привет, — сказал Антон. Он сел.';
-    const without = parseChapterStructure(body, idx);
-    // default: the whole narration-open line stays one narration paragraph
+    const without = parseChapterStructure(body, idx, { recoverMidParagraphTurns: false });
+    // recovery disabled: the whole narration-open line stays one narration paragraph
     expect(without.map((p) => p.kind)).toEqual(['narration']);
     expect(spansOf(without).filter((s) => s.kind === 'speech')).toHaveLength(0);
 
-    const withRecovery = parseChapterStructure(body, idx, { recoverMidParagraphTurns: true });
+    const withRecovery = parseChapterStructure(body, idx); // recovery ON by default
     const speech = speechOf(withRecovery);
     expect(speech).toHaveLength(1);
     expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
