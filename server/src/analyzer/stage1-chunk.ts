@@ -49,8 +49,10 @@ export const DEFAULT_STAGE1_CHUNK_CHAR_BUDGET = 24000;
    cap, so a dense Cyrillic chapter (~2.5 chars/token) estimated at ~18-20k
    tokens and tripped the guard — dropping the chapter, since RequestExceedsTpm
    is not an AnalyzerTruncatedError the adaptive re-split can catch. Reserving
-   7000 tokens keeps the worst-case Cyrillic request (full body + a ~60-80 char
-   running roster) at ~13-14k estimated tokens, comfortably below 16000. Measured
+   7000 tokens keeps the worst-case Cyrillic request (full body + scaffold) at
+   ~13-14k estimated tokens, comfortably below 16000. The running roster is NOT
+   covered by this fixed constant — its growing, whole-book size is reserved
+   separately in char space in resolveStage1ChunkCharBudget (#1691). Measured
    in stage1-chunk.test.ts against the real prompt so a future skill growth
    re-trips the guard test. Token-space (not char-space) so it is script-correct:
    the reservation is the same token cost whether the body is Latin or Cyrillic;
@@ -76,12 +78,41 @@ export function stage1ChunkBudgetForEngine(
   return Math.max(2000, Math.min(configured, numCtxDerived));
 }
 
-export function resolveStage1ChunkCharBudget(engine?: 'gemini' | 'local', body?: string): number {
+/* Marginal char-space overhead the running roster adds to the stage-1 inbox.
+   Must mirror buildStage1ChapterInbox's compact {id,name,role} render — the
+   stage-1 regression lock (stage1-chunk.test.ts) measures the REAL inbox via
+   buildStage1ChapterInbox, so a drift here re-trips the lock instead of silently
+   dropping chapters again (#1691). */
+function stage1RosterReservedChars(runningRoster: CharacterOutput[]): number {
+  if (runningRoster.length === 0) return 0;
+  return JSON.stringify(
+    runningRoster.map((c) => ({ id: c.id, name: c.name, role: c.role })),
+    null,
+    2,
+  ).length;
+}
+
+export function resolveStage1ChunkCharBudget(
+  engine?: 'gemini' | 'local',
+  body?: string,
+  runningRoster: CharacterOutput[] = [],
+): number {
   if (engine !== 'local') {
     // Cloud: size the BODY to the per-request token cap MINUS stage-1's fixed
     // system-instruction + scaffold overhead (reserved in token space so the
-    // full request — not just the body — stays under the finite TPM guard).
-    return cloudBodyCharBudget(body ?? '', 0, STAGE1_CLOUD_RESERVED_TOKENS);
+    // full request — not just the body — stays under the finite TPM guard),
+    // and MINUS the injected running-roster's own char footprint (reserved in
+    // char space via the reservedChars param cloudBodyCharBudget exposes).
+    // #1691: the roster accumulates the whole book's cast, so a fixed-only
+    // reservation hit a wall (~130 speaking cast — past it the total estimate
+    // crossed 16000 & RequestExceedsTpmError dropped the chapter). Reserving
+    // the roster's actual rendered size keeps the worst-case estimate under the
+    // guard regardless of cast size.
+    return cloudBodyCharBudget(
+      body ?? '',
+      stage1RosterReservedChars(runningRoster),
+      STAGE1_CLOUD_RESERVED_TOKENS,
+    );
   }
   return stage1ChunkBudgetForEngine(
     configValue<number>('analyzer.stage1.chunkCharBudget'),

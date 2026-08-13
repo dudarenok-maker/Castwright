@@ -3972,7 +3972,15 @@ export async function runMainAnalyzerJob(
                 call: () =>
                   runStage1ChapterChunked({
                     body: ch.body,
-                    charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
+                    charBudget: resolveStage1ChunkCharBudget(
+                      selection.engine,
+                      ch.body,
+                      // #1691 — roster-aware reservation: the running roster
+                      // grows with the whole book's cast, so the body budget must
+                      // shrink by its injected size or the worst-case request
+                      // crosses the Gemma TPM guard (~130 speaking cast).
+                      Array.from(rebuildRoster().values()),
+                    ),
                     mergeRosters: mergeRosterChapter,
                     onChunk: (sec) => {
                       /* Feed section progress into the live ETA so the first
@@ -6302,7 +6310,12 @@ export async function runSubsetAnalyzerJob(
               call: () =>
                 runStage1ChapterChunked({
                   body: ch.body,
-                  charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
+                  charBudget: resolveStage1ChunkCharBudget(
+                    selection.engine,
+                    ch.body,
+                    // #1691 — roster-aware reservation, mirroring the full route.
+                    Array.from(rebuildRoster().values()),
+                  ),
                   mergeRosters: mergeRosterChapter,
                   onChunk: (sec) =>
                     log(
