@@ -538,6 +538,15 @@ too. That is a *better-evidenced* reassignment than `applyNarratorDefault`'s,
 but it is still not the model's answer, and a user debugging a collapsed book
 needs to know which of the three they are looking at.
 
+**Verified 2026-08-13: `crossExamine` has exactly one application site** —
+`cross-examine.ts:393`, `sentences.push({ ...as.sentence, characterId:
+decision.characterId, confidence: decision.confidence })`. Five `decide*`
+helpers produce verdicts and all converge there, so instrumenting it is one
+edit, not five. **The record is keyed on the id actually changing, not on the
+`corrected` bucket:** `decideNarrationOnly` (`:274`) returns a `confirmed`
+narrator verdict for a sentence that was already narrator, and a bucket test
+would mislabel it as an overwrite.
+
 **So the measurement carries three narrator populations, never one:**
 
 | Column | Meaning | What the user does about it |

@@ -222,10 +222,38 @@ Two branches in `applyNarratorDefault` construct a new object; both gain
 
 - [ ] **Step 5: RED then GREEN — the same for `crossExamine`'s correction**
 
-Find the single site where `crossExamine` writes a corrected `characterId`
-(the `corrected` decision bucket) and do the same. **If it turns out to be more
-than one site, stop and report it** — the spec assumed one, and a call-graph
-that disagrees with the spec is a finding, not something to work around.
+**Verified 2026-08-13: there is exactly one application site**, and it is
+`server/src/analyzer/dialogue-structure/cross-examine.ts:393`:
+
+```ts
+sentences.push({ ...as.sentence, characterId: decision.characterId, confidence: decision.confidence });
+```
+
+Five `decide*` helpers produce a verdict (`:144`, `:151`, `:166`, `:261`,
+`:286` are the `bucket: 'corrected'` returns) but all of them converge here, so
+one edit covers every correction path. **Record the field on the value test, not
+on the bucket:**
+
+```ts
+const overwritten = decision.characterId !== as.sentence.characterId;
+sentences.push({
+  ...as.sentence,
+  characterId: decision.characterId,
+  confidence: decision.confidence,
+  ...(overwritten ? { priorCharacterId: as.sentence.characterId } : {}),
+});
+```
+
+**Keying on `bucket === 'corrected'` would be wrong in both directions** and is
+the obvious-looking mistake here: a `corrected` verdict can re-affirm the same
+id (`decideNarrationOnly` at `:274` returns `NARRATOR_ID` for a sentence already
+narrator), and a non-`corrected` bucket is not a guarantee the id is unchanged.
+The question the column answers is "was this id overwritten", so the test is
+whether it changed.
+
+Paired assertion: a sentence whose verdict equals its incoming id carries **no**
+`priorCharacterId`. Mutate to `bucket === 'corrected'` and that assertion goes
+red.
 
 - [ ] **Step 6: Assert nothing else moved**
 
