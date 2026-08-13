@@ -1814,7 +1814,7 @@ there are **five** states and the library shows all five:
 | `collapsed` | `narratorIdSpoken / attributableSpoken` ≥ threshold, book or chapter | warning badge | full notice | yes |
 | `drifted` | `unacknowledgedOrphanSpoken / spokenTotal` ≥ `DRIFT_SHARE_THRESHOLD`, with `unacknowledgedOrphanSpoken` ≥ `MIN_ORPHAN_FOR_VERDICT` (D13) | warning badge | full notice, pointing at the orphan banner | **yes** |
 | `missing` | `castCount > 0 && spokenTotal === 0 && (await readAnalysisState(dir)) === null && languageCorroborated` | warning badge | full notice | **yes** |
-| `unmeasurable` | the book **has been analysed** and the measurement still could not be made: cache corrupt, the declared language contradicted by detection over the book's own text, detection surrendered, **or** the resolved language has no conventions table | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
+| `unmeasurable` | the book **has been analysed** and the measurement still could not be made: cache corrupt, **the manuscript record absent so there is no source prose to measure against (revision 8, D14)**, the declared language contradicted by detection over the book's own text, detection surrendered, **or** the resolved language has no conventions table | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
 **That `unmeasurable` cell is normative and revision 5's was not** (R-6M3).
 Revision 5 fixed the rule in prose 80 lines below the table and left the table
@@ -1841,6 +1841,7 @@ The sequence, written once and normatively:
 ```
 1. no analysis at all                          → ok        (no claim is made)
 2. cache corrupt (loadAnalysisCache throws)    → unmeasurable
+2b. manuscript record absent (no source prose) → unmeasurable   [revision 8]
 3. conventionsFor(resolvedLanguage) === null   → unmeasurable
 4. castCount > 0 && spokenTotal === 0
    && (await readAnalysisState(dir)) === null:
@@ -1852,7 +1853,18 @@ The sequence, written once and normatively:
 7. otherwise                                   → ok
 ```
 
-Steps 2 and 3 are the only ones that are genuinely "`unmeasurable` first"; the
+**Step 2b is new in revision 8 and it is a consequence of D14, not an
+afterthought.** The denominator is built from `ChapterHint.body`, so a book whose
+manuscript record is gone has no denominator at all — and the wrong answer is
+`spokenTotal: 0`, which with a real cast and a completed run's deleted snapshot
+satisfies every clause of `missing` and badges a book nothing is wrong with.
+**That is R-4C1's shape for the third time**, arriving through a new door, and it
+is caught here rather than discovered later. It is also a real corpus state: the
+workspace and the cache directory have already been shown to diverge by a factor
+of three, so a cache outliving its manuscript is the ordinary case, not an
+exotic one.
+
+Steps 2, 2b and 3 are the only ones that are genuinely "`unmeasurable` first"; the
 corroboration arm is **step 4b, inside the `missing` test**, which is what makes
 it cheap and what makes it unable to touch an `ok` or `collapsed` verdict.
 There is no separate precedence mechanism to delete, and revision 6's mutation
