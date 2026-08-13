@@ -318,7 +318,7 @@ Design rationale:
 ## Commands
 
 - `npm start` — frontend + server + TTS sidecar in one shot (plan 43). Server owns the sidecar child-process lifecycle (per-user `autoStartSidecar` preference, default on); Ctrl+C tears the sidecar down via `taskkill /T /F` on Windows.
-- `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
+- `npm run dev` — frontend (Vite, HMR, `:5173`) **and** server (`:8080`) together via `concurrently`; the server auto-starts the TTS sidecar same as `npm start` (per-user `autoStartSidecar`, default on) — it is not frontend-only.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
@@ -1015,9 +1015,11 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    (`EnterWorktree`, Agent `isolation: "worktree"`) never has this file —
    only `scripts/wt-new.mjs` writes one, and it's git-ignored — so this step
    doesn't error when skipped, it just silently breaks isolation. Pick an
-   unused port (e.g. increment by 10 per worktree, mirroring
-   `scripts/wt-new.mjs`'s own `PORT_STEP`), set it as `PORT`/`VITE_API_PORT`
-   in `.env.local` and as `PORT` in `server/.env`, and point `WORKSPACE_DIR`
+   unused slot N (mirroring `scripts/wt-new.mjs`'s own `BASE_PORTS`/
+   `PORT_STEP`) and step each port by `10 × N` off its own base —
+   `VITE_PORT` off `5173`, `PORT`/`VITE_API_PORT` off `8080` — e.g. slot 1 is
+   `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`. Set all three in
+   `.env.local` and `PORT` in `server/.env`, and point `WORKSPACE_DIR`
    at a directory this worktree alone owns (e.g.
    `../castwright-workspace-<slug>`, relative to `server/`) so two servers
    never share one `cast.json`/`state.json`. Do not copy the primary

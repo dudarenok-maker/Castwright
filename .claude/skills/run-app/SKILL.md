@@ -16,7 +16,9 @@ npm run dev:mock
 ```
 
 This starts the frontend with `VITE_USE_MOCKS=true` (`.env.mock`) alongside
-the real server, no sidecar. Most components read through `api.*` and use
+the real server — including its TTS sidecar, which the server auto-starts by
+default (`autoStartSidecar`) the same as `npm run dev`/`npm start`; nothing
+about `dev:mock` opts out of it. Most components read through `api.*` and use
 canned data under mocks, but ~19 call `/api/…` directly with no mock
 counterpart — that's why the real server still needs to be running, and why
 a frontend-only mock launch (`npm run dev:frontend:mock`, see STEP 1's table)
@@ -51,9 +53,11 @@ react-router-dom 7, TypeScript 6.
 |---|---|---|
 | Frontend only, against the real server (mocks OFF, the default) | `npm run dev:frontend` | Vite `:5173` |
 | Frontend only, mock mode — no server/sidecar, but the ~19 direct-`/api/`-fetch components below will still 502 | `npm run dev:frontend:mock` | Vite `:5173` |
-| Frontend (mock mode) + real server, no sidecar — the fastest full mock verify, covers those ~19 components | `npm run dev:mock` | `:5173` + `:8080` |
-| Full dev (frontend + server + sidecar) | `npm start` | `:5173` + `:8080` |
+| Frontend (mock mode) + real server (sidecar still auto-starts) — the fastest full mock verify, covers those ~19 components | `npm run dev:mock` | `:5173` + `:8080` |
+| Full dev (frontend + server + sidecar), foregrounded via `concurrently`, Ctrl+C tears the whole stack down | `npm run dev` | `:5173` + `:8080` |
 | Production bundle smoke | `npm run build && npm run preview` | preview port |
+
+`npm start` brings up the same three processes, not a superset — the real difference from `npm run dev` is process lifecycle, not what's running. On Windows it runs `scripts/start-app.ps1`, which backgrounds frontend + server as detached, PID-tracked processes (`.run/*.pid`, logs under `logs/`), is idempotent on re-run, and needs `npm run stop` to tear down rather than Ctrl+C — better suited to "leave it running" than to this skill's launch/drive/cleanup flow, which is why the table above lists `npm run dev`.
 
 In a worktree, `scripts/wt-new.mjs` assigns per-worktree ports (e.g. `:5193`/`:8100`)
 via `.env.local` — check the wt-new output. The primary checkout uses `:5173`/`:8080`.
