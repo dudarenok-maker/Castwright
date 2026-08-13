@@ -278,11 +278,15 @@ export interface Stage2ChunkRunOptions {
       prompts); non-null on later chunks (prepend it as read-only context).
 
       `callSeq` (#2324) is the 1-based sequence of this call within the chapter,
-      or `undefined` for the ONE unchunked whole-body call. It exists only so
-      the caller can key the handoff forensics per call — a chunked chapter used
-      to write every section under the same `2-ch{n}` key, each write rm'ing the
-      previous response, so only the last section survived. Undefined on the
-      single-call path keeps that path's filenames byte-identical. */
+      or `undefined` for the FIRST attempt of the unchunked whole-body call. It
+      exists only so the caller can key the handoff forensics per call — a
+      chunked chapter used to write every section under the same `2-ch{n}`
+      key, each write rm'ing the previous response, so only the last section
+      survived (#2324, fixed for the chunked path); the single-call path had
+      the same defect on its coverage retries, fixed by #2342 item 6.
+      Attempt 1 of the single-call path stays `undefined` (byte-identical
+      filenames for the overwhelmingly common no-retry case); a coverage
+      retry of that SAME call gets its attempt number (2, 3, …) instead. */
   callForBody: (
     subBody: string,
     precedingContext: string | null,
@@ -481,14 +485,30 @@ export async function runStage2ChapterChunked(
        path already has. A body that's a single un-splittable paragraph has
        nowhere to split, so the truncation still surfaces loudly. */
     try {
+      /* #2342 item 6 — attempt 1 of the unchunked call keeps the historical
+         `2-ch{n}` filename (sequence undefined), but `runStage2WithCoverageGuard`
+         re-invokes this SAME lambda on every coverage retry, always with the
+         same body — a stable `undefined` on every attempt made every retry
+         write under that one key, and `writeInbox` rm's the previous
+         outbox/errors/raw-attempt files first, so a chapter that retried
+         twice kept only the last attempt's forensics. Numbering attempt 2+
+         (leaving attempt 1 unnumbered) fixes that while keeping the
+         overwhelmingly common no-retry case byte-identical. If it truncates
+         or fails deterministically, the re-split below runs through
+         `callSectioned`, which has its own independent counter. */
+      let singleCallAttempt = 0;
       const { result, coverage, deterministicFailure } = await runStage2WithCoverageGuard({
         body: opts.body,
         maxRetries: opts.coverageRetries,
-        /* The ONE unchunked call: no sequence, so its forensics keep the
-           historical `2-ch{n}` filenames. If it truncates or fails
-           deterministically, the re-split below runs through `callSectioned`
-           and those attempts DO get numbered. */
-        call: () => opts.callForBody(opts.body, null, null, undefined),
+        call: () => {
+          singleCallAttempt += 1;
+          return opts.callForBody(
+            opts.body,
+            null,
+            null,
+            singleCallAttempt === 1 ? undefined : singleCallAttempt,
+          );
+        },
         thresholds: opts.coverageThresholds,
         dialogueOpen: opts.dialogueOpen,
         onRetry: opts.onRetry,

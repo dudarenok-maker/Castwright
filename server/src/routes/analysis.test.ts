@@ -38,8 +38,10 @@ import {
   buildStage2ChunkInbox,
   STAGE2_ATTRIBUTION_RULES,
   STAGE2_ATTRIBUTION_RULES_CHUNK,
+  selectStage2FailureCode,
   type AnalysisJob,
 } from './analysis.js';
+import type { Stage2CoverageVerdict } from '../analyzer/stage2-coverage.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -3302,6 +3304,99 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
     },
     60_000,
   );
+});
+
+describe('selectStage2FailureCode (#2342 item 2 — collapse vs. incomplete)', () => {
+  /* A dialogue collapse (every spoken line handed to the narrator, or the
+     dialogue markers lost outright) covered EVERY sentence — there is no gap
+     to fill, so `attribution-incomplete`'s copy ("did not cover every
+     sentence… retry usually fills the gaps") is false on every count for
+     this shape. `attribution-collapse` is the code that tells the truth: the
+     cast was ignored. A verdict that ALSO fails on coverage/duplication
+     keeps `attribution-incomplete` — missing prose is the more serious
+     problem, and that code's remediation (retry to fill the gap) is the one
+     that actually helps. */
+  function baseVerdict(): Stage2CoverageVerdict {
+    return {
+      ok: false,
+      coverageRatio: 1,
+      endingPresent: true,
+      duplicatedBlock: null,
+      narratedSpeech: null,
+      noSentences: false,
+      truncated: false,
+      excess: false,
+      markersLost: false,
+      issues: [],
+    };
+  }
+
+  it('markersLost alone (no coverage/duplication failure) -> attribution-collapse', () => {
+    const v = { ...baseVerdict(), markersLost: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-collapse');
+  });
+
+  it('a narratedSpeech collapse breach alone -> attribution-collapse', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      narratedSpeech: { speechHalves: 30, narrated: 25, pct: (25 / 30) * 100, evaluable: true },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-collapse');
+  });
+
+  it('an UN-evaluable narratedSpeech reading (too little dialogue) is not a collapse', () => {
+    /* evaluable: false — too few speech halves to judge; must not misread as
+       a breach. Deliberately NO other failing gate (no truncated/excess/
+       duplicatedBlock/noSentences) — `isIncomplete` must stay false here too,
+       or this assertion would pass via that branch regardless of whether the
+       evaluable gate is respected, proving nothing about it. */
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      narratedSpeech: { speechHalves: 2, narrated: 2, pct: 100, evaluable: false },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('truncated coverage failure alone -> attribution-incomplete', () => {
+    const v = { ...baseVerdict(), truncated: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('excess coverage (repeat-loop) alone -> attribution-incomplete', () => {
+    const v = { ...baseVerdict(), excess: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('a duplicated block alone -> attribution-incomplete', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      duplicatedBlock: { startIndex: 4, length: 3, offset: 5 },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('noSentences alone -> attribution-incomplete', () => {
+    const v = { ...baseVerdict(), noSentences: true };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('BOTH a coverage failure AND a collapse -> prefers attribution-incomplete (missing prose is worse)', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      truncated: true,
+      markersLost: true,
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
+
+  it('a duplicated block AND a narratedSpeech collapse breach -> prefers attribution-incomplete', () => {
+    const v: Stage2CoverageVerdict = {
+      ...baseVerdict(),
+      duplicatedBlock: { startIndex: 4, length: 3, offset: 5 },
+      narratedSpeech: { speechHalves: 30, narrated: 25, pct: (25 / 30) * 100, evaluable: true },
+    };
+    expect(selectStage2FailureCode(v)).toBe('attribution-incomplete');
+  });
 });
 
 describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggregation)', () => {

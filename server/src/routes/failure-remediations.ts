@@ -114,6 +114,20 @@ export const FAILURE_REMEDIATIONS = {
       'Click Retry on this chapter to re-run attribution. Already-attributed lines are kept; a ' +
       'retry usually fills the gaps.',
   },
+  'attribution-collapse': {
+    /* #2342 item 2 — distinct from `attribution-incomplete`: every sentence
+       WAS covered here, so "did not cover every sentence" / "retry usually
+       fills the gaps" is false on every count. The cast was ignored (every
+       spoken line handed to the narrator) or the dialogue markers themselves
+       were lost, not dropped prose. */
+    userMessage:
+      "This chapter's cast was not used — every (or nearly every) spoken line was attributed to the " +
+      'narrator instead of the character speaking it, or the dialogue markers were lost outright.',
+    remediation:
+      "Click Retry on this chapter to re-run attribution. If it repeats, check that the book's " +
+      'language is set correctly on the confirm screen — a dash-convention language is what makes ' +
+      'this check active at all.',
+  },
   auth: {
     userMessage: 'Gemini TTS authentication failed — check GEMINI_API_KEY.',
     remediation:

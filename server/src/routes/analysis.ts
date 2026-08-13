@@ -56,6 +56,10 @@ import {
   resolveStage2ChunkCharBudget,
   type Stage2ChunkRunResult,
 } from '../analyzer/stage2-chunk.js';
+import {
+  isDialogueCollapseBreach,
+  type Stage2CoverageVerdict,
+} from '../analyzer/stage2-coverage.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import {
   countSentencesHeuristic,
@@ -159,6 +163,7 @@ import {
   classifyAnalysisFailure,
   tryParseApiError,
   FAILURE_REMEDIATIONS,
+  type FailureCode,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import {
@@ -2397,6 +2402,33 @@ export function attributeChapterStage2WithEval(
     () => attributeChapterStage2(opts),
     (r) => r.chunkCount ?? null,
   );
+}
+
+/** #2342 item 2 — a failed `Stage2CoverageVerdict` used to always report
+    `attribution-incomplete`, whose copy claims the model's answer "did not
+    cover every sentence" and that a retry "usually fills the gaps". That is
+    true for a truncation/repeat-loop/no-sentences/duplicated-block failure,
+    but false on every count for a dialogue COLLAPSE: every sentence WAS
+    covered — they were all handed to the narrator (`narratedSpeech` breach)
+    or the dialogue markers were lost outright (`markersLost`). Neither of
+    those two shapes overlaps `noSentences`/`truncated`/`excess` — `markersLost`
+    is defined `!truncated` by construction (see validateStage2Coverage), and
+    a collapse still has every sentence present — so `isIncomplete` and
+    `isCollapse` are the two disjoint READINGS of a verdict, not two
+    independent bits that happen to correlate.
+
+    A verdict that fails BOTH ways (rare: e.g. a re-split section that both
+    truncated AND lost its markers) keeps `attribution-incomplete` —
+    deliberately, per the #2342 spec: missing prose is the more serious
+    problem, and `attribution-incomplete`'s remediation (retry to fill the
+    gap) is the one that actually helps; `attribution-collapse`'s remediation
+    would tell the user their cast was ignored while the bigger problem is
+    that the chapter is missing text. */
+export function selectStage2FailureCode(verdict: Stage2CoverageVerdict): FailureCode {
+  const isIncomplete = verdict.noSentences || verdict.truncated || verdict.excess || !!verdict.duplicatedBlock;
+  if (isIncomplete) return 'attribution-incomplete';
+  const isCollapse = verdict.markersLost || isDialogueCollapseBreach(verdict.narratedSpeech);
+  return isCollapse ? 'attribution-collapse' : 'attribution-incomplete';
 }
 
 /** srv-59 Task 11 — roll up every chapter's `structureReport` (set only when
@@ -5001,15 +5033,20 @@ export async function runMainAnalyzerJob(
         console.warn(
           `[analysis] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${coverageVerdict.issues.join(' ')}`,
         );
+        const failureCode = selectStage2FailureCode(coverageVerdict);
         log(
           1,
-          `Chapter ${i + 1}/${totalChapters} — ⚠ attribution may be incomplete (${
-            coverageVerdict.issues[0] ?? 'low coverage'
-          }); kept the best take and flagged the chapter for retry.`,
+          failureCode === 'attribution-collapse'
+            ? `Chapter ${i + 1}/${totalChapters} — ⚠ the cast was not used (${
+                coverageVerdict.issues[0] ?? 'dialogue collapse'
+              }); kept the best take and flagged the chapter for retry.`
+            : `Chapter ${i + 1}/${totalChapters} — ⚠ attribution may be incomplete (${
+                coverageVerdict.issues[0] ?? 'low coverage'
+              }); kept the best take and flagged the chapter for retry.`,
         );
-        const copy = FAILURE_REMEDIATIONS['attribution-incomplete'];
+        const copy = FAILURE_REMEDIATIONS[failureCode];
         recordFailedChapter(cache, ch.id, {
-          code: 'attribution-incomplete',
+          code: failureCode,
           userMessage: copy.userMessage,
           remediation: copy.remediation,
         });
@@ -5017,7 +5054,7 @@ export async function runMainAnalyzerJob(
           kind: 'chapter-failed',
           chapterId: ch.id,
           message: copy.userMessage,
-          code: 'attribution-incomplete',
+          code: failureCode,
           remediation: copy.remediation,
         });
       }

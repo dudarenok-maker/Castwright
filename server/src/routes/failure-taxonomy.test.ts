@@ -383,6 +383,9 @@ describe('analysis-side codes (spec A2)', () => {
   it('attribution-incomplete has copy (synthetic code, no signature)', () => {
     expect(FAILURE_REMEDIATIONS['attribution-incomplete'].remediation.length).toBeGreaterThan(0);
   });
+  it('attribution-collapse has copy (synthetic code, no signature — #2342 item 2)', () => {
+    expect(FAILURE_REMEDIATIONS['attribution-collapse'].remediation.length).toBeGreaterThan(0);
+  });
   it('classifies a GPU-acceleration-unavailable message without shadowing CUDA/VRAM (AMD phase 2)', () => {
     expect(
       classifyFailure(new Error('GPU acceleration unavailable — no compatible GPU detected')).code,
@@ -403,6 +406,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'analyzer-truncated',
         'analyzer-unreachable',
         'attribution-incomplete',
+        'attribution-collapse',
         'auth',
         'cloned-voice-broken',
         'cuda-poisoned',

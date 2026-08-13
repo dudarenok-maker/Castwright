@@ -849,6 +849,47 @@ describe('GeminiAnalyzer.runStage1Chapter — two-schema runStage tolerates a to
   });
 });
 
+describe('GeminiAnalyzer.runStage2Chapter — stage2CallSeq reaches the handoff key (#2342 item 3)', () => {
+  /* runStage2Chapter is the ONLY reader of StageCall.stage2CallSeq — the whole
+     point of #2324. Nothing previously exercised the seam where the sequence
+     actually changes the handoff key: protocol.test.ts covers the pure
+     stage2HandoffKey() helper, but reverting gemini.ts:316 back to
+     `stage2HandoffKey(chapterId)` (dropping `call.stage2CallSeq`) left the
+     whole suite green before this test existed. */
+  const manuscriptId = 'm_gemini_stage2_callseq';
+
+  afterAll(async () => {
+    for (const key of ['stage2-ch1', 'stage2-ch1-c3']) {
+      await rm(resolve(HANDOFF_ROOT, 'inbox', `${manuscriptId}-${key}.md`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'outbox', `${manuscriptId}-${key}.json`), { force: true });
+    }
+  });
+
+  it('a stage-2 call carrying stage2CallSeq: 3 writes its inbox under 2-ch{n}-c3, not the bare key', async () => {
+    const stage2Payload = JSON.stringify({
+      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+    });
+    generateContentStream.mockResolvedValue(
+      asyncFromArray(chunksOf(stage2Payload, 24).map((text) => ({ text }))),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-3.1-flash-lite' });
+
+    await analyzer.runStage2Chapter(manuscriptId, 1, '# stage2 prompt', { stage2CallSeq: 3 });
+
+    const { readFile } = await import('node:fs/promises');
+    // Written under the numbered key ("2-ch1-c3")...
+    await expect(
+      readFile(resolve(HANDOFF_ROOT, 'inbox', `${manuscriptId}-stage2-ch1-c3.md`), 'utf8'),
+    ).resolves.toBe('# stage2 prompt');
+    // ...and NOT under the bare single-call key ("2-ch1").
+    await expect(
+      readFile(resolve(HANDOFF_ROOT, 'inbox', `${manuscriptId}-stage2-ch1.md`), 'utf8'),
+    ).rejects.toThrow();
+  });
+});
+
 describe('GeminiAnalyzer.runStage3Chapter — fs-57 instruct-annotation pass', () => {
   /* Valid stage-3 envelope: annotations[] with sentenceId + optional fields.
      The schema is .strict() so extra fields must be rejected. */

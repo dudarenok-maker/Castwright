@@ -220,10 +220,11 @@ export function narratedSpeechShare(
 
 /** Whether a `narratedSpeechShare` measurement breaches the collapse
     threshold. Shared between `validateStage2Coverage` (which builds the
-    `dialogueCollapse` issue) and the retry scorer below (which recomputes the
-    SAME condition from a `Stage2CoverageVerdict`'s `narratedSpeech` field) so
-    the definition can't drift into two copies that quietly disagree. */
-function isDialogueCollapseBreach(speech: { pct: number; evaluable: boolean } | null): boolean {
+    `dialogueCollapse` issue), the retry scorer below (which recomputes the
+    SAME condition from a `Stage2CoverageVerdict`'s `narratedSpeech` field),
+    and — #2342 item 2 — the route's failure-code selector (same reason:
+    "was this a collapse" must stay ONE definition, not a copy that drifts). */
+export function isDialogueCollapseBreach(speech: { pct: number; evaluable: boolean } | null): boolean {
   return !!(speech && speech.evaluable && speech.pct > STAGE2_MAX_NARRATED_SPEECH_PCT);
 }
 

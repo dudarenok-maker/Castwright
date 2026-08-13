@@ -36,6 +36,7 @@ export type FailureCode =
   | 'analyzer-unreachable'
   | 'analyzer-content-blocked'
   | 'attribution-incomplete'
+  | 'attribution-collapse'
   | 'oom'
   | 'disk-full'
   | 'model-not-loaded'

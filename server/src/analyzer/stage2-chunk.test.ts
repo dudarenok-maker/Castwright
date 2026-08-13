@@ -815,4 +815,49 @@ describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => 
     expect(call.mock.calls.length).toBeGreaterThan(1);
     expect(new Set(seqs).size).toBe(seqs.length); // no reuse across the retry
   });
+
+  it('(#2342) numbers RETRIES on the single-call path, but keeps attempt 1 unnumbered', async () => {
+    /* The single-call path used to pass `undefined` on EVERY attempt, so a
+       retry wrote its handoff forensics under the same `2-ch{n}` key as
+       attempt 1 — `writeInbox` rm's the previous outbox first, so a chapter
+       that retried twice kept only the last attempt's prompt/response. Attempt
+       1 must still read as `undefined` (byte-identical filenames for the
+       overwhelmingly common no-retry case); only attempt 2+ get numbered. */
+    const body = makeBody(3); // ~18 source words
+    let call1 = 0;
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => {
+        call1 += 1;
+        if (call1 === 1) {
+          // Very low, distinct coverage ratio → fails, retry #1.
+          return { sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Paragraph' }] };
+        }
+        if (call1 === 2) {
+          // Different (higher, still failing) ratio → not a deterministic
+          // repeat of attempt 1, so the guard doesn't stop early.
+          return {
+            sentences: [
+              { id: 1, chapterId: 1, characterId: 'narrator', text: 'Paragraph 1 has several words' },
+            ],
+          };
+        }
+        return fakeAttribute(subBody); // attempt 3: full coverage, passes
+      },
+    );
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 10_000,
+      coverageRetries: 2,
+      callForBody: call,
+    });
+    expect(out.chunkCount).toBe(1);
+    expect(call).toHaveBeenCalledTimes(3);
+    const seqs = call.mock.calls.map((c) => c[3]);
+    expect(seqs).toEqual([undefined, 2, 3]);
+  });
 });
