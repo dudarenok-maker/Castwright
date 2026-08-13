@@ -119,7 +119,7 @@ export function syncOneFile(srcPath, destPath, rel) {
   // after the write let a malformed canonical source clobber a previously
   // good mirror with an unusable one before the throw ever fired.
   if (rel === 'SKILL.md' && !mirrored.startsWith('---\n')) {
-    throw new Error(`${destPath}: frontmatter is not the first line`);
+    throw new Error(`${srcPath}: frontmatter is not the first line`);
   }
 
   mkdirSync(dirname(destPath), { recursive: true });

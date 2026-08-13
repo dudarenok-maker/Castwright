@@ -87,9 +87,23 @@ EOF
 # imports (`@playwright/test`) against the CWD's node_modules, not the
 # script's own (temp-dir) location — a plain `node "$VERIFY_DIR/…mjs"` would
 # throw ERR_MODULE_NOT_FOUND instead.
-VERIFY_SCREENSHOT="$VERIFY_DIR/verify-screenshot.png" node --input-type=module < "$VERIFY_DIR/verify-drive.mjs"
-# then Read "$VERIFY_DIR/verify-screenshot.png" and LOOK at it
+# `export` (not a bare prefix assignment) so VERIFY_SCREENSHOT survives as a
+# shell variable for the cygpath calls below, not just inside node's own env.
+export VERIFY_SCREENSHOT="$VERIFY_DIR/verify-screenshot.png"
+node --input-type=module < "$VERIFY_DIR/verify-drive.mjs"
+# Print the ABSOLUTE WINDOWS paths now, in THIS shell. Each Bash tool call is
+# a fresh shell — $VERIFY_DIR will be GONE by the next step, so this is the
+# only chance to hand the path forward. Print, don't rely on the variable.
+echo "VERIFY_DIR_WIN=$(cygpath -w "$VERIFY_DIR")"
+echo "VERIFY_SCREENSHOT_WIN=$(cygpath -w "$VERIFY_SCREENSHOT")"
 ```
+
+Then **Read the `VERIFY_SCREENSHOT_WIN` path printed above** — e.g.
+`C:\Users\...\AppData\Local\Temp\tmp.XXXXXXXXXX\verify-screenshot.png` — and
+LOOK at it. Use that Windows-style path, not the Git-Bash POSIX form
+(`/tmp/tmp.XXXXXXXXXX/verify-screenshot.png`): the POSIX form resolves fine
+*inside* Git Bash itself, but the Read tool runs outside Git Bash and measures
+it as "File does not exist" — only the `cygpath -w` output works there.
 
 **What a healthy run looks like** (this is the regression net for the plan-167 stack):
 - Heading renders (`Welcome back, Mike` on `#/`, or the view's heading) — proves
@@ -111,5 +125,13 @@ screenshot — don't trust the exit code alone.
 ```bash
 # stop a stray Vite holding :5173 (PowerShell — taskkill on the bash PID misses the node child)
 # Get-NetTCPConnection -LocalPort 5173 -State Listen | %{ Stop-Process -Id $_.OwningProcess -Force }
-rm -rf "$VERIFY_DIR"   # unconditional — a failed run (the case you're cleaning up FOR) must not skip this
+
+# This is a FRESH shell — $VERIFY_DIR from STEP 2 is unset here. Paste the
+# VERIFY_DIR_WIN value STEP 2 printed (the directory, not the screenshot):
+VERIFY_DIR_WIN="C:\Users\...\AppData\Local\Temp\tmp.XXXXXXXXXX"   # <- paste STEP 2's printed VERIFY_DIR_WIN
+if [ -z "$VERIFY_DIR_WIN" ]; then
+  echo "VERIFY_DIR_WIN is empty -- refusing to rm -rf" >&2
+else
+  rm -rf "$VERIFY_DIR_WIN"   # unconditional once non-empty — a failed run (the case you're cleaning up FOR) must not skip this
+fi
 ```
