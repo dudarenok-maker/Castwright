@@ -25,21 +25,29 @@ import type { LanguageConventions } from './dialogue-structure/types.js';
 const NARRATOR_ID = 'narrator';
 
 /** True when the sentence text reads as spoken dialogue under `conventions`:
-    (1) `conventions.dialogueOpen` matches at line start; (2) any
-    `conventions.quotePairs` opener occurs at line start; (3) any
-    `conventions.quotePairs` pair forms an embedded `open…close` span with at
-    least one character between. `conventions` is required — the no-table case
-    (no basis to judge) is handled one level up, in `applyNarratorDefault`, so
-    "no table -> no demotion" is a structural property of that function rather
-    than something this one has to special-case for a `null` input. */
+    (1) `conventions.dialogueOpen` matches at line start; (2) any opener from
+    `conventions.quotePairs` OR `conventions.secondaryQuotePairs` occurs at
+    line start; (3) any pair from either tier forms an embedded `open…close`
+    span with at least one character between. Both tiers are read as one
+    union, not two separate checks — `findQuoteRuns` needs the secondary tier
+    to rank below primary because it computes RUN BOUNDARIES and a low-ranked
+    candidate can straddle a real turn; this function computes no boundary at
+    all, so it cannot straddle, and inheriting the tier restriction here would
+    just mean #2286's secondary-convention pairs land in a field this function
+    never reads — real dialogue typeset in that convention would demote to
+    narrator. `conventions` is required — the no-table case (no basis to
+    judge) is handled one level up, in `applyNarratorDefault`, so "no table ->
+    no demotion" is a structural property of that function rather than
+    something this one has to special-case for a `null` input. */
 export function isSpokenLine(text: string, conventions: LanguageConventions): boolean {
   const t = (text ?? '').trimStart();
   if (!t) return false;
   if (conventions.dialogueOpen && conventions.dialogueOpen.test(t)) return true;
-  for (const [open] of conventions.quotePairs) {
+  const pairs = [...conventions.quotePairs, ...conventions.secondaryQuotePairs];
+  for (const [open] of pairs) {
     if (t.startsWith(open)) return true;
   }
-  for (const [open, close] of conventions.quotePairs) {
+  for (const [open, close] of pairs) {
     const o = t.indexOf(open);
     if (o >= 0 && t.indexOf(close, o + open.length + 1) > o) return true;
   }

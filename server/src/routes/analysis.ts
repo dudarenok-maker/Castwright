@@ -1729,6 +1729,61 @@ ${priorJson}
 \`\`\`
 `;
 
+  /* #2313 — `name` and `aliases` were the one part of a non-English roster
+     nothing bound to the manuscript's script, so they were free to drift.
+     Ночной дозор (ru) came back with a 59%-Latin roster
+     (`anton-gorodovsky "Anton Gorodovsky"`) where an earlier run of the same
+     book, same weights and the same prompt returned `"Антон Городецкий"`; a
+     controlled 5x replay of the recorded prompt reproduced Latin 5/5.
+
+     The gap is narrower than "no language guidance". `languagePreamble`
+     (analyzer/gemini.ts) IS appended to the system instruction for a
+     non-English book: "the manuscript text is in Russian (Cyrillic script).
+     Quote evidence VERBATIM from the manuscript (do not translate or
+     transliterate it)" — note the prohibition is scoped to EVIDENCE QUOTES,
+     not to the response at large — and its `castFields` clause binds `tone`,
+     `role`, `description` and each `attributes` tag to the book's language.
+     It never mentions `name` or `aliases`. This block closes exactly that, and
+     is NOT redundant with the preamble: nothing there governs the cast's names.
+
+     Anchored on THE PROSE, not on a language name passed in from the route.
+     Two reasons, both load-bearing: the chapter text is in front of the model
+     and is self-evidencing; and `resolveBookLanguageForManuscript` cannot
+     distinguish "English" from "never declared" — it returns 'en' on a miss and
+     `normaliseBookLanguage` is `primary || 'en'` — so a stated language would
+     assert `en` over Cyrillic prose for any book imported before fs-2 or left
+     undecided at the confirm screen, which is precisely the drift case. Those
+     books get an empty `languagePreamble` too, so this block is their only
+     protection and must not depend on the same unreliable signal.
+
+     The `id` carve-back is not optional. "Transliterate for the id" renders
+     ABOVE the running-roster and series-prior blocks, which require reusing an
+     existing id verbatim. Without the exception, a model correctly repairing a
+     drifted `"Anton Gorodovsky"` back to `"Антон Городецкий"` would then derive
+     `anton-gorodetsky` beside the roster's existing `anton-gorodovsky` — and
+     `mergeRosterChapter` merges by id, so the character SPLITS into two rows,
+     two voice profiles and two sets of lines. That arrives past
+     `retireCharacterId`/`buildCastResolver`, which watch for an id that
+     CHANGED, not for a second one being minted. */
+  const scriptBlock = `
+## Names — use the manuscript's own script
+
+Write every \`name\` and every entry in \`aliases\` **exactly as this chapter's
+prose spells them** — same script, same letters, same diacritics. Never
+transliterate, romanise, or translate a name: for a Russian chapter that means
+\`Антон Городецкий\`, NOT \`Anton Gorodetsky\`.
+
+A transliterated name cannot be matched against this book's text by the later
+attribution pass, and it is what the reader sees in the cast list.
+
+\`id\` is the ONE exception: it stays ASCII kebab-case, so transliterate for the
+id and only for the id — \`Антон Городецкий\` → \`anton-gorodetsky\`. **Unless
+the character already appears in the running roster below, or — when this prompt
+carries one — in the known-series list: then reuse that \`id\` exactly as written
+there, whatever its spelling, even when you are correcting their \`name\`.**
+Minting a second id for someone already listed splits them into two characters.
+`;
+
   /* #938 — the book's byline author is NOT a character. Rendered only when known. */
   const authorBlock = author.trim()
     ? `
@@ -1812,7 +1867,7 @@ Return ONLY a JSON object matching the schema. No prose, no code fences.
 - Title: ${title}
 - Manuscript ID: ${manuscriptId}
 - Chapter: ${chapter.id} — ${chapter.title}
-
+${scriptBlock}
 ## Running roster (from earlier chapters — reuse these ids verbatim)
 
 For any character below who appears in this chapter, use the existing \`id\`

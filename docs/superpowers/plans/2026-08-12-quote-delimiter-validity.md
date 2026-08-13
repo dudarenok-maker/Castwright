@@ -1,5 +1,9 @@
 # Quote-delimiter validity in `findQuoteRuns` — Implementation Plan
 
+> **SHIPPED as M1** — PR [#2300](https://github.com/dudarenok-maker/Castwright/pull/2300), merged `e839a939`, 2026-08-13, after five review rounds (Rounds 2–4 below record what each changed). All six tasks are complete; the plan is kept for the reasoning, not as work to pick up.
+>
+> [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) stays open for **M2**, the general gap-seeded straddle. M1 did **not** unblock [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286) / [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279) — re-measured, not assumed: the widening sweep reads 437 of 51,608 corrupted shapes both before and after, with all nine added pairs individually disqualified. M2's executable acceptance criteria are in [#2288#issuecomment-5275015405](https://github.com/dudarenok-maker/Castwright/issues/2288#issuecomment-5275015405); **M2 is now designed** — [`2026-08-13-gap-seeded-straddle-design.md`](../specs/2026-08-13-gap-seeded-straddle-design.md) and [`2026-08-13-gap-seeded-straddle.md`](2026-08-13-gap-seeded-straddle.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop an apostrophe being read as a closing quote, which today truncates every single-quoted English dialogue turn at its first contraction.
@@ -8,7 +12,7 @@
 
 **Tech Stack:** TypeScript (Node, ESM), Vitest. Server suite only.
 
-**Design of record:** `docs/superpowers/specs/2026-08-12-quote-delimiter-validity-design.md` (revision 3 — see the "Round 2" section at the end of this plan for what changed after Tasks 1–6 below were implemented). Read it before Task 2 — the "Rejected" section explains why two other clauses are deliberately absent, and the metric section explains why the never-delete invariant exists.
+**Design of record:** `docs/superpowers/specs/2026-08-12-quote-delimiter-validity-design.md` (revision 4 as shipped — see the "Round 2", "Round 3" and "Round 4" sections at the end of this plan for what each changed after Tasks 1–6 below were implemented). Read it before Task 2 — the "Rejected" section explains why two other clauses are deliberately absent, and the metric section explains why the never-delete invariant exists.
 
 ## Global Constraints
 

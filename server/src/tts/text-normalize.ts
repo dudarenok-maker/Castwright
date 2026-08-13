@@ -65,6 +65,9 @@ const AUDIO_TAG_RUN = new RegExp(`\\s*\\[(?:${AUDIO_TAGS.join('|')})\\]\\s*`, 'g
 
 /* Zero-width + bidi format chars. Codepoints (all written as \u escapes so
    the source is auditable — these glyphs are invisible in a normal editor):
+   - U+00AD SOFT HYPHEN — invisible in HTML, no audio mapping. Reachable from
+     EPUB since #2310 taught stripHtml to decode `&shy;`; it matches neither
+     CONTROL_CHARS nor `\s`, so nothing else would remove it.
    - U+200B ZERO WIDTH SPACE
    - U+200C ZERO WIDTH NON-JOINER
    - U+200D ZERO WIDTH JOINER
@@ -73,7 +76,10 @@ const AUDIO_TAG_RUN = new RegExp(`\\s*\\[(?:${AUDIO_TAGS.join('|')})\\]\\s*`, 'g
    - U+202A–U+202E bidi embedding/override controls
    - U+2060 WORD JOINER
    - U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM */
-const ZERO_WIDTH_AND_BIDI = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', 'g');
+const ZERO_WIDTH_AND_BIDI = new RegExp(
+  '[\\u00AD\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]',
+  'g',
+);
 
 /* C0 control chars (U+0000–U+001F) MINUS the two readable ones we want to
    preserve (U+0009 TAB, U+000A LF) plus C1 (U+007F–U+009F). XTTS treats

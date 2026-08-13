@@ -7,6 +7,7 @@ import {
 } from './narrator-default.js';
 import { foldMinorCast } from './fold-minor-cast.js';
 import { conventionsFor } from './dialogue-structure/lang/index.js';
+import type { LanguageConventions } from './dialogue-structure/types.js';
 
 // #2245 — isSpokenLine is now driven by the same LanguageConventions tables
 // the structure engine uses, not a separate language-blind regex bundle.
@@ -131,6 +132,10 @@ describe('isSpokenLine', () => {
     // The zh/ja asymmetry is closed: `ja` now carries `“”` like `zh`, so the
     // same line no longer splits by language.
     expect(isSpokenLine('“你好”', ZH)).toBe(true);
+    // #2286 landed both `“…”` and `"…"` in ja's SECONDARY tier (#2288 M2) —
+    // `isSpokenLine` reads primary + secondary as one union (see the comment
+    // on `isSpokenLine` itself), so both read as spoken even though neither
+    // ranks in a `findQuoteRuns` run boundary.
     expect(isSpokenLine('“おはよう”', JA)).toBe(true);
     expect(isSpokenLine('"おはよう"', JA)).toBe(true);
   });
@@ -157,13 +162,14 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('„Ven aquí“ dijo él.', ES)).toBe(false);
     expect(isSpokenLine('„おはよう“ 彼は言った。', JA)).toBe(false);
     expect(isSpokenLine('«你好» 他说。', ZH)).toBe(false);
-    // es/fr dialogueOpen carry &mdash; but not &ndash; (ru carries both) —
-    // a dialogueOpen change moves parser.ts:99's paragraph split, a different
-    // mechanism from quotePairs, and the corpus control for it is vacuous on
-    // the es/fr books (neither has a dash-opened paragraph). Carved out as #2289.
-    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(false);
-    expect(isSpokenLine('&ndash; Un instant', FR)).toBe(false);
-    expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that IS carried, as the control
+  });
+  it('#2289: es/fr dialogueOpen carries &ndash; alongside &mdash;', () => {
+    // es/fr dialogueOpen now carry &ndash; alongside &mdash; (ru precedent)
+    // — this used to pin the exclusion as deliberate; it now pins the fix
+    // instead.
+    expect(isSpokenLine('&ndash; Un momento', ES)).toBe(true);
+    expect(isSpokenLine('&ndash; Un instant', FR)).toBe(true);
+    expect(isSpokenLine('&mdash; Un momento', ES)).toBe(true); // the entity that was already carried, as the control
   });
   it('a single quote used as an apostrophe does NOT make narration spoken', () => {
     expect(isSpokenLine('She didn’t know where she was.', EN)).toBe(false); // smart apostrophe (lone U+2019)
@@ -207,6 +213,36 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('他说「你好」很大声', ZH)).toBe(true);
     expect(isSpokenLine('「おはよう」', JA)).toBe(true);
     expect(isSpokenLine('彼は「おはよう」と言った。', JA)).toBe(true);
+  });
+});
+
+describe('#2288 M2: isSpokenLine reads BOTH quote-pair tiers', () => {
+  /* The tier stops a run STRADDLING; isSpokenLine computes no run boundary, so
+     it cannot straddle and must not inherit the restriction — otherwise #2286's
+     pairs land in a field it never reads and real dialogue is demoted to
+     narrator. Its failure direction here is a false POSITIVE ("do not demote"),
+     the safe one for a demote-only heuristic. */
+  const ruTier: LanguageConventions = {
+    ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']],
+  };
+  // #2286 shipped `['‘','’']` into ru's real secondaryQuotePairs, so the
+  // control below must strip it back out — `conventionsFor('ru')!` alone no
+  // longer has the pair in NEITHER tier, and asserting against it directly
+  // would silently stop discriminating "tier present" from "tier absent".
+  const ruNoPair: LanguageConventions = {
+    ...conventionsFor('ru')!,
+    secondaryQuotePairs: conventionsFor('ru')!.secondaryQuotePairs.filter(
+      ([o, c]) => !(o === '‘' && c === '’'),
+    ),
+  };
+  it('a line in the SECONDARY convention still reads as spoken', () => {
+    expect(isSpokenLine('‘Привет,’ сказал он.', ruTier)).toBe(true);
+  });
+  it('CONTROL: the same line is NOT spoken with the pair in neither tier', () => {
+    expect(isSpokenLine('‘Привет,’ сказал он.', ruNoPair)).toBe(false);
+  });
+  it('an unrelated line is still not spoken', () => {
+    expect(isSpokenLine('Он молча вышел из комнаты.', ruTier)).toBe(false);
   });
 });
 
