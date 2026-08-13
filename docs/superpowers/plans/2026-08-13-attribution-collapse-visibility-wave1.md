@@ -426,17 +426,37 @@ quietly shrank" criterion 4 names.
 
 - [ ] **Step 2: Check the aligner's short-needle behaviour BEFORE trusting the fixture**
 
-`aligner.ts` selects Pass-A anchors on **length alone** (`ANCHOR_MIN_LEN =
-FUZZY_MIN_NEEDLE`), and its own header records a known residual: a short or
-duplicated needle is left to the interval-bounded Pass B. A three-word Russian
-fixture sentence may sit below that floor and align differently than this plan
-assumes.
+`aligner.ts` selects Pass-A anchors on **length alone** —
+`ANCHOR_MIN_LEN = FUZZY_MIN_NEEDLE = 24` (`aligner.ts:45`), with
+`WINDOW = 4096` (`:43`) — and its own header records a known residual: a needle
+shorter than 24 normalised characters never anchors and is left to the
+interval-bounded Pass B infill.
+
+**Every fixture sentence in this plan as drafted is under 24 characters.**
+`'— Ничего нет,'` is 13. So none of them anchors, all of them go through Pass B,
+and Pass B's behaviour on a run with **no** bounding anchors is not the same as
+its behaviour between two. A fixture that passes because Pass B happened to
+place everything is not evidence the join works.
 
 **So: before writing Task 4's assertions, run the fixture through
 `alignSentences` directly and print `aligned[i].spans` for each sentence.**
-Assert what it actually does, and if the fixture sentences are too short to
-anchor, lengthen them rather than working around it. A fixture that passes
-because nothing aligned is the placebo shape this spec has shipped four times.
+Assert what it actually does. Then build the fixture set in **two tiers**, and
+run every criteria test against both:
+
+- **Short tier** — the drafted fixture, all needles under 24 chars, exercising
+  Pass B with no anchors.
+- **Anchored tier** — the same book with every speech and tag half rewritten to
+  **over 24 normalised characters**, so Pass A anchors and Pass B infills
+  between anchors. e.g. `'— Ничего здесь нет, совсем ничего,'` /
+  `'— негромко сказал Егор, не оборачиваясь.'`
+
+**A single-tier suite cannot distinguish "the join works" from "Pass B guessed
+right on a two-sentence chapter", and the real corpus is the anchored tier.**
+Lengthening the fixture instead of adding the tier loses the short case, which
+is where dash dialogue actually lives — `- Да.` is 5 characters, and #2187's
+note records that exact needle as the one that used to mis-anchor. A fixture
+that passes because nothing aligned is the placebo shape this spec has shipped
+four times.
 
 - [ ] **Step 3: GREEN — map spans to attributions**
 
