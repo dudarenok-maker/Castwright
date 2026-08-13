@@ -3108,8 +3108,14 @@ was only ever read, never written): a row for every book, none blank; both
 live CJK books (`煤落的委托`, `コールフォールの依頼`) at `spokenTotal > 0`;
 `dashOnlySpoken` non-zero on both Russian books (`Юный дрессировщик` 17,
 `Ночной дозор` 1719); `orphanSpoken` non-zero on several books, concentrated
-in the *Coalfall Commission* family (0–62 across its five language
-editions); `unattributedSpeech` printed for every book. **`modelNarrator` and
+in the *Coalfall Commission* family (2–62 across its five language
+editions); `unattributedSpeech` printed for every book. **Re-verified
+2026-08-13** after a #2328 review-gate fix to `orphanSpoken` (it was
+double-counting per unresolvable model id sharing one split span, instead
+of once per span — finding 1): across this same corpus the fix moved
+exactly one book's figure (`Ночной дозор (Tetralogy)`, 30→29), everything
+else above is unchanged; see the acceptance doc's own §1/§5 for the
+corrected per-book table and D13 percentages. **`modelNarrator` and
 `demotedNarrator` read 0 on every book — this is the D18 trap doing its job,
 not the R-9C1 finding recurring:** none of these 21 caches have been
 re-analysed since `priorCharacterId` shipped, so every narrator-speech span

@@ -29,22 +29,28 @@ every book reads `ok (not analysed)` regardless of its real state.
 
 Record the full table verbatim below, plus the JSON report path.
 
-**Result: PARTIAL, 2026-08-13, implementation worktree.** Ran from
-`wt-1984-wave1` after `cd server && npm run build`, with 21 of 23 real books'
-`server/handoff/cache/*.json` copied in **read-only** from the primary
-checkout (the two missing were "C2/C2C3 run" throwaway Night Watch test
-copies with no cache anywhere) and deleted from the worktree afterward —
-nothing written to `C:\AudiobookWorkspace`, and the primary checkout's cache
-was only ever read. This is **not** the full-checkout run item 1 above
-actually asks for; it is the closest available proxy without running from a
-concurrently-in-use checkout. Sorted-by-share table (23 books; unattributed
+**Result: PARTIAL, 2026-08-13, implementation worktree — RE-MEASURED after
+the finding-1 fix.** Ran from `wt-1984-wave1` after `cd server && npm run
+build`, with real books' `server/handoff/cache/*.json` copied in
+**read-only** from the primary checkout and deleted from the worktree
+afterward — nothing written to `C:\AudiobookWorkspace`, and the primary
+checkout's cache was only ever read. This is **not** the full-checkout run
+item 1 above actually asks for; it is the closest available proxy without
+running from a concurrently-in-use checkout. **Re-run 2026-08-13 after the
+#2328 review-gate fix to `orphanSpoken`** (it was counting one increment per
+unresolvable model id sharing a split span, rather than once per span —
+finding 1): across the real corpus this moved exactly **one** cell —
+`Ночной дозор (Tetralogy)`'s `orphan` column, `30` → `29` (one split span in
+that book carried two distinct bogus ids). Every other row's `orphan`
+column, and every D13 percentage below, is numerically unchanged by the fix
+— the bug was real but this corpus rarely hits the multiplicity case. Sorted-by-share table (23 books; unattributed
 worst-chapter lines omitted here, present in the full console output and the
 JSON report):
 
 ```
 title                                                        lang  src       spoken tag  narrIdSpoken share  modelN demotedN unknownOriginN unattr split orphan tagNarr dashOnly cast state
 Юный дрессировщик                                             ru  declared    279   58     193        88.5%     0      0        193           56     5      0      52       17    7  ok
-Ночной дозор (Tetralogy)                                       ru  declared   1928  521     147         8.9%     0      0        147           12   250     30     443     1719   34  ok
+Ночной дозор (Tetralogy)                                       ru  declared   1928  521     147         8.9%     0      0        147           12   250     29     443     1719   34  ok
 Unraveled                                                       en  declared   2054  615      84         4.5%     0      0         84          168     2      0     527        0   11  ok
 Everblaze                                                       en  declared   4265 1538     136         3.3%     0      0        136          155    11      0    1223        0   34  ok
 Neverseen                                                       en  declared   5822 2584     180         3.2%     0      0        180          179     6      0    1790        0   53  ok
@@ -141,14 +147,24 @@ Compute, per book, `orphanSpoken / (spokenTotal - unattributedSpeech -
 splitSpeech)` (spec §D13 re-gated's corrected denominator) and check whether
 a separating gap survives D14's rebasing.
 
-**Result: PARTIAL, from the §1 table above.** Non-zero orphan shares, sorted:
+**Result: PARTIAL, from the §1 table above — RE-VERIFIED 2026-08-13 against
+the finding-1-fixed `orphanSpoken`.** Non-zero orphan shares
+(`orphanSpoken / (spokenTotal - unattributedSpeech - splitSpeech)`, sorted):
 `The Coalfall Commission` 49.2%, `El Encargo de Coalfall` 26.0%, `La Commande
 de Coalfall` 18.3%, `Заказ Коалфолла` 16.5% — then a gap down to `煤落的委托`
-2.5%, `Der Auftrag von Coalfall` / `The Lost Art of World Domination` 1.6–1.8%,
-`Playing with Fire` 0.34%, then zero on the remaining 15 books. **The gap is
-real but roughly 6–7×, not the round-7 gate's claimed order of magnitude
-(~10×), and — this is the more important caveat — the entire "high" group is
-one book family** (*The Coalfall Commission*'s five language editions,
+2.5%, `Ночной дозор (Tetralogy)` 1.7%, `Der Auftrag von Coalfall` 1.6%,
+`Playing with Fire` 0.34%, then zero on the remaining 15 books (previously
+this row named `The Lost Art of World Domination` instead of `Ночной дозор
+(Tetralogy)` for the second book in that middle pair — that was always
+wrong, `The Lost Art of World Domination`'s own `orphanSpoken` is 0; fixed
+here alongside the finding-1 re-measurement). All four top-group
+percentages, and the low-group max (`煤落的委托` 2.5%), are numerically
+**unchanged** by the finding-1 fix — none of those five books' split spans
+carried more than one bogus id, so the fix's only real-corpus effect landed
+on `Ночной дозор (Tetralogy)` (1.80%→1.74%), which was never in the "high"
+group. **The gap is real but roughly 6–7×, not the round-7 gate's claimed
+order of magnitude (~10×), and — this is the more important caveat — the
+entire "high" group is one book family** (*The Coalfall Commission*'s five language editions,
 Castwright's own canonical e2e/regression fixture, which has been
 re-analysed and re-cast repeatedly during development). A repeatedly-
 retested fixture book is exactly the shape that would accumulate unusual
