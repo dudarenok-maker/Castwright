@@ -36,9 +36,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -151,4 +151,106 @@ test('pr-review-gate/SKILL.md names both reference files, and they exist', () =>
         `dispatching session happens to retype it`,
     );
   }
+});
+
+// Markdown links of the form ](some/relative/path.md#anchor) — http(s) links
+// are skipped, and so are bare #anchor links (no file part to resolve).
+const INTRA_REPO_ANCHOR_LINK = /\]\((?!https?:)([^)#\s]+\.md)#([^)\s]+)\)/g;
+
+/**
+ * GitHub's heading-anchor slug: strip backticks, lowercase, drop everything
+ * that is not a word char / space / hyphen, trim the ends, then replace each
+ * REMAINING SPACE WITH ONE HYPHEN.
+ *
+ * The one-for-one replacement is the whole subtlety, and an earlier draft of
+ * this helper got it wrong with `.replace(/ +/g, '-')`. GitHub does not
+ * collapse runs of spaces: `### Scope discipline > merge magic` drops the `>`
+ * and leaves TWO spaces, which slug to the DOUBLE hyphen in
+ * CONTRIBUTING.md#scope-discipline--merge-magic. A collapsing version reports
+ * that correct, live link as broken — a guard that fails on valid input, which
+ * is worse than no guard: it trains its reader to "fix" correct documents.
+ * The unit test below pins exactly that case GREEN.
+ */
+function githubAnchor(heading) {
+  return heading
+    .replace(/`/g, '')
+    .toLowerCase()
+    .replace(/[^\w\- ]+/g, '')
+    .replace(/^ +| +$/g, '')
+    .replace(/ /g, '-');
+}
+
+/** Blank out fenced code blocks — a ```js sample containing a markdown-link
+ *  literal is not a link. Measured: without this, scanning this repo's own
+ *  plan docs reports their example snippets as dangling. */
+function stripFencedBlocks(text) {
+  const out = [];
+  let inFence = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    out.push(inFence ? '' : line);
+  }
+  return out.join('\n');
+}
+
+function headingAnchors(file) {
+  const anchors = new Set();
+  for (const line of readNormalized(file).split('\n')) {
+    const m = /^#{1,6} +(.+?)\s*$/.exec(line);
+    if (m) anchors.add(githubAnchor(m[1]));
+  }
+  return anchors;
+}
+
+/** The scan set is DERIVED, not hand-listed: the two root governance docs plus
+ *  every markdown file under .claude/skills/**. A hand-list would reproduce the
+ *  enumeration trap Task 4 exists to close — the next skill doc added would be
+ *  unprotected for exactly the same reason the three extraFiles literals were.
+ *  Historical plan docs under docs/ are deliberately OUT of scope: measured
+ *  2026-08-13, they carry 15 pre-existing dangling links (relative paths
+ *  written as if from the repo root), none of which this work touches. */
+function linkScanSet() {
+  const skillsRoot = join(REPO_ROOT, '.claude', 'skills');
+  const skillDocs = readdirSync(skillsRoot, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.md'))
+    .map((d) => join(d.parentPath ?? d.path, d.name));
+  return [join(REPO_ROOT, 'CLAUDE.md'), join(REPO_ROOT, 'CONTRIBUTING.md'), ...skillDocs];
+}
+
+test('githubAnchor matches GitHub slugging, including runs of spaces', () => {
+  // The green-on-awkward-input case. Without it, the collapsing bug that this
+  // helper shipped with in draft is invisible: every OTHER assertion here is a
+  // true-positive check, and a helper that over-reports passes all of them.
+  assert.equal(githubAnchor('Scope discipline > merge magic'), 'scope-discipline--merge-magic');
+  assert.equal(githubAnchor('Mandatory independent review (PRs)'), 'mandatory-independent-review-prs');
+  assert.equal(
+    githubAnchor('Incidental findings: report, fix, record'),
+    'incidental-findings-report-fix-record',
+  );
+});
+
+test('intra-repo anchor links in the governance docs and skills resolve to real headings', () => {
+  // CLAUDE.md:716 links model-routing/SKILL.md#mandatory-independent-review-prs.
+  // Moving that section breaks the anchor while the existing string-match
+  // assertion ("step 10 references pr-review-gate") stays GREEN — the guard
+  // would certify the very line it broke. Presence of a word is not integrity
+  // of a link.
+  const broken = [];
+  for (const source of linkScanSet()) {
+    const text = stripFencedBlocks(readNormalized(source));
+    for (const [, relPath, anchor] of text.matchAll(INTRA_REPO_ANCHOR_LINK)) {
+      const target = resolve(dirname(source), relPath);
+      if (!existsSync(target)) {
+        broken.push(`${basename(source)} -> ${relPath} (file does not exist)`);
+        continue;
+      }
+      if (!headingAnchors(target).has(anchor.toLowerCase())) {
+        broken.push(`${basename(source)} -> ${relPath}#${anchor} (no such heading)`);
+      }
+    }
+  }
+  assert.deepEqual(broken, [], `dangling intra-repo anchor links:\n  ${broken.join('\n  ')}`);
 });
