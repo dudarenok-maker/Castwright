@@ -367,8 +367,8 @@ half-calibrated.
 
 **What this costs: the metric now needs the manuscript body, and revision 7's
 did not.** `ChapterHint.body` lives in the manuscript record, not in the
-analysis cache, so `resolveBookLanguage`'s sibling — the impure caller of Wave 1
-criterion 2 — gains a second read. That is I/O the pure module still never does;
+analysis cache, so `resolveBookLanguage`'s sibling — the impure caller Wave 1
+criterion 7 mandates — gains a second read. That is I/O the pure module still never does;
 the bodies are passed in with the sentences. It also means **a book whose
 manuscript record is gone cannot be measured**, which is a new `unmeasurable`
 producer and is specified as one below.
@@ -2025,7 +2025,7 @@ precedence order, and produces the state. The pure module never reads a file.
 **Revision 5 drew that line for the snapshot and not for the language, which is
 the same class of defect half-closed** (R-6M1). Step 1 of §Language resolution
 reads `state.json`; step 3 reads the cached text to corroborate. Both are I/O,
-and revision 5's Wave 1 criterion 1 nonetheless listed `detectManuscriptLanguage`
+and revision 5's Wave 1 criterion 1 (now 6) nonetheless listed `detectManuscriptLanguage`
 among the pure module's own imports. The resolver is therefore **one impure
 function** — `resolveBookLanguage(bookDir, sentences)` — returning
 `{ language, languageSource }`, which the pure metric receives as an argument
