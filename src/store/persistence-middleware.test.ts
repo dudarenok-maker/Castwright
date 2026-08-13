@@ -12,6 +12,7 @@ import { persistenceMiddleware } from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
+import { bookMetaSlice, bookMetaActions } from './book-meta-slice';
 
 function makeStore(state: Record<string, unknown>) {
   return {
@@ -560,5 +561,174 @@ describe('bulk-reassign persistence', () => {
     await vi.runAllTimersAsync();
     const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
     expect(toasts.length).toBe(0);
+  });
+});
+/* #2230 — a refused rename (409) from the Listen-view book-meta editor must
+   surface the server's sentence AND roll back the optimistic saved update so
+   the header stops showing a title the server rejected. Unlike makeReduxStore
+   above (whose bookMeta is a no-op stub), this builder wires the REAL bookMeta
+   reducer so setDraftField → commitDraft → rollbackCommitDraft actually mutate
+   state. */
+function makeBookMetaStore() {
+  const meta = {
+    title: 'The Northern Star',
+    author: 'Marin Vale',
+    series: '',
+    narratorCredit: 'Anders Vale',
+    genre: 'Literary fiction',
+    publicationDate: '2026-05-09',
+    description: null,
+    notes: null,
+  };
+  return configureStore({
+    reducer: {
+      bookMeta: bookMetaSlice.reducer,
+      ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
+    } as never,
+    preloadedState: {
+      ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+      bookMeta: { draft: null, saved: { b1: meta }, prosodyEnabled: {} },
+    } as never,
+    middleware: (gDM) => gDM().concat(persistenceMiddleware),
+  });
+}
+
+describe('bookMeta/commitDraft persist failure (#2230)', () => {
+  /* Both refusal modes — analysis-busy and folder path collision — must
+     surface the server's OWN sentence (not the bulk-reassign copy) and revert
+     the optimistic `saved` while KEEPING the user's typed draft for retry. */
+  it.each([
+    {
+      serverError:
+        'Analysis is running for this book. Wait for it to finish before renaming it.',
+      probe: 'Analysis is running for this book',
+    },
+    {
+      serverError: 'A book already exists at that Author/Series/Title path.',
+      probe: 'already exists at that Author/Series/Title path',
+    },
+  ])('surfaces the server refusal sentence and reverts title but keeps the draft ($probe)', async ({ serverError, probe }) => {
+    putBookState.mockRejectedValueOnce(new Error(`Book state PUT failed (409): ${serverError}`));
+    const store = makeBookMetaStore();
+    /* Stage + commit a rename exactly as the Listen editor does. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Renamed Book' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.runAllTimersAsync();
+
+    const state = store.getState() as {
+      notifications: { toasts: { kind: string; message: string; dedupeKey?: string }[] };
+      bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null };
+    };
+
+    /* Specific server message, book-meta dedupe key — NOT the bulk copy. */
+    const toast = state.notifications.toasts.find((t) => t.dedupeKey === 'book-meta-persist-failed');
+    expect(toast?.kind).toBe('error');
+    expect(toast?.message).toContain(probe);
+    expect(toast?.message).not.toContain('Line reassignment');
+    /* The api.ts envelope is stripped — only the server's sentence remains. */
+    expect(toast?.message).not.toContain('Book state PUT failed');
+
+    /* Persisted `saved` reverts to the last accepted value… */
+    expect(state.bookMeta.saved.b1.title).toBe('The Northern Star');
+    /* …and the user's typed text survives in the editor for retry. */
+    expect(state.bookMeta.draft?.title).toBe('Renamed Book');
+  });
+
+  it('does NOT toast, roll back, or keep a snapshot on a SUCCESSFUL save', async () => {
+    putBookState.mockResolvedValue(undefined);
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Persisted Fine' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.runAllTimersAsync();
+
+    const state = store.getState() as {
+      notifications: { toasts: unknown[] };
+      bookMeta: {
+        saved: Record<string, { title: string }>;
+        draft: unknown;
+        lastCommitted?: Record<string, unknown>;
+      };
+    };
+    /* The optimistic value is now confirmed on disk — no rollback. */
+    expect(state.bookMeta.saved.b1.title).toBe('Persisted Fine');
+    expect(state.bookMeta.draft).toBeNull();
+    expect(state.notifications.toasts).toHaveLength(0);
+    /* Success prunes the snapshot so the next save snaps a fresh baseline. */
+    expect(state.bookMeta.lastCommitted?.['b1']).toBeUndefined();
+  });
+
+  it('does NOT attribute a ui/confirmCast failure to book-meta when it replaces the state write in the same window', async () => {
+    /* #2230 — ui/confirmCast and bookMeta/commitDraft share the `state` slice.
+       If a confirmCast lands in the same debounce window it REPLACES the pending
+       write, so the failure concerns the cast-confirm, not the superseded
+       rename: the stale book-meta handler must be dropped (no book-meta toast,
+       no book-meta rollback). */
+    putBookState.mockRejectedValueOnce(new Error('Book state PUT failed (409): cast refused'));
+    const store = makeBookMetaStore();
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Renamed Book' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    /* A different `state`-slice write lands in the same debounce window. */
+    store.dispatch({ type: 'ui/confirmCast' } as never);
+    await vi.runAllTimersAsync();
+
+    /* The pending write that flushed (and failed) was the cast-confirm. */
+    expect(putBookState).toHaveBeenCalledWith('b1', {
+      slice: 'state',
+      patch: { castConfirmed: true },
+    });
+
+    const state = store.getState() as {
+      notifications: { toasts: { dedupeKey?: string }[] };
+      bookMeta: { draft: { title?: string } | null };
+    };
+    /* No book-meta failure toast for an op that wasn't book-meta… */
+    expect(state.notifications.toasts.some((t) => t.dedupeKey === 'book-meta-persist-failed')).toBe(false);
+    /* …and no rollback: commitDraft nulled the draft and nothing restored it. */
+    expect(state.bookMeta.draft).toBeNull();
+  });
+
+  it('does NOT let an older in-flight save prune/roll back over a newer one (#2230 race)', async () => {
+    /* Two saves whose debounced PUTs OVERLAP in flight: the older PUT resolving
+       after a newer one is scheduled must NOT prune the shared rollback
+       snapshot, and the newer PUT's failure must still recover the newest edit.
+       Before the generation-token gate, the older flush's onSuccess would wipe
+       the snapshot the newer flush's rollback needs → the newer edit was lost. */
+    const deferred: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    putBookState.mockImplementation(
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          deferred.push({ resolve, reject });
+        }),
+    );
+    const store = makeBookMetaStore();
+
+    /* Save A → the first debounced flush fires and its PUT stays in-flight. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Edit A' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(1);
+
+    /* Save B before PUT_A resolves → a second flush fires, PUT_B in-flight. */
+    store.dispatch(bookMetaActions.setDraftField({ field: 'title', value: 'Edit B' }));
+    store.dispatch(bookMetaActions.commitDraft({ bookId: 'b1' }));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deferred).toHaveLength(2);
+
+    /* The OLDER flush (A) succeeds first — it must NOT prune the snapshot that
+       the still-in-flight newer flush (B) depends on. */
+    deferred[0].resolve(undefined);
+    await vi.runAllTimersAsync();
+    expect((store.getState() as { bookMeta: { lastCommitted?: Record<string, unknown> } }).bookMeta.lastCommitted?.['b1']).toBeDefined();
+
+    /* The NEWER flush (B) now fails — its rollback must still run, restoring the
+       accepted title and preserving the newest edit for retry. */
+    deferred[1].reject(new Error('Book state PUT failed (409): analysis is running'));
+    await vi.runAllTimersAsync();
+    const after = store.getState() as {
+      bookMeta: { saved: Record<string, { title: string }>; draft: { title?: string } | null };
+    };
+    expect(after.bookMeta.saved.b1.title).toBe('The Northern Star');
+    expect(after.bookMeta.draft?.title).toBe('Edit B');
   });
 });
