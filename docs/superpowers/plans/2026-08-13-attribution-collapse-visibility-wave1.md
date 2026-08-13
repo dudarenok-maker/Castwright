@@ -124,7 +124,7 @@ its own steps and violates one of these has failed.
 |---|---|---|
 | `openapi.yaml` | API contract, type source of truth | Add optional `priorCharacterId` to the sentence schema. **Edited first**, then `npm run openapi:types` |
 | `server/src/handoff/schemas.ts` | zod mirror of the contract (`:117-142`) | Add `priorCharacterId: z.string().optional()` |
-| `server/src/analyzer/narrator-default.ts` | the demote-only heuristic | `applyNarratorDefault` (`:76`) records `priorCharacterId` on each demotion |
+| `server/src/analyzer/narrator-default.ts` | the demote-only heuristic | `applyNarratorDefault` (`:77`) records `priorCharacterId` on each demotion |
 | `server/src/analyzer/dialogue-structure/cross-examine.ts` | the engine's correction pass | records `priorCharacterId` on each correction |
 | `server/src/store/attribution-health.ts` | **NEW** — the pure metric | `computeAttributionMeasurement`, `AttributionMeasurement` |
 | `server/src/store/attribution-health.test.ts` | **NEW** — unit + mutation suite | |
@@ -152,7 +152,7 @@ Instrumenting only that site reports zero on every default-configuration book.
 
 **Files:**
 - Modify: `openapi.yaml`, `server/src/handoff/schemas.ts:117-142`
-- Modify: `server/src/analyzer/narrator-default.ts:76-96` (`applyNarratorDefault`)
+- Modify: `server/src/analyzer/narrator-default.ts:77-96` (`applyNarratorDefault`)
 - Modify: `server/src/analyzer/dialogue-structure/cross-examine.ts` (the correction site)
 - Test: `server/src/analyzer/narrator-default.test.ts`, `.../cross-examine.test.ts`
 
