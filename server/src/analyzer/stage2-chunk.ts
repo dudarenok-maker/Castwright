@@ -294,6 +294,12 @@ export interface Stage2ChunkRunOptions {
   /** Adaptive re-split recursion bound. Default 3. */
   maxSplitDepth?: number;
   coverageThresholds?: Stage2CoverageThresholds;
+  /** #2325 — the language's dialogue marker (conventionsFor(lang).dialogueOpen).
+      Enables the dialogue-collapse check inside the coverage guard, so a section
+      that hands every spoken line to the narrator is retried instead of
+      persisted. Omitted for a language with no marker, leaving behaviour
+      unchanged. */
+  dialogueOpen?: RegExp;
   onRetry?: (attempt: number, verdict: Stage2CoverageVerdict) => void;
   /** Fired when a chunk's coverage retry stopped early because the failure
       reproduced exactly — deterministic, so the remaining budget cannot help. */
@@ -402,6 +408,7 @@ export async function runStage2ChapterChunked(
         maxRetries: opts.coverageRetries,
         call: () => callSectioned(span, preceding, lastSpeakerId),
         thresholds: opts.coverageThresholds,
+        dialogueOpen: opts.dialogueOpen,
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });
@@ -451,7 +458,12 @@ export async function runStage2ChapterChunked(
       lastSpeakerId = lastSpokenSpeaker(sectionSentences, lastSpeakerId);
     }
     const sentences = all.map((s, i) => ({ ...s, id: i + 1 }));
-    const coverage = validateStage2Coverage(opts.body, sentences, opts.coverageThresholds);
+    const coverage = validateStage2Coverage(
+      opts.body,
+      sentences,
+      opts.coverageThresholds,
+      opts.dialogueOpen,
+    );
     return { sentences, coverage, chunkCount: chunks.length };
   };
 
@@ -478,6 +490,7 @@ export async function runStage2ChapterChunked(
            and those attempts DO get numbered. */
         call: () => opts.callForBody(opts.body, null, null, undefined),
         thresholds: opts.coverageThresholds,
+        dialogueOpen: opts.dialogueOpen,
         onRetry: opts.onRetry,
         onExhausted: opts.onExhausted,
       });

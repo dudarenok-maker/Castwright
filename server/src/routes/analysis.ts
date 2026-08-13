@@ -2250,6 +2250,14 @@ export async function attributeChapterStage2(opts: {
     body: opts.chapter.body,
     charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),
     coverageRetries: resolveStage2CoverageRetries(),
+    /* #2325 — the language's own dialogue marker, so a section that hands every
+       spoken line to the narrator fails the coverage guard and is retried
+       rather than persisted. Reuses `fpConventions`, already resolved above and
+       independent of the structure-engine knob — the collapse this catches is a
+       stage-2 failure, so the check must not disappear when the deterministic
+       engine is turned off. undefined for a language with no marker (English),
+       leaving the guard byte-identical to before. */
+    dialogueOpen: fpConventions?.dialogueOpen ?? undefined,
     callForBody,
     onRetry: opts.onCoverageRetry,
     onExhausted: opts.onCoverageExhausted,

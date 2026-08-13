@@ -745,7 +745,14 @@ describe('lastSpokenSpeaker (#1758)', () => {
    LAST chunk, which is exactly the chunk that does not fail. */
 describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => {
   it('passes NO sequence on the single-call path (filenames stay unchanged)', async () => {
-    const call = vi.fn(async (subBody: string) => fakeAttribute(subBody));
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => fakeAttribute(subBody),
+    );
     await runStage2ChapterChunked({
       body: makeBody(3),
       charBudget: 10_000,
@@ -757,7 +764,14 @@ describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => 
   });
 
   it('gives each section of a chunked chapter a distinct 1..N sequence', async () => {
-    const call = vi.fn(async (subBody: string) => fakeAttribute(subBody));
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => fakeAttribute(subBody),
+    );
     const out = await runStage2ChapterChunked({
       body: makeBody(10),
       charBudget: 80,
@@ -777,13 +791,20 @@ describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => 
        the section's number and the retry would overwrite the attempt that
        failed — losing precisely the evidence a retry exists to explain. */
     let first = true;
-    const call = vi.fn(async (subBody: string) => {
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => {
       if (first) {
         first = false;
         return { sentences: [] as SentenceOutput[] }; // fails coverage → retry
       }
       return fakeAttribute(subBody);
-    });
+    },
+    );
     await runStage2ChapterChunked({
       body: makeBody(10),
       charBudget: 80,
