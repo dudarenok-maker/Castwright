@@ -381,9 +381,12 @@ const SENTENCE_END_CHARS = new Set(['.', '!', '?', '。', '！', '？']);
     own tag, declining a genuine second turn. A short capitalised name is far
     more common than a title abbreviation, and corpus prevalence settles it
     either way: 0 of 726,385 real paragraphs exhibit the abbreviation shape
-    at all, so excluding it bought nothing measured and cost 11 of a
-    21-shape family (`server/src/analyzer/dialogue-structure/reopen-sweep
-    .test.ts`'s short-name attribution family). Removing it is a residual,
+    at all, so excluding it bought nothing measured and cost all 11 of the
+    11 second-turn shapes in a 22-case family
+    (`server/src/analyzer/dialogue-structure/reopen-sweep
+    .test.ts`'s short-name attribution family — the 42-case family's own
+    second-turn count is 21; this replica family is smaller, 4 languages not
+    6). Removing it is a residual,
     not a fix-in-place: `“Hi,” said Mr. «Anton».` (`parser.test.ts`) is
     re-pinned as a known gap the guard doesn't close, rather than silently
     reworked to keep passing. */

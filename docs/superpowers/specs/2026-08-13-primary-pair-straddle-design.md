@@ -329,22 +329,38 @@ against #2286's actual tables (101 across 48 paragraphs, down from an
 unfixed 7,438 across 1,489), and the mutation evidence: the implementation
 plan's Ship notes, "Round 2 — PR #2340 Premium review gate".
 
-**F2 — a known, filed gap, PR #2340 round 2 (not fixed here).** The primary-
-run precondition above turns the guard off entirely for a paragraph typed
-WHOLLY in a secondary-tier convention — no primary run anywhere means
-nothing for the precondition to find, in ANY language, not only CJK. The
-obvious repair (check the accepted-run list instead of the primary-run list
-alone) fixes that but re-declines 5,892 spans in the same real Chinese book
-this section's own MAJOR finding was about, at corpus scale — the real
+**F2 — a known, filed gap, PR #2340 round 2 (not fixed here); condition and
+harm figure both corrected in round 3 (findings C2, C1).** The primary-run
+precondition above turns the guard off for a candidate with **no primary run
+ending before it** — corrected from an earlier, looser statement of this
+("typed WHOLLY in a secondary-tier convention") that missed the case where a
+primary run exists but comes AFTER the candidate; that shape is inert too.
+Not CJK-specific either — it hits any language whose dialogue happens to sit
+before the paragraph's only primary run, or has none. The obvious repair
+(check the accepted-run list instead of the primary-run list alone) fixes
+that but re-declines 5,892 spans in the same real Chinese book this
+section's own MAJOR finding was about, at corpus scale — the real
 discriminator is a word-order typology question ("does the verb attribute
 the PRECEDING turn, or introduce the FOLLOWING one") with more than one
-defensible encoding, not decided here. Measured exposed population against
-#2286's real tables: 2,202 real paragraphs carry a secondary-tier-only turn,
-1,164 of which a would-lose-a-speaker proxy fires on, 94% of that from the
-same one book. Full detail, the two candidate encodings, and the measured
-cost of the naive repair: implementation plan Ship notes, "Round 2,
-continued", and issue
-[#2346](https://github.com/dudarenok-maker/Castwright/issues/2346).
+defensible encoding, not decided here.
+
+Measured exposed population against #2286's real tables: 2,202 real
+paragraphs carry a secondary-tier-only turn (paragraph-level; 2,221
+paragraphs / 8,802 runs at the run level, confirming 2,202 under-counts
+rather than over-counts). A raw two-secondary-spans-around-a-tag proxy fires
+on 1,164 of the 2,202 — **but that raw count overstates the harm by ~100×**:
+it cannot distinguish the harmful shape (a name inside the quotes) from an
+ordinary correctly-parsed two-turn paragraph where each turn carries its own
+leading tag, and 94% of its mass is the latter, from one book. Classified
+(generous upper bound), the true figure is **≤21 of 1,164 (1.8%)**. **The
+raw proxy is not the target** — driving it to zero would mean re-declining
+exactly the correctly-parsed paragraphs it's mostly counting, which is the
+same 5,892-span regression the naive repair above was already rejected for.
+Full detail, the two candidate encodings, the classification method, and the
+measured cost of the naive repair: implementation plan Ship notes, "Round 2,
+continued" and "Round 3", and issue
+[#2346](https://github.com/dudarenok-maker/Castwright/issues/2346), which
+carries the classified figure as its stated target.
 
 ---
 

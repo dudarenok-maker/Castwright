@@ -1107,9 +1107,10 @@ describe('parser — #2315 PR #2340 review, finding 2: a non-terminal . or ; mus
      from counting as a sentence boundary, to keep this case declining. That
      exclusion is a NAME filter, not a title filter — a short capitalised
      name ("Ana.", "Jean.", "Иван.") matches the identical shape, and
-     excluding it lost a genuine SECOND turn entirely in 11 of 21 short-name
-     family shapes (see reopen-sweep.test.ts's SHORT-name attribution
-     family) — a materially worse harm than this one. Corpus prevalence
+     excluding it lost a genuine SECOND turn entirely in ALL 11 of 11
+     second-turn shapes in the 22-case short-name attribution family (see
+     reopen-sweep.test.ts) — a materially worse harm than this one. Corpus
+     prevalence
      settled it: 0 of 726,385 real paragraphs exhibit the abbreviation shape
      at all, so the exclusion bought nothing measured. Pinned here as a
      known, accepted gap rather than silently reworked to keep passing. */
@@ -1143,13 +1144,17 @@ describe('parser — #2315 PR #2340 review, finding 2: a non-terminal . or ; mus
      re-duplicated here. */
 });
 
-describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert with no primary run anywhere in the paragraph', () => {
-  /* PR #2340 round 2 finding F2. The precededByPrimaryRun precondition
-     (finding 1's fix, correct for what it fixes) has a side effect finding
-     1's own measurement never covered: a paragraph typed WHOLLY in a
-     secondary-tier convention has no primary run anywhere for that
-     precondition to find, so the guard can never decline anything in it —
-     defect 2 stays unfixed exactly in the population #2286 exists to serve.
+describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert when no primary run precedes the candidate', () => {
+  /* PR #2340 round 2 finding F2, title corrected in round 3 (finding C2):
+     `precededByPrimaryRun` is set only for a primary run whose
+     `end <= cand.start` — the real condition is "no primary run ENDS BEFORE
+     this candidate", not "no primary run anywhere in the paragraph". A
+     paragraph CAN carry a primary run and still be fully inert for a
+     candidate that sits before it — the third case below (`Said «Anton»,
+     "Hi there."`) is exactly that: `"…"` IS an `en` primary pair, so this
+     paragraph has a primary run, just one that comes AFTER «Anton» rather
+     than before it.
+
      The obvious repair (check `out`, i.e. primary + already-accepted
      secondary runs, instead of `primaryRuns` alone) fixes these three cases
      but re-declines 5,892 genuine spans in one real Chinese book
@@ -1159,13 +1164,23 @@ describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert with
      (decline) from "the verb introduces the FOLLOWING turn" (admit) — a
      word-order typology question with more than one defensible encoding,
      which is why this is filed rather than guessed:
-     https://github.com/dudarenok-maker/Castwright/issues/2346. Measured
-     exposed population against #2286's actual tables: 2,202 real corpus
-     paragraphs carry a secondary-tier-only turn; a would-lose-a-speaker
-     proxy fires on 1,164 of them, 94% from that same one book (issue #2346
-     has the full breakdown). Pinned here as a KNOWN, TRACKED gap — this
-     test is expected to start FAILING the moment #2346 is fixed, at which
-     point it should be deleted, not adjusted to pass again. */
+     https://github.com/dudarenok-maker/Castwright/issues/2346.
+
+     Measured exposed population against #2286's actual tables: 2,202 real
+     corpus paragraphs (paragraph-level; a run-level measurement — a primary
+     run exists but doesn't precede — finds 2,221 paragraphs / 8,802 inert
+     runs, confirming the paragraph-level figure is a conservative
+     under-count, not an over-count). A RAW two-secondary-spans-around-a-tag
+     proxy fires on 1,164 of the 2,202 — **but PR #2340 round 3 finding C1
+     found that raw count overstates the harm by ~100×**: it fires on an
+     ordinary correctly-parsed two-turn paragraph just as readily as on the
+     harmful shape, and for 94% of its mass (the same one book) it is the
+     former. Classified (generous upper bound: short, unpunctuated, <=3
+     words / <=5 CJK characters), the true figure is <=21 of 1,164 (1.8%).
+     **Do not target the raw 1,164 for reduction — #2346 has the full
+     breakdown and says this explicitly.** Pinned here as a KNOWN, TRACKED
+     gap — this test is expected to start FAILING the moment #2346 is fixed,
+     at which point it should be deleted, not adjusted to pass again. */
   const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
   const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
   const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>

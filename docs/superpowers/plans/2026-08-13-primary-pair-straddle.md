@@ -864,15 +864,36 @@ defensible encoding (a per-language tag-position property on
 `LanguageConventions`; the punctuation immediately before the candidate —
 `：`/`、` vs `,`; something else) — not guessed here, filed as #2346 instead.
 
-Measured exposed population against #2286's actual tables (new instrument
+**Condition, stated correctly (PR #2340 round 3 finding C2 — this doc, the
+design doc, `parser.test.ts` and #2346 all understated it before this
+correction):** `precededByPrimaryRun` is set only for a primary run whose
+`end <= cand.start` — the real condition is **"no primary run ENDS BEFORE
+this candidate"**, not "no primary run anywhere in the paragraph". A
+paragraph can carry a primary run and still be fully inert for a candidate
+that happens to sit before it — `Said «Anton», "Hi there."` (the third pinned
+case below: `"…"` **is** an `en` primary pair, so this paragraph does have a
+primary run, just one that comes after «Anton» rather than before it).
+Measured at the RUN level over the same corpus (new instrument
+`scratchpad/s2315/reprice-f2-runlevel.mts`, cross-referencing `wide` speech
+spans against `main` primary-run boundaries directly, rather than the
+paragraph-level "main finds zero speech" proxy `reprice-f2-exposed.mts`
+used): **2,221 inert paragraphs, 8,802 inert secondary runs** — of which the
+paragraph-level definition catches only **2,202**, an under-count (paragraphs
+where a primary run exists but sits AFTER an inert candidate aren't counted
+paragraph-level, but ARE run-level). The direction is conservative — it
+doesn't argue against merging — but "typed wholly in a secondary-tier
+convention" is the wrong description of the population; corrected everywhere
+it appeared to "no primary run precedes the candidate".
+
+Measured exposed population against #2286's actual tables (instrument
 `scratchpad/s2315/reprice-f2-exposed.mts`, reusing the `wide`/`wide-noguard`
-trees): **2,202** real corpus paragraphs carry a secondary-tier-only turn; a
-would-lose-a-speaker proxy (two secondary speech spans with a verb-bearing
-gap directly between them — no real corpus roster exists to check an actual
-name, same documented limit as `tagcut.mts`) fires on **1,164** of them:
+trees, paragraph-level as above): **2,202** real corpus paragraphs carry a
+secondary-tier-only turn with no primary run before it; a raw proxy (two
+secondary speech spans with a verb-bearing gap directly between them) fires
+on **1,164** of them:
 
 ```
-lang    paras   exposed   would-lose
+lang    paras   exposed   proxy-fires
 de      63941         0            0
 en     389020         0            0
 es      89854       787           69
@@ -882,26 +903,85 @@ ru       2073         0            0
 zh      93104      1400         1094
 ```
 
+**PR #2340 round 3 finding C1 (BLOCKING, corrected here) — the raw 1,164 is
+not the harm figure and overstates it by ~100×.** `speech → tag → speech`
+fires on the harmful shape (a NAME inside the secondary quotes) **and** on an
+ordinary correct two-turn paragraph where each turn carries its own leading
+tag — the proxy cannot tell them apart, and for 94% of its mass it fires on
+the SECOND kind. Classifying the second span of each firing (generous upper
+bound: short, unpunctuated, ≤3 words / ≤5 CJK characters counts as
+NAME-shaped) gives **≤21 of 1,164 (1.8%)** — es 12/69, fr 1/1, zh 8/1094 —
+and manual inspection narrows that further: the flagged CJK "names" read as
+`怪物` ("monster"), `官球台`, `光照天下` — quoted terms, not speaker names, and
+the concrete `pg/zh/23835.txt` paragraph this proxy counts as "would lose a
+speaker" is `…高颎道："…"不肯发遣。高德弘道："…"` — **two correctly-parsed turns,
+each with its own leading tag, nothing loses a speaker.** Making the guard
+fire there is exactly the 5,892-span regression the naive `out`-based repair
+above was rejected for — this paragraph is evidence AGAINST that repair, not
+for the harm of leaving it unfixed. **Do not target the raw 1,164 for
+reduction; #2346 says this explicitly.** The corrected, classified figure —
+≤21 of 1,164, generously — is what to cite as F2's measured cost, not the raw
+proxy count.
+
 **94% (1,094 of 1,164) is one book, `pg/zh/23835.txt`** — round 1's own
-flagship example, confirming this decision matters for exactly the case
-round 1 was fixed for. The `es` figure (69, spread across ~10 distinct real
-Spanish books, sampled and confirmed genuinely Spanish rather than a
-mislabelled-language artifact) likely still includes some quoted-title-in-
-narration false positives of the shape `tagcut.mts` already documents as a
-residual — not further adjudicated here. Full detail, the discriminator
-question, and the candidate encodings: issue #2346.
+flagship example — but per the classification above, only ≤8 of that
+book's 1,094 firings are plausibly the harmful shape; the other 1,086+ are
+correctly-declined-nothing false positives of the proxy. **The `es` figure's
+"sampled and confirmed genuinely Spanish" claim was also wrong (same PR
+finding C1)**: two of the ~10 contributing books — `pg/es/16119.txt` and
+`pg/es/23206.txt`, together 8 of the 69 `es` firings — are English-language
+Gutenberg works *about* Spanish literature, not Spanish-language books; their
+own printed corpus excerpts read in English ("The accounts of the printing
+of two Doctrinas…", "As has been already observed, the dramas of Juan del
+Encina…"). Small in magnitude, but the claim was stated as verified and
+wasn't. Full detail, the discriminator question, and the candidate
+encodings: issue #2346, corrected to carry the classified figure and an
+explicit "do not target the raw proxy" note.
 
-**Pinned as a known, tracked gap** (`parser.test.ts`, describe block titled
-"#2315 / #2346 known gap"): the three rows above, asserted against their
-CURRENT (buggy) output, labelled to fail loudly and be deleted — not
-adjusted — the moment #2346 lands a fix.
+**Pinned as a known, tracked gap** (`parser.test.ts`, describe block
+re-titled "#2315 / #2346 known gap: the tag-clause guard is inert when no
+primary run precedes the candidate" — PR #2340 round 3 finding C2 corrected
+the title too): the three rows above, asserted against their CURRENT (buggy)
+output, labelled to fail loudly and be deleted — not adjusted — the moment
+#2346 lands a fix.
 
-**4 nits, all applied:** `REOPEN_CHAIN_LIMIT` moved from inside the
+**4 nits (round 2), all applied:** `REOPEN_CHAIN_LIMIT` moved from inside the
 per-opener loop body to module level, alongside the file's other tunables;
 the mutation-table row above corrected (5 unit + 2 family, not "6 unit +
 family"); `reopenChain` now resets on the `end === null` continue path too,
 consistent with the accept path; the release note's and this doc's own
 "decimal point, an abbreviation period, and a semicolon" summaries corrected
 for both F1's removal and the missing `…` mention.
+
+### Round 3 — a third review pass on PR #2340: docs-and-issue-only, no code change
+
+The code was found sound (F1's removal confirmed corpus-neutral — 0
+paragraphs change on #2286's tables with the exclusion reinstated and
+diffed against shipped span signatures over all 726,385 paragraphs — and
+both new gates confirmed genuinely discriminating). Three corrections, all
+documentation/issue text: **C1 (blocking)** — the F2 "would-lose-a-speaker:
+1,164" figure overstated the harm by ~100×, corrected above and in #2346 to
+the classified ≤21-of-1,164 figure with an explicit "do not target the raw
+proxy" note, and the `es` "sampled and confirmed genuinely Spanish" claim
+corrected (2 of ~10 contributing books, 8 of 69 firings, are English-language
+works *about* Spanish literature). **C2 (disclose)** — F2's condition was
+mis-stated as "no primary run anywhere in the paragraph"; corrected
+everywhere (this doc, the design doc, `parser.test.ts`'s describe-block
+title, #2346) to "no primary run precedes the candidate", with the run-level
+measurement (2,221 paragraphs / 8,802 runs, vs. the paragraph-level 2,202)
+disclosing the paragraph-level figure as a conservative under-count. **C3
+(disclose)** — `RELEASE_NOTES.md`'s brand-voice line made an unconditional
+promise F2 falsifies; qualified in place, and `docs/release-notes-next.md`
+now names #2346. **N1** — "11 of 21" corrected to "all 11 of 11" (the
+short-name family's own second-turn count) in `parser.ts` and
+`parser.test.ts`; the 21 was the 42-case family's second-turn count, wrongly
+carried over. **N2** — the `scratchpad/s2315/{main,wide,wide-noguard}`
+copies used for every corpus measurement in this document predate the
+`reopenChain = 0` reset on the `end === null` path (a round-2 nit fix,
+provably behaviour-neutral: once an opener class hits `end === null`, no
+later occurrence of that class can take an accept-or-cut path, so the
+counter is dead from there) — no re-measurement owed, noted here as
+provenance only. The PR body's residuals section is owned by the
+coordinating/reviewing thread, not this plan.
 
 Ship date / merge SHA: *(filled by the coordinating thread at merge)*.
