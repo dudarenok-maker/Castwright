@@ -136,7 +136,7 @@
 
 - **A dash-opened line of Spanish or French dialogue could read as narration, depending on which invisible character its EPUB happened to carry.** Some ebook conversions leave a dash written out as its HTML code rather than the dash itself — Castwright already understood one such code in these two languages but not its sibling. It now understands both, so the same dash reads as dialogue either way.
 
-- **A book whose EPUB spelled out its punctuation in HTML code — a dash, an accented letter, a curly quote — no longer had any of it read aloud letter by letter.** Some ebook conversions write "—" as `&mdash;`, "é" as `&eacute;`, and so on, instead of the character itself. Castwright already understood a handful of these codes; it now understands the complete set, so a chapter title or a line of dialogue that used one comes out exactly as written, dash, accent, or quote mark included — and a book that had been narrated before this fix will pick up the correction the next time it's analysed.
+- **A book whose EPUB spelled out its punctuation in HTML code — a dash, an accented letter, a curly quote — no longer had any of it read aloud letter by letter.** Some ebook conversions write "—" as `&mdash;`, "é" as `&eacute;`, and so on, instead of the character itself. Castwright already understood a handful of these codes; it now understands the complete set, so a chapter title or a line of dialogue that used one comes out exactly as written, dash, accent, or quote mark included — and a book that was imported before this fix picks up the correction once you **re-parse** it, from its menu in your library, rather than on its next analysis.
 
 # Castwright 1.14.0
 

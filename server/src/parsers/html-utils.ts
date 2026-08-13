@@ -55,7 +55,14 @@ function codePointOr(original: string, codePoint: number): string {
    3. U+00A0 folds to a plain space. `&nbsp;` yielded U+0020 before #2310 and
       must keep doing so; folding the CHARACTER rather than the spelling also
       covers aliases such as `&NonBreakingSpace;`. Callers must run this
-      BEFORE `decodeNumericEntities` so `&#160;` still yields U+00A0 as it did.
+      BEFORE `decodeNumericEntities` so `&#160;` still yields U+00A0 as it did
+      (constraint 3's OWN fold runs before that call, so it never touches the
+      numeric form). Because the fold runs over the WHOLE string rather than
+      only its own regex's matches, it also folds a source-literal U+00A0
+      byte that was never a decoded entity at all — common in French EPUBs —
+      to U+0020 too, which is new and wider than "preserve `&nbsp;`'s
+      meaning" strictly requires. Downstream impact is benign:
+      `src/tts/normalize/classifiers.ts` already treats U+00A0 as space.
 
    A leftmost `replace` does not rescan its own output, so `&amp;lt;` yields
    `&lt;` rather than double-unescaping to `<`. */

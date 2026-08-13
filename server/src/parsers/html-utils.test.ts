@@ -210,8 +210,7 @@ describe('stripHtml — named character references (#2310)', () => {
 
   it('#2310: &nbsp; still yields U+0020, not U+00A0 — and so do its aliases', () => {
     expect(stripHtml('<p>A&nbsp;B</p>')).toBe('A B');
-    expect(stripHtml('<p>A&nbsp;B</p>')).not.toContain('\u00a0');
-    expect(stripHtml('<p>A&NonBreakingSpace;B</p>')).not.toContain('\u00a0');
+    expect(stripHtml('<p>A&NonBreakingSpace;B</p>')).toBe('A B');
   });
 
   /* The contract at html-utils.ts:15-16 — documented since the Coalfall fix
@@ -234,12 +233,23 @@ describe('stripHtml — named character references (#2310)', () => {
 
   /* Found by adversarial review: these decode BEFORE the `[ \t]+\n` and
      `\n{3,}` collapses at html-utils.ts:58-59, and the parsers emit one
-     paragraph per line — so they can change chapter STRUCTURE, not just
-     wording. Vanishingly rare in real ebook output; pinned anyway, because
-     "rare" is not "handled". */
-  it('#2310: &NewLine; / &Tab; decode without corrupting paragraph structure', () => {
+     paragraph per line — so they DO change chapter STRUCTURE, not just
+     wording: `One&NewLine;Two` is one paragraph pre-fix and two after.
+     That is accepted, expected behaviour (the decode is correct; a bare
+     newline inside prose was always going to read as a paragraph break
+     once it exists at all) — this test pins what actually happens, not a
+     claim that structure is preserved. Vanishingly rare in real ebook
+     output; pinned anyway, because "rare" is not "handled". */
+  it('#2310: &NewLine; / &Tab; decode, and DO split a paragraph in two', () => {
     expect(stripHtml('<p>A&Tab;B</p>')).toBe('A\tB');
     expect(stripHtml('<p>One&NewLine;Two</p>').split('\n').filter(Boolean)).toEqual(['One', 'Two']);
+  });
+
+  /* Appendix B: three consecutive &NewLine; references decode to three
+     literal newlines BEFORE the `\n{3,}` -> `\n\n` collapse runs, so they
+     land inside that collapse's own input rather than escaping it. */
+  it('#2310: three consecutive &NewLine; feed the \\n{3,} -> \\n\\n collapse', () => {
+    expect(stripHtml('<p>A&NewLine;&NewLine;&NewLine;B</p>')).toBe('A\n\nB');
   });
 });
 
