@@ -859,3 +859,42 @@ describe('parser — #2288 M2: a quoted TITLE in narration must not suppress dia
     ).toEqual(['ファウスト', 'おはよう', 'さようなら']);
   });
 });
+
+describe('parser — #2288 M2: residuals accepted with rule B (design doc § Residuals)', () => {
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it("residual 1: the straddle inside a language's own PRIMARY pairs is untouched (design residual 1)", () => {
+    // M2 only adds a tier BELOW primary; Task 3 never touched scanQuoteRuns or
+    // the leftmost-accept loop. es's primary quotePairs leads with «»; an
+    // unclosed « (no » after "Hola") makes the primary scan skip past the
+    // beat straight to the NEXT » — the one closing the second turn's own
+    // quote — merging beat + second turn's opening tag into one run. This is
+    // exactly `main`'s behaviour today (design doc's own worked example) —
+    // 579 of 2,456 well-formed straddle shapes corrupt this way, and M2
+    // moves none of that.
+    const es = conventionsFor('es')!;
+    const merged = speechOf('«Hola, dijo él. «Adiós», dijo ella.', es);
+    expect(merged).toEqual(['Hola, dijo él. «Adiós']);
+    // Prove it's a genuine MERGE, not an absence of runs or two clean turns:
+    // the single run's text must contain both halves.
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toContain('dijo él');
+    expect(merged[0]).toContain('Adiós');
+  });
+
+  it("residual 2: a spurious secondary run over narration survives, with BOTH real turns intact (design residual 2, F1's 284)", () => {
+    // "Stop" sits in the gap between two real turns, framed by the secondary
+    // «» pair. It contains no primary opener, so the gap tier accepts it as
+    // a (spurious) third run — narration read as speech — but BOTH real
+    // turns ("Hi" and "Bye") survive untouched. That's the residual the
+    // owner decision (rule B) accepted: audible, attributable, recoverable —
+    // never a lost turn.
+    const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
+    const spans = speechOf('“Hi”, he said. The sign said «Stop». “Bye”, she said.', enTier);
+    expect(spans).toEqual(['Hi', 'Stop', 'Bye']);
+  });
+});
