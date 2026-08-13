@@ -355,6 +355,95 @@ function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>
   return best;
 }
 
+/** Sentence-final punctuation for the tag-clause guard, CJK full-width forms
+    included — without them `zh`/`ja` read every tag as one unbounded clause.
+    `;`/`；` are deliberately excluded (PR #2340 review finding 2): a
+    semicolon joins two clauses of ONE sentence, it does not end one. `…` is
+    excluded too: right before this guard's own candidate it is
+    indistinguishable from a mid-clause pause (`said… "Anton"`) and a genuine
+    trailing-off sentence, and treating it as a boundary was measured to
+    defeat the guard on the former — the safer default is to extend the
+    clause, not cut it short (same "never delete, extend instead" bias as the
+    rest of this file). */
+const SENTENCE_END_CHARS = new Set(['.', '!', '?', '。', '！', '？']);
+
+/** Is `line[i]` a genuine sentence terminator, or a decimal point /
+    abbreviation period that only LOOKS like one (PR #2340 review finding 2)?
+    Two exclusions, both local to the glyph's neighbours:
+      `3.30`      a digit on both sides -> a decimal point, never a boundary.
+      `Mr.`/`Dr.` a short (<=4 char) run of letters immediately before it,
+                  STARTING WITH AN UPPERCASE LETTER, itself preceded by
+                  start-of-line or a non-letter -> abbreviation-shaped, not a
+                  boundary. Keyed on capitalisation, not just length: an
+                  ordinary short LOWERCASE word ending a real sentence
+                  (`он.`, `it.`) must still count, and does — `он`/`it` don't
+                  start with an uppercase letter, so this exclusion doesn't
+                  fire for them (needed for "a genuine secondary-convention
+                  second turn is still recovered", which pins exactly `он.`
+                  through `сказал он.` as a boundary). A short CAPITALISED
+                  word that is a genuine name rather than a title abbreviation
+                  (`Kim.`) is a false exclusion this leaves in place; it errs
+                  toward extending the clause, the same direction as the
+                  never-delete fallback elsewhere in this file — the guard
+                  staying engaged one clause too long costs a declined
+                  admission, not a lost speaker. */
+function isGuardSentenceEnd(line: string, i: number): boolean {
+  const ch = line[i];
+  if (!SENTENCE_END_CHARS.has(ch)) return false;
+  if (ch !== '.') return true;
+  const before = line[i - 1];
+  const after = line[i + 1];
+  if (before !== undefined && after !== undefined && /\d/.test(before) && /\d/.test(after)) return false;
+  if (/(?:^|[^\p{L}])\p{Lu}\p{L}{0,3}$/u.test(line.slice(0, i))) return false;
+  return true;
+}
+
+/** #2315 defect 2. A gained SECONDARY run that lands INSIDE a tag clause
+    truncates it, `findRosterName` never reaches the name, and the adjacent
+    real turn loses its speaker — so it is read in the wrong voice. The turn
+    survives, so every turns-destroyed instrument in this strand reads 0.
+
+    Declining requires an ALREADY-CAPTURED PRIMARY run to be at risk
+    (PR #2340 review finding 1, fixed): the guard's whole premise is that a
+    tag is attributing a turn that already exists as its own run — with no
+    primary run anywhere before the candidate, there is nothing for a tag to
+    be attributing, so the candidate can only be the turn itself. This isn't
+    a per-language exception; it's what the guard's own docstring always
+    claimed and the original implementation never actually checked. Without
+    it, the guard is polarity-inverted for any language whose canonical tag
+    order is VERB then quote (zh/ja: `他说，"你好"`), which the original
+    clause-before-candidate model reads as `verb, no sentence end -> tag
+    clause -> decline` — backwards, because there the verb introduces the
+    turn rather than attributing an already-parsed one. Measured: 93.7% of
+    one real Chinese book's speech spans falsely declined before this gate.
+
+    Once a primary run is confirmed, the discriminator is a SENTENCE
+    BOUNDARY, not a verb alone:
+      `, сказал `      verb, no sentence end -> inside the tag clause -> decline
+      `, сказал он. `  verb, sentence end    -> a new sentence, a turn -> admit
+      ` en la portada. ` no verb             -> narration; M2's suppression
+                                                class                  -> admit
+
+    The window is the CLAUSE, not the whole gap: scoping it to the gap was
+    measured and only moved the corpus figure 265 -> 165, because a long
+    paragraph's gap contains earlier sentence-final punctuation. Secondary-tier
+    only, so it is a measured no-op on every shipped table. */
+function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], conv: LanguageConventions): boolean {
+  let from = 0;
+  let precededByPrimaryRun = false;
+  for (const r of primaryRuns) {
+    if (r.end <= cand.start && r.end > from) {
+      from = r.end;
+      precededByPrimaryRun = true;
+    }
+  }
+  if (!precededByPrimaryRun) return false;
+  for (let i = cand.start - 1; i >= from; i--) {
+    if (isGuardSentenceEnd(line, i)) { from = i + 1; break; }
+  }
+  return hasStem(line.slice(from, cand.start), [...conv.speechVerbStems, ...conv.beatVerbStems]);
+}
+
 /** Two-tier scan (#2288 M2, rule B). Primary-pair runs are found first and
     always win; secondary-pair candidates then fill the gaps BETWEEN them,
     except one whose interior contains a primary OPENER glyph.
@@ -377,36 +466,6 @@ function nearestOpenerAtOrAfter(line: string, from: number, openers: Set<string>
     This cannot delete a primary run and cannot alter a table with an empty
     tier — M1's never-delete invariant and the 270-test suite hold by
     construction, not by measurement. */
-/** Sentence-final punctuation, including the CJK full-width forms — without
-    them `zh`/`ja` read every tag as one unbroken clause. */
-const SENTENCE_END = /[.!?…。！？；;]/u;
-
-/** #2315 defect 2. A gained SECONDARY run that lands INSIDE a tag clause
-    truncates it, `findRosterName` never reaches the name, and the adjacent real
-    turn loses its speaker — so it is read in the wrong voice. The turn
-    survives, so every turns-destroyed instrument in this strand reads 0.
-
-    The discriminator is a SENTENCE BOUNDARY, not a verb alone:
-      `, сказал `      verb, no sentence end -> inside the tag clause -> decline
-      `, сказал он. `  verb, sentence end    -> a new sentence, a turn -> admit
-      ` en la portada. ` no verb             -> narration; M2's suppression
-                                                class                  -> admit
-
-    The window is the CLAUSE, not the whole gap: scoping it to the gap was
-    measured and only moved the corpus figure 265 -> 165, because a long
-    paragraph's gap contains earlier sentence-final punctuation. Secondary-tier
-    only, so it is a measured no-op on every shipped table. */
-function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], conv: LanguageConventions): boolean {
-  const stems = [...conv.speechVerbStems, ...conv.beatVerbStems];
-  let from = 0;
-  for (const r of primaryRuns) if (r.end <= cand.start && r.end > from) from = r.end;
-  for (let i = cand.start - 1; i >= from; i--) {
-    if (SENTENCE_END.test(line[i])) { from = i + 1; break; }
-  }
-  const clause = line.slice(from, cand.start).toLowerCase();
-  return stems.some((s) => clause.includes(s.toLowerCase()));
-}
-
 function findQuoteRuns(
   line: string,
   pairs: Array<[string, string]>,
@@ -478,6 +537,21 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
     let pos = 0;
+    /* #2315 perf (PR #2340 review finding 3): bounds how many CONSECUTIVE
+       re-open cuts (below) this opener class may take before falling back to
+       the pre-#2315 accept-and-resume behaviour for the rest of its chain.
+       Each cut re-scans the remaining line for a closer, and `pos = cut`
+       resumes only two characters past the last one — so a paragraph with N
+       consecutive same-glyph re-opens and no real closer until the very end
+       pays a full closer scan N times, each almost as expensive as the last:
+       O(n^2). Real quote density is ~1 opener per 75 chars; even badly
+       garbled prose measured at ~1 per 75 (400 joined real paragraphs, every
+       closer retyped as an opener) never approaches this bound. It exists
+       for the adversarial case, not the real one — capping it converts an
+       unbounded quadratic blowup on adversarial input into a bounded linear
+       one, without touching the closer-search machinery below at all. */
+    let reopenChain = 0;
+    const REOPEN_CHAIN_LIMIT = 200;
     for (;;) {
       const start = line.indexOf(open, pos);
       if (start < 0) break;
@@ -560,12 +634,15 @@ function scanQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[]
          destroys a turn, the harm this strand refuses; the spurious speech span
          it can produce is the accepted lesser harm. Resuming at `cut` is what
          lets the next turn be seen at all. */
-      const cut = reopenCut(line, interiorStart, end.at, open, openers);
+      const cut =
+        reopenChain < REOPEN_CHAIN_LIMIT ? reopenCut(line, interiorStart, end.at, open, openers) : null;
       if (cut !== null && cut > interiorStart && cut < end.at) {
         candidates.push({ start, end: cut, openLen: open.length, closeLen: 0 });
         pos = cut;
+        reopenChain++;
         continue;
       }
+      reopenChain = 0;
       candidates.push({
         start,
         end: end.at + end.glyph.length,

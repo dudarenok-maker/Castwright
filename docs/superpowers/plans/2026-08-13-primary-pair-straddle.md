@@ -653,4 +653,132 @@ figure below is a genuine measurement of the shipped code, not the prototype.
   register's recorded artifact URL at **69 owed / group D 3 rows**.
 - Design doc moved to `status: stable` in the same diff.
 
+### Round 2 — PR #2340 Premium review gate, 3 correctness fixes + 4 nits
+
+The mandatory review gate found the interval arithmetic, the mutation
+sensitivity, and the 162/76-vs-156/71 correction above all sound, but found
+the tag-clause guard itself **polarity-inverted for verb-before-quote
+languages (zh/ja)** — the half of this PR that exists to unblock #2286 — plus
+one robustness gap and one perf regression it introduced. All fixed in the
+same branch/commit history (not a new PR), TDD throughout: every new test
+below reproduced the reviewer's exact failure shape RED before the fix.
+
+1. **MAJOR — `cutsATagClause` was polarity-inverted for zh/ja, declining
+   93.7% of one real Chinese book's (`pg/zh/23835.txt`) speech spans.** The
+   guard's clause-before-candidate model assumes a tag ATTRIBUTES an
+   already-captured turn (Latin trailing-tag: `"Hi," said Anton`) — correct
+   for that shape, backwards for zh/ja's canonical VERB-then-quote order
+   (`他说，"你好"`), where the verb INTRODUCES the turn rather than naming an
+   already-parsed one. Compounded by zh/ja's single-character verb stems
+   matching as substrings inside unrelated words with no word boundary (道
+   inside 道路/知道, 息 inside 息子, 笑 inside 微笑/苦笑い). **Fix, not a
+   per-language property**: `cutsATagClause` now requires a PRIMARY run to
+   actually precede the candidate before it even evaluates a verb — the
+   guard's own docstring always claimed this ("the adjacent real turn loses
+   its speaker"), the original implementation never checked it. Language-
+   agnostic: doesn't change behaviour on any Latin defect-2 shape (a primary
+   run always precedes by construction there), fixes every zh/ja case
+   because dialogue-only paragraphs in the affected book carry no primary-
+   tier quote at all. New committed regression: a generated CJK
+   leading-tag/false-cognate family (`reopen-sweep.test.ts`) plus 6 unit
+   tests (`parser.test.ts`), including one confirming a genuine leading-tag
+   turn is BOTH admitted and correctly attributed end-to-end via the
+   existing narration→tag mechanism, unmodified.
+2. **MEDIUM — the `SENTENCE_END` backward scan was defeated by any
+   non-terminal `.`, `;` or `…`, re-opening defect 2 itself.** A decimal
+   point (`3.30`), an abbreviation period (`Mr.`), a semicolon, or a
+   mid-clause ellipsis reset the clause boundary past the verb, un-declining
+   a candidate that should have stayed declined. Fix: `isGuardSentenceEnd`
+   excludes a `.` with digits on both sides (decimal) or a short
+   UPPERCASE-led run of letters before it (abbreviation-shaped — keyed on
+   capitalisation specifically, so an ordinary short lowercase word like
+   `он.`/`it.` still counts, which the existing "second turn recovered" test
+   already pinned and still passes); `;`/`；` are dropped entirely (a
+   semicolon joins one sentence's clauses, it doesn't end one); `…` is
+   dropped entirely too (indistinguishable from a mid-clause pause right
+   before this guard's own candidate — errs toward extending the clause, the
+   same "never delete, extend instead" bias as the rest of this file). 4 new
+   unit tests, all RED before, GREEN after.
+3. **MEDIUM — `pos = cut` made `scanQuoteRuns` quadratic in paragraph length
+   on the synchronous analyzer path.** A truncated run resumes only 2 chars
+   past the re-open, so N consecutive same-glyph re-opens each pay a full
+   O(remaining-length) closer scan: O(n²). Measured pre-fix,
+   `'“a'.repeat(N)+'”'`: len 64,001 → 4,625ms (×10,381 over pre-#2315).
+   Fix: `REOPEN_CHAIN_LIMIT = 200` caps consecutive re-open cuts per opener
+   class before falling back to the pre-#2315 accept-and-resume behaviour —
+   converts the adversarial case to bounded-linear without touching the
+   closer-search machinery. Real quote density (~1/75 chars, per the
+   review's own representative-damage measurement) never approaches the cap.
+   New committed perf regression test at the same 4 lengths, threshold 750ms
+   (generous, to avoid CI flakiness — the point is bounding catastrophic
+   growth, not a specific figure).
+4. **4 nits, all applied**: `cutsATagClause` now calls the existing
+   `hasStem()` helper instead of re-implementing it with a redundant
+   per-stem `.toLowerCase()`; the M2 `findQuoteRuns` JSDoc (which had been
+   pushed off its function by the `SENTENCE_END`/`cutsATagClause` insertion)
+   moved back directly above `findQuoteRuns`; the duplicate "es worked
+   example" test removed from the `#2315: the re-open bound` describe block
+   (the M2-era "residual 1" test the plan required keeping already pins the
+   identical input/output); `reopen-sweep.test.ts`'s "generates a non-trivial
+   shape set" now pins the exact measured count (de 176 / en 117 / ru 336)
+   instead of `toBeGreaterThan(0)`.
+
+**Mutation verification (red before, green after), each fix reverted
+individually and reconfirmed on the FULL suite before moving to the next:**
+
+| fix | reverted to | result |
+|---|---|---|
+| 1 (polarity) | `precededByPrimaryRun` gate removed | RED — 7 tests fail: all 6 unit tests + the whole 11-case CJK leading-tag family (`speakersLost`/`failures` both non-zero) |
+| 2 (clause boundary) | `isGuardSentenceEnd` → naive `/[.!?…。！？；;]/u.test` | RED — all 4 new unit tests fail, each showing the candidate re-admitted as its own null-speaker span |
+| 3 (perf) | `REOPEN_CHAIN_LIMIT` cap removed | RED — len 32,001/64,001 perf tests fail at ~1,000–4,450ms vs the 750ms bound (reproducing the review's own ~4,625ms figure at len 64,001) |
+
+**Corpus re-pricing against #2286's actual tables (not the proxy), the
+review's own explicit request.** New instrument
+`scratchpad/s2315/reprice-tagcut.mts` (not `tagcut.mts`, which counts a
+different population — gained runs overlapping a `main` tag span, not
+genuine guard declines) compares `wide/` (this worktree's fixed code +
+#2286's real `secondaryQuotePairs`) against `wide-noguard/` (byte-identical,
+guard call removed) over all 726,385 wide-table corpus paragraphs:
+
+```
+DECLINED SECONDARY SPANS (guard on vs guard off): 101 across 48 paragraphs
+lang   paras   declined-paras   declined-spans
+de     63941                0                0
+en    389020                0                0
+es     89854                0                0
+fr     85206                0                0
+ja      3187                1                1
+ru      2073                0                0
+zh     93104               47              100
+```
+
+Down from the review's measured **7,438 across 1,489** (pre-fix). The
+review's own flagged book, `pg/zh/23835.txt` (7,090 of 7,570 spans falsely
+declined pre-fix, 93.7%), now measures **0 declined of 7,570** — guard-on and
+guard-off produce byte-identical output. The 101-span residual is
+concentrated in one classical-Chinese novel (`pg/zh/24264.txt`, 紅樓夢) whose
+dialogue paragraphs DO carry primary-tier quotes elsewhere in the same
+paragraph — the one shape this fix does not fully resolve (a second genuine
+turn, introduced by a colon after an EARLIER primary run in the same
+paragraph, can still trip the verb check) — named here as a known,
+much-smaller residual rather than claimed away. Family/anchors/Arm A
+re-confirmed unmoved by these three fixes (172/805, 19/22, both re-measured
+against the real code after the round-2 changes) — expected, since the guard
+is inert on `main`-only tables and the perf cap never fires below hundreds of
+consecutive re-opens.
+
+**New perf numbers** (`'“a'.repeat(N)+'”'`, same four lengths):
+
+```
+len    8001 : 8.9ms   (was 79ms)
+len   16001 : 16.2ms  (was 279ms)
+len   32001 : 26.2ms  (was 1051ms)
+len   64001 : 53.7ms  (was 4625ms)
+```
+
+Linear, not quadratic (roughly doubling per doubling of N, not
+quadrupling) — an 86× improvement at the largest measured length, and the
+corpus's own longest real paragraph (165,173 chars) now extrapolates to
+~140ms rather than ~30s.
+
 Ship date / merge SHA: *(filled by the coordinating thread at merge)*.

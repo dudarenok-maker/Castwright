@@ -938,11 +938,10 @@ describe('parser — #2315: the re-open bound', () => {
       speechOf('«Bonjour», dit-il, regardant le «panneau de Faust. «Et toi», demanda-t-elle.', conventionsFor('fr')!),
     ).toEqual(['Bonjour', 'panneau de Faust. ', 'Et toi']);
   });
-  it('es: the design’s worked example keeps both turns', () => {
-    expect(speechOf('«Hola, dijo él. «Adiós», dijo ella.', conventionsFor('es')!)).toEqual([
-      'Hola, dijo él. ', 'Adiós',
-    ]);
-  });
+  // es: the design's worked example is pinned by "residual 1" in the M2
+  // residuals describe block above — same input, same output, kept there
+  // per the plan's explicit "do not delete" on that test (PR #2340 review
+  // nit 3: this was a byte-for-byte duplicate of that assertion).
   /* The shape a real book produces when a CLOSING quote is typed as an OPENING
      one. `toEqual`, not `toContain`: a superset assertion cannot see a rule
      that ADDS a span, which is how an earlier candidate rule passed every
@@ -1023,6 +1022,115 @@ describe('parser — #2315 defect 2: a gained secondary run must not cut a tag c
   });
 });
 
+describe('parser — #2315 PR #2340 review, finding 1: the guard is polarity-inverted for verb-before-quote languages', () => {
+  const zhTier: LanguageConventions = { ...conventionsFor('zh')!, secondaryQuotePairs: [['‘', '’'], ['"', '"']] };
+  const jaTier: LanguageConventions = { ...conventionsFor('ja')!, secondaryQuotePairs: [['"', '"']] };
+  const speechOf = (body: string, conv: LanguageConventions) =>
+    parseChapterStructure(body, buildNameIndex([], conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+  const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  /* CONTROL, comes first: this exact shape has no false-cognate verb-stem
+     substring nearby and already worked before this fix — proves the
+     failures below are specifically about the polarity/substring bug, not
+     about zh/ja parsing generally. */
+  it('zh: control — no stray verb-stem substring nearby, the turn already survived', () => {
+    expect(speechOf('他走在马路上，‘再见’，安东说。', zhTier)).toContain('再见');
+  });
+
+  /* zh/ja's canonical dialogue-tag order is VERB then quote ("他说，'你好'"),
+     the mirror image of the Latin trailing-tag shape ("'Hi,' he said") the
+     guard's clause-before-candidate model was built for. With NO primary run
+     anywhere in the paragraph, there is no already-captured turn for a tag to
+     be attributing — the candidate IS the turn, and the guard's verb check
+     should never even run. Compounding: zh/ja verb stems are single
+     characters with no word-boundary to stop a false match — 道 inside 道路
+     ("road"), 道 inside 知道 ("know"), 笑 inside 微笑 ("smile", a genuine BEAT
+     verb, but narration describing action BEFORE the quote, not a trailing
+     name-tag AFTER it). Reproduced from PR #2340 review finding 1. */
+  it.each([
+    ['zh: 道 substring inside 道路 ("road")', '他走在道路上，‘再见’，安东说。', '再见'],
+    ['zh: 道 substring inside 知道 ("know")', '他不知道，‘再见’，安东说。', '再见'],
+    ['zh: 笑 — a real beat verb, but it is narration before the quote', '她微笑着，‘你好’，安东说。', '你好'],
+  ])('%s: the turn is not swallowed', (_label, body, turn) => {
+    expect(speechOf(body, zhTier)).toContain(turn);
+  });
+
+  it('ja: the mirror shape — 笑 inside 苦笑い ("smile ruefully")', () => {
+    expect(speechOf('彼女は苦笑いして、"こんにちは"、アントンは言った。', jaTier)).toContain('こんにちは');
+  });
+
+  /* GENUINE TURN, END TO END: the leading clause ("安东说，") IS a real tag —
+     it's just BEFORE the turn, not after it. Once the guard stops swallowing
+     the candidate, the existing narration->tag reclassification (below, in
+     parseQuoteParagraph) and anchorSpansFromTags already attribute it
+     correctly; nothing else needs to change for this to work. */
+  it('zh: a genuine leading-tag turn is admitted AND attributed to the name in front of it', () => {
+    expect(speakersOf('安东说，‘你好’。', zhTier, [{ id: 'anton', name: '安东' }])).toEqual([['你好', 'anton']]);
+  });
+
+  /* MUST STILL DECLINE: the Latin-mimicking trailing-name-tag shape in zh
+     glyphs, with a PRIMARY run already captured before the tag. The 42-case
+     attribution family (reopen-sweep.test.ts) already covers this across all
+     six languages including zh/ja; re-asserted narrowly here as the one
+     shape this fix must NOT touch. */
+  it('zh: a trailing name-tag AFTER an already-captured primary turn is still declined', () => {
+    expect(speakersOf('「你好」，说道‘安东’。', zhTier, [{ id: 'anton', name: '安东' }])).toEqual([
+      ['你好', 'anton'],
+    ]);
+  });
+});
+
+describe('parser — #2315 PR #2340 review, finding 2: a non-terminal . or ; must not defeat the guard', () => {
+  const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
+  const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
+  const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
+    parseChapterStructure(body, buildNameIndex(roster as never, conv))
+      .flatMap((p) => p.spans)
+      .filter((s) => s.kind === 'speech')
+      .map((s) => [body.slice(s.start, s.end), s.speaker?.characterId ?? null]);
+
+  it('ru: a decimal point in the tag clause does not reset the sentence-boundary scan', () => {
+    expect(speakersOf('«Привет», сказал в 3.30 ‘Антон’.', ruTier, [{ id: 'anton', name: 'Антон' }])).toEqual([
+      ['Привет', 'anton'],
+    ]);
+  });
+
+  it('en: an abbreviation period ("Mr.") in the tag clause does not reset the scan', () => {
+    expect(speakersOf('“Hi,” said Mr. «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Hi,', 'anton'],
+    ]);
+  });
+
+  it('ru: a semicolon in the tag clause does not terminate it — ; is not a sentence boundary', () => {
+    // "вчера" (yesterday), not "он" — ru's addressee-disambiguation in
+    // findSubjectName treats a subject PRONOUN between the verb and the name
+    // as proof the name isn't the speaker (by design, unrelated to this
+    // fix); an adverb there isn't a pronoun and doesn't trigger it.
+    expect(speakersOf('«Привет», сказал вчера; ‘Антон’ кивнул.', ruTier, [{ id: 'anton', name: 'Антон' }])).toEqual([
+      ['Привет', 'anton'],
+    ]);
+  });
+
+  it('en: a mid-clause ellipsis does not terminate the scan', () => {
+    expect(speakersOf('“Hi,” said… «Anton».', enTier, [{ id: 'anton', name: 'Anton' }])).toEqual([
+      ['Hi,', 'anton'],
+    ]);
+  });
+
+  /* MUST STILL WORK: a genuine sentence-ending period — a short LOWERCASE
+     word before it ("он.") must still count as a real boundary, since the
+     abbreviation exclusion is keyed on capitalisation, not length. Already
+     covered by the existing "a genuine secondary-convention second turn is
+     still recovered" test above; not re-duplicated here. */
+});
+
 describe('parser — #2315 residuals, accepted (design § Residuals)', () => {
   const speechOf = (body: string, conv: LanguageConventions) =>
     parseChapterStructure(body, buildNameIndex([], conv))
@@ -1054,5 +1162,30 @@ describe('parser — #2315 residuals, accepted (design § Residuals)', () => {
   it('residual 3: depth-3 nesting is still truncated at the depth-3 closer', () => {
     expect(speechOf('“He told me, ‘She said “no” to him,’ and walked off,” Mary explained.', conventionsFor('en')!))
       .toEqual(['He told me, ‘She said “no']);
+  });
+});
+
+describe('parser — #2315 PR #2340 review finding 3: the re-open bound is not quadratic', () => {
+  /* Pre-fix, an accepted run advanced the scan past its own closer, so each
+     opener occurrence cost one forward closer-scan. The re-open bound alone
+     (`pos = cut`) resumes only two characters past a re-opened glyph, so a
+     paragraph with N consecutive same-glyph re-opens and no real closer
+     until the very end paid a full closer-scan N times: O(n^2). Measured
+     pre-fix on this exact input: len 64,001 took 4,625ms (x10,381 over the
+     pre-#2315 baseline). The REOPEN_CHAIN_LIMIT bound in scanQuoteRuns caps
+     this to O(REOPEN_CHAIN_LIMIT * n) — linear in the input length. Every
+     length gets a generous ceiling (not a tight one, to avoid flaking on a
+     loaded CI runner) — the point is bounding catastrophic quadratic growth,
+     not chasing a specific millisecond figure. */
+  const en = conventionsFor('en')!;
+  const idx = buildNameIndex([], en);
+
+  it.each([8001, 16001, 32001, 64001])('len %i completes in well under a second', (n) => {
+    const line = '“a'.repeat((n - 1) / 2) + '”';
+    expect(line.length).toBe(n);
+    const start = performance.now();
+    parseChapterStructure(line, idx);
+    const ms = performance.now() - start;
+    expect(ms, `took ${ms.toFixed(1)}ms`).toBeLessThan(750);
   });
 });

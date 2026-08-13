@@ -44,6 +44,10 @@ const speechOf = (body: string, conv: LanguageConventions) =>
 
 const FAMILY_LANGS = ['de', 'en', 'ru'] as const;
 const DESTROYED_MEASURED: Record<string, number> = { de: 24, en: 30, ru: 92 };
+/* PR #2340 review nit 4: the shape count is the family's own denominator —
+   the one number a language-table change would move silently if only
+   `toBeGreaterThan(0)` pinned it. */
+const SHAPE_COUNT: Record<string, number> = { de: 176, en: 117, ru: 336 };
 
 const FAMILY_TEXT: Record<
   string,
@@ -108,8 +112,8 @@ describe('parser — #2315 Task 10: the primary-pair straddle family (generated,
     const t = FAMILY_TEXT[lang];
     const shapes = familyShapes(lang);
 
-    it(`${lang}: generates a non-trivial shape set (${shapes.length} shapes)`, () => {
-      expect(shapes.length).toBeGreaterThan(0);
+    it(`${lang}: generates the measured shape set (${shapes.length} shapes)`, () => {
+      expect(shapes.length).toBe(SHAPE_COUNT[lang]);
     });
 
     it(`${lang}: destroyed count matches the measured figure (mutation (a)/(c) target)`, () => {
@@ -261,4 +265,93 @@ describe('parser — #2315 Task 10: the attribution-aware family (generated, rea
      design's measured firing control exactly — then reverted. Not committed
      as a standing assertion because there is nothing in shipped code for it
      to assert against without that removal. */
+});
+
+/* ------------------------------------------------------------------ */
+/* PR #2340 review finding 1 — the verb-BEFORE-quote (CJK leading-tag)      */
+/* family. The attribution family above only exercises the Latin           */
+/* TRAILING-tag shape (turn, verb, NAME) even in CJK glyphs. Real zh/ja     */
+/* dialogue is dominated by the MIRROR shape — a verb introduces the turn, */
+/* "他说，'你好'" — and zh/ja's single-character verb stems also match as    */
+/* SUBSTRINGS inside unrelated words with no word-boundary to stop them:   */
+/* 道 inside 道路 ("road") and 知道 ("know"), 息 inside 息子 ("son"), 笑     */
+/* inside 微笑/苦笑い ("smile"). None of this is a review nit — it is the   */
+/* MAJOR finding (93.7% of one real Chinese book's speech spans falsely    */
+/* declined) and this is the generated, at-scale regression for it. */
+/* ------------------------------------------------------------------ */
+
+const LEADING_TAG_LANGS = ['zh', 'ja'] as const;
+const LEADING_TAG_SECONDARY: Record<string, Array<[string, string]>> = {
+  zh: [['‘', '’'], ['"', '"']],
+  ja: [['"', '"']],
+};
+/* NARRATION prefixes before the leading tag: a mix of genuine FALSE-COGNATE
+   substring matches (a verb stem inside an unrelated word), a genuine BEAT
+   verb describing narrative action before the quote (not a name-tag), and
+   one clean no-match control per language. None of these prefixes is itself
+   a tag naming who is about to speak — the only real tag in each generated
+   body is the "NAME verb，" clause immediately before the candidate. */
+const NARRATION_PREFIX: Record<string, string[]> = {
+  zh: ['他走在道路上，', '他不知道，', '她微笑着，', '他走在马路上，'],
+  ja: ['彼は道を渡って、', '彼の息子が立って、', '彼女は苦笑いして、'],
+};
+const LEADING_TEXT: Record<string, { name: string; verb: string; turn: string }> = {
+  zh: { name: '安东', verb: '说，', turn: '你好' },
+  ja: { name: 'アントン', verb: 'は言った、', turn: 'こんにちは' },
+};
+
+interface LeadingCase { lang: string; body: string; prefix: string }
+function leadingCases(lang: string): LeadingCase[] {
+  const t = LEADING_TEXT[lang];
+  const out: LeadingCase[] = [];
+  for (const prefix of NARRATION_PREFIX[lang]) {
+    for (const [so, sc] of LEADING_TAG_SECONDARY[lang]) {
+      out.push({ lang, prefix, body: `${prefix}${t.name}${t.verb}${so}${t.turn}${sc}。` });
+    }
+  }
+  return out;
+}
+
+describe('parser — #2315 PR #2340 review finding 1: the verb-before-quote (CJK leading-tag) family', () => {
+  const cases = LEADING_TAG_LANGS.flatMap((l) => leadingCases(l));
+
+  it('generates a non-trivial shape set', () => {
+    expect(cases.length).toBeGreaterThan(0);
+  });
+
+  /* CONTROL, comes first: proves the family actually contains a verb-stem
+     match in the narration prefix for BOTH languages — a family with no
+     stem hit anywhere would pass the assertion below vacuously. */
+  it('control: every language has at least one narration prefix carrying a verb-stem substring', () => {
+    for (const lang of LEADING_TAG_LANGS) {
+      const conv = conventionsFor(lang)!;
+      const stems = [...conv.speechVerbStems, ...conv.beatVerbStems];
+      const hit = NARRATION_PREFIX[lang].some((p) => stems.some((s) => p.includes(s)));
+      expect(hit, lang).toBe(true);
+    }
+  });
+
+  it('every genuine turn survives, regardless of a verb-stem substring in the narration before it', () => {
+    const failures: string[] = [];
+    for (const c of cases) {
+      const conv: LanguageConventions = { ...conventionsFor(c.lang)!, secondaryQuotePairs: LEADING_TAG_SECONDARY[c.lang] };
+      const spoken = speechOf(c.body, conv);
+      if (!spoken.includes(LEADING_TEXT[c.lang].turn)) failures.push(c.body);
+    }
+    expect(failures, failures.join('\n')).toHaveLength(0);
+  });
+
+  it('every genuine turn is also correctly attributed to the name in the leading tag', () => {
+    const failures: string[] = [];
+    for (const c of cases) {
+      const conv: LanguageConventions = { ...conventionsFor(c.lang)!, secondaryQuotePairs: LEADING_TAG_SECONDARY[c.lang] };
+      const index = buildNameIndex([{ id: 'anton', name: LEADING_TEXT[c.lang].name }] as never, conv);
+      const speech = parseChapterStructure(c.body, index)
+        .flatMap((p) => p.spans)
+        .filter((s) => s.kind === 'speech');
+      const turnSpan = speech.find((s) => c.body.slice(s.start, s.end) === LEADING_TEXT[c.lang].turn);
+      if (!turnSpan || turnSpan.speaker?.characterId !== 'anton') failures.push(c.body);
+    }
+    expect(failures, failures.join('\n')).toHaveLength(0);
+  });
 });

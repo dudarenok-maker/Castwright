@@ -300,6 +300,29 @@ sentence starts here" for a candidate sitting mid-clause several sentences later
 arms are byte-identical with and without it. It costs nothing until #2286 lands,
 and #2286 is the consumer waiting on it.
 
+### Corrected by the PR #2340 review gate (implementation-time)
+
+The rule above, as first implemented, was **polarity-inverted for any
+language whose canonical dialogue-tag order is VERB then quote** (zh, ja:
+`他说，"你好"`) — the mirror image of the Latin trailing-tag shape (`"Hi," said
+Anton`) this section's own worked example is built from. The
+clause-before-candidate model read a leading verb as proof of a name-tag
+regardless of whether any turn had actually been captured to attribute,
+which on one real Chinese book falsely declined 93.7% of its speech spans.
+**Fix, not a re-decision**: the guard now requires a PRIMARY run to actually
+precede the candidate before it evaluates a verb at all — the sentence above
+("the adjacent real turn loses its speaker") always presupposed this; the
+implementation simply hadn't checked it. This doesn't change the rule's
+behaviour on the shape this section documents (a primary run always precedes
+in the Latin trailing-tag construction), and it isn't a per-language
+property — the same structural check is language-agnostic. Separately, the
+sentence-boundary scan was hardened against a decimal point, an abbreviation
+period, and a semicolon defeating it (none of `.!?…` was previously excluded
+for these cases). Full measurement, the corrected corpus figure against
+#2286's actual tables (101 across 48 paragraphs, down from an unfixed 7,438
+across 1,489), and the mutation evidence: the implementation plan's Ship
+notes, "Round 2 — PR #2340 Premium review gate".
+
 ---
 
 ## Candidate rules evaluated
