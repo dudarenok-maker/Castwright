@@ -291,7 +291,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 2 |
+| **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -299,7 +299,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2531,17 +2531,64 @@ synthesis.
 
 Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night Watch Tetralogy\Ночной дозор`.
 
-### C1 · Cloud request sizing + local input-fraction calibration ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
+> **Hold the full 12-hour re-run — the in-flight speaker-separation work**
+> ([#2288](https://github.com/dudarenok-maker/Castwright/issues/2288),
+> [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)) **changes dialogue
+> segmentation**, so a pass taken before it lands measures a moving target and has to
+> be repeated. Wait for it, then take C2 and C3 in one session.
+>
+> **But a one-chapter local-vs-Gemini A/B is the next step and is not blocked by
+> that.** [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s cause is
+> **not** identified: an offline replay showed that swapping the roster
+> `reconcileSentenceCharacterIds` validates against moves the victim rate 38.0% →
+> 76.3%, but the run's own logs record **zero demotions** on that path — same
+> `log(1, …)` channel as a control message that *does* appear — so the mechanism is a
+> real latent hazard that did not fire here. The dash lines were `narrator` before
+> reconcile, which points at the stage-2 output itself.
+>
+> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down the run's
+> checkout.** The 2026-08-12/13 pass's raw stage-2 output — the model's attribution
+> *before* any engine or reconcile — was destroyed with its worktree, and it is the
+> one artifact that would have settled the residual gap in #2306 without a re-run.
+> The analysis cache alone does not carry it: it holds the final, post-demotion ids.
 
-Three unchecked items. Uses the free-tier `GEMINI_API_KEY` **already configured** in
-`server/.env` — a credential this run exercises, not a blocker.
+### C1 · Free-tier Gemma cloud pass completes end to end ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
-Re-analyze end-to-end on `gemma-4-31b-it` **including the script-review pass** — the
-pass that actually 429'd in the original incident (all 22 logged failures were
-`task: script-review`) — and confirm a per-minute 429 is retried rather than
-misclassified as daily-quota. Then calibrate `analyzer.stage2.localInputFraction`
-(ships at 0.3) downward until a full local re-analysis completes with **zero**
-stage-2 truncation drops, and record the working value.
+**Narrowed 2026-08-13 from three items to one** — see
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685#issuecomment-5274602285)
+for the full reasoning. Two items came out:
+
+- **429 classification — already covered offline.** `gemini.test.ts` carries four
+  tests over this exact behaviour against the real payload shapes, including both
+  historical misclassifications: the #1682 case (`free_tier` in the metric name
+  matching the daily marker, `:551`) and the #1695 case (the free tier's 15-req/min
+  cap colliding with a `\d{1,3}` heuristic, `:583`). The latter asserts the call
+  happened **twice** — it proves the retry, not merely the absence of a throw. A
+  live run would only detect fixture drift in those payloads, which is a far weaker
+  claim than the item made.
+- **`localInputFraction` calibration — obsolete.** The shipped `0.3` produced
+  **one** stage-2 truncation across nine chapters of the hardest book available;
+  truncation already *recovers* via the adaptive re-split (`stage2-chunk.ts`, #528)
+  rather than dropping, so the knob is prevention for a cured failure; and lowering
+  it means smaller chunks, more calls, longer wall-clock — pushing the wrong way on
+  the one target that just missed by 2.5–6×. The value is per-model and
+  per-`num_ctx` besides, so it would not survive the next model.
+
+**What remains** is the systems property no unit test reaches: re-analyze end to end
+on `gemma-4-31b-it` — **including the script-review pass**, the one that actually
+429'd in the original incident (all 22 logged failures were `task: script-review`) —
+and confirm the book **completes** with no dropped chapters and no hang under real
+throttling, with the limiter, the retries and the fallback interacting over hours.
+Uses the free-tier `GEMINI_API_KEY` **already configured** in `server/.env` — a
+credential this run exercises, not a blocker.
+
+**Its remaining draw is that it doubles as the cloud arm of
+[#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s control** — and
+with #2306's cause still open and the **stage-2 output** now the leading suspect,
+that A/B is the sharpest test available rather than a spare one. Two candidates have
+been eliminated offline (`isConventionRescue`'s roster gate moves 0.1 points;
+`reconcileSentenceCharacterIds`'s demotion is potent at 38.0% → 76.3% but logged
+**zero** demotions in the actual run), which is what promoted the A/B back up.
 
 **Two things the 2026-08-06 local pass established for this row, before anyone
 sets it up again:**
@@ -2604,6 +2651,58 @@ does not change that; it is not blocked on acquiring one.
 Same setup as C2: local Ollama, `qwen36-cw-iq4-32k`, ~14 GB VRAM free, sidecar
 suppressed (`DISABLE_AUTOSTART_SIDECAR=1`), no TTS. Batches naturally with C2's
 session rather than needing its own.
+
+### C3 · A deterministic stage-2 failure actually clears when the span is halved ([#2304](https://github.com/dudarenok-maker/Castwright/issues/2304))
+
+**What the unit tests already prove, and does NOT need re-running:** the wiring.
+A repeated failure signature stops the retry loop, the stop escalates to
+`splitSpanForRetry`, and it does so on **both** chunking routes — each mutation-
+verified, each with a control that reddens when the fix is made unconditional.
+
+**What is still owed** is the premise underneath all of that: *that a real model,
+degenerating deterministically on a real span, produces a different answer when
+the span is halved.* Every test above uses a fake model that succeeds on smaller
+input **by construction**, so they prove the split is reached, never that it
+helps. If the degeneration is a property of the *content* rather than the span
+length, the split re-runs twice and fails twice, and the chapter is no better off
+— just slower.
+
+The reproducer is already known and specific, which is the only reason this is
+cheap: Ночной дозор **ch8**, `repeat-loop` at offset **19**, which reproduced
+identically five times across two server lifetimes on 2026-08-12/13. Observe:
+
+- the analyzer log shows the retry **halting on the repeated signature** before
+  the `coverageRetries` budget is spent — *"the same attribution failure
+  reproduced exactly on attempt N"*. Do **not** pin N to 2: for the ch8 shape
+  (attempt 1 a plain truncation, attempts 2+ an identical repeat-loop) the stop
+  lands on **attempt 3**, because the first repeat is the first thing there is
+  anything to match against. Any N below the budget is a pass;
+- the log then shows **`re-attributing a <N>-char section as <M> smaller ones
+  (split depth D)`**. This line exists only because nothing else can see the
+  split: it happens inside a recursion that fires neither `onChunk` nor
+  `onSectionDone`, and `chunkCount` is fixed before any of it runs — so on a
+  multi-chunk chapter, which ch8 is, **both of those counters read identically
+  whether the escalation fires or is reverted outright**. An earlier draft of
+  this row asked for exactly those counters and would have recorded a PASS on a
+  null observation;
+- **ch8's sentence count is whole**, not the partial take. This is the criterion
+  that matters; the two above establish that the mechanism under test is what
+  produced it, rather than luck.
+
+Absence of the re-split line is **not** a failure on its own — the split
+declines for an indivisible span or at `maxSplitDepth`, and `onExhausted` fires
+either way. If the stop line appears without the split line, record that: it
+means the chapter reached the depth limit, which is its own result.
+
+Record the outcome either way. A **negative** result here is valuable and must
+not be quietly dropped: it would mean the escalation costs model calls without
+recovering the chapter, and that the remedy for this failure class has to be
+something other than a shorter prompt.
+
+Same setup as C1/C2, and it **batches with the C2 re-run** — that run replays
+this exact book and chapter, so this row needs no session of its own. Note C2 is
+itself waiting on [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306);
+this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 ---
 

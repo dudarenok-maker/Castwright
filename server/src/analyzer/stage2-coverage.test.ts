@@ -252,6 +252,85 @@ describe('runStage2WithCoverageGuard', () => {
     expect(out.attempts).toBe(2);
   });
 
+  /* #2287-adjacent, found on the Ночной дозор C2/C3 acceptance run: the retry's
+     whole premise is that the loop-and-truncate defect is stochastic. On ch8 it
+     was not — five attempts across two server lifetimes all failed with the same
+     rule at the same offset. The loop burned its entire budget re-running a call
+     that provably could not succeed, then reported it as a soft "SUSPECT after
+     retries" as though it had been transient. */
+  it('stops early when a retry reproduces the previous failure EXACTLY (deterministic)', async () => {
+    const identicalFailure = () => ({ sentences: bodyOf(12).sentences.slice(0, 2) });
+    const call = vi.fn(async () => identicalFailure());
+    const onRetry = vi.fn();
+    const onExhausted = vi.fn();
+
+    const out = await runStage2WithCoverageGuard({
+      body,
+      maxRetries: 5,
+      call,
+      onRetry,
+      onExhausted,
+    });
+
+    /* Two calls, not six: the first attempt plus ONE retry that proved the
+       failure reproduces. Without the early stop this is 6. */
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(out.attempts).toBe(2);
+    expect(out.deterministicFailure).toBe(true);
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    expect(onExhausted.mock.calls[0][0]).toBe(2);
+    expect(out.coverage.ok).toBe(false); // still reported as failing, never silently accepted
+  });
+
+  it('keeps retrying while the failure signature CHANGES (a genuinely stochastic defect)', async () => {
+    /* The control for the test above: differing failures must NOT trip the
+       early stop, or the fix would defeat the retry it is protecting. */
+    const call = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ sentences: bodyOf(12).sentences.slice(0, 2) }))
+      .mockImplementationOnce(async () => ({ sentences: bodyOf(12).sentences.slice(0, 4) }))
+      .mockImplementationOnce(async () => ({ sentences: bodyOf(12).sentences }));
+    const onExhausted = vi.fn();
+
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 5, call, onExhausted });
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(out.coverage.ok).toBe(true);
+    expect(out.deterministicFailure).toBe(false);
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
+
+  it('stops on identical repeats even when the FIRST attempt remains the least-bad take', async () => {
+    /* The shape that made the early stop inert: the signature must be compared
+       against the attempt just made, NOT against the running best. Attempt 1 is
+       a plain truncation (no duplicated block, so it scores well); attempts 2+
+       are an identical repeat-loop, which scores WORSE and therefore never
+       replaces `coverage`. Comparing against `coverage` freezes on attempt 1's
+       signature, no repeat ever matches it, and the whole budget burns.
+
+       This is the ordinary case, not an exotic one — any run whose first attempt
+       is the least-bad hits it, which is why the two tests above cannot see it:
+       one makes every attempt byte-identical, the other makes them improve. */
+    const { sentences: full } = bodyOf(12);
+    const plainTruncation = () => ({ sentences: full.slice(0, 6) });
+    const repeatLoop = () => ({ sentences: [...full.slice(0, 5), ...full.slice(0, 5)] });
+    const call = vi
+      .fn()
+      .mockImplementationOnce(async () => plainTruncation())
+      .mockImplementation(async () => repeatLoop());
+    const onExhausted = vi.fn();
+
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 5, call, onExhausted });
+
+    /* Three calls: attempt 1, the first repeat-loop, and the second one that
+       proves it reproduces. Comparing against the running best gives 6. */
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(out.deterministicFailure).toBe(true);
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    /* The best take is still returned — the stop must not cost us attempt 1. */
+    expect(out.result.sentences.length).toBe(6);
+  });
+
   it('exhausts retries and returns the best (least-bad) take, still flagged', async () => {
     // attempt1: 3/12 (worse), attempt2: 8/12 (better but still <0.6? 0.67>0.6 ok) → use a clearer bad
     const veryShort = () => ({ sentences: bodyOf(12).sentences.slice(0, 2) }); // 0.17
