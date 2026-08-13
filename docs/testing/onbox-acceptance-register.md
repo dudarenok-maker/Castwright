@@ -291,7 +291,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 3 |
+| **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -299,7 +299,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2491,11 +2491,37 @@ chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
 flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
 flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
 
-Since then the #2187 aligner fix has landed, adding a **new C2** — one more local
-re-analysis to confirm plan 247's flagged-count target end to end. Alignment
-itself is already proven and is **not** what that row asks for. (The ID is
-reused: the C2 discharged above was the srv-59 attribution row. Row IDs are
-positional and renumber on discharge.)
+Since then the #2187 aligner fix landed, adding a **new C2** — one more local
+re-analysis to confirm plan 247's targets end to end — and #2253's convention
+invariant added a third row. **Both ran 2026-08-12/13 and are discharged**; see
+below. (Row IDs are positional and renumber on discharge, so a given ID has
+named several different rows over this group's life. The C2 discharged in the
+paragraph above was the srv-59 attribution row; the C2 discharged in the
+paragraph below is the post-#2187 one; the C2 that remains is what was C3.)
+
+**The 2026-08-12/13 run — 9/9 chapters, and it discharged two rows at once.**
+Throwaway `mns_rKjCHx0vrS`, build `52a8fb97`, local Ollama `qwen36-cw-iq4-32k`,
+structure engine on, `allowCloudFallback: false`, **12 h 27 m** of compute across
+an overnight pause. Full per-chapter figures and the seven run-sheet gaps it
+exposed are in
+[`night-watch-reanalysis-onbox-acceptance.md`](night-watch-reanalysis-onbox-acceptance.md)
+§4. Headline outcomes:
+
+- **Escalation executes on all nine chapters** — the post-#2187 C2's principal
+  owed item, and the thing offline replay explicitly could not prove. 61 windows
+  attempted, 21 lines applied. **Discharged.**
+- **Wall-clock missed target 5 by ~2.5–6×** — 12 h 27 m against +2–5 h. Cause
+  identified, so this is a recorded outcome rather than a re-run: the 16 GB model
+  does not fit the 5070 Ti's 14.2 GiB usable, and ~5 GB spilled over PCIe for the
+  whole run. Re-testing needs different hardware or a smaller quantisation.
+- **The bucket split is live** — `unresolved` populated on every chapter (670
+  book-wide), `flagged` 0 throughout, i.e. under its bar rather than over it.
+- **But the end-to-end outcome criterion FAILED**: 87.4% of dash-opening dialogue
+  was attributed to `narrator` (4131/4725) against a 30.3% baseline. The
+  dialogue-structure engine is **exonerated** by replay — today's engine over the
+  2026-08-06 cached stage-2 output reproduces 30.4% — so the cause is upstream,
+  filed as [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306).
+  That is why the row below survives with narrowed scope instead of discharging.
 
 The cloud row remains (renumbered **C1** now that the other two are discharged;
 it was C3 before 2026-08-06 and is referenced under that ID in
@@ -2536,36 +2562,13 @@ re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json
 and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
 for cast + generation.
 
-### C2 · srv-59 flagged-count target, end to end after the #2187 aligner fix ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187), plan [247](../features/247-dialogue-structure-attribution.md))
+### C2 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
 
-**What is already proven, and does NOT need re-running:** alignment. The #2187 fix
-was measured offline against this exact corpus — the 15,069 cached stage-2
-sentences replayed through the production EPUB parser and the production aligner
-— taking chapters 5–8 from 3.7/1.7/66.4/73.5% to 94.6/92.7/92.0/95.7%, book-level
-67.7% → 96.0%, with the pre-fix column reproducing the on-box report to within
-rounding. Every chapter now clears the 80% floor. The aligner is pure, so no
-hardware was needed and none is needed again.
-
-**What is still owed:** plan 247's **target 1 — flagged ≤ ~500 per chapter**. That
-is a property of the cross-examiner running over a *real* stage-2 model output,
-not of alignment alone, so it cannot be replayed from cache. Observe, per chapter,
-the `[analysis:structure]` line's `flagged` count and confirm it lands near
-chapter 9's already-measured 488 rather than the 1,200–1,700 the below-floor
-chapters produced. Also confirm `escalation` actually runs now (it was skipped
-chapter-wide before) and record the escalated/accepted counts, plus wall-clock —
-target 5 (+2–5 h at `'local'`) was never measurable while escalation was being
-skipped.
-
-Same setup as the 2026-08-06 pass: local Ollama, `qwen36-cw-iq4-32k`, structure
-engine on, `analyzer.structure.escalation = 'local'`, no TTS. Force `fresh: true`
-— a resumed run serves cached chapters and measures nothing (see the Group C
-history above, and the chapters 1–4 caveat in plan 247).
-
-**Run it against a throwaway re-import, not the library book** — same reason as
-C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
-entry would overwrite the qwen36 cast the owner is keeping.
-
-### C3 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
+**Partially discharged 2026-08-13** — see the run summary above. Two of this
+row's four criteria passed on the live run and do **not** need re-running:
+`unresolved` is populated per chapter, and `flagged` sits under its bar, so the
+bucket split reaches a real stage-2 output. Escalation's behaviour under the
+split was also observed. What follows is the narrowed remainder.
 
 **What is already proven, and does NOT need re-running:** the fix itself, at
 corpus scale. Two offline replays over the 2026-08-06 cache
