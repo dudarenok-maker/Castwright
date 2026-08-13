@@ -267,14 +267,17 @@ describe('attributeChapterStage2 — dash-dialogue ru fixture (srv-59 Task 12)',
 });
 
 /* #2253/#2254 — the SAME scene with its paragraph breaks destroyed, which is
-   what Calibre's txt->html EPUB conversion did to Ночной дозор ch4-8. The
-   engine loses every speech span and, before this fix, rewrote each dash line
-   to `narrator` as a silent, unflagged `corrected` success.
+   what Calibre's txt->html EPUB conversion did to Ночной дозор ch4-8. Before
+   recovery, the engine lost every speech span and rewrote each dash line to
+   `narrator` as a silent, unflagged `corrected` success; #2253 then kept the
+   model speaker but flagged it low-confidence. With #2254's default-on recovery
+   the interior breaks are re-introduced for ATTRIBUTED turns, so the engine now
+   CONFIRMS the speakers at high confidence — the intended upgrade these tests
+   assert.
 
-   Two variants because "no speech span => narrator" has TWO producers:
-   without a quote run the whole paragraph is one `narration` span
-   (decideNarrationOnly); with one it becomes a single 2,393-char `tag` span
-   (decideTagSpanOnly) — the real ch5 shape. */
+   Both variants survive because the fixture is "recoverable" (its dash turns
+   carry name tags); shapes recovery cannot recover (unattributed turns) still
+   exercise the flag/unresolved rescue paths elsewhere in this file. */
 const MERGED_NARRATION_BODY = CHAPTER_BODY.split('\n').join(' ');
 const MERGED_TAG_BODY = MERGED_NARRATION_BODY.replace('Ветер с залива', 'Ветер "с залива"');
 
@@ -293,7 +296,7 @@ describe('#2253 — a merged (paragraph-degraded) chapter keeps its speakers', (
     ['narration route (no quote run)', MERGED_NARRATION_BODY],
     ['tag route (one incidental quote run)', MERGED_TAG_BODY],
   ] as Array<[string, string]>) {
-    it(`${label}: dash lines keep the model speaker and surface as low-confidence`, async () => {
+    it(`${label}: dash lines keep the model speaker and are structurally CONFIRMED (recovery-on)`, async () => {
       const opts = baseOpts(mergedMockSentences());
       opts.chapter = { ...opts.chapter, body };
       const result = await attributeChapterStage2(opts);
@@ -304,15 +307,18 @@ describe('#2253 — a merged (paragraph-degraded) chapter keeps its speakers', (
       expect(result.structureReport?.alignedPct).toBe(100);
 
       expect(result.sentences.map((s) => s.characterId)).toEqual(['mairin', 'tobias', 'mairin']);
+      // #2254 default-on recovery re-introduces the paragraph breaks in this
+      // MERGED fixture, so the structure engine now CONFIRMS all three dash
+      // turns at high confidence — the intended upgrade over #2253's old
+      // "keep the model speaker but flag it low-confidence (<0.75)" path.
       for (const s of result.sentences) {
-        expect(s.confidence).toBeLessThan(0.75); // the UI highlights every one
+        expect(s.confidence).toBeGreaterThanOrEqual(0.75);
       }
-      // Before the fix all three were bucketed `corrected` (silently narratored).
+      // Recovery succeeds for every turn: nothing corrected, nothing flagged.
+      expect(result.structureReport?.confirmed).toBe(3);
       expect(result.structureReport?.corrected).toBe(0);
-      // Pin the PRODUCER, not just an id/confidence outcome a `lumped` (0.65)
-      // or `unresolved` bucket would equally satisfy: all three must land in
-      // `flagged` via the dash-convention rescue, not some other route.
-      expect(result.structureReport?.flagged).toBe(3);
+      expect(result.structureReport?.flagged).toBe(0);
+      expect(result.structureReport?.unresolved).toBe(0);
     });
   }
 });
