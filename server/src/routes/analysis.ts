@@ -56,6 +56,12 @@ import {
   resolveStage2ChunkCharBudget,
   type Stage2ChunkRunResult,
 } from '../analyzer/stage2-chunk.js';
+import {
+  isDialogueCollapseBreach,
+  sourceSpeechHalfCount,
+  STAGE2_MIN_SPEECH_HALVES,
+  type Stage2CoverageVerdict,
+} from '../analyzer/stage2-coverage.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import {
   countSentencesHeuristic,
@@ -159,6 +165,7 @@ import {
   classifyAnalysisFailure,
   tryParseApiError,
   FAILURE_REMEDIATIONS,
+  type FailureCode,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import {
@@ -1439,7 +1446,10 @@ export function reconcileSentenceCharacterIds(
     }
     demotedCount += 1;
     demotedByOriginalId.set(s.characterId, (demotedByOriginalId.get(s.characterId) ?? 0) + 1);
-    out.push({ ...s, characterId: fallbackId });
+    // #1984 D18 — record the id this demotion overwrote. This is the site that
+    // matters: it runs by default and knob-independently, and is the #1984
+    // incident's own mechanism (roster-shrink demotion).
+    out.push({ ...s, characterId: fallbackId, priorCharacterId: s.characterId });
     options.onDemote?.({ sentence: s, originalId: s.characterId });
   }
   return { sentences: out, demotedCount, demotedByOriginalId };
@@ -2394,6 +2404,44 @@ export function attributeChapterStage2WithEval(
     () => attributeChapterStage2(opts),
     (r) => r.chunkCount ?? null,
   );
+}
+
+/** #2342 item 2 — a failed `Stage2CoverageVerdict` used to always report
+    `attribution-incomplete`, whose copy claims the model's answer "did not
+    cover every sentence" and that a retry "usually fills the gaps". That is
+    true for a truncation/repeat-loop/no-sentences/duplicated-block failure,
+    but false on every count for a dialogue COLLAPSE: every sentence WAS
+    covered — they were all handed to the narrator (`narratedSpeech` breach)
+    or the dialogue markers were lost outright (`markersLost`).
+
+    `isIncomplete` and `isCollapse` are NOT disjoint bits (review round 3
+    corrected an earlier version of this comment that claimed they were,
+    contradicting its own very next paragraph): `markersLost` is gated
+    `!truncated && !excess` (see validateStage2Coverage), which rules out
+    overlap with those two specifically, but NOT with `duplicatedBlock` — a
+    repeat-loop can independently lose its dialogue markers across the
+    (possibly duplicated) span, so `markersLost && duplicatedBlock` is a real,
+    reachable state. `isDialogueCollapseBreach` is gated on nothing from
+    `isIncomplete` at all — it is computed purely from the attributed
+    sentences' own `characterId`s, so a truncated, excess, or duplicated take
+    can ALSO breach the collapse threshold on whatever fraction of dialogue it
+    does contain. So a verdict can genuinely fail both ways, and the function
+    below is a deliberate PRECEDENCE between two possibly-overlapping
+    readings, not a dispatch between two mutually exclusive ones.
+
+    The precedence: a verdict that fails BOTH ways (e.g. a re-split section
+    that is both truncated AND lost its markers, or a repeat-loop that also
+    collapses) keeps `attribution-incomplete` — deliberately, per the #2342
+    spec: missing prose is the more serious problem, and
+    `attribution-incomplete`'s remediation (retry to fill the gap) is the one
+    that actually helps; `attribution-collapse`'s remediation would tell the
+    user their cast was ignored while the bigger problem is that the chapter
+    is missing text. */
+export function selectStage2FailureCode(verdict: Stage2CoverageVerdict): FailureCode {
+  const isIncomplete = verdict.noSentences || verdict.truncated || verdict.excess || !!verdict.duplicatedBlock;
+  if (isIncomplete) return 'attribution-incomplete';
+  const isCollapse = verdict.markersLost || isDialogueCollapseBreach(verdict.narratedSpeech);
+  return isCollapse ? 'attribution-collapse' : 'attribution-incomplete';
 }
 
 /** srv-59 Task 11 — roll up every chapter's `structureReport` (set only when
@@ -4994,19 +5042,57 @@ export async function runMainAnalyzerJob(
           `Chapter ${i + 1}/${totalChapters} — attributed in ${stage2ChunkCount} sections.`,
         );
       }
+      /* C4 on-box acceptance (#2325/#2342) — the row asks an operator to
+         "record the actual percentages" and to log "the source's dash-
+         opening count and the attributed speech-half count... for at least
+         one chapter", but nothing emitted them: they lived only inside
+         `dialogueCollapse`'s issue string, which the job only logs when
+         `!coverage.ok` (below) — so the row's own "healthy book" case, the
+         one it's chiefly about, would discharge on a NULL observation.
+         Logged here unconditionally (pass or fail) whenever the language has
+         a dialogue marker (`narratedSpeech !== null`), which also completes
+         #2342 item 4's observability half — that item exposed the field on
+         the verdict struct but nothing routed it into the operator log. */
+      /* `legibilityConventions?.dialogueOpen` is checked here too rather
+         than assumed: `coverageVerdict.narratedSpeech` is non-null exactly
+         when `fpConventions?.dialogueOpen` was truthy inside
+         `attributeChapterStage2WithEval`, and `fpConventions` there is
+         `conventionsFor(bookLanguage)` — the SAME pure call as
+         `legibilityConventions` here — so the two conditions are provably
+         equivalent. Spelling it out lets the type checker prove
+         `sourceHalves` below is always a number, rather than leaving a
+         `?? '?'` fallback for a null that can't actually occur. */
+      if (coverageVerdict.narratedSpeech && legibilityConventions?.dialogueOpen) {
+        const ns = coverageVerdict.narratedSpeech;
+        const sourceHalves = sourceSpeechHalfCount(ch.body, legibilityConventions.dialogueOpen);
+        log(
+          1,
+          `Chapter ${i + 1}/${totalChapters} — narrated-speech check: ${ns.narrated}/${ns.speechHalves} ` +
+            `spoken lines attributed to the narrator (${ns.pct.toFixed(1)}%)${
+              ns.evaluable
+                ? ''
+                : ` — attributed population below the ${STAGE2_MIN_SPEECH_HALVES}-line floor, too small to judge`
+            }; source has ${sourceHalves} dash-opening speech lines.`,
+        );
+      }
       if (!coverageVerdict.ok) {
         console.warn(
           `[analysis] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${coverageVerdict.issues.join(' ')}`,
         );
+        const failureCode = selectStage2FailureCode(coverageVerdict);
         log(
           1,
-          `Chapter ${i + 1}/${totalChapters} — ⚠ attribution may be incomplete (${
-            coverageVerdict.issues[0] ?? 'low coverage'
-          }); kept the best take and flagged the chapter for retry.`,
+          failureCode === 'attribution-collapse'
+            ? `Chapter ${i + 1}/${totalChapters} — ⚠ the cast was not used (${
+                coverageVerdict.issues[0] ?? 'dialogue collapse'
+              }); kept the best take and flagged the chapter for retry.`
+            : `Chapter ${i + 1}/${totalChapters} — ⚠ attribution may be incomplete (${
+                coverageVerdict.issues[0] ?? 'low coverage'
+              }); kept the best take and flagged the chapter for retry.`,
         );
-        const copy = FAILURE_REMEDIATIONS['attribution-incomplete'];
+        const copy = FAILURE_REMEDIATIONS[failureCode];
         recordFailedChapter(cache, ch.id, {
-          code: 'attribution-incomplete',
+          code: failureCode,
           userMessage: copy.userMessage,
           remediation: copy.remediation,
         });
@@ -5014,7 +5100,7 @@ export async function runMainAnalyzerJob(
           kind: 'chapter-failed',
           chapterId: ch.id,
           message: copy.userMessage,
-          code: 'attribution-incomplete',
+          code: failureCode,
           remediation: copy.remediation,
         });
       }
@@ -6608,6 +6694,7 @@ export async function runSubsetAnalyzerJob(
          and discarded the whole job — the reported failure. */
       const {
         sentences: chapterSentences,
+        coverage: subsetCoverageVerdict,
         chunkCount: subsetChunkCount,
         structureReport: subsetStructureReport,
       } = await attributeChapterStage2WithEval({
@@ -6662,6 +6749,65 @@ export async function runSubsetAnalyzerJob(
           1,
           `Chapter ${ch.id} — attributed in ${subsetChunkCount} sections.`,
         );
+      }
+      /* C4 on-box acceptance (#2325/#2342) parity with the main route's
+         equivalent log line above — see that block's own comment. */
+      /* `subsetLegibilityConventions?.dialogueOpen` checked here too, same
+         reasoning as the main route's equivalent block: it's provably
+         equivalent to the `dialogueOpen` that made `narratedSpeech`
+         non-null, so this lets the type checker prove `sourceHalves` below
+         is always a number rather than leaving a `?? '?'` fallback for a
+         null that can't occur. */
+      if (subsetCoverageVerdict.narratedSpeech && subsetLegibilityConventions?.dialogueOpen) {
+        const ns = subsetCoverageVerdict.narratedSpeech;
+        const sourceHalves = sourceSpeechHalfCount(ch.body, subsetLegibilityConventions.dialogueOpen);
+        log(
+          1,
+          `Chapter ${ch.id} — narrated-speech check: ${ns.narrated}/${ns.speechHalves} spoken lines ` +
+            `attributed to the narrator (${ns.pct.toFixed(1)}%)${
+              ns.evaluable
+                ? ''
+                : ` — attributed population below the ${STAGE2_MIN_SPEECH_HALVES}-line floor, too small to judge`
+            }; source has ${sourceHalves} dash-opening speech lines.`,
+        );
+      }
+      /* #2342 review round 3 — item 4. The subset (Retry) job's stage-2 loop
+         used to discard `coverage` entirely: a chapter whose Phase 0 (cast)
+         step succeeded already had `clearFailedChapterId` called on it above
+         (before Phase 1 attribution even ran), so a chapter that collapses
+         again on retry came back "clean" with nothing re-flagging it — even
+         though the `attribution-collapse` remediation copy the user acted on
+         is what told them to press Retry in the first place. Evaluate and
+         re-report the SAME way the main route does, so a still-broken
+         chapter is still reported broken, not silently marked resolved. */
+      if (!subsetCoverageVerdict.ok) {
+        console.warn(
+          `[analysis-subset] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${subsetCoverageVerdict.issues.join(' ')}`,
+        );
+        const subsetFailureCode = selectStage2FailureCode(subsetCoverageVerdict);
+        log(
+          1,
+          subsetFailureCode === 'attribution-collapse'
+            ? `Chapter ${ch.id} — ⚠ the cast was not used (${
+                subsetCoverageVerdict.issues[0] ?? 'dialogue collapse'
+              }); kept the best take and flagged the chapter for retry.`
+            : `Chapter ${ch.id} — ⚠ attribution may be incomplete (${
+                subsetCoverageVerdict.issues[0] ?? 'low coverage'
+              }); kept the best take and flagged the chapter for retry.`,
+        );
+        const subsetCopy = FAILURE_REMEDIATIONS[subsetFailureCode];
+        recordFailedChapter(cache, ch.id, {
+          code: subsetFailureCode,
+          userMessage: subsetCopy.userMessage,
+          remediation: subsetCopy.remediation,
+        });
+        send({
+          kind: 'chapter-failed',
+          chapterId: ch.id,
+          message: subsetCopy.userMessage,
+          code: subsetFailureCode,
+          remediation: subsetCopy.remediation,
+        });
       }
       for (const s of chapterSentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = chapterSentences;

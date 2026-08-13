@@ -55,7 +55,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true` via `npm run dev`) unless noted:
+Run in mock mode (`npm run dev:mock`) unless noted:
 
 1. **Cold boot at `#/`**. Click a book → analysing → Start analysis → confirm-cast. Expect: Captain Halloran's card visible.
 2. **Click Halloran's card.** Profile Drawer opens. Scroll to **CAST ROSTER → Also known as**. Expect: section header visible; no alias chips (fixture has none); `+ Add alias` button visible.

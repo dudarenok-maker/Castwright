@@ -387,6 +387,45 @@ describe('OllamaAnalyzer — schema-constrained `format`', () => {
   });
 });
 
+describe('OllamaAnalyzer — stage2CallSeq reaches the handoff key (#2342 item 3)', () => {
+  /* runStage2Chapter is the ONLY reader of StageCall.stage2CallSeq — the whole
+     point of #2324. Nothing previously exercised the seam where the sequence
+     actually changes the handoff key: protocol.test.ts covers the pure
+     stage2HandoffKey() helper, but reverting ollama.ts:336 back to
+     `stage2HandoffKey(chapterId)` (dropping `call.stage2CallSeq`) left the
+     whole suite green before this test existed. */
+  const manuscriptId = 'm_ollama_stage2_callseq';
+
+  afterEach(async () => {
+    const { rm: rmFile } = await import('node:fs/promises');
+    for (const key of ['stage2-ch1', 'stage2-ch1-c3']) {
+      await rmFile(resolve(HANDOFF_ROOT, 'inbox', `${manuscriptId}-${key}.md`), { force: true });
+      await rmFile(resolve(HANDOFF_ROOT, 'outbox', `${manuscriptId}-${key}.json`), { force: true });
+    }
+  });
+
+  it('a stage-2 call carrying stage2CallSeq: 3 writes its inbox under 2-ch{n}-c3, not the bare key', async () => {
+    const stage2Payload = JSON.stringify({
+      sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+    });
+    fetchMock.mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(stage2Payload, 32))));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await analyzer.runStage2Chapter(manuscriptId, 1, '# stage2 prompt', { stage2CallSeq: 3 });
+
+    const { readFile } = await import('node:fs/promises');
+    // Written under the numbered key ("2-ch1-c3")...
+    await expect(
+      readFile(resolve(HANDOFF_ROOT, 'inbox', `${manuscriptId}-stage2-ch1-c3.md`), 'utf8'),
+    ).resolves.toBe('# stage2 prompt');
+    // ...and NOT under the bare single-call key ("2-ch1").
+    await expect(
+      readFile(resolve(HANDOFF_ROOT, 'inbox', `${manuscriptId}-stage2-ch1.md`), 'utf8'),
+    ).rejects.toThrow();
+  });
+});
+
 describe('OllamaAnalyzer — two-schema runStage (grammar vs validation)', () => {
   /* Task 7: runStage now accepts grammarSchema (fed to z.toJSONSchema → Ollama
      format) and validationSchema (fed to parseAndValidate). For stage1Chapter,

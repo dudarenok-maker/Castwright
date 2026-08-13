@@ -143,6 +143,14 @@ export const STEPS = [
            it does not read the file from disk (plan review round 2 named
            the wrong file/mechanism; M1, #2146 review). */
         '.husky/**',
+        /* .claude/skills/** is an input because review-gate-mechanism.test.mjs
+           reads those files as TEXT at RUNTIME. This was three literal paths
+           until 2026-08-13; a literal list cannot see a file that does not
+           exist yet, so every reference file added later would have needed
+           hand-registering here or its diff would print test:hooks [cached]
+           and leave the guard stale-green. Same #1847 trap as fixtures/**
+           above, with the enumeration failure mode on top. */
+        '.claude/skills/**',
       ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
@@ -234,20 +242,35 @@ export const STEPS = [
         // so the structural test never ran on the one diff shape it exists
         // to catch.
         'server/madge-cycles-allowlist.json',
-        // ops-55 (#2241): review-gate-mechanism.test.mjs reads all three of
-        // these as TEXT at RUNTIME (frontmatter + prose regex, not a
-        // module-graph edge) to assert the mandated PR-review-gate mechanism
-        // stays model-invocable and cross-referenced. None sits under this
-        // step's own globs above (.claude/skills/** and root CLAUDE.md are
-        // both outside scripts/**, pinokio-scripts/**, .github/**, .husky/**)
-        // — without these entries, a diff touching only .claude/skills/** or
-        // CLAUDE.md prints test:hooks [cached] locally and (ci-scope.mjs
-        // derives its scope from this same STEPS[] entry) skips the guard's
-        // CI leg too, on exactly the diff shape that would break it. Same
-        // #1847 runtime-read trap as fixtures/** above.
-        '.claude/skills/pr-review-gate/SKILL.md',
-        '.claude/skills/model-routing/SKILL.md',
+        // ops-55 (#2241): review-gate-mechanism.test.mjs reads CLAUDE.md as
+        // TEXT at RUNTIME (frontmatter + prose regex, not a module-graph
+        // edge) to assert the mandated PR-review-gate mechanism stays
+        // model-invocable and cross-referenced. CLAUDE.md sits at the repo
+        // root, outside this step's own globs above (scripts/**,
+        // pinokio-scripts/**, .github/**, .husky/**, .claude/skills/**) — so
+        // without this entry a CLAUDE.md-only diff prints test:hooks
+        // [cached] locally and (ci-scope.mjs derives its scope from this
+        // same STEPS[] entry) skips the guard's CI leg too, on exactly the
+        // diff shape that would break it. Same #1847 runtime-read trap as
+        // fixtures/** above. The equivalent reads under .claude/skills/**
+        // are covered by that tree's own glob above (2026-08-13) instead of
+        // being listed here as literals — see that glob's comment.
         'CLAUDE.md',
+        // #2348 review, finding 1: dev-mock-command.test.mjs readFileSync's
+        // both of these at RUNTIME (asserting .env.mock sets
+        // VITE_USE_MOCKS=true and .env.development keeps it false) — no
+        // module-graph edge, so without them here a diff touching only
+        // .env.mock or .env.development (precisely the regression the test
+        // exists to catch — e.g. flipping .env.development's flag back to
+        // true) prints test:hooks [cached] locally, and ci-scope.mjs derives
+        // cloud CI's legs from this same STEPS[] entry, so the cloud run
+        // skips it too. Same #1847 runtime-read trap as fixtures/** above.
+        // (package.json's dev:mock/dev:frontend:mock scripts are the test's
+        // third leg, but need no entry here: a root package.json edit is
+        // already `computeShared`'s global-override case, so it busts every
+        // step, this one included, without a dedicated entry.)
+        '.env.mock',
+        '.env.development',
       ],
       includeLockfiles: ['root'],
     },

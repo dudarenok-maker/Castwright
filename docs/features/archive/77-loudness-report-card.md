@@ -120,7 +120,7 @@ The per-row badge lives inline in `ChapterListenRow` next to the title, sharing 
 
 ### Manual acceptance walkthrough
 
-Mock mode (`VITE_USE_MOCKS=true`) — the Solway Bay seed in `src/lib/api.ts` ships deterministic chapterLufs payloads that exercise every badge colour.
+Mock mode (`npm run dev:mock`) — the Solway Bay seed in `src/lib/api.ts` ships deterministic chapterLufs payloads that exercise every badge colour.
 
 1. **Open `#/books/sb/listen`** → expected stage = `{ kind: 'ready', view: 'listen', bookId: 'sb' }`, expected UI = listen view with header + chapter list + loudness report card visible below the chapter list.
 2. **Inspect the summary line** → reads "N of M chapters within ±2 LU of -16.0 LUFS" where N counts the chapters with two-pass on-target measurements (15 in the mock seed) and M counts chapters with ANY two-pass measurement (16 — chapters 11 and 15 are single-pass, chapter 14 is null).

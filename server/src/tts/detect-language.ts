@@ -20,7 +20,15 @@ import { franc } from 'franc';
 import { allLanguageEntries } from './language-registry.js';
 import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD, countWords } from '../parsers/front-matter.js';
-import { countProseUnits, PROSE_UNIT_FLOOR } from './prose-units.js';
+import {
+  countProseUnits,
+  PROSE_UNIT_FLOOR,
+  guiraudR,
+  LEXICAL_RICHNESS_FLOOR,
+  digitTokenShare,
+  DIGIT_TOKEN_SHARE_CEILING,
+  joinSamplesForGates,
+} from './prose-units.js';
 
 const SAMPLE_CHARS = 20_000;
 const SCRIPT_THRESHOLD = 0.3; // matches the shipped Cyrillic-ratio gate (fs-2)
@@ -123,6 +131,44 @@ export function detectManuscriptLanguage(
   const match = latin.find((e) => e.detect.iso6393 === iso);
   // 'und' or no match → fall back to English (the confidence floor).
   if (!match) return resultFor('en', true);
+
+  /* #2332/#2337 ordering (merge-induced conflict, resolved 2026-08-14) —
+     PUNCTUATED junk (a numbered TOC, a repeated heading — #2256's residual:
+     enough sentence-terminal units to clear PROSE_UNIT_FLOOR, but not real
+     prose) must surrender via #2332's specific junk-gate reason (voteLanguage
+     below, applied to the winning aggregate — the more actionable diagnosis),
+     not via this cross-check's generic confidence-floor reason. franc's
+     UNRESTRICTED call is unstable on that class of non-prose text: it isn't
+     disagreeing because the text is a genuine foreign language coerced onto
+     the wrong registered neighbour, it's disagreeing because there is no real
+     language decision to make at all (measured: a 40-entry numbered TOC and a
+     30x-repeated "Chapter One." heading both send the unrestricted call to an
+     ISO code with no relation to the text — 'jav', 'src' — that a real
+     coercion never produces). So the cross-check below is skipped ONLY when
+     the sample BOTH clears PROSE_UNIT_FLOOR (looks substantial/punctuated —
+     the same threshold voteLanguage applies to the winning aggregate) AND
+     fails one of the two junk gates (LEXICAL_RICHNESS_FLOOR /
+     DIGIT_TOKEN_SHARE_CEILING, same as voteLanguage): only then does it keep
+     its restricted match as a decision (fallback: false), leaving those two
+     gates to catch and explain it downstream with the specific reason.
+     Requiring PROSE_UNIT_FLOOR here (unlike an earlier draft of this fix)
+     matters for a THIRD, unpunctuated-junk shape: #2246 C1's original repro
+     (a short, comma/space-only TOC list, 0 prose units) is exactly what this
+     cross-check exists to catch directly — it fails richness too, but with
+     zero prose units it never reaches voteLanguage's floor either way, so
+     gating this skip on "clears the floor" leaves it on the cross-check path
+     (fallback: true, the generic surrender reason) rather than falsely
+     routing it back through the floor. The C1 coerced-Latin fixtures below
+     (one real sentence each, well under the floor) clear the AND for the
+     same reason: too few prose units to ever satisfy it, so the cross-check
+     always runs for them. */
+  if (
+    countProseUnits(sample) >= PROSE_UNIT_FLOOR &&
+    (guiraudR(sample) < LEXICAL_RICHNESS_FLOOR || digitTokenShare(sample) > DIGIT_TOKEN_SHARE_CEILING)
+  ) {
+    return resultFor(match.code, false);
+  }
+
   const unrestrictedIso = franc(sample, { minLength: 30 });
   const coerced = !latinIso.includes(unrestrictedIso);
   return resultFor(match.code, coerced);
@@ -155,7 +201,18 @@ export function selectBodyChapters<T extends { title: string; body: string }>(ch
    comment for why keying it on chapter count made it unreachable in
    practice). A single candidate is just the n=1 case of this same vote: its
    whole mass "wins" unanimously, and its own prose units are checked against
-   the floor exactly as any other winner's are. */
+   the floor exactly as any other winner's are.
+
+   #2256 — PROSE_UNIT_FLOOR alone lets PUNCTUATED junk through: a long
+   numbered table of contents or a periods-and-page-numbers index
+   accumulates enough terminators to clear it purely by having many short
+   entries, none of which is real prose (see prose-units.ts's own header for
+   the corpus this was measured against, and why a letters-per-unit length
+   check can't separate it from a real CJK manuscript). Two more gates apply
+   to the same winning-language sample, either one enough to surrender:
+   lexical richness (Guiraud's R, LEXICAL_RICHNESS_FLOOR) catches a small
+   repeated vocabulary; digit-token share (DIGIT_TOKEN_SHARE_CEILING)
+   catches a numbered list regardless of how wide its vocabulary is. */
 function voteLanguage(
   candidates: Array<{ title: string; body: string }>,
   meta: { author?: string | null; title?: string | null },
@@ -182,11 +239,40 @@ function voteLanguage(
   }
   if (!winner || totalMass === 0 || winnerMass / totalMass <= 0.5) return resultFor('en', true);
 
-  const winningProseUnits = nonSurrendered
+  const winningSamples = nonSurrendered
     .filter((b) => b.detection.language === winner)
-    .reduce((sum, b) => sum + countProseUnits(prepareSample(b.chapter.body, meta)), 0);
+    .map((b) => prepareSample(b.chapter.body, meta));
+  const winningProseUnits = winningSamples.reduce((sum, s) => sum + countProseUnits(s), 0);
+  if (winningProseUnits < PROSE_UNIT_FLOOR) return resultFor('en', true);
 
-  return winningProseUnits < PROSE_UNIT_FLOOR ? resultFor('en', true) : resultFor(winner, false);
+  /* #2256 review round 3 (finding C1) — round 2 capped this join to a
+     RICHNESS_SAMPLE_CHARS prefix to guard against unbounded-N decay. That
+     cap made the two lexical gates see only the FIRST winning chapter (or
+     two) of a many-chapter book, which is chapter-ORDER-dependent: a single
+     numeral-dense opening chapter (a dated chronicle, an epistolary frame,
+     a 大事记/Zeittafel that survives selectBodyChapters) could refuse a
+     whole book that reads fine once the rest of its chapters are counted —
+     measured, an 11-chapter Chinese book with such a chapter first refused
+     (digitShare 0.2632, prefix-only) but resolved correctly with the SAME
+     chapter last (whole join). No windowing is applied here: real CJK
+     content does not need it (see prose-units.ts's own
+     LEXICAL_RICHNESS_FLOOR/DIGIT_TOKEN_SHARE_CEILING block, finding 3's
+     retraction of the windowing sub-fix).
+
+     #2256 review round 4 (finding B1) — removing the cap did NOT by itself
+     make this order-invariant, which is what round 3 claimed here. Joining
+     with a bare '\n' left a second, older order dependence in place: '\n'
+     is not a sentence terminator, so a chapter whose sample does not end at
+     one glued its trailing residue onto the next chapter's first unit and
+     changed which units dedupeProseUnits collapses. joinSamplesForGates
+     closes each sample first, which is what actually makes the two gates
+     order-invariant — see its own comment for the measured verdict flip and
+     the full argument. */
+  const winningSample = joinSamplesForGates(winningSamples);
+  if (guiraudR(winningSample) < LEXICAL_RICHNESS_FLOOR) return resultFor('en', true);
+  if (digitTokenShare(winningSample) > DIGIT_TOKEN_SHARE_CEILING) return resultFor('en', true);
+
+  return resultFor(winner, false);
 }
 
 /* #2263/#2276 — chapter-aware entry point, called by POST /api/import instead

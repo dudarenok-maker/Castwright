@@ -1,6 +1,13 @@
 /* Deterministic narrator-default heuristic (plan 221 Wave A; generalized to all
    languages 2026-06-20; made conventions-driven #2245).
 
+   #1984 D18 note (finding 6): only `applyNarratorDefault` below is
+   instrumented with `priorCharacterId` — it is the one with a production
+   caller. `forceNarratorOnNonSpokenLines`, also in this file, demotes with
+   no prior recorded; it is dead code today (see its own docstring), so a
+   future reader should not assume every demotion in this file is
+   D18-instrumented just because one of them is.
+
    The per-sentence attribution model mislabels third-person NARRATION as the
    named character (e.g. "She was lost." -> stephanie), which would read
    narration in that character's voice. The spoken-vs-narration distinction is
@@ -96,8 +103,13 @@ export function applyNarratorDefault(
     if (s.characterId === NARRATOR_ID) return s; // already narrator — not an override
     if (!clampedThisRun) {
       clampedThisRun = true;
-      return { ...s, characterId: NARRATOR_ID, confidence: Math.min(s.confidence ?? 1, 0.5) };
+      return {
+        ...s,
+        characterId: NARRATOR_ID,
+        confidence: Math.min(s.confidence ?? 1, 0.5),
+        priorCharacterId: s.characterId, // #1984 D18 — record the id this demotion overwrote
+      };
     }
-    return { ...s, characterId: NARRATOR_ID };
+    return { ...s, characterId: NARRATOR_ID, priorCharacterId: s.characterId }; // #1984 D18
   });
 }

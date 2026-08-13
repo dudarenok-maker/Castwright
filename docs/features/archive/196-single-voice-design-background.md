@@ -67,7 +67,7 @@ Revert by removing `singleDesignRouter` from `server/src/index.ts` and restoring
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev` or `npm run test:e2e`).
+Run in mock mode (`npm run dev:mock` or `npm run test:e2e`).
 
 1. **Cold boot at `#/`** → library cards. Start a new book, upload text, save, start analysis, wait for confirm view.
 2. **Open a character's Profile Drawer** → click any character card. Evidence section appears.

@@ -50,7 +50,7 @@ Edit drawer for a single character. Lets the user adjust identity (name, role, g
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to a book's cast view.
+Run `npm run dev:mock`, navigate to a book's cast view.
 
 1. **Click a character card** → drawer slides in; URL becomes `#/books/<id>/cast?profile=<characterId>`.
 2. **Reload the page** → drawer reopens automatically from the URL on hydration.

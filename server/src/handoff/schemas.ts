@@ -138,6 +138,19 @@ export const sentenceSchema = z
        the post-attribution annotateSceneBreaks pass, never by the model, so
        .strict() validation of model output is unaffected. Additive. */
     sceneBreakBefore: z.boolean().optional(),
+    /* #1984 D18 — the characterId this sentence carried before a
+       post-stage-2 step DEMOTED it (never written by the model). Written by
+       every known demotion site: reconcileSentenceCharacterIds,
+       applyNarratorDefault, the dialogue-structure engine's correction pass
+       (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared by steps
+       that re-assign rather than demote (escalation, tagged-line
+       recovery). NOT written by the id-remap/merge paths —
+       dedupAndPrepare, foldMinorCast, remapCjkHonorificIds,
+       remapFreshToPriorIds, performCastMerge — which also overwrite
+       characterId (to another character's id, not narrator); whether a
+       re-assignment should also carry a prior is an open design question,
+       #2331. Additive. */
+    priorCharacterId: z.string().optional(),
   })
   .strict();
 

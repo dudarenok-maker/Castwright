@@ -37,6 +37,7 @@ import { planBookLanguage, cacheChaptersFor, main } from '../repair-missing-book
 import { cachePath } from '../../server/src/store/analysis-cache.js';
 import { detectManuscriptLanguage } from '../../server/src/tts/detect-language.js';
 import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../../server/src/parsers/front-matter.js';
+import { countProseUnits, PROSE_UNIT_FLOOR } from '../../server/src/tts/prose-units.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -249,6 +250,47 @@ const NO_LETTERS_TEXT = '12345 000 --- !!! ??? 000000 111 222 333 444 555 666 77
 const TOC_MISDETECTED_AS_SPANISH =
   'Prologue 1 Kaz 2 Inej 3 Kaz 4 Jesper 5 Nina 6 Matthias 7 Inej 8 Wylan 9 Kaz 10 Nina';
 
+// #2256 — the residual PROSE_UNIT_FLOOR alone doesn't close: the SAME cast
+// of names, but PUNCTUATED ("N. Name.") so it racks up enough sentence-
+// terminal units to clear PROSE_UNIT_FLOOR (80 units here, 4x the floor) —
+// unlike TOC_MISDETECTED_AS_SPANISH above, which has zero punctuation and
+// is already caught by the floor alone. Real repro of #2251's own review
+// comment ("a dot-leader TOC backfilled 'de' on an English book"): franc
+// mis-disambiguates this as German with fallback:false.
+function numberedTocEntries(count: number): string {
+  const names = ['Kaz', 'Inej', 'Nina', 'Matthias', 'Wylan', 'Jesper'];
+  const parts: string[] = [];
+  for (let i = 1; i <= count; i++) parts.push(`${i}. ${names[i % names.length]}.`);
+  return parts.join(' ');
+}
+const NUMBERED_TOC_JUNK = numberedTocEntries(40); // 80 prose units
+
+// #2256 — a periods-and-page-numbers index, the second punctuated shape
+// #2251's review comment evidenced. A WIDE, mostly-distinct term pool (20
+// dictionary words) so this fixture clears LEXICAL_RICHNESS_FLOOR on its own
+// (R=3.65) — deliberately isolating the DIGIT_TOKEN_SHARE_CEILING gate: half
+// its whitespace tokens carry a digit (the page number) regardless of how
+// wide the vocabulary is, since the number is what makes it an index at all.
+// A NARROWER-vocabulary index (e.g. reusing TOC's 6-name pool) is also
+// caught, but via richness first — this fixture exists specifically to
+// prove the digit gate fires on its own.
+function periodIndexEntries(count: number, poolSize: number): string {
+  const terms = [
+    'Aardvark', 'Abacus', 'Abandon', 'Abbey', 'Abbot', 'Abdicate', 'Abduct', 'Abeyance', 'Abhor', 'Abide',
+    'Ability', 'Ablaze', 'Able', 'Abnormal', 'Aboard', 'Abolish', 'Abrasive', 'Abroad', 'Abrupt', 'Absence',
+  ];
+  const parts: string[] = [];
+  for (let i = 1; i <= count; i++) parts.push(`${terms[i % poolSize]}, ${i * 3}.`);
+  return parts.join(' ');
+}
+const PERIOD_INDEX_JUNK = periodIndexEntries(30, 20); // 30 prose units, R clears richness, digit share does not
+
+// #2256 — repeated chapter headings, the third punctuated shape #2251's
+// review comment evidenced. No digits at all — this shape needs the
+// LEXICAL_RICHNESS_FLOOR gate, not the digit one, since it dedupes straight
+// to one heading's own (tiny) vocabulary.
+const REPEATED_HEADING_JUNK = Array(30).fill('Chapter One.').join(' '); // 30 prose units
+
 // #2263 — the 煤落的委托 shape: a real repro against the live book. Chapter 1
 // is titled plainly ("Chapter 1", not a front-matter title match) but its
 // body is just publisher-watermark boilerplate — a handful of words, well
@@ -412,6 +454,62 @@ test('planBookLanguage: single chapter, TOC-shaped franc-coercion sample → ski
   });
   assert.equal(plan.action, 'skip-fallback');
   assert.match(plan.reason, /surrendered/);
+});
+
+// ---------------------------------------------------------------------------
+// #2256 — the residual: PROSE_UNIT_FLOOR alone lets PUNCTUATED junk through.
+// All three fixtures below comfortably clear PROSE_UNIT_FLOOR on their own
+// (verified below) — a gate with only the old floor would have backfilled
+// every one of them, including with the WRONG non-English language.
+// ---------------------------------------------------------------------------
+
+test('planBookLanguage: fixture sanity — all three #2256 punctuated-junk shapes clear PROSE_UNIT_FLOOR on their own', () => {
+  assert.ok(countProseUnits(NUMBERED_TOC_JUNK) >= PROSE_UNIT_FLOOR);
+  assert.ok(countProseUnits(PERIOD_INDEX_JUNK) >= PROSE_UNIT_FLOOR);
+  assert.ok(countProseUnits(REPEATED_HEADING_JUNK) >= PROSE_UNIT_FLOOR);
+});
+
+test('planBookLanguage: a numbered TOC that clears the prose-unit floor still surrenders — never backfills the wrong non-English language (#2256, the "backfilled \'de\'" residual)', () => {
+  // Fixture sanity: franc really is fooled here, same as #2246 C1 —
+  // a gate keyed on fallback alone (or on PROSE_UNIT_FLOOR alone) would
+  // have written the WRONG non-English language.
+  const solo = detectManuscriptLanguage(NUMBERED_TOC_JUNK);
+  assert.equal(solo.fallback, false);
+  assert.notEqual(solo.language, 'en');
+
+  const plan = planBookLanguage({
+    bookId: 'book-toc-junk',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', NUMBERED_TOC_JUNK)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /too repetitive to trust as prose/);
+  assert.match(plan.reason, /Guiraud's R/);
+});
+
+test('planBookLanguage: a periods-and-page-numbers index surrenders via the digit-token-share ceiling, named in the reason', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-index-junk',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', PERIOD_INDEX_JUNK)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /% of its tokens carry a digit/);
+  assert.match(plan.reason, /table of contents or an index, not/);
+});
+
+test('planBookLanguage: repeated "Chapter One." headings (no digits at all) surrenders via lexical richness alone, not the digit gate', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-heading-junk',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', REPEATED_HEADING_JUNK)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /too repetitive to trust as prose/);
+  assert.doesNotMatch(plan.reason, /carry a digit/);
 });
 
 // ---------------------------------------------------------------------------

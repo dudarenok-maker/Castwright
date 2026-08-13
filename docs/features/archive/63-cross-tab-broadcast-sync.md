@@ -62,7 +62,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Cold boot at `#/`** in tab A → expected stage = `{ kind: 'books' }`, library cards render.
 2. **Open the same library URL in tab B.** Same `{ kind: 'books' }` stage in B.

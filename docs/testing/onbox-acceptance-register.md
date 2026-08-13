@@ -291,15 +291,16 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
-| **C** | One *Ночной дозор* re-analysis session | 3 |
-| **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **C** | One *Ночной дозор* re-analysis session | 4 |
+| **D** | Multi-language TTS render + ASR | 3 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
+| **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**72 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2533,7 +2534,7 @@ If the run instead happens on a book whose language was never declared (imported
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**Three rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Four rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2783,6 +2784,25 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 ---
 
+### C4 · The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book ([#2325](https://github.com/dudarenok-maker/Castwright/issues/2325), [#2342](https://github.com/dudarenok-maker/Castwright/issues/2342))
+
+**Why this cannot be closed by the unit tests.** The guard's whole calibration rests on **one** Cyrillic book, nine chapters, two runs — the 2026-08-06 pass (per-chapter narrated speech halves 32.4 18.0 3.8 39.3 3.2 2.0 27.6 33.8 20.8, **max 39.3%**) and the 2026-08-12/13 collapse (93.1 93.7 94.8 97.5 86.5 72.2 84.3 74.6 91.8, **min 72.2%**). The 60% threshold sits in a 33-point gap between two runs of the *same book*. Every automated test feeds the guard a fixture built to breach or not breach it; none can say whether a *different* real Russian, French or Spanish book lands in that gap. Replaying the metric over all 82 cached analyses on this box found **exactly one** with an evaluable speech population (4,240 speech halves, 19.9% narrated); the only other two Cyrillic books hold **19** and **15** speech halves, both under the 20 floor. No offline work can widen this — a second dash-language book has to be imported.
+
+**Observe, on a real local re-analysis:**
+
+- a **healthy** dash-convention book completes with no `attribution-collapse` chapter failure, and the per-chapter narrated-speech share logged for each chapter sits below 60%. Record the actual percentages — the distribution is worth far more than a pass/fail, because it is what says whether 60% has real headroom or got lucky;
+- the guard's **retry** fires on a section that breaches, and the kept take is the *less* collapsed one (#2342 made the scoring see the collapse dimension at all — confirm the better take survived, not merely that a retry happened);
+- a chapter that still breaches reports **`attribution-collapse`** with the cast-focused copy, **not** `attribution-incomplete`'s "did not cover every sentence / a retry usually fills the gaps" — that copy was factually wrong for this failure class until #2342, and this is the only place the corrected wiring is exercised end to end;
+- the **marker-loss** control does not false-positive: the source's dash-opening count and the attributed speech-half count are logged for at least one chapter, and the second is well above half the first. Both real runs measured ~246→213 and ~241→209, so near-parity is expected and a ratio approaching 0.5 is what to escalate.
+
+**Hardware prerequisite:** no GPU needed — local Ollama analyzer only, as with the rest of Group C. Best taken in the same session as C2/C3 rather than as its own long run.
+
+**Where the criteria live:** the max-39.3%/min-72.2% per-chapter narrated-speech-half figures this row cites are stated directly above, in this row (**Why this cannot be closed by the unit tests**) — no source file duplicates them at that granularity, so this row is their canonical home, not a pointer away from it. [`server/src/analyzer/stage2-coverage.ts`](../../server/src/analyzer/stage2-coverage.ts) carries two DIFFERENT calibration figures of its own, not this row's numbers: the module header's 95.7%/67.9% (lines ~160-161) is the same book's WHOLE-BOOK, ALL-SENTENCE narrator share, not the per-chapter SPEECH-HALF share the 60% threshold actually gates — reading 67.9% as "under the 60% threshold" would be wrong, since the good run's per-chapter figure this row measured is 3.2-39.3%, comfortably clear; and the `markersLost` comment's 246→213/241→209 (lines ~389-390) is an unrelated dialogue-marker-recovery calibration, not a narrated-share number at all. There is no dedicated plan doc for #2325/#2342, and plan 247 (dialogue-structure attribution) mentions neither the issue nor this calibration, so it was never the right pointer. Related but distinct: the #1984 attribution-collapse *visibility* strand measures and surfaces collapse; this guard *acts* on it during analysis. They share a name and nothing else — do not discharge one against the other.
+
+**Not discharged by:** a green `npm run test:server`. The guard's tests are fixture-driven by construction; that is the point of this row.
+
+---
+
 ## Group D — multi-language TTS render + ASR
 
 ### D1 · Non-English ASR content-QA calibration ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
@@ -2805,6 +2825,34 @@ collisions across 101 files. Largely an unattended batch: render, then inspect.
 The Qwen VoiceDesign pipeline is merged, but the **zh/ja** Coalfall placeholder
 artifacts were never produced. Run the shipped pipeline against them. Distinct from
 D1's five languages, which are done.
+
+### D3 · The re-open bound's recovered turn actually sounds right when voiced ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), plan [`docs/superpowers/plans/2026-08-13-primary-pair-straddle.md`](../superpowers/plans/2026-08-13-primary-pair-straddle.md))
+
+The re-open bound (`scanQuoteRuns`, `server/src/analyzer/dialogue-structure/parser.ts`)
+changes run boundaries on real books in all seven supported languages — 1,231
+corpus paragraphs, dominated by `zh` (744) and `fr` (232). Every test in the PR
+scores the recovered span's *text* (never lost, never mid-word) and, separately,
+whether the tag-clause guard keeps a speaker attached — neither measures whether
+the recovered turn *sounds* acceptable once voiced, which is a judgement only a
+real render + a human ear can make.
+
+**What to observe:** generate a chapter of a `zh` or `ja` book that contains a
+continuation paragraph — the design doc's worked example
+(`docs/superpowers/specs/2026-08-13-primary-pair-straddle-design.md` § "What it
+fixes, on real books") quotes two, one already in the Gutenberg corpus this PR's
+own instruments read. Confirm the previously-swallowed inner turn now renders as
+its **own** speech turn, in the character's own cast voice rather than merged
+into the narration/tag reading of the turn before it, and that the boundary
+doesn't land mid-word or drop a syllable. A `ru` or `de` chapter containing one
+of the 3/97 `ru`/`de` corpus paragraphs this PR changes is a secondary, lower-
+priority check — `zh`/`ja` carry the bulk of the real-book delta (744+75 of
+1,231) and are also the two scripts with no case distinction for the CJK-blind
+part of defect 2's corpus proxy, so they are the shapes least covered by any
+other instrument in the PR.
+
+No hardware prerequisite beyond a working TTS engine (Kokoro/Coqui/Qwen, any) —
+listed here rather than under Group A because the debt is about *listening*
+to real output, not about VRAM or a specific card.
 
 ---
 
@@ -3107,6 +3155,61 @@ whole setup with E2 and E3, so run the three together. *Criteria:* PR
 [#2294](https://github.com/dudarenok-maker/Castwright/pull/2294) body; plan 225
 §Invariants item 6.
 
+### E11 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
+
+New read-only `scripts/measure-attribution.mjs` — every unit test mocks its
+inputs; nothing automated runs it against the real `C:\AudiobookWorkspace`
+library, and the spec's own acceptance criteria are stated as properties of
+that run, not of a fixture. Partially run 2026-08-13 from a **feature
+worktree**, which is the reason this row exists rather than closes:
+`server/handoff/cache/` is per-checkout and git-ignored (CLAUDE.md's own
+`CACHE_DIR` note), so a worktree's freshly-built `server/dist` reads an empty
+cache for every book until its analyses are copied in from the checkout that
+actually ran them — every book that has never been re-analysed in the
+worktree itself reads `ok (not analysed)`, indistinguishable from a
+genuinely-fresh import.
+
+**What was observed** (21 of 23 real books' caches copied in, read-only, from
+the primary checkout; copies deleted afterward — nothing written to
+`C:\AudiobookWorkspace`, and the primary checkout's own `server/handoff/cache/`
+was only ever read, never written): a row for every book, none blank; both
+live CJK books (`煤落的委托`, `コールフォールの依頼`) at `spokenTotal > 0`;
+`dashOnlySpoken` non-zero on both Russian books (`Юный дрессировщик` 17,
+`Ночной дозор` 1719); `orphanSpoken` non-zero on several books, concentrated
+in the *Coalfall Commission* family (2–62 across its five language
+editions); `unattributedSpeech` printed for every book. **Re-verified
+2026-08-13** after a #2328 review-gate fix to `orphanSpoken` (it was
+double-counting per unresolvable model id sharing one split span, instead
+of once per span — finding 1): across this same corpus the fix moved
+exactly one book's figure (`Ночной дозор (Tetralogy)`, 30→29), everything
+else above is unchanged; see the acceptance doc's own §1/§5 for the
+corrected per-book table and D13 percentages. **`modelNarrator` and
+`demotedNarrator` read 0 on every book — this is the D18 trap doing its job,
+not the R-9C1 finding recurring:** none of these 21 caches have been
+re-analysed since `priorCharacterId` shipped, so every narrator-speech span
+correctly lands in `unknownOriginNarrator` (verified non-zero, e.g. 193 of
+193 on `Юный дрессировщик`) rather than being defaulted to `modelNarrator`.
+The mutation-tested proof that site 1 (`reconcileSentenceCharacterIds`) *is*
+instrumented lives in `server/src/routes/analysis.test.ts`, not in this run —
+this row is what's left: confirming a **freshly re-analysed** real book
+actually produces a non-zero `demotedNarrator`/`modelNarrator` split, which
+requires GPU time this pass did not spend.
+
+**Still owed:** (1) the full run from the **primary checkout** (or with its
+`server/dist` build), so `hasCacheFile`/`state` reflect every book's real
+analysis history rather than a worktree's copied subset; (2) the dash-stripped
+re-run invariance check (Task 9's paired assertion — run twice, second time
+over scratch-path copies of each cache with every leading dash stripped,
+diff every field of every row); (3) re-analysing one book post-D18 to confirm
+`demotedNarrator`/`modelNarrator` actually populate outside a unit fixture.
+
+*Needs:* a checkout (or worktree with `server/handoff/cache/` populated from
+one) whose cache holds the real 20-book library's analyses, `cd server && npm
+run build`, then `WORKSPACE_DIR=C:\AudiobookWorkspace node
+scripts/measure-attribution.mjs`. *Cost:* under 5 minutes once `server/dist`
+exists. *Criteria:* spec §On-box acceptance
+(`docs/superpowers/specs/2026-08-06-attribution-collapse-visibility-design.md`).
+
 ## Group F — a real Android device
 
 ### F1 · Android companion app — v1 live-device acceptance (plan 188) · **an entire untested axis**
@@ -3281,6 +3384,112 @@ block on the next cut is unlikely, but not proven until observed.
 *Cost:* zero extra; it is observed as part of a cut that was happening anyway.
 *Discharges when:* one real release publishes with a body sourced from the file
 and the observations above are recorded here.
+
+---
+
+## Group H — no hardware, needs a real CJK manuscript this corpus lacks
+
+Not a hardware prerequisite at all — the blocker is a real-book fixture this
+repo's corpus doesn't currently have. `detectManuscriptLanguageFromChapters`
+needs no GPU, sidecar, or analyzer; it is a pure function over chapter text,
+runnable on any machine (`npx tsx` against a real manuscript's chapters, or a
+dry-run `npm run repair:book-language` pass over a real imported book).
+
+### H1 · Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)
+
+`server/src/tts/prose-units.ts`'s kana tokenizer (overlapping character
+trigrams, replacing per-character tokenization) is verified only against an
+own hand-authored synthetic all-kana fixture — 30 distinct hiragana base
+words composed into 1,500 sentences, `detect-language.test.ts`'s
+`finding 3(b)` fixture — not a genuine all-kana book. The fix closes the
+SPECIFIC real
+failure the original #2256 finding reported (a real book at N≈4,843
+characters, old per-character scheme measured R=1.72, refused) using the
+finding's own reported number as an anchor, but this repo cannot reproduce
+that exact book to re-measure it directly, and the synthetic fixture's
+margin is known to be vocabulary-dependent and thinner than Han-based CJK's
+(round-3 finding C5 additionally found the richness gate is close to inert
+for kana beyond what `dedupeProseUnits` already catches — see
+`prose-units.ts`'s own finding-3(b) block for the honest numbers, all of
+which round 4 re-measured against the fixture actually in the tree).
+
+**What to observe, once a real all-kana Japanese manuscript is available**
+(a children's book or early-reader text with no kanji at all is the
+realistic shape — this repo's two real Coalfall Commission translations at
+`C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+コールフォールの依頼}\manuscript.md` are real CJK text but MIXED kanji+kana,
+not the all-kana case this row is about):
+
+1. Run the manuscript's chapters through `detectManuscriptLanguageFromChapters`
+   (or a full `POST /api/import`) and record the result — expected:
+   `{ language: 'ja', supported: true, fallback: false }`.
+2. Separately call `guiraudR` on the same (deduped, per
+   `dedupeProseUnits`) winning sample and record the actual value against
+   `LEXICAL_RICHNESS_FLOOR` (3) — a real number at real scale, not the
+   30-word synthetic fixture's.
+3. If the book has multiple chapters, note the total combined character
+   count the richness gate actually saw (no cap applies post-#2256 round 3 —
+   see `prose-units.ts`'s finding-3(a) retraction) — the margin at that
+   real scale is the actual thing this row exists to confirm.
+
+*Needs:* a real, legally usable all-kana (no kanji) Japanese manuscript —
+no GPU, sidecar, or analyzer.
+*Cost:* one `detectManuscriptLanguageFromChapters` call plus recording the
+observed `R`/`digitTokenShare` numbers here.
+*Discharges when:* a real all-kana manuscript has been run through
+detection, the result and the observed `R` are recorded in this row (or a
+dedicated run sheet this row is updated to point at), and either the
+current trigram fix is confirmed sufficient at real scale or a follow-up
+issue is filed with the real numbers that show it isn't.
+
+### H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
+
+`voteLanguage` measures the two lexical gates over the whole joined winning
+sample with **no length cap** — round 2 added one, round 3 removed it
+because the cap made the verdict chapter-order-dependent. Removing it is
+right for that reason, which is measured. What is NOT measured is the thing
+the cap was originally added for: Guiraud's R is `V / sqrt(N)`, and `V`
+saturates while `N` keeps growing, so R decays with book length.
+
+Round 3 recorded a direct measurement of "the corpus's 815k-char worst case
+→ R≈4.4" as the justification for removing the cap. **Round 4 could not
+reproduce that number from anything in this repo, and it has been deleted
+rather than restated.** What this repo can actually reach:
+
+- the two real Coalfall Commission translations (read-only,
+  `C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+  コールフォールの依頼}\manuscript.md`) — R = **12.078** (zh, 4,425 Han
+  characters, 795 distinct) and **27.302** (ja mixed, 7,797 chars);
+- no synthetic substitute: a 30-word-pool zh narrative at 21,711 characters
+  measures R = **1.581** and is *refused*, because a hand-authored pool
+  reaches ~250 distinct Han characters where real Chinese prose reaches
+  thousands. A synthetic large-N fixture measures its own vocabulary, not
+  the gate.
+
+So the largest real Han sample this repo can measure is ~4.4k characters,
+one to two orders of magnitude short of a book.
+
+**What to observe, once a full-length real Chinese manuscript is available:**
+
+1. Import it (or run `detectManuscriptLanguageFromChapters` over its
+   chapters) and record the result — expected
+   `{ language: 'zh', supported: true, fallback: false }`.
+2. Record the **combined character count** of the joined winning sample the
+   gates actually saw (every winning chapter's `prepareSample` output, each
+   capped at 20,000 chars, joined) and the **observed `guiraudR`** on it,
+   against `LEXICAL_RICHNESS_FLOOR` (3).
+3. Record the **distinct-Han-character count** at that scale. That is the
+   `V` in `V / sqrt(N)` and it is the whole question: at N = 400,000, R
+   clears the floor only if V is above ~1,900.
+
+*Needs:* one real, legally usable full-length Chinese (Han) manuscript —
+no GPU, sidecar, or analyzer.
+*Cost:* one detection call plus recording three numbers here.
+*Discharges when:* a full-length real Han book has been run through
+detection and its N, V and R are recorded in this row — either confirming
+the uncapped gate clears the floor at book scale, or showing it does not,
+in which case a follow-up issue owns re-introducing a length correction
+that is NOT a chapter-order-dependent prefix.
 
 ---
 

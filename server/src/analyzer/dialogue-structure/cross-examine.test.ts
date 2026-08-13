@@ -196,6 +196,60 @@ describe('crossExamine — §5.3 decision matrix (one case per row)', () => {
   });
 });
 
+describe('crossExamine — priorCharacterId (#1984 D18)', () => {
+  it('records the overwritten id when a tag span demotes a named character to narrator', () => {
+    const s = mkSentence('anton');
+    const result = run([aligned(s, [tagSpan()])]);
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].priorCharacterId).toBe('anton');
+  });
+
+  it('records nothing when a narration span RE-AFFIRMS a sentence already narrator (not an overwrite)', () => {
+    // The trap: keying on `bucket === 'corrected'` would mislabel this. This
+    // is decideNarrationOnly returning NARRATOR_ID for a sentence whose
+    // incoming id is already narrator — the bucket can read 'corrected' with
+    // no actual change, and this is exactly that case.
+    const s = mkSentence('narrator');
+    const result = run([aligned(s, [narrationSpan()])]);
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].priorCharacterId).toBeUndefined();
+  });
+
+  it('records the overwritten id when a tag-name correction moves the id off narrator', () => {
+    const s = mkSentence('narrator');
+    const result = run([aligned(s, [speechSpan({ characterId: 'anton', source: 'tag-name' })])]);
+    expect(result.sentences[0].characterId).toBe('anton');
+    expect(result.sentences[0].priorCharacterId).toBe('narrator');
+  });
+
+  it('records nothing when the id is confirmed, unchanged (row 1)', () => {
+    const s = mkSentence('anton', 0.4);
+    const result = run([aligned(s, [speechSpan({ characterId: 'anton', source: 'tag-name' })])]);
+    expect(result.sentences[0].characterId).toBe('anton');
+    expect(result.sentences[0].priorCharacterId).toBeUndefined();
+  });
+
+  it('a stale incoming priorCharacterId is overwritten rather than retained when the id changes again', () => {
+    const stale: SentenceOutput = { ...mkSentence('anton'), priorCharacterId: 'someone-else' };
+    const result = run([aligned(stale, [tagSpan()])]);
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].priorCharacterId).toBe('anton'); // NOT 'someone-else'
+  });
+
+  it('records nothing when a tag span RE-AFFIRMS a sentence already narrator — the discriminating case the narration-only trap above cannot catch (finding 3)', () => {
+    // decideTagSpanOnly() returns bucket: 'corrected' UNCONDITIONALLY (unlike
+    // decideNarrationOnly, which returns 'confirmed' for an already-narrator
+    // sentence). A `decision.bucket === 'corrected'` mutant is indistinguishable
+    // from the correct `characterId !==` check on every OTHER fixture in this
+    // block, including the narration-span trap at :207 — only a tag-only span
+    // on an already-narrator sentence tells them apart.
+    const s = mkSentence('narrator');
+    const result = run([aligned(s, [tagSpan()])]);
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].priorCharacterId).toBeUndefined();
+  });
+});
+
 describe('crossExamine — hard invariants', () => {
   it('INVARIANT: tag-name evidence is never overridden — model disagreement auto-corrects (real parser pipeline)', () => {
     const ru = conventionsFor('ru')!;

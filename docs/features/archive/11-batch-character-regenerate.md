@@ -30,7 +30,7 @@ Lets the user pick multiple characters from the cast and regenerate their lines 
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`, navigate to a book's cast view.
+Run `npm run dev:mock`, navigate to a book's cast view.
 
 1. **Multi-select 3 characters** (Cmd/Ctrl-click) → "Regenerate selected (3)" button appears.
 2. **Click the button** → `ui.batchRegenIds` becomes the 3 character ids; modal opens listing them by name.

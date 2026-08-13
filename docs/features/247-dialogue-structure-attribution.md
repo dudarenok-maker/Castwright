@@ -39,8 +39,11 @@ owner: null
 - **Architectural:** A new pure-code module family (`server/src/analyzer/dialogue-structure/`)
   slots into one existing seam (`attributeChapterStage2`, replacing the old
   `applyNarratorDefault` call) with zero schema changes downstream — sentence `characterId`/
-  `confidence` are the only mutated fields, so fold/reconcile/persistence/OpenAPI shapes are
-  untouched. Two small additive provenance fields on `state.json` close a forensics gap (nothing
+  `confidence` were the only mutated fields until #1984 D18 added a third, additive/optional one:
+  `priorCharacterId` (the id an overwrite replaced), written by both `applyNarratorDefault` and
+  `crossExamine` alongside their existing `characterId` write. Optional and absent by default, so
+  fold/reconcile/persistence/OpenAPI shapes are unaffected for any reader that doesn't know the
+  field. Two small additive provenance fields on `state.json` close a forensics gap (nothing
   previously recorded which analyzer/model produced an analysis).
 
 ## Architectural impact
@@ -63,7 +66,9 @@ owner: null
   cross-examiner as one rule among several — its behaviour is kept (tag/beat span → narrator,
   first-of-run clamp to ≤0.5) and its self-inflicted bug (demoting a dash-continuation sentence
   that has no leading dash of its own) is fixed by the continuation exemption (see "Invariants to
-  preserve" below). Sentence schema (`SentenceOutput`) is unchanged.
+  preserve" below). Sentence schema (`SentenceOutput`) gained one additive, optional field since
+  this plan shipped — `priorCharacterId` (#1984 D18) — written by `applyNarratorDefault` and
+  `crossExamine` on an overwrite; absent otherwise, so pre-#1984 readers are unaffected.
 - **Migration story:** none needed — every new field is additive/optional
   (`analysisProvenance`, `structureReport`). A book analysed before this engine shipped simply
   has no `analysisProvenance` block; the book-state GET route already tolerates that (pinned by

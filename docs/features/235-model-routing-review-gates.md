@@ -7,7 +7,19 @@ owner: null
 # Model routing & review gates
 
 > Status: active — the issue-linkage gate (`scripts/validate-pr-issue-link.mjs`) is tested + CI-enforced end-to-end (it proves the gate ran). A second guard, `scripts/tests/review-gate-mechanism.test.mjs` (ops-55), locks that the PR-review gate's *mechanism* — `pr-review-gate` staying model-invocable and cross-referenced — doesn't rot, but it does not prove the gate actually ran on any given PR. The other four gates remain self-enforced prose, not locked by automated tests, so `stable` (which this repo's INDEX.md lifecycle defines as "behavior locked by automated tests") does not yet apply.
-> Key files: `CLAUDE.md`, `.claude/skills/model-routing/SKILL.md`, `scripts/validate-pr-issue-link.mjs`, `.github/workflows/pr-issue-link.yml`, `.claude/skills/pr-review-gate/SKILL.md`, `scripts/tests/review-gate-mechanism.test.mjs`
+> Key files: `CLAUDE.md`, `.claude/skills/model-routing/SKILL.md`, `scripts/validate-pr-issue-link.mjs`, `.github/workflows/pr-issue-link.yml`, `.claude/skills/pr-review-gate/SKILL.md`, `.claude/skills/pr-review-gate/references/{reviewer-brief,findings-triage}.md`, `scripts/tests/review-gate-mechanism.test.mjs`, `scripts/sync-agent-skills.mjs`
+>
+> **Superseded in part, 2026-08-13:** the PR-review half of this plan no longer
+> lives in `model-routing/SKILL.md`. `## Mandatory independent review (PRs)` and
+> `## PR-gate issue verification` **moved into
+> [`pr-review-gate/SKILL.md`](../../.claude/skills/pr-review-gate/SKILL.md)**,
+> which is now the full runbook (preconditions, exemption, effort ladder,
+> dispatch, the per-pass PR comment, triage, re-review loop, issue verification).
+> `model-routing` keeps routing: the tier table, escalation, session drift, the
+> spec/plan `assumption-checker` loop, and the shared judgment-call carve-out.
+> A reader sent here by an older reference should follow that file, not this
+> one. Design of record:
+> [2026-08-13-pr-review-skill-design.md](../superpowers/specs/2026-08-13-pr-review-skill-design.md).
 > URL surface: n/a — process/tooling change, no application UI
 > OpenAPI ops: none
 

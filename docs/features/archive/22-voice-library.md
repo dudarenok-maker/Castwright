@@ -36,7 +36,7 @@ Cross-book view of every voice the user has confirmed. Cast members are grouped 
 
 ## Acceptance walkthrough
 
-Run `VITE_USE_MOCKS=true`.
+Run `npm run dev:mock`.
 
 1. **Open `#/voices`** → on the default `All` tab, the list renders one header per voice family (engine + speaker name), pinned families first. Standalone books flatten under the family header (no "Standalones" series sub-header). Cast members nest series → book → character.
 2. **Click the per-family Play button** → status pill on the header cycles `Preparing… → Freeing memory… → Loading TTS… → Synthesising…` (same JIT contract as plan 10), then audio plays inline. A second click within the cache TTL returns cached audio without the load cycle.

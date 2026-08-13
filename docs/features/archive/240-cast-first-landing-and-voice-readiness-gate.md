@@ -219,7 +219,7 @@ Stamp the existing per-entry `fallbackConfirmed` flag at enqueue time:
 
 ### Manual acceptance walkthrough
 
-Mock mode (`VITE_USE_MOCKS=true`):
+Mock mode (`npm run dev:mock`):
 
 1. Upload/analyse a book → confirm stage → click **"Confirm cast and design voices"** →
    expected hash `#/books/<id>/cast`, cast roster + "Continue to manuscript" visible.

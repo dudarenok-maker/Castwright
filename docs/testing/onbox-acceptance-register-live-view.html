@@ -181,8 +181,8 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">67</div><div class="l">Owed</div></div>
-    <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
+    <div class="stat"><div class="n owed">72</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n">8</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">2</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 60)</div></div>
@@ -195,11 +195,12 @@
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>45</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>4</td></tr>
-      <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>3</td></tr>
-      <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>10</td></tr>
+      <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
+      <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>11</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
+      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td>2</td></tr>
     </tbody>
   </table>
   </div>
@@ -917,7 +918,7 @@
   <!-- C -->
   <section class="group" id="gc">
     <header>
-      <h3 class="gtitle"><span class="gtag">C</span> One <span lang="ru">Ночной дозор</span> re-analysis <span class="gcount">3 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">C</span> One <span lang="ru">Ночной дозор</span> re-analysis <span class="gcount">4 rows</span></h3>
       <p class="setup">
         <b>Two rows.</b> Two local passes have now run — <b>2026-08-06</b> (9 chapters, 15,069
         sentences) and <b>2026-08-12/13</b> (9 chapters, 12 h 27 m) — both on
@@ -1152,12 +1153,58 @@
         added 2026-08-13</p>
       </div>
     </details>
+<details class="item">
+      <summary><span class="num">C4</span><span class="iname">The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book</span><span class="risk">Calibrated on ONE book, two runs</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><b>Why this cannot be closed by the unit tests.</b> The guard's whole calibration rests on
+        <b>one</b> Cyrillic book, nine chapters, two runs — the 2026-08-06 pass (per-chapter narrated
+        speech halves 32.4 18.0 3.8 39.3 3.2 2.0 27.6 33.8 20.8, <b>max 39.3%</b>) and the
+        2026-08-12/13 collapse (93.1 93.7 94.8 97.5 86.5 72.2 84.3 74.6 91.8, <b>min 72.2%</b>). The
+        60% threshold sits in a 33-point gap between two runs of the <em>same</em> book. Every
+        automated test feeds the guard a fixture built to breach or not breach it; none can say
+        whether a <em>different</em> real Russian, French or Spanish book lands in that gap. Replaying
+        the metric over all 82 cached analyses on this box found <b>exactly one</b> with an evaluable
+        speech population (4,240 speech halves, 19.9% narrated); the only other two Cyrillic books
+        hold <b>19</b> and <b>15</b> speech halves, both under the 20 floor. No offline work can widen
+        this — a second dash-language book has to be imported.</p>
+        <p><b>Observe, on a real local re-analysis:</b></p>
+        <ul>
+          <li>a <b>healthy</b> dash-convention book completes with no <code>attribution-collapse</code>
+          chapter failure, and the per-chapter narrated-speech share logged for each chapter sits below
+          60%. Record the actual percentages — the distribution is worth far more than a pass/fail,
+          because it is what says whether 60% has real headroom or got lucky;</li>
+          <li>the guard's <b>retry</b> fires on a section that breaches, and the kept take is the
+          <em>less</em> collapsed one (#2342 made the scoring see the collapse dimension at all —
+          confirm the better take survived, not merely that a retry happened);</li>
+          <li>a chapter that still breaches reports <b><code>attribution-collapse</code></b> with the
+          cast-focused copy, <b>not</b> <code>attribution-incomplete</code>'s "did not cover every
+          sentence / a retry usually fills the gaps" — that copy was factually wrong for this failure
+          class until #2342, and this is the only place the corrected wiring is exercised end to end;</li>
+          <li>the <b>marker-loss</b> control does not false-positive: the source's dash-opening count
+          and the attributed speech-half count are logged for at least one chapter, and the second is
+          well above half the first. Both real runs measured ~246→213 and ~241→209, so near-parity is
+          expected and a ratio approaching 0.5 is what to escalate.</li>
+        </ul>
+        <p><b>Hardware prerequisite:</b> no GPU needed — local Ollama analyzer only, as with the rest
+        of Group C. Best taken in the same session as C2/C3 rather than as its own long run.</p>
+        <p><b>Where the criteria live:</b> this row, plus the calibration in
+        <code>docs/features/247-dialogue-structure-attribution.md</code>. Related but distinct: the
+        #1984 attribution-collapse <em>visibility</em> strand measures and surfaces collapse; this
+        guard <em>acts</em> on it during analysis. They share a name and nothing else — do not
+        discharge one against the other.</p>
+        <div class="flag"><b>Not discharged by a green <code>npm run test:server</code>.</b> The
+        guard's tests are fixture-driven by construction; that is the point of this row.</div>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2325">#2325</a> ·
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2342">#2342</a> · added
+        2026-08-13</p>
+      </div>
+    </details>
   </section>
 
   <!-- D -->
   <section class="group" id="gd">
     <header>
-      <h3 class="gtitle"><span class="gtag">D</span> Multi-language render + ASR <span class="gcount">2 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">D</span> Multi-language render + ASR <span class="gcount">3 rows</span></h3>
       <p class="setup">Whisper resident plus real non-English renders. Largely unattended — render the batch, inspect the distribution afterwards.</p>
     </header>
     <details class="item">
@@ -1175,12 +1222,21 @@
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1600">#1600</a></p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">D3</span><span class="iname">The recovered turn sounds right when voiced</span><span class="risk">Ear-only</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The re-open bound changes run boundaries on real books in all seven supported languages — <b>1,231 corpus paragraphs</b>, dominated by <span lang="zh">zh</span> (744) and fr (232). Every test in the PR scores the recovered span's <i>text</i> (never lost, never mid-word) and, separately, whether the tag-clause guard keeps a speaker attached. Neither measures whether the recovered turn <b>sounds</b> acceptable once voiced — a judgement only a real render and a human ear can make.</p>
+        <p><b>What to observe:</b> generate a chapter of a <span lang="zh">zh</span> or <span lang="ja">ja</span> book containing a continuation paragraph (the design doc quotes two, one already in the Gutenberg corpus this PR's own instruments read). Confirm the previously-swallowed inner turn now renders as its <b>own</b> speech turn, in the character's own cast voice rather than merged into the narration/tag reading of the turn before it, and that the boundary lands neither mid-word nor a syllable short.</p>
+        <p>A ru or de chapter is a secondary, lower-priority check — <span lang="zh">zh</span>/<span lang="ja">ja</span> carry the bulk of the real-book delta (744+75 of 1,231) and are the two scripts with no case distinction, so they are the shapes least covered by any other instrument in the PR.</p>
+        <p class="src">No hardware prerequisite beyond a working TTS engine (Kokoro/Coqui/Qwen, any) — listed here rather than under Group A because the debt is about <i>listening</i> to real output, not about VRAM or a specific card · <a href="https://github.com/dudarenok-maker/Castwright/issues/2315">#2315</a></p>
+      </div>
+    </details>
   </section>
 
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">11 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1297,6 +1353,19 @@
       </div>
     </details>
 
+    <details class="item">
+      <summary><span class="num">E11</span><span class="iname">measure-attribution.mjs against the real workspace (#1984 Wave 1)</span><span class="risk">Partial run only — worktree cache mismatch</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>New read-only <code>scripts/measure-attribution.mjs</code> — every unit test mocks its inputs; nothing automated runs it against the real <code>C:\AudiobookWorkspace</code> library, and the spec&#39;s own acceptance criteria are stated as properties of that run, not of a fixture.</p>
+        <div class="flag"><b>Partially run 2026-08-13 from a feature worktree, which is the reason this row exists rather than closes.</b> <code>server/handoff/cache/</code> is per-checkout and git-ignored, so a worktree&#39;s freshly-built <code>server/dist</code> reads an empty cache for every book until its analyses are copied in from the checkout that actually ran them — every book never re-analysed in the worktree itself reads <code>ok (not analysed)</code>, indistinguishable from a genuinely-fresh import.</p></div>
+        <p><b>What was observed</b> (21 of 23 real books&#39; caches copied in, read-only, from the primary checkout; copies deleted afterward — nothing written to <code>C:\AudiobookWorkspace</code>, and the primary checkout&#39;s own cache was only ever read): a row for every book, none blank; both live CJK books at <code>spokenTotal &gt; 0</code>; <code>dashOnlySpoken</code> non-zero on both Russian books (17, 1719); <code>orphanSpoken</code> non-zero on several books, concentrated in the <i>Coalfall Commission</i> family (2–62 across its five language editions); <code>unattributedSpeech</code> printed for every book. <b>Re-verified 2026-08-13</b> after a #2328 review-gate fix to <code>orphanSpoken</code> (it double-counted per unresolvable model id sharing one split span, instead of once per span); across this corpus the fix moved exactly one book&#39;s figure (<i lang="ru">Ночной дозор (Tetralogy)</i>, 30→29) — everything else above, and the D13 percentages below, are unchanged.</p>
+        <p><b><code>modelNarrator</code>/<code>demotedNarrator</code> read 0 on every book — this is the D18 trap doing its job, not the R-9C1 finding recurring:</b> none of these 21 caches have been re-analysed since <code>priorCharacterId</code> shipped, so every narrator-speech span correctly lands in <code>unknownOriginNarrator</code> (verified non-zero, e.g. 193 of 193 on <i lang="ru">Юный дрессировщик</i>) rather than being defaulted to <code>modelNarrator</code>. The mutation-tested proof that site 1 (<code>reconcileSentenceCharacterIds</code>) is instrumented lives in <code>server/src/routes/analysis.test.ts</code>, not in this run.</p>
+        <p><b>D13 verdict, from the same partial run:</b> orphan shares sorted show a real but roughly 6–7× gap (not the round-7 gate&#39;s claimed ~10×) separating <i>The Coalfall Commission</i>&#39;s five language editions (16.5–49.2%) from everything else (≤2.5%) — but that &quot;high&quot; group is one repeatedly-retested fixture book family, which could produce unusual <code>cast-id-history.json</code> churn independent of a real reader&#39;s library. <b>Verdict: inconclusive, not disqualifying</b> — D13&#39;s mechanism still holds, but this sample is not sufficient to set <code>DRIFT_SHARE_THRESHOLD</code> from.</p>
+        <p><b>Still owed:</b> the full run from the primary checkout (or with its <code>server/dist</code> build), so state reflects every book&#39;s real analysis history; the dash-stripped re-run invariance check (diff every field of every row); re-analysing one book post-D18 to confirm <code>demotedNarrator</code>/<code>modelNarrator</code> actually populate outside a unit fixture.</p>
+        <p class="src">A checkout (or worktree with its cache populated from one) whose cache holds the real library&#39;s analyses, <code>cd server &amp;&amp; npm run build</code>, then <code>WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs</code> · under 5 min once <code>server/dist</code> exists · <a href="https://github.com/dudarenok-maker/Castwright/issues/1984">#1984</a> Wave 1 · <a href="../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md">plan</a> · full checklist: <code>docs/testing/attribution-collapse-visibility-onbox-acceptance.md</code></p>
+      </div>
+    </details>
+
   </section>
 
   <!-- F -->
@@ -1349,6 +1418,39 @@
         <p><b>Pre-merge evidence, gathered rather than asserted</b> — the shipped <code>resolveReleaseBody()</code> replayed against the last 12 real tags: <code>v1.14.0</code>…<code>v1.9.0</code> (9 releases) → publish from FILE; <code>v1.8.0</code> → BLOCKED (placeholder annotation, 18 B, vs. a stale 3,060 B file still headed <code>v1.7.0</code>); <code>v1.7.0</code> → BLOCKED (3,060 B file vs. 6,757 B annotation); <code>v1.6.0</code> → file absent at that ref → publish from ANNOTATION. <b>Two real historical releases genuinely diverged</b> — this is not hypothetical.</p>
         <p><b>Observe, at the next real release cut:</b> the release-body step exits 0 and logs the FILE as its source; the published body matches <code>git show &lt;tag&gt;:docs/release-notes-next.md</code> exactly, not the one-line placeholder; the annotation checks visibly ran rather than being silently skipped. A failure here is a real signal — read what it names before overriding anything.</p>
         <p class="src">Nothing beyond a real vX.Y.Z tag push — the next release cut · zero extra cost, observed as part of a cut that was happening anyway · <a href="https://github.com/dudarenok-maker/Castwright/issues/2137">#2137</a>, PR #2168</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- H -->
+  <section class="group is-soft" id="gh">
+    <header>
+      <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real CJK manuscript this corpus lacks <span class="gcount">2 rows</span></h3>
+      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists.</p>
+    </header>
+    <details class="item">
+      <summary><span class="num">H1</span><span class="iname">Kana trigram gate at real-book scale</span><span class="risk">Synthetic only</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The kana tokenizer (overlapping character <b>trigrams</b>, replacing per-character tokenization) is verified only against a hand-authored synthetic fixture — 30 distinct hiragana base words composed into 1,500 sentences — <b>not a genuine all-kana book</b>. The fix closes the specific real failure #2256 reported (a real book at N≈4,843 characters measured R = 1.72 under the old scheme, and was refused), but this repo cannot reproduce that book to re-measure it.</p>
+        <p class="flag">Round 3 additionally found the richness gate is <b>close to inert for kana</b> beyond what <code>dedupeProseUnits</code> already catches. That is recorded honestly in <code>prose-units.ts</code> rather than implied away — which is part of why this row exists.</p>
+        <p><b>What to observe</b>, once a real all-kana manuscript is available (a children's or early-reader text with no kanji — note this repo's two real Coalfall translations are <i>mixed</i> kanji+kana, not this case):</p>
+        <ul>
+          <li>Detection returns <code>{ language: 'ja', supported: true, fallback: false }</code>.</li>
+          <li><code>guiraudR</code> on the deduped winning sample, recorded as a real number against the floor of 3 — not the 30-word fixture's.</li>
+          <li>The combined character count the gate actually saw (no cap applies since round 3).</li>
+        </ul>
+        <p class="src">A real, legally usable all-kana Japanese manuscript. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 3, finding C5</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">H2</span><span class="iname">Richness floor on a full-length real Han book</span><span class="risk">Claim retracted</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>voteLanguage</code> measures both gates over the whole joined sample with <b>no length cap</b>. Round 2 added one; round 3 removed it because the cap made the verdict chapter-<i>order</i>-dependent. Removing it is right for that reason — which is measured. What is <b>not</b> measured is the thing the cap was added for: Guiraud's R is <code>V / √N</code>, and V saturates while N keeps growing, so R decays with book length.</p>
+        <p class="flag">Round 3 justified the removal with "the corpus's 815k-char worst case → R ≈ 4.4". <b>Round 4 could not reproduce that number from anything in this repo, and it was deleted rather than restated.</b> This row is what replaces it.</p>
+        <p>What this repo can actually reach: the two real Coalfall translations measure R = <b>12.078</b> (zh, 4,425 Han characters, 795 distinct) and <b>27.302</b> (ja mixed). There is no synthetic substitute — a 30-word-pool zh narrative at 21,711 characters measures R = <b>1.581</b> and is <i>refused</i>, because a hand-authored pool reaches ~250 distinct Han characters where real Chinese prose reaches thousands. A synthetic large-N fixture measures its own vocabulary, not the gate.</p>
+        <p>So the largest real Han sample measurable here is ~4.4k characters — one to two orders of magnitude short of a book.</p>
+        <p><b>What to observe:</b> import a full-length real Chinese manuscript, confirm <code>{ language: 'zh', supported: true, fallback: false }</code>, and record the joined sample's combined character count alongside the observed <code>guiraudR</code> against the floor of 3. Vocabulary growth is the thing being checked: at chapter scale V still outruns √N, so R <i>rises</i> — the exposure is only in the saturation regime.</p>
+        <p class="src">A full-length real Chinese book. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 4, finding B3</p>
       </div>
     </details>
   </section>

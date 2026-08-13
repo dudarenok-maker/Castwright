@@ -60,7 +60,7 @@ owner: null
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Open the generate view.** Navigate to `#/books/sb/generate` (Solway Bay fixture — all 18 chapters pre-seeded as `done`). Expected: chapter list loads, chapter rows show waveform strips under done rows.
 

@@ -111,7 +111,7 @@ The standalone prosody pill (`layout-prosody-pill.test.tsx` + its rendering in `
 
 ### Manual acceptance walkthrough
 
-Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`).
+Run in mock mode (`npm run dev:mock`).
 
 1. **Open a book → Manuscript view.** With an attributed book in the mock, navigate to `#/books/<id>/manuscript`. Status pill shows idle (no chip).
 

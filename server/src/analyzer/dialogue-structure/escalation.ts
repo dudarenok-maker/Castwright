@@ -276,6 +276,10 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
 
       opts.sentences[idx].characterId = assignment.characterId;
       opts.sentences[idx].confidence = ESCALATED_CONFIDENCE;
+      // #1984 D18 — this is a re-assignment, not a demotion. A stale
+      // priorCharacterId from an earlier site would misreport this sentence
+      // as engine-demoted narrator once escalation has since corrected it.
+      delete opts.sentences[idx].priorCharacterId;
       opts.flags.splice(flagPos, 1);
       appliedIdx.add(idx);
       outcome.applied += 1;

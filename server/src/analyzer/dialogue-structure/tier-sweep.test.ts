@@ -251,7 +251,12 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
          (secondary ignored, `tiered === ref` everywhere) reads as 0 and
          fails outright. Value pinned by direct measurement against this
          file's own shapes, not copied from any other report. */
-      it(`tiered differs from ref on ${lang === 'es' ? 88 : lang === 'ru' ? 225 : 114} scored shapes (proves the tier is actually engaged)`, () => {
+      /* #2315: re-measured against the shipped re-open bound + tag-clause
+         guard (docs/superpowers/plans/2026-08-13-primary-pair-straddle.md
+         Task 5) — the bound lives inside `scan`, which this tier calls twice,
+         so it reaches these shapes too. Values are a direct re-measurement,
+         not copied from the design doc's prototype figures. */
+      it(`tiered differs from ref on ${lang === 'es' ? 74 : lang === 'ru' ? 253 : 130} scored shapes (proves the tier is actually engaged)`, () => {
         let differs = 0;
         for (const body of shapes) {
           const r = speechOf(body, ref);
@@ -260,7 +265,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           const cand = speechOf(body, tiered);
           if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
         }
-        expect(differs).toBe(lang === 'es' ? 88 : lang === 'ru' ? 225 : 114);
+        expect(differs).toBe(lang === 'es' ? 74 : lang === 'ru' ? 253 : 130);
       });
     });
 
@@ -310,7 +315,8 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
          This requires `tiered` to actually differ from `ref` on a measured
          number of scored shapes. Value pinned by direct measurement against
          this file's own shapes. */
-      it(`tiered differs from ref on ${lang === 'es' ? 116 : lang === 'ru' ? 618 : 258} scored shapes (proves the tier is actually engaged)`, () => {
+      /* #2315: re-measured, same rationale as F2's comment above. */
+      it(`tiered differs from ref on ${lang === 'es' ? 124 : lang === 'ru' ? 632 : 277} scored shapes (proves the tier is actually engaged)`, () => {
         let differs = 0;
         for (const { body, outer } of shapes) {
           const r = speechOf(body, ref);
@@ -319,7 +325,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           const cand = speechOf(body, tiered);
           if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
         }
-        expect(differs).toBe(lang === 'es' ? 116 : lang === 'ru' ? 618 : 258);
+        expect(differs).toBe(lang === 'es' ? 124 : lang === 'ru' ? 632 : 277);
       });
     });
   }
