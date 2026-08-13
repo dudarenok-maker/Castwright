@@ -365,6 +365,37 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
     expect(new Set(conventionsFor('de')!.quotePairs.map(([o]) => o))).toEqual(new Set(['„', '»']));
   });
 });
+
+/* #2286 residual — the OWNER'S 2026-08-13 decision, recorded in
+   docs/superpowers/specs/2026-08-13-gap-seeded-straddle-design.md: the gap
+   tier's binding acceptance criterion is ZERO DESTROYED TURNS (measured —
+   F1/F2/F3 sweeps + the 291-book corpus replay all read 0 destroyed, 0
+   merged, 0 lost, 0 split). A spurious narration-read-as-speech span is the
+   ACCEPTED lesser harm: a primary-convention scan is a run detector, not a
+   convention detector, so a secondary-tier quotation appearing in narration
+   (a sign, a title, a scare quote) with NO primary run anywhere nearby still
+   forms its own quote run and reads as spoken — nothing is destroyed, but
+   the narration line is misclassified. These three pin CURRENT behaviour
+   (not desired), one per representative language, so a future change to the
+   tier or the scan cannot silently narrow OR widen this residual without a
+   test going red either way. */
+describe('parser — #2286 residual: accepted spurious spans under the gap tier (owner decision 2026-08-13)', () => {
+  const spoken = (body: string, lang: string) =>
+    spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor(lang)!)))
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('es: a sign quoted with the secondary "…" pair, alone in narration, still reads as spoken', () => {
+    expect(spoken('El cartel decía "Cerrado".', 'es')).toEqual(['Cerrado']);
+  });
+  it('en: a title quoted with the secondary «…» pair, alone in narration, still reads as spoken', () => {
+    expect(spoken('He read «Faust» on the cover.', 'en')).toEqual(['Faust']);
+  });
+  it('ru: a sign quoted with the secondary ‘…’ pair, alone in narration, still reads as spoken', () => {
+    expect(spoken('Знак гласил ‘Закрыто’.', 'ru')).toEqual(['Закрыто']);
+  });
+});
+
 describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 1)', () => {
   const enIdx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
   const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
