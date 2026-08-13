@@ -39,6 +39,7 @@ import {
   STAGE2_ATTRIBUTION_RULES,
   STAGE2_ATTRIBUTION_RULES_CHUNK,
   selectStage2FailureCode,
+  attributeChapterStage2,
   type AnalysisJob,
 } from './analysis.js';
 import type { Stage2CoverageVerdict } from '../analyzer/stage2-coverage.js';
@@ -7318,6 +7319,98 @@ describe('chunk-variant attribution rules (#1758)', () => {
     // byte-identical between the two constants — not just share a prefix.
     const leadIn = (block: string) => block.slice(0, block.indexOf('\n1. '));
     expect(leadIn(STAGE2_ATTRIBUTION_RULES_CHUNK)).toBe(leadIn(STAGE2_ATTRIBUTION_RULES));
+  });
+});
+
+/* #2324 last gap — `attributeChapterStage2`'s `callForBody` closure
+   (analysis.ts, just above `runStage2ChapterChunked`) is the wiring that
+   carries the per-call `callSeq` runStage2ChapterChunked generates onto the
+   `StageCall.stage2CallSeq` field the two engines' `runStage2Chapter` read
+   (see ollama.test.ts / gemini.test.ts "#2342 item 3"). The chunker's own
+   callSeq generation is covered in stage2-chunk.test.ts; the engines' READ
+   of `call.stage2CallSeq` is covered in ollama.test.ts/gemini.test.ts. This
+   is the one link nothing else exercises: the spread
+   `{ ...opts.stageCall, stage2CallSeq: callSeq }` vs. plain `opts.stageCall`.
+   Reverting that line to plain `opts.stageCall` leaves every other stage-2
+   suite green (verified) — this test is written to fail on that revert. */
+describe('attributeChapterStage2 — per-call stage2CallSeq wiring (#2324 final gap)', () => {
+  const originalCharBudget = process.env.STAGE2_CHUNK_CHAR_BUDGET;
+  const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+
+  afterEach(() => {
+    if (originalCharBudget === undefined) delete process.env.STAGE2_CHUNK_CHAR_BUDGET;
+    else process.env.STAGE2_CHUNK_CHAR_BUDGET = originalCharBudget;
+    if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+  });
+
+  // 'xx' has no conventions table — a plain pass-through, same as the
+  // structure-engine suite's (e) case, so this test stays about the call
+  // wiring and not about the dialogue-structure engine's own behaviour.
+  const STAGE1: Stage1Output = { characters: [], chapters: [{ id: 1, title: 'Chapter One' }] };
+
+  function fakeAnalyzer(calls: StageCall[]): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () => Promise.reject(new Error('not used')),
+      runStage2Chapter: (_manuscriptId, chapterId, _prompt, call) => {
+        calls.push(call);
+        return Promise.resolve({
+          sentences: [
+            { id: calls.length, chapterId, characterId: 'narrator', text: 'lorem ipsum dolor sit amet consectetur.' },
+          ],
+        });
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.resolve(null),
+    };
+  }
+
+  it("a chunked chapter's calls carry distinct stage2CallSeq values on their StageCall", async () => {
+    // Coverage retries off: keeps the call count pinned to exactly one call
+    // per section regardless of the fake sentences' coverage verdict — the
+    // sequencing under test, not coverage scoring, is the point here.
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    // Small enough that two ~60-char paragraphs can't share a chunk.
+    process.env.STAGE2_CHUNK_CHAR_BUDGET = '100';
+    const calls: StageCall[] = [];
+    const body =
+      'The old sailor walked slowly along the misty harbor at dawn.\n\n' +
+      'Gulls cried overhead as the fishing boats began to stir awake.';
+
+    await attributeChapterStage2({
+      analyzer: fakeAnalyzer(calls),
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body },
+      stageCall: { language: 'xx' } as StageCall,
+    });
+
+    expect(calls).toHaveLength(2); // sanity: the body really did chunk
+    expect(calls[0].stage2CallSeq).toBe(1);
+    expect(calls[1].stage2CallSeq).toBe(2);
+  });
+
+  it("the single-call (unchunked) path's call carries NO stage2CallSeq", async () => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    delete process.env.STAGE2_CHUNK_CHAR_BUDGET; // default 9000 — far over this short body
+    const calls: StageCall[] = [];
+    const body = 'The old sailor walked slowly along the misty harbor at dawn.';
+
+    await attributeChapterStage2({
+      analyzer: fakeAnalyzer(calls),
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body },
+      stageCall: { language: 'xx' } as StageCall,
+    });
+
+    expect(calls).toHaveLength(1); // sanity: the body really did NOT chunk
+    expect(calls[0].stage2CallSeq).toBeUndefined();
   });
 });
 
