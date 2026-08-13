@@ -212,9 +212,9 @@ recorded here, so the agent posts each round without pausing to ask.
 
 The full rubric for what the reviewer checks and how it must report a
 finding is [`references/reviewer-brief.md`](references/reviewer-brief.md).
-What happens to what comes back — the fix-now bar, the defect / chore /
-taste seam, the void deferral reasons, the design-pass carve-out, and one
-dispatched fix agent per finding with one paired test — is
+What happens to what comes back — the fix-in-this-round rule, the defect /
+chore / taste seam, the void deferral reasons, the design-pass carve-out, and
+one dispatched fix agent per finding with one paired test — is
 [`references/findings-triage.md`](references/findings-triage.md). Not
 restated here.
 

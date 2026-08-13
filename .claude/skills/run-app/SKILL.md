@@ -56,7 +56,7 @@ via `.env.local` — check the wt-new output. The primary checkout uses `:5173`/
 Launch in the background and wait for ready:
 
 ```bash
-npm run dev:frontend > /tmp/dev.log 2>&1 &
+VITE_USE_MOCKS=true npm run dev:frontend > /tmp/dev.log 2>&1 &
 for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:5173/ && { echo ready; break; }; sleep 1; done
 ```
 
