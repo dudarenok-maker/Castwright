@@ -124,6 +124,15 @@ const F2_TEXT: Record<string, StraddleText> = {
     tailWord: 'gallery',
     tailPost: '.',
   },
+  de: {
+    t1: 'Hallo',
+    tag1: ', sagte er, während er das ',
+    gapPost: 'Faust-Plakat betrachtete.',
+    t2: 'Tschüss',
+    tag2: ', sagte sie, in der Nähe der ',
+    tailWord: 'Galerie',
+    tailPost: '.',
+  },
 };
 
 function straddleShapes(t: StraddleText, allPairs: Array<[string, string]>, lang: string): string[] {
@@ -191,6 +200,16 @@ const F3_TEXT: Record<string, CrossText> = {
     tag2: ', she said, near the ',
     tail: 'gallery',
   },
+  de: {
+    pre: 'Er sagte ',
+    nestWord: 'hallo',
+    post: ' zu mir',
+    tag1: ', erklärte sie, während sie das ',
+    gap: 'Faust-Plakat betrachtete.',
+    t2: 'Tschüss',
+    tag2: ', sagte sie, in der Nähe der ',
+    tail: 'Galerie',
+  },
 };
 
 function crossShapes(
@@ -221,7 +240,21 @@ const LANGS: Record<string, [string, string]> = {
   es: ['"', '"'],
   ru: ['‘', '’'],
   en: ['«', '»'],
+  // `de` deliberately uses curly `“…”`, not Swiss `«…»`: German's PRIMARY
+  // table already pairs `['»','«']`, so a Swiss `«…»` SECONDARY entry has
+  // the collision #2352 pins (two Swiss turns in one paragraph — the `»`
+  // closing turn 1 is also a valid primary opener, and a primary run forms
+  // between it and turn 2's `«`, destroying both turns). Curly is clean:
+  // measured 0 destroyed on both F2 and F3 below, same as the other three.
+  de: ['“', '”'],
 };
+
+/* `tiered differs from ref` scored-shape counts, one per family. Direct
+   measurement against this file's own generated shapes, not copied from any
+   other report — see the comment above each assertion for what "differs"
+   proves and why 0 would mean the tier silently no-ops. */
+const F2_DIFFERS: Record<string, number> = { es: 74, ru: 253, en: 130, de: 190 };
+const F3_DIFFERS: Record<string, number> = { es: 124, ru: 632, en: 277, de: 230 };
 
 describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
   for (const [lang, addedPair] of Object.entries(LANGS)) {
@@ -276,7 +309,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
          Task 5) — the bound lives inside `scan`, which this tier calls twice,
          so it reaches these shapes too. Values are a direct re-measurement,
          not copied from the design doc's prototype figures. */
-      it(`tiered differs from ref on ${lang === 'es' ? 74 : lang === 'ru' ? 253 : 130} scored shapes (proves the tier is actually engaged)`, () => {
+      it(`tiered differs from ref on ${F2_DIFFERS[lang]} scored shapes (proves the tier is actually engaged)`, () => {
         let differs = 0;
         for (const body of shapes) {
           const r = speechOf(body, ref);
@@ -285,7 +318,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           const cand = speechOf(body, tiered);
           if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
         }
-        expect(differs).toBe(lang === 'es' ? 74 : lang === 'ru' ? 253 : 130);
+        expect(differs).toBe(F2_DIFFERS[lang]);
       });
     });
 
@@ -336,7 +369,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
          number of scored shapes. Value pinned by direct measurement against
          this file's own shapes. */
       /* #2315: re-measured, same rationale as F2's comment above. */
-      it(`tiered differs from ref on ${lang === 'es' ? 124 : lang === 'ru' ? 632 : 277} scored shapes (proves the tier is actually engaged)`, () => {
+      it(`tiered differs from ref on ${F3_DIFFERS[lang]} scored shapes (proves the tier is actually engaged)`, () => {
         let differs = 0;
         for (const { body, outer } of shapes) {
           const r = speechOf(body, ref);
@@ -345,7 +378,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           const cand = speechOf(body, tiered);
           if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
         }
-        expect(differs).toBe(lang === 'es' ? 124 : lang === 'ru' ? 632 : 277);
+        expect(differs).toBe(F3_DIFFERS[lang]);
       });
     });
   }

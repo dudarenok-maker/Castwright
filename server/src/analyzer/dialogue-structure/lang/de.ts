@@ -29,7 +29,20 @@ export const de: LanguageConventions = {
   // The SECONDARY tier is a different mechanism: it declines a candidate
   // outright when it straddles into a primary turn, which is exactly the
   // failure the paragraph above describes — so a table entry there does work.
-  // All three candidates are clean under it:
+  // Plain `"…"` and curly `“…”` are genuinely clean under it at every arity
+  // (any number of turns per paragraph). Swiss `«…»` is a NARROWER case:
+  // it is near-unreachable, not clean, because the PRIMARY table already
+  // claims `«` as `»`'s closer (`['»','«']` above) — a `»` that closes one
+  // Swiss turn is also a valid primary opener, so a SECOND `«…»` turn in the
+  // same paragraph seeds a primary run there that swallows the attribution
+  // between them and reads both real turns as narration (#2352, pinned as a
+  // known gap in parser.test.ts). It ships anyway because the entry is a
+  // real, measured gain on every OTHER arity (one Swiss quote per paragraph —
+  // by far the common case — plus `isSpokenLine`, which unions both tiers
+  // and gets the line right even where `findQuoteRuns`' run boundary
+  // doesn't) and the collision is rare and design-gated (16 of 63,941
+  // corpus paragraphs, see below). It is not a substitute for fixing #2352.
+  // All three candidates are measured under the tier:
   //   - generated sweep, each declared secondary alone: 6,250 shapes each
   //     (18,750 total), 0 DESTROYED (spurious spans, informational only per
   //     the owner's 2026-08-13 "zero destroyed, not zero spurious" decision:
@@ -38,6 +51,13 @@ export const de: LanguageConventions = {
   //     paragraphs, 23,925 with a speech run, 261 CHANGED — all GAINED, 0
   //     LOST / MERGED / SPLIT. Concentrated, not broad: one book
   //     (`pg/de/77073.txt`) is 217 of the 261; 12 books gain dialogue overall.
+  //     These zeros are the M2 gap tier's structural guarantee
+  //     (parser.ts:468-470 — append-only, cannot delete a primary run), not
+  //     something this corpus arm could have failed to find; what it
+  //     measures is the size/distribution of the gain. Separately, isolating
+  //     the Swiss entry alone: it changes the parse of 16 of the 63,941
+  //     paragraphs (15 with exactly one `«`, 1 with two or more) — the #2352
+  //     collision above is what the "two or more" case is.
   quotePairs: [
     ['„', '“'],
     ['„', '”'],

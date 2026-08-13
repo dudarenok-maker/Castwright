@@ -356,14 +356,39 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
   });
   // The exact shape the old de.ts comment feared: a genuine two-turn German
   // paragraph (primary „…") with a quoted sign in the gap between them, using
-  // the SECONDARY Swiss pair («…», the reverse polarity of primary's own
-  // »…« so it cannot be mistaken for a primary run). Both real turns survive
-  // AND the tier is provably engaged: the sign forms its own third run
-  // (the #2286 residual — accepted, not destroyed) rather than the run
-  // extending past `Und du?`'s opener and swallowing it.
+  // the SECONDARY Swiss pair («…»). This works because there is exactly ONE
+  // «…» in the paragraph — not because the reverse polarity (« opens/» closes
+  // here, vs. »…« for primary) makes it safe in general. That same reverse
+  // polarity is exactly what breaks a SECOND «…» turn in the same paragraph:
+  // a `»` that closes one Swiss turn is also a valid PRIMARY opener (German's
+  // `quotePairs` carries `['»','«']`), so it can seed a primary run that
+  // swallows the attribution between two Swiss turns — see #2352, pinned
+  // below as a known gap.
   it('de: two genuine „…" turns survive a secondary-Swiss-quoted sign in the gap between them', () => {
     const body = '„Guten Tag", sagte er. Das Schild dort: «Zu». „Und du?", fragte sie.';
     expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Zu', 'Und du?']);
+  });
+  // #2352 — KNOWN GAP, not desired behaviour: TWO Swiss `«…»` turns in one
+  // paragraph collide with German's PRIMARY `['»','«']` pair. The `»` that
+  // closes turn 1 (as the secondary opener's closer) is also a valid PRIMARY
+  // opener, so `findQuoteRuns` seeds a primary run there and extends it to
+  // the next `«` — turn 2's opener — swallowing the attribution between them
+  // and reading BOTH real turns as narration. Measured 2026-08-14 over the
+  // 40-book German corpus: 16 of 63,941 paragraphs change under this
+  // collision (15 with exactly one `«`, 1 with two or more). #2352 is filed
+  // to fix this — it needs a design pass (per-paragraph convention detection
+  // or positional disambiguation, either of which touches PRIMARY-tier
+  // behaviour) — so this test pins CURRENT (wrong) behaviour, derived from a
+  // real run of this exact body, to keep a future change from silently
+  // moving it.
+  it('#2352: de — TWO Swiss «…» turns in one paragraph mis-read as narration (known gap, not desired)', () => {
+    const body = '«Guten Morgen», sagte Anton. «Hast du gut geschlafen?»';
+    const spans = spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor('de')!)));
+    expect(spans.map((s) => ({ kind: s.kind, text: body.slice(s.start, s.end) }))).toEqual([
+      { kind: 'narration', text: '«Guten Morgen' },
+      { kind: 'speech', text: ', sagte Anton. ' },
+      { kind: 'narration', text: 'Hast du gut geschlafen?»' },
+    ]);
   });
 
   /* #2288 — the regressions this block exists to prevent, and the reason `de`
@@ -377,7 +402,7 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
      a different mechanism the gap-tier rule makes safe, covered by the
      "#2279 added quote pairs (closer-driven)" de cases above and by
      #2315's guard-with-real-secondaryQuotePairs block below. */
-  it('#2288: de + ["”,"”"] — a turn pair around an ASCII-quoted sign keeps BOTH turns', () => {
+  it('#2288: de + [\'"\',\'"\'] — a turn pair around an ASCII-quoted sign keeps BOTH turns', () => {
     const body = '„Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.';
     expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
   });
@@ -396,11 +421,17 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
 
 /* #2286 residual — the OWNER'S 2026-08-13 decision, recorded in
    docs/superpowers/specs/2026-08-13-gap-seeded-straddle-design.md: the gap
-   tier's binding acceptance criterion is ZERO DESTROYED TURNS (measured —
-   F1/F2/F3 sweeps + the 291-book corpus replay all read 0 destroyed, 0
-   merged, 0 lost, 0 split). A spurious narration-read-as-speech span is the
-   ACCEPTED lesser harm: a primary-convention scan is a run detector, not a
-   convention detector, so a secondary-tier quotation appearing in narration
+   tier's binding acceptance criterion is ZERO DESTROYED TURNS. LOST/MERGED/
+   SPLIT are guaranteed, not measured, for any change confined to
+   `secondaryQuotePairs`: `findQuoteRuns` seeds `out = [...primaryRuns]` and
+   only ever appends (parser.ts:468-470's "cannot delete a primary run…by
+   construction, not by measurement"), so the candidate set is always a
+   superset of the baseline's. What the F1/F2/F3 sweeps + the 331-book corpus
+   replay actually establish, by measurement, is the SIZE and DISTRIBUTION of
+   the gain — the structural guarantee doesn't extend to it. A spurious
+   narration-read-as-speech span is the ACCEPTED lesser harm: a primary-
+   convention scan is a run detector, not a convention detector, so a
+   secondary-tier quotation appearing in narration
    (a sign, a title, a scare quote) with NO primary run anywhere nearby still
    forms its own quote run and reads as spoken — nothing is destroyed, but
    the narration line is misclassified. These three pin CURRENT behaviour

@@ -18,8 +18,9 @@
    A spoken line is driven by the same `LanguageConventions` tables the
    structure engine uses (`dialogue-structure/lang/*.ts`), not a separate
    language-blind regex bundle — see #2245: the old bundle carried only one of
-   the German `quotePairs` forms (four at the time, six since #2279) and
-   recognised no CJK quote glyphs at all.
+   the German `quotePairs` forms (four, unchanged by #2279 — its three
+   additions landed in the secondary tier instead, see #2286) and recognised
+   no CJK quote glyphs at all.
    Everything else is narration. Demote-only at the sentence level: it never
    reassigns a quoted line and never promotes narrator->character (it does
    lower line counts, which fold/reconcile consume downstream). Coverage is

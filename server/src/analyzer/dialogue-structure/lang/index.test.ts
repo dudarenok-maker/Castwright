@@ -6,8 +6,11 @@ describe('conventionsFor', () => {
     // `ja` is deliberately NOT in this loop: it carries 9 speechVerbStems,
     // under the >10 bar below. (`zh` has 11 and would pass; it is left out
     // alongside its sibling rather than split across the two lists.) The
-    // duplicate-pair guard further down DOES cover both — salvaged onto #2288's
-    // engine fix (#2300) while this branch was blocked.
+    // duplicate-pair guard further down does NOT cover this exclusion — it
+    // iterates `c.quotePairs` only and never reads `speechVerbStems`, so it
+    // passes vacuously regardless (confirmed by mutation: zeroing
+    // `zh.speechVerbStems` leaves every test in this file green). zh/ja's
+    // `speechVerbStems` length simply has no coverage here.
     for (const lang of ['ru', 'en', 'es', 'fr', 'de']) {
       const c = conventionsFor(lang);
       expect(c, lang).not.toBeNull();
