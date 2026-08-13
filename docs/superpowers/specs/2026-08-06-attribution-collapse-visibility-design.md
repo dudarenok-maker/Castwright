@@ -197,11 +197,13 @@ The corruption was produced by the pre-fix analyzer of
 attribution collapses — for any reason, including future ones — the product does
 not tell the user in terms they can act on.
 
-**Revision 4 narrows one analyzer change into scope**, and only one:
-`isSpokenLine` gains the CJK bracket pair (§The CJK denominator defect). Through
-revision 3 this spec changed no analyzer behaviour at all; that is no longer
-true, and §Out of scope is amended accordingly. Everything else about the
-analyzer remains untouched.
+**Revision 8 narrows one analyzer change into scope, and it is a different one
+from revision 4's.** Revision 4 admitted the CJK bracket pair on `isSpokenLine`
+and revision 5 added `DetectionResult.fallback`; **both shipped elsewhere**
+(#2245, #2246), so neither is this spec's any more. What revision 8 admits is
+the additive, optional `SentenceOutput.priorCharacterId` — the only way
+acceptance criterion 5 is satisfiable (§D18). Everything else about the analyzer
+remains untouched, and §Out of scope states the boundary normatively.
 
 ## Decisions taken
 
@@ -2041,12 +2043,12 @@ instead of reading as a clean bill of health.
 
 - **Dash-prefixed narration.** The larger of the two, and unmentioned in
   revision 1. Quantified in Wave 1 via `dashOnlySpoken`; the threshold is set
-  against it. Still deliberately **not** fixed by changing the dash rule in
-  `isSpokenLine`, which the analyzer also acts on — that is a much wider blast
-  radius and its own piece of work. **Revision 4 note:** D12 removes this
-  false positive from the *denominator* for languages whose `dialogueOpen` is
-  `null` (English among them), because a leading dash is then not dialogue. It
-  does **not** remove it for Russian, where `ru.dialogueOpen` matches dashes by
+  against it. Still deliberately **not** fixed by changing any dialogue rule —
+  the analyzer acts on the same tables, so that is a much wider blast radius and
+  its own piece of work. **Revision 8 note:** the rule now lives in the language
+  tables (#2245), so the false positive is gone for `en`/`de`/`zh`/`ja`, whose
+  `dialogueOpen` is `null` and for whom a leading dash is not dialogue. It
+  remains for `ru`/`es`/`fr`, where `dialogueOpen` matches dashes by
   design — which is why `dashOnlySpoken` survives and why the threshold is still
   calibrated against it. The CJK change in §The CJK denominator defect is a
   different rule in the same function and carries no dash implications.
@@ -2651,13 +2653,22 @@ defensible answer. Listed in the order they block work.
    were wrong, and quoting them made this criterion load-bearing on a number
    nobody had re-derived — R-6C3.)
 9. **A Chinese or Japanese book with attributed dialogue is neither badged nor
-   gated** (R-4C1). Asserted against a `「」` fixture, with the mutation control
-   from the D11 table.
-10. **`blindSpoken` matches its recorded per-language baseline.** A *change* from
-    that baseline is a finding; a standing non-zero value on a known gap is not.
-    The German baseline is non-zero for **three** of four `de.quotePairs` forms,
-    not one (R-6C4) — a baseline recorded from today's single `„`-at-position-0
-    German book would read 0 and alarm on the next German import.
+   gated** (R-4C1). Asserted against a `「」` fixture. **Its control changed in
+   revision 8** (F9): "revert the denominator to `isSpokenLine`" is now a no-op,
+   so the control is the D14 row of the mutation table — build the denominator
+   from the sentence list instead of from `ch.body`.
+10. **~~`blindSpoken` matches its recorded per-language baseline~~ — DELETED in
+    revision 8 (F3).** The column does not exist; #2245 merged the two
+    definitions it measured the gap between, so it is identically zero in every
+    language forever. A criterion over a constant cannot fail. **Replaced by
+    criterion 10′, which is the same intent one level deeper:** the measurement
+    is **invariant under a punctuation-only rewrite of the model's output**
+    (Wave 1 criterion 16). Strip every leading dash, add one to every line, or
+    replace `—` with `-`, and every field must be byte-identical. Anything that
+    varies under that transform is reading model text, which is F1. This is what
+    `blindSpoken` was *for* — a standing signal that the metric's view of
+    dialogue has drifted from the book's — stated over the axis that can still
+    drift.
 11. **An unresolvable `characterId` never moves the collapse share** (D9) —
     **and a book whose only anomaly is id drift badges as `drifted`, gates
     generation, and is sent to the orphan banner rather than to re-analysis**
