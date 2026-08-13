@@ -291,7 +291,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 2 |
+| **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -299,7 +299,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2531,6 +2531,22 @@ synthesis.
 
 Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night Watch Tetralogy\Ночной дозор`.
 
+> **Do not schedule the next re-run yet — two reasons, both cheap to check.**
+> (1) The in-flight speaker-separation work ([#2288](https://github.com/dudarenok-maker/Castwright/issues/2288),
+> [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)) changes dialogue
+> segmentation, so a 12-hour pass taken before it lands measures a moving target and
+> has to be repeated. (2) [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s
+> cause is now identified **offline** — the roster `reconcileSentenceCharacterIds`
+> validates against, not the model — so a re-run would confirm a diagnosis that is
+> already in hand rather than produce a new one. Wait for both, then take C2 and C3
+> in one session.
+>
+> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down the run's
+> checkout.** The 2026-08-12/13 pass's raw stage-2 output — the model's attribution
+> *before* any engine or reconcile — was destroyed with its worktree, and it is the
+> one artifact that would have settled the residual gap in #2306 without a re-run.
+> The analysis cache alone does not carry it: it holds the final, post-demotion ids.
+
 ### C1 · Cloud request sizing + local input-fraction calibration ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
 Three unchecked items. Uses the free-tier `GEMINI_API_KEY` **already configured** in
@@ -2604,6 +2620,43 @@ does not change that; it is not blocked on acquiring one.
 Same setup as C2: local Ollama, `qwen36-cw-iq4-32k`, ~14 GB VRAM free, sidecar
 suppressed (`DISABLE_AUTOSTART_SIDECAR=1`), no TTS. Batches naturally with C2's
 session rather than needing its own.
+
+### C3 · A deterministic stage-2 failure actually clears when the span is halved ([#2304](https://github.com/dudarenok-maker/Castwright/issues/2304))
+
+**What the unit tests already prove, and does NOT need re-running:** the wiring.
+A repeated failure signature stops the retry loop, the stop escalates to
+`splitSpanForRetry`, and it does so on **both** chunking routes — each mutation-
+verified, each with a control that reddens when the fix is made unconditional.
+
+**What is still owed** is the premise underneath all of that: *that a real model,
+degenerating deterministically on a real span, produces a different answer when
+the span is halved.* Every test above uses a fake model that succeeds on smaller
+input **by construction**, so they prove the split is reached, never that it
+helps. If the degeneration is a property of the *content* rather than the span
+length, the split re-runs twice and fails twice, and the chapter is no better off
+— just slower.
+
+The reproducer is already known and specific, which is the only reason this is
+cheap: Ночной дозор **ch8**, `repeat-loop` at offset **19**, which reproduced
+identically five times across two server lifetimes on 2026-08-12/13. Observe:
+
+- the `[analysis:structure]` / analyzer log shows the retry halting on the
+  repeated signature (attempt 2, not the full `coverageRetries` budget), and the
+  operator line naming the deterministic failure;
+- the span is then re-attributed as smaller sections — `chunkCount` for that
+  chapter exceeds 1, or the section-done log shows more sections than before;
+- **ch8's sentence count is whole**, not the partial take. This is the criterion
+  that matters; the rest is corroboration.
+
+Record the outcome either way. A **negative** result here is valuable and must
+not be quietly dropped: it would mean the escalation costs model calls without
+recovering the chapter, and that the remedy for this failure class has to be
+something other than a shorter prompt.
+
+Same setup as C1/C2, and it **batches with the C2 re-run** — that run replays
+this exact book and chapter, so this row needs no session of its own. Note C2 is
+itself waiting on [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306);
+this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 ---
 
