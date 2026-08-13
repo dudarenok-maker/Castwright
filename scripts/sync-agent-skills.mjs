@@ -45,10 +45,13 @@ const PROVENANCE_END = "     this file's location. Some point at sibling skills.
 function header(rel) {
   // <repo> is deliberately left as a literal placeholder, not the absolute
   // path of the machine that ran this sync: the header travels with the
-  // mirror into every repo Cline reviews, and "resolve against the
-  // repository you are reviewing" is the whole point — a baked-in path to
-  // THIS checkout would be actively wrong once the agent is reviewing a
-  // different one.
+  // mirror into every repo Cline reviews, but the body's relative links only
+  // resolve inside a CASTWRIGHT checkout (they point at this repo's own
+  // docs/skills, not at whatever repo the mirror happens to be read from) —
+  // so the header says so explicitly rather than implying they resolve
+  // wherever Cline is currently reviewing. A baked-in absolute path to THIS
+  // machine's checkout would be actively wrong on every other machine the
+  // mirror is synced to; <repo> stays a literal placeholder for that reason.
   return (
     '<!-- MIRRORED COPY — do not edit here.\n' +
     `     Canonical source: <repo>/.claude/skills/${SKILL_NAME}/${rel}\n` +
@@ -111,12 +114,16 @@ export function syncOneFile(srcPath, destPath, rel) {
   const canonicalContent = readFileSync(srcPath, 'utf8');
   const mirrored = buildMirrorContent(canonicalContent, rel);
 
-  mkdirSync(dirname(destPath), { recursive: true });
-  writeFileSync(destPath, mirrored, 'utf8');
-
+  // Checked BEFORE the write, like assertNoBom above: `mirrored` already
+  // exists at this point, so nothing blocks checking it first. Checking it
+  // after the write let a malformed canonical source clobber a previously
+  // good mirror with an unusable one before the throw ever fired.
   if (rel === 'SKILL.md' && !mirrored.startsWith('---\n')) {
     throw new Error(`${destPath}: frontmatter is not the first line`);
   }
+
+  mkdirSync(dirname(destPath), { recursive: true });
+  writeFileSync(destPath, mirrored, 'utf8');
 
   console.log(`wrote ${destPath}`);
   return destPath;

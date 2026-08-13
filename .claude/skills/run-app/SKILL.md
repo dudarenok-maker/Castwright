@@ -53,11 +53,20 @@ for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:5173/ && { echo r
 ## STEP 2 — DRIVE it in a real browser (don't just curl)
 
 `curl` only returns the empty `index.html` shell — it can't tell you whether
-React rendered or threw. Drive it with the project's Playwright chromium. Drop
-this one-shot driver at the repo root and `node` it:
+React rendered or threw. Drive it with the project's Playwright chromium.
 
-```js
-// verify-drive.mjs  (delete after use)
+**Write the driver script and its screenshot to the OS temp directory, NEVER
+the repo root.** A repo-root scratch file dirties `git status --porcelain`
+and trips the PR review gate's own tree check (see
+`.claude/skills/pr-review-gate/references/reviewer-brief.md`'s "Post your own
+findings" section, which hits the identical trap). `mktemp -d` is the
+documented temp path in this repo's Git-Bash-on-Windows environment — it
+resolves under Windows' own temp root (confirmed: `/tmp/tmp.XXXXXXXXXX` maps
+to `%TEMP%`), unlike `$TMPDIR`, which Git Bash leaves unset here.
+
+```bash
+VERIFY_DIR="$(mktemp -d)"
+cat > "$VERIFY_DIR/verify-drive.mjs" <<'EOF'
 import { chromium } from '@playwright/test';
 const errors = [];
 const browser = await chromium.launch();
@@ -69,14 +78,17 @@ await page.waitForSelector('text=/Welcome back|Your audiobooks|New book/i', { ti
 const heading = await page.locator('h1,h2').first().innerText();
 try { await page.getByRole('button', { name: /^Voices$/ }).click({ timeout: 5000 }); } catch {}
 await page.waitForTimeout(800);
-await page.screenshot({ path: 'verify-screenshot.png' });
+await page.screenshot({ path: process.env.VERIFY_SCREENSHOT });
 console.log('HEADING=' + heading, '| NAV_URL=' + page.url(), '| ERRORS=' + errors.length);
 errors.forEach((e) => console.log('  ' + e));
 await browser.close();
-```
-
-```bash
-node verify-drive.mjs && rm verify-drive.mjs   # then Read verify-screenshot.png and LOOK at it
+EOF
+# --input-type=module + stdin, run from the repo root: Node resolves bare
+# imports (`@playwright/test`) against the CWD's node_modules, not the
+# script's own (temp-dir) location — a plain `node "$VERIFY_DIR/…mjs"` would
+# throw ERR_MODULE_NOT_FOUND instead.
+VERIFY_SCREENSHOT="$VERIFY_DIR/verify-screenshot.png" node --input-type=module < "$VERIFY_DIR/verify-drive.mjs"
+# then Read "$VERIFY_DIR/verify-screenshot.png" and LOOK at it
 ```
 
 **What a healthy run looks like** (this is the regression net for the plan-167 stack):
@@ -99,5 +111,5 @@ screenshot — don't trust the exit code alone.
 ```bash
 # stop a stray Vite holding :5173 (PowerShell — taskkill on the bash PID misses the node child)
 # Get-NetTCPConnection -LocalPort 5173 -State Listen | %{ Stop-Process -Id $_.OwningProcess -Force }
-rm -f verify-drive.mjs verify-screenshot.png   # never commit these
+rm -rf "$VERIFY_DIR"   # unconditional — a failed run (the case you're cleaning up FOR) must not skip this
 ```

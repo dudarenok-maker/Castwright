@@ -34,7 +34,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -217,7 +217,14 @@ function headingAnchors(file) {
   // already strips fences before matching) and the TARGET side disagree, and
   // the guard accepts a link that resolves only to a fenced example.
   for (const line of stripFencedBlocks(readNormalized(file)).split('\n')) {
-    const m = /^#{1,6} +(.+?)\s*$/.exec(line);
+    // (?:\s+#+)? strips an optional closed-ATX closing sequence — GitHub
+    // renders `## Foo ##` as heading text "Foo", not "Foo ##". The stripped
+    // run must be whitespace-separated from the content: `## C#` keeps its
+    // trailing `#` (no preceding whitespace before it), only a *space-then-
+    // hashes* run at the line's end is a closing sequence. Latent today (zero
+    // closed-ATX headings in the current scan set) but a plain
+    // `(.+?)\s*$` would silently mis-anchor the first one that appears.
+    const m = /^#{1,6} +(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (m) anchors.add(githubAnchor(m[1]));
   }
   return anchors;
@@ -293,6 +300,30 @@ test('headingAnchors ignores heading-shaped lines inside fenced code blocks', ()
       `headingAnchors(pr-review-gate/SKILL.md) reports "${fake}" as a real anchor — ` +
         'it only exists inside the ```fenced PR-comment template',
     );
+  }
+});
+
+test('headingAnchors strips a closed-ATX heading\'s trailing hashes', () => {
+  // GitHub renders `## Foo ##` (closed-ATX form) as heading text "Foo" — the
+  // trailing ` ##` is a closing sequence, not part of the text. Before the
+  // fix, the capturing regex kept it verbatim ("Foo ##"), which githubAnchor
+  // then slugs to "foo-" (trailing hyphen from the stripped-but-still-spaced
+  // hashes) instead of "foo" — a link to `#foo` would report as dangling
+  // against a heading that visibly renders as "Foo" on GitHub. Zero
+  // occurrences in today's scan set (this is latent, not live), so this unit
+  // assertion is the only thing pinning the regex.
+  const tmpDir = mkdtempSync(join(tmpdir(), 'heading-anchors-closed-atx-'));
+  try {
+    const file = join(tmpDir, 'doc.md');
+    writeFileSync(file, '## Foo ##\n', 'utf8');
+    const anchors = headingAnchors(file);
+    assert.ok(anchors.has('foo'), `expected anchors to contain "foo", got: ${JSON.stringify([...anchors])}`);
+    assert.ok(
+      !anchors.has('foo-'),
+      'closed-ATX trailing hashes leaked into the anchor as "foo-" instead of being stripped to "foo"',
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -386,6 +417,40 @@ test('syncOneFile throws when the CANONICAL SOURCE has a UTF-8 BOM, and writes n
     assert.ok(
       !existsSync(destPath),
       'a BOM-poisoned canonical source must not produce a mirrored file at all',
+    );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('syncOneFile throws when SKILL.md frontmatter is not the first line, and leaves a pre-existing mirror untouched', () => {
+  // The frontmatter check must run BEFORE the write, like the BOM check
+  // above: it inspects `mirrored`, which already exists before writeFileSync
+  // is called, so nothing blocks hoisting it. Before the fix, the write ran
+  // first — a malformed canonical source clobbered a previously-GOOD mirror
+  // with an unusable one, and only then threw. This never touches the real
+  // $HOME mirror — both paths are fixtures under a throwaway tmpdir.
+  const tmpDir = mkdtempSync(join(tmpdir(), 'skills-sync-frontmatter-'));
+  try {
+    const srcPath = join(tmpDir, 'SKILL.md');
+    const destPath = join(tmpDir, 'mirror', 'SKILL.md');
+    // No leading '---\n': buildMirrorContent falls through to its
+    // no-frontmatter branch (header + body), so the mirrored output starts
+    // with '<!--', not '---\n' — the malformed-canonical-source case.
+    writeFileSync(srcPath, 'Just body text, no frontmatter block.\n', 'utf8');
+    mkdirSync(dirname(destPath), { recursive: true });
+    const preExisting = '---\nname: pr-review-gate\n---\nA previously-good mirror.\n';
+    writeFileSync(destPath, preExisting, 'utf8');
+
+    assert.throws(
+      () => syncOneFile(srcPath, destPath, 'SKILL.md'),
+      /frontmatter is not the first line/,
+      'syncOneFile did not throw for a canonical source missing frontmatter',
+    );
+    assert.equal(
+      readFileSync(destPath, 'utf8'),
+      preExisting,
+      'a malformed canonical source must not clobber a pre-existing good mirror',
     );
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
