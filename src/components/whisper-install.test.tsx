@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { WhisperInstall } from './whisper-install';
+import { api } from '../lib/api';
+import type { ConfigResponse } from '../lib/types';
 
 const fetchMock = vi.fn();
 
@@ -123,5 +125,54 @@ describe('WhisperInstall', () => {
     await waitFor(() => expect(screen.getByTestId('whisper-install-error')).toBeInTheDocument());
     expect(screen.getByText(/pip failed/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  describe('#2344 — routed through api.getConfig(), not a raw fetch', () => {
+    it('reads the configured qa.asr.model via api.getConfig(), not a direct fetch("/api/config")', async () => {
+      fetchMock.mockImplementation((url: string) =>
+        url.includes('/detect')
+          ? Promise.resolve(jsonResponse({ state: 'not-installed', installed: false }))
+          : Promise.resolve(jsonResponse({})),
+      );
+      const getConfigSpy = vi.spyOn(api, 'getConfig').mockResolvedValue({
+        groups: [],
+        descriptors: [],
+        values: { 'qa.asr.model': { key: 'qa.asr.model', effective: 'medium', source: 'override', locked: false, overridden: true } },
+        restartPending: false,
+        cudaEnvShadow: false,
+      } as ConfigResponse);
+      render(<WhisperInstall />);
+      await waitFor(() =>
+        expect(screen.getByTestId('whisper-install-not-detected')).toBeInTheDocument(),
+      );
+      await waitFor(() => expect(screen.getByText('medium')).toBeInTheDocument());
+      expect(getConfigSpy).toHaveBeenCalledTimes(1);
+      // The old direct-fetch implementation would have hit fetch('/api/config') —
+      // confirm nothing under this URL was ever asked of the raw fetch stub.
+      expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/config'));
+      getConfigSpy.mockRestore();
+    });
+
+    it('preserves the best-effort swallow: a rejected api.getConfig() keeps the registry-default label instead of erroring the card (PR #2008 review m1)', async () => {
+      fetchMock.mockImplementation((url: string) =>
+        url.includes('/detect')
+          ? Promise.resolve(jsonResponse({ state: 'not-installed', installed: false }))
+          : Promise.resolve(jsonResponse({})),
+      );
+      // realGetConfig throws (rather than resolving null) on a non-ok response
+      // — this simulates exactly that shape, reaching the component's own
+      // .catch(() => {}) rather than an unhandled rejection or a crashed card.
+      const getConfigSpy = vi
+        .spyOn(api, 'getConfig')
+        .mockRejectedValue(new Error('Config fetch failed (500): boom'));
+      render(<WhisperInstall />);
+      await waitFor(() =>
+        expect(screen.getByTestId('whisper-install-not-detected')).toBeInTheDocument(),
+      );
+      // Default label ('base') survives; no error surfaces on the card.
+      expect(screen.getByText('base')).toBeInTheDocument();
+      expect(screen.queryByTestId('whisper-install-error')).not.toBeInTheDocument();
+      getConfigSpy.mockRestore();
+    });
   });
 });

@@ -474,8 +474,17 @@ Design rationale:
   `--peach`, `--ink`, `--magenta`, etc.; `tailwind.config.ts` references those
   vars. No hex literals in component code.
 - **Mocks behind `VITE_USE_MOCKS`** — `src/lib/api.ts` exports
-  `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
-  they never know which is which. `.env.development` sets the flag on.
+  `api = USE_MOCKS ? mock : real`. Components import from `api.*` with a
+  bounded, deliberate exception set: the install/detect/provisioning
+  surfaces (`/api/{ollama,qwen,kokoro,coqui,whisper}/{detect,install}`,
+  `/api/ollama/{pull,refresh}`, `/api/setup/venv/bootstrap`) talk to the
+  local machine and have no mock counterpart; `mini-player`'s `keepalive`
+  unload flush bypasses the mock api by design (must survive page unload);
+  `store/queue-thunks.ts` honours the toggle through its own branch rather
+  than through `api.*`. `.env.development` sets `VITE_USE_MOCKS=false` (real
+  backend, since commit `6b4b2e51`) — `npm run dev` drives the real server;
+  `npm run dev:mock` (`.env.mock`) is mock mode, and `.env.e2e`/
+  `.env.marketing` set it true for their Playwright harnesses.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
 - **`server/src/gpu/` reaches a route module through a leaf gate, never an
   import** — a static import, a dynamic `import()`, and even `import type`

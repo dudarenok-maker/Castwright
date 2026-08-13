@@ -3,7 +3,7 @@
    loop (mirrors venv-bootstrap.tsx's pattern) so callers don't hand-roll
    button wiring per action kind. */
 import { useEffect, useRef, useState } from 'react';
-import type { BlockerAction, BlockerDiagnosis } from '../lib/api';
+import { api, type BlockerAction, type BlockerDiagnosis } from '../lib/api';
 
 interface Job {
   id: string;
@@ -155,8 +155,15 @@ export function BlockerFixAction({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch('/api/sidecar/restart', { method: 'POST' });
-      const body = (await res.json()) as { ok: boolean; error?: string };
+      /* Routed through api.restartSidecar() (#2344) rather than a raw fetch.
+         The server's in-band failure shape (HTTP 200, body.ok === false)
+         still surfaces via this same body.ok check — realRestartSidecar only
+         resolves (rather than throwing) when res.ok is true, and returns
+         that body verbatim. An actual HTTP-error response (e.g. 500) now
+         throws INSIDE realRestartSidecar with its own formatted message
+         instead of reaching this line at all; both cases land in the catch
+         below either way. */
+      const body = await api.restartSidecar();
       if (!body.ok) throw new Error(body.error ?? 'Restart failed.');
       setBusy(false);
       onDone();
