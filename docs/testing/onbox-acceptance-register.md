@@ -2547,17 +2547,41 @@ Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night W
 > one artifact that would have settled the residual gap in #2306 without a re-run.
 > The analysis cache alone does not carry it: it holds the final, post-demotion ids.
 
-### C1 · Cloud request sizing + local input-fraction calibration ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
+### C1 · Free-tier Gemma cloud pass completes end to end ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
-Three unchecked items. Uses the free-tier `GEMINI_API_KEY` **already configured** in
-`server/.env` — a credential this run exercises, not a blocker.
+**Narrowed 2026-08-13 from three items to one** — see
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685#issuecomment-5274602285)
+for the full reasoning. Two items came out:
 
-Re-analyze end-to-end on `gemma-4-31b-it` **including the script-review pass** — the
-pass that actually 429'd in the original incident (all 22 logged failures were
-`task: script-review`) — and confirm a per-minute 429 is retried rather than
-misclassified as daily-quota. Then calibrate `analyzer.stage2.localInputFraction`
-(ships at 0.3) downward until a full local re-analysis completes with **zero**
-stage-2 truncation drops, and record the working value.
+- **429 classification — already covered offline.** `gemini.test.ts` carries four
+  tests over this exact behaviour against the real payload shapes, including both
+  historical misclassifications: the #1682 case (`free_tier` in the metric name
+  matching the daily marker, `:551`) and the #1695 case (the free tier's 15-req/min
+  cap colliding with a `\d{1,3}` heuristic, `:583`). The latter asserts the call
+  happened **twice** — it proves the retry, not merely the absence of a throw. A
+  live run would only detect fixture drift in those payloads, which is a far weaker
+  claim than the item made.
+- **`localInputFraction` calibration — obsolete.** The shipped `0.3` produced
+  **one** stage-2 truncation across nine chapters of the hardest book available;
+  truncation already *recovers* via the adaptive re-split (`stage2-chunk.ts`, #528)
+  rather than dropping, so the knob is prevention for a cured failure; and lowering
+  it means smaller chunks, more calls, longer wall-clock — pushing the wrong way on
+  the one target that just missed by 2.5–6×. The value is per-model and
+  per-`num_ctx` besides, so it would not survive the next model.
+
+**What remains** is the systems property no unit test reaches: re-analyze end to end
+on `gemma-4-31b-it` — **including the script-review pass**, the one that actually
+429'd in the original incident (all 22 logged failures were `task: script-review`) —
+and confirm the book **completes** with no dropped chapters and no hang under real
+throttling, with the limiter, the retries and the fallback interacting over hours.
+Uses the free-tier `GEMINI_API_KEY` **already configured** in `server/.env` — a
+credential this run exercises, not a blocker.
+
+**Take it opportunistically rather than scheduling a session for it.** Its remaining
+draw is that it doubles as the cloud arm of
+[#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s control — and
+#2306's cause has since been identified offline, so it is no longer the shortest
+path to that answer either.
 
 **Two things the 2026-08-06 local pass established for this row, before anyone
 sets it up again:**

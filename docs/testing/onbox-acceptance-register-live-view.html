@@ -951,23 +951,43 @@
         attributed to <code>narrator</code> (4131/4725) against a 30.3% baseline. The
         dialogue-structure engine is <b>exonerated</b> — today's engine replayed over the 2026-08-06
         cached stage-2 output reproduces <b>30.4%</b> — so the cause is upstream, filed as
-        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>. Note the
-        confound recorded there: <code>stage2DurationsEngine</code> stores the <em>selected</em>
-        engine, not the engine that served each call, so it cannot distinguish a pure-local run from
-        one that silently failed over to Gemini.
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a> — where the
+        cause has since been <b>found, offline</b>: changing <em>only</em> the roster that
+        <code>reconcileSentenceCharacterIds</code> validates against moves the victim rate
+        <b>38.0% → 76.3%</b> on identical stage-2 sentences, with zero model calls. Swapping the same
+        roster at <code>crossExamine</code> instead moves it 0.1 points, so
+        <code>isConventionRescue</code>'s roster gate — the obvious suspect — is exonerated; the
+        damage lands one step later, where an off-roster id is demoted to <code>narrator</code>
+        unconditionally. This run's roster lost 10 ids including the protagonist.
         <b>Target 1c never emitted</b> — no <code>scope=book merged=</code> line appears on a
         <em>resumed</em> run, and pause/resume is the only practical way to survive a 12-hour
         analysis, so it cannot serve as an acceptance criterion in its current form.
       </div>
     </header>
     <details class="item">
-      <summary><span class="num">C1</span><span class="iname">Cloud request sizing + input-fraction calibration</span><span class="risk low">Key already set</span><span class="chev">›</span></summary>
+      <summary><span class="num">C1</span><span class="iname">Free-tier Gemma cloud pass completes end to end</span><span class="risk low">Narrowed · take opportunistically</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Uses the free-tier <code>GEMINI_API_KEY</code> <b>already configured</b> in <code>server/.env</code> — the credential this run exercises, not a blocker.</p>
-        <ul>
-          <li>Re-analyze end-to-end on <code>gemma-4-31b-it</code> <b>including the script-review pass</b> — the pass that actually 429'd (all 22 logged failures were <code>task: script-review</code>). Confirm a per-minute 429 is retried rather than misclassified as daily-quota.</li>
-          <li>Calibrate <code>analyzer.stage2.localInputFraction</code> (ships at 0.3) downward until a full local re-analysis completes with <b>zero</b> stage-2 truncation drops. Record the working value.</li>
-        </ul>
+        <div class="flag"><b>Narrowed 2026-08-13 from three items to one.</b> Two came out on merit:
+        <b>429 classification is already covered offline</b> — <code>gemini.test.ts</code> carries four
+        tests over this exact behaviour against the real payload shapes, including both historical
+        misclassifications (#1682's <code>free_tier</code>-in-the-metric-name at <code>:551</code>,
+        #1695's 15-req/min <code>quotaValue</code> collision at <code>:583</code>), and the latter
+        asserts the call happened <b>twice</b>, so it proves the retry rather than the absence of a
+        throw; a live run would only detect fixture drift. <b><code>localInputFraction</code>
+        calibration is obsolete</b> — the shipped 0.3 produced <b>one</b> truncation across nine
+        chapters of the hardest book available, truncation already <em>recovers</em> via the adaptive
+        re-split rather than dropping, and lowering the knob means more calls and longer wall-clock,
+        pushing the wrong way on the one target that just missed by 2.5–6×.</div>
+        <p><b>What remains</b> is the systems property no unit test reaches: re-analyze end to end on
+        <code>gemma-4-31b-it</code> — <b>including the script-review pass</b>, the one that actually
+        429'd (all 22 logged failures were <code>task: script-review</code>) — and confirm the book
+        <b>completes</b>, no dropped chapters, no hang, under real throttling with the limiter, the
+        retries and the fallback interacting over hours. Uses the free-tier
+        <code>GEMINI_API_KEY</code> <b>already configured</b> in <code>server/.env</code> — the
+        credential this run exercises, not a blocker. <b>Take it opportunistically rather than
+        scheduling a session:</b> its remaining draw is that it doubles as the cloud arm of
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>'s control, and
+        #2306's cause has since been found offline.</p>
         <p><b>Established by the 2026-08-06 local pass:</b> <code>gemini-*</code> really does
         RECITATION-block this book — a queued Ollama call timed out into the cloud fallback and
         <code>gemini-3.5-flash-lite</code> returned <code>PROHIBITED_CONTENT</code> on a stage-2 section.
@@ -976,7 +996,7 @@
         code, is what must change. Run it against a <b>throwaway re-import</b>: the analysis cache is keyed
         by <code>manuscriptId</code> only, so re-analyzing the library entry would overwrite the qwen36
         sentences and cast the owner is keeping for generation.</p>
-        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — 3 unchecked items · was <b>C3</b> before 2026-08-06</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — narrowed to 1 item 2026-08-13 · was <b>C3</b> before 2026-08-06</p>
       </div>
     </details>
     <details class="item">
