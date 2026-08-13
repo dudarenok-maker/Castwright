@@ -224,8 +224,18 @@ export type SurrenderDiagnostic =
    either of the two junk-gate floors voteLanguage applies next (see
    detect-language.ts's own comment): lexical richness (a small repeated
    vocabulary — 'too-repetitive') or digit-token share (a numbered list —
-   'too-numbered'). Checked in the SAME order voteLanguage applies them, so
-   this can never attribute a surrender to the wrong gate. */
+   'too-numbered'). Checked in the SAME order voteLanguage applies them, on
+   the SAME (unwindowed) `winningSamples.join('\n')` sample — round-2's
+   independent review (finding C3) found this guarantee broken for one
+   release: voteLanguage briefly computed its two lexical gates over a
+   RICHNESS_SAMPLE_CHARS-truncated prefix while this function kept
+   computing over the full join, so a real surrender could be attributed to
+   the wrong gate (or missed entirely) here. Round 3 retracted that
+   windowing fix outright (see prose-units.ts's own finding-3(a)
+   retraction) rather than threading the same cap through both call sites,
+   which restores this comment's guarantee by construction: there is only
+   ONE sample-preparation path (the unwindowed join) for either function to
+   diverge from. */
 function describeSurrenderReason(
   chapters: ChapterSample[],
   meta: { author?: string | null; title?: string | null },

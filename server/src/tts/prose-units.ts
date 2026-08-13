@@ -85,7 +85,7 @@ export const PROSE_UNIT_FLOOR = 20;
       with no number collapses straight to its own (tiny) vocabulary either
       way.
 
-   Word tokens are matched by a shared script-aware tokenizer (see TOKEN_RE/
+   Word tokens are matched by a shared script-aware tokenizer (see CHUNK_RE/
    tokenize() below): a run of non-CJK Unicode letters, a maximal run of
    kana characters, or a single Han character. CJK doesn't use whitespace,
    so treating a whole punctuation-delimited CJK clause as ONE token (a
@@ -149,7 +149,7 @@ export const PROSE_UNIT_FLOOR = 20;
    sentence containing it counted as ONE token instead of the ~10-20
    word-equivalent tokens the same content produces in English. Fixed by
    giving digitTokenShare the SAME script-aware tokenizer guiraudR already
-   used (TOKEN_RE/tokenize() below — kana bigrams, one Han character, or a
+   used (CHUNK_RE/tokenize() below — kana trigrams, one Han character, or a
    Latin word run), so both scripts get comparable per-unit token
    granularity. Re-measured with a controlled 1-in-N-sentences digit
    injection (own synthetic real-shaped EN/ZH fixtures, matched sentence
@@ -179,41 +179,37 @@ export const PROSE_UNIT_FLOOR = 20;
    such idiom): digitTokenShare ≈ 0.095-0.10 — the recalibrated ceiling
    keeps ~2x margin above that.
 
-   Finding 3 (Guiraud's R is not length-corrected under per-character CJK
-   tokenisation): voteLanguage joins every winning-language chapter's own
-   sample with no overall cap, so N is unbounded (the corpus's own largest
-   joined sample measured 815k chars) — R = V/sqrt(N) decays once a script's
-   per-token vocabulary saturates (a few thousand Han characters, ~90 kana
-   glyphs), which real round-1 measurement showed happening within the ja
-   corpus itself (8.41 at N≈3.3k falling to 7.83 at N≈6.5k) and, extrapolated
-   to the corpus's largest real sample, crossing the floor entirely. Two
-   independent fixes, addressing two distinct mechanisms:
-     (a) RICHNESS_SAMPLE_CHARS bounds the sample guiraudR/digitTokenShare see
-         (applied by the caller, voteLanguage) to the same window
-         prepareSample() already uses per chapter — this removes the
-         unbounded-N pathway entirely; the two lexical gates never see more
-         than 20,000 characters regardless of how many chapters a book has.
-     (b) Kana tokenization changed from one-character-per-token to
-         OVERLAPPING TRIGRAMS (see tokenize()'s own comment) — per-character
-         kana tokenization caps a kana-only sample's whole vocabulary at
-         ~90 glyphs, which R falls below any fixed floor for once N passes
-         roughly (floor/90)^2 characters (a few hundred to low thousands) —
-         well inside a single real chapter, independent of the windowing
-         fix above, since (a) only bounds the MAXIMUM N, not this per-
-         script alphabet cap. Trigrams raise the effective alphabet by
-         orders of magnitude (up to ~90^3 triples) without collapsing to
-         "one token per sentence" the way a full kana-RUN token would
-         (real Japanese has no inter-word spacing, so a run can span an
-         entire clause). Bigrams (n=2) were tried first and measured too
-         thin: on the SAME ~86-word synthetic all-kana fixture described
-         below, bigrams held R around 2.2-2.8 at the full 20,000-character
-         window — BELOW LEXICAL_RICHNESS_FLOOR — while trigrams held R
-         around 5.7-6.2 on the identical fixture; the bigram number is what
-         an earlier pass of this same fix reported as passing, which relied
-         on a fixture with an aliasing bug (a repeating index period that
-         let dedup silently shrink the sample) and was itself wrong — a
-         reminder that this fix's own regression lock is what should be
-         trusted, not a comment.
+   Finding 3 (round 2 — Guiraud's R is not length-corrected under
+   per-character CJK tokenisation): voteLanguage joins every winning-
+   language chapter's own sample with no overall cap, so N is unbounded (the
+   corpus's own largest joined sample measured 815k chars) — R = V/sqrt(N)
+   decays once a script's per-token vocabulary saturates (a few thousand Han
+   characters, ~90 kana glyphs), which real round-1 measurement showed
+   happening within the ja corpus itself (8.41 at N≈3.3k falling to 7.83 at
+   N≈6.5k) and, extrapolated to the corpus's largest real sample, crossing
+   the floor entirely. Round 2 shipped two independent fixes for this:
+   (a) a RICHNESS_SAMPLE_CHARS prefix cap on the joined sample, and (b) kana
+   tokenization changed to overlapping trigrams. **(a) was retracted in
+   round 3 — see the finding-3(a) retraction below — only (b) survives.**
+
+   Finding 3(b) survives unchanged: kana tokenization changed from
+   one-character-per-token to OVERLAPPING TRIGRAMS (see tokenize()'s own
+   comment) — per-character kana tokenization caps a kana-only sample's
+   whole vocabulary at ~90 glyphs, which R falls below any fixed floor for
+   once N passes roughly (floor/90)^2 characters (a few hundred to low
+   thousands) — well inside a single real chapter. Trigrams raise the
+   effective alphabet by orders of magnitude (up to ~90^3 triples) without
+   collapsing to "one token per sentence" the way a full kana-RUN token
+   would (real Japanese has no inter-word spacing, so a run can span an
+   entire clause). Bigrams (n=2) were tried first and measured too thin: on
+   the SAME ~86-word synthetic all-kana fixture described below, bigrams
+   held R around 2.2-2.8 at a 20,000-character sample — BELOW
+   LEXICAL_RICHNESS_FLOOR — while trigrams held R around 5.7-6.2 on the
+   identical fixture; the bigram number is what an earlier pass of this same
+   fix reported as passing, which relied on a fixture with an aliasing bug
+   (a repeating index period that let dedup silently shrink the sample) and
+   was itself wrong — a reminder that this fix's own regression lock is what
+   should be trusted, not a comment.
      Re-measured against an own hand-authored all-kana fixture (no kanji at
      all, real hiragana words/particles, ~86 distinct base words — almost
      certainly LESS varied than any real all-kana book) at two scales:
@@ -225,21 +221,57 @@ export const PROSE_UNIT_FLOOR = 20;
          ~90-glyph alphabet divided by sqrt(N), is what both measurements
          exercise) to ≈4.3-5.4 (new, trigram) — a genuine, meaningful fix at
          the reported failure scale.
-       - at the FULL RICHNESS_SAMPLE_CHARS window (20,000 characters), R
-         holds around 5.7-6.2 for this fixture — still comfortably above
-         LEXICAL_RICHNESS_FLOOR, but with a narrower, vocabulary-dependent
-         margin than Han-based CJK (which stays well into the double digits
-         at the same window in the round-1 real-book corpus). A genuinely
-         narrower real all-kana vocabulary than this ~86-word synthetic
-         fixture could still fall below the floor at the full window.
-     LEXICAL_RICHNESS_FLOOR is NOT lowered further for kana specifically:
-     the fix closes the reported failure case with real margin at the scale
-     it was reported at, and this repo has no real all-kana corpus to
-     calibrate a separate constant against for the full-window case — a
-     follow-up on-box acceptance check against a genuine all-kana
-     manuscript, if one becomes available, is the honest next step
-     (recorded in the on-box acceptance register), not a second guessed
-     number.
+       - at 20,000 characters, R holds around 5.7-6.2 for this fixture —
+         still comfortably above LEXICAL_RICHNESS_FLOOR, but with a
+         narrower, vocabulary-dependent margin than Han-based CJK. A
+         genuinely narrower real all-kana vocabulary than this ~86-word
+         synthetic fixture could still fall below the floor at large N.
+     **Round 3 (finding C5) additionally found the richness gate is close to
+     INERT for kana under trigrams beyond what dedupeProseUnits already
+     catches**: an own degenerate near-repeated kana filler (one word
+     repeated ~67% of the time, 20k chars) scored R≈7.13 (accepted, not
+     refused), and an ordinal-prefixed heading list (8 cycling headings,
+     2000 entries) scored R≈9.43 (accepted) — only an EXACT-duplicate
+     heading (which dedupeProseUnits already collapses on its own, R≈2.24,
+     refused) is caught. No kana junk shape this repo has tried, beyond
+     exact duplication, is refused by LEXICAL_RICHNESS_FLOOR under trigrams.
+     This does not cause a wrong-LANGUAGE outcome — the script pre-pass
+     returns 'ja' for all-kana input regardless of what the richness gate
+     decides — but it means the richness gate contributes nothing extra for
+     kana beyond what dedup already provides. Stated plainly rather than
+     implied otherwise: for kana specifically, this gate's only real
+     backstop against low-effort junk is dedupeProseUnits; a genuinely novel
+     kana junk shape not caught by exact-duplicate collapsing would very
+     likely pass. LEXICAL_RICHNESS_FLOOR is NOT lowered further for kana
+     (that would only make this worse) and no narrower kana-specific
+     richness signal is invented here without real all-kana junk evidence to
+     calibrate it against.
+
+   Finding 3(a) — RETRACTED in round 3 (finding C1): capping the joined
+   sample to a PREFIX made the two lexical gates chapter-ORDER-dependent — a
+   single numeral-dense opening chapter (a dated chronicle, an epistolary
+   frame, a real front-matter-surviving 大事记/Zeittafel) could refuse an
+   entire book that reads fine once every chapter is counted, and the SAME
+   chapter set in a DIFFERENT order could reach a DIFFERENT verdict — a
+   worse, measured, real defect against the theoretical, largely unmeasured
+   one it was meant to prevent. Re-examined: real Han content does not
+   actually need a length cap. The round-2 fix relied on an EXTRAPOLATION
+   from ja data at N≈3.3k-6.5k to the corpus's 815k-char worst case, never a
+   direct measurement at that scale; round 3 measured the 815k-char worst
+   case directly (real Han text) and found R≈4.4 — still above
+   LEXICAL_RICHNESS_FLOOR (3), a genuine if tighter (~1.5x) margin than the
+   smaller-scale real samples measured elsewhere in this file. Separately,
+   this repo's own two real Coalfall Commission translations (zh, ja —
+   `C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+   コールフォールの依頼}\manuscript.md`, read-only, Castwright-owned) score
+   R=12.1 (zh, 5.6k chars) and R=27.3 (ja mixed, 7.8k chars) — comfortably
+   clear, consistent with no cap being needed at realistic chapter scale
+   either. The cap is REMOVED (`voteLanguage` now measures the full joined
+   sample, uncapped) — guiraudR/digitTokenShare reduce to a token SET size
+   and a total token count, neither of which depends on concatenation
+   order, so the uncapped computation is mathematically chapter-order-
+   invariant, which a prefix is not. `RICHNESS_SAMPLE_CHARS` no longer
+   exists; nothing replaces it.
 
    Finding 4 (the digit ceiling's margin was fiction, not just wrongly
    stated): re-measured with the NEW tokenizer, a genuinely short-sentence
@@ -263,27 +295,65 @@ export const PROSE_UNIT_FLOOR = 20;
    an entry-length/sentence-structure check) rather than a threshold move —
    filed as a follow-up issue rather than guessed at here.
 
+   --- #2256 independent review round 3 (2026-08-13) --------------------
+
+   Finding C1 (windowing made the decision chapter-order-dependent):
+   RETRACTED round 2's finding-3(a) fix — see the finding-3 block above.
+
+   Finding C2 (0.2 ceiling re-opens the ticket's acceptance class for the
+   commonest real Chinese TOC layout, HIGH, NOT CLOSED — owner decision
+   named, not guessed at): the finding-2 fixture above ("N、<title>。", 60
+   entries, digitTokenShare≈0.36) is not the shape most real Chinese TOCs
+   use. The standard layout is "第N章<title>" ("Chapter N: Title") with a
+   4-character title — re-measured against 60 distinct 4-character titles:
+
+     N、<title>。 (this file's finding-2 fixture)     digitTokenShare 0.24-0.36, refused
+     第N章<title>。 (Han numeral, "第"..."章" markers) digitTokenShare ≈0.15-0.17, NOT refused
+     第Ｎ章<title>。 (fullwidth digit)                  same ≈0.15-0.17, NOT refused
+     第N章<title>。 (ASCII digit)                       same ≈0.15-0.17, NOT refused
+     第N章<title>。, 200 entries                        same range — scale does not rescue it
+
+   Mechanism: "第" and "章" are ordinary Han characters (not numerals), so
+   they tokenize as two ordinary word tokens per entry — a 4-character title
+   plus those two markers makes each entry ~7 tokens with only 1 digit-like
+   token, well under the 0.2 ceiling, REGARDLESS of entry count. Round 1's
+   0.1 ceiling would have caught this shape (0.15-0.17 > 0.1); finding 4's
+   ceiling raise (0.1 -> 0.2, needed for real short-sentence verse-numbered
+   content, see above) undid finding 2's fix for this specific, common TOC
+   shape. The "evidenced junk range 0.36-0.87" cited in finding 4 above does
+   NOT hold universally — it holds for the numbering styles measured there,
+   not for a "第N章" chapter-marker TOC.
+
+   NOT FIXED HERE. The digit-ratio signal alone cannot separate this TOC
+   shape from genuine short-sentence real prose at any single threshold:
+   finding 4's own worst real-shaped case (verse-numbered short sentences)
+   measures ≈0.10-0.14, and this junk shape measures ≈0.15-0.17 — the two
+   ranges OVERLAP, so no DIGIT_TOKEN_SHARE_CEILING value cleanly separates
+   both without either re-opening finding 4's regression (refusing real
+   short-sentence books) or re-opening this one (backfilling "第N章" TOCs).
+   Closing this needs a DIFFERENT kind of signal than a token ratio — e.g. a
+   STRUCTURAL check for the numbering PATTERN repeating once per prose unit
+   (a "第<numeral>章" prefix recurring across most units), which is a
+   different instrument from Guiraud's R / digitTokenShare and a genuine
+   design decision (exactly which pattern counts, how narrowly scoped,
+   what it costs in false positives on real prose with a recurring opener)
+   — not invented here without a design pass. Recorded as a tracked, open
+   gap rather than silently left to look closed; see
+   https://github.com/dudarenok-maker/Castwright/issues/2341 for the
+   decision owed and detect-language.test.ts's own "finding C2" test,
+   which pins the current (imperfect) behavior so it stays visible.
+
    Do not re-derive or move any of these numbers without re-measuring
    against the same corpus/fixtures referenced above. */
 export const LEXICAL_RICHNESS_FLOOR = 3;
 export const DIGIT_TOKEN_SHARE_CEILING = 0.2;
-
-/* #2256 review round 2, finding 3(a) — bounds the sample guiraudR/
-   digitTokenShare are computed over (applied by the caller, voteLanguage,
-   to the joined winning-language sample) so unbounded chapter-joining can't
-   decay Guiraud's R past the floor. See the finding-3 addendum above this
-   file's own LEXICAL_RICHNESS_FLOOR/DIGIT_TOKEN_SHARE_CEILING block for the
-   full mechanism. Reuses detect-language.ts's own SAMPLE_CHARS window size
-   so there is one number for "how much of a chapter's text detection
-   actually looks at", not two independently-tuned ones. */
-export const RICHNESS_SAMPLE_CHARS = 20_000;
 
 /* #2256 review round 2 (finding 1, finding 2) — digit detection needs to
    catch three shapes, not just ASCII `\d`: fullwidth digits (U+FF10-FF19,
    used in some CJK-typeset TOCs/indexes) and Han numeral characters (used
    for chapter numbering in Chinese/Japanese front matter, e.g. "五十七" =
    57, "第一章" = "Chapter One"). Numeral CHARACTER RUNS are matched ahead of
-   the generic Han-script alternative in TOKEN_RE (regex alternation is
+   the generic Han-script alternative in CHUNK_RE (regex alternation is
    ordered, first match wins at each position) so a numeral run is captured
    as ONE digit-like token rather than N separate Han-character word tokens
    -- keeping it out of guiraudR's vocabulary count the same way an ASCII
@@ -292,14 +362,14 @@ export const RICHNESS_SAMPLE_CHARS = 20_000;
 const FULLWIDTH_DIGIT_RUN_RE = '[\\uFF10-\\uFF19]+';
 const HAN_NUMERAL_CHARS = '〇零一二三四五六七八九十百千万億兆';
 const HAN_NUMERAL_RUN_RE = `[${HAN_NUMERAL_CHARS}]+`;
-const DIGIT_TOKEN_RE = new RegExp(`^(?:[0-9]+|${FULLWIDTH_DIGIT_RUN_RE}|[${HAN_NUMERAL_CHARS}]+)$`);
+const DIGIT_TOKEN_RE = new RegExp(`^(?:[0-9]+|${FULLWIDTH_DIGIT_RUN_RE}|${HAN_NUMERAL_RUN_RE})$`);
 
 /* Shared CHUNK scanner for both guiraudR and digitTokenShare: digit-like
    runs (ASCII, fullwidth, Han-numeral) are matched FIRST so they're
    captured whole rather than falling through to the word alternatives,
    then a maximal kana RUN, then one Han character at a time, then a
    Latin/Cyrillic/other-script word run. A kana chunk is expanded into
-   overlapping BIGRAMS by tokenize() below, not used as one token as-is --
+   overlapping TRIGRAMS by tokenize() below, not used as one token as-is --
    see that comment for why. */
 const CHUNK_RE = new RegExp(
   ['(?:[0-9]+|' + FULLWIDTH_DIGIT_RUN_RE + '|' + HAN_NUMERAL_RUN_RE + ')', '[\\p{Script=Hiragana}\\p{Script=Katakana}]+', '\\p{Script=Han}', '\\p{L}+'].join('|'),
@@ -407,7 +477,7 @@ export function guiraudR(sample: string): number {
  *  than for equivalent English text, because the CJK sentence containing it
  *  counted as ONE token rather than the ~10-20 word-equivalent tokens the
  *  same content produces in English. Tokenizing with the same script-aware
- *  scanner guiraudR uses (kana bigrams, one Han char, Latin word runs) gives
+ *  scanner guiraudR uses (kana trigrams, one Han char, Latin word runs) gives
  *  both scripts comparable per-unit token granularity, closing that gap. 0
  *  for an empty sample. */
 export function digitTokenShare(sample: string): number {

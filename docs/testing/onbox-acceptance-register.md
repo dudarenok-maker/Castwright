@@ -296,6 +296,7 @@ setup rather than repeatedly loading and evicting models.
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
+| **H** | No hardware — needs a real all-kana Japanese manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
@@ -3344,6 +3345,61 @@ block on the next cut is unlikely, but not proven until observed.
 *Cost:* zero extra; it is observed as part of a cut that was happening anyway.
 *Discharges when:* one real release publishes with a body sourced from the file
 and the observations above are recorded here.
+
+---
+
+## Group H — no hardware, needs a real all-kana manuscript
+
+Not a hardware prerequisite at all — the blocker is a real-book fixture this
+repo's corpus doesn't currently have. `detectManuscriptLanguageFromChapters`
+needs no GPU, sidecar, or analyzer; it is a pure function over chapter text,
+runnable on any machine (`npx tsx` against a real manuscript's chapters, or a
+dry-run `npm run repair:book-language` pass over a real imported book).
+
+### H1 · Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)
+
+`server/src/tts/prose-units.ts`'s kana tokenizer (overlapping character
+trigrams, replacing per-character tokenization) is verified only against an
+own hand-authored synthetic all-kana fixture (~86-30 distinct words
+depending on which test, see `detect-language.test.ts`'s two finding-3(b)
+tests) — not a genuine all-kana book. The fix closes the SPECIFIC real
+failure the original #2256 finding reported (a real book at N≈4,843
+characters, old per-character scheme measured R=1.72, refused) using the
+finding's own reported number as an anchor, but this repo cannot reproduce
+that exact book to re-measure it directly, and the synthetic fixture's
+margin is known to be vocabulary-dependent and thinner than Han-based CJK's
+(round-3 finding C5 additionally found the richness gate is close to inert
+for kana beyond what `dedupeProseUnits` already catches — see
+`prose-units.ts`'s own finding-3(b) block for the honest numbers).
+
+**What to observe, once a real all-kana Japanese manuscript is available**
+(a children's book or early-reader text with no kanji at all is the
+realistic shape — this repo's two real Coalfall Commission translations at
+`C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+コールフォールの依頼}\manuscript.md` are real CJK text but MIXED kanji+kana,
+not the all-kana case this row is about):
+
+1. Run the manuscript's chapters through `detectManuscriptLanguageFromChapters`
+   (or a full `POST /api/import`) and record the result — expected:
+   `{ language: 'ja', supported: true, fallback: false }`.
+2. Separately call `guiraudR` on the same (deduped, per
+   `dedupeProseUnits`) winning sample and record the actual value against
+   `LEXICAL_RICHNESS_FLOOR` (3) — a real number at real scale, not the
+   ~86-word synthetic fixture's.
+3. If the book has multiple chapters, note the total combined character
+   count the richness gate actually saw (no cap applies post-#2256 round 3 —
+   see `prose-units.ts`'s finding-3(a) retraction) — the margin at that
+   real scale is the actual thing this row exists to confirm.
+
+*Needs:* a real, legally usable all-kana (no kanji) Japanese manuscript —
+no GPU, sidecar, or analyzer.
+*Cost:* one `detectManuscriptLanguageFromChapters` call plus recording the
+observed `R`/`digitTokenShare` numbers here.
+*Discharges when:* a real all-kana manuscript has been run through
+detection, the result and the observed `R` are recorded in this row (or a
+dedicated run sheet this row is updated to point at), and either the
+current trigram fix is confirmed sufficient at real scale or a follow-up
+issue is filed with the real numbers that show it isn't.
 
 ---
 

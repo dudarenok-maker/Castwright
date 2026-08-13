@@ -25,7 +25,6 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
-  RICHNESS_SAMPLE_CHARS,
 } from './prose-units.js';
 
 const SAMPLE_CHARS = 20_000;
@@ -176,16 +175,23 @@ function voteLanguage(
   const winningProseUnits = winningSamples.reduce((sum, s) => sum + countProseUnits(s), 0);
   if (winningProseUnits < PROSE_UNIT_FLOOR) return resultFor('en', true);
 
-  /* #2256 review round 2 (finding 3) — joining every winning chapter's own
-     (already per-chapter-capped) sample leaves the TOTAL uncapped, so a book
-     with many chapters can still hand guiraudR/digitTokenShare a
-     multi-hundred-thousand-character sample. Guiraud's R decays with N once
-     a script's per-token vocabulary saturates (see prose-units.ts's own
-     RICHNESS_SAMPLE_CHARS comment); capping the joined sample to the same
-     window prepareSample() already uses per chapter keeps richness
-     comparisons at a length where the corpus this gate is measured against
-     stays representative, regardless of how many chapters the book has. */
-  const winningSample = winningSamples.join('\n').slice(0, RICHNESS_SAMPLE_CHARS);
+  /* #2256 review round 3 (finding C1) — round 2 capped this join to a
+     RICHNESS_SAMPLE_CHARS prefix to guard against unbounded-N decay. That
+     cap made the two lexical gates see only the FIRST winning chapter (or
+     two) of a many-chapter book, which is chapter-ORDER-dependent: a single
+     numeral-dense opening chapter (a dated chronicle, an epistolary frame,
+     a 大事记/Zeittafel that survives selectBodyChapters) could refuse a
+     whole book that reads fine once the rest of its chapters are counted —
+     measured, an 11-chapter Chinese book with such a chapter first refused
+     (digitShare 0.2632, prefix-only) but resolved correctly with the SAME
+     chapter last (whole join). No windowing is applied here: real CJK
+     content does not need it (see prose-units.ts's own
+     LEXICAL_RICHNESS_FLOOR/DIGIT_TOKEN_SHARE_CEILING block, finding 3's
+     retraction of the windowing sub-fix) and the whole-join computation is
+     mathematically ORDER-INVARIANT (guiraudR/digitTokenShare reduce to a
+     token SET size and a total count, neither of which depends on
+     concatenation order), which a prefix is not. */
+  const winningSample = winningSamples.join('\n');
   if (guiraudR(winningSample) < LEXICAL_RICHNESS_FLOOR) return resultFor('en', true);
   if (digitTokenShare(winningSample) > DIGIT_TOKEN_SHARE_CEILING) return resultFor('en', true);
 
