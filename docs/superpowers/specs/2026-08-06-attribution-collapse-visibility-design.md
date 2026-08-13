@@ -2018,7 +2018,8 @@ does not exercise it still passes (R-5M5).
 
 That also settles module ownership, which revision 4 left unstated: the state
 derivation **does I/O and therefore cannot live in the pure module** Wave 1
-acceptance criterion 1 requires. `attribution-health.ts` stays pure and returns
+acceptance criterion 6 requires (renumbered in revision 8, when the owner's five
+criteria took numbers 1–5). `attribution-health.ts` stays pure and returns
 `AttributionMeasurement`; a separate caller resolves the snapshot, applies the
 precedence order, and produces the state. The pure module never reads a file.
 
@@ -2027,9 +2028,13 @@ the same class of defect half-closed** (R-6M1). Step 1 of §Language resolution
 reads `state.json`; step 3 reads the cached text to corroborate. Both are I/O,
 and revision 5's Wave 1 criterion 1 (now 6) nonetheless listed `detectManuscriptLanguage`
 among the pure module's own imports. The resolver is therefore **one impure
-function** — `resolveBookLanguage(bookDir, sentences)` — returning
+function** — `resolveBookLanguage(bookDir, chapters)` — returning
 `{ language, languageSource }`, which the pure metric receives as an argument
-alongside the sentence list. `detectManuscriptLanguage` is itself pure, so the
+alongside the sentence list and the bodies. **Revision 8 changes its second
+argument** from the cached sentences to the chapter records, because
+`selectBodyChapters` (`detect-language.ts:105`, #2263) keys on `{ title, body }`
+and drops front/back matter from the voting pool — a filter the cache cannot
+express. `detectManuscriptLanguage` is itself pure, so the
 resolver is thin; what makes it impure is the `state.json` read, and that is
 exactly the boundary.
 
