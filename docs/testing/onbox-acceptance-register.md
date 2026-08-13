@@ -2774,7 +2774,7 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 **Hardware prerequisite:** no GPU needed — local Ollama analyzer only, as with the rest of Group C. Best taken in the same session as C2/C3 rather than as its own long run.
 
-**Where the criteria live:** this row, plus the calibration in [`docs/features/247-dialogue-structure-attribution.md`](../features/247-dialogue-structure-attribution.md). Related but distinct: the #1984 attribution-collapse *visibility* strand measures and surfaces collapse; this guard *acts* on it during analysis. They share a name and nothing else — do not discharge one against the other.
+**Where the criteria live:** this row, plus the calibration in [`server/src/analyzer/stage2-coverage.ts`](../../server/src/analyzer/stage2-coverage.ts) — the module header and the `STAGE2_MAX_NARRATED_SPEECH_PCT`/`markersLost` comments carry the measured numbers this row cites (39.3/72.2, 246→213/241→209); there is no dedicated plan doc for #2325/#2342, and plan 247 (dialogue-structure attribution) mentions neither the issue nor this calibration, so it was never the right pointer. Related but distinct: the #1984 attribution-collapse *visibility* strand measures and surfaces collapse; this guard *acts* on it during analysis. They share a name and nothing else — do not discharge one against the other.
 
 **Not discharged by:** a green `npm run test:server`. The guard's tests are fixture-driven by construction; that is the point of this row.
 

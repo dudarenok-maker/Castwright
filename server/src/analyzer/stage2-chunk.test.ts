@@ -822,7 +822,13 @@ describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => 
        attempt 1 — `writeInbox` rm's the previous outbox first, so a chapter
        that retried twice kept only the last attempt's prompt/response. Attempt
        1 must still read as `undefined` (byte-identical filenames for the
-       overwhelmingly common no-retry case); only attempt 2+ get numbered. */
+       overwhelmingly common no-retry case); only attempt 2+ get numbered.
+
+       Numbers come from the SAME shared `callSeq` counter `callSectioned`
+       uses (review round 3 follow-up below) — starting at 1, not at the raw
+       `singleCallAttempt` value — so a retry here reads `1`, `2`, … rather
+       than `2`, `3`, …; the exact number is incidental, only its uniqueness
+       across BOTH paths matters (pinned by the collision test below). */
     const body = makeBody(3); // ~18 source words
     let call1 = 0;
     const call = vi.fn(
@@ -858,6 +864,57 @@ describe('runStage2ChapterChunked — per-call handoff sequence (#2324)', () => 
     expect(out.chunkCount).toBe(1);
     expect(call).toHaveBeenCalledTimes(3);
     const seqs = call.mock.calls.map((c) => c[3]);
-    expect(seqs).toEqual([undefined, 2, 3]);
+    expect(seqs).toEqual([undefined, 1, 2]);
+  });
+
+  /* Review round 3 follow-up (#2342): the single-call path's retry counter
+     (`singleCallAttempt`) and `callSectioned`'s counter were independent, both
+     starting from "the next number after 1" — so a chapter that retries on
+     the unchunked path and THEN falls into a forced deterministic re-split
+     hands out the SAME number from both counters. `writeInbox` rm's the
+     earlier response at a reused key, so the re-split's first section call
+     silently destroyed the single-call retry's forensics — the exact failing
+     attempt that justified escalating to a split in the first place. This
+     test walks that exact sequence (single-call retry, THEN a forced
+     re-split with real section calls) and pins that every numbered call
+     gets a distinct sequence — the shape the test above (retries only, no
+     split reached) cannot see. */
+  it('gives the single-call retry and a forced re-split DISTINCT sequence numbers (no key collision)', async () => {
+    const body = makeBody(6);
+    const call = vi.fn(
+      async (
+        subBody: string,
+        _preceding: string | null,
+        _lastSpeakerId: string | null,
+        _callSeq: number | undefined,
+      ) => {
+        // The whole body always returns the same one-sentence take — a
+        // deterministic failure. Any strictly smaller span (a split section)
+        // attributes cleanly.
+        if (subBody.length >= body.length) {
+          const full = fakeAttribute(subBody);
+          return { ...full, sentences: full.sentences.slice(0, 1) };
+        }
+        return fakeAttribute(subBody);
+      },
+    );
+
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 10_000, // single-call path selected first
+      coverageRetries: 5,
+      callForBody: call,
+    });
+
+    expect(out.chunkCount).toBeGreaterThan(1); // it really did re-split
+    expect(out.coverage.ok).toBe(true);
+
+    const seqs = call.mock.calls.map((c) => c[3]);
+    expect(seqs[0]).toBeUndefined(); // attempt 1 keeps the historical unnumbered key
+    const numbered = seqs.slice(1) as number[];
+    expect(numbered.length).toBeGreaterThan(1); // the single-call retry PLUS ≥1 section call
+    expect(numbered.every((n) => typeof n === 'number')).toBe(true);
+    // The whole point: no number is handed out twice across the two paths.
+    expect(new Set(numbered).size).toBe(numbered.length);
   });
 });

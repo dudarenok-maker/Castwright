@@ -85,7 +85,8 @@ export interface Stage2CoverageVerdict {
   /** #2342 defect B — the attribution lost the dialogue markers themselves
       (see the "markers lost" check below), as distinct from `dialogueCollapse`
       (the markers survived but went overwhelmingly to `narrator`). Always
-      `false` when `truncated` is true — see that check's own comment. */
+      `false` when `truncated` OR `excess` is true — see that check's own
+      comment (review round 3 widened the gate to both sides of the band). */
   markersLost: boolean;
   issues: string[];
 }
@@ -396,10 +397,25 @@ export function validateStage2Coverage(
      there is the missing prose, not a dropped marker — the message must not
      claim the model mangled a marker it never got the chance to emit.
      `truncated` already gates `ok` on its own, so nothing slips through by
-     suppressing this one here. */
+     suppressing this one here.
+
+     `!excess` covers the OTHER side of the same band, found by review round
+     3: a repeat-loop/excess take pads the output with hundreds of looped
+     filler sentences that carry no dash marker at all, which dilutes
+     `speech.speechHalves` below half of the source's count for the same
+     reason a truncated take does — too much of the output is not the
+     source's real dialogue, not that the model mangled the marker on the
+     lines it did keep. Verified directly: a 60-dash-opener source padded
+     with 400 unmarked filler sentences measures ratio 8.17 (`excess`) and
+     recognises only 10 speech halves — under the half-of-60 floor — so
+     without this gate the guard reports "markers lost" on a take whose real
+     defect is the loop `excess` already reports. `excess` already gates
+     `ok` on its own, exactly like `truncated`, so nothing slips through by
+     suppressing this one here either. */
   const sourceSpeechHalves = dialogueOpen ? sourceSpeechHalfCount(bodyText, dialogueOpen) : 0;
   const markersLost = !!(
     !truncated &&
+    !excess &&
     speech &&
     sourceSpeechHalves >= STAGE2_MIN_SPEECH_HALVES &&
     speech.speechHalves < sourceSpeechHalves / 2
@@ -428,70 +444,93 @@ export function validateStage2Coverage(
 
 /** Severity tier for `isBetterCoverage`, below. Lower is better.
 
-      3 — nothing attributed at all (`noSentences`) — nothing to compare;
-      2 — a duplicated block (repeat-loop, degenerate output);
-      1 — truncated or excess coverage (prose missing or looped);
+      2 — nothing attributed at all (`noSentences`) — nothing to compare;
+      1 — "prose damaged": a duplicated block, or truncated/excess coverage
+          (repeat-loop and/or missing/looped prose — the same span can be
+          both at once, the ch18 loop-and-truncate shape);
       0 — the prose survived; only the attribution itself is wrong
           (dialogue collapse or lost markers).
 
     #2342 round 1 replaced the original two-term SUM (`(duplicatedBlock ?
     100 : 0) + |1 - coverageRatio|`) with a three-term sum that added a
     collapse PENALTY, and an independent review caught two ways an additive
-    scheme hides a wrong ordering: the penalty was gated on `evaluable`,
-    which losing the dialogue markers entirely also defeats — so a
-    dash-stripped take (penalty 0) could beat an intact-but-collapsing one —
-    and the penalty floor (>1.0) exceeded the ENTIRE low-side range of
-    `|1 - coverageRatio|` (max ~1.0 for anything `truncated`/`excess`), so
-    gross truncation could outrank a collapsing-but-COMPLETE take — exactly
-    backwards from the module's own stated intent. A lexicographic tier +
-    tie-break (below) cannot exhibit either failure mode: a lower tier always
-    wins outright regardless of magnitude, and the two attribution-only
-    failures inside tier 0 are compared on one shared, correctly-ordered
-    scale instead of being summed into a ratio-shaped term.
+    scheme hides a wrong ordering (the `evaluable`-gated penalty vanishing
+    for a dash-stripped take, and the penalty floor outranking gross
+    truncation). Round 2 replaced the sum with a lexicographic 4-tier scheme
+    (`noSentences` > `duplicatedBlock` > `truncated`/`excess` > clean) and
+    claimed — WRONGLY — that it matched the original sum for every pairing
+    but one. Review round 3 measured two more reversals the claim missed
+    entirely, both from putting `duplicatedBlock` and `truncated`/`excess` in
+    DIFFERENT tiers: `sourceEvaluable` (which the round-2 comment invoked to
+    argue `|1 - coverageRatio|` "stays under 100" for tier 1) bounds the
+    DENOMINATOR of the ratio, not the ratio itself — the module's own header
+    already records a measured ratio of 702.50, so an `excess` take's
+    tie-break score can be arbitrarily large and does NOT stay under a dup
+    take's `+100` floor. Measured: a `duplicatedBlock` take at ratio 1.6
+    (old score 100.6) vs an `excess` take at ratio 110 (old score 109) — the
+    ORIGINAL sum preferred the dup take, the round-2 tiers preferred the
+    excess take (tier 1 < tier 2), reversed. And within the round-2 tier-0/
+    tier-1 boundary: an in-band-ratio (1.55) collapse-only take (old score
+    0.55) vs a `truncated` take at ratio 0.55 (old score 0.45) — the ORIGINAL
+    sum preferred the truncated take (closer to 1.0), round 2's tiers always
+    prefer tier 0, reversed. The two ranges genuinely overlap in (0.4, 0.6].
 
-    This tier order matches the ORIGINAL (pre-#2342) sum for every pairing
-    except one: `noSentences` (tier 3) now loses to `duplicatedBlock` (tier
-    2), reversed from before. Under the original sum an empty attribution
-    scored `0 + |1 - 0| = 1.0` (a zero-word output makes the ratio 0) while
-    any dup take scored `≥100`, so the sum picked "nothing at all" over a
-    repeat-loop take — an accident of the `+100` constant, not a considered
-    decision: a repeat-loop take still contains real (if duplicated) prose,
-    where an empty one contains none, so tier 2 losing to tier 3 was
-    backwards and the new ordering is the intended one, not a regression to
-    guard against.
+    The fix: `duplicatedBlock` and `truncated`/`excess` are ONE tier — call
+    it "prose damaged" — whose tie-break is the ORIGINAL two-term sum
+    (`(duplicatedBlock ? 100 : 0) + |1 - coverageRatio|`) VERBATIM. Ordering
+    within that tier is then the old function BY CONSTRUCTION, so unlike
+    round 2's prose claim, no argument is needed and none can go stale.
 
-    Every other pairing is unchanged: a dup take (tier 2) still always loses
-    to a `truncated`/`excess` take (tier 1) and to a clean-prose take (tier
-    0) — `truncated`/`excess` require `sourceEvaluable`, the only source of
-    an unbounded ratio term, so `|1 - coverageRatio|` stays under 100 for
-    every take that can reach tier 1, matching the original `+100` dup
-    constant exactly; two dup takes still order by `|1 - coverageRatio|`, as
-    before; a collapse-only take (tier 0) still beats a `truncated` take
-    (tier 1), as before (collapse contributed nothing to the original sum);
-    and `markersLost` — which the original sum had no term for at all — sits
-    inside tier 0 same as `dialogueCollapse`, so it likewise beats a
-    `truncated` take, consistent with "no term" behaving as "always tier 0". */
-function verdictTier(v: Stage2CoverageVerdict): 0 | 1 | 2 | 3 {
-  if (v.noSentences) return 3;
-  if (v.duplicatedBlock) return 2;
-  if (v.truncated || v.excess) return 1;
+    That leaves exactly TWO cross-tier reversals from the pre-#2342 sum, both
+    deliberate and both pinned by `isBetterCoverage — enumerated pairwise
+    orderings` in the test file:
+
+      (a) `duplicatedBlock` beats `noSentences` (tier 1 < tier 2) — reversed
+          from the original sum, which scored an empty take `0 + |1-0| = 1.0`
+          against any dup take's `≥100` and so preferred "nothing at all"
+          over a repeat-loop take. Deliberate, unchanged from round 2: a
+          repeat-loop take still holds real (if duplicated) prose; an empty
+          one holds none.
+      (b) a tier-0 take (collapse or `markersLost`) beats a `truncated`/
+          `excess` take (tier 1), REGARDLESS of magnitude — reversed from the
+          original sum only in the overlapping band described above.
+          Deliberate: a complete-but-miscast chapter is more useful than one
+          missing a large fraction of its prose.
+
+    Do NOT trust a third claim of "every other pairing is unchanged" without
+    re-running the enumeration test — that is exactly the claim round 2 got
+    wrong twice. */
+function verdictTier(v: Stage2CoverageVerdict): 0 | 1 | 2 {
+  if (v.noSentences) return 2;
+  if (v.duplicatedBlock || v.truncated || v.excess) return 1;
   return 0;
 }
 
 /** Tie-break within a tier — only meaningful when both verdicts share a
-    tier (`isBetterCoverage` checks tier first). Tier 0's tie-break puts
-    `markersLost` (200) strictly above any `dialogueCollapse` `pct` (≤100):
-    losing the dialogue markers entirely is worse than misattributing SOME of
-    them, per #2342 round 2. Tiers 1 and 2 both use `|1 - coverageRatio|`,
-    identical to the original scoring. Tier 3 has nothing left to compare. */
+    tier (`isBetterCoverage` checks tier first).
+
+    Tier 1 ("prose damaged") uses the ORIGINAL pre-#2342 sum verbatim —
+    `(duplicatedBlock ? 100 : 0) + |1 - coverageRatio|` — so two takes that
+    are both damaged order exactly as they always did; see `verdictTier`'s
+    comment for why this must be the untouched original formula rather than
+    a fresh approximation of it. NOTE: a `markersLost`/`dialogueCollapse`
+    breach that ALSO lands in tier 1 (possible — see the `markersLost`
+    field's own comment on why it isn't mutually exclusive with
+    `duplicatedBlock`) has no term here at all; that information is not
+    compared once a take is tier 1, by the same "old formula verbatim"
+    design choice — it was never part of the original sum either.
+
+    Tier 0's tie-break puts `markersLost` (200) strictly above any
+    `dialogueCollapse` `pct` (≤100): losing the dialogue markers entirely is
+    worse than misattributing SOME of them, per #2342 round 2. Tier 2
+    (`noSentences`) has nothing left to compare. */
 function verdictTieBreak(v: Stage2CoverageVerdict): number {
   switch (verdictTier(v)) {
+    case 1:
+      return (v.duplicatedBlock ? 100 : 0) + Math.abs(1 - v.coverageRatio);
     case 0:
       if (v.markersLost) return 200;
       return isDialogueCollapseBreach(v.narratedSpeech) ? v.narratedSpeech!.pct : 0;
-    case 1:
-    case 2:
-      return Math.abs(1 - v.coverageRatio);
     default:
       return 0;
   }
@@ -499,11 +538,13 @@ function verdictTieBreak(v: Stage2CoverageVerdict): number {
 
 /** Between two failing verdicts, the "least bad" is chosen by severity tier
     first, then by the tier's own tie-break. See `verdictTier`'s comment for
-    the full rationale and the one deliberate ordering reversal from the
-    pre-#2342 baseline.
+    the full rationale and the two deliberate ordering reversals from the
+    pre-#2342 baseline (everything else matches it by construction, not by a
+    prose claim — see the enumeration test).
 
-    Exported (round 2) so the pairwise orderings themselves — the exact shape
-    an additive score hid two bugs inside — can be pinned directly against
+    Exported (round 2) so the pairwise orderings themselves — the exact shapes
+    an additive scheme (round 1) and a too-fine-grained tier split (round 2)
+    each hid a wrong ordering inside — can be pinned directly against
     hand-built verdicts, rather than reconstructed indirectly through
     `runStage2WithCoverageGuard`'s single-shared-`body` constraint. */
 export function isBetterCoverage(a: Stage2CoverageVerdict, b: Stage2CoverageVerdict): boolean {

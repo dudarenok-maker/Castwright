@@ -344,7 +344,15 @@ export async function runStage2ChapterChunked(
      every sectioned model call, including each coverage retry and each adaptive
      re-split, so the failing attempt is preserved next to the one that replaced
      it rather than deleted by it. Deliberately not the section index: two calls
-     for the same section must not collide, which is the whole defect. */
+     for the same section must not collide, which is the whole defect.
+
+     SHARED with the single-call path's own retry numbering below (#2342
+     follow-up, review round 3) — a chapter can retry on the unchunked path
+     first and THEN fall into a forced re-split that runs through
+     `callSectioned`; a second independent counter there would hand out
+     numbers already used by the single-call retries and collide. One counter
+     for the whole chapter, regardless of which path consumes it, is the only
+     way a number is never reused. */
   let callSeq = 0;
   const callSectioned = (
     span: string,
@@ -493,21 +501,31 @@ export async function runStage2ChapterChunked(
          outbox/errors/raw-attempt files first, so a chapter that retried
          twice kept only the last attempt's forensics. Numbering attempt 2+
          (leaving attempt 1 unnumbered) fixes that while keeping the
-         overwhelmingly common no-retry case byte-identical. If it truncates
-         or fails deterministically, the re-split below runs through
-         `callSectioned`, which has its own independent counter. */
+         overwhelmingly common no-retry case byte-identical.
+
+         Review round 3 (#2342 follow-up): a retry's number MUST come from the
+         same shared `callSeq` counter `callSectioned` uses below, not an
+         independent local one. This path's own retry (attempt 2+) and a
+         forced re-split's first section call used to both start counting
+         from a fresh "2", so a deterministic-failure re-split — which runs
+         only AFTER this path's retries have already used some of those
+         numbers — collided with them: `writeInbox` rm's the earlier response
+         at that reused key, destroying the retry attempt's forensics, which
+         is exactly the evidence that justified the split in the first place.
+         Sharing `callSeq` guarantees every number handed out on either path
+         is used at most once per chapter, regardless of which path issues
+         it or in what order. */
       let singleCallAttempt = 0;
       const { result, coverage, deterministicFailure } = await runStage2WithCoverageGuard({
         body: opts.body,
         maxRetries: opts.coverageRetries,
         call: () => {
           singleCallAttempt += 1;
-          return opts.callForBody(
-            opts.body,
-            null,
-            null,
-            singleCallAttempt === 1 ? undefined : singleCallAttempt,
-          );
+          if (singleCallAttempt === 1) {
+            return opts.callForBody(opts.body, null, null, undefined);
+          }
+          callSeq += 1;
+          return opts.callForBody(opts.body, null, null, callSeq);
         },
         thresholds: opts.coverageThresholds,
         dialogueOpen: opts.dialogueOpen,

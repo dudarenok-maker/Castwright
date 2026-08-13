@@ -751,7 +751,7 @@ describe('severity-tier scoring and gated signature (#2342 round 2)', () => {
       expect(isBetterCoverage(gutted, collapsing)).toBe(false);
     });
 
-    it('prefers a breaching take over a duplicated-block take (tier 0 vs tier 2)', () => {
+    it('prefers a breaching take over a duplicated-block take (tier 0 vs tier 1)', () => {
       const breaching = verdict({
         narratedSpeech: { speechHalves: 100, narrated: 70, pct: 70, evaluable: true },
       });
@@ -897,5 +897,266 @@ describe('severity-tier scoring and gated signature (#2342 round 2)', () => {
       expect(v.markersLost).toBe(false);
       expect(v.issues.join(' ')).not.toMatch(/marker/i);
     });
+  });
+
+  /* Review round 3 — the mirror image of nit 7 above, on the OTHER side of
+     the band: `!truncated` alone left `excess` uncovered, so a repeat-loop
+     take that pads the output with hundreds of unmarked filler sentences
+     also fails the "under half" marker-recovery ratio, for the same reason
+     (too much of the output isn't the source's real dialogue), and used to
+     be reported as "markers lost" ON TOP OF "excess coverage" — blaming the
+     marker for a defect `excess` already names. Verified directly against
+     this module: 60 dash-openers + 400 unmarked filler sentences measures
+     ratio ~8.17 and BOTH issues fired before the fix. */
+  describe('markersLost does not misattribute an excess/repeat-loop take (round 3)', () => {
+    it('never sets markersLost when the take is excess, and the message does not blame the marker', () => {
+      const sourceLines = Array.from({ length: 60 }, (_, i) => `- Реплика номер ${i} для проверки.`);
+      const body = sourceLines.join('\n\n');
+      const kept = sourceLines
+        .slice(0, 10)
+        .map((line, i) => ({ text: line, characterId: i % 2 ? 'anton' : 'narrator' }));
+      const padding = Array.from({ length: 400 }, (_, i) => ({
+        text: `filler word filler word filler ${i}`,
+        characterId: 'narrator',
+      }));
+      const sentences = [...kept, ...padding];
+      const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v.excess).toBe(true);
+      expect(v.markersLost).toBe(false);
+      expect(v.issues.join(' ')).not.toMatch(/marker/i);
+      expect(v.issues.join(' ')).toMatch(/Excess coverage/);
+    });
+  });
+
+  /* Review round 3 — `markersLost`'s gate is `!truncated && !excess`, which
+     does NOT rule out `duplicatedBlock`: a repeat-loop can independently lose
+     its dialogue markers across the (possibly duplicated) span while staying
+     in-band on `coverageRatio`. This pins that the two CAN co-occur — a
+     `selectStage2FailureCode` comment (routes/analysis.ts) previously claimed
+     `isIncomplete`/`isCollapse` were disjoint, which this shape disproves. */
+  describe('markersLost and duplicatedBlock can co-occur (round 3)', () => {
+    it('flags both together on a repeat-loop that also lost most of its dash markers', () => {
+      // 60 source dash-opening lines. The attribution keeps the dash on only
+      // the first 8 (well below half of 60 → markersLost), strips it on the
+      // rest, and repeats the dash-stripped tail's first 6 lines (→ dup).
+      const sourceLines = Array.from({ length: 60 }, (_, i) => `- Реплика номер ${i} для проверки.`);
+      const body = sourceLines.join('\n\n');
+      const dashed = sourceLines
+        .slice(0, 8)
+        .map((line, i) => ({ text: line, characterId: i % 2 ? 'anton' : 'narrator' }));
+      const stripped = sourceLines.slice(8).map((line) => ({ text: line.replace(/^- /, ''), characterId: 'anton' }));
+      const loopTail = stripped.slice(0, 6);
+      const sentences = [...dashed, ...stripped, ...loopTail];
+      const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS, RU_DIALOGUE_OPEN);
+      expect(v.truncated).toBe(false);
+      expect(v.excess).toBe(false);
+      expect(v.duplicatedBlock).not.toBeNull();
+      expect(v.markersLost).toBe(true);
+    });
+  });
+});
+
+/* Review round 3 — the round-2 comment on `verdictTier` claimed "this tier
+   order matches the ORIGINAL sum for every pairing except one", and that
+   claim was FALSE: `sourceEvaluable` bounds the ratio's DENOMINATOR, not the
+   ratio itself (the module's own header already records a measured ratio of
+   702.50), so putting `duplicatedBlock` and `truncated`/`excess` in
+   DIFFERENT tiers let an `excess` take's tie-break score grow past a dup
+   take's `+100` floor — measured: dup at ratio 1.6 (old score 100.6) vs
+   excess at ratio 110 (old score 109) — the OLD sum preferred the dup take,
+   the 4-tier scheme preferred the excess take. And in the (0.4, 0.6] band a
+   tier-0 collapse take at ratio 1.55 (old score 0.55) vs a `truncated` take
+   at ratio 0.55 (old score 0.45) reversed the OLD sum's own preference for
+   the closer-to-1.0 truncated take.
+
+   The fix (see `verdictTier`'s own comment in stage2-coverage.ts) merges
+   `duplicatedBlock`/`truncated`/`excess` into ONE "prose damaged" tier whose
+   tie-break is the ORIGINAL two-term sum verbatim — so within that tier the
+   ordering matches the old sum BY CONSTRUCTION and needs no prose claim to
+   defend it. What's left is asserted here MECHANICALLY, not claimed in
+   prose: build a grid of verdicts spanning the tier/ratio/collapse space and
+   diff the OLD sum's preference against the NEW tier scheme's for every
+   pair, then require every disagreement to fall into one of two documented,
+   justified categories. An undocumented disagreement shape fails the test
+   loudly rather than being silently absorbed — which is exactly the failure
+   mode this test exists to close off. */
+describe('isBetterCoverage — enumerated pairwise orderings against the pre-#2342 sum (review round 3)', () => {
+  /* Ratios are chosen to stay CONSISTENT with the flags they're paired with,
+     mirroring how `validateStage2Coverage` actually derives `truncated`/
+     `excess` from `coverageRatio` — an inconsistent pairing (e.g.
+     `excess: false` at ratio 110 outside the un-evaluable-tiny-span case)
+     cannot be produced by the real function and would manufacture
+     disagreements that mean nothing. `TINY_SPAN` (110, 702) DOES pair
+     legitimately with `excess: false` — that's the module's own documented
+     "Глава 4" un-evaluable-span case (`sourceEvaluable: false` forces
+     `excess` off regardless of how far the ratio strays; see
+     `STAGE2_MIN_EVALUABLE_WORDS`'s own comment). */
+  const LOW = [0, 0.3, 0.55, 0.59]; // truncated-consistent
+  const IN_BAND = [1.0, 1.55, 1.6]; // clean/dupOnly-consistent (neither truncated nor excess)
+  const TINY_SPAN = [110, 702]; // un-evaluable small span — excess forced off
+  const HIGH = [1.7, 5, 110, 702]; // excess-consistent
+
+  /** The pre-#2342 two-term sum, verbatim — `noSentences` forces the ratio
+      term to `|1 - 0|` exactly as it did before any tier scheme existed
+      (a zero-word OUTPUT forces `coverageRatio` to 0). */
+  const oldScore = (v: Stage2CoverageVerdict): number => {
+    const ratio = v.noSentences ? 0 : v.coverageRatio;
+    return (v.duplicatedBlock ? 100 : 0) + Math.abs(1 - ratio);
+  };
+  /** Mirrors `verdictTier` (not exported) purely to LABEL disagreements for
+      this test's own categorisation — the actual pass/fail below never uses
+      this, only the real exported `isBetterCoverage`. */
+  const tierOf = (v: Stage2CoverageVerdict): 0 | 1 | 2 => {
+    if (v.noSentences) return 2;
+    if (v.duplicatedBlock || v.truncated || v.excess) return 1;
+    return 0;
+  };
+
+  type Collapse = 'none' | 'collapseBreach' | 'markersLost';
+  const mk = (
+    ratio: number,
+    dup: boolean,
+    truncated: boolean,
+    excess: boolean,
+    collapse: Collapse,
+  ): Stage2CoverageVerdict => ({
+    ok: false,
+    coverageRatio: ratio,
+    endingPresent: true,
+    duplicatedBlock: dup ? { startIndex: 0, length: 5, offset: 3 } : null,
+    narratedSpeech:
+      collapse === 'collapseBreach' ? { speechHalves: 100, narrated: 70, pct: 70, evaluable: true } : null,
+    noSentences: false,
+    truncated,
+    excess,
+    markersLost: collapse === 'markersLost',
+    issues: [],
+  });
+
+  function buildGrid(): Array<{ v: Stage2CoverageVerdict; label: string }> {
+    const grid: Array<{ v: Stage2CoverageVerdict; label: string }> = [];
+    const push = (label: string, v: Stage2CoverageVerdict) => grid.push({ v, label });
+
+    /* Tier 0 ("clean"): NOT dup/truncated/excess. A verdict with none of
+       those AND no collapse/markersLost is `ok: true` in reality and never
+       reaches this comparison at all (`isBetterCoverage`'s `ok` check short-
+       circuits first) — so 'clean' only gets a collapse OR markersLost
+       variant, never bare 'none'. */
+    for (const ratio of [...IN_BAND, ...TINY_SPAN]) {
+      push(`clean/${ratio}/collapseBreach`, mk(ratio, false, false, false, 'collapseBreach'));
+      push(`clean/${ratio}/markersLost`, mk(ratio, false, false, false, 'markersLost'));
+    }
+    /* Tier 1, duplicatedBlock alone: pairs with any not-truncated/excess
+       ratio (in-band, or the tiny-span extreme) and any collapse state —
+       `markersLost` is NOT gated off by `duplicatedBlock` (only by
+       `truncated`/`excess`), so a dup take CAN also be markersLost. */
+    for (const ratio of [...IN_BAND, ...TINY_SPAN]) {
+      for (const collapse of ['none', 'collapseBreach', 'markersLost'] as Collapse[]) {
+        push(`dupOnly/${ratio}/${collapse}`, mk(ratio, true, false, false, collapse));
+      }
+    }
+    /* Tier 1, truncated / excess: `markersLost` is gated off by construction
+       whenever either is true (validateStage2Coverage's `!truncated &&
+       !excess` gate), so only none/collapseBreach are reachable. */
+    for (const ratio of LOW) {
+      for (const collapse of ['none', 'collapseBreach'] as Collapse[]) {
+        push(`truncatedOnly/${ratio}/${collapse}`, mk(ratio, false, true, false, collapse));
+      }
+    }
+    for (const ratio of HIGH) {
+      for (const collapse of ['none', 'collapseBreach'] as Collapse[]) {
+        push(`excessOnly/${ratio}/${collapse}`, mk(ratio, false, false, true, collapse));
+      }
+    }
+    /* Tier 1, the loop-and-truncate (ch18) shape and its excess mirror. */
+    for (const ratio of LOW) {
+      for (const collapse of ['none', 'collapseBreach'] as Collapse[]) {
+        push(`dupAndTruncated/${ratio}/${collapse}`, mk(ratio, true, true, false, collapse));
+      }
+    }
+    for (const ratio of HIGH) {
+      for (const collapse of ['none', 'collapseBreach'] as Collapse[]) {
+        push(`dupAndExcess/${ratio}/${collapse}`, mk(ratio, true, false, true, collapse));
+      }
+    }
+    /* Tier 2 — nothing attributed. ONE equivalence class: `verdictTier`
+       short-circuits on `noSentences` before looking at anything else, and
+       `oldScore` forces the ratio term to `|1-0|` unconditionally too — so
+       every other field is provably irrelevant to either comparison and
+       varying them would only inflate the grid without adding coverage. */
+    push('noSentences', { ...mk(0, false, true, false, 'none'), noSentences: true, endingPresent: false });
+    return grid;
+  }
+
+  it('every disagreement between the OLD sum and the NEW tier scheme falls into a documented category', () => {
+    const grid = buildGrid();
+    expect(grid.length).toBeGreaterThan(50); // sanity: the grid is non-trivial
+
+    /* Category 1 — CROSS-TIER: the two verdicts are in different tiers, so
+       the NEW scheme always picks the lower tier OUTRIGHT, regardless of the
+       OLD sum's magnitude. This is what the whole fix is FOR — see
+       `verdictTier`'s own comment for the two deliberate reversals from the
+       pre-#2342 baseline this produces ((a) dup/truncated/excess beats
+       noSentences, (b) clean-prose-but-miscast beats prose-damaged) — this
+       test doesn't re-derive which specific pairing is "deliberate" by
+       label, it mechanically checks the ONE structural invariant that makes
+       both of them true at once: lower tier wins, unconditionally.
+
+       Category 2 — SAME-TIER-0: both verdicts are tier 0 (clean prose). The
+       OLD sum had NO term at all for `markersLost`/`dialogueCollapse` — its
+       score for a tier-0 verdict is driven purely by `coverageRatio`, a
+       value that is semantically NOISE there (tier 0 means the prose amount
+       is fine; a huge deviation can still occur legitimately via the tiny-
+       span un-evaluable case). NEW's tier-0 tie-break correctly ignores
+       ratio entirely and ranks by attribution-quality severity alone
+       (`markersLost` (200) > a breaching collapse `pct` (<=100)). Any
+       disagreement here is expected: OLD's ranking in this region was never
+       meaningful, since a term it never had is exactly what's now deciding
+       the order — this is new information, not a reversed preference. */
+    let disagreements = 0;
+    let crossTierSeen = false;
+    let sameTier0Seen = false;
+
+    for (const { v: a, label: la } of grid) {
+      for (const { v: b, label: lb } of grid) {
+        if (a === b) continue;
+        const oldA = oldScore(a);
+        const oldB = oldScore(b);
+        const oldBetter: 'a' | 'b' | 'tie' = oldA < oldB ? 'a' : oldA > oldB ? 'b' : 'tie';
+        const newA = isBetterCoverage(a, b);
+        const newB = isBetterCoverage(b, a);
+        const newBetter: 'a' | 'b' | 'tie' = newA ? 'a' : newB ? 'b' : 'tie';
+        if (oldBetter === newBetter) continue; // agreement — the overwhelming common case
+        disagreements += 1;
+
+        const ta = tierOf(a);
+        const tb = tierOf(b);
+        const pairLabel = `${la} vs ${lb} (old=${oldBetter}, new=${newBetter}, tier ${ta} vs ${tb})`;
+
+        if (ta !== tb) {
+          crossTierSeen = true;
+          const lowerIsA = ta < tb;
+          expect(newBetter, `CROSS-TIER but NEW didn't prefer the lower tier: ${pairLabel}`).toBe(
+            lowerIsA ? 'a' : 'b',
+          );
+        } else if (ta === 0) {
+          sameTier0Seen = true;
+          // No further assertion beyond "this is the known, expected shape" —
+          // see the category-2 rationale above; OLD's ranking here carries no
+          // information NEW is obligated to preserve.
+        } else {
+          // UNDOCUMENTED shape: same tier 1 (should be IMPOSSIBLE — tier 1's
+          // tie-break is the OLD score verbatim, so same-tier-1 pairs must
+          // always AGREE with OLD) or same tier 2 (only one representative
+          // in the grid, so unreachable). Either way, fail loudly rather
+          // than silently classifying it as "fine".
+          expect.fail(`UNDOCUMENTED disagreement shape, do not paper over it: ${pairLabel}`);
+        }
+      }
+    }
+
+    expect(disagreements, 'the grid must actually exercise some disagreements').toBeGreaterThan(0);
+    expect(crossTierSeen, 'never witnessed a cross-tier disagreement').toBe(true);
+    expect(sameTier0Seen, 'never witnessed a same-tier-0 disagreement').toBe(true);
   });
 });
