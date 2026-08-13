@@ -1,4 +1,6 @@
 import type { LanguageConventions } from './types.js';
+import type { NameIndex } from './name-matcher.js';
+import { findRosterName } from './name-matcher.js';
 
 /* Opt-in, conservative recovery for DEGRADED manuscripts — where a source
    conversion (most commonly a Calibre TXT→EPUB) collapsed many dialogue turns
@@ -7,20 +9,27 @@ import type { LanguageConventions } from './types.js';
 
    This is a BODY TRANSFORMATION on narration-open lines: it inserts a line break
    before a mid-paragraph dash ONLY when the turned-out segment carries ending
-   dialogue EVIDENCE — i.e. a tag clause with a speech/beat verb (the same bar
-   parseDialogueSpans applies, parser.ts). That single gate makes fabrication
-   impossible rather than merely rare:
+   dialogue EVIDENCE — an interior tag clause that anchors a SPEAKER. The tag
+   must (a) contain a speech/beat verb AND (b) carry a roster NAME or a
+   first-person pronoun (я) — the same attribution bar parseDialogueSpans uses.
+   That combined gate keeps fabrication structurally impossible:
 
-     • a genuine turn like “. — Речь, — сказал Антон.” splits  (has a verb tag)
-     • a bare narration tail like “. — Толик отличался запасливостью…” does NOT
-       split (no tag, no verb) → it stays glued and is never mis-detected;
+     • a genuine turn like “. — Речь, — сказал Антон.” splits      (named tag)
+     • a first-person turn like “. — Возьми, — сказал я.” splits    (я tag)
+     • a bare narration tail “. — Толик отличался запасливостью…” never splits
+       (no tag) → stays glued, never mis-detected;
+     • a beat/pronoun narration interruption, e.g. “. — Картина, — воскликнул он
+       мысленно…” does NOT split — the tag is neither named nor first-person, so
+       an un-attributable beat verb can never promote narration to speech;
      • an apposition dash (X — это Y) is never preceded by a sentence end, so it
        is not even a candidate.
 
-   A verb-bearing tag WITHOUT a roster name/pronoun is accepted on purpose —
-   identical to parseDialogueSpans, which keeps such turns as unanchored speech.
-   So recovery can restore COVERAGE (the turn is surfaced and aligned) even when
-   no speaker name anchors it; attribution of those spans is downstream's job.
+   TRADEOFF, explicit: evidence requires a SPEAKER ANCHOR, so a genuine turn
+   whose tag is only a bare third-person pronoun (“. — Нет, — ответил он.”) is
+   NOT recovered — the ambiguity (could be narration: «он покачал головой») is
+   deliberately resolved against recovery. Recovery restores COVERAGE only for
+   turns it can attribute (named or first-person); everything else is left glued
+   rather than fabricated.
 
    OFFSET CONTRACT: this is a body transformation, so the returned string has
    DIFFERENT offsets than the input. Any caller that also aligns structure
@@ -54,18 +63,24 @@ function hasSpeechOrBeatVerb(text: string, conv: LanguageConventions): boolean {
   return verbs.some((s) => lower.includes(s));
 }
 
-/** true when `segment` (text of a candidate turn, starting after its leading
-    dash) carries genuine dialogue evidence: it must contain a verb-bearing tag
-    clause. A bare speech-like line with no tag fails this gate and is left as
-    narration — never fabricated as speech. */
-function hasTurnEvidence(segment: string, conv: LanguageConventions): boolean {
+/** true when `segment` (a candidate turn, starting after its leading dash) is a
+    real attributed dialogue turn: it must contain a tag clause that BOTH carries
+    a speech/beat verb AND anchors a speaker (a roster name or first-person я).
+    A beat/pronoun narration interruption has neither → it is left as narration,
+    never fabricated as speech. */
+function hasTurnEvidence(segment: string, index: NameIndex): boolean {
+  const conv = index.conventions;
   for (const m of segment.matchAll(TAG_OPEN)) {
     // tag text runs from just past the dash to the next clause end (or end).
     const tagStart = (m.index ?? 0) + m[0].length;
     const tail = segment.slice(tagStart);
     const end = tail.search(CLAUSE_END);
     const tagText = (end === -1 ? tail : tail.slice(0, end)).trim();
-    if (hasSpeechOrBeatVerb(tagText, conv)) return true;
+    if (!hasSpeechOrBeatVerb(tagText, conv)) continue;
+    // evidence must anchor a speaker: a roster name OR first-person pronoun.
+    // Third-person pronouns are NOT evidence (он/она appear in narration beats).
+    if (findRosterName(tagText, index)) return true;
+    if (conv.pronouns.firstPerson?.test(tagText)) return true;
   }
   return false;
 }
@@ -73,7 +88,8 @@ function hasTurnEvidence(segment: string, conv: LanguageConventions): boolean {
 /** Insert a line break before each evidenced mid-paragraph dash turn in a
     narration-open line. Returns the transformed body (paras joined by '\n').
     Pure; never mutates the input. */
-export function splitEvidencedInteriorTurns(body: string, conv: LanguageConventions): string {
+export function splitEvidencedInteriorTurns(body: string, index: NameIndex): string {
+  const conv = index.conventions;
   if (!conv.dialogueOpen) return body; // only dash-dialogue languages
   const out: string[] = [];
   let changed = false;
@@ -95,7 +111,7 @@ export function splitEvidencedInteriorTurns(body: string, conv: LanguageConventi
     for (let i = 0; i < candidates.length; i++) {
       const segEnd = i + 1 < candidates.length ? candidates[i + 1].start : line.length;
       const seg = line.slice(candidates[i].start, segEnd);
-      if (hasTurnEvidence(seg, conv)) cuts.push(candidates[i].dash);
+      if (hasTurnEvidence(seg, index)) cuts.push(candidates[i].dash);
     }
     if (cuts.length === 0) { out.push(line); continue; }
     changed = true;

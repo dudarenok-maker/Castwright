@@ -105,7 +105,7 @@ export function parseChapterStructure(
 ): ParagraphEvidence[] {
   const conv = index.conventions;
   const text = opts?.recoverMidParagraphTurns
-    ? splitEvidencedInteriorTurns(body, conv)
+    ? splitEvidencedInteriorTurns(body, index)
     : body;
   const out: ParagraphEvidence[] = [];
   let offset = 0;

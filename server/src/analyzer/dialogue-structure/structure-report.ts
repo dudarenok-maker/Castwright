@@ -21,7 +21,10 @@ export interface ParagraphStructureReport {
   paraInitialDashes: number;
   /** dashes inside narration-open paragraphs — the genuinely hidden/lost set */
   hiddenDashes: number;
-  /** hidden dashes preceded by sentence-end — the weak-signal turn candidates */
+  /** hidden dashes preceded by sentence-end — the weak-signal turn candidates.
+      UPPER BOUND: the sentence-end heuristic is weaker than recovery's evidence
+      gate (a candidate may still lack a speaker-anchored tag), so this is a
+      scanning signal, NOT a forecast of how many turns recovery will restore. */
   hiddenTurnCandidates: number;
   /** ratio of the hidden set to all dashes (0..1); 0 = clean structure */
   hiddenFraction: number;
@@ -58,7 +61,7 @@ export function assessParagraphStructure(body: string, conv: LanguageConventions
     for (const m of dashes) {
       totalDashes++;
       hiddenDashes++;
-      const before = p.slice(Math.max(0, m.index! - 6), m.index!);
+      const before = p.slice(Math.max(0, m.index! - 20), m.index!);
       if (/([.!?…]|\.{3})\s*$/u.test(before)) hiddenTurnCandidates++;
     }
   }
