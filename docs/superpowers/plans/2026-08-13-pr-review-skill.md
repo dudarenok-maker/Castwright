@@ -352,8 +352,18 @@ The pre-rewrite `SKILL.md:11` linked
 `../model-routing/SKILL.md#mandatory-independent-review-prs` — an anchor Task 6
 deletes. The full rewrite should have removed it; confirm rather than assume:
 
-Run: `git grep -n "model-routing/SKILL.md#" -- .claude/skills/pr-review-gate/`
+Run: `git grep -n "model-routing/SKILL.md#mandatory-independent-review-prs\|model-routing/SKILL.md#pr-gate-issue-verification" -- .claude/skills/pr-review-gate/`
 Expected: no output.
+
+**Scope the grep to the two DYING anchors.** An earlier draft of this step ran
+the bare `model-routing/SKILL.md#` prefix and expected no output at all, which
+is wrong: `pr-review-gate/` legitimately links three sections `model-routing`
+*keeps* — `#routing-table`,
+`#mandatory-adversarial-review-specs--plans`, and
+`#judgment-call-carve-out-shared-by-both-review-loops` — from both `SKILL.md`
+and `references/findings-triage.md`. The bare prefix reports those as hits and
+invites someone to "fix" correct links. Only the two moved anchors must
+disappear.
 
 - [ ] **Step 7: Mutation-verify**
 
