@@ -2531,15 +2531,20 @@ synthesis.
 
 Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night Watch Tetralogy\Ночной дозор`.
 
-> **Do not schedule the next re-run yet — two reasons, both cheap to check.**
-> (1) The in-flight speaker-separation work ([#2288](https://github.com/dudarenok-maker/Castwright/issues/2288),
-> [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)) changes dialogue
-> segmentation, so a 12-hour pass taken before it lands measures a moving target and
-> has to be repeated. (2) [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s
-> cause is now identified **offline** — the roster `reconcileSentenceCharacterIds`
-> validates against, not the model — so a re-run would confirm a diagnosis that is
-> already in hand rather than produce a new one. Wait for both, then take C2 and C3
-> in one session.
+> **Hold the full 12-hour re-run — the in-flight speaker-separation work**
+> ([#2288](https://github.com/dudarenok-maker/Castwright/issues/2288),
+> [#2279](https://github.com/dudarenok-maker/Castwright/issues/2279)) **changes dialogue
+> segmentation**, so a pass taken before it lands measures a moving target and has to
+> be repeated. Wait for it, then take C2 and C3 in one session.
+>
+> **But a one-chapter local-vs-Gemini A/B is the next step and is not blocked by
+> that.** [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s cause is
+> **not** identified: an offline replay showed that swapping the roster
+> `reconcileSentenceCharacterIds` validates against moves the victim rate 38.0% →
+> 76.3%, but the run's own logs record **zero demotions** on that path — same
+> `log(1, …)` channel as a control message that *does* appear — so the mechanism is a
+> real latent hazard that did not fire here. The dash lines were `narrator` before
+> reconcile, which points at the stage-2 output itself.
 >
 > **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down the run's
 > checkout.** The 2026-08-12/13 pass's raw stage-2 output — the model's attribution
@@ -2577,11 +2582,13 @@ throttling, with the limiter, the retries and the fallback interacting over hour
 Uses the free-tier `GEMINI_API_KEY` **already configured** in `server/.env` — a
 credential this run exercises, not a blocker.
 
-**Take it opportunistically rather than scheduling a session for it.** Its remaining
-draw is that it doubles as the cloud arm of
-[#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s control — and
-#2306's cause has since been identified offline, so it is no longer the shortest
-path to that answer either.
+**Its remaining draw is that it doubles as the cloud arm of
+[#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s control** — and
+with #2306's cause still open and the **stage-2 output** now the leading suspect,
+that A/B is the sharpest test available rather than a spare one. Two candidates have
+been eliminated offline (`isConventionRescue`'s roster gate moves 0.1 points;
+`reconcileSentenceCharacterIds`'s demotion is potent at 38.0% → 76.3% but logged
+**zero** demotions in the actual run), which is what promoted the A/B back up.
 
 **Two things the 2026-08-06 local pass established for this row, before anyone
 sets it up again:**
