@@ -936,19 +936,35 @@
         <a href="https://github.com/dudarenok-maker/Castwright/issues/2279">#2279</a>) changes
         dialogue segmentation, so a pass taken before it lands measures a moving target and has to be
         repeated. Wait for it, then take C2 and C3 in one session.
-        <b>A one-chapter local-vs-Gemini A/B is the next step and is NOT blocked by that.</b>
-        <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>'s cause is
-        <b>not</b> identified: an offline replay showed that swapping the roster
-        <code>reconcileSentenceCharacterIds</code> validates against moves the victim rate
-        <b>38.0% → 76.3%</b>, but the run's own logs record <b>zero demotions</b> on that path — the
-        same <code>log(1, …)</code> channel as a control message that <em>does</em> appear — so that
-        mechanism is a real latent hazard which did not fire here. The dash lines were
-        <code>narrator</code> before reconcile, which points at the stage-2 output itself.
-        <b>And preserve <code>server/handoff/outbox/*-stage2-ch*.json</code> before tearing down the
-        run's checkout:</b> the 2026-08-12/13 pass's raw stage-2 output — the model's attribution
-        <em>before</em> any engine or reconcile — was destroyed with its worktree, and it is the one
-        artifact that would have settled #2306's residual gap without a re-run. The analysis cache
-        does not carry it; it holds the final, post-demotion ids.
+        <b>#2306's cause is still NOT identified (2026-08-13).</b> A strong candidate was raised and
+        then refuted by measurement, and both halves are recorded here so it is not raised a third
+        time.
+        The candidate: this run was driven over the API and its confirm payload carries no
+        <code>language</code> field (<code>book-req3.json</code>, on disk), so the book persisted as
+        <code>state.language = "en"</code> while <code>POST /import</code> had detected
+        <code>ru</code> seconds earlier. Marked <code>en</code> a book gets no
+        <code>languagePreamble</code>, and <code>conventionsFor('en').dialogueOpen</code> is
+        <code>null</code>, which makes the #2253 convention invariant inert. The correlation is real
+        and verified — the 2026-08-06 book that attributed well is <code>ru</code>; the 2026-08-12
+        book that collapsed is <code>en</code>, same manuscript and same engine.
+        <b>The mechanism does not survive testing.</b> Replaying the captured ch3 chunk-1 prompt
+        varying ONLY <code>StageCall.language</code> gives 0.0% narrated on both <code>ru</code> and
+        <code>en</code>; pushing the captured raw model output through <code>crossExamine</code> with
+        <code>dialogueOpen: undefined</code> (the <code>en</code> configuration) gives 5.6%, against a
+        recorded 94.8%. Neither path reproduces the collapse. Every <code>en</code> book was created
+        by the same harness in the same sessions as the collapsed runs, so <code>state.language</code>
+        may be a marker of provenance rather than the operative difference.
+        The language default is fixed anyway
+        (<a href="https://github.com/dudarenok-maker/Castwright/issues/2335">#2335</a>) — stamping a
+        Russian book English is wrong on its own terms — but it is <b>not</b> recorded here as
+        #2306's cause.
+        The earlier roster-reconcile hypothesis is also withdrawn: the run's own logs record zero
+        demotions on that path, and controlled replays of the real chunker attribute the collapsed
+        chapter at 0.5%. It remains a latent hazard that did not fire here.
+        <b>And preserve <code>server/handoff/outbox/*-stage2-ch*.json</code> before tearing down a
+        run's checkout</b> — #2324 now numbers each call's forensics, so a chunked chapter no longer
+        overwrites its own prompts and responses as it runs (which is why only last chunks survived
+        this one).
       </div>
       <div class="flag">
         <b>Discharged 2026-08-06 — results recorded, one target missed.</b>
@@ -1026,7 +1042,10 @@
         scheduling a session:</b> its remaining draw is that it doubles as the cloud arm of
         <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>'s control — which,
         with #2306's cause still open and the stage-2 output the leading suspect, is now the sharpest
-        test available rather than a spare one.</p>
+        test available rather than a spare one. Two candidates have been eliminated offline
+        (<code>isConventionRescue</code>'s roster gate moves 0.1 points;
+        <code>reconcileSentenceCharacterIds</code>'s demotion is potent at 38.0% → 76.3% but logged zero
+        demotions in the actual run), which is what promoted the A/B back up.</p>
         <p><b>Established by the 2026-08-06 local pass:</b> <code>gemini-*</code> really does
         RECITATION-block this book — a queued Ollama call timed out into the cloud fallback and
         <code>gemini-3.5-flash-lite</code> returned <code>PROHIBITED_CONTENT</code> on a stage-2 section.

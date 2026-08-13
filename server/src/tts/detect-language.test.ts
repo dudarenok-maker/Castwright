@@ -67,6 +67,52 @@ describe('detectManuscriptLanguage', () => {
     expect(r).toEqual({ language: 'en', supported: true, fallback: true });
   });
 
+  it('flags a coerced Latin match as a fallback guess instead of a confident decision (#2337 review C1)', () => {
+    // franc is restricted to the registry's four Latin ISO-639-3 codes
+    // (eng/spa/fra/deu). A Latin-script language outside that set doesn't
+    // make franc surrender to 'und' — it gets COERCED onto its nearest
+    // registered neighbour and returned as a confident (fallback: false)
+    // match, which is worse than the pre-registry-restriction behaviour: the
+    // wrong language persists (not merely 'en'), and it is uncorrectable
+    // afterwards (PUT /api/books/:bookId/state has no `language` in its
+    // whitelist). Measured directly against franc 2026-08-13:
+    //   italian     restricted=spa  unrestricted=ita
+    //   portuguese  restricted=spa  unrestricted=por
+    //   dutch       restricted=deu  unrestricted != {eng,spa,fra,deu}
+    // `language` still carries the restricted best guess so the confirm
+    // screen has something to pre-select and override — only `fallback`
+    // changes.
+    const it_ =
+      "Il forno si era raffreddato fino al colore di un tramonto coperto di cenere, e Wren raschiava l'ultima scoria quando qualcuno bussò alla porta della sua officina.";
+    const pt =
+      'O forno tinha esfriado até a cor de um pôr do sol coberto de cinzas, e Wren raspava a última escória quando alguém bateu à porta da sua oficina.';
+    const nl =
+      'De oven was afgekoeld tot de kleur van een met as bedekte zonsondergang, en Wren schraapte het laatste slak weg toen er op de deur van haar werkplaats werd geklopt.';
+
+    const itResult = detectManuscriptLanguage(it_);
+    expect(itResult.language).toBe('es');
+    expect(itResult.fallback).toBe(true);
+
+    const ptResult = detectManuscriptLanguage(pt);
+    expect(ptResult.language).toBe('es');
+    expect(ptResult.fallback).toBe(true);
+
+    const nlResult = detectManuscriptLanguage(nl);
+    expect(nlResult.language).toBe('de');
+    expect(nlResult.fallback).toBe(true);
+  });
+
+  it('keeps fallback:false for a genuinely-agreeing Latin match (the no-regression control for C1)', () => {
+    // The cross-check must not turn every Latin match into a surrender —
+    // only franc restricted vs. unrestricted DISAGREEING is a coercion.
+    // Reuses the module's own Spanish fixture (also covered by the
+    // 'detects Spanish' test above) to pin the agreement path explicitly
+    // alongside the disagreement cases above, in the same describe block.
+    const es =
+      'El horno se había enfriado hasta el color de un atardecer cubierto de ceniza, y Wren raspaba la última escoria cuando alguien llamó a la puerta de su taller.';
+    expect(detectManuscriptLanguage(es)).toEqual({ language: 'es', supported: true, fallback: false });
+  });
+
   it('strips an English front-matter page before detecting the Spanish body', () => {
     const text =
       'Copyright © 2026 Some Publisher. All rights reserved.\nFirst published as an ebook.\nhttps://example.com/book\n\n' +
@@ -259,6 +305,31 @@ describe('detectManuscriptLanguageFromChapters (#2263)', () => {
 
   it('an empty chapter list surrenders rather than throwing', () => {
     expect(detectManuscriptLanguageFromChapters([])).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  it('an ALL-COERCED book (every chapter a franc coercion) surrenders to en, never the coerced language (#2337 review N3)', () => {
+    // #2337 review C1 made a single coerced detection carry `fallback: true`
+    // alongside a non-'en' `language` (e.g. Italian -> 'es'). import.ts's own
+    // NOT-A-FALLBACK comment claimed this made its guard clause "no longer
+    // inert" — but THIS route calls detectManuscriptLanguageFromChapters, and
+    // voteLanguage filters every `fallback: true` ballot out of
+    // nonSurrendered BEFORE the vote runs (a coerced ballot never enters
+    // massByLanguage). A book that is ENTIRELY coerced chapters never
+    // reaches the vote with a non-'en' winner: nonSurrendered ends up empty
+    // and voteLanguage surrenders straight to resultFor('en', true). Confirm
+    // the fixture is a genuine coercion first (matching the #2337 C1 test
+    // above), then that the chapter-voting entry point still lands on 'en'.
+    const it_ =
+      "Il forno si era raffreddato fino al colore di un tramonto coperto di cenere, e Wren raschiava l'ultima scoria quando qualcuno bussò alla porta della sua officina.";
+    const solo = detectManuscriptLanguage(it_);
+    expect(solo).toEqual({ language: 'es', supported: true, fallback: true });
+
+    const r = detectManuscriptLanguageFromChapters([
+      { title: 'Chapter One', body: repeat(it_) },
+      { title: 'Chapter Two', body: repeat(it_) },
+      { title: 'Chapter Three', body: repeat(it_) },
+    ]);
+    expect(r).toEqual({ language: 'en', supported: true, fallback: true });
   });
 });
 

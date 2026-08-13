@@ -34,8 +34,15 @@
  * from. `fallback: false` alone is NOT proof of confidence — franc has no
  * confidence floor above its own `minLength: 30`, so a short,
  * unrepresentative sample (a table of contents, a run of OCR noise) can
- * return a fluent, WRONG, non-fallback language (#2246 C1: a genuinely
- * English table of contents mis-detects as 'es' with `fallback: false`).
+ * still return a fluent, WRONG, non-fallback language (#2246 C1: a
+ * genuinely English table of contents originally mis-detected as 'es' with
+ * `fallback: false`; #2337 review C1, 2026-08-13, narrowed but did not
+ * close this gap — franc's restricted call is now cross-checked against an
+ * UNRESTRICTED call, and disagreement is flagged as `fallback: true`, so
+ * this exact fixture surrenders one layer earlier today, but the cross-check
+ * is blind to a short sample that coincidentally mis-detects WITHIN the
+ * registry's four Latin codes both restricted and unrestricted — that case
+ * still needs this floor).
  * Round 1's fix required a SECOND independent sample to agree before
  * writing; round 2 proved that fix unusable in practice — `loadAnalysisCache`
  * resolves `CACHE_DIR` from its own module `__dirname`

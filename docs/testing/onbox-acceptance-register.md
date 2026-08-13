@@ -2595,20 +2595,40 @@ Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night W
 > segmentation**, so a pass taken before it lands measures a moving target and has to
 > be repeated. Wait for it, then take C2 and C3 in one session.
 >
-> **But a one-chapter local-vs-Gemini A/B is the next step and is not blocked by
-> that.** [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306)'s cause is
-> **not** identified: an offline replay showed that swapping the roster
-> `reconcileSentenceCharacterIds` validates against moves the victim rate 38.0% →
-> 76.3%, but the run's own logs record **zero demotions** on that path — same
-> `log(1, …)` channel as a control message that *does* appear — so the mechanism is a
-> real latent hazard that did not fire here. The dash lines were `narrator` before
-> reconcile, which points at the stage-2 output itself.
+> **#2306's cause is still NOT identified (2026-08-13).** A strong candidate was
+> raised and then refuted by measurement, and both halves are recorded here so it
+> is not raised a third time.
 >
-> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down the run's
-> checkout.** The 2026-08-12/13 pass's raw stage-2 output — the model's attribution
-> *before* any engine or reconcile — was destroyed with its worktree, and it is the
-> one artifact that would have settled the residual gap in #2306 without a re-run.
-> The analysis cache alone does not carry it: it holds the final, post-demotion ids.
+> The candidate: this run was driven over the API and its confirm payload carries
+> no `language` field (`book-req3.json`, on disk), so the book persisted as
+> `state.language = "en"` while `POST /import` had detected `ru` seconds earlier.
+> Marked `en` a book gets no `languagePreamble`, and
+> `conventionsFor('en').dialogueOpen` is `null`, which makes the #2253 convention
+> invariant inert. The correlation is real and verified — the 2026-08-06 book that
+> attributed well is `ru`; the 2026-08-12 book that collapsed is `en`, same
+> manuscript and same engine.
+>
+> **The mechanism does not survive testing.** Replaying the captured ch3 chunk-1
+> prompt varying ONLY `StageCall.language` gives 0.0% narrated on both `ru` and
+> `en`; pushing the captured raw model output through `crossExamine` with
+> `dialogueOpen: undefined` (the `en` configuration) gives 5.6%, against a
+> recorded 94.8%. Neither path reproduces the collapse. Every `en` book was
+> created by the same harness in the same sessions as the collapsed runs, so
+> `state.language` may be a marker of provenance rather than the operative
+> difference.
+>
+> The language default is fixed anyway (#2335) — stamping a Russian book English
+> is wrong on its own terms — but it is **not** recorded here as #2306's cause.
+>
+> The earlier roster-reconcile hypothesis is also withdrawn: the run's own logs
+> record zero demotions on that path, and controlled replays of the real chunker
+> attribute the collapsed chapter at 0.5%. It remains a latent hazard that did
+> not fire here.
+>
+> **Preserve `server/handoff/outbox/*-stage2-ch*.json` before tearing down a run's
+> checkout** — #2324 now numbers each call's forensics, so a chunked chapter no
+> longer overwrites its own prompts and responses as it runs (which is why only
+> last chunks survived this one).
 
 ### C1 · Free-tier Gemma cloud pass completes end to end ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 

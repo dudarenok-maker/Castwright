@@ -1,9 +1,11 @@
 /* Server-side manuscript language detection (fs-41/fs-50 seam 2). Runs during
    POST /api/import. The script pre-pass is authoritative (Cyrillic⇒ru, CJK⇒
-   unsupported); franc disambiguates the Latin set (en/es/fr/de), restricted to
-   the registry's ISO-639-3 codes. Front-matter is stripped first so an English
-   copyright page can't mask a non-English body. Never silently returns `en` for
-   a confidently-detected other language — the `supported` flag rides along.
+   zh/ja — both `supported: true` since fs-59 W5, read through the registry
+   below rather than a literal); franc disambiguates the Latin set (en/es/fr/de),
+   restricted to the registry's ISO-639-3 codes. Front-matter is stripped first
+   so an English copyright page can't mask a non-English body. Never silently
+   returns `en` for a confidently-detected other language — the `supported`
+   flag rides along.
 
    #2263 — `detectManuscriptLanguage` samples the first SAMPLE_CHARS of the
    WHOLE document, which is exactly where front matter (title page, copyright,
@@ -41,13 +43,18 @@ export interface DetectionResult {
   /** Whether that language has passed its validation gate (registry `supported`). */
   supported: boolean;
   /**
-   * True on a surrender path (no letters to sample, or franc found no Latin
-   * match) where `language: 'en'` is a confidence-floor guess, not a decision.
-   * False whenever the language was genuinely decided (script pre-pass match,
-   * or a real franc match) — including the `en` case where franc/pre-pass
-   * actually decided English. `supported` cannot distinguish these cases
-   * because 'en' is itself `supported: true`; callers that must "never write
-   * a language they only guessed" (#2246) need this field, not `supported`.
+   * True on a surrender path — no letters to sample, franc found no Latin
+   * match, or franc's restricted-to-the-registry answer was a coercion (an
+   * unrestricted franc call landed outside the registry's Latin set, so the
+   * restricted match was forced onto the nearest registered language rather
+   * than genuinely decided) — where `language` is a confidence-floor guess,
+   * not a decision. On the coercion path `language` still carries the
+   * restricted best guess, not `'en'`. False whenever the language was
+   * genuinely decided (script pre-pass match, or a real franc match) —
+   * including the `en` case where franc/pre-pass actually decided English.
+   * `supported` cannot distinguish these cases because 'en' is itself
+   * `supported: true`; callers that must "never write a language they only
+   * guessed" (#2246) need this field, not `supported`.
    */
   fallback: boolean;
 }
@@ -97,12 +104,74 @@ export function detectManuscriptLanguage(
     return resultFor(kana > han ? 'ja' : 'zh', false);
   }
 
-  /* 3. franc disambiguates Latin, restricted to the registry's Latin codes. */
+  /* 3. franc disambiguates Latin, restricted to the registry's Latin codes.
+     Restricting franc's `only` set to the four registered Latin languages
+     means franc MUST answer with one of them — a book written in a Latin
+     language outside that set (Italian, Portuguese, Dutch, …) gets coerced
+     onto its nearest registered neighbour (Italian → 'es', Portuguese →
+     'es', Dutch → 'de', measured 2026-08-13) and returned as if it were a
+     genuine decision. Cross-check with an UNRESTRICTED franc call: if the
+     unrestricted answer isn't one of the registry's Latin codes, the
+     restricted answer was a coercion, not a decision, so this is a
+     surrender — `fallback: true` — even though `language` still carries the
+     restricted best guess (so the confirm screen has something to
+     pre-select and override). This function runs once per CANDIDATE CHAPTER
+     in production (voteLanguage below calls it per chapter, not once per
+     book), so that is the unit the cross-check needs measuring against — a
+     whole-book figure understates the sample, since per-chapter samples are
+     smaller and more numerous. Measured per chapter against all 82 cached
+     analyses in the live corpus (server/handoff/cache, 2026-08-13): 607
+     franc ballots, 5 disagreements (0.8%), all of them real English prose
+     that unrestricted franc labels `sco` (Scots) rather than a genuine
+     coercion — absorbed by voteLanguage's mass vote, so 0 outcome changes
+     across all 77 books with chapters. */
   const latin = allLanguageEntries().filter((e) => e.detect.script === 'latin');
-  const iso = franc(sample, { only: latin.map((e) => e.detect.iso6393), minLength: 30 });
+  const latinIso = latin.map((e) => e.detect.iso6393);
+  const iso = franc(sample, { only: latinIso, minLength: 30 });
   const match = latin.find((e) => e.detect.iso6393 === iso);
   // 'und' or no match → fall back to English (the confidence floor).
-  return match ? resultFor(match.code, false) : resultFor('en', true);
+  if (!match) return resultFor('en', true);
+
+  /* #2332/#2337 ordering (merge-induced conflict, resolved 2026-08-14) —
+     PUNCTUATED junk (a numbered TOC, a repeated heading — #2256's residual:
+     enough sentence-terminal units to clear PROSE_UNIT_FLOOR, but not real
+     prose) must surrender via #2332's specific junk-gate reason (voteLanguage
+     below, applied to the winning aggregate — the more actionable diagnosis),
+     not via this cross-check's generic confidence-floor reason. franc's
+     UNRESTRICTED call is unstable on that class of non-prose text: it isn't
+     disagreeing because the text is a genuine foreign language coerced onto
+     the wrong registered neighbour, it's disagreeing because there is no real
+     language decision to make at all (measured: a 40-entry numbered TOC and a
+     30x-repeated "Chapter One." heading both send the unrestricted call to an
+     ISO code with no relation to the text — 'jav', 'src' — that a real
+     coercion never produces). So the cross-check below is skipped ONLY when
+     the sample BOTH clears PROSE_UNIT_FLOOR (looks substantial/punctuated —
+     the same threshold voteLanguage applies to the winning aggregate) AND
+     fails one of the two junk gates (LEXICAL_RICHNESS_FLOOR /
+     DIGIT_TOKEN_SHARE_CEILING, same as voteLanguage): only then does it keep
+     its restricted match as a decision (fallback: false), leaving those two
+     gates to catch and explain it downstream with the specific reason.
+     Requiring PROSE_UNIT_FLOOR here (unlike an earlier draft of this fix)
+     matters for a THIRD, unpunctuated-junk shape: #2246 C1's original repro
+     (a short, comma/space-only TOC list, 0 prose units) is exactly what this
+     cross-check exists to catch directly — it fails richness too, but with
+     zero prose units it never reaches voteLanguage's floor either way, so
+     gating this skip on "clears the floor" leaves it on the cross-check path
+     (fallback: true, the generic surrender reason) rather than falsely
+     routing it back through the floor. The C1 coerced-Latin fixtures below
+     (one real sentence each, well under the floor) clear the AND for the
+     same reason: too few prose units to ever satisfy it, so the cross-check
+     always runs for them. */
+  if (
+    countProseUnits(sample) >= PROSE_UNIT_FLOOR &&
+    (guiraudR(sample) < LEXICAL_RICHNESS_FLOOR || digitTokenShare(sample) > DIGIT_TOKEN_SHARE_CEILING)
+  ) {
+    return resultFor(match.code, false);
+  }
+
+  const unrestrictedIso = franc(sample, { minLength: 30 });
+  const coerced = !latinIso.includes(unrestrictedIso);
+  return resultFor(match.code, coerced);
 }
 
 /* Chapters that look like front/back matter by title, or that are too short

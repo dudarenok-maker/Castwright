@@ -104,6 +104,20 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
     }
 
     const tempId = 'imp_' + nanoid(10);
+    /* #2263 — the whole-document sample (byte 0 onward) is dominated by
+       front matter (title page, copyright, dedication, TOC, epigraph,
+       foreword) on a book whose front matter isn't in the book's own
+       language, and was silently deciding the wrong language whenever that
+       front matter outweighed the body within the sample window. Detect
+       per chapter and vote instead — see detectManuscriptLanguageFromChapters.
+
+       Computed BEFORE the staging entry (it used to run after `putStaging`)
+       so the result can be stored on it rather than only returned to the
+       client — see StagedImport.detectedLanguage for why that matters. */
+    const detected = detectManuscriptLanguageFromChapters(parsed.chapters, {
+      author: parsed.author,
+      title: parsed.title,
+    });
     const entry: StagedImport = {
       tempId,
       format: parsed.format,
@@ -117,20 +131,12 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
       originalFileName,
       byteSize,
       originalBuffer,
+      detectedLanguage: detected.language,
+      detectedLanguageSupported: detected.supported,
+      detectedLanguageFallback: detected.fallback,
       createdAt: Date.now(),
     };
     putStaging(entry);
-
-    /* #2263 — the whole-document sample (byte 0 onward) is dominated by
-       front matter (title page, copyright, dedication, TOC, epigraph,
-       foreword) on a book whose front matter isn't in the book's own
-       language, and was silently deciding the wrong language whenever that
-       front matter outweighed the body within the sample window. Detect
-       per chapter and vote instead — see detectManuscriptLanguageFromChapters. */
-    const detected = detectManuscriptLanguageFromChapters(entry.chapters, {
-      author: entry.author,
-      title: entry.title,
-    });
 
     res.json({
       tempId,
@@ -191,7 +197,9 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       title?: string;
       isStandalone?: boolean;
       /* fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected
-         on the frontend, user-overridable). Defaults to 'en' when absent. */
+         on the frontend, user-overridable). Saying nothing here — absent,
+         null, empty or whitespace — falls back to /import's own detection,
+         not to English; see the resolution below. */
       language?: string;
       /* Slugs (matching the server-derived `${id-pad}-${slug(title)}`
          form) for chapters the user pre-excluded from analysis at the
@@ -210,12 +218,28 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         .json({ error: 'Import expired or already consumed. Please re-upload.' });
     }
 
+    /* #2337 review N2 — `author`, `title` and `series` share the identical
+       shape as the `language` field C2 guarded: `(body.X ?? '').trim()`
+       only catches null/undefined via `??`; a number, boolean, array or
+       object sails past it and hits `.trim()` unguarded, throwing a raw
+       TypeError the handler's generic `catch` below surfaces as an HTTP 500
+       carrying an internal message. Reject the whole non-string, non-null
+       shape here, per field, before any `.trim()` runs — never a 500. */
+    if (body.author != null && typeof body.author !== 'string') {
+      return res.status(400).json({ error: 'author must be a string.' });
+    }
+    if (body.title != null && typeof body.title !== 'string') {
+      return res.status(400).json({ error: 'title must be a string.' });
+    }
     const author = (body.author ?? '').trim();
     const title = (body.title ?? '').trim();
     if (!author || !title) {
       return res.status(400).json({ error: 'author and title are required.' });
     }
     const isStandalone = !!body.isStandalone;
+    if (!isStandalone && body.series != null && typeof body.series !== 'string') {
+      return res.status(400).json({ error: 'series must be a string.' });
+    }
     const series = isStandalone ? STANDALONES_SERIES : (body.series ?? '').trim();
     if (!isStandalone && !series) {
       return res.status(400).json({ error: 'series is required (or set isStandalone=true).' });
@@ -236,7 +260,95 @@ importRouter.post('/books', async (req: Request, res: Response) => {
        replacement for it). Checked before ensureWorkspace()/mkdir so a
        rejected request writes nothing and leaves the staging entry intact
        for a corrected retry. */
-    const language = normaliseBookLanguage(body.language);
+    /* An OMITTED `language` now falls back to what `/import` detected from the
+       chapter bodies, not to English.
+
+       The confirm screen always sends the field (pre-filled from the detection,
+       user-overridable), so the UI path is unchanged — an explicit value still
+       wins outright, including an explicit 'en' over a Russian detection.
+       What changes is the caller that leaves it out: it used to get English
+       while the server held the correct answer from seconds earlier. Silently
+       guessing the language is not a small wrong: it picks the voices, the
+       pronunciation, the dialogue conventions and the script the cast is
+       spelled in. A Russian book confirmed this way ran for 20 hours as an
+       English one (#2306) — no language preamble, so stage 1 romanised every
+       name and stage 2 read dash-marked dialogue as narration.
+
+       Two conditions gate the fallback, and NEITHER is load-bearing today
+       (#2337 review N1 — an earlier version of this comment claimed the
+       second was; it is not, see below). SUPPORTED: an unsupported detection
+       would turn a previously-succeeding request into a 400 below — a
+       breaking change for a caller that never asked about language. Every
+       registry entry is currently `supported: true`, so this cannot fire
+       yet; it is defence for the moment one lands unsupported, as
+       es/fr/de/zh/ja each once were. NOT-A-FALLBACK: a detection that
+       surrendered is a confidence-floor guess, not a decision, and this
+       route is a writer — see DetectionResult.fallback. `detectManuscriptLanguageFromChapters`'s
+       own surrender path — what this route actually calls, not the
+       single-call `detectManuscriptLanguage` it calls internally — stamps
+       `language: 'en'` alongside `fallback: true` on every branch (see the
+       N2 paragraph below for why `detectManuscriptLanguage` itself is NOT
+       this uniform since C1), so both branches of this condition currently
+       produce the SAME `normaliseBookLanguage(entry.detectedLanguage)`
+       result the fallback-less path below would also produce — deleting
+       this clause changes no observable output today, which is why it is
+       not load-bearing yet. **#2337 review N2 (round 3): a prior version of this
+       paragraph claimed review C1 changed that** — that `entry.detectedLanguage`
+       could now be a coerced guess (e.g. `'es'`) alongside
+       `entry.detectedLanguageFallback: true`, making this clause load-bearing.
+       That is false for the path this field is actually populated from. C1's
+       coercion check lives inside `detectManuscriptLanguage` (the single-call
+       detector), but this route stores whatever
+       `detectManuscriptLanguageFromChapters` returns, and that function's
+       surrender branches — including the one an all-coerced book takes,
+       since `voteLanguage` filters every `fallback: true` ballot out of the
+       vote before it runs — are ALL hardcoded `resultFor('en', true)` (see
+       `detect-language.ts`). A coerced ballot lives only transiently inside
+       that per-chapter filtering; it is never this function's own return
+       value. So `entry.detectedLanguageFallback: true` still always pairs
+       with `entry.detectedLanguage === 'en'`, exactly as before C1, and this
+       clause is still inert for this route — matching openapi.yaml's
+       documented rule (`language`'s description above `excludedSlugs`), which
+       names only the SUPPORTED gate and says nothing about a surrender ever
+       carrying a non-`'en'` language. See
+       `detect-language.test.ts`'s "#2337 review N3" test for the pinned
+       all-coerced-surrenders-to-en behaviour.
+
+       "No choice" is the CLASS, not one spelling of it: absent, `null`, `''`
+       and whitespace all mean the caller did not pick a language, and
+       `normaliseBookLanguage` maps every one of them to 'en' (see its own
+       doc: "Missing, empty, or whitespace → 'en'"). Testing only `=== undefined`
+       would have left `{"language": ""}` — an unfilled form field, or
+       `detected ?? ''` — silently persisting English over a Russian detection,
+       i.e. this exact defect surviving under a different spelling. */
+    /* #2337 review C2 — a caller sending a non-string, non-null `language`
+       (a number, boolean, array, object) used to reach `normaliseBookLanguage`
+       unguarded below, which calls `.trim()` on whatever it was handed and
+       throws a raw TypeError that surfaced as an HTTP 500 carrying an
+       internal message on a client-facing body. `null`/`undefined` are
+       handled below (the "no choice" class); anything else non-string is
+       simply not a language the caller could have meant, so it gets the same
+       400 `unsupported_language` an unsupported STRING gets. */
+    if (body.language != null && typeof body.language !== 'string') {
+      return res.status(400).json({
+        error: 'unsupported_language',
+        message: `Unsupported language "${JSON.stringify(body.language)}". Supported languages: ${supportedLanguages()
+          .map((l) => l.code)
+          .join(', ')}.`,
+        supportedLanguages: supportedLanguages(),
+      });
+    }
+    // The C2 guard above already rejected every non-null, non-string
+    // `language` with a 400, so by this point a non-string value can only be
+    // `null`/`undefined` — the `: body.language != null` alternative a prior
+    // version had here was the exact pre-fix C2 bug expression (see
+    // import.test.ts's "#2337 review C2" describe block) kept on as dead
+    // code: always `false` post-guard, never reachable as `true`.
+    const languageChosen = typeof body.language === 'string' && body.language.trim() !== '';
+    const language =
+      !languageChosen && entry.detectedLanguageSupported && !entry.detectedLanguageFallback
+        ? normaliseBookLanguage(entry.detectedLanguage)
+        : normaliseBookLanguage(body.language);
     if (!isSupportedLanguage(language)) {
       return res.status(400).json({
         error: 'unsupported_language',

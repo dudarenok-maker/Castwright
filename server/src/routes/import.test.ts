@@ -20,6 +20,11 @@ import { detectManuscriptLanguage } from '../tts/detect-language.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_EPUB = resolve(__dirname, '..', 'parsers', '__fixtures__', 'sample.epub');
+/* The repo's canonical Russian chapter (CLAUDE.md "Canonical end-to-end
+   manuscript"). Ad-hoc Russian prose is NOT usable here: the detector has a
+   text floor and answers 'en' for a handful of sentences, which would make an
+   omitted-language test pass for the wrong reason. */
+const FIXTURE_RU_MD = resolve(__dirname, '..', '__fixtures__', 'the-coalfall-commission.ru.md');
 const FIXTURE_EPUB_NO_CALIBRE = resolve(
   __dirname,
   '..',
@@ -327,7 +332,13 @@ describe('POST /api/books — fs-2 language persistence', () => {
     expect(stateJson.language).toBe('ru');
   });
 
-  it("defaults language to 'en' when the confirm body omits it", async () => {
+  /* Renamed from "defaults language to 'en' when the confirm body omits it".
+     The omitted-language path no longer DEFAULTS to English — it falls back to
+     what /import detected. This book IS English, so the answer is unchanged;
+     the case is kept because it must not regress, but it can no longer be read
+     as evidence that we default to 'en'. The Russian case below is the one
+     that distinguishes the two. */
+  it("keeps 'en' for an ENGLISH book whose confirm body omits the language", async () => {
     const md = '# English Book\n\n## Chapter One\n\nThe story opens here with several sentences.';
     const importRes = await request(app)
       .post('/api/import')
@@ -338,6 +349,96 @@ describe('POST /api/books — fs-2 language persistence', () => {
       title: 'English Book',
       seriesPosition: null,
       isStandalone: true,
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('en');
+  });
+
+  /* #2306 — the defect that cost a 20-hour run. /import detects the language
+     from the chapter bodies and returns it, but POST /books used to read ONLY
+     body.language and default to English, dropping that detection on the floor.
+     A caller that didn't echo the field back got an English book while the
+     server held 'ru' in memory from seconds earlier — so there was no language
+     preamble, stage 1 romanised every name, and stage 2 read dash-marked
+     dialogue as narration (95.7% narrator across 15,100 sentences). */
+  it('uses the DETECTED language when the confirm body omits it (#2306)', async () => {
+    const md = readFileSync(FIXTURE_RU_MD, 'utf8');
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'nochnoy-dozor.md' });
+    // If the detection itself were wrong the fallback would prove nothing.
+    expect(importRes.body.candidate.language).toBe('ru');
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Sergei L',
+      title: 'Nochnoy Dozor',
+      seriesPosition: null,
+      isStandalone: true,
+      // language deliberately omitted — that is the whole case
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('ru');
+  });
+
+  /* #2337 review F1 — "no choice" is a CLASS, not one spelling. Testing only
+     `=== undefined` left `{"language": ""}` (an unfilled form field, or
+     `detected ?? ''`) persisting English over a Russian detection: the same
+     defect under a different spelling. normaliseBookLanguage maps missing,
+     empty AND whitespace to 'en', so each is a way of saying nothing. */
+  it.each([
+    ['empty string', ''],
+    ['whitespace', '   '],
+    ['null', null],
+  ])('treats %s as no choice and uses the detection', async (label, value) => {
+    const md = readFileSync(FIXTURE_RU_MD, 'utf8');
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'blank-language.md' });
+    expect(importRes.body.candidate.language).toBe('ru');
+
+    const confirmRes = await request(app)
+      .post('/api/books')
+      .send({
+        tempId: importRes.body.tempId,
+        author: 'Sergei L',
+        // #2337 review N6 — `JSON.stringify(value)` slugged '' and '   ' to the
+        // same "blank-language" title, minting one bookId for two of the three
+        // cases. `label` (the it.each description) is already distinct per case.
+        title: `Blank Language (${label})`,
+        seriesPosition: null,
+        isStandalone: true,
+        language: value,
+      });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('ru');
+  });
+
+  it('lets an EXPLICIT language override the detection', async () => {
+    /* The confirm screen is user-overridable, so an explicit value must still
+       win outright — including an explicit 'en' over a Russian detection. */
+    const md = readFileSync(FIXTURE_RU_MD, 'utf8');
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'override.md' });
+    expect(importRes.body.candidate.language).toBe('ru');
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Someone',
+      title: 'Override Test',
+      seriesPosition: null,
+      isStandalone: true,
+      language: 'en',
     });
     expect(confirmRes.status).toBe(201);
     const stateJson = JSON.parse(
@@ -429,6 +530,134 @@ describe('POST /api/books — unsupported language rejected at the import bounda
     );
     expect(stateJson.language).toBe('fr');
   });
+});
+
+/* #2337 review C2 — a non-string `language` used to reach `normaliseBookLanguage`
+   (which calls `bcp47.trim()`) unguarded. `languageChosen` only special-cased
+   `typeof body.language === 'string'`; any other non-null value (a number,
+   boolean, array, object) fell through to `body.language != null`, which is
+   true, so the route called `normaliseBookLanguage(42)` → `(42).trim is not a
+   function` → an uncaught TypeError → HTTP 500 with the raw internal message
+   on a client-facing body. The only defensible answer for a caller that sent
+   a non-string, non-null `language` is the same 400 `unsupported_language`
+   an unsupported STRING gets — never a 500. */
+describe('POST /api/books — a non-string `language` is rejected with 400, never a 500 (#2337 review C2)', () => {
+  it.each([
+    ['a number', 42],
+    ['a boolean', true],
+    ['an array', []],
+    ['an object', {}],
+  ])('rejects %s with 400 unsupported_language, not a 500', async (_label, value) => {
+    const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'nonstring-language.md' });
+
+    const confirmRes = await request(app)
+      .post('/api/books')
+      .send({
+        tempId: importRes.body.tempId,
+        author: 'Nonstring Lang Author',
+        title: `Nonstring Language ${_label}`,
+        seriesPosition: null,
+        isStandalone: true,
+        language: value,
+      });
+
+    expect(confirmRes.status).toBe(400);
+    expect(confirmRes.body.error).toBe('unsupported_language');
+    // Never the raw TypeError message a non-string reaching normaliseBookLanguage
+    // used to produce.
+    expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    expect(confirmRes.body.message).not.toMatch(/trim is not a function/);
+  });
+});
+
+/* #2337 review N2 (round 3) — C2 guarded ONLY `language` against a
+   non-string value. Three sibling fields on the same handler share the
+   identical shape: `(body.author ?? '').trim()`, `(body.title ?? '').trim()`,
+   and (when `!isStandalone`) `(body.series ?? '').trim()` all call `.trim()`
+   on whatever a non-string, non-null value slides past the `?? ''`. A
+   number/boolean/array/object reaches `.trim()` unguarded, throws a raw
+   TypeError, and the handler's generic `catch` at the bottom surfaces it as
+   an HTTP 500 carrying the internal message
+   ("(body.author ?? \"\").trim is not a function") on a client-facing body —
+   the same defect class C2 fixed for `language`, left open for its three
+   siblings. */
+describe('POST /api/books — a non-string author/title/series is rejected with 400, never a 500 (#2337 review N2)', () => {
+  const nonStringValues: [string, unknown][] = [
+    ['a number', 42],
+    ['a boolean', true],
+    ['an array', []],
+    ['an object', {}],
+  ];
+
+  it.each(nonStringValues)(
+    'rejects a non-string author (%s) with 400 naming the field, not a 500',
+    async (_label, value) => {
+      const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: md, fileName: 'nonstring-author.md' });
+
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: value,
+        title: 'Fallback Title',
+        seriesPosition: null,
+        isStandalone: true,
+      });
+
+      expect(confirmRes.status).toBe(400);
+      expect(confirmRes.body.error).toMatch(/author/i);
+      expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    },
+  );
+
+  it.each(nonStringValues)(
+    'rejects a non-string title (%s) with 400 naming the field, not a 500',
+    async (_label, value) => {
+      const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: md, fileName: 'nonstring-title.md' });
+
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: 'Fallback Author',
+        title: value,
+        seriesPosition: null,
+        isStandalone: true,
+      });
+
+      expect(confirmRes.status).toBe(400);
+      expect(confirmRes.body.error).toMatch(/title/i);
+      expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    },
+  );
+
+  it.each(nonStringValues)(
+    'rejects a non-string series (%s) with 400 naming the field, not a 500',
+    async (_label, value) => {
+      const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+      const importRes = await request(app)
+        .post('/api/import')
+        .send({ text: md, fileName: 'nonstring-series.md' });
+
+      const confirmRes = await request(app).post('/api/books').send({
+        tempId: importRes.body.tempId,
+        author: 'Fallback Author',
+        title: 'Fallback Title',
+        seriesPosition: null,
+        isStandalone: false,
+        series: value,
+      });
+
+      expect(confirmRes.status).toBe(400);
+      expect(confirmRes.body.error).toMatch(/series/i);
+      expect(confirmRes.body.error).not.toMatch(/trim is not a function/);
+    },
+  );
 });
 
 /* Plan 105 — multer 2.x guard. The import route mounts
@@ -586,8 +815,18 @@ describe('POST /api/import — language detection (fs-41/fs-50)', () => {
 
     // Fixture sanity: prove the OLD whole-blob call site would genuinely get
     // this wrong (not just theoretically) before asserting the NEW behaviour.
+    // `language` is still the wrong 'en' — that is the defect this whole test
+    // pins, and franc's restricted (Latin-only) call still lands there. But
+    // since #2337 review C1, `fallback` is no longer a confident `false`
+    // here either: an UNRESTRICTED franc call over this same mixed English/
+    // Chinese sample lands outside the registry's Latin set too (measured:
+    // 'sco', not 'eng'), which is exactly the coercion signal C1 added — so
+    // the whole-blob call is honest about not being sure, even though it is
+    // still the wrong answer. That is why the per-chapter vote below remains
+    // necessary regardless of C1: a flagged guess is still not the right
+    // language.
     const wholeBlob = detectManuscriptLanguage(text);
-    expect(wholeBlob).toEqual({ language: 'en', supported: true, fallback: false });
+    expect(wholeBlob).toEqual({ language: 'en', supported: true, fallback: true });
 
     const res = await request(app).post('/api/import').send({ text }).expect(200);
     expect(res.body.candidate.language).toBe('zh');
