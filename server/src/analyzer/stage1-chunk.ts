@@ -107,7 +107,9 @@ export function resolveStage1ChunkCharBudget(
     // reservation hit a wall (~130 speaking cast — past it the total estimate
     // crossed 16000 & RequestExceedsTpmError dropped the chapter). Reserving
     // the roster's actual rendered size keeps the worst-case estimate under the
-    // guard regardless of cast size.
+    // guard across the cast sizes a book realistically accumulates (cloudBody-
+    // CharBudget's 2000-char floor is the practical ceiling — past ~290 all-
+    // Cyrillic cast the roster's own tokens dominate).
     return cloudBodyCharBudget(
       body ?? '',
       stage1RosterReservedChars(runningRoster),
