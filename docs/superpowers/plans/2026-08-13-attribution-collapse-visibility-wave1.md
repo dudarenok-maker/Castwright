@@ -16,6 +16,16 @@
 > | 4 | **Is `parseChapterStructure`'s speech/tag split the D15 rule?** | Task 3 changes shape — the fallback is the case-based heuristic, which is Russian-specific and would need a per-language table this plan does not build |
 > | 2 | Does D13's banner scope land? | Wave 2 only. Does not block this plan |
 > | 3 | Is Wave 2's surface still right at this size? | Wave 2 only. Does not block this plan |
+> | 5 | **Does `unanswered` become a sixth state?** (spec R-9C4) | Wave 2 only. Does not block this plan — Task 8 prints `unattributedSpeech` either way, and that column is what the decision gets made from |
+>
+> **Revision 8 has since been through the Premium adversarial gate and did not
+> survive its first draft — five Criticals.** All are folded into both documents;
+> spec §Review findings round 8 records them. **Three land squarely in this
+> plan** and are already applied below, but read them before Task 1 rather than
+> trusting the steps: D18's write sites were the wrong two (R-9C1, Task 1);
+> criterion 3's mutation control was inert (R-9C2, Task 5); and the
+> punctuation-invariance property asserted something `alignSentences` cannot
+> deliver (R-9C3, Task 6).
 >
 > **Read the spec before Task 1.** In particular §Revision 8 rebaseline, which
 > lists thirteen revision-7 claims this plan must not carry forward, and §D13
@@ -143,12 +153,31 @@ its own steps and violates one of these has failed.
 **Gated on owner decision 1.** If declined, skip to Task 2 and delete Task 6's
 criterion-5 block.
 
-The origin of a `narrator` id is knowable only at the moment of overwrite. Two
-sites overwrite a model attribution, and the spec's criterion 5 names only the
-first — the widening is declared in spec §Wave 1 acceptance criteria and is
-load-bearing, because `applyNarratorDefault` runs only with
-`analyzer.structure.enabled` OFF, and it defaults **on** (`registry.ts:1267-1273`).
-Instrumenting only that site reports zero on every default-configuration book.
+The origin of a `narrator` id is knowable only at the moment of overwrite.
+**FIVE sites overwrite a model attribution, and the two the owner's criterion 5
+points at both produce ZERO on the default configuration** (spec R-9C1). Read
+spec §D18's write sites before writing any code here — the site list below is
+the corrected one, and the obvious-looking pair is the wrong pair.
+
+| # | Site | Runs by default? | Produces `narrator` on a speech span? |
+|---|---|---|---|
+| 1 | `reconcileSentenceCharacterIds` `analysis.ts:1423` (called `:5286`, `:6787`) | **yes, both paths, knob-independent** | **yes — and it is the #1984 incident's own mechanism** |
+| 2 | `escalateFlaggedWindows` `escalation.ts:277` | **yes** (`analyzer.structure.escalation` defaults `'local'`) | no, but it INVALIDATES the field |
+| 3 | `crossExamine` `cross-examine.ts:393` | yes (engine on) | **no** — proven in the spec |
+| 4 | `applyNarratorDefault` `analysis.ts:2287` | **no** — it is the `else` of a knob defaulting `true` | yes, when the engine is off |
+| 5 | `recoverTaggedNarratorLines` `flipQ` | yes | no, but it INVALIDATES the field |
+
+**Site 1 is the one that matters and it needs no new plumbing.** Its `onDemote`
+hook is already `(info: { sentence: SentenceOutput; originalId: string }) => void`
+(`analysis.ts:1428`) — `originalId` **is** `priorCharacterId`.
+
+**Code to the property, not to this table**, because a table is what got the
+first draft wrong:
+
+> Every path that assigns a `characterId` a stage-2 response did not return must
+> leave `priorCharacterId` correct for the value it just wrote — set to the id
+> being replaced, or **cleared** when the write is not a demotion. A path that
+> changes `characterId` and leaves `priorCharacterId` alone is a defect.
 
 **Files:**
 - Modify: `openapi.yaml`, `server/src/handoff/schemas.ts:117-142`
@@ -220,7 +249,48 @@ invert criterion 5's headline number. Run: expect three failures.
 Two branches in `applyNarratorDefault` construct a new object; both gain
 `priorCharacterId: s.characterId`. The `return s` paths are not touched.
 
-- [ ] **Step 5: RED then GREEN — the same for `crossExamine`'s correction**
+- [ ] **Step 4b: RED then GREEN — site 1, `reconcileSentenceCharacterIds`**
+
+**Do this before site 3 or 4.** It is the only one that moves the number on a
+default-configuration book, and it is the one the acceptance run checks.
+
+```ts
+it('records the roster-shrink demotion, which is the #1984 incident mechanism', () => {
+  const r = reconcileSentenceCharacterIds(
+    [{ id: 's1', chapterId: 1, text: '— Никого здесь не было.', characterId: 'dropped-char' }] as SentenceOutput[],
+    new Set(['egor', 'narrator']),
+  );
+  expect(r.sentences[0].characterId).toBe('narrator');
+  expect(r.sentences[0].priorCharacterId).toBe('dropped-char');
+  expect(r.demotedCount).toBe(1);
+});
+```
+
+**Mutation:** instrument sites 3 and 4 only, leaving this one bare, and the
+acceptance run reports `demotedNarrator: 0` on every book while the collapse is
+real. That mutation is what the first draft of this plan actually specified.
+
+- [ ] **Step 4c: RED then GREEN — sites 2 and 5 must not leave a STALE field**
+
+`escalateFlaggedWindows` (`escalation.ts:277`) writes `characterId` **in place**
+and runs by default; `recoverTaggedNarratorLines`' `flipQ` does the same. Neither
+is a demotion, so both must **clear** `priorCharacterId` when they change the id.
+
+```ts
+it('clears a stale priorCharacterId when escalation re-assigns the sentence', () => {
+  // a sentence the validator demoted, which escalation then re-attributes
+  const s = { characterId: 'narrator', priorCharacterId: 'dropped-char', /* ... */ };
+  // after escalation assigns 'egor':
+  expect(after.characterId).toBe('egor');
+  expect(after.priorCharacterId).toBeUndefined();   // NOT 'dropped-char'
+});
+```
+
+**Without this the field is *wrong* rather than merely absent** — a sentence
+correctly attributed by escalation reads as an engine demotion, and
+`demotedNarrator` over-reports on exactly the books escalation helped most.
+
+- [ ] **Step 5: RED then GREEN — sites 3 and 4, for the knob-off configuration**
 
 **Verified 2026-08-13: there is exactly one application site**, and it is
 `server/src/analyzer/dialogue-structure/cross-examine.ts:393`:
@@ -533,15 +603,30 @@ and it scores a `char-narrator` book at 0% while 100% collapsed.
 
 - [ ] **Step 2: RED — the origin split, including the absent-field case**
 
+**EVERY sentence in this fixture must land on a SPEECH span** (spec R-9C2). The
+numerator is over speech spans, so a narrator sentence that aligns to a **tag**
+or **narration** span enters no origin column at all and the assertion about it
+is vacuous. The round-8 gate found exactly that defect in the spec's own version
+of this fixture, where the prior-less narrator was the tag half.
+
 ```ts
+// body has THREE dash paragraphs, so THREE speech spans.
+const body =
+  '— Ничего нет, — сказал Егор.\n' +
+  '— Значит, ищем дальше.\n' +
+  '— Никого здесь не было.\n';
+
 it('splits the narrator numerator three ways and never defaults the third', () => {
-  const m = compute({ ...base, sentences: [
-    { text: 'Ничего нет,',  characterId: 'narrator', priorCharacterId: 'egor' },
-    { text: 'Он ушёл.',     characterId: 'narrator' },   // model said so
+  const m = compute({ ...base, body, cacheHasOriginField: true, sentences: [
+    { text: '— Ничего нет,',           characterId: 'narrator', priorCharacterId: 'egor' },
+    { text: '— сказал Егор.',          characterId: 'narrator' },  // TAG span — NOT counted
+    { text: '— Значит, ищем дальше.',  characterId: 'anton'    },
+    { text: '— Никого здесь не было.', characterId: 'narrator' },  // SPEECH span, model said so
   ]});
   expect(m.demotedNarrator).toBe(1);
-  expect(m.modelNarrator).toBe(1);
+  expect(m.modelNarrator).toBe(1);          // the 4th sentence, NOT the 2nd
   expect(m.unknownOriginNarrator).toBe(0);
+  expect(m.tagNarratorSpan).toBe(1);        // the 2nd, in its own column
   expect(m.narratorIdSpoken).toBe(m.modelNarrator + m.demotedNarrator + m.unknownOriginNarrator);
 });
 
@@ -599,12 +684,16 @@ reviewer can read the five criteria and the five describes side by side.
 - [ ] **Step 1: Criterion 1 + 3 — the F1 replay, both arms**
 
 ```ts
-const body = '— Ничего нет, — сказал Егор.\n— Значит, ищем дальше.\n';
+const body =
+  '— Ничего нет, — сказал Егор.\n' +
+  '— Значит, ищем дальше.\n' +
+  '— Никого здесь не было.\n';       // R-9M4: a SPEECH span the narrator takes
 
 const withDashes = [
   { text: '— Ничего нет,',           characterId: 'egor'     },
-  { text: '— сказал Егор.',          characterId: 'narrator' },
+  { text: '— сказал Егор.',          characterId: 'narrator' },  // TAG span, CORRECT
   { text: '— Значит, ищем дальше.',  characterId: 'anton'    },
+  { text: '— Никого здесь не было.', characterId: 'narrator' },  // SPEECH span, a DEFECT
 ];
 // The EXACT transform observed between Aug-6 and Aug-13.
 const stripped = withDashes.map((s) => ({ ...s, text: s.text.replace(/^\s*[-–—]\s*/u, '') }));
@@ -612,6 +701,8 @@ const stripped = withDashes.map((s) => ({ ...s, text: s.text.replace(/^\s*[-–�
 it('scores identically whether or not the model returned leading dashes', () => {
   const a = compute({ ...base, sentences: withDashes });
   const b = compute({ ...base, sentences: stripped });
+  expect(a.narratorIdSpoken).toBe(1);        // the numerator EXISTS (R-9M4)
+  expect(a.tagNarratorSpan).toBe(1);         // and the tag half is NOT in it
   expect(b.spokenTotal).toBe(a.spokenTotal);
   expect(b.tagTotal).toBe(a.tagTotal);
   expect(b.narratorIdSpoken).toBe(a.narratorIdSpoken);
@@ -620,11 +711,24 @@ it('scores identically whether or not the model returned leading dashes', () => 
 });
 ```
 
-**The `unattributedSpeech` assertions are what make this able to fail for the
-right reason.** An implementation that loses the join entirely scores
-`narratorIdSpoken: 0` on **both** arms and passes the three equalities. The
-suite must distinguish "the score did not move" from "there is no score" —
-this spec has shipped that exact placebo before.
+**Measured against the real modules 2026-08-13, after the fix:**
+
+```
+speech 3 | tag 1
+dashes   | narratorIdSpoken(speech) 1 | tagNarratorSpan 1
+stripped | narratorIdSpoken(speech) 1 | tagNarratorSpan 1
+```
+
+**The fourth sentence is not decoration — without it this test cannot fail for
+the right reason** (spec R-9M4). The round-8 gate executed the three-sentence
+version: `'— сказал Егор.'` lands on the **tag** span in both arms, so
+`narratorIdSpoken` is `0 === 0` and an implementation that never tests
+`NARRATOR_CHARACTER_IDS` at all passes every assertion.
+
+**The `unattributedSpeech` assertions cover the other half**: an implementation
+that loses the join entirely also scores 0 on both arms. The suite must
+distinguish "the score did not move" from "there is no score" **and** from
+"there is no numerator".
 
 - [ ] **Step 2: Criterion 2 — the tag half is not in the numerator**
 
@@ -641,11 +745,36 @@ demoted lines report `demotedNarrator`, not `modelNarrator`.
 
 - [ ] **Step 4: Criterion 4 — omission, from Task 4, restated here**
 
-- [ ] **Step 5: The punctuation-invariance property test**
+- [ ] **Step 5: The punctuation-invariance property test — TWO TIERS**
 
-Over a generated corpus, apply three punctuation-only transforms to the model
-output — strip every leading dash, add one to every line, replace `—` with `-`
-— and assert **every field** of `AttributionMeasurement` is unchanged.
+Spec criterion 16, and **the single-tier version this plan first specified would
+fail on correct code** (spec R-9C3). `ANCHOR_MIN_LEN = 24` is a hard threshold on
+**normalised length**, and two of the three transforms change length by 2 chars,
+so a needle at 24–25 loses anchor status when stripped — which merges runs in
+`locateNeedles` and changes the bounded haystack for every neighbour.
+
+```ts
+// Tier A — byte-identical under ALL THREE transforms, no tolerance.
+// These fields never read model text, so any variation is a defect.
+for (const t of [stripDashes, addDashes, emToHyphen]) {
+  expect(measure(t(sents)).spokenTotal).toBe(base.spokenTotal);
+  expect(measure(t(sents)).tagTotal).toBe(base.tagTotal);
+}
+
+// Tier B — join-dependent fields. Byte-identical under the LENGTH-PRESERVING
+// transform only; bounded under the other two by the number of needles that
+// actually crossed the 24-char boundary, COMPUTED from the fixture.
+expect(measure(emToHyphen(sents))).toEqual(base);            // exact
+
+const crossers = sents.filter((s) => crossesAnchorFloor(s.text, stripDashes)).length;
+expect(Math.abs(measure(stripDashes(sents)).narratorIdSpoken - base.narratorIdSpoken))
+  .toBeLessThanOrEqual(crossers);
+```
+
+**`crossers` is computed, not tolerated blindly** — a drift of any other size
+still fails, so the test keeps its teeth. Build one fixture set well away from
+the boundary (where `crossers === 0` and the assertion is exact equality) and
+one straddling it.
 
 **The corpus must include one book per convention family** (`ru`/`es`/`fr`
 dash; `en`/`de` quote-only; `zh`/`ja` CJK). A property test locks only what its
@@ -689,6 +818,8 @@ not the metric.
      a. no source prose sentences at all       → missing   (nothing to corroborate)
      b. detection contradicts or surrenders    → unmeasurable
      c. otherwise                              → missing
+4d. unattributedSpeech share ≥ threshold       → unanswered  (Wave 2 — spec R-9C4,
+                                                  gated on owner question 5)
 5. orphan share ≥ DRIFT_SHARE_THRESHOLD        → drifted    (Wave 2 — no threshold yet)
 6. share ≥ threshold (book or chapter)         → collapsed  (Wave 2 — no threshold yet)
 7. otherwise                                   → ok
@@ -780,7 +911,12 @@ none blank; the two live CJK books at `spokenTotal > 0`; `orphanSpoken` non-zero
 on the books that carry unresolvable ids (8 of 20 as of 2026-08-11) with the
 share unaffected; `dashOnlySpoken` non-zero on the two Russian books; and
 `unattributedSpeech`/`demotedNarrator` printed for every book. **A run reporting
-0 in both new columns on all 20 books is a finding to investigate, not a pass.**
+0 in both new columns on all 20 books is a finding to investigate, not a pass** —
+and specifically, `demotedNarrator: 0` everywhere means site 1
+(`reconcileSentenceCharacterIds`) was not instrumented, **not** that the corpus
+is clean. The first draft of this check said "unless that book ran with the
+structure engine on"; the engine is on by default, so that escape clause covered
+every book and made the check vacuous (spec R-9C1).
 
 **Do NOT carry the `blindSpoken` corpus-replay row** — it is discharged by
 #2245 (spec F7).
