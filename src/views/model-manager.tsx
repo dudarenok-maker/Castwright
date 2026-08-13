@@ -13,6 +13,7 @@ import { DevicePanel } from '../components/device-panel';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { saveAccountSettings } from '../store/account-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import {
   ModelControlPill,
   type ModelControlState,
@@ -21,6 +22,7 @@ import {
 import {
   api,
   type EngineHealthState,
+  type ModelControlResult,
   type ModelInventoryItem,
   type ModelInventoryResponse,
   type ModelsStatus,
@@ -154,6 +156,7 @@ export function ModelManagerView() {
 }
 
 function ModelInventory({ keepAliveMap }: { keepAliveMap: Record<string, number> }) {
+  const dispatch = useAppDispatch();
   const [inv, setInv] = useState<ModelInventoryResponse | null>(null);
   const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -250,9 +253,34 @@ function ModelInventory({ keepAliveMap }: { keepAliveMap: Record<string, number>
           busyKind: busyAction?.id === item.id ? busyAction.kind : null,
           onAction: async (action: () => Promise<unknown>, kind: 'load' | 'stop') => {
             setBusyAction({ id: item.id, kind });
+            const verb = kind === 'load' ? 'Load' : 'Stop';
             try {
-              await action();
+              /* #2349 — a background Load/Stop that fails must surface *somewhere*.
+                 Previously this shared handler (used by EVERY row — TTS + analyzer
+                 + ASR, and both the load and stop pills) ran `await action()`
+                 inside try/finally and ignored the result, so a `status:'error'`
+                 body or a thrown fetch error was silently swallowed and the pill
+                 just flipped back with zero indication. Since every pill funnels
+                 here, surfacing in this one place is systemic coverage for all of
+                 them (this is intentionally NOT a per-call-site patch). */
+              const result = (await action()) as ModelControlResult | undefined;
+              if (result?.status === 'error') {
+                dispatch(
+                  notificationsActions.pushToast({
+                    kind: 'error',
+                    message: result.error || `${verb} ${item.label} failed`,
+                  }),
+                );
+                return; // nothing changed on disk/VRAM — don't refetch
+              }
               await refetch();
+            } catch (e) {
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'error',
+                  message: e instanceof Error ? e.message : `${verb} ${item.label} failed`,
+                }),
+              );
             } finally {
               setBusyAction(null);
             }

@@ -10,6 +10,7 @@ import { accountSlice, type AccountState } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { upgradeSlice } from '../store/upgrade-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { ModelManagerView } from './model-manager';
 import { api, type ModelControlResult, type ModelInventoryResponse } from '../lib/api';
 import type { UserSettings } from '../lib/types';
@@ -179,6 +180,7 @@ function renderManager(initial: Partial<UserSettings> = {}) {
       ui: uiSlice.reducer,
       settings: settingsSlice.reducer,
       upgrade: upgradeSlice.reducer,
+      notifications: notificationsSlice.reducer,
     },
     preloadedState: { account: preloaded },
   });
@@ -398,6 +400,71 @@ describe('ModelManagerView — qwen-base17 row', () => {
     const qwen = await screen.findByTestId('model-row-qwen-base');
     within(qwen).getByRole('button', { name: /load model/i }).click();
     await waitFor(() => expect(mockLoad).toHaveBeenCalledWith({ engine: 'qwen' }));
+  });
+});
+
+describe('ModelManagerView — load/stop failure surfacing (#2349)', () => {
+  const QWEN_BASE17_ITEM = {
+    id: 'qwen-base17' as const,
+    kind: 'tts' as const,
+    label: 'Qwen3-TTS Base (1.7B)',
+    present: true,
+    sizeBytes: 2_000_000_000,
+    diskPath: 'hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base',
+    loaded: false,
+    installState: 'ready' as const,
+    isDefaultEngine: false,
+    isFallbackEngine: false,
+    removable: true,
+    updatable: true,
+  };
+
+  beforeEach(() => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [...INVENTORY.items, QWEN_BASE17_ITEM],
+    });
+  });
+
+  it('surfaces a status:"error" result from a Load as an error toast', async () => {
+    vi.mocked(api.loadSidecar).mockResolvedValue({ status: 'error', error: 'OOM on GPU' });
+    const { store } = renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    within(row).getByRole('button', { name: /load model/i }).click();
+
+    await waitFor(() => expect(api.loadSidecar).toHaveBeenCalledWith({ engine: 'qwen', model: '1.7b' }));
+    await waitFor(() =>
+      expect(store.getState().notifications.toasts.some((t) => t.message.includes('OOM on GPU'))).toBe(true),
+    );
+  });
+
+  it('surfaces a thrown (network) failure from a Stop as an error toast', async () => {
+    vi.mocked(api.unloadSidecar).mockRejectedValue(new Error('sidecar went away'));
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [...INVENTORY.items, { ...QWEN_BASE17_ITEM, loaded: true }],
+    });
+    const { store } = renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    within(row).getByRole('button', { name: /stop/i }).click();
+
+    await waitFor(() => expect(api.unloadSidecar).toHaveBeenCalledWith({ engine: 'qwen', model: '1.7b' }));
+    await waitFor(() =>
+      expect(store.getState().notifications.toasts.some((t) => t.message.includes('sidecar went away'))).toBe(true),
+    );
+  });
+
+  it('a failed Load does not trigger a refetch (nothing changed on disk/VRAM)', async () => {
+    vi.mocked(api.loadSidecar).mockResolvedValue({ status: 'error', error: 'OOM' });
+    const callsBefore = vi.mocked(api.getModelInventory).mock.calls.length;
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base17');
+    within(row).getByRole('button', { name: /load model/i }).click();
+
+    await waitFor(() => expect(api.loadSidecar).toHaveBeenCalled());
+    /* The initial-mount fetch already happened before the click; a failed action
+       must NOT add another inventory poll. */
+    expect(vi.mocked(api.getModelInventory).mock.calls.length).toBe(callsBefore + 1);
   });
 });
 
