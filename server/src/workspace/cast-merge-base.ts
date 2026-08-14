@@ -45,15 +45,18 @@ export interface CastMergeBase {
 }
 
 /**
- * @param resolveBookDir Resolves the book's CURRENT directory. #2165 — a
- *   `string` captured here would be pinned for the life of the run, and a
- *   rename mid-run (`book-state.ts`'s `rec.bookDir = newDir`) could not reach
- *   it; `writeJsonAtomic` mkdir's its parent, so the write would not fail —
- *   it would recreate the pre-rename directory and drop cast.json where
- *   nothing reads it.
+ * @param resolveBookDir Resolves the book's CURRENT directory. May return a
+ *   `string` or a `Promise<string>` (an async resolver lets a caller run the
+ *   guard's identity check before the write — the actual guard wiring happens
+ *   in analysis.ts). #2165 — a `string` captured here would be pinned for the
+ *   life of the run, and a rename mid-run (`book-state.ts`'s
+ *   `rec.bookDir = newDir`) could not reach it; `writeJsonAtomic` mkdir's its
+ *   parent, so the write would not fail — it would recreate the pre-rename
+ *   directory and drop cast.json where nothing reads it. Resolution happens
+ *   once per `writeChecked` call, before the lock is taken (unchanged).
  */
 export function createCastMergeBase(
-  resolveBookDir: () => string,
+  resolveBookDir: () => string | Promise<string>,
   capturedFingerprint: string | null,
 ): CastMergeBase {
   let baseline: CastFingerprint = capturedFingerprint;
@@ -81,7 +84,7 @@ export function createCastMergeBase(
          path the observed fingerprint still equals the baseline: no phantom
          conflict, no missed detection. The ABSENT/markDeleted path is
          likewise unaffected — an absent file is still absent after a move. */
-      const bookDir = resolveBookDir();
+      const bookDir = await resolveBookDir();
       await withCastLock(bookDir, async () => {
         const path = castJsonPath(bookDir);
         /* A transient read error (UNREADABLE — see cast-fingerprint.ts) says

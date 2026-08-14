@@ -119,6 +119,11 @@ import {
 } from '../workspace/cast-fingerprint.js';
 import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
 import {
+  BookDirUnresolvedError,
+  verifyBookDirForWrite,
+  withVerifiedBookDir,
+} from '../workspace/book-dir-guard.js';
+import {
   mergeAnalysisResultWithExistingCast,
   overlayInterimCastForLiveView,
   seedReuseGuardsFromPriorCast,
@@ -2717,32 +2722,65 @@ function liveBookDir(job: AnalysisJob): string | null {
   return getManuscript(job.manuscriptId)?.bookDir ?? job.bookDir;
 }
 
+/* #2196 — resolve a VERIFIED bookDir for this run's cast writes. Runs the
+   guard's full identity check against the LIVE bookDir(job) (resolved fresh,
+   never a captured record — C2), invalidating + re-hydrating on a miss, and
+   throws BookDirUnresolvedError when the book can no longer be located
+   (out-of-process move out of the workspace / gone). This is the single
+   identity-gated 'throw' (C3) feeding the createCastMergeBase cast.json
+   resolver: a cast write through a dead stale path must NEVER mkdir the old
+   directory back into existence. */
+async function resolveVerifiedBookDirForRun(job: AnalysisJob): Promise<string> {
+  const result = await verifyBookDirForWrite({
+    manuscriptId: job.manuscriptId,
+    candidateBookDir: liveBookDir(job),
+  });
+  /* `verifyBookDirForWrite` already threw on `unresolved`, so the only
+     surviving variant is `{ status: 'ok' }`; the discriminant check keeps the
+     narrowing explicit (TS cannot see through the throw). */
+  if (result.status !== 'ok') {
+    throw new Error('unreachable: verifyBookDirForWrite threw on unresolved');
+  }
+  return result.bookDir;
+}
+
 async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise<void> {
-  const bookDir = liveBookDir(job); // #2165
-  if (!bookDir) return;
+  const candidate = liveBookDir(job); // #2165
+  if (!candidate) return;
   const phase = job.replay.lastPhase;
   if (!phase) return;
   const now = Date.now();
   if (!force && now - job.lastDiskWriteAt < ANALYSIS_STATE_WRITE_THROTTLE_MS) return;
   job.lastDiskWriteAt = now;
-  try {
-    await writeAnalysisState(bookDir, {
-      manuscriptId: job.manuscriptId,
-      phaseId: phase.phaseId,
-      phaseLabel: phase.label,
-      phaseProgress: phase.progress,
-      state: 'running',
-      engine: job.engine,
-      kind: job.kind,
-      subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
-      lastTickAt: now,
-    });
-  } catch (err) {
-    /* Non-fatal — the on-disk file only powers cold-boot pill
-       rehydration. The analyzer cache + cast.json are the real
-       source of truth. Log and continue. */
-    console.warn('[analysis-state] running snapshot write failed', err);
-  }
+  /* #2196 (C4) — the running snapshot is guarded in mode:'drop': a stale
+     (out-of-process-moved / gone) dir is NEVER mkdir'd back by
+     writeAnalysisState. Non-fatal by design — the analyzer cache +
+     cast.json are the real source of truth, so on an unresolvable dir the
+     snapshot is simply dropped and the run proceeds to the terminal
+     persist, which halts loudly (Task 6). */
+  await withVerifiedBookDir(
+    { manuscriptId: job.manuscriptId, candidateBookDir: candidate, mode: 'drop' },
+    async (bookDir) => {
+      try {
+        await writeAnalysisState(bookDir, {
+          manuscriptId: job.manuscriptId,
+          phaseId: phase.phaseId,
+          phaseLabel: phase.label,
+          phaseProgress: phase.progress,
+          state: 'running',
+          engine: job.engine,
+          kind: job.kind,
+          subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
+          lastTickAt: now,
+        });
+      } catch (err) {
+        /* Non-fatal — the on-disk file only powers cold-boot pill
+           rehydration. The analyzer cache + cast.json are the real
+           source of truth. Log and continue. */
+        console.warn('[analysis-state] running snapshot write failed', err);
+      }
+    },
+  );
 }
 
 async function persistTerminalSnapshot(
@@ -2750,27 +2788,38 @@ async function persistTerminalSnapshot(
   state: 'paused' | 'halted',
   finalEv: { code?: string; message?: string } | null,
 ): Promise<void> {
-  const bookDir = liveBookDir(job); // #2165
-  if (!bookDir) return;
+  const candidate = liveBookDir(job); // #2165
+  if (!candidate) return;
   const phase = job.replay.lastPhase;
-  try {
-    await writeAnalysisState(bookDir, {
-      manuscriptId: job.manuscriptId,
-      phaseId: phase?.phaseId ?? 0,
-      phaseLabel: phase?.label ?? PHASES[0].label,
-      phaseProgress: phase?.progress ?? 0,
-      state,
-      engine: job.engine,
-      kind: job.kind,
-      subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
-      haltCode: state === 'halted' ? finalEv?.code : undefined,
-      haltReason: state === 'halted' ? finalEv?.message : undefined,
-      lastTickAt: Date.now(),
-    });
-    job.lastDiskWriteAt = Date.now();
-  } catch (err) {
-    console.warn('[analysis-state] terminal snapshot write failed', err);
-  }
+  /* #2196 (C1/C4) — the terminal snapshot is guarded in mode:'drop'. On an
+     unresolvable (out-of-process-moved / gone) book dir NO snapshot is
+     written — writing through the stale liveBookDir fallback would mkdir the
+     dead folder (the bug). A `halted` snapshot therefore lands ONLY when a
+     valid book dir exists; the pathless case is surfaced by the persist-block
+     STALE_BOOK_DIR log + the terminal halt event (V7·1). */
+  await withVerifiedBookDir(
+    { manuscriptId: job.manuscriptId, candidateBookDir: candidate, mode: 'drop' },
+    async (bookDir) => {
+      try {
+        await writeAnalysisState(bookDir, {
+          manuscriptId: job.manuscriptId,
+          phaseId: phase?.phaseId ?? 0,
+          phaseLabel: phase?.label ?? PHASES[0].label,
+          phaseProgress: phase?.progress ?? 0,
+          state,
+          engine: job.engine,
+          kind: job.kind,
+          subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
+          haltCode: state === 'halted' ? finalEv?.code : undefined,
+          haltReason: state === 'halted' ? finalEv?.message : undefined,
+          lastTickAt: Date.now(),
+        });
+        job.lastDiskWriteAt = Date.now();
+      } catch (err) {
+        console.warn('[analysis-state] terminal snapshot write failed', err);
+      }
+    },
+  );
 }
 
 function broadcastToJob(job: AnalysisJob, payload: unknown): void {
@@ -3359,9 +3408,12 @@ export async function runMainAnalyzerJob(
        every merge-base write and reset by the Start-fresh delete below. */
     const castBase: CastMergeBase | null = recordRef.bookDir
       ? createCastMergeBase(
-          /* #2165 — live, not pinned. The fallback and the `!` are belt-and-
-             braces that TypeScript cannot prove unreachable. */
-          () => liveBookDir(job) ?? recordRef.bookDir!,
+          /* #2165 + #2196 — live, not pinned, AND identity-gated. Resolution
+             is deferred to write time and routed through the guard, which
+             verifies against liveBookDir(job) and throws on an unresolvable
+             (out-of-process-moved) path instead of resolving through the
+             captured record object. */
+          () => resolveVerifiedBookDirForRun(job),
           priorSnapshot.fingerprint,
         )
       : null;
@@ -3408,12 +3460,22 @@ export async function runMainAnalyzerJob(
          at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
          against the roster that actually got persisted. */
       try {
-        await recordRetirements(
-          recordRef.bookDir,
-          bookIdForRetirementCleanup(recordRef),
-          reconciled.retirements,
-          null,
-          log,
+        await withVerifiedBookDir(
+          { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+          async (bookDir) => {
+            /* #2196 — interim (pre-persist) retirement recording: guarded in
+               mode:'drop' so a stale dir is not mkdir'd back by
+               retireCharacterId. On an unresolvable path the retirement is
+               skipped; the run proceeds to the terminal persist block, which
+               is the single halt gate (C3). */
+            await recordRetirements(
+              bookDir,
+              bookIdForRetirementCleanup(recordRef),
+              reconciled.retirements,
+              null,
+              log,
+            );
+          },
         );
       } catch (historyErr) {
         /* #2260 — THE CANONICAL "why" for the four rethrow sites in this file;
@@ -3732,7 +3794,15 @@ export async function runMainAnalyzerJob(
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
       }
-      await persistDroppedQuotesBatch(recordRef.bookDir, manuscriptId, 'analysis-stream', verified);
+      // #2196 — dropped-quotes persistence is guarded in mode:'drop' so a
+        // stale (moved/gone) dir is not recreated here; the terminal persist
+        // block is the single halt gate (C4).
+        await withVerifiedBookDir(
+          { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+          async (bookDir) => {
+            await persistDroppedQuotesBatch(bookDir, manuscriptId, 'analysis-stream', verified);
+          },
+        );
       send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
       /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
          the finalised stage1 is the canonical roster for any Phase 1
@@ -4392,11 +4462,18 @@ export async function runMainAnalyzerJob(
         phase1Stage1Ready = true;
         cache.stage1 = stage1;
         await saveAnalysisCache(manuscriptId, cache);
-        await persistDroppedQuotesBatch(
-          recordRef.bookDir,
-          manuscriptId,
-          'analysis-stream',
-          verified,
+        // #2196 — dropped-quotes persistence guarded in mode:'drop' (subset
+        // phase-0b; stale dir not recreated; terminal persist halt-gates).
+        await withVerifiedBookDir(
+          { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+          async (bookDir) => {
+            await persistDroppedQuotesBatch(
+              bookDir,
+              manuscriptId,
+              'analysis-stream',
+              verified,
+            );
+          },
         );
         stage1ActualMs = Date.now() - stage0Start;
         send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
@@ -5129,7 +5206,16 @@ export async function runMainAnalyzerJob(
             const arr = sentencesByChapter.get(order.id);
             if (arr) running.push(...arr);
           }
-          await writeJsonAtomic(manuscriptEditsJsonPath(recordRef.bookDir), { sentences: running });
+          /* #2196 — rolling manuscript-edits is guarded in mode:'drop': a
+             stale (moved/gone) dir is NOT recreated by writeJsonAtomic here.
+             Interim rolls simply skip on an unresolvable path; the terminal
+             persist block is the single halt gate (C4). */
+          await withVerifiedBookDir(
+            { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+            async (bookDir) => {
+              await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: running });
+            },
+          );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll manuscript-edits.json', persistErr);
         }
@@ -5531,15 +5617,25 @@ export async function runMainAnalyzerJob(
          WRITE timed out is what decides; which HANDLER caught it is not (see
          the wrap on `writeChecked` below). */
       let persistLockTimeout: unknown;
+      let staleBookDirError: unknown;
+      /* #2196 — resolve the SINGLE verified write target before ANY write.
+         Identity-gated (full `.audiobook/state.json` check on liveBookDir(job),
+         invalidate + re-hydrate on a miss — C2). Throwing BookDirUnresolvedError
+         here (an out-of-process-moved / gone book) skips EVERY write in this
+         block: no `writeJsonAtomic` mkdir can recreate the stale folder (C1).
+         It propagates straight past `catch (persistErr)` to this job's
+         top-level catch, which ends the run halted (C3). Every write below is
+         re-keyed onto `writeDir` (R3 — no ordering bet). */
+      const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
+        await writeJsonAtomic(manuscriptEditsJsonPath(writeDir), {
           sentences: reconciled.sentences,
         });
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
            a journal failure must never fail the analysis persist. */
         try {
           await writeFoldJournal(
-            record.bookDir,
+            writeDir,
             folded.rewrites,
             recovered.sentences,
             stage1.characters,
@@ -5559,7 +5655,7 @@ export async function runMainAnalyzerJob(
            suggestions. Non-fatal, mirroring the fold journal. */
         try {
           await writeDedupJournal(
-            record.bookDir,
+            writeDir,
             dd.rewrites,
             dd.preDedupSentences,
             dd.preDedupRoster,
@@ -5567,7 +5663,7 @@ export async function runMainAnalyzerJob(
           // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
           // §4.4) — prune against characters0, not the remapped `characters`,
           // or every suggestion fails both id checks and the list empties.
-          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
+          await writeSuggestions(writeDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
         } catch (dedupErr) {
           /* #2295 — same deliberate swallow as the fold journal above, same
              reason: dedup lineage + diminutive suggestions are advisory, and a
@@ -5659,10 +5755,10 @@ export async function runMainAnalyzerJob(
                half is already unreadable. The verdict must be captured here,
                first, and carried down. */
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
-              record.bookDir,
+              writeDir,
             );
-            await recordRetirements(record.bookDir, retirementBookId, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, retirementBookId, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -5672,7 +5768,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, retirementBookId, remapRetirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -5687,7 +5783,7 @@ export async function runMainAnalyzerJob(
                segments as needs-your-decision (§4.6, Wave 3) — this call
                only drops and returns, it does not surface anything itself. */
             const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
-              record.bookDir,
+              writeDir,
               liveIds,
             );
             /* #2040 Task 14 review item 2a — operator-visible, mirrors the
@@ -5710,7 +5806,7 @@ export async function runMainAnalyzerJob(
                so prune it against this exact just-persisted roster, same as
                the reclaim drop above. */
             const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
-              record.bookDir,
+              writeDir,
               liveIds,
             );
             if (displacedByDeadTarget.length) {
@@ -5727,7 +5823,7 @@ export async function runMainAnalyzerJob(
                pre-rewrite verdict captured at the top of this block — without
                it the helper's own read sees the file the steps above just
                rewrote, not the one the persist started with. */
-            await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
+            await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
             /* #2260 round 2 — see the dedup site near the top of this job for
                why a lock-acquisition timeout must NOT be swallowed here.
@@ -5751,10 +5847,10 @@ export async function runMainAnalyzerJob(
             }
           }
           await logCarriedForwardCharacters(
-            record.bookDir,
+            writeDir,
             voicedSurvivorsDropped(remapped.priorCast, characters),
           );
-          const statePath = stateJsonPath(record.bookDir);
+          const statePath = stateJsonPath(writeDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
             /* Preserve the user-owned flags — analysis owns chapter titles/
@@ -5807,8 +5903,24 @@ export async function runMainAnalyzerJob(
           }
         }
       } catch (persistErr) {
-        console.error('[analysis] failed to persist .audiobook/* for', record.bookDir, persistErr);
-        // Non-fatal — the analysis result still streams back to the client.
+        /* #2196 — a MID-BLOCK guard failure (TOCTOU move landing after the
+           block-top resolve — e.g. from `castBase!.writeChecked`'s own guard
+           resolver) must not be swallowed into a false success. Park and
+           rethrow after this try/catch, mirroring the lock-timeout below.
+           The block-top resolve already threw PAST this catch for the
+           primary stale-dir case, so this only fires mid-run. */
+        if (persistErr instanceof BookDirUnresolvedError) {
+          /* V7·1 — durable fail-loud for a detached (zero-subscriber) run:
+             always-on server error naming manuscriptId + STALE_BOOK_DIR. The
+             in-memory marker is non-observable once endJob deregisters the job. */
+          console.error(
+            `[analysis] ${job.manuscriptId} STALE_BOOK_DIR: refusing to persist into a stale book folder (${(persistErr as Error).message})`,
+          );
+          staleBookDirError = persistErr;
+        } else {
+          console.error('[analysis] failed to persist .audiobook/* for', writeDir, persistErr);
+          // Non-fatal — the analysis result still streams back to the client.
+        }
       }
       /* #2260 round 3 (C1) — the deferred rethrow. OUTSIDE the try/catch
          above on purpose: from in there it would be caught by
@@ -5820,6 +5932,9 @@ export async function runMainAnalyzerJob(
          identity-block producer's property; the authoritative-write producer
          aborts the persist by design, since its own write did not land.) */
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
+      /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
+         top-level catch (Task 6), which ends the job halted. */
+      if (staleBookDirError !== undefined) throw staleBookDirError;
     }
 
     if (phase1DriftExceeded) {
@@ -5853,6 +5968,21 @@ export async function runMainAnalyzerJob(
         kind: 'error',
         code: 'aborted',
         message: 'Analysis aborted (paused or displaced by a new run).',
+      });
+      return;
+    }
+    if (e instanceof BookDirUnresolvedError) {
+      /* #2196 — an out-of-process-moved / gone book makes this run's writes
+         unresolvable and defuses the stale-folder resurrection (C1). End the
+         job terminal `halted`; persistTerminalSnapshot (Task 7) runs in
+         mode:'drop', so no dead-dir halted snapshot is written. V7·1 — the
+         durable detached-run signal (server console.error naming
+         STALE_BOOK_DIR) already fired at the persist site above; this
+         broadcasts the halt over SSE to any attached subscriber. */
+      endJob(job, {
+        kind: 'error',
+        code: 'STALE_BOOK_DIR',
+        message: e.message,
       });
       return;
     }
@@ -6220,7 +6350,11 @@ export async function runSubsetAnalyzerJob(
      every merge-base write. */
   const castBase: CastMergeBase | null = record.bookDir
     ? createCastMergeBase(
-        () => liveBookDir(job) ?? record.bookDir!, // #2165 — fallback + ! are belt-and-braces
+        /* #2165 + #2196 — live, not pinned, AND identity-gated. See the
+           streaming-path resolver for the full rationale: resolves through
+           the guard (liveBookDir(job), full identity check) so a stale
+           captured-record path can never mkdir a dead folder back. */
+        () => resolveVerifiedBookDirForRun(job),
         priorSnapshot.fingerprint,
       )
     : null;
@@ -6272,12 +6406,20 @@ export async function runSubsetAnalyzerJob(
     /* `liveIds: null` — same reasoning as the main route's dedup site: no
        roster is final here. See that call site's comment. */
     try {
-      await recordRetirements(
-        record.bookDir,
-        bookIdForRetirementCleanup(record),
-        dedupRetirements,
-        null,
-        log,
+      await withVerifiedBookDir(
+        { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+        async (bookDir) => {
+          /* #2196 — interim (pre-persist) retirement recording (subset):
+             mode:'drop' so a stale dir is not recreated; the terminal persist
+             block halt-gates. */
+          await recordRetirements(
+            bookDir,
+            bookIdForRetirementCleanup(record),
+            dedupRetirements,
+            null,
+            log,
+          );
+        },
       );
     } catch (historyErr) {
       // #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
@@ -6594,7 +6736,13 @@ export async function runSubsetAnalyzerJob(
       });
     }
     await saveAnalysisCache(manuscriptId, cache);
-    await persistDroppedQuotesBatch(record.bookDir, manuscriptId, 'analysis-chapters', verified);
+    // #2196 — subset dropped-quotes guarded in mode:'drop' (no stale recreation).
+    await withVerifiedBookDir(
+      { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+      async (bookDir) => {
+        await persistDroppedQuotesBatch(bookDir, manuscriptId, 'analysis-chapters', verified);
+      },
+    );
     send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label, model: subsetModelId });
 
@@ -6826,7 +6974,14 @@ export async function runSubsetAnalyzerJob(
             const arr = cachedChapters[order.id];
             if (arr) running.push(...arr);
           }
-          await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: running });
+          /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
+             (no stale-dir recreation); the terminal persist halt-gates. */
+          await withVerifiedBookDir(
+            { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+            async (bookDir) => {
+              await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: running });
+            },
+          );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll subset manuscript-edits.json', persistErr);
         }
@@ -7080,15 +7235,21 @@ export async function runSubsetAnalyzerJob(
          #2295 — and for why the slot has two producers (the identity block,
          and the authoritative cast.json write above it). */
       let persistLockTimeout: unknown;
+      let staleBookDirError: unknown;
+      /* #2196 — resolve the SINGLE verified write target before ANY write,
+         mirroring the main job. Throwing BookDirUnresolvedError here skips
+         every write in this block (no stale mkdir), which then propagates to
+         this run's top-level catch -> endJob halted (C1/C3). */
+      const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
+        await writeJsonAtomic(manuscriptEditsJsonPath(writeDir), {
           sentences: subsetReconciled.sentences,
         });
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
            a journal failure must never fail the analysis persist. */
         try {
           await writeFoldJournal(
-            record.bookDir,
+            writeDir,
             folded.rewrites,
             recovered.sentences,
             stage1.characters,
@@ -7102,7 +7263,7 @@ export async function runSubsetAnalyzerJob(
            suggestions. Non-fatal, mirroring the fold journal. */
         try {
           await writeDedupJournal(
-            record.bookDir,
+            writeDir,
             dd.rewrites,
             dd.preDedupSentences,
             dd.preDedupRoster,
@@ -7110,7 +7271,7 @@ export async function runSubsetAnalyzerJob(
           // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
           // §4.4) — prune against enriched0, not the remapped `enriched`, or
           // every suggestion fails both id checks and the list empties.
-          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
+          await writeSuggestions(writeDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
         } catch (dedupErr) {
           // #2295 — deliberate swallow, mirroring the main job's handler.
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
@@ -7167,10 +7328,10 @@ export async function runSubsetAnalyzerJob(
                those steps launder a degraded file into a valid empty one and
                a verdict taken after them reads `ok` on lost content. */
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
-              record.bookDir,
+              writeDir,
             );
-            await recordRetirements(record.bookDir, subsetBookId, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, subsetBookId, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -7180,7 +7341,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, subsetBookId, remapRetirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
@@ -7188,7 +7349,7 @@ export async function runSubsetAnalyzerJob(
                and the live-id binding (`mergedFinal.characters`, the exact
                roster this write just persisted). */
             const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
-              record.bookDir,
+              writeDir,
               liveIds,
             );
             // #2040 Task 14 review item 2a — mirrors the main path's same-
@@ -7205,7 +7366,7 @@ export async function runSubsetAnalyzerJob(
             // an entry whose TARGET quietly died, against this exact
             // just-persisted roster.
             const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
-              record.bookDir,
+              writeDir,
               liveIds,
             );
             if (displacedByDeadTarget.length) {
@@ -7218,7 +7379,7 @@ export async function runSubsetAnalyzerJob(
             }
             // #2166 — mirrors the main path's same-named call above, including
             // the pre-rewrite verdict captured at the top of this block.
-            await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
+            await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
             /* #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
                lock-acquisition timeout must NOT be swallowed here.
@@ -7237,10 +7398,10 @@ export async function runSubsetAnalyzerJob(
             }
           }
           await logCarriedForwardCharacters(
-            record.bookDir,
+            writeDir,
             voicedSurvivorsDropped(remapped.priorCast, enriched),
           );
-          const statePath = stateJsonPath(record.bookDir);
+          const statePath = stateJsonPath(writeDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
             /* Preserve the user-owned `excluded` + `held` flags across the
@@ -7284,17 +7445,28 @@ export async function runSubsetAnalyzerJob(
           }
         }
       } catch (persistErr) {
-        console.error(
-          '[analysis-subset] failed to persist .audiobook/* for',
-          record.bookDir,
-          persistErr,
-        );
+        /* #2196 — mirror the main job's mid-block stale-dir detection. */
+        if (persistErr instanceof BookDirUnresolvedError) {
+          console.error(
+            `[analysis-subset] ${job.manuscriptId} STALE_BOOK_DIR: refusing to persist into a stale book folder (${(persistErr as Error).message})`,
+          );
+          staleBookDirError = persistErr;
+        } else {
+          console.error(
+            '[analysis-subset] failed to persist .audiobook/* for',
+            writeDir,
+            persistErr,
+          );
+        }
       }
       /* #2260 round 3 (C1) — the deferred rethrow, outside the try/catch so
          it escapes `catch (persistErr)` and reaches this job's top-level
          catch, which ends the job via `endJob(job, {kind:'error', …})`.
          Mirrors the main job. */
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
+      /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
+         top-level catch (Task 6), which ends the job halted. Mirrors main. */
+      if (staleBookDirError !== undefined) throw staleBookDirError;
     }
 
     if (subsetDriftExceeded) {
@@ -7319,6 +7491,17 @@ export async function runSubsetAnalyzerJob(
         kind: 'error',
         code: 'aborted',
         message: 'Analysis aborted (paused or displaced).',
+      });
+      return;
+    }
+    if (e instanceof BookDirUnresolvedError) {
+      /* #2196 — mirror the main job: an unresolvable book dir ends this
+         subset run terminal `halted`; persistTerminalSnapshot (Task 7) in
+         mode:'drop' writes no dead-dir snapshot. */
+      endJob(job, {
+        kind: 'error',
+        code: 'STALE_BOOK_DIR',
+        message: e.message,
       });
       return;
     }
