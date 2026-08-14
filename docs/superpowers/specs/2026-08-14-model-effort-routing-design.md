@@ -1,36 +1,55 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 7 (rounds 1–3 folded; decision 0 resolved; `medium` norm declared for roles and sessions)_
-
-> **STATUS: decision 0 is RESOLVED — POSITIVE. The roster proceeds.**
->
-> `effort:` is a real, schema-declared agent-definition key. Settled not by the
-> probe — which could not discriminate — but by reading the harness's own bundled
-> schema (M2). Probe files have been removed. **Awaiting your approval to move to
-> `writing-plans`.**
+_Design spec — 2026-08-14 · rev 8 · **FINAL — approved, ready for `writing-plans`**_
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
 adds *how hard it thinks*, and gives both axes a mechanism that can be checked
 rather than asserted.
 
-**Rev 2 changed the shape of the work, not just its wording.** Round 1 found the
-design resting on an unobservable premise, and a guard test that would not have
-run on the diffs it guards. The roster is now gated behind a falsifiability
-probe, and four other decisions changed.
+## Read this first — the twelve decisions
 
-**Rev 3 retracts a finding rev 2 invented.** Round 2 attacked the new material
-and killed two pieces of it: a fabricated incidental finding (F2, see
-[Withdrawn](#withdrawn-f2--the-format-exemplar-citation)) and a Cost claim built
-on a category error.
+Everything below is evidence and provenance for these. Nothing is unverified.
 
-**Rev 4 folded round 3**, which found that rev 3's own reorder had made decision
-0's `Negative` outcome unreachable — a falsifiability gate that could not fail.
+| # | Decision |
+|---|---|
+| **0** | The roster was gated behind a falsifiability probe. **Resolved POSITIVE** — `effort:` is a schema-declared agent key (M2). Settled by reading the harness bundle, *not* by the probe, which could not discriminate. |
+| **0b** | **`medium` is the declared repo-wide effort norm**, for roles *and* sessions. `high`+ are deliberate, work-shaped raises. |
+| **1** | The existing model-tier table is **not** modified. A second, separate table holds the named roles. |
+| **2** | **Six named roles**, one `.claude/agents/*.md` each, pinning `model:` + `effort:`. Dispatch by `subagent_type`, not `model`. |
+| **3** | **No `tools:` list is a security boundary.** `scout` omits write tools for hygiene; the reviewers' prohibition stays with the tree check. |
+| **4** | `.gitignore` gains `!.claude/agents/`, mirroring the existing skills negation. |
+| **5** | `pr-review-gate`'s "effort ladder" is renamed **"review depth"** — one word, one meaning, repo-wide. |
+| **6** | A **session-effort rule**: read `effortLevel`, compare bands, flag and ask. Never silent, never self-applied. |
+| **7** | Guard cases **extend the existing test file**; no new one. |
+| **8** | `.claude/agents/**` joins `test:hooks`'s scope globs — **without this, none of decision 7 ever runs.** |
+| **9** | Cline mirror: **skills now** (fixes F1), definitions only after their own probe. |
+| **10** | Escalation overrides **model only**; effort stays pinned. Opus is terminal. |
 
-**Rev 5 resolves decision 0: POSITIVE.** `effort:` is schema-declared (M2). The
-probe could not settle it and the harness's own bundle could; see
-[Result](#result--positive-and-the-probe-is-not-what-settled-it). Corrections are
-marked inline throughout.
+Plus one incidental finding fixed in the same round (**F1**, the mirror's dead
+routing links) and one
+[**withdrawn**](#withdrawn-f2--the-format-exemplar-citation) (F2 — raised in rev
+2, refuted in rev 3; kept as a record of a fabricated finding, not as a task).
+
+### Revision history
+
+Eight revisions, three adversarial review rounds (the full cap), one empirical
+gate. Every round found a defect in the *previous* round's new prose, so
+corrections are marked inline as `(rev N, round-M finding: …)` rather than
+silently absorbed:
+
+- **Rev 2** — round 1 found the premise unobservable and a guard that would never
+  run on the diffs it guards. Roster gated behind decision 0.
+- **Rev 3** — round 2 retracted a finding rev 2 **invented** (F2) and a Cost
+  claim built on a category error.
+- **Rev 4** — round 3 found rev 3's own reorder had made decision 0's `Negative`
+  outcome **unreachable**: a falsifiability gate that could not fail.
+- **Rev 5** — decision 0 resolved POSITIVE from the harness schema; the guard's
+  effort enum corrected to admit the schema's integer branch.
+- **Revs 6–7** — `medium` declared the norm (0b), reversing Cost's direction from
+  net-down to net-**up**; bands re-anchored and the top band narrowed to
+  *adversarial* work.
+- **Rev 8** — final consistency pass.
 
 ## Problem
 
@@ -52,32 +71,34 @@ That produces three concrete failures, all named by the repo owner:
    session doing design work at `low`, or transcription at `xhigh`, goes
    unremarked.
 
-Two further problems surfaced while probing the first three, and are fixed here
-as incidental findings rather than filed — see
-[Incidental findings](#incidental-findings).
+One further problem surfaced while probing the first three and is fixed here as
+an incidental finding rather than filed — F1, see
+[Incidental findings](#incidental-findings). (A second, F2, was raised and then
+refuted; it is recorded there as withdrawn.)
 
 This is a governance spec. No application code changes; the deliverables are
-project instructions, a probe, up to six agent-definition files, one
+project instructions, six agent-definition files, one probe record, one
 sync-script extension, one scope-glob addition, and guard-test cases.
 
 ## Verified mechanism facts
 
 Every decision below rests on one of these. Each was checked on this box on
 2026-08-14 — the predecessor spec's round-1 correction (a routing rule that was
-"silently void" for forks) is the failure mode being avoided. **M2 is the one
-that is not settled, and decision 0 exists because of it.**
+"silently void" for forks) is the failure mode being avoided. **All nine are
+Confirmed.** M2 was the spec's central risk through revs 1–4 and was the reason
+decision 0 existed; it is now settled.
 
 | # | Fact | How it was checked | Status |
 |---|---|---|---|
 | M1 | The `Agent` tool has **no** `effort` parameter. Its properties are `description`, `isolation`, `model`, `prompt`, `subagent_type`. | The tool's own schema. | Confirmed |
 | M2 | `effort:` is a **real, schema-declared agent-definition key**, accepting the five named levels **or an integer**. | The harness's own bundled schema, `~/.local/share/claude/versions/2.1.232`: `effort: Cs([Nr(["low","medium","high","xhigh","max"]), at().int()]).optional().describe("Reasoning effort level for this agent. Either a named level or an integer")`. `model: inherit` is handled explicitly in the config resolver (`l!=="inherit"`). | **Confirmed** — see [decision 0](#0-probe-before-roster--the-falsifiability-gate) for why the *probe* could not settle this and the schema could. |
-| M8 | `tools:` is honoured, and the resolved list is surfaced in the agent-type listing. | Probe-c (`tools: Read, Glob, Grep`) enumerated as exactly `(Tools: Read, Glob, Grep)` while the two controls, which set no `tools:`, did not. Corroborated by the same schema block, which carries `tools` plus a sibling "Tools removed from the default set. Ignored if `tools` is set." | **Confirmed** |
-| M9 | Project-level `.claude/agents/*.md` definitions are loaded and become dispatchable agent types. | All three probe definitions appeared in the agent-type list after restart. | **Confirmed** |
 | M3 | Session effort is **readable**: `"effortLevel": "high"` in `~/.claude/settings.json`, sibling to `"model": "opus[1m]"`. | Read directly. | Confirmed |
 | M4 | `.claude/agents/` is **git-ignored**. `.gitignore:33` is `.claude/*`; line 34 negates `!.claude/skills/` only, and five files are tracked beneath it. | `git check-ignore -v .claude/agents/pr-reviewer.md` → `.gitignore:33`; `git ls-files .claude`. | Confirmed |
 | M5 | Cline resolves skills from `~/.agents/skills/` only, **cannot select a subagent's model**, and its agent-definition resolution is **untested**. `~/.agents/agents/` does not exist. | [`agent-skill-resolution-probe.md`](../../testing/agent-skill-resolution-probe.md): `CLINE_TIER_SELECTABLE: no — observed deepseek-v4-flash`. Directory absence checked directly. | Confirmed |
 | M6 | `test:hooks` runs `scripts/tests/*.test.mjs` under `node:test`, and is in pre-commit, pre-push and `test:all`. Its scope-filter inputs are `scripts/**/*.{mjs,cjs,js,mts,cts,ts}`, `scripts/tests/fixtures/**`, `pinokio-scripts/**`, `.github/workflows/**`, `.github/actions/**`, `.claude/skills/**`. **`.claude/agents/**` is not among them.** | `scripts/run-hooks-tests.mjs:10`; `scripts/verify-cache.mjs:76–153`. | Confirmed |
 | M7 | Real PR comments carry `effort <level>` in their header: 7 across PRs #2339, #2337, #2350 — all `effort high`. | `gh pr view <n> --json comments`. | Confirmed — **but this measures the prose *depth ladder*, not the model setting.** It is admissible only for decision 5's migration count. Rev 2 wrongly cited it as evidence about session effort; see [Cost](#cost). |
+| M8 | `tools:` is honoured, and the **resolved** list is surfaced in the agent-type listing. | Probe-c (`tools: Read, Glob, Grep`) enumerated as exactly `(Tools: Read, Glob, Grep)` while the two controls, which set no `tools:`, did not. Corroborated by the same schema block as M2, which carries `tools` plus a sibling "Tools removed from the default set. Ignored if `tools` is set." | **Confirmed** |
+| M9 | Project-level `.claude/agents/*.md` definitions are loaded and become dispatchable agent types. | All three probe definitions appeared in the agent-type list after restart. | **Confirmed** |
 
 M1 and M2 together are the load-bearing pair: **effort is not settable per
 dispatch, only per role.** Every decision follows from that. M2 was the spec's
@@ -94,10 +115,15 @@ effort. Building six definitions on that would have been the
 `f_measurement_instrument_cannot_fail` shape the spec's own Problem section
 warns about.)*
 
-**Nothing in decisions 1–9 is built until one throwaway definition has produced
-a positive observable.** Task zero creates a single
-`.claude/agents/probe-effort.md` and looks for **any** signal that the harness
-parses the key, in this order — the first positive is enough:
+**RESOLVED — see [Result](#result--positive-and-the-probe-is-not-what-settled-it)
+below.** The gate and its pre-registered outcome table are kept in full rather
+than collapsed into their answer: the point of deciding outcomes in advance is
+lost if the record is rewritten once the answer is known.
+
+**As pre-registered:** nothing in decisions 1–10 is built until one throwaway
+definition has produced a positive observable. Task zero creates
+`.claude/agents/probe-*.md` and looks for **any** signal that the harness parses
+the key, in this order — the first positive is enough:
 
 1. **Validation — run this first.** Does `effort: not-a-level` produce a load
    error, warning, or rejection? A harness that *rejects* an invalid value
@@ -128,7 +154,7 @@ falsifiability gate that cannot return its own failure verdict is the exact trap
 this decision exists to escape. Numbers are removed so the next reorder cannot
 disarm it again.)*
 
-- **Positive** (any step) → proceed to decisions 1–9 unchanged.
+- **Positive** (any step) → proceed to decisions 1–10 unchanged.
 - **Negative** (**Validation** shows the key ignored — i.e. the control rejects
   and `effort:` does not) → the roster is abandoned. What survives is decision 6
   (the session rule, whose input M3 confirms), decision 9 (the Cline skill
@@ -182,7 +208,7 @@ for `effort`.
 **What settled it was reading the harness's own bundled schema** (M2), which took
 one grep and no restart. Two things follow, and the second is the reusable one:
 
-- **Decision 0 = Positive.** Decisions 1–9 proceed. `effort:` is real, and the
+- **Decision 0 = Positive.** Decisions 1–10 proceed. `effort:` is real, and the
   five-value enum the guard case asserts is exactly right — with one correction,
   below.
 - **Any future capability probe reads the harness's schema FIRST.** Three
@@ -257,8 +283,13 @@ Choices rather than transcription:
   Adding a seventh role was rejected as speculative; giving `scout` `Bash` costs
   one word and closes the gap.)*
 - **`xhigh`, not `max`, on the adversarial roles.** `max` is what
-  `/code-review ultra` is for — user-triggered and billed. `xhigh` matches the
-  only precedent on this box (M2's `patch-generator`, itself an adversarial role).
+  `/code-review ultra` is for — user-triggered and billed. `xhigh` also matches
+  the only pre-existing precedent on this box: the official `claude-security`
+  plugin's `patch-generator`, itself an adversarial role, pins `effort: xhigh`.
+  *(Rev 8: revs 1–7 cited this as "M2's `patch-generator`". M2 was rewritten in
+  rev 5 to carry the harness schema instead, so the citation pointed at evidence
+  that row no longer holds. The observation stands on its own and is stated
+  directly.)*
 - **`model: inherit` is not used**, though M2 confirms it legal: `pr-reviewer`
   and `spec-checker` must land on Opus even when dispatched from a Sonnet
   session, which is the whole point of the Premium row.
@@ -445,9 +476,12 @@ explicit `model` override (`Agent({subagent_type: 'implementer', model: 'opus'})
 which the `Agent` tool's schema states takes precedence over the definition's
 `model:`. **Effort stays at the role's pinned value** — M1 leaves no way to raise
 it per dispatch. `model-routing` states this asymmetry plainly rather than
-leaving a reader to discover it: escalation buys capability, not depth. If the
-decision-0 probe shows effort is the more load-bearing axis, a follow-up may add
-`-escalated` variants; that is not built speculatively now.
+leaving a reader to discover it: escalation buys capability, not depth. Should
+effort later prove the more load-bearing axis, a follow-up may add `-escalated`
+variants; that is not built speculatively now. *(Rev 8: revs 2–7 made this
+conditional on "if the decision-0 probe shows…". The probe ran and measured
+nothing about relative axis weight — it was never designed to — so the
+conditional pointed at evidence that will never arrive.)*
 
 **Opus is terminal.** *(Rev 3, round-2 finding: rev 2 stated the mechanism as if
 it applied at every tier.)* A twice-failing `pr-reviewer` or `spec-checker` is
@@ -541,8 +575,8 @@ pass tempted to "fix" that citation should read #2320's comments first.
 
 | File | Change |
 |---|---|
-| `docs/testing/agent-effort-resolution-probe.md` | **New — decision 0, gates everything below** |
-| `.claude/agents/*.md` ×6 | New — the roster (only if the probe permits) |
+| `docs/testing/agent-effort-resolution-probe.md` | **New — the decision-0 record.** The probe has already run; this file writes up the verdict block (`KEY: value`, matching the Cline probe doc) so the result is greppable rather than living only in this spec |
+| `.claude/agents/*.md` ×6 | New — the roster. **Unblocked**: decision 0 returned Positive |
 | `.gitignore` | +1 line, `!.claude/agents/` |
 | `scripts/verify-cache.mjs` | `.claude/agents/**` → `test:hooks` globs (decision 8) |
 | `.claude/skills/model-routing/SKILL.md` | Role table; session-effort rule; escalation asymmetry |
@@ -581,8 +615,12 @@ first, alone, is red by construction.
 - **Per-PR effort scaling for the reviewer** (three `pr-reviewer-{low,medium,high}`
   definitions). M1 means it would take three files, and the tier would no longer
   be pinned.
-- **Mirroring definitions to Cline** — deferred to the probe (decision 9).
-- **`-escalated` role variants** — deferred to the probe (decision 10).
+- **Mirroring definitions to Cline** — deferred to its own probe (decision 9),
+  which has **not** been run. Distinct from decision 0's, which has.
+- **`-escalated` role variants** — deferred indefinitely (decision 10); no
+  evidence is pending that would trigger them.
+- **Changing `effortLevel` on any machine.** 0b declares the norm; decision 6
+  reads and flags. Neither sets it, and this spec does not ask CI to.
 
 ## Open question deferred to implementation
 
