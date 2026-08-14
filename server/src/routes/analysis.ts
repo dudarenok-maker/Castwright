@@ -120,6 +120,7 @@ import {
 import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
 import {
   BookDirUnresolvedError,
+  tryResolveVerifiedBookDir,
   verifyBookDirForWrite,
   withVerifiedBookDir,
 } from '../workspace/book-dir-guard.js';
@@ -2731,9 +2732,18 @@ function liveBookDir(job: AnalysisJob): string | null {
    resolver: a cast write through a dead stale path must NEVER mkdir the old
    directory back into existence. */
 async function resolveVerifiedBookDirForRun(job: AnalysisJob): Promise<string> {
+  const record = getManuscript(job.manuscriptId);
   const result = await verifyBookDirForWrite({
     manuscriptId: job.manuscriptId,
     candidateBookDir: liveBookDir(job),
+    /* #2196 review (🟡 dead guard surface) — bind the manuscript's OWN bookId
+       into the identity check (expectedBookId was previously a test-only
+       surface): a candidate whose .audiobook/state.json claims a DIFFERENT
+       book's id is refused outright (cross-book contamination) rather than
+       accepted on manuscriptId alone, and a re-hydration that comes back with
+       a foreign identity also fails. `undefined` for legacy / upload records
+       (no bookId) keeps the check a no-op for them, exactly as before. */
+    expectedBookId: record?.bookId,
   });
   /* `verifyBookDirForWrite` already threw on `unresolved`, so the only
      surviving variant is `{ status: 'ok' }`; the discriminant check keeps the
@@ -2935,9 +2945,25 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
         /* #2165 — the CURRENT directory, not the pinned copy: deleting the
            pre-rename path leaves the real analysis-state.json behind, and
            scanActiveAnalyses later offers it as a resumable analysis for a
-           book that finished. */
+           book that finished.
+           #2196 review (🟡 dead guard surface) — route the snapshot cleanup
+           through the guard's delete-only fast path (identityBearing:false,
+           `tryResolveVerifiedBookDir`): only delete within a book folder that
+           can still be resolved, so a stale/out-of-process-moved path is never
+           mkdir'd back into existence by a delete and is simply skipped. This
+           is the guard surface the unit tests already cover but that previously
+           had no production call site. */
         const dir = liveBookDir(job);
-        if (dir) void deleteAnalysisState(dir);
+        if (dir) {
+          void (async () => {
+            const verified = await tryResolveVerifiedBookDir({
+              manuscriptId: job.manuscriptId,
+              candidateBookDir: dir,
+              identityBearing: false,
+            });
+            if (verified) await deleteAnalysisState(verified);
+          })();
+        }
       }
     } else if (kind === 'error' && code === 'aborted') {
       /* Paused or displaced. Write paused state so the cold-boot
@@ -5850,6 +5876,23 @@ export async function runMainAnalyzerJob(
             writeDir,
             voicedSurvivorsDropped(remapped.priorCast, characters),
           );
+          /* #2196 review (🟡 TOCTOU) — re-verify the write target immediately
+             before the terminal authoritative state.json record. A book folder
+             move landing mid-persist (after the block-top resolve) leaves
+             `writeDir` stale: the fresh identity-gated resolution below either
+             (a) throws BookDirUnresolvedError — parked in `catch (persistErr)`
+             and the run halts loudly — or (b) resolves to a DIFFERENT dir than
+             this block has already persisted to, which we also refuse so a
+             completed-looking state record never lands in a half-migrated pair.
+             (The earlier advisory/retirement writes sit inside this same tight
+             block and are best-effort by design; this re-check is the loud guard
+             at the authoritative terminal record.) */
+          const stateWriteDir = await resolveVerifiedBookDirForRun(job);
+          if (stateWriteDir !== writeDir) {
+            throw new BookDirUnresolvedError(
+              `book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir}); refusing to write the terminal state record`,
+            );
+          }
           const statePath = stateJsonPath(writeDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
@@ -7401,6 +7444,14 @@ export async function runSubsetAnalyzerJob(
             writeDir,
             voicedSurvivorsDropped(remapped.priorCast, enriched),
           );
+          /* #2196 review (🟡 TOCTOU) — mirror the main persist's re-verify of the
+             write target immediately before the terminal state.json record. */
+          const stateWriteDir = await resolveVerifiedBookDirForRun(job);
+          if (stateWriteDir !== writeDir) {
+            throw new BookDirUnresolvedError(
+              `book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir}); refusing to write the terminal state record`,
+            );
+          }
           const statePath = stateJsonPath(writeDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
