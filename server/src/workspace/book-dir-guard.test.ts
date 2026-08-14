@@ -203,7 +203,7 @@ describe('verifyBookDirForWrite', () => {
     expect(result.status).toBe('ok');
     if (result.status === 'ok') expect(result.bookDir).toBe(bookDir);
     /* The guard never re-creates a stale dir. */
-    expect(existsSyncGuard(stale)).toBe(false); // eslint-disable-line
+    expect(existsSyncGuard(stale)).toBe(false);
     /* The store now holds the fresh record (post re-hydration). */
     expect(store.getManuscript('m_case2')?.bookDir).toBe(bookDir);
   });
