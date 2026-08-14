@@ -13,7 +13,7 @@
 > three profiles), so criterion 5's AMD row already covers that mechanism; no
 > separate Apple row is owed.
 >
-> Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](282-ort-pip-consistency-marker.md)
+> Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](../features/282-ort-pip-consistency-marker.md)
 > Design of record: [`docs/superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md`](../superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md)
 > ("### On-box acceptance" section — the six numbered criteria this sheet mirrors)
 > Register rows: [A39–A42](onbox-acceptance-register.md#group-a--the-gpu-box),

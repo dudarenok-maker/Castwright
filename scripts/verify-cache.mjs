@@ -151,6 +151,23 @@ export const STEPS = [
            and leave the guard stale-green. Same #1847 trap as fixtures/**
            above, with the enumeration failure mode on top. */
         '.claude/skills/**',
+        /* .claude/agents/** is an input for the same reason .claude/skills/**
+           is: review-gate-mechanism.test.mjs reads the six role definitions as
+           TEXT at RUNTIME to check them against model-routing's role table.
+           Without this glob a definitions-only diff — flipping an `effort:`
+           value being the obvious one — prints test:hooks [cached] and runs
+           the guard on nothing, locally AND in cloud CI (ci-scope.mjs derives
+           from this same STEPS[]). The guard would certify the value it just
+           stopped checking. Same #1847 trap as fixtures/** above. */
+        '.claude/agents/**',
+        /* docs/testing/** is an input because review-gate-mechanism.test.mjs's
+           linkScanSet() now reads every .md file under this directory as TEXT
+           at RUNTIME, alongside CLAUDE.md/CONTRIBUTING.md/.claude/skills/**
+           above. Without this glob, a docs/testing/**-only diff — exactly the
+           shape that adds or breaks a link the scan exists to catch — prints
+           test:hooks [cached] and leaves the guard stale-green. Same #1847
+           trap as .claude/skills/** above. */
+        'docs/testing/**',
       ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
@@ -256,6 +273,15 @@ export const STEPS = [
         // are covered by that tree's own glob above (2026-08-13) instead of
         // being listed here as literals — see that glob's comment.
         'CLAUDE.md',
+        // #2375 review, finding 2: linkScanSet() reads CONTRIBUTING.md as
+        // TEXT at RUNTIME too (the other root governance doc, alongside
+        // CLAUDE.md above), but this entry was missing — a
+        // CONTRIBUTING.md-only diff printed test:hooks [cached] locally and
+        // (ci-scope.mjs derives its scope from this same STEPS[] entry)
+        // skipped the guard's CI leg too, even though a CONTRIBUTING.md link
+        // is exactly what the guard exists to check. Same #1847 runtime-read
+        // trap as CLAUDE.md's own entry above.
+        'CONTRIBUTING.md',
         // #2348 review, finding 1: dev-mock-command.test.mjs readFileSync's
         // both of these at RUNTIME (asserting .env.mock sets
         // VITE_USE_MOCKS=true and .env.development keeps it false) — no

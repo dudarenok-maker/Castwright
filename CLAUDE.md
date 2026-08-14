@@ -287,6 +287,19 @@ dispatching session's model; the table below does not apply to them.
 | Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (spec/plan and PR review — see below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
 | Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
 
+**Reasoning effort is the second axis, and `medium` is this repo's declared
+norm** — for dispatched roles, for the main session, and for CLI worker
+dispatch (`claude --effort`, `copilot --effort`, `cline --thinking`; pass it
+explicitly, since omitting it inherits an undeclared default — though passing
+it is a declaration, not a guarantee: at least one CLI is reported to ignore
+it in some configurations). `high` and
+above are deliberate, work-shaped raises rather than a resting state. Dispatch
+by named role — `Agent({subagent_type: 'pr-reviewer'})` — rather than by raw
+`model:`; the six roles and their pinned `model:`/`effort:` values live in the
+role table in
+[`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md),
+which is also the registry every `.claude/agents/**` file — nested subdirectories included — must appear in.
+
 A subagent that fails twice on its assigned tier is silently re-dispatched
 one rung up (Haiku → Sonnet, Sonnet → Opus) and the escalation is reported
 after the fact — no need to ask first, since subagent dispatch is cheap and
@@ -301,8 +314,9 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 - Every PR gets a `pr-review-gate` pass (findings only, never auto-applied)
   once fully staged, before merge — except a docs-only PR (same file-set
   test as CONTRIBUTING.md's doc-only CI fast-path), which is exempt
-  entirely. Otherwise effort scales with the PR's commit type/scope
-  (CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
+  entirely. Otherwise **review depth** scales with the PR's commit type/scope
+  (review depth, not the model's `effort` setting;
+  CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
   `chore`/`test`/`build`/`ci`, `medium` for a single-scope `feat`/`fix`,
   `high` for `refactor`/`perf` or any multi-scope PR — see the
   `pr-review-gate` skill for the full split.
@@ -421,7 +435,8 @@ Design rationale:
   Run from a checkout that has `apps/android/android/key.properties` + `upload-keystore.jks`
   (git-ignored). Pure helpers unit-tested in `scripts/tests/build-companion-apk.test.mjs`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
-- `npm run skills:sync` — mirror `.claude/skills/pr-review-gate/` into
+- `npm run skills:sync` — mirror `.claude/skills/pr-review-gate/` **and**
+  `.claude/skills/model-routing/` into
   `~/.agents/skills/`, the skill store Cline (and the five other agents sharing
   it) is known to resolve — it does **not** read a workspace `.claude/skills/`
   (probed 2026-08-13, `docs/testing/agent-skill-resolution-probe.md`). "The
@@ -432,10 +447,13 @@ Design rationale:
   presence is not proof — `~/.cline/skills` is in that same list and was proven
   dead — so it stays unverified pending #2368. A
   **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
-  fresh clone has no mirror. Re-run after any change under that directory; the
-  drift guard in `scripts/tests/review-gate-mechanism.test.mjs` catches a stale
-  mirror **only on a machine that has one** — it skips, loudly, where the path
-  is absent.
+  fresh clone has no mirror. Re-run after any change under either directory;
+  the drift guard in `scripts/tests/review-gate-mechanism.test.mjs` checks
+  against the store root (`~/.agents/skills/`), so it only **skips**, loudly,
+  on a machine with no store at all — once the store exists (e.g. any box
+  where Cline has installed its global skills), the guard **fails** rather
+  than skips if this repo's mirror is missing or stale there, even if
+  `skills:sync` has never been run on that machine.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
