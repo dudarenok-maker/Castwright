@@ -176,7 +176,11 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
 }
 
 describe('stage-2 estimate label (#2354, #2365 C2)', () => {
-  it('logs the pre-flight wording unconditionally, including in default (sequential) mode', async () => {
+  /* The title says only what this test asserts. It runs with the per-phase env
+     cleared, so `isPerPhaseModelSelectionActive()` reads false and the route
+     takes its default path — but the test does not ASSERT the mode, and naming
+     a mode it never checks would be the same overstatement the fix removed. */
+  it('logs the pre-flight wording, with no pipelined-mode forcing', async () => {
     const manuscriptId = `test-estimate-default-${Date.now()}`;
     registerStubManuscript(manuscriptId, 5);
 
