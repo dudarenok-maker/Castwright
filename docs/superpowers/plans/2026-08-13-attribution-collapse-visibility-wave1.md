@@ -963,8 +963,9 @@ merge; filled 2026-08-14 alongside the D13 re-gate.
 re-gate this wave was required to run has now run, and its verdict is *drop
 the `drifted` state* — see spec §D13 re-gated → *Re-gate outcome* and
 [the run sheet §5](../../testing/attribution-collapse-visibility-onbox-acceptance.md).
-That is an owner confirmation, not a settled fact, so this plan stays out of
-`archive/` until Wave 2's surface is decided.
+That is an owner confirmation, not a settled fact — tracked as
+[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357) — so this
+plan stays out of `archive/` until Wave 2's surface is decided.
 
 **Acceptance still owed** (register row E11, which stays open): the
 dash-stripped re-run invariance check, and re-analysing one book post-D18 to

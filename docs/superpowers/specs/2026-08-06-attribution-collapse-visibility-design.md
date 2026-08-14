@@ -1572,7 +1572,10 @@ be cleared. This section's own bar — *"if the bimodality does not survive the
 re-basing, D13 is dropped rather than shipped with a threshold picked off a
 book"* — is therefore met on the drop side.
 
-**Owner confirmation owed — this fires §Open questions' question-2 caveat**
+**Owner confirmation owed — tracked as
+[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357), which
+carries the options and this evidence in decision form. It fires §Open
+questions' question-2 caveat**
 (*"Wave 1 must re-measure D13 under the current unit; if the gap does not
 survive, D13 is dropped despite this answer"*), rather than opening a new
 question. It is a confirmation and not an automatic application because the
@@ -2979,7 +2982,10 @@ if the gap does not survive, D13 is dropped despite this answer.
 > agreed the conditional here — but the condition's evaluation is not the
 > clean yes/no it was written for (the gap *did* survive; only its
 > non-fixture half did not), so it is worth confirming rather than applying
-> silently. Question 2's banner-scope answer is not reopened: if D13 goes,
+> silently. **The decision is tracked as
+> [#2357](https://github.com/dudarenok-maker/Castwright/issues/2357)** —
+> #1984 itself closed when Wave 1 shipped, so it is not the home for this.
+> Question 2's banner-scope answer is not reopened: if D13 goes,
 > the cache-sourced banner tier goes with it and `alsoCollapsed`, the fifth
 > library state and `attributionVerdictKey` are not built.
 
