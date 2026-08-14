@@ -2783,14 +2783,6 @@ function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   }
 }
 
-/* Issue #2354 — label the stage-2 estimate by its actual basis.
-   In pipelined mode, Phase 1 setup runs before Phase 0 refinement completes,
-   so the estimate is still pre-flight. In sequential/refined modes, the
-   refinement has run. Return the appropriate label. */
-export function selectStage2EstimateLabel(isRefined: boolean): string {
-  return isRefined ? '(based on stage 1 rate)' : '(pre-flight estimate, refined after stage 1)';
-}
-
 /* Exported for unit testing (the chapter-failed replay contract). */
 export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   if (!payload || typeof payload !== 'object') return;
@@ -3341,7 +3333,6 @@ export async function runMainAnalyzerJob(
        *observed* rate, so the second bar reflects actual model speed. */
     const stage1EstMs = clampStageEstMs(sourceChars / STAGE1_BASELINE_RATE);
     let stage2EstMs = clampStageEstMs((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
-    let stage2EstRefined = false;
 
     /* Load any partial progress from a previous attempt. Cached stage 1 is
        reused as-is; cached chapters are skipped in the stage 2 loop. The
@@ -4459,7 +4450,6 @@ export async function runMainAnalyzerJob(
            signal that pipelining is engaged. */
         if (stage1ActualMs > 0) {
           stage2EstMs = clampStageEstMs(stage1ActualMs * STAGE2_STRETCH);
-          stage2EstRefined = true;
           log(
             0,
             `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map((c) => c.name).join(', ')}`,
@@ -4526,7 +4516,17 @@ export async function runMainAnalyzerJob(
       1,
       `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}…`,
     );
-    log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} ${selectStage2EstimateLabel(stage2EstRefined)}`);
+    /* Issue #2354 / #2365 C2 — this log always fires before Phase 0's
+       refinement can have run: Phase 0 is launched un-awaited just above
+       (`phase0PoolPromise = runPhase0Pool()`) and nothing awaits it before
+       this line, in EVERY mode (sequential mode parks Phase 1's *workers* on
+       the watermark, not this setup code). So the number here is always the
+       pre-flight constant computed from the static baseline — never the
+       stage-1-observed rate — and the label says so unconditionally. */
+    log(
+      1,
+      `Estimated stage time: ~${humanSeconds(stage2EstMs)} (pre-flight estimate, refined after stage 1)`,
+    );
     if (cachedChapterCount > 0) {
       log(
         1,
