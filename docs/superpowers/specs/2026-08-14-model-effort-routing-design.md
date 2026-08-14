@@ -1,20 +1,13 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 4 (after adversarial review rounds 1–3, the full cap)_
+_Design spec — 2026-08-14 · rev 5 (review rounds 1–3 folded; decision 0 resolved)_
 
-> **STATUS: NOT APPROVED. Blocked on decision 0's probe, which is armed and
-> waiting on a session restart.**
+> **STATUS: decision 0 is RESOLVED — POSITIVE. The roster proceeds.**
 >
-> Three throwaway definitions sit in the **primary checkout's** `.claude/agents/`
-> (git-ignored, so invisible to `git status` and to this branch):
-> `probe-a-invalid-effort.md` (invalid `effort:`), `probe-b-invalid-model.md`
-> (invalid `model:` — the **positive control**, without which "no error" is just
-> silence), `probe-c-valid-restricted.md` (valid, restricted `tools:` — tests
-> whether `tools:` is honoured, visible in the agent-type listing).
->
-> Next session started in that checkout reads the result: any startup complaint,
-> `/agents`, and the injected agent-type list. Then apply the outcome table in
-> decision 0 **by step name**. Cleanup: `rm .claude/agents/probe-*.md`.
+> `effort:` is a real, schema-declared agent-definition key. Settled not by the
+> probe — which could not discriminate — but by reading the harness's own bundled
+> schema (M2). Probe files have been removed. **Awaiting your approval to move to
+> `writing-plans`.**
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
@@ -29,8 +22,15 @@ probe, and four other decisions changed.
 **Rev 3 retracts a finding rev 2 invented.** Round 2 attacked the new material
 and killed two pieces of it: a fabricated incidental finding (F2, see
 [Withdrawn](#withdrawn-f2--the-format-exemplar-citation)) and a Cost claim built
-on a category error. The evidence for the central mechanism also got *weaker*,
-not stronger — see M2. Corrections are marked inline.
+on a category error.
+
+**Rev 4 folded round 3**, which found that rev 3's own reorder had made decision
+0's `Negative` outcome unreachable — a falsifiability gate that could not fail.
+
+**Rev 5 resolves decision 0: POSITIVE.** `effort:` is schema-declared (M2). The
+probe could not settle it and the harness's own bundle could; see
+[Result](#result--positive-and-the-probe-is-not-what-settled-it). Corrections are
+marked inline throughout.
 
 ## Problem
 
@@ -70,7 +70,9 @@ that is not settled, and decision 0 exists because of it.**
 | # | Fact | How it was checked | Status |
 |---|---|---|---|
 | M1 | The `Agent` tool has **no** `effort` parameter. Its properties are `description`, `isolation`, `model`, `prompt`, `subagent_type`. | The tool's own schema. | Confirmed |
-| M2 | Agent-definition frontmatter **carries** `effort:` alongside `model:`; `model: inherit` is legal. | `claude-security/agents/patch-generator.md` in the plugin cache declares `model: inherit` + `effort: xhigh`. Tally across installed definitions: `effort: xhigh` ×6, `effort: medium` ×1, `model: inherit` ×21. | **Asserted, and weaker after round 2.** The key exists in one file, in a plugin **not enabled in this session**. Round 2 searched for a schema: the official `plugin-dev/.../frontmatter-reference.md` documents `description`, `allowed-tools`, `model`, `argument-hint`, `disable-model-invocation` — **for commands**, using `allowed-tools` not `tools`, so it does not transfer — and contains **no** `effort`. **No agent-definition frontmatter reference exists in the installed docs at all.** Nothing shows this harness *honours* the key for a project-level definition. |
+| M2 | `effort:` is a **real, schema-declared agent-definition key**, accepting the five named levels **or an integer**. | The harness's own bundled schema, `~/.local/share/claude/versions/2.1.232`: `effort: Cs([Nr(["low","medium","high","xhigh","max"]), at().int()]).optional().describe("Reasoning effort level for this agent. Either a named level or an integer")`. `model: inherit` is handled explicitly in the config resolver (`l!=="inherit"`). | **Confirmed** — see [decision 0](#0-probe-before-roster--the-falsifiability-gate) for why the *probe* could not settle this and the schema could. |
+| M8 | `tools:` is honoured, and the resolved list is surfaced in the agent-type listing. | Probe-c (`tools: Read, Glob, Grep`) enumerated as exactly `(Tools: Read, Glob, Grep)` while the two controls, which set no `tools:`, did not. Corroborated by the same schema block, which carries `tools` plus a sibling "Tools removed from the default set. Ignored if `tools` is set." | **Confirmed** |
+| M9 | Project-level `.claude/agents/*.md` definitions are loaded and become dispatchable agent types. | All three probe definitions appeared in the agent-type list after restart. | **Confirmed** |
 | M3 | Session effort is **readable**: `"effortLevel": "high"` in `~/.claude/settings.json`, sibling to `"model": "opus[1m]"`. | Read directly. | Confirmed |
 | M4 | `.claude/agents/` is **git-ignored**. `.gitignore:33` is `.claude/*`; line 34 negates `!.claude/skills/` only, and five files are tracked beneath it. | `git check-ignore -v .claude/agents/pr-reviewer.md` → `.gitignore:33`; `git ls-files .claude`. | Confirmed |
 | M5 | Cline resolves skills from `~/.agents/skills/` only, **cannot select a subagent's model**, and its agent-definition resolution is **untested**. `~/.agents/agents/` does not exist. | [`agent-skill-resolution-probe.md`](../../testing/agent-skill-resolution-probe.md): `CLINE_TIER_SELECTABLE: no — observed deepseek-v4-flash`. Directory absence checked directly. | Confirmed |
@@ -78,8 +80,8 @@ that is not settled, and decision 0 exists because of it.**
 | M7 | Real PR comments carry `effort <level>` in their header: 7 across PRs #2339, #2337, #2350 — all `effort high`. | `gh pr view <n> --json comments`. | Confirmed — **but this measures the prose *depth ladder*, not the model setting.** It is admissible only for decision 5's migration count. Rev 2 wrongly cited it as evidence about session effort; see [Cost](#cost). |
 
 M1 and M2 together are the load-bearing pair: **effort is not settable per
-dispatch, only per role.** Every decision follows from that — which is exactly
-why M2 being merely Asserted is the spec's central risk.
+dispatch, only per role.** Every decision follows from that. M2 was the spec's
+central risk through revs 1–4 and is now Confirmed.
 
 ## Decisions
 
@@ -156,6 +158,42 @@ Results are recorded in a new `docs/testing/agent-effort-resolution-probe.md`,
 following the format of the Cline probe doc — a verdict block with the same
 `KEY: value` shape, so the finding is greppable later.
 
+### Result — POSITIVE, and the probe is not what settled it
+
+Run 2026-08-14. All three definitions **loaded and enumerated**, including
+`probe-b-invalid-model`, the positive control carrying a bogus `model:` value.
+
+**That control passing is what made the probe useless, and it is why the control
+was worth having.** An unrecognized key and a known key with an invalid value
+both load silently, so `probe-a` loading was never going to discriminate. Without
+the control, "no error on invalid `effort:`" would have read as evidence the key
+was fine. The probe design was sound; its *discriminating power* was zero, and
+only the control revealed that. Recorded as a live instance of
+`f_measurement_instrument_cannot_fail`.
+
+The mechanism is now understood: there are **two schema layers**. The
+frontmatter-parsing layer types `effort` as a loose string
+(`effort:n2().optional().describe("Thinking effort: \`low\`, \`medium\`,
+\`high\`, \`max\`, or an integer.")`), so any value parses; the resolved-agent
+layer enforces the real enum (M2). Load-time acceptance therefore cannot report
+on validity **for any key at all** — the control proved that generally, not just
+for `effort`.
+
+**What settled it was reading the harness's own bundled schema** (M2), which took
+one grep and no restart. Two things follow, and the second is the reusable one:
+
+- **Decision 0 = Positive.** Decisions 1–9 proceed. `effort:` is real, and the
+  five-value enum the guard case asserts is exactly right — with one correction,
+  below.
+- **Any future capability probe reads the harness's schema FIRST.** Three
+  revisions were spent designing behavioural probes for a question the binary
+  answers directly. Behavioural probing is what you do when there is no schema to
+  read, not before checking whether there is.
+
+Two side results, both Confirmed: `tools:` **is** honoured and is surfaced in the
+listing (M8) — closing round 3's open question — and project-level definitions
+**are** loaded and dispatchable (M9), which was Asserted in every prior rev.
+
 ### 1. The tier table is not modified
 
 It answers a different question — ad-hoc dispatch and session judgment ("this
@@ -227,15 +265,13 @@ a stated prohibition with a check behind it.)*
   mechanism, so this is not re-proposed in six months.
 - **Omitting `tools:` is assumed to mean *all tools*, not *no tools*.** Inferred
   from the `Agent` tool's description, not observed.
-- **`tools:` rests on the same unverified frontmatter parsing as `effort:`**
-  *(rev 4, round-3 finding)* — same file, same undocumented schema, same disabled
-  plugin; the official reference documents `allowed-tools` for **commands**, a
-  different key. So decision 0's probe tests `tools:` too: one probe definition
-  carries a restricted list while the controls carry none, and the agent-type
-  listing — which **does** render `(Tools: …)` — shows directly whether the
-  restriction was honoured. If `tools:` is ignored, `scout` silently holds every
-  tool while the table says otherwise, and decision 7's guard case passes green
-  on a file the harness never read.
+- **`tools:` is honoured — Confirmed (M8), no longer a risk.** *(Rev 4 flagged it
+  as resting on the same unverified parsing as `effort:`, and had decision 0's
+  probe test it. It did: `probe-c` carried `tools: Read, Glob, Grep` and
+  enumerated as exactly `(Tools: Read, Glob, Grep)` while the two controls, which
+  set no `tools:`, did not.)* This is the one question the behavioural probe
+  actually answered, because the listing renders the **resolved** tool set rather
+  than reporting on load-time acceptance.
 
 ### 4. `.gitignore` gains `!.claude/agents/`
 
@@ -301,7 +337,13 @@ role table in `model-routing/SKILL.md`:
 
 - a `.claude/agents/<name>.md` exists and is **tracked by git**;
 - its `name:`, `model:` and `effort:` frontmatter equal the row's values;
-- every `effort:` is one of `low`/`medium`/`high`/`xhigh`/`max`;
+- every `effort:` is one of `low`/`medium`/`high`/`xhigh`/`max` **or an integer**
+  *(rev 5: the schema in M2 is `Cs([Nr([…five names…]), at().int()])` — a union
+  with an int branch. Revs 1–4 asserted the names only, so the guard as specced
+  would have **failed a legal definition**. This repo does not use integer efforts
+  today; the guard still admits them, because a guard that rejects what the
+  harness accepts is a guard that will be deleted the first time someone needs
+  one.)*;
 - `scout` lists no write tool (`Edit`, `Write`, `NotebookEdit`);
 - **both directions** — a definition file with no table row fails too.
 
