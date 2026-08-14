@@ -280,6 +280,227 @@ describe('applyTag — addressee/bystander gate (opt-in languages)', () => {
   });
 });
 
+/* #2279 — the added quote pairs, on the STRUCTURE-ENGINE path.
+
+   `narrator-default.test.ts`'s #2279 blocks exercise `isSpokenLine`, which is
+   unreachable at default settings, and every one of its positive assertions is
+   satisfied by the leading-opener check alone. `findQuoteRuns` is entirely
+   CLOSER-driven, so these cases put each added pair in embedded position —
+   opener mid-paragraph, closer required — which is the only shape that can
+   catch a wrong closer glyph. Missing coverage here is what let #2288 through
+   the first time. */
+describe('parser — #2279 added quote pairs (closer-driven)', () => {
+  const spoken = (body: string, lang: string) =>
+    spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor(lang)!)))
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('es: straight "…" forms a quote run in embedded position', () => {
+    expect(spoken('Él dijo "Ven aquí" y se fue.', 'es')).toEqual(['Ven aquí']);
+  });
+  it('fr: straight "…" and curly “…” both form quote runs', () => {
+    expect(spoken('Il a dit "Viens ici" et il est parti.', 'fr')).toEqual(['Viens ici']);
+    expect(spoken('Il a dit “Viens ici” et il est parti.', 'fr')).toEqual(['Viens ici']);
+  });
+  it('ru: smart-single ‘…’ forms a quote run in embedded position', () => {
+    expect(spoken('Он сказал ‘Иди сюда’ и ушёл.', 'ru')).toEqual(['Иди сюда']);
+  });
+  it('en: guillemets «…» form a quote run in embedded position', () => {
+    expect(spoken('He said «come here» and left.', 'en')).toEqual(['come here']);
+  });
+  it('zh: straight "…" and nested ‘…’ both form quote runs', () => {
+    expect(spoken('他说 "你好" 然后走了。', 'zh')).toEqual(['你好']);
+    expect(spoken('他说 ‘你好’ 然后走了。', 'zh')).toEqual(['你好']);
+  });
+  it('ja/zh: curly “…” and straight "…" both form quote runs — the zh/ja asymmetry is closed', () => {
+    expect(spoken('彼は “おはよう” と言った。', 'ja')).toEqual(['おはよう']);
+    expect(spoken('彼は "おはよう" と言った。', 'ja')).toEqual(['おはよう']);
+    expect(spoken('他说 “你好” 然后走了。', 'zh')).toEqual(['你好']); // same line, same answer now
+  });
+  // #2286 (2026-08-14 re-measure) — de's added pairs live in the SECONDARY
+  // tier, unlike es/fr/ru/en/zh/ja above (all primary), because de.quotePairs
+  // stays closed per de.ts's comment. One closer-driven case per candidate.
+  it('de: straight "…" forms a quote run in embedded position', () => {
+    expect(spoken('Sie sagte "Komm her" und ging.', 'de')).toEqual(['Komm her']);
+  });
+  it('de: curly “…” forms a quote run in embedded position', () => {
+    expect(spoken('Sie sagte “Komm her” und ging.', 'de')).toEqual(['Komm her']);
+  });
+  it('de: Swiss «…» forms a quote run in embedded position', () => {
+    expect(spoken('Sie sagte «Komm her» und ging.', 'de')).toEqual(['Komm her']);
+  });
+
+  /* Multi-run interaction, the hazard class this block exists for. A single
+     quoted run per paragraph cannot see it — #1601 and #2288 are both about a
+     run extending past the NEXT turn's opener — so every added pair gets a
+     two-turn case with a quoted term between the turns. */
+  it('es: two turns around a quoted term stay three separate runs', () => {
+    const body = '"Hola", dijo. El cartel decía "Cerrado". "Adiós", dijo ella.';
+    expect(spoken(body, 'es')).toEqual(['Hola', 'Cerrado', 'Adiós']);
+  });
+  it('fr: two turns around a quoted term stay three separate runs', () => {
+    const body = '«Bonjour», dit-il. Le panneau disait “Fermé”. «Au revoir», dit-elle.';
+    expect(spoken(body, 'fr')).toEqual(['Bonjour', 'Fermé', 'Au revoir']);
+  });
+  it('ru: two turns around a quoted term stay three separate runs', () => {
+    const body = '«Privet», skazal on. Znak glasil ‘Zakryto’. «Poka», skazala ona.';
+    expect(spoken(body, 'ru')).toEqual(['Privet', 'Zakryto', 'Poka']);
+  });
+  it('zh: two turns around a quoted term stay three separate runs', () => {
+    const body = '「你好」他说。牌子写着‘停’。「再见」她说。';
+    expect(spoken(body, 'zh')).toEqual(['你好', '停', '再见']);
+  });
+  it('ja: two turns around a quoted term stay three separate runs', () => {
+    const body = '「おはよう」彼は言った。看板には “Closed” とあった。「さようなら」彼女は言った。';
+    expect(spoken(body, 'ja')).toEqual(['おはよう', 'Closed', 'さようなら']);
+  });
+  // The exact shape the old de.ts comment feared: a genuine two-turn German
+  // paragraph (primary „…") with a quoted sign in the gap between them, using
+  // the SECONDARY Swiss pair («…»). This works because there is exactly ONE
+  // «…» in the paragraph — not because the reverse polarity (« opens/» closes
+  // here, vs. »…« for primary) makes it safe in general. That same reverse
+  // polarity is exactly what breaks a SECOND «…» turn in the same paragraph:
+  // a `»` that closes one Swiss turn is also a valid PRIMARY opener (German's
+  // `quotePairs` carries `['»','«']`), so it can seed a primary run that
+  // swallows the attribution between two Swiss turns — see #2352, pinned
+  // below as a known gap.
+  it('de: two genuine „…" turns survive a secondary-Swiss-quoted sign in the gap between them', () => {
+    const body = '„Guten Tag", sagte er. Das Schild dort: «Zu». „Und du?", fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Zu', 'Und du?']);
+  });
+  // #2352 — KNOWN GAP, not desired behaviour: TWO Swiss `«…»` turns in one
+  // paragraph collide with German's PRIMARY `['»','«']` pair. The `»` that
+  // closes turn 1 (as the secondary opener's closer) is also a valid PRIMARY
+  // opener, so `findQuoteRuns` seeds a primary run there and extends it to
+  // the next `«` — turn 2's opener — swallowing the attribution between them
+  // and reading BOTH real turns as narration. Measured 2026-08-14 over the
+  // 40-book German corpus: this collision BLOCKS the Swiss secondary entry
+  // in 4,926 of 63,941 paragraphs (4,903 with two or more «) — the entry
+  // works cleanly in only 16 of the 63,941 (see de.ts). #2352 is filed
+  // to fix this — it needs a design pass (per-paragraph convention detection
+  // or positional disambiguation, either of which touches PRIMARY-tier
+  // behaviour) — so this test pins CURRENT (wrong) behaviour, derived from a
+  // real run of this exact body, to keep a future change from silently
+  // moving it.
+  it('#2352: de — TWO Swiss «…» turns in one paragraph mis-read as narration (known gap, not desired)', () => {
+    const body = '«Guten Morgen», sagte Anton. «Hast du gut geschlafen?»';
+    const spans = spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor('de')!)));
+    expect(spans.map((s) => ({ kind: s.kind, text: body.slice(s.start, s.end) }))).toEqual([
+      { kind: 'narration', text: '«Guten Morgen' },
+      { kind: 'speech', text: ', sagte Anton. ' },
+      { kind: 'narration', text: 'Hast du gut geschlafen?»' },
+    ]);
+  });
+
+  /* #2288 — the regressions this block exists to prevent, and the reason `de`
+     gains nothing in the PRIMARY table (`quotePairs`) from #2279. `spoken`
+     below always runs against the REAL shipped `de` table, so these three
+     bodies double as a guard: if a future change ever moves one of the three
+     candidates into `de.quotePairs`, German pairs `„` with three closers
+     while any new PRIMARY opener carries one, so its run runs on past the
+     next turn's opener and one of these redden. #2286 widened German's
+     SECONDARY tier instead (`de.secondaryQuotePairs`, see de.ts's comment) —
+     a different mechanism the gap-tier rule makes safe, covered by the
+     "#2279 added quote pairs (closer-driven)" de cases above and by
+     #2315's guard-with-real-secondaryQuotePairs block below. */
+  it('#2288: de + [\'"\',\'"\'] — a turn pair around an ASCII-quoted sign keeps BOTH turns', () => {
+    const body = '„Guten Tag", sagte er. Das Schild sagte "Zu". „Und du?", fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + curly — a `„…”` turn pair around a `“`-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag”, sagte er. Das Schild sagte “Zu". „Und du?”, fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: de + Swiss — a `„…“` / `»…«` turn pair around a `«`-opened sign keeps BOTH turns', () => {
+    const body = '„Guten Tag“, sagte er. Das Schild sagte «Zu". »Und du?«, fragte sie.';
+    expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Und du?']);
+  });
+  it('#2288: `de` carries no opener beyond `„` and `»` — the exclusion IS the fix', () => {
+    expect(new Set(conventionsFor('de')!.quotePairs.map(([o]) => o))).toEqual(new Set(['„', '»']));
+  });
+});
+
+/* #2286 residual — the OWNER'S 2026-08-13 decision, recorded in
+   docs/superpowers/specs/2026-08-13-gap-seeded-straddle-design.md: the gap
+   tier's binding acceptance criterion is ZERO DESTROYED TURNS. LOST/MERGED/
+   SPLIT are guaranteed, not measured, for any change confined to
+   `secondaryQuotePairs`: `findQuoteRuns` seeds `out = [...primaryRuns]` and
+   only ever appends (parser.ts:468-470's "cannot delete a primary run…by
+   construction, not by measurement"), so the candidate set is always a
+   superset of the baseline's. What the F1/F2/F3 sweeps + the 331-book corpus
+   replay actually establish, by measurement, is the SIZE and DISTRIBUTION of
+   the gain — the structural guarantee doesn't extend to it. A spurious
+   narration-read-as-speech span is the ACCEPTED lesser harm: a primary-
+   convention scan is a run detector, not a convention detector, so a
+   secondary-tier quotation appearing in narration
+   (a sign, a title, a scare quote) with NO primary run anywhere nearby still
+   forms its own quote run and reads as spoken — nothing is destroyed, but
+   the narration line is misclassified. These three pin CURRENT behaviour
+   (not desired), one per representative language, so a future change to the
+   tier or the scan cannot silently narrow OR widen this residual without a
+   test going red either way. */
+describe('parser — #2286 residual: accepted spurious spans under the gap tier (owner decision 2026-08-13)', () => {
+  const spoken = (body: string, lang: string) =>
+    spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor(lang)!)))
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  it('es: a sign quoted with the secondary "…" pair, alone in narration, still reads as spoken', () => {
+    expect(spoken('El cartel decía "Cerrado".', 'es')).toEqual(['Cerrado']);
+  });
+  it('en: a title quoted with the secondary «…» pair, alone in narration, still reads as spoken', () => {
+    expect(spoken('He read «Faust» on the cover.', 'en')).toEqual(['Faust']);
+  });
+  it('ru: a sign quoted with the secondary ‘…’ pair, alone in narration, still reads as spoken', () => {
+    expect(spoken('Знак гласил ‘Закрыто’.', 'ru')).toEqual(['Закрыто']);
+  });
+});
+
+/* The #2315 guard `cutsATagClause` declines a secondary-tier quote-run when a
+   primary-tier turn precedes it and the clause between them carries a
+   speech/beat verb stem — preventing a secondary run from truncating an
+   attribution tag. On `main`, `secondaryQuotePairs` is empty for every
+   language, so this is the first change under which the guard is reachable
+   from the real shipped tables. Without the guard, a secondary run would cut
+   the tag at the quoted name, leaving the turn with its text but no speaker. */
+describe('parser — #2315 guard `cutsATagClause` with real secondaryQuotePairs (#2286)', () => {
+  const assertSpansOf = (body: string, lang: string, roster: Array<{ id: string; name: string }>) => {
+    const conv = conventionsFor(lang)!;
+    const idx = buildNameIndex(roster, conv);
+    const paras = parseChapterStructure(body, idx);
+    const spans = spansOf(paras);
+    expect(spans.filter((s) => s.kind === 'speech')).toHaveLength(1);
+    expect(spans.filter((s) => s.kind === 'tag')).toHaveLength(1);
+    const speech = spans.find((s) => s.kind === 'speech')!;
+    const tag = spans.find((s) => s.kind === 'tag')!;
+    return {
+      speechText: body.slice(speech.start, speech.end),
+      tagText: body.slice(tag.start, tag.end),
+    };
+  };
+
+  it('ru: secondary single-quotes do not cut the tag — Антон remains in the attribution', () => {
+    const body = '«Привет», сказал ‘Антон’.';
+    const { speechText, tagText } = assertSpansOf(body, 'ru', [{ id: 'anton', name: 'Антон' }]);
+    expect(speechText).toBe('Привет');
+    expect(tagText).toBe(', сказал ‘Антон’.');
+  });
+
+  it('es: secondary straight-quotes do not cut the tag — Antonio remains in the attribution', () => {
+    const body = '«Hola», dijo "Antonio".';
+    const { speechText, tagText } = assertSpansOf(body, 'es', [{ id: 'antonio', name: 'Antonio' }]);
+    expect(speechText).toBe('Hola');
+    expect(tagText).toBe(', dijo "Antonio".');
+  });
+
+  it('en: secondary guillemets do not cut the tag — Anton remains in the attribution', () => {
+    const body = '"Hi," said «Anton».';
+    const { speechText, tagText } = assertSpansOf(body, 'en', [{ id: 'anton', name: 'Anton' }]);
+    expect(speechText).toBe('Hi,');
+    expect(tagText).toBe(' said «Anton».');
+  });
+});
+
 describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 1)', () => {
   const enIdx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
   const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
@@ -599,13 +820,16 @@ describe('parser — #2288 round 3: the bound is anchored at the rejection, not 
 // Salvaged from blocked PR #2286 (source commit b5e7a365): only the cases that
 // pass against the SHIPPED lang tables, with no table change of any kind. That
 // PR widens several languages' quotePairs; those widened-table cases stay
-// there and are NOT reproduced here. `de` is the one language #2286 concluded
-// should gain nothing from its table widening — every candidate opener it
-// tried (ASCII same-glyph, curly, Swiss) let a „ run extend past the next
-// turn's opener and swallow it, per #1601 — so these three pin the shipped,
-// unwidened `de` table against exactly the counter-examples that sank the
-// widening attempt.
-describe('parser — #2288 de gains no opener from #2279 (counter-examples, PR #2286 salvage)', () => {
+// there and are NOT reproduced here. `de` was, at the time this block was
+// salvaged, the one language #2286 concluded should gain nothing from any
+// table widening — every candidate opener tried, added to PRIMARY, let a „
+// run extend past the next turn's opener and swallow it, per #1601. That
+// conclusion held only for `quotePairs` (primary); #2286's later re-measure
+// (2026-08-14, see de.ts's comment) widened `de.secondaryQuotePairs` instead,
+// a mechanism the gap tier makes safe. These three still pin the shipped
+// table against the counter-examples that sank the PRIMARY widening attempt
+// — de's `quotePairs` is unchanged, so they still hold.
+describe('parser — #2288 de gains no PRIMARY opener from #2279 (counter-examples, PR #2286 salvage)', () => {
   const deIdx = buildNameIndex([{ id: 'anna', name: 'Anna' }], conventionsFor('de')!);
   const speechOf = (body: string) =>
     parseChapterStructure(body, deIdx)
@@ -792,10 +1016,14 @@ describe('parser — #2288 M2: a secondary pair fills gaps but never straddles a
     ]);
   });
 
-  it('an empty tier leaves the shipped table exactly as it reads today', () => {
-    /* NOT expect(x).toEqual(x) — the right-hand side is the literal shipped
-       reading, so this asserts that adding the field changed nothing. */
-    expect(ru.secondaryQuotePairs).toEqual([]);
+  it('#2286 — the shipped table now carries this exact pair in its secondary tier', () => {
+    /* Before #2286 this pinned an EMPTY secondaryQuotePairs (`toEqual([])`) as
+       proof the M2 field alone changed nothing. #2286 is the widening M2 was
+       built to unblock, so the shipped table now equals `tiered` above —
+       asserted structurally, not just behaviourally, so a future accidental
+       reversion to an empty array reddens here even if some other case
+       happens to still pass. */
+    expect(ru.secondaryQuotePairs).toEqual([['‘', '’']]);
     expect(speechOf(straddle, ru)).toEqual(['Привет', 'Пока']);
   });
 

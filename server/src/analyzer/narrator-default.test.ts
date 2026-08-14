@@ -96,17 +96,14 @@ describe('isSpokenLine', () => {
        (a) `dialogueOpen: null` in en, de, zh AND ja — a leading dash is not
            dialogue in any of the four. The old bundle treated a leading dash
            as dialogue in EVERY language.
-       (b) A quote pair absent from `quotePairs` is not dialogue — including
-           the zh/ja asymmetry, where `zh` carries `“”` and `ja` does not, so
-           the same line splits by language.
+       (b) A quote pair absent from `quotePairs` is not dialogue. **#2279
+           closed most of this half** by adding the missing conventions to the
+           tables, so block (b) now pins what the tables gained.
+       (c) What is still excluded, and why — the residue after (b).
 
-     This is the SAME gap the structure engine has (it reads the same tables),
-     so the default path is unchanged and the gap is pre-existing there. With
-     `analyzer.structure.enabled` OFF these lines now go to the narrator. Zero
-     occurrences in the live 20-book corpus — which holds ONE book each of
-     de/es/fr/zh/ja and therefore cannot produce a counter-example either way,
-     so that zero is not evidence of safety. #2279 carries the row-by-row
-     enumeration and the measurement it needs; blocks (a) and (b) below are its
+     This is the SAME condition the structure engine reads (same tables), so
+     (a) and (c) describe both paths, not just the narrator-default fallback.
+     #2279 carries the row-by-row enumeration; blocks (a)–(c) are its
      executable copy, so a row added to either belongs in the other and in
      #2279's table. */
   it('#2279 (a): a leading dash is not dialogue where dialogueOpen is null — en, de, zh, ja', () => {
@@ -120,19 +117,50 @@ describe('isSpokenLine', () => {
     expect(isSpokenLine('——你好', ZH)).toBe(false);
     expect(isSpokenLine('— こんにちは', JA)).toBe(false);
   });
-  it('#2279 (b): a quote pair absent from the language table is not dialogue', () => {
-    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(false); // fully-ASCII; de carries „…" but not "…"
-    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(false); // “ is German's CLOSER, never an opener
-    expect(isSpokenLine('«Lass das.»', DE)).toBe(false); // Swiss order; de carries »…« only
-    expect(isSpokenLine('"Hola", dijo.', ES)).toBe(false); // es carries «» and “” only
-    expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(false); // fr.quotePairs is «» only
-    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(false);
-    expect(isSpokenLine('‘Привет’', RU)).toBe(false); // ru carries «», „“, “”, "" — not ‘’
-    expect(isSpokenLine('«Bonjour»', EN)).toBe(false); // en carries no guillemets
-    // The zh/ja asymmetry: same line, opposite answers, because zh.quotePairs
-    // carries ['“','”'] and ja.quotePairs does not.
+  it('#2279 (b): the conventions the tables gained ARE dialogue', () => {
+    // Every row here read as narration before #2279, in both the fallback and
+    // the structure engine. The structure-engine half is pinned separately, on
+    // the real path, in dialogue-structure/parser.test.ts — these assertions
+    // only exercise `isSpokenLine`, which is unreachable at default settings.
+    expect(isSpokenLine('"Hola", dijo.', ES)).toBe(true);
+    expect(isSpokenLine('"Bonjour", dit-il.', FR)).toBe(true);
+    expect(isSpokenLine('“Bonjour”, dit-il.', FR)).toBe(true);
+    expect(isSpokenLine('‘Привет’', RU)).toBe(true);
+    expect(isSpokenLine('«Bonjour»', EN)).toBe(true);
+    expect(isSpokenLine('"你好"', ZH)).toBe(true);
+    expect(isSpokenLine('‘你好’', ZH)).toBe(true); // Mandarin's NESTED quote
+    // The zh/ja asymmetry is closed: `ja` now carries `“”` like `zh`, so the
+    // same line no longer splits by language.
     expect(isSpokenLine('“你好”', ZH)).toBe(true);
-    expect(isSpokenLine('“おはよう”', JA)).toBe(false);
+    // #2286 landed both `“…”` and `"…"` in ja's SECONDARY tier (#2288 M2) —
+    // `isSpokenLine` reads primary + secondary as one union (see the comment
+    // on `isSpokenLine` itself), so both read as spoken even though neither
+    // ranks in a `findQuoteRuns` run boundary.
+    expect(isSpokenLine('“おはよう”', JA)).toBe(true);
+    expect(isSpokenLine('"おはよう"', JA)).toBe(true);
+    // #2286 also widened `de.secondaryQuotePairs` (unlike es/ru/en, which
+    // #2279 widened directly) — `isSpokenLine` unions both tiers (see its own
+    // doc comment), so all three straight-glyph German forms read as spoken
+    // too, even though the SAME opener stays banned from `de.quotePairs`
+    // (primary) — see de.ts's comment for why the two tables differ here.
+    expect(isSpokenLine('"Hallo", sagte er.', DE)).toBe(true);
+    expect(isSpokenLine('“Hallo”, sagte er.', DE)).toBe(true);
+    expect(isSpokenLine('«Lass das.»', DE)).toBe(true);
+  });
+  it('#2279 (c): what is still excluded, and why', () => {
+    // Straight-single stays out of EVERY table — asserted for all seven, not a
+    // sample: `'` is the apostrophe, so a same-glyph pair opens a run on
+    // don't / she'd / the dogs'.
+    for (const c of [EN, DE, RU, ES, FR, ZH, JA]) {
+      expect(c.quotePairs.some(([o, x]) => o === "'" && x === "'")).toBe(false);
+    }
+    expect(isSpokenLine("'I'm lost,' she said.", EN)).toBe(false);
+    expect(isSpokenLine("'Komm her' sagte er.", DE)).toBe(false);
+    // A convention belonging to a DIFFERENT language stays out: German „…“
+    // inside a Spanish or Japanese book is not Spanish or Japanese typography.
+    expect(isSpokenLine('„Ven aquí“ dijo él.', ES)).toBe(false);
+    expect(isSpokenLine('„おはよう“ 彼は言った。', JA)).toBe(false);
+    expect(isSpokenLine('«你好» 他说。', ZH)).toBe(false);
   });
   it('#2289: es/fr dialogueOpen carries &ndash; alongside &mdash;', () => {
     // es/fr dialogueOpen now carry &ndash; alongside &mdash; (ru precedent)
@@ -196,11 +224,21 @@ describe('#2288 M2: isSpokenLine reads BOTH quote-pair tiers', () => {
   const ruTier: LanguageConventions = {
     ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']],
   };
+  // #2286 shipped `['‘','’']` into ru's real secondaryQuotePairs, so the
+  // control below must strip it back out — `conventionsFor('ru')!` alone no
+  // longer has the pair in NEITHER tier, and asserting against it directly
+  // would silently stop discriminating "tier present" from "tier absent".
+  const ruNoPair: LanguageConventions = {
+    ...conventionsFor('ru')!,
+    secondaryQuotePairs: conventionsFor('ru')!.secondaryQuotePairs.filter(
+      ([o, c]) => !(o === '‘' && c === '’'),
+    ),
+  };
   it('a line in the SECONDARY convention still reads as spoken', () => {
     expect(isSpokenLine('‘Привет,’ сказал он.', ruTier)).toBe(true);
   });
   it('CONTROL: the same line is NOT spoken with the pair in neither tier', () => {
-    expect(isSpokenLine('‘Привет,’ сказал он.', conventionsFor('ru')!)).toBe(false);
+    expect(isSpokenLine('‘Привет,’ сказал он.', ruNoPair)).toBe(false);
   });
   it('an unrelated line is still not spoken', () => {
     expect(isSpokenLine('Он молча вышел из комнаты.', ruTier)).toBe(false);

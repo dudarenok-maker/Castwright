@@ -21,7 +21,9 @@ export const ru: LanguageConventions = {
      and aligner.ts's 7-char atom. */
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»'], ['„', '“'], ['“', '”'], ['"', '"']],
-  secondaryQuotePairs: [],
+  // #2279 — `‘…’` added for texts typeset with Western smart singles.
+  // Secondary tier (#2288 M2): only fills gaps between primary runs.
+  secondaryQuotePairs: [['‘', '’']],
   speechVerbStems: [
     'сказа', 'говор', 'ответ', 'спрос', 'переспрос', 'прошепта', 'шепн', 'шепта', 'крикн', 'крича',
     'воскликн', 'произнес', 'произнос', 'поинтерес', 'пробормота', 'бормота', 'буркн', 'отрез',

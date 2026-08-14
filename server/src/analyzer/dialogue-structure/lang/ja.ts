@@ -11,7 +11,11 @@ export const ja: LanguageConventions = {
     ['「', '」'],
     ['『', '』'],
   ],
-  secondaryQuotePairs: [],
+  // #2279 — `“…”` and `"…"` appear in translated / web-converted Japanese that
+  // uses Western quotes instead of corner brackets. `zh` already carried `“…”`
+  // in its primary tier and `ja` did not, so the same line used to split by
+  // language. Secondary tier (#2288 M2): only fills gaps between primary runs.
+  secondaryQuotePairs: [['“', '”'], ['"', '"']],
   speechVerbStems: ['言', '話', '答', '尋', '叫', '呟', '囁', '続け', '応え'],
   beatVerbStems: ['頷', '笑', '頬', '息'],
   nameStemmer: (t) => t,

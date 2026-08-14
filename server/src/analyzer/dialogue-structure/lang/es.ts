@@ -17,7 +17,9 @@ export const es: LanguageConventions = {
      and aligner.ts's 7-char atom. */
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»'], ['“', '”']],
-  secondaryQuotePairs: [],
+  // #2279 — `"…"` added for digital/converted texts that lost their curly
+  // glyphs. Secondary tier (#2288 M2): only fills gaps between primary runs.
+  secondaryQuotePairs: [['"', '"']],
   speechVerbStems: [
     'dijo', 'pregunt', 'respond', 'susurr', 'grit', 'murmur', 'exclam', 'contest', 'añad', 'insist',
     'coment', 'cont', 'interrump', 'observ', 'manifest', 'asegur', 'afirm', 'ment', 'advier', 'advert',

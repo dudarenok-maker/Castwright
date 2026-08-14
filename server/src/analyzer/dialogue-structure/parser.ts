@@ -191,25 +191,28 @@ interface QuoteRun {
 
 /** Scripts with no inter-word spacing, where a delimiter with letters on both
     sides is ordinary text rather than a mis-read apostrophe.
-    FORWARD-COVER, not live protection: `en` is the only shipped table pairing
-    an apostrophe-shaped glyph as a closer, so today this branch is never
-    reached and removing it leaves 725,066 corpus paragraphs byte-identical.
-    It matters when #2286 adds ['‘','’'] to `zh` and `ru`, at which point the
-    inner `’` of `“他说‘你好’然后走了”` becomes exactly the both-sides shape the
-    first clause rejects. No test can make this fail yet; do not delete it as
-    dead code. Hangul is deliberately absent: modern Korean uses inter-word
-    spacing like English, so a `’` with Hangul on both sides is not ordinary
-    unspaced text — it's exactly the mis-read-apostrophe shape the first
-    clause exists to catch. See `isSpacedLetter`'s comment for a gap this
-    exclusion does NOT close: a decomposed combining mark's own script reads
-    as `Inherited`, not the base character's script, so it can slip past this
-    regex regardless of how far this set is widened. */
+    LIVE PROTECTION as of #2286, not forward-cover: `en` used to be the only
+    shipped table pairing an apostrophe-shaped glyph as a closer, but #2286
+    added `['‘','’']` to `zh` and `ru`'s secondary tier, and the inner `’` of
+    `“他说‘你好’然后走了”` is exactly the both-sides shape the first clause
+    rejects — verified by mutation (dropping `\p{sc=Han}` from this regex):
+    on `他说‘你好’很好。’然后走了。` the correctly-scoped speech span
+    `你好` over-extends to `你好’很好。`, swallowing the following clause,
+    because the now-"spaced" Han neighbours make the first `’` look like an
+    apostrophe and the scan resumes onto the next occurrence instead. Do not
+    delete this as dead code. Hangul is deliberately absent: modern Korean
+    uses inter-word spacing like English, so a `’` with Hangul on both sides
+    is not ordinary unspaced text — it's exactly the mis-read-apostrophe
+    shape the first clause exists to catch. See `isSpacedLetter`'s comment
+    for a gap this exclusion does NOT close: a decomposed combining mark's
+    own script reads as `Inherited`, not the base character's script, so it
+    can slip past this regex regardless of how far this set is widened. */
 const UNSPACED_SCRIPT = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Thai}]/u;
-/** Only `’` is reachable today: `en` is the sole table pairing an
-    apostrophe-shaped glyph as a CLOSER. `'` and `‘` are carried because
-    nothing stops a future table pairing them, and because this is the exact
-    set the corpus and the sweep were measured against. Do not narrow it
-    without re-measuring. */
+/** Only `’` is reachable today, and since #2286 that is true of three tables
+    rather than one: `en` pairs it primarily, `ru` and `zh` in their secondary
+    tier. `'` and `‘` are carried because nothing stops a future table pairing
+    them, and because this is the exact set the corpus and the sweep were
+    measured against. Do not narrow it without re-measuring. */
 const APOSTROPHE_SHAPED = new Set(['’', "'", '‘']);
 
 /** `\p{M}` alongside `\p{L}`: this path has no NFC-normalisation guarantee,
@@ -335,8 +338,11 @@ function isRealCloser(line: string, k: number, closer: string, openers: Set<stri
     and by a 1,400,000-string differential fuzz across all seven shipped
     tables in which the guard fired 0 times with 0 output differences. Do not
     delete this as dead code — same rationale as `UNSPACED_SCRIPT`'s comment
-    above. It matters once #2286 pairs `‘`/`’` alongside another closer on
-    one opener — the precondition this guard exists for. Reviewer's synthetic
+    above. #2286 gave `zh` and `ru` a `‘`/`’` secondary pair, but re-checked
+    across all seven shipped tables (2026-08-14) `‘` is still paired with the
+    single closer `’` everywhere it appears — no opener carries `’` alongside
+    a SIBLING closer, so the precondition this guard exists for still is not
+    met, and it remains forward-cover. Reviewer's synthetic
     case (`quotePairs
     = [['«','’'], ['«','»'], ['“','”']]`, not any shipped table):
     `«He said don’t go. “Stop,” said Tom. Later» he left.` — without

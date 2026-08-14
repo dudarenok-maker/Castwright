@@ -17,7 +17,10 @@ export const fr: LanguageConventions = {
      and aligner.ts's 7-char atom. */
   dialogueOpen: /^\s*(?:&mdash;|&ndash;|[-–—])\s*/iu,
   quotePairs: [['«', '»']],
-  secondaryQuotePairs: [],
+  // #2279 — `“…”` and `"…"` added for translated / converted texts that use
+  // Western doubles rather than French guillemets. Secondary tier (#2288 M2):
+  // only fills gaps between primary runs.
+  secondaryQuotePairs: [['“', '”'], ['"', '"']],
   speechVerbStems: [
     'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanç', 'rétorqu',
     'continu', 'interromp', 'observ', 'remarqu', 'affirm', 'assur', 'promis', 'averti', 'déclara',

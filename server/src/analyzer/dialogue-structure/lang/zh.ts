@@ -12,7 +12,10 @@ export const zh: LanguageConventions = {
     ['『', '』'],
     ['“', '”'],
   ],
-  secondaryQuotePairs: [],
+  // #2279 — `‘…’` is Mandarin's NESTED quote inside `“…”`; `"…"` appears in
+  // web-converted texts that lost their curly glyphs. Secondary tier (#2288
+  // M2): only fills gaps between primary runs.
+  secondaryQuotePairs: [['‘', '’'], ['"', '"']],
   speechVerbStems: ['说', '道', '问', '答', '喊', '叫', '回答', '说道', '问道', '喃喃', '低语'],
   beatVerbStems: ['点头', '笑', '皱眉', '叹'],
   nameStemmer: (t) => t,

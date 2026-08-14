@@ -17,16 +17,20 @@ import type { LanguageConventions } from './types.js';
        itself a legitimate nested quotation. No other sweep family covers
        this cross-product.
 
-   Restricted to es/ru/en per the plan ("keep it to three languages... if it
-   exceeds ~2s, drop a language — never thin the cross-product"); ru's
-   quotePairs table (4 pairs) is the largest of the three so it sets the pace.
+   Originally restricted to es/ru/en per the plan ("keep it to three
+   languages... if it exceeds ~2s, drop a language — never thin the
+   cross-product"); ru's quotePairs table (4 pairs) is the largest of the
+   three so it sets the pace. `de` was added as a fourth language in the
+   same commit (see LANGS below and its comment for why it uses curly
+   “…” rather than Swiss «…»).
 
    Every shape is driven through the REAL production parser — no env vars, no
    patched module copies, no reimplementation of findQuoteRuns. `tiered` adds
    the candidate pair as SECONDARY (the rule under test); `flat` is the
    control — same pair added as PRIMARY instead, i.e. "what happens without
-   tiering"; `ref` is the untouched table (fixed reference reading, no
-   widening at all). */
+   tiering"; `ref` is `addedPair` filtered back out of the shipped table —
+   for es/ru/en that's tier-empty (the untouched pre-#2286 table), but NOT
+   for `de` (see `variants()` below). */
 
 const speechOf = (body: string, conv: LanguageConventions): string[] =>
   parseChapterStructure(body, buildNameIndex([], conv))
@@ -35,7 +39,46 @@ const speechOf = (body: string, conv: LanguageConventions): string[] =>
     .map((s) => body.slice(s.start, s.end));
 
 function variants(lang: string, addedPair: [string, string]) {
-  const ref = conventionsFor(lang)!;
+  /* #2286 shipped `addedPair` into the REAL table's `secondaryQuotePairs` for
+     es/ru/en — the exact pair this sweep adds synthetically to prove the tier
+     is engaged. `ref` must stay the pre-widening baseline (no `addedPair` in
+     either tier) or the "tiered differs from ref" checks below go vacuously
+     to 0 by construction: `tiered` and `ref` would just be the same shipped
+     table twice, which passes even if the tier were deleted outright — the
+     exact trap this file's own comments warn about. Filtering `addedPair`
+     back out of the shipped `secondaryQuotePairs` restores the pre-#2286
+     baseline **for es/ru/en** — the `de` arm is the exception, spelled out
+     below — so the counts those three pin (74/253/130, 124/632/277) are
+     unchanged by this. Verified by mutation, 2026-08-14: drop the
+     `.filter(...)` and those six collapse to 0. (`de`'s two would not, for
+     the reason below: its `ref` is not tier-empty either way, so the
+     mutation moves the comparison rather than flattening it — re-run the
+     mutation expecting six, not eight.)
+     (The counts themselves moved from 88/225/114 and 116/618/258 when
+     #2315's re-open bound landed on `main` — that is #2315's delta, not this
+     widening's; the values pinned below are `main`'s own post-#2315 ones.)
+
+     For es/ru/en, filtering `addedPair` back out leaves `secondaryQuotePairs:
+     []` — tier-empty, i.e. the pre-#2286 baseline described above. For `de`
+     it does NOT: `de` ships THREE secondary pairs (ASCII `"…"`, curly
+     “…”, Swiss «…» — see `de.ts`), and this sweep's `addedPair` for `de`
+     is only curly, so `de`'s `ref` still carries `[['"','"'], ['«','»']]` —
+     curly-removed, not tier-empty. `de`'s pinned counts (190, 230 below)
+     therefore measure curly-vs-(ASCII+Swiss), not curly-vs-nothing like the
+     other three languages' — not the same quantity. That also makes `de`
+     the one arm in this file whose `destroys zero real turns` assertion is
+     NOT append-only-guaranteed the same way the others are: `ref` here
+     already carries two secondary pairs of its own, so this compares two
+     secondary-populated tables against each other rather than a
+     secondary-populated one against an empty one — the only one of the
+     four languages here that could genuinely fail. */
+  const shipped = conventionsFor(lang)!;
+  const ref: LanguageConventions = {
+    ...shipped,
+    secondaryQuotePairs: shipped.secondaryQuotePairs.filter(
+      ([o, c]) => !(o === addedPair[0] && c === addedPair[1]),
+    ),
+  };
   const tiered: LanguageConventions = { ...ref, secondaryQuotePairs: [addedPair] };
   const flat: LanguageConventions = {
     ...ref,
@@ -102,6 +145,15 @@ const F2_TEXT: Record<string, StraddleText> = {
     t2: 'Bye',
     tag2: ', she said, near the ',
     tailWord: 'gallery',
+    tailPost: '.',
+  },
+  de: {
+    t1: 'Hallo',
+    tag1: ', sagte er, während er das ',
+    gapPost: 'Faust-Plakat betrachtete.',
+    t2: 'Tschüss',
+    tag2: ', sagte sie, in der Nähe der ',
+    tailWord: 'Galerie',
     tailPost: '.',
   },
 };
@@ -171,6 +223,16 @@ const F3_TEXT: Record<string, CrossText> = {
     tag2: ', she said, near the ',
     tail: 'gallery',
   },
+  de: {
+    pre: 'Er sagte ',
+    nestWord: 'hallo',
+    post: ' zu mir',
+    tag1: ', erklärte sie, während sie das ',
+    gap: 'Faust-Plakat betrachtete.',
+    t2: 'Tschüss',
+    tag2: ', sagte sie, in der Nähe der ',
+    tail: 'Galerie',
+  },
 };
 
 function crossShapes(
@@ -201,7 +263,21 @@ const LANGS: Record<string, [string, string]> = {
   es: ['"', '"'],
   ru: ['‘', '’'],
   en: ['«', '»'],
+  // `de` deliberately uses curly `“…”`, not Swiss `«…»`: German's PRIMARY
+  // table already pairs `['»','«']`, so a Swiss `«…»` SECONDARY entry has
+  // the collision #2352 pins (two Swiss turns in one paragraph — the `»`
+  // closing turn 1 is also a valid primary opener, and a primary run forms
+  // between it and turn 2's `«`, destroying both turns). Curly is clean:
+  // measured 0 destroyed on both F2 and F3 below, same as the other three.
+  de: ['“', '”'],
 };
+
+/* `tiered differs from ref` scored-shape counts, one per family. Direct
+   measurement against this file's own generated shapes, not copied from any
+   other report — see the comment above each assertion for what "differs"
+   proves and why 0 would mean the tier silently no-ops. */
+const F2_DIFFERS: Record<string, number> = { es: 74, ru: 253, en: 130, de: 190 };
+const F3_DIFFERS: Record<string, number> = { es: 124, ru: 632, en: 277, de: 230 };
 
 describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
   for (const [lang, addedPair] of Object.entries(LANGS)) {
@@ -256,7 +332,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
          Task 5) — the bound lives inside `scan`, which this tier calls twice,
          so it reaches these shapes too. Values are a direct re-measurement,
          not copied from the design doc's prototype figures. */
-      it(`tiered differs from ref on ${lang === 'es' ? 74 : lang === 'ru' ? 253 : 130} scored shapes (proves the tier is actually engaged)`, () => {
+      it(`tiered differs from ref on ${F2_DIFFERS[lang]} scored shapes (proves the tier is actually engaged)`, () => {
         let differs = 0;
         for (const body of shapes) {
           const r = speechOf(body, ref);
@@ -265,7 +341,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           const cand = speechOf(body, tiered);
           if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
         }
-        expect(differs).toBe(lang === 'es' ? 74 : lang === 'ru' ? 253 : 130);
+        expect(differs).toBe(F2_DIFFERS[lang]);
       });
     });
 
@@ -316,7 +392,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
          number of scored shapes. Value pinned by direct measurement against
          this file's own shapes. */
       /* #2315: re-measured, same rationale as F2's comment above. */
-      it(`tiered differs from ref on ${lang === 'es' ? 124 : lang === 'ru' ? 632 : 277} scored shapes (proves the tier is actually engaged)`, () => {
+      it(`tiered differs from ref on ${F3_DIFFERS[lang]} scored shapes (proves the tier is actually engaged)`, () => {
         let differs = 0;
         for (const { body, outer } of shapes) {
           const r = speechOf(body, ref);
@@ -325,7 +401,7 @@ describe('gap-tier straddle sweeps (#2288 M2 Task 5)', () => {
           const cand = speechOf(body, tiered);
           if (JSON.stringify(r) !== JSON.stringify(cand)) differs++;
         }
-        expect(differs).toBe(lang === 'es' ? 124 : lang === 'ru' ? 632 : 277);
+        expect(differs).toBe(F3_DIFFERS[lang]);
       });
     });
   }
