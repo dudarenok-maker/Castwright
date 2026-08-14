@@ -775,6 +775,8 @@ git commit -m "test(scripts): guard the role registry in both directions"
 - Modify: `.claude/skills/pr-review-gate/SKILL.md` — lines 3 (description), 39 (heading), 41, 148 (comment header), 232–233
 - Modify: `.claude/skills/pr-review-gate/references/reviewer-brief.md:106`
 - Modify: `.claude/skills/pr-review-gate/references/findings-triage.md:107`
+- Modify: `.claude/skills/model-routing/SKILL.md` — one phrase, see step 4b (locate by search; Task 3 shifted this file's line numbers)
+- Modify: `docs/features/235-model-routing-review-gates.md` — one phrase, see step 4b
 - Modify: `scripts/tests/review-gate-mechanism.test.mjs:108–116` — **the existing assertion reads `## Effort level` and will go red the moment you rename the heading. Retargeting it is part of this task, not a follow-up.**
 
 **Interfaces:**
@@ -845,6 +847,32 @@ Heading: `## PR review — pass N (head <sha>, depth <level>)`. The head SHA is
 ```
 
 `.claude/skills/pr-review-gate/SKILL.md:3` (frontmatter `description:`) — change `the effort ladder` to `the review-depth ladder`. **Change nothing else in that line**; it is one long single-line value.
+
+- [ ] **Step 4b: Fix the two sentences OUTSIDE `pr-review-gate` that this rename makes false**
+
+*(Added during execution. The rename's blast radius reaches two files the
+original step list never named — both describe `pr-review-gate`'s contents in
+the present tense, so after the rename both assert a section that no longer
+exists. `CLAUDE.md`'s rule is explicit that a comment your change made false is
+a chore, not taste, and is fixed in the same round.)*
+
+1. **`.claude/skills/model-routing/SKILL.md`**, in the `## PR review` section
+   that lists what moved out of that file on 2026-08-13. It reads
+   *"…the docs-only exemption, the effort ladder, dispatch, the PR comment…"* —
+   change `the effort ladder` to `the review-depth ladder`. **Find it by
+   searching for the phrase, not by line number**: Task 3 inserted two sections
+   into this file, so every line number below its role table has moved.
+2. **`docs/features/235-model-routing-review-gates.md`**, the line reading
+   *"which is now the full runbook (preconditions, exemption, effort ladder,"* —
+   same one-word change. This is an **active** plan (not under `archive/`), and
+   the sentence describes the runbook as it *is*, so it is live prose rather
+   than a historical record.
+
+**Do not go hunting further than these two.** They were found by
+`grep -rn "effort ladder" --include="*.md"` across the repo; that grep is the
+complete list. In particular, the seven historical **PR comments** carrying
+`effort <level>` are deliberately NOT rewritten — step 2's migration sentence
+exists precisely to leave them alone.
 
 - [ ] **Step 5: Add the sentence recording why `tools:` is not the mechanism**
 
