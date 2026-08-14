@@ -273,6 +273,15 @@ export const STEPS = [
         // are covered by that tree's own glob above (2026-08-13) instead of
         // being listed here as literals — see that glob's comment.
         'CLAUDE.md',
+        // #2375 review, finding 2: linkScanSet() reads CONTRIBUTING.md as
+        // TEXT at RUNTIME too (the other root governance doc, alongside
+        // CLAUDE.md above), but this entry was missing — a
+        // CONTRIBUTING.md-only diff printed test:hooks [cached] locally and
+        // (ci-scope.mjs derives its scope from this same STEPS[] entry)
+        // skipped the guard's CI leg too, even though a CONTRIBUTING.md link
+        // is exactly what the guard exists to check. Same #1847 runtime-read
+        // trap as CLAUDE.md's own entry above.
+        'CONTRIBUTING.md',
         // #2348 review, finding 1: dev-mock-command.test.mjs readFileSync's
         // both of these at RUNTIME (asserting .env.mock sets
         // VITE_USE_MOCKS=true and .env.development keeps it false) — no

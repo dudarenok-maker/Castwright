@@ -9,10 +9,11 @@
 // docs/testing/agent-skill-resolution-probe.md. Cline does not read this
 // repo's workspace .claude/skills/ at all, so without this mirror the
 // mandated PR review runbook is invisible to it. model-routing joined the
-// mirror on 2026-08-14: pr-review-gate/SKILL.md links
-// ../model-routing/SKILL.md four times, including the link naming which
-// tier to dispatch a reviewer at, and every one of those links resolved to a
-// directory the mirror did not write until then.
+// mirror on 2026-08-14: pr-review-gate links ../model-routing/SKILL.md three
+// times in SKILL.md plus once more in references/findings-triage.md (four in
+// total), including the link naming which tier to dispatch a reviewer at,
+// and every one of those links resolved to a directory the mirror did not
+// write until then.
 //
 // This is a PER-MACHINE step. CI cannot run it — the target lives under
 // $HOME, which is absent on every fresh clone and every CI runner. Run
@@ -43,10 +44,12 @@ const MIRROR_ROOT = join(homedir(), '.agents', 'skills');
 
 /** Skill-QUALIFIED relative paths, mirroring the store's own layout. Was a
  *  bare list under one skill root until 2026-08-14, when model-routing joined:
- *  pr-review-gate links ../model-routing/SKILL.md four times, including the
- *  link naming which tier to dispatch at, and every one of them resolved to a
- *  directory the mirror did not write. Cline had been reading a runbook with
- *  dead routing references since the mirror was created. */
+ *  pr-review-gate links ../model-routing/SKILL.md three times in SKILL.md
+ *  plus once more in references/findings-triage.md (four in total),
+ *  including the link naming which tier to dispatch at, and every one of
+ *  them resolved to a directory the mirror did not write. Cline had been
+ *  reading a runbook with dead routing references since the mirror was
+ *  created. */
 export const FILES = [
   'pr-review-gate/SKILL.md',
   'pr-review-gate/references/reviewer-brief.md',

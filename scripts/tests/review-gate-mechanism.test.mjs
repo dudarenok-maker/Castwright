@@ -37,7 +37,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join, posix, resolve } from 'node:path';
+import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
 import { FILES as MIRRORED_FILES, buildMirrorContent, syncOneFile } from '../sync-agent-skills.mjs';
@@ -423,10 +423,23 @@ test('every definition file has a role-table row — the registry is closed', ()
   // The reverse direction, and the one with teeth: without it a definition
   // can be added with any model/effort it likes and nothing notices, which
   // makes the "table is the registry" claim in model-routing false.
+  //
+  // Recursive, mirroring linkScanSet()'s own .claude/skills/** walk below —
+  // a bare readdirSync(AGENTS_DIR) only sees the top level, but the harness's
+  // agent loader recurses into subdirectories. A definition committed one
+  // directory down (e.g. .claude/agents/legacy/rogue.md) was loadable and
+  // dispatchable while being invisible to this guard, leaving the "closed
+  // registry" claim false for anything not directly under AGENTS_DIR.
+  // Reported WITH its subpath, not a bare basename: "rogue" is ambiguous
+  // between .claude/agents/rogue.md and .claude/agents/legacy/rogue.md.
   const named = new Set(parseRoleTable().map((r) => r.name));
-  const onDisk = readdirSync(AGENTS_DIR)
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => basename(f, '.md'));
+  const onDisk = readdirSync(AGENTS_DIR, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.md'))
+    .map((d) => {
+      const parentPath = d.parentPath ?? d.path;
+      const rel = join(relative(AGENTS_DIR, parentPath), d.name);
+      return rel.slice(0, -'.md'.length).split(sep).join('/');
+    });
   const orphans = onDisk.filter((n) => !named.has(n));
   assert.deepEqual(
     orphans,
@@ -522,6 +535,24 @@ test('intra-repo .md links in the governance docs and skills resolve to real fil
 // verified 2026-08-13 by asking Cline in this workspace: it listed the 23
 // global skills and answered "pr-review-gate: NO".
 const AGENT_SKILL_STORE = join(homedir(), '.agents', 'skills');
+
+test('MIRRORED_FILES (sync-agent-skills.mjs FILES) is non-empty and names the expected mirrored skills', () => {
+  // The green-on-awkward-input case, matching "the role table is non-empty
+  // and parses" above. Without it, every test below that does
+  // `for (const rel of MIRRORED_FILES)` is vacuously true the moment FILES
+  // is emptied: `npm run skills:sync` would exit 0 printing success having
+  // written no files, and the mirror-drift / cross-skill-link tests would
+  // both pass by iterating nothing. Exact list, not `.length > 0`: that's
+  // what closes the vacuous-pass hole — a `> 0` check is satisfied just as
+  // easily by a wrong or partial list as by the real one. Adding a
+  // legitimately mirrored file means updating this list in the same change.
+  assert.deepEqual(MIRRORED_FILES, [
+    'pr-review-gate/SKILL.md',
+    'pr-review-gate/references/reviewer-brief.md',
+    'pr-review-gate/references/findings-triage.md',
+    'model-routing/SKILL.md',
+  ]);
+});
 
 test('the agent-store mirror matches its canonical source, when it exists', () => {
   // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is

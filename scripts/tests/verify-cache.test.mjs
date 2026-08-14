@@ -477,6 +477,18 @@ test('stepTouchedByDiff: an agent definition added later is in scope for test:ho
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/some-future-role.md']), true);
 });
 
+// #2375 review, finding 2: review-gate-mechanism.test.mjs's linkScanSet()
+// reads CONTRIBUTING.md as TEXT at RUNTIME — the other root governance doc,
+// alongside CLAUDE.md above — but CONTRIBUTING.md had no extraFiles entry.
+// A CONTRIBUTING.md-only diff printed test:hooks [cached] locally and
+// (ci-scope.mjs derives its scope from this same STEPS[] entry) skipped the
+// guard's CI leg too, on exactly the diff shape that would add or break a
+// link the scan exists to catch. Same #1847 runtime-read trap as CLAUDE.md's
+// own case documents.
+test('stepTouchedByDiff: a CONTRIBUTING.md diff matches test:hooks via extraFiles', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['CONTRIBUTING.md']), true);
+});
+
 // PR #2007 review, Minor 9 — bump-version.test.mjs mirrors bump-version.mjs's
 // TEXT into a throwaway repo at RUNTIME (no module-graph edge), the same
 // #1847 trap release-notes-gate.mjs's own extraFiles entry already guards
