@@ -1,6 +1,6 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 6 (rounds 1–3 folded; decision 0 resolved; `medium` norm declared)_
+_Design spec — 2026-08-14 · rev 7 (rounds 1–3 folded; decision 0 resolved; `medium` norm declared for roles and sessions)_
 
 > **STATUS: decision 0 is RESOLVED — POSITIVE. The roster proceeds.**
 >
@@ -201,10 +201,12 @@ effort as "up" or "down" without naming a baseline; the implicit one was
 `effortLevel` **on the repo owner's box**, a per-user setting, so the same spec
 described opposite changes on two machines.)*
 
-**`medium` is this repo's declared default reasoning effort.** It is the anchor
-every role's `effort:` is stated against, and it is a *declaration*, not a
-mechanism — nothing reads it at runtime. It exists so "raised" and "lowered" mean
-the same thing to every reader, on every machine.
+**`medium` is this repo's declared default reasoning effort — for roles *and* for
+sessions.** It is the anchor every `effort:` is stated against, and it is a
+*declaration*, not a mechanism: nothing reads it at runtime. It exists so
+"raised" and "lowered" mean the same thing to every reader, on every machine.
+`high` and above are deliberate, work-shaped raises rather than a resting state
+— see decision 6's bands for which shapes earn which.
 
 Three consequences:
 
@@ -335,13 +337,31 @@ have a home.)*
 |---|---|---|
 | Mechanical | `low` | Running commands, transcribing a decided edit, formatting. |
 | **Norm** | **`medium`** | **The declared default (0b):** routine implementation against a settled plan, coordination, summarizing output. |
-| Raised | `high` | Non-obvious debugging, triage of a failure whose cause is unknown. |
-| Judgment | `xhigh`, `max` | Adversarial or design work in-session: spec design, an ambiguous defect hunt, an irreversible call. |
+| Raised | `high` | **Design and brainstorming**, non-obvious debugging, triage of a failure whose cause is unknown. |
+| Adversarial | `xhigh`, `max` | Hunting for what is *wrong*: an in-session review gate, an ambiguous defect hunt, an irreversible call. |
 
-*(Rev 6: revs 3–5 labelled `high` "the working default", which was a description
-of this box's setting rather than a decision. With 0b declaring `medium` the
-norm, `high` becomes a deliberate raise and the bands are re-anchored. An integer
-`effort:` — legal per M2 — maps to the band containing its nearest named level.)*
+*(Rev 6: revs 3–5 labelled `high` "the working default", which described this box's
+setting rather than a decision. With 0b declaring `medium` the norm, `high`
+becomes a deliberate raise. **Rev 7:** the top band was called "Judgment" and
+listed "spec design" in it — which would have flagged a session doing design work
+at `high` as drifted one band low, i.e. mis-fired on the exact case the repo owner
+names as the correct reason to raise. Design moves to `high`; the top band
+narrows to **adversarial** work, matching the two roles that sit there
+(`pr-reviewer`, `spec-checker`) — both of which hunt for defects rather than
+produce designs.)* An integer `effort:` — legal per M2 — maps to the band
+containing its nearest named level.
+
+**The norm covers sessions, not just roles.** `effortLevel` should sit at
+`medium`, with `high` and above as deliberate, work-shaped raises. **This spec's
+own authoring session is the worked example**: design work at `high` is a correct
+raise, not drift — which is why the rule reports the band it read and asks,
+rather than treating any deviation as an error.
+
+**Honest limit: the repo cannot enforce this half.** `effortLevel` lives in
+`~/.claude/settings.json`, outside version control and outside any check this
+repo can run. 0b declares the norm; decision 6 reads the value and flags a
+mismatch; **neither can set it.** A session is compliant only because someone
+chose to be.
 
 **"Drifted" means** the current unit of work sits in a different *band* than the
 band containing the value read — not a different value, which would fire on
