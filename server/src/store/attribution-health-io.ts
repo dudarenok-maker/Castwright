@@ -183,8 +183,10 @@ export interface AttributionStateResult {
 }
 
 /** Wave 1 ships steps 1-4 and 7 of the state sequence only (spec
-    §Failure modes) — 4d/5/6 (`unanswered`/`drifted`/`collapsed`) have no
-    threshold yet and are Wave 2's. */
+    §Failure modes) — 4d/6 (`unanswered`/`collapsed`) have no threshold yet
+    and are Wave 2's. Step 5 (`drifted`) was DROPPED, not deferred (#2357);
+    its slot in the sequence is kept struck so these step numbers stay
+    valid. */
 export async function resolveAttributionState(bookDir: string): Promise<AttributionStateResult> {
   const inputs = await loadMeasurementInputs(bookDir);
 
@@ -254,8 +256,8 @@ export async function resolveAttributionState(bookDir: string): Promise<Attribut
     }
   }
 
-  // Steps 4d/5/6 (unanswered/drifted/collapsed) are Wave 2 — no threshold
-  // ships in Wave 1.
+  // Steps 4d/6 (unanswered/collapsed) are Wave 2 — no threshold ships in
+  // Wave 1. Step 5 (drifted) is dropped outright (#2357) and never gets one.
 
   // Step 7: otherwise.
   return {

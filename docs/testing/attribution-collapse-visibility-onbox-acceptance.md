@@ -307,10 +307,16 @@ hand-edited casts, which is a real (developer-facing) defect the column
 surfaced on its first real run. The finding is about the fifth *state*, not
 the column.
 
-**This is an owner decision, and it is recorded in the spec** (§D13 re-gated
-→ *Re-gate outcome*) and tracked as
-[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357) rather
-than settled here. The options and the recommendation live in both.
+**Decided: the repo owner confirmed the drop on 2026-08-14**, taking the
+first of the three options — drop the `drifted` state, keep
+`orphanSpoken`/`orphanIds` as reported columns. Closed as
+[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357); recorded
+in the spec at §D13 re-gated → *Re-gate outcome*, which also carries the one
+paragraph saying what evidence would reopen D13. **Wave 2 ships four states,
+not five**, and the `drifted` surface — the fifth badge, the second notice
+variant, `alsoCollapsed`, `attributionVerdictKey`,
+`unacknowledgedOrphanSpoken` and the cache-sourced orphan-banner tier — is
+not built.
 
 ### 5f · Reproducing this
 

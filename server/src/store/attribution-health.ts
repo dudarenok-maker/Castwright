@@ -55,7 +55,7 @@ export interface AttributionMeasurement {
   demotedNarrator: number; // a post-stage-2 step overwrote it (priorCharacterId present)
   unknownOriginNarrator: number; // cache predates priorCharacterId
 
-  // ---- id drift (D9/D13), re-based on spans ----
+  // ---- id drift (D9), re-based on spans — D13 was dropped, not deferred (#2357) ----
   orphanSpoken: number; // unresolvable id; reported, NEVER summed into the share
   orphanIds: string[]; // distinct unresolvable ids
 

@@ -959,13 +959,16 @@ Wave 1 shipping moves it to `active`, not `stable` (Wave 2 is unbuilt).
 Measurement only — no threshold, no badge, no UI, as scoped. Left empty at
 merge; filled 2026-08-14 alongside the D13 re-gate.
 
-**Not archived, deliberately.** Wave 2's shape is the live question: the D13
-re-gate this wave was required to run has now run, and its verdict is *drop
-the `drifted` state* — see spec §D13 re-gated → *Re-gate outcome* and
+**Wave 2's surface is now decided.** The D13 re-gate this wave was required to
+run has run, its verdict was *drop the `drifted` state*, and the repo owner
+confirmed it on 2026-08-14 — closed as
+[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357). **Wave 2
+ships four states, not five**; `orphanSpoken`/`orphanIds` stay as reported
+developer-facing columns. Evidence and consequences: spec §D13 re-gated →
+*Re-gate outcome* and
 [the run sheet §5](../../testing/attribution-collapse-visibility-onbox-acceptance.md).
-That is an owner confirmation, not a settled fact — tracked as
-[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357) — so this
-plan stays out of `archive/` until Wave 2's surface is decided.
+The plan is not moved: `docs/superpowers/plans/` has no `archive/`
+subdirectory and no plan here has ever been archived.
 
 **Acceptance still owed** (register row E11, which stays open): the
 dash-stripped re-run invariance check, and re-analysing one book post-D18 to

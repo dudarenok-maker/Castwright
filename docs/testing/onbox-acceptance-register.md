@@ -3206,7 +3206,8 @@ books are identical in every column to the partial run**; the three that moved
 `orphan` 29→32) are the parser work merged in between — **measured not to be
 #2286**, which moved nothing in this corpus on either side of its merge. The
 same run completed the **D13 re-gate**, whose verdict is *drop the `drifted`
-state*: see the run sheet §5 and spec §D13 re-gated → *Re-gate outcome*.
+state* — the owner confirmed this 2026-08-14, closed as #2357: see the run
+sheet §5 and spec §D13 re-gated → *Re-gate outcome*.
 
 **Still owed:** (2) the dash-stripped re-run invariance check (Task 9's paired
 assertion — run twice, second time over scratch-path copies of each cache with
