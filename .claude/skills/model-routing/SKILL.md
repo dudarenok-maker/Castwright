@@ -24,6 +24,69 @@ non-fork subagent, or the routing instruction is silently void.
 | Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
 | Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
 
+## Named dispatch roles
+
+**This table governs one surface: Claude Code `subagent_type` dispatch.**
+Nothing else reads `.claude/agents/` — not the worker CLIs (`claude`,
+`copilot`, `cline`), not Cline, which resolves skills from `~/.agents/skills/`
+and cannot select a subagent's model at all. Editing a row here changes what
+`Agent({subagent_type: '<name>'})` does, and nothing else.
+
+**The other execution lane is governed too — just not here, and not by this
+repo.** Work routed to a CLI worker queue is dispatched by the Ringer engine
+config (`~/.config/ringer/config.toml`), which pins each engine's model and
+passes `--effort`/`--thinking` explicitly. Same norm, different file. This
+table is therefore not the whole story of how work gets dispatched: it governs
+the `subagent_type` lane, which is the minority path. That file lives outside
+version control, so nothing here reads or checks it — it is named so a reader
+editing `implementer` below knows which lane they are and are not changing.
+
+Dispatch by role, not by model: `Agent({subagent_type: 'pr-reviewer'})`, not
+`Agent({model: 'opus'})`. The definition pins both axes, so the depth of a
+gate stops depending on what the dispatching session happened to be set to.
+
+| Role | Tier | `model:` | `effort:` | Dispatch for |
+|---|---|---|---|---|
+| `pr-reviewer` | Premium | `opus` | `xhigh` | The mandatory pre-merge PR review gate (see [`pr-review-gate`](../pr-review-gate/SKILL.md)) |
+| `spec-checker` | Premium | `opus` | `xhigh` | The mandatory adversarial pass on a non-trivial spec or plan |
+| `task-reviewer` | Default | `sonnet` | `high` | Reviewing one completed task between steps of a plan |
+| `implementer` | Default | `sonnet` | `medium` | Implementing one task from a plan, test-first |
+| `fix-agent` | Cheap | `haiku` | `medium` | One incidental finding: one fix, one paired regression test |
+| `scout` | Cheap | `haiku` | `low` | Mechanical search-and-report; running a command and summarising it |
+
+**`model:` and `effort:` are Claude Code only — Cline cannot select either.**
+
+**This table is a closed registry.** Every `.claude/agents/*.md` file in this
+repo must have a row here, and every row must have a file — the guard in
+`scripts/tests/review-gate-mechanism.test.mjs` checks **both** directions. A
+new definition has exactly two legal paths: add its row (one line, and it
+becomes a governed role), or keep the file out of `.claude/agents/`, which
+`.gitignore` leaves untracked and unaffected. There is deliberately no third
+path — no `# unmanaged` escape comment, no allowlist. An ungoverned definition
+file is precisely what the declared effort norm exists to prevent, and a
+registry with an opt-out is not a registry.
+
+**Reasoning effort: `medium` is the declared repo-wide norm** — for these
+roles, for the main session, and for CLI worker dispatch. Every role above
+declares `effort:` explicitly, *including the two sitting at the norm*:
+omitting the key inherits the dispatching session's effort, which is the
+ungoverned behaviour the norm exists to end. `high` and above are deliberate,
+work-shaped raises — see [Session-level effort drift](#session-level-effort-drift)
+for which shapes earn which.
+
+**Dispatching a CLI worker? Pass the flag.** `claude --effort medium`,
+`copilot --effort medium`, `cline --thinking medium`. This is the same rule as
+"declare it even at the norm", on a surface where the cost of omission is
+documented rather than inferred: `cline --help` states that omitting
+`--thinking` "leaves provider default" — an effort this repo neither declares
+nor observes.
+
+**No `tools:` list here is a security boundary.** `scout` omits the write
+tools for hygiene — a search-and-report role has no business holding `Edit` —
+but `Bash` can write files, so the omission buys tidiness, not enforcement.
+The reviewer roles' no-writes prohibition lives where it actually works: prose
+in `pr-review-gate`, enforced by its tree check.
+
 ## Escalation (subagent dispatch)
 
 A subagent that fails twice on its assigned tier is auto-re-dispatched one
@@ -40,6 +103,22 @@ phrased differently."
 This is silent/non-interrupting by design: subagent dispatch is cheap and
 disposable, unlike the session-level case below.
 
+**Escalation raises the model, not the effort — and here is why that is not
+arbitrary.** Re-dispatch the **same** `subagent_type` with an explicit model
+override (`Agent({subagent_type: 'implementer', model: 'opus'})`), which the
+`Agent` tool's schema states takes precedence over the definition's `model:`.
+Effort stays at the role's pinned value **because the `Agent` tool has no
+effort parameter** — the asymmetry belongs to that surface, not to escalation
+as an idea. On surfaces that do expose the axis (a worker CLI's `--effort`, a
+`Workflow` stage's `opts.effort`) a retry can raise both. Stated with its
+because-clause so a reader who has just used `Workflow` does not read the rule
+as false and discount the rest.
+
+**Opus is terminal.** A twice-failing `pr-reviewer` or `spec-checker` is
+already at the top of the ladder and has no rung above it. That case escalates
+**to the user** — the same place the review loop's cap routes an unresolved
+disagreement.
+
 ## Session-level drift (main session's own model)
 
 You cannot switch your own running model. When the current unit of work,
@@ -50,6 +129,43 @@ whether to switch — do not silently work through it on the "wrong" tier.
 **"Drifted" means:** the current unit of work now matches a different table
 row than the one the active session model sits on, by the same criteria used
 for subagent dispatch above.
+
+## Session-level effort drift
+
+The same shape as the model-drift rule above, for the other axis: flag and
+ask, never silent, never claim to have changed it.
+
+Read `effortLevel` from the project's `.claude/settings.local.json` first,
+then `~/.claude/settings.json`, and **state which file the value came from.**
+
+| Band | Values | The session is doing |
+|---|---|---|
+| Mechanical | `low` | Running commands, transcribing a decided edit, formatting. |
+| **Norm** | **`medium`** | **The declared default:** routine implementation against a settled plan, coordination, summarizing output. |
+| Raised | `high` | Design and brainstorming, non-obvious debugging, triage of a failure whose cause is unknown. |
+| Adversarial | `xhigh`, `max` | Hunting for what is *wrong*: an in-session review gate, an ambiguous defect hunt, an irreversible call. |
+
+An integer `effortLevel` — legal per the harness schema — maps to the band
+containing its nearest named level.
+
+**"Drifted" means** the current unit of work sits in a different *band* than
+the band containing the value read — not a different value, which would fire
+on every routine shift. Raise it **once per unit of work**, not per step.
+
+Two limits, stated rather than left implicit:
+
+- The file holds the **configured** value. If the user says they changed it
+  mid-session, their statement wins over the file.
+- The reading is **reported, never acted on unilaterally.** You cannot set
+  this, and must not imply you have.
+
+**Honest limit — this rule is unenforceable, twice over.** `effortLevel`
+lives outside version control, so no check this repo runs can see it; a
+session is compliant only because someone chose to be. And both files it
+reads are Claude Code's, so the rule is silently inapplicable to a Cline or
+Copilot session — it does not misfire there, it never fires. On those lanes
+the whole mechanism is passing `--effort`/`--thinking` explicitly at dispatch,
+because there is no file to read afterwards and no band to compare against.
 
 ## Mandatory adversarial review (specs & plans)
 

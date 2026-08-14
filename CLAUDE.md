@@ -287,6 +287,17 @@ dispatching session's model; the table below does not apply to them.
 | Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (spec/plan and PR review — see below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
 | Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
 
+**Reasoning effort is the second axis, and `medium` is this repo's declared
+norm** — for dispatched roles, for the main session, and for CLI worker
+dispatch (`claude --effort`, `copilot --effort`, `cline --thinking`; pass it
+explicitly, since omitting it inherits an undeclared default). `high` and
+above are deliberate, work-shaped raises rather than a resting state. Dispatch
+by named role — `Agent({subagent_type: 'pr-reviewer'})` — rather than by raw
+`model:`; the six roles and their pinned `model:`/`effort:` values live in the
+role table in
+[`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md),
+which is also the registry every `.claude/agents/*.md` file must appear in.
+
 A subagent that fails twice on its assigned tier is silently re-dispatched
 one rung up (Haiku → Sonnet, Sonnet → Opus) and the escalation is reported
 after the fact — no need to ask first, since subagent dispatch is cheap and
