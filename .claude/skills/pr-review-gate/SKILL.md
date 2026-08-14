@@ -1,6 +1,6 @@
 ---
 name: pr-review-gate
-description: Use when preparing to ship a PR, staging one for merge, or running CLAUDE.md's before-shipping "Independent PR review" step. This is the full PR review runbook — preconditions, the docs-only exemption, the effort ladder, dispatching the reviewer, posting the pass comment, findings triage, the re-review loop, and issue verification at PR creation. For choosing a subagent's model tier outside a PR review, or the spec/plan adversarial-review loop, consult `model-routing` instead. Dispatches a non-fork subagent at the routing table's Premium tier carrying an adversarial reviewer brief — a findings report only, never auto-applied.
+description: Use when preparing to ship a PR, staging one for merge, or running CLAUDE.md's before-shipping "Independent PR review" step. This is the full PR review runbook — preconditions, the docs-only exemption, the review-depth ladder, dispatching the reviewer, posting the pass comment, findings triage, the re-review loop, and issue verification at PR creation. For choosing a subagent's model tier outside a PR review, or the spec/plan adversarial-review loop, consult `model-routing` instead. Dispatches a non-fork subagent at the routing table's Premium tier carrying an adversarial reviewer brief — a findings report only, never auto-applied.
 ---
 
 # PR review gate
@@ -36,11 +36,11 @@ the file-set test that exempted it (see [The PR comment](#the-pr-comment)).
 A large share of this repo's PRs are docs-only, so without the note the
 durable record would be missing exactly where the volume is.
 
-## Effort level
+## Review depth
 
-For every non-exempt PR, effort scales with the PR's commit type/scope,
-reusing CONTRIBUTING.md's existing commit-convention vocabulary rather than a
-new classification:
+For every non-exempt PR, **review depth** scales with the PR's commit
+type/scope, reusing CONTRIBUTING.md's existing commit-convention vocabulary
+rather than a new classification:
 
 - **`low`** — single-scope `chore`, `test`, `build`, or `ci` (mechanical, no
   user-facing behavior change).
@@ -54,6 +54,18 @@ earn on its own (e.g. one `fix` commit + one `refactor` commit → `high`).
 `ultra` is never auto-selected here — it is billed and requires explicit user
 opt-in (`/code-review ultra`, or the user asking for it by name), per the
 Workflow tool's own rule.
+
+**"Depth", not "effort", and the distinction is load-bearing.** This ladder is
+prompt-stated scope — how much of the PR the reviewer is asked to interrogate.
+It is *not* the model's reasoning-effort setting, which is pinned at `xhigh` on
+the `pr-reviewer` role and does not vary by PR. Both were called "effort" until
+2026-08-14, so a reader meeting `effort: xhigh` in a definition and `effort:
+low` in a comment header had no way to tell them apart. Repo-wide, **`effort`
+now means only the model setting**; this axis is `depth`.
+
+**Comments posted before 2026-08-14 use the old noun for this same thing.**
+Seven of them, across PRs #2339, #2337 and #2350, read `effort <level>` in
+their header. They are historical records and are not rewritten.
 
 State the level explicitly in the dispatch prompt so the subagent calibrates
 depth instead of guessing.
@@ -135,6 +147,14 @@ it as such, do not absorb it. This is the one behavioural property of the
 pass verifiable from outside it, so it is the one that gets verified. The
 guard test cannot check it, and does not claim to.
 
+**The reviewer's `tools:` list is not what stops it writing**, and was
+deliberately not used for that. Stripping `Write` from the role would make
+this skill's own mandated path — `gh pr comment --body-file <file>`, which
+requires creating a file — run through a Bash heredoc instead, i.e. it would
+make routing around the restriction the normal, unremarkable happy path.
+`Bash` can write files regardless. The prohibition stays prose, and the tree
+check above is its enforcement.
+
 ## The PR comment
 
 Every pass posts one summary comment on the PR the moment it returns,
@@ -145,7 +165,7 @@ Format, following the three comments on [PR
 #2320](https://github.com/dudarenok-maker/Castwright/pull/2320):
 
 ```
-## PR review — pass N (head <sha>, effort <level>)
+## PR review — pass N (head <sha>, depth <level>)
 
 Scope: <files reviewed> · verified: <suite counts, typecheck> before
 adversarially probing <what>.
@@ -229,8 +249,8 @@ restated here.
   no new signal. This mirrors the spec/plan loop's severity-gated shape (see
   [`model-routing`'s adversarial-review
   loop](../model-routing/SKILL.md#mandatory-adversarial-review-specs--plans)),
-  rather than firing on every push. Re-review re-derives the effort level
-  from the PR's current commit set (per [Effort level](#effort-level))
+  rather than firing on every push. Re-review re-derives the review depth
+  from the PR's current commit set (per [Review depth](#review-depth))
   rather than reusing the initial pass's tier — a fix commit can raise the
   tier the same way any other commit would.
 - **Loop cap**: 2 re-review rounds, same numeric cap as the spec/plan loop

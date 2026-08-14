@@ -198,7 +198,7 @@ because there is no file to read afterwards and no band to compare against.
 ## PR review
 
 Moved out of this file 2026-08-13. The sequence, the docs-only exemption, the
-effort ladder, dispatch, the PR comment, findings triage, the re-review trigger
+review-depth ladder, dispatch, the PR comment, findings triage, the re-review trigger
 and loop cap, and issue verification at PR creation all live in
 [`pr-review-gate`](../pr-review-gate/SKILL.md). Routing keeps routing; that file
 owns the PR process.

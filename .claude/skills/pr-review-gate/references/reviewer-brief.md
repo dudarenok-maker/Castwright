@@ -103,7 +103,7 @@ posts a review onto someone else's PR. If the prompt did not give you both,
 stop and say so rather than guessing — a review comment on the wrong PR cannot
 be quietly withdrawn.
 
-Heading: `## PR review — pass N (head <sha>, effort <level>)`. The head SHA is
+Heading: `## PR review — pass N (head <sha>, depth <level>)`. The head SHA is
 required; without it the comment is uninterpretable once the branch moves.
 
 If you found nothing, post anyway with `### ✅ No findings`. A record that

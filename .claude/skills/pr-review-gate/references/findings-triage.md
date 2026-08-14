@@ -104,7 +104,7 @@ reads:
   no new signal. (This is a *fixing* rule, not a re-review rule: 🟡-only
   findings are still fixed this round per "Fix in this round (the
   report-fix-record rule)" above — they just don't reopen the loop.)
-  Re-review re-derives the effort level from the
+  Re-review re-derives the review depth from the
   PR's current commit set rather than reusing the initial pass's tier — a
   fix commit can raise the tier the same way any other commit would.
 - **Loop cap**: initial pass + up to 2 re-review rounds (3 total). Still

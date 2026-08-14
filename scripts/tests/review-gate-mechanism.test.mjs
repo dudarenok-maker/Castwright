@@ -16,7 +16,7 @@
 //   - the gate skill stays model-invocable and resolvable (path exists, no
 //     disable-model-invocation, frontmatter `name:` == directory basename);
 //   - pr-review-gate/SKILL.md — not model-routing — carries the dispatch
-//     mechanism and the effort ladder, and model-routing carries no second
+//     mechanism and the review-depth ladder, and model-routing carries no second
 //     copy of the sections that moved out of it on 2026-08-13;
 //   - CLAUDE.md's before-shipping step 10 still names the skill;
 //   - both references/*.md exist AND are named by SKILL.md, so the dispatch
@@ -135,7 +135,7 @@ test("pr-review-gate/SKILL.md's frontmatter name: matches its directory", () => 
   );
 });
 
-test('pr-review-gate/SKILL.md carries the dispatch mechanism and the effort ladder', () => {
+test('pr-review-gate/SKILL.md carries the dispatch mechanism and the review-depth ladder', () => {
   // Retargeted 2026-08-13: this assertion used to read model-routing's
   // "## Mandatory independent review (PRs)" section, which has moved into this
   // skill. It must read the file that now OWNS the rule, or it certifies a
@@ -151,13 +151,13 @@ test('pr-review-gate/SKILL.md carries the dispatch mechanism and the effort ladd
       'inherits the dispatching session, which is the opposite of independent review',
   );
 
-  const ladder = /\n## Effort level\n([\s\S]*?)(?=\n## )/.exec(src);
-  assert.ok(ladder, 'pr-review-gate/SKILL.md has no "## Effort level" section');
+  const ladder = /\n## Review depth\n([\s\S]*?)(?=\n## )/.exec(src);
+  assert.ok(ladder, 'pr-review-gate/SKILL.md has no "## Review depth" section');
   for (const level of ['low', 'medium', 'high']) {
     assert.match(
       ladder[1],
       new RegExp('`' + level + '`'),
-      `the effort ladder no longer names \`${level}\``,
+      `the review-depth ladder no longer names \`${level}\``,
     );
   }
 });
