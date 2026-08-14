@@ -3,12 +3,23 @@
 ## Read these first -- they are NOT loaded for you
 
 The canonical rules are the root **`CLAUDE.md`** and **`CONTRIBUTING.md`**.
-Cline loads neither: its rule loader reads this file, `.clinerules/*.md`, and
-workspace/global `AGENTS.md`, and nothing else (verified 2026-08-14 against the
-installed `@cline/core` loader and a live `cline -p` probe). **Read both files
-before your first edit** -- `CLAUDE.md` for the working principles, execution
-model and conventions, `CONTRIBUTING.md` for the commit / branch / PR / issue /
-release-notes specs.
+Cline loads neither. Its rule loader reads `.clinerules` (a directory or a bare
+file), `.cline/`, and workspace/global `AGENTS.md`, taking `.md` / `.markdown`
+/ `.txt`. **Read both canonical files before your first edit** -- `CLAUDE.md`
+for the working principles, execution model and conventions,
+`CONTRIBUTING.md` for the commit / branch / PR / issue / release-notes specs.
+
+Verified 2026-08-14, two ways: `@cline/core` (the package holding the loader)
+contains zero `CLAUDE` byte sequences under a binary-safe grep, against
+positive controls that do find `clinerules` and `AGENTS.md`; and a live
+`cline -p` probe in this workspace reported only `Workspace AGENTS.md` +
+`.clinerules/cline.md` in context. One caveat, so nobody re-derives this and
+thinks the note is wrong: `cli-windows-x64/bin/cline.exe` does carry a
+`CLAUDE.md` literal and a `claudeMd` / `claudeMdExcludes` **managed-policy**
+schema. That is enterprise-policy plumbing, not the workspace rule loader, and
+it changed nothing on this box -- but a managed config is the one thing that
+could make this stale. Re-probe rather than assume if you are on a managed
+install.
 
 This file is a summary, not a substitute. It deliberately restates almost
 nothing from them, carrying only rules that are **Cline-specific** or that
@@ -57,12 +68,16 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 - **Never bypass a hook with `--no-verify` to get unstuck.** Triage instead:
   caused by my change -> fix it in the same commit; pre-existing (the same test
   fails on `main`) -> surface it to the user and do NOT fold the fix in;
-  suspected flake -> re-run that test alone once and name it. Bypassing is
-  legitimate in two narrow cases only: a genuine emergency, where the commit
-  still needs fixing before review (CONTRIBUTING.md "Enforcement"), and
-  deliberately skipping the pre-push hook on a push whose gate you have already
-  satisfied (CLAUDE.md "Commit gate"). Never on a red hook you have not
-  diagnosed.
+  suspected flake -> re-run that test alone once and name it. CLAUDE.md
+  "Working practice" states the rule flatly: do not use `--no-verify` to
+  bypass. The single documented exception is a `git commit --no-verify` in a
+  genuine emergency, and that commit still needs fixing before review
+  (CONTRIBUTING.md "Enforcement"). **"I already ran the tests" is not a
+  reason to skip pre-push**: that hook also runs `guard-protected-push` and
+  `guard-commit-subjects`, and `verify:fast:branch` runs neither, so bypassing
+  drops the backstop that catches a malformed subject when `commit-msg` did
+  not fire -- exactly the fresh-worktree case below, and the leak that shipped
+  on #856.
 - **Never treat hook output in a fresh worktree as proof of verification** --
   see the first trap below.
 
@@ -77,10 +92,13 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
   server legs with "vitest not found"). Simplest path is
   `node scripts/wt-new.mjs <type>/<scope>-<slug>`, which does all of it plus
   non-clashing ports.
-- **Tearing that worktree down in the wrong order destroys the primary
-  checkout.** `git worktree remove` (and `Remove-Item -Recurse`) will follow a
-  junction and delete the REAL `node_modules` it points at, taking husky
-  activation with it. Drop the junctions first -- `(Get-Item $j -Force).Delete()`
+- **Tearing that worktree down in the wrong order guts the primary checkout.**
+  `git worktree remove` (and `Remove-Item -Recurse`) will follow a junction and
+  delete the REAL `node_modules` it points at, so every npm script in the
+  primary checkout breaks until you reinstall. (Hooks themselves survive --
+  `.husky/_` is a real repo-root directory, not a link -- so they keep firing
+  and fail loudly; it is the *ordering* requirement and the two checks below
+  that are silent.) Drop the junctions first -- `(Get-Item $j -Force).Delete()`
   removes the link only -- gating on
   `$i.Attributes -band [IO.FileAttributes]::ReparsePoint`, never on
   `.LinkTarget`, which reads empty on PowerShell 5.1 even for a real junction
