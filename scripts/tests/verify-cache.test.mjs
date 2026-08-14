@@ -459,6 +459,24 @@ test('stepTouchedByDiff: a brand-new skill file is in scope for test:hooks', () 
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+test('stepTouchedByDiff: an agent-definition diff is in scope for test:hooks', () => {
+  // decision 8 / M6. review-gate-mechanism.test.mjs reads .claude/agents/*.md
+  // as TEXT at RUNTIME — no module-graph edge — so without this glob a
+  // definitions-only diff (e.g. flipping pr-reviewer's `effort: xhigh` to
+  // `low`, the single highest-value mutation anyone could make here) would
+  // print test:hooks [cached] and gate nothing, locally AND in cloud CI,
+  // since ci-scope.mjs derives from this same STEPS[]. Same #1847 trap the
+  // fixtures/** and .claude/skills/** comments document at length.
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/pr-reviewer.md']), true);
+});
+
+test('stepTouchedByDiff: an agent definition added later is in scope for test:hooks', () => {
+  // The enumeration half, matching the brand-new-skill-file case above: the
+  // glob must see a file that does not exist when it is written, or the next
+  // role added needs hand-registering here and silently does not get it.
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/some-future-role.md']), true);
+});
+
 // PR #2007 review, Minor 9 — bump-version.test.mjs mirrors bump-version.mjs's
 // TEXT into a throwaway repo at RUNTIME (no module-graph edge), the same
 // #1847 trap release-notes-gate.mjs's own extraFiles entry already guards

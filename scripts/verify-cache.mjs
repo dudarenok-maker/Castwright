@@ -151,6 +151,15 @@ export const STEPS = [
            and leave the guard stale-green. Same #1847 trap as fixtures/**
            above, with the enumeration failure mode on top. */
         '.claude/skills/**',
+        /* .claude/agents/** is an input for the same reason .claude/skills/**
+           is: review-gate-mechanism.test.mjs reads the six role definitions as
+           TEXT at RUNTIME to check them against model-routing's role table.
+           Without this glob a definitions-only diff — flipping an `effort:`
+           value being the obvious one — prints test:hooks [cached] and runs
+           the guard on nothing, locally AND in cloud CI (ci-scope.mjs derives
+           from this same STEPS[]). The guard would certify the value it just
+           stopped checking. Same #1847 trap as fixtures/** above. */
+        '.claude/agents/**',
       ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
