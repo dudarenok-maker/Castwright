@@ -335,7 +335,7 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
        JSON.parse to reject it as invalid. This test asserts that readJson
        strips the BOM before parsing. */
     const target = join(workdir, 'state.json');
-    const bomContent = '﻿{"v": 1, "name": "test"}';
+    const bomContent = '\ufeff' + '{"v": 1, "name": "test"}';
     await writeFile(target, bomContent, 'utf8');
 
     const value = await readJson<{ v: number; name: string }>(target);
@@ -349,7 +349,7 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
        returned value comes from the main file, not the backup. This proves
        the recovery path was not taken. */
     const target = join(workdir, 'state.json');
-    const bomContent = '﻿{"v": 99, "source": "main"}';
+    const bomContent = '\ufeff' + '{"v": 99, "source": "main"}';
     await writeFile(target, bomContent, 'utf8');
     await writeFile(`${target}.bak.1`, JSON.stringify({ v: 1, source: 'backup' }), 'utf8');
 
@@ -359,6 +359,30 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
     expect(value).toEqual({ v: 99, source: 'main' });
     /* No fallback should have occurred. */
     expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('readJsonWithRecovery parses a BOM-prefixed BACKUP file when the main file is corrupt (#2365 N2)', async () => {
+    /* The BOM strip inside the recovery loop's OWN readFile (state-io.ts,
+       the `try { const raw = await readFile(backupPath, 'utf8'); ... }`
+       block) is a separate strip from the one on the main-file read above —
+       it has to run again because this is a second, independent read of a
+       different file. A BOM'd backup is not exotic: it's the same
+       Notepad/PowerShell hand-edit as the main-file case, applied to the
+       exact file a user is told to look at when recovering. Mirrors the
+       existing ".bak.1 fallback" test above, but with a BOM on the backup
+       instead of plain JSON. */
+    const target = join(workdir, 'state.json');
+    await writeFile(target, '{ not valid json', 'utf8');
+    const bomBackup = '\ufeff' + '{"v": 1, "source": "backup"}';
+    await writeFile(`${target}.bak.1`, bomBackup, 'utf8');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const value = await readJsonWithRecovery<{ v: number; source: string }>(target, { keep: 3 });
+
+    expect(value).toEqual({ v: 1, source: 'backup' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/recovered from .*state\.json\.bak\.1/);
     warn.mockRestore();
   });
 });
