@@ -34,15 +34,31 @@ Copied verbatim from the spec. Every task's requirements implicitly include thes
 - **The PR-comment header becomes `## PR review — pass N (head <sha>, depth <level>)`** (decision 5). The word `effort` thereafter means only the model setting, repo-wide.
 - **DO NOT touch the `#2320` citation** at `.claude/skills/pr-review-gate/SKILL.md:144`. The spec records a fabricated finding about it as **withdrawn** (F2). A pass that "fixes" it is repeating the error the record exists to prevent.
 - **Existing PR comments are not rewritten.** 7 historical comments across #2339/#2337/#2350 read `effort high`; they are records.
-- **`npm run skills:sync` is per-machine and CI cannot run it.** It must be run by hand after Tasks 6 and 7.
+- **`npm run skills:sync` is per-machine and CI cannot run it.** It must be run by hand after Tasks 5 and 6.
 - **Scope discipline:** this is a governance change. **No application code changes.** If a task tempts you into `src/` or `server/`, stop — you have misread it.
 
-## Coherence note for the reviewing session
+## Convergence with the CLI-worker queue — reviewed, and the intake question is settled
 
-A parallel session (Open Engine / Ringer) is reviewing the spec and this plan together. Two seams are deliberate and should be read as decisions, not omissions:
+The parallel Open Engine / Ringer session reviewed this plan against the spec on
+2026-08-14. Its findings are folded in; two outcomes matter to anyone executing:
 
-1. **The role table governs one surface** — Claude Code `subagent_type` dispatch. The worker CLIs (M10) and Cline (M5) do not read `.claude/agents/`. Task 3 writes that sentence into the skill.
-2. **The intake-path question is deferred with the decision named** (spec, "Open questions" #2): whether work chooses its execution surface by work-shape, by dispatcher, or by declared-default-with-exceptions. **No task here answers it**, and the roster is correct under all three answers. If that session has since settled it, this plan does not need reworking — only a follow-up row.
+1. **The intake path is decided: declared-default-with-exceptions.** The queue is
+   the default — anything with more than one step, or that will outlive a single
+   session, goes through Open Engine sub-issues and executes on the `cline` CLI.
+   `superpowers:subagent-driven-development` is reserved for same-session work the
+   operator is actively watching. **This plan needs no rework under that answer**
+   — `implementer` is not orphaned, it governs the minority path, and
+   `sonnet`/`medium` remains right for it.
+2. **Two execution-governance surfaces now exist, and they agree on the norm.**
+   The `subagent_type` lane is governed by `.claude/agents/` (this plan); the
+   queue lane by the Ringer engine config, which pins each engine's model and
+   passes `--effort`/`--thinking` explicitly. Decision 0b holds on both. Task 3's
+   role-table prose names the other surface so a reader editing `implementer`
+   knows which lane they are *not* changing.
+
+**The review also caught a blocking defect** — Tasks 3 and 4 were a split that
+could not commit. They are now one task; see its banner for why, and do not
+re-split it.
 
 ---
 
@@ -54,19 +70,25 @@ A parallel session (Open Engine / Ringer) is reviewing the spec and this plan to
 | `scripts/tests/verify-cache.test.mjs` | Locks that glob so it cannot be removed silently | 1 |
 | `.gitignore` | `!.claude/agents/` negation, mirroring the existing skills one | 2 |
 | `.claude/agents/*.md` ×6 | The roster — one file per role, `model:` + `effort:` pinned | 2 |
-| `.claude/skills/model-routing/SKILL.md` | The role table (the registry), the session-effort rule, the escalation asymmetry, surface scoping | 3, 4 |
-| `scripts/tests/review-gate-mechanism.test.mjs` | Bidirectional roster guard; retargeted depth assertion; mirrored-link case | 5, 6, 7 |
-| `CLAUDE.md` | The `medium`-norm sentence + link to the role table. **No second table** | 4 |
-| `.claude/skills/pr-review-gate/SKILL.md` + `references/*.md` | effort→depth rename; `subagent_type` dispatch; why `tools:` is not the mechanism | 6 |
-| `scripts/sync-agent-skills.mjs` | `model-routing` joins the mirror (fixes F1) | 7 |
-| `docs/testing/agent-effort-resolution-probe.md` | **New** — the decision-0 record, greppable | 8 |
-| `docs/testing/agent-skill-resolution-probe.md` | Second probe run appended (decision 9) | 8 |
+| `.claude/skills/model-routing/SKILL.md` | The role table (the registry), the session-effort rule, the escalation asymmetry, surface scoping | 3 |
+| `CLAUDE.md` | The `medium`-norm sentence + link to the role table. **No second table** | 3 |
+| `scripts/tests/review-gate-mechanism.test.mjs` | Bidirectional roster guard; retargeted depth assertion; mirrored-link case | 4, 5, 6 |
+| `.claude/skills/pr-review-gate/SKILL.md` + `references/*.md` | effort→depth rename; `subagent_type` dispatch; why `tools:` is not the mechanism | 5 |
+| `scripts/sync-agent-skills.mjs` | `model-routing` joins the mirror (fixes F1) | 6 |
+| `docs/testing/agent-effort-resolution-probe.md` | **New** — the decision-0 record, greppable | 7 |
+| `docs/testing/agent-skill-resolution-probe.md` | Second probe run appended (decision 9) | 7 |
 
-**Landing order is load-bearing in three places:**
+**Landing order is load-bearing in four places:**
+
+- **Task 3 is one commit and must stay one.** It writes an anchor and its target
+  into the same file. Splitting them puts a dangling link in the tree at a moment
+  `pre-commit` runs `test:hooks` — which is in scope, because the staged diff
+  touches `.claude/skills/**` — so the link guard rejects the commit outright.
+  This was a real defect in the first draft of this plan, caught in review.
 
 - **Task 1 first.** M6: `test:hooks`'s globs do not cover `.claude/agents/**`. Until they do, a definitions-only diff prints `test:hooks [cached]` and runs nothing — locally *and* in cloud CI, since `ci-scope.mjs` derives from the same `STEPS[]`. Every guard added later would sit stale-green on exactly the diff that breaks it.
-- **Task 2 before Task 5.** The bidirectional guard needs both the definitions and the table to exist, or it is red by construction.
-- **Task 7's `FILES` change lands with its own guard case**, never after it. The mirrored-link case asserts every cross-skill link resolves to a path the mirror writes; `model-routing` is not such a path until `FILES` grows.
+- **Task 2 before Task 4.** The bidirectional guard needs both the definitions and the table to exist, or it is red by construction.
+- **Task 6's `FILES` change lands with its own guard case**, never after it. The mirrored-link case asserts every cross-skill link resolves to a path the mirror writes; `model-routing` is not such a path until `FILES` grows.
 
 ---
 
@@ -80,7 +102,7 @@ A parallel session (Open Engine / Ringer) is reviewing the spec and this plan to
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/<anything>'])` returns `true`. Tasks 5–7 rely on this being true or their guards never run.
+- Produces: `stepTouchedByDiff(stepByName['test:hooks'], ['.claude/agents/<anything>'])` returns `true`. Tasks 4–6 rely on this being true or their guards never run.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -156,9 +178,9 @@ git commit -m "build(scripts): scope test:hooks to .claude/agents/** so role gua
 
 **Interfaces:**
 - Consumes: Task 1's glob (so a later change to these files is actually checked).
-- Produces: six tracked files whose frontmatter Task 5's guard reads. Exact keys: `name`, `description`, `model`, `effort`, and `tools` on `scout` only.
+- Produces: six tracked files whose frontmatter Task 4's guard reads. Exact keys: `name`, `description`, `model`, `effort`, and `tools` on `scout` only.
 
-**Note on ordering:** the `.gitignore` line must land in the *same commit* as the definitions. `.claude/*` (line 33) ignores the directory wholesale — this is the recorded [`.claude/` is gitignored wholesale](../../../CLAUDE.md) trap. Without the negation, `git add .claude/agents/` silently adds nothing and Task 5's `git ls-files` assertion fails with a confusing message.
+**Note on ordering:** the `.gitignore` line must land in the *same commit* as the definitions. `.claude/*` (line 33) ignores the directory wholesale — this is the recorded [`.claude/` is gitignored wholesale](../../../CLAUDE.md) trap. Without the negation, `git add .claude/agents/` silently adds nothing and Task 4's `git ls-files` assertion fails with a confusing message.
 
 - [ ] **Step 1: Add the `.gitignore` negation**
 
@@ -337,7 +359,7 @@ git status --short .claude/agents/
 git ls-files .claude/agents/ | wc -l
 ```
 
-Expected: six `A` lines in `git status`, and `6` from `git ls-files`. **If `git ls-files` prints `0`, the negation failed** — do not proceed; the guard in Task 5 depends on these being tracked.
+Expected: six `A` lines in `git status`, and `6` from `git ls-files`. **If `git ls-files` prints `0`, the negation failed** — do not proceed; the guard in Task 4 depends on these being tracked.
 
 - [ ] **Step 7: Commit**
 
@@ -348,14 +370,30 @@ git commit -m "feat(docs): add the six named dispatch roles and track .claude/ag
 
 ---
 
-## Task 3: The role table — `model-routing`'s new registry section
+## Task 3: All of `model-routing`'s new prose, plus `CLAUDE.md`'s norm — **one commit**
+
+> **This was two tasks until the convergence review.** The split had the role
+> table commit first, linking a `#session-level-effort-drift` anchor the next
+> task would create — and called the intervening dangling link "expected".
+> **That commit cannot succeed.** `.husky/pre-commit` runs
+> `verify:fast:scoped`, whose `--steps` include `test:hooks`, whose globs
+> include `.claude/skills/**`. Staging `model-routing/SKILL.md` puts
+> `test:hooks` in scope, the link guard fires on the dangling anchor, and the
+> hook refuses the commit. `--no-verify` is forbidden. Verified, not inferred:
+> `stepTouchedByDiff(test:hooks, ['.claude/skills/model-routing/SKILL.md'])`
+> returns `true`.
+>
+> **Do not re-split this task.** If you must stage it in pieces, the anchor and
+> its target have to land together in whichever piece commits first.
 
 **Files:**
-- Modify: `.claude/skills/model-routing/SKILL.md` (insert a new section after `## Routing table`, before `## Escalation (subagent dispatch)`)
+- Modify: `.claude/skills/model-routing/SKILL.md` — three insertions (role table; session-effort rule; escalation asymmetry)
+- Modify: `CLAUDE.md` — the `## Model routing` section
 
 **Interfaces:**
 - Consumes: the six definitions from Task 2 (values must match exactly).
-- Produces: a markdown table under the heading `## Named dispatch roles` whose rows Task 5's guard parses. **The guard's parser and this table's format are a contract** — Task 5 parses rows of the form `| \`name\` | Tier | \`model\` | \`effort\` | … |`.
+- Produces: a markdown table under the heading `## Named dispatch roles` whose rows Task 4's guard parses. **The guard's parser and this table's format are a contract** — Task 4 parses rows of the form `| \`name\` | Tier | \`model\` | \`effort\` | … |`.
+- Produces: the heading `## Session-level effort drift`, which the role table's own prose links.
 
 - [ ] **Step 1: Insert the role table section**
 
@@ -369,6 +407,15 @@ Nothing else reads `.claude/agents/` — not the worker CLIs (`claude`,
 `copilot`, `cline`), not Cline, which resolves skills from `~/.agents/skills/`
 and cannot select a subagent's model at all. Editing a row here changes what
 `Agent({subagent_type: '<name>'})` does, and nothing else.
+
+**The other execution lane is governed too — just not here, and not by this
+repo.** Work routed to a CLI worker queue is dispatched by the Ringer engine
+config (`~/.config/ringer/config.toml`), which pins each engine's model and
+passes `--effort`/`--thinking` explicitly. Same norm, different file. This
+table is therefore not the whole story of how work gets dispatched: it governs
+the `subagent_type` lane, which is the minority path. That file lives outside
+version control, so nothing here reads or checks it — it is named so a reader
+editing `implementer` below knows which lane they are and are not changing.
 
 Dispatch by role, not by model: `Agent({subagent_type: 'pr-reviewer'})`, not
 `Agent({model: 'opus'})`. The definition pins both axes, so the depth of a
@@ -417,37 +464,11 @@ The reviewer roles' no-writes prohibition lives where it actually works: prose
 in `pr-review-gate`, enforced by its tree check.
 ```
 
-- [ ] **Step 2: Verify the link anchors resolve**
+**Do not commit yet.** The section you just wrote links
+`#session-level-effort-drift`, which step 2 creates. Committing here is the
+rejected commit the banner above describes.
 
-The new section links `../pr-review-gate/SKILL.md` and `#session-level-effort-drift` (added in Task 4). The existing link guard will fail on the second until Task 4 lands — that is expected and is why these are consecutive tasks.
-
-```bash
-cd C:/Claude/Projects/wt-model-effort-routing && node --test scripts/tests/review-gate-mechanism.test.mjs 2>&1 | grep -A5 "dangling intra-repo"
-```
-
-Expected: one dangling link reported — `SKILL.md -> #session-level-effort-drift`. **Only that one.** Any other dangling link is a typo you just introduced.
-
-- [ ] **Step 3: Commit** (the tree is intentionally red on one link; Task 4 closes it in the next commit)
-
-```bash
-cd C:/Claude/Projects/wt-model-effort-routing
-git add .claude/skills/model-routing/SKILL.md
-git commit -m "docs(docs): add the named-dispatch-role registry to model-routing"
-```
-
----
-
-## Task 4: The session-effort rule, the escalation asymmetry, and CLAUDE.md's norm
-
-**Files:**
-- Modify: `.claude/skills/model-routing/SKILL.md` (new section after `## Session-level drift (main session's own model)`; two sentences appended to `## Escalation (subagent dispatch)`)
-- Modify: `CLAUDE.md` — the `## Model routing` section
-
-**Interfaces:**
-- Consumes: Task 3's role table (the bands reference it).
-- Produces: the heading `## Session-level effort drift`, which Task 3's link targets.
-
-- [ ] **Step 1: Add the session-effort rule**
+- [ ] **Step 2: Add the session-effort rule**
 
 In `.claude/skills/model-routing/SKILL.md`, immediately after the `## Session-level drift (main session's own model)` section (ending line 52) and before `## Mandatory adversarial review (specs & plans)`:
 
@@ -490,7 +511,7 @@ the whole mechanism is passing `--effort`/`--thinking` explicitly at dispatch,
 because there is no file to read afterwards and no band to compare against.
 ```
 
-- [ ] **Step 2: Add the escalation asymmetry**
+- [ ] **Step 3: Add the escalation asymmetry**
 
 Append to the end of `## Escalation (subagent dispatch)`, after the "silent/non-interrupting by design" paragraph:
 
@@ -512,7 +533,7 @@ already at the top of the ladder and has no rung above it. That case escalates
 disagreement.
 ```
 
-- [ ] **Step 3: Update `CLAUDE.md`'s Model routing section**
+- [ ] **Step 4: Update `CLAUDE.md`'s Model routing section**
 
 In `CLAUDE.md`, immediately after the four-row tier table and before the paragraph beginning "A subagent that fails twice on its assigned tier", insert:
 
@@ -534,25 +555,27 @@ reference; a third home for the same six rows is exactly the drift this work
 is closing. The norm sentence is the one thing worth putting there, because it
 is what every other statement of effort is relative to.
 
-- [ ] **Step 4: Run the link guard — the dangling link from Task 3 must now be gone**
+- [ ] **Step 5: Run the link guard — it must be fully green before you commit**
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing && node --test scripts/tests/review-gate-mechanism.test.mjs
 ```
 
-Expected: **whole file green.** If `#session-level-effort-drift` still dangles, the heading text does not match the anchor — GitHub slugs `## Session-level effort drift` to `session-level-effort-drift`.
+Expected: **whole file green, zero dangling links.** This is not a courtesy check — `test:hooks` is in scope for this staged diff, so pre-commit runs this same file and a red result *rejects the commit*. If `#session-level-effort-drift` still dangles, the heading text does not match the anchor: GitHub slugs `## Session-level effort drift` to `session-level-effort-drift`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit — everything from steps 1–4 in one commit**
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing
 git add .claude/skills/model-routing/SKILL.md CLAUDE.md
-git commit -m "docs(docs): add the session-effort drift rule, escalation asymmetry, and the medium norm"
+git commit -m "docs(docs): add the role registry, session-effort rule, and the medium norm"
 ```
+
+Expect pre-commit to actually run `test:hooks` here (not `[skip] … (out of scope)`) — that is the gate this task was restructured around. If it skips, `.claude/skills/**` is missing from the step's globs, which would be a separate defect worth reporting before continuing.
 
 ---
 
-## Task 5: The bidirectional roster guard
+## Task 4: The bidirectional roster guard
 
 **Files:**
 - Modify: `scripts/tests/review-gate-mechanism.test.mjs` (append new tests; add two constants near the existing path constants at lines 44–48)
@@ -739,7 +762,7 @@ git commit -m "test(scripts): guard the role registry in both directions"
 
 ---
 
-## Task 6: Rename `pr-review-gate`'s effort ladder to review depth
+## Task 5: Rename `pr-review-gate`'s effort ladder to review depth
 
 **Files:**
 - Modify: `.claude/skills/pr-review-gate/SKILL.md` — lines 3 (description), 39 (heading), 41, 148 (comment header), 232–233
@@ -878,11 +901,11 @@ npm run skills:sync
 ```
 
 `skills:sync` is per-machine and CI cannot run it. Running it here keeps the
-mirror from drifting between this commit and Task 7's.
+mirror from drifting between this commit and Task 6's.
 
 ---
 
-## Task 7: `model-routing` joins the cross-agent mirror (fixes F1)
+## Task 6: `model-routing` joins the cross-agent mirror (fixes F1)
 
 **Why:** `.claude/skills/pr-review-gate/` links `../model-routing/SKILL.md` four times — three in `SKILL.md`, one in `references/findings-triage.md`, including the link that names which tier to dispatch at. The mirror carries only `pr-review-gate`, so in `~/.agents/skills/` every one of those resolves to a directory that is not there. **Cline has been reading a runbook with dead routing references since the mirror was created.**
 
@@ -1053,7 +1076,7 @@ git commit -m "fix(scripts): mirror model-routing so pr-review-gate's routing li
 
 ---
 
-## Task 8: The two probe records
+## Task 7: The two probe records
 
 **Files:**
 - Create: `docs/testing/agent-effort-resolution-probe.md`
@@ -1179,7 +1202,7 @@ git commit -m "docs(docs): record the effort-resolution probe and the owed Cline
 
 ---
 
-## Task 9: Ship
+## Task 8: Ship
 
 **Files:** none new — this is the before-shipping checklist for this branch.
 
@@ -1222,7 +1245,7 @@ Run the `pr-review-gate` skill. Depth: **`high`** — this is a multi-scope PR (
 npm run skills:sync
 ```
 
-CI cannot do this. A machine that skips it has a mirror that is stale in exactly the way Task 7 just fixed.
+CI cannot do this. A machine that skips it has a mirror that is stale in exactly the way Task 6 just fixed.
 
 ---
 
@@ -1232,20 +1255,20 @@ Every decision in the spec, mapped to the task that implements it:
 
 | Spec decision | Task | Note |
 |---|---|---|
-| 0 — probe gate | 8 | Resolved POSITIVE; Task 8 writes the greppable record |
-| 0b — `medium` norm | 3, 4 | Role table paragraph + `CLAUDE.md` sentence + CLI clause |
+| 0 — probe gate | 7 | Resolved POSITIVE; Task 7 writes the greppable record |
+| 0b — `medium` norm | 3 | Role table paragraph + `CLAUDE.md` sentence + CLI clause |
 | 1 — tier table unmodified | — | Nothing to do; Task 3 **adds** a table rather than editing the existing one |
 | 2 — six roles | 2, 3 | Definitions + registry table |
-| 3 — `tools:` is not a boundary | 2, 3, 6 | `scout.md` prose, role-table paragraph, `pr-review-gate` sentence |
+| 3 — `tools:` is not a boundary | 2, 3, 5 | `scout.md` prose, role-table paragraph, `pr-review-gate` sentence |
 | 4 — `.gitignore` negation | 2 | Same commit as the definitions, deliberately |
-| 5 — effort → review depth | 6 | Includes retargeting the existing guard assertion |
-| 6 — session-effort rule | 4 | Bands + both halves of the honest limit |
-| 7 — guard cases, both directions | 5, 7 | Roster guard + mirrored-link case |
+| 5 — effort → review depth | 5 | Includes retargeting the existing guard assertion |
+| 6 — session-effort rule | 3 | Bands + both halves of the honest limit |
+| 7 — guard cases, both directions | 4, 6 | Roster guard + mirrored-link case |
 | 8 — scope glob | 1 | **First**, or nothing else is enforced |
-| 9 — Cline mirror | 7, 8 | Skills now; definitions deferred to the owed probe |
-| 10 — escalation asymmetry | 4 | With its because-clause |
-| F1 — mirror dead links | 7 | Fixed in-round, declared in the PR body |
-| M10/M11 — CLI + Workflow surfaces | 3, 4 | Surface-scoping sentences in the role table and escalation section |
-| Open question 2 — intake path | — | **Deliberately unimplemented.** Needs a design pass; the decision owed is named in the spec |
+| 9 — Cline mirror | 6, 7 | Skills now; definitions deferred to the owed probe |
+| 10 — escalation asymmetry | 3 | With its because-clause |
+| F1 — mirror dead links | 6 | Fixed in-round, declared in the PR body |
+| M10/M11 — CLI + Workflow surfaces | 3 | Surface-scoping sentences in the role table and escalation section |
+| Open question 2 — intake path | 3 | **Settled by the reviewing session: declared-default-with-exceptions.** No rework followed; Task 3's role-table prose names the other governed surface |
 
-**Open-question 1** (`settings.local.json` precedence) is not verified by any task here — decision 6 is written to be correct under either precedence and to state which file it read. Confirming it is a nice-to-have the implementer can do in Task 4 if cheap; it does not block.
+**Open-question 1** (`settings.local.json` precedence) is not verified by any task here — decision 6 is written to be correct under either precedence and to state which file it read. Confirming it is a nice-to-have the implementer can do in Task 3 if cheap; it does not block.

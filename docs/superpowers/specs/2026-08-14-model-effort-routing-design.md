@@ -1,6 +1,6 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 9 · **FINAL — approved, ready for `writing-plans`**_
+_Design spec — 2026-08-14 · rev 10 · **FINAL — plan written and reviewed; ready to execute**_
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
@@ -33,8 +33,8 @@ routing links) and one
 
 ### Revision history
 
-Nine revisions, three adversarial review rounds (the full cap), one empirical
-gate, and one **convergence pass** against a parallel session. Every round found
+Ten revisions, three adversarial review rounds (the full cap), one empirical
+gate, and two **convergence passes** against a parallel session. Every round found
 a defect in the *previous* round's new prose, so corrections are marked inline as
 `(rev N, round-M finding: …)` rather than silently absorbed:
 
@@ -60,6 +60,19 @@ a defect in the *previous* round's new prose, so corrections are marked inline a
   sentence is scoped, and the two decisions that reasoned from the unscoped
   version — 10 and the per-PR-scaling rejection — are repaired. Five smaller
   findings folded; one deferred with the decision named.
+- **Rev 10 — second convergence pass**, after the plan was written and the same
+  session reviewed spec and plan together. **The deferred intake question is
+  answered** (declared-default-with-exceptions) with no rework to the roster,
+  and its consequence recorded: execution governance now lives in two files
+  that agree on the norm and differ on model, so decision 2's surface-scoping
+  sentence under-informs unless it names the second one. That review also found
+  a **blocking defect in the plan, not in this spec** — a two-commit split whose
+  first commit could not pass `pre-commit`, because the staged file put
+  `test:hooks` in scope and the link guard fired on a deliberately-dangling
+  anchor. Recorded here because it is the same shape as decision 8's own
+  rationale, inverted: reasoning about a scope glob without checking which hook
+  consumes it, once producing a guard that silently *did not* run and once one
+  that *did*.
 
 ## Problem
 
@@ -305,6 +318,17 @@ surface `CLAUDE.md`'s execution model already describes:
 `.claude/agents/` — not the worker CLIs of M10, not Cline (M5, and decision 9
 defers even the skills-style mirror until probed). Editing `implementer` here
 changes what `Agent({subagent_type: 'implementer'})` does and nothing else.
+
+**But the other lane is governed too, and the skill must say so** *(rev 10,
+second convergence pass)*. With the intake path settled — see [Open questions
+#2](#open-questions-deferred-to-implementation) — the queue is the **default**
+execution path and `subagent_type` dispatch the minority one, so a table that
+correctly scopes itself and stops there leaves a reader believing the majority
+lane is ungoverned. It is not: the Ringer engine config pins each engine's model
+and passes `--effort`/`--thinking` explicitly. `model-routing` names that file.
+Not because this repo can check it — it is outside version control and nothing
+here reads it — but so that someone editing `implementer` knows which lane they
+are *not* changing. Same norm, different file.
 
 | Role | Tier | `model:` | `effort:` | `tools:` |
 |---|---|---|---|---|
@@ -728,8 +752,38 @@ project-then-user and *state which file it read*, which is correct under either
 precedence; the implementation confirms the precedence and records it in the
 skill.
 
-**2. Which intake path a piece of work takes — deferred to a design pass, and
-this names the decision owed.** *(Rev 9, convergence finding.)* The parallel
+**2. Which intake path a piece of work takes — ANSWERED, rev 10.**
+
+> **Declared-default-with-exceptions.** The queue is the default: anything with
+> more than one step, or that will outlive a single session, goes through Open
+> Engine sub-issues and executes on the `cline` CLI.
+> `superpowers:subagent-driven-development` is reserved for same-session work
+> the operator is actively watching.
+
+Settled by the session that raised it, on the same day, during its convergence
+review of this spec and its plan. **Nothing in the roster changes** — which is
+what the deferral predicted: the six roles were defined by what `CLAUDE.md`'s
+execution model dispatches today, and that is still true. `implementer` is not
+orphaned; it governs the minority path.
+
+**One consequence is worth stating, because it is the thing a reader will get
+wrong.** Execution-path governance now lives in **two** files that agree on the
+norm and differ on model — `.claude/agents/implementer.md` for the
+`subagent_type` lane, and the Ringer engine config for the queue lane, which
+pins each engine's model and passes `--effort`/`--thinking` explicitly (0b's
+consequence 4, already applied there). Decision 2's surface-scoping sentence
+therefore under-informs on its own: saying "nothing else reads
+`.claude/agents/`" is true and leaves a reader believing the other lane is
+ungoverned. `model-routing` names the second file for that reason — not because
+this repo can check it (it cannot; the file is outside version control) but so
+that someone editing `implementer` knows which lane they are *not* changing.
+
+The original deferral is kept below as a record of what was owed and why, per
+this spec's convention that withdrawn and superseded claims are not deleted.
+
+---
+
+*(Superseded — the deferral as written in rev 9.)* The parallel
 session that raised M10 is standing up a CLI-worker queue that routes execution
 work to `cline` rather than to `Agent({subagent_type: 'implementer'})`. If that
 queue becomes the intake path, `implementer` — and, with it, `fix-agent` and
