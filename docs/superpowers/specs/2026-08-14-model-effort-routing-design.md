@@ -120,8 +120,10 @@ sync-script extension, one scope-glob addition, and guard-test cases.
 
 Every decision below rests on one of these. Each was checked on this box on
 2026-08-14 — the predecessor spec's round-1 correction (a routing rule that was
-"silently void" for forks) is the failure mode being avoided. **All eleven are
-Confirmed.** M2 was the spec's central risk through revs 1–4 and was the reason
+"silently void" for forks) is the failure mode being avoided. **Ten are
+Confirmed outright; M10 is Confirmed for flag declaration only, based on `--help`
+evidence that cannot speak to runtime behaviour.** *(Rev 11: all eleven were
+Confirmed; M10's status was qualified when its evidence was scoped.)*  M2 was the spec's central risk through revs 1–4 and was the reason
 decision 0 existed; it is now settled. M10 and M11 are rev 9's, and exist because
 M1 was generalised one step too far — see the paragraph below the table.
 
