@@ -40,7 +40,12 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
-import { FILES as MIRRORED_FILES, buildMirrorContent, syncOneFile } from '../sync-agent-skills.mjs';
+import {
+  FILES as MIRRORED_FILES,
+  buildMirrorContent,
+  syncOneFile,
+  assertFilesNonEmpty,
+} from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -672,6 +677,27 @@ test('syncOneFile throws when SKILL.md frontmatter is not the first line, and le
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('assertFilesNonEmpty throws on an empty list, so skills:sync cannot report success having written nothing', () => {
+  // syncAgentSkills() itself calls this before its loop, so an accidentally
+  // emptied FILES throws instead of printing the success hint and exiting 0
+  // having written no files. The commit-time exact-list assert on
+  // MIRRORED_FILES above catches an emptied FILES in THIS repo's git history,
+  // but skills:sync is a per-machine step run by hand — this is the runtime
+  // check for the moments that guard isn't watching. Exercised directly,
+  // like the FILES import right above it, rather than through
+  // syncAgentSkills(), since FILES is a module-level const nothing here can
+  // inject an empty value into.
+  assert.throws(
+    () => assertFilesNonEmpty([]),
+    /FILES is empty/,
+    'assertFilesNonEmpty did not throw for an empty list',
+  );
+  assert.doesNotThrow(
+    () => assertFilesNonEmpty(MIRRORED_FILES),
+    'assertFilesNonEmpty must not throw for the real, non-empty FILES list',
+  );
 });
 
 // buildMirrorContent is a pure function — it needs no filesystem and runs on

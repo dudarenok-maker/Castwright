@@ -298,7 +298,7 @@ by named role — `Agent({subagent_type: 'pr-reviewer'})` — rather than by raw
 `model:`; the six roles and their pinned `model:`/`effort:` values live in the
 role table in
 [`.claude/skills/model-routing/SKILL.md`](.claude/skills/model-routing/SKILL.md),
-which is also the registry every `.claude/agents/*.md` file must appear in.
+which is also the registry every `.claude/agents/**` file — nested subdirectories included — must appear in.
 
 A subagent that fails twice on its assigned tier is silently re-dispatched
 one rung up (Haiku → Sonnet, Sonnet → Opus) and the escalation is reported

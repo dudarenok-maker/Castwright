@@ -56,8 +56,9 @@ gate stops depending on what the dispatching session happened to be set to.
 
 **`model:` and `effort:` are Claude Code only — Cline cannot select either.**
 
-**This table is a closed registry.** Every `.claude/agents/*.md` file in this
-repo must have a row here, and every row must have a file — the guard in
+**This table is a closed registry.** Every `.claude/agents/**` file — nested
+subdirectories included — in this repo must have a row here, and every row
+must have a file — the guard in
 `scripts/tests/review-gate-mechanism.test.mjs` checks **both** directions. A
 new definition has exactly two legal paths: add its row (one line, and it
 becomes a governed role), or keep the file out of `.claude/agents/`, which

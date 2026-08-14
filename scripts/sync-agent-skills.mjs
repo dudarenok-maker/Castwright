@@ -10,7 +10,8 @@
 // repo's workspace .claude/skills/ at all, so without this mirror the
 // mandated PR review runbook is invisible to it. model-routing joined the
 // mirror on 2026-08-14: pr-review-gate links ../model-routing/SKILL.md three
-// times in SKILL.md plus once more in references/findings-triage.md (four in
+// times in SKILL.md plus once more (one directory deeper, as
+// ../../model-routing/SKILL.md) in references/findings-triage.md (four in
 // total), including the link naming which tier to dispatch a reviewer at,
 // and every one of those links resolved to a directory the mirror did not
 // write until then.
@@ -45,8 +46,9 @@ const MIRROR_ROOT = join(homedir(), '.agents', 'skills');
 /** Skill-QUALIFIED relative paths, mirroring the store's own layout. Was a
  *  bare list under one skill root until 2026-08-14, when model-routing joined:
  *  pr-review-gate links ../model-routing/SKILL.md three times in SKILL.md
- *  plus once more in references/findings-triage.md (four in total),
- *  including the link naming which tier to dispatch at, and every one of
+ *  plus once more (one directory deeper, as ../../model-routing/SKILL.md) in
+ *  references/findings-triage.md (four in total), including the link naming
+ *  which tier to dispatch at, and every one of
  *  them resolved to a directory the mirror did not write. Cline had been
  *  reading a runbook with dead routing references since the mirror was
  *  created. */
@@ -150,7 +152,22 @@ export function syncOneFile(srcPath, destPath, rel) {
   return destPath;
 }
 
+// Guards the one input the commit-time guard (the exact-list assert in
+// review-gate-mechanism.test.mjs) cannot reach: `npm run skills:sync` is a
+// PER-MACHINE step run by hand, on machines and at moments that test isn't
+// watching. Without this, an accidentally emptied FILES would make the loop
+// below iterate nothing, and the script would still print its success hint
+// and exit 0 — reporting "mirror is up to date" to the operator when nothing
+// was written at all. Exported so the check can be exercised directly,
+// mirroring assertNoBom above.
+export function assertFilesNonEmpty(files) {
+  if (files.length === 0) {
+    throw new Error('sync-agent-skills: FILES is empty — nothing would be written, refusing to report success');
+  }
+}
+
 export function syncAgentSkills() {
+  assertFilesNonEmpty(FILES);
   const written = [];
   for (const rel of FILES) {
     written.push(syncOneFile(join(SKILLS_ROOT, rel), join(MIRROR_ROOT, rel), rel));
