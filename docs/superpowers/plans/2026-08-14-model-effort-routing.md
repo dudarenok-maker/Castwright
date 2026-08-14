@@ -78,7 +78,7 @@ re-split it.
 | `docs/testing/agent-effort-resolution-probe.md` | **New** — the decision-0 record, greppable | 7 |
 | `docs/testing/agent-skill-resolution-probe.md` | Second probe run appended (decision 9) | 7 |
 
-**Landing order is load-bearing in four places:**
+**Landing order is load-bearing in five places:**
 
 - **Task 3 is one commit and must stay one.** It writes an anchor and its target
   into the same file. Splitting them puts a dangling link in the tree at a moment
@@ -89,6 +89,13 @@ re-split it.
 - **Task 1 first.** M6: `test:hooks`'s globs do not cover `.claude/agents/**`. Until they do, a definitions-only diff prints `test:hooks [cached]` and runs nothing — locally *and* in cloud CI, since `ci-scope.mjs` derives from the same `STEPS[]`. Every guard added later would sit stale-green on exactly the diff that breaks it.
 - **Task 2 before Task 4.** The bidirectional guard needs both the definitions and the table to exist, or it is red by construction.
 - **Task 6's `FILES` change lands with its own guard case**, never after it. The mirrored-link case asserts every cross-skill link resolves to a path the mirror writes; `model-routing` is not such a path until `FILES` grows.
+- **Tasks 5 and 6 run `npm run skills:sync` BEFORE their commit, not after** — both edit inputs to the mirror-drift test, which does *not* take its fails-open skip on a machine where `~/.agents/skills/` exists. A stale mirror is a red `test:hooks`, and both tasks stage paths that put `test:hooks` in scope, so the commit is refused. *(Ruled at pre-flight; the plan originally had the sync after the commit in both.)*
+
+> **All four of the constraints above are one defect class**, found three separate
+> times in this plan's own life: reasoning about what a guard *reports* without
+> asking which hook *consumes* it. If you are about to write "this is
+> intentionally red, the next step fixes it" — check `stepTouchedByDiff` for the
+> paths you are staging first.
 
 ---
 
@@ -875,15 +882,33 @@ test('pr-review-gate/SKILL.md carries the dispatch mechanism and the review-dept
 
 Also update the file-header comment at line 19 — it says "carries the dispatch mechanism and the effort ladder" — to read "the review-depth ladder".
 
-- [ ] **Step 7: Run the guard**
+- [ ] **Step 7: Re-sync the mirror BEFORE running the guard or committing**
+
+```bash
+cd C:/Claude/Projects/wt-model-effort-routing && npm run skills:sync
+```
+
+**This is not bookkeeping you can defer to after the commit.** You just edited the
+canonical `pr-review-gate/*` files, and `review-gate-mechanism.test.mjs`'s
+mirror-drift test asserts `mirrored === buildMirrorContent(canonical)`. On any
+machine where `~/.agents/skills/` exists, that test does **not** take its
+fails-open skip — it compares, finds the mirror stale, and goes red. This task
+stages `.claude/skills/**` and `scripts/**`, both of which put `test:hooks` in
+scope at `pre-commit`, so a stale mirror means **the commit is refused**.
+
+*(Ruling made at pre-flight scan: the plan originally had this at step 9, after
+the commit. Same defect class as the merged-task banner in Task 3 — reasoning
+about a guard's output without asking which hook consumes it.)*
+
+- [ ] **Step 8: Run the guard**
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing && node --test scripts/tests/review-gate-mechanism.test.mjs
 ```
 
-Expected: green, including the link test — `#review-depth` must resolve, since step 4 links it.
+Expected: green, including the link test — `#review-depth` must resolve, since step 4 links it — and the mirror-drift test, which step 7 just made current.
 
-- [ ] **Step 8: Confirm no stray "effort" remains in the depth sense**
+- [ ] **Step 9: Confirm no stray "effort" remains in the depth sense**
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing && grep -rn -i "effort" .claude/skills/pr-review-gate/
@@ -891,17 +916,16 @@ cd C:/Claude/Projects/wt-model-effort-routing && grep -rn -i "effort" .claude/sk
 
 Expected: matches only in (a) the new "not effort" disambiguation paragraph, (b) the historical-comments sentence, and (c) `reviewer-brief.md:9`'s "don't reward effort", which is unrelated English. **Any other match is a missed rename.**
 
-- [ ] **Step 9: Commit and re-sync the mirror**
+- [ ] **Step 10: Commit**
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing
 git add .claude/skills/pr-review-gate/ scripts/tests/review-gate-mechanism.test.mjs
 git commit -m "docs(docs): rename pr-review-gate's effort ladder to review depth"
-npm run skills:sync
 ```
 
-`skills:sync` is per-machine and CI cannot run it. Running it here keeps the
-mirror from drifting between this commit and Task 6's.
+The mirror was already re-synced in step 7 — that ordering is load-bearing, not
+stylistic. `skills:sync` is per-machine and CI cannot run it.
 
 ---
 
@@ -1062,14 +1086,21 @@ git checkout scripts/sync-agent-skills.mjs
 
 Expected: **≥1** — this is the assertion failing on exactly the state F1 describes, i.e. proof the case would have caught the real bug. If it prints `0`, the case is not reaching the four `../model-routing/SKILL.md` links; fix the link-resolution logic before committing. The suffix-matching in step 6 is the part most likely to be wrong — **do not skip this step and assume it works.**
 
-- [ ] **Step 8: Run everything, sync, and commit**
+- [ ] **Step 8: Sync FIRST, then run everything, then commit**
+
+**The order below is load-bearing** *(ruling made at pre-flight scan; the plan
+originally ran `test:hooks` before `skills:sync`)*. This task does two things
+that stale every mirrored file at once: it adds `model-routing/SKILL.md` to
+`FILES`, and it changes the provenance header format for **all** of them. Until
+`skills:sync` runs, the mirror-drift test compares a stale mirror against a
+changed builder and goes red — and this task stages `scripts/**`, which puts
+`test:hooks` in scope at `pre-commit`, so the commit would be refused.
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing
-npm run test:hooks
 npm run skills:sync
 ls ~/.agents/skills/model-routing/SKILL.md   # must now exist
-node --test scripts/tests/review-gate-mechanism.test.mjs   # mirror-drift test now actually checks 4 files
+npm run test:hooks
 git add scripts/sync-agent-skills.mjs scripts/tests/review-gate-mechanism.test.mjs
 git commit -m "fix(scripts): mirror model-routing so pr-review-gate's routing links resolve for Cline"
 ```
