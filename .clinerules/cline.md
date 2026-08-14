@@ -1,10 +1,19 @@
 # Cline project rules (Castwright / Audiobook-Generator)
 
-Loaded by Cline each session. The canonical context is the root `CLAUDE.md`
-and `CONTRIBUTING.md` -- Cline reads both, so nothing here restates them. This
-file carries only two kinds of rule: ones that are **Cline-specific**, and ones
-that are **costly if missed** and easy to lose in 140 KB of prose. Keep it that
-way -- anything of general value belongs in `CLAUDE.md` instead.
+## Read these first -- they are NOT loaded for you
+
+The canonical rules are the root **`CLAUDE.md`** and **`CONTRIBUTING.md`**.
+Cline loads neither: its rule loader reads this file, `.clinerules/*.md`, and
+workspace/global `AGENTS.md`, and nothing else (verified 2026-08-14 against the
+installed `@cline/core` loader and a live `cline -p` probe). **Read both files
+before your first edit** -- `CLAUDE.md` for the working principles, execution
+model and conventions, `CONTRIBUTING.md` for the commit / branch / PR / issue /
+release-notes specs.
+
+This file is a summary, not a substitute. It deliberately restates almost
+nothing from them, carrying only rules that are **Cline-specific** or that
+**fail silently**. Where the two disagree, they win -- and tell the user, so
+this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 
 ## Cline-specific
 
@@ -14,13 +23,19 @@ way -- anything of general value belongs in `CLAUDE.md` instead.
   after any change under `.claude/skills/pr-review-gate/`. It is a per-machine
   step: the target is under `$HOME`, so CI cannot run it and a fresh clone has
   no mirror.
-- **Model tiers are not selectable.** Subagents run on the configured session
-  model, so CLAUDE.md's "Model routing" table (Haiku / Sonnet / Opus / Fable)
-  and its `.claude/worktrees` + `claude/wt-*` branch choreography are
-  Claude-Code mechanics I cannot reproduce verbatim. Follow the INTENT -- fresh
-  cold subagents per task, per-task review, review-gated ships -- and where a
-  tier choice would genuinely change the outcome, say so and hand the decision
-  to the user.
+- **Model tiers are not selectable, so a Cline review pass does NOT discharge
+  the merge gate.** The probe above recorded `CLINE_TIER_SELECTABLE: no`,
+  observing a subagent backed by `deepseek-v4-flash`; subagents do start cold
+  (`CLINE_SUBAGENT_COLD: yes`, self-reported, not independently reproduced).
+  Independence is the property people check and it is the one Cline has -- the
+  tier is the one it lacks. So CLAUDE.md's "Model routing" table (Haiku /
+  Sonnet / Opus / Fable) and its `.claude/worktrees` + `claude/wt-*` branch
+  choreography are Claude-Code mechanics I cannot reproduce. Follow the INTENT
+  -- fresh cold subagents per task, per-task review, review-gated ships -- but
+  record a Cline pass as a **flash-tier independent pass, never as the
+  `pr-review-gate` gate itself**, and hand any decision that turns on tier
+  choice to the user. Calling it "the review gate" is a false completion
+  claim.
 - **This is a Windows box running PowerShell 5.1.** No `&&` / `||` chaining
   (use `;` or `if ($?) { ... }`), no ternary / `??` / `?.`. `head`, `tail`,
   `which`, and `touch` do not exist -- use `Get-Content -TotalCount N` /
@@ -33,13 +48,21 @@ way -- anything of general value belongs in `CLAUDE.md` instead.
   reaches `main` through a branch and a PR; `main`'s required status checks
   reject anything else. Branches are `<type>/<scope>-<slug>`.
 - **Never hand-edit a generated file:** `src/lib/api-types.ts` (regenerate via
-  `npm run openapi:types`), `docs/BACKLOG.md` (`npm run backlog:sync`),
-  `server/.env.example` (`npm run config:sync`).
-- **Never bypass a hook with `--no-verify`.** Triage instead: caused by my
-  change -> fix it in the same commit; pre-existing (the same test fails on
-  `main`) -> surface it to the user and do NOT fold the fix in; suspected flake
-  -> re-run that test alone once and name it. `--no-verify` is reserved for
-  CI-generated commits (`.github/workflows/regen-visual-baselines.yml`).
+  `npm run openapi:types`) and `docs/BACKLOG.md` (`npm run backlog:sync`) are
+  generated whole. `server/.env.example` is only PARTLY generated -- the block
+  between the `BEGIN`/`END generated config knobs` markers is owned by
+  `npm run config:sync`, and the ~460 lines outside it (including
+  `GEMINI_API_KEY=`) are hand-authored and safe to edit. `config:check` never
+  looks outside the block, so it will not catch a mistake there.
+- **Never bypass a hook with `--no-verify` to get unstuck.** Triage instead:
+  caused by my change -> fix it in the same commit; pre-existing (the same test
+  fails on `main`) -> surface it to the user and do NOT fold the fix in;
+  suspected flake -> re-run that test alone once and name it. Bypassing is
+  legitimate in two narrow cases only: a genuine emergency, where the commit
+  still needs fixing before review (CONTRIBUTING.md "Enforcement"), and
+  deliberately skipping the pre-push hook on a push whose gate you have already
+  satisfied (CLAUDE.md "Commit gate"). Never on a red hook you have not
+  diagnosed.
 - **Never treat hook output in a fresh worktree as proof of verification** --
   see the first trap below.
 
@@ -54,6 +77,16 @@ way -- anything of general value belongs in `CLAUDE.md` instead.
   server legs with "vitest not found"). Simplest path is
   `node scripts/wt-new.mjs <type>/<scope>-<slug>`, which does all of it plus
   non-clashing ports.
+- **Tearing that worktree down in the wrong order destroys the primary
+  checkout.** `git worktree remove` (and `Remove-Item -Recurse`) will follow a
+  junction and delete the REAL `node_modules` it points at, taking husky
+  activation with it. Drop the junctions first -- `(Get-Item $j -Force).Delete()`
+  removes the link only -- gating on
+  `$i.Attributes -band [IO.FileAttributes]::ReparsePoint`, never on
+  `.LinkTarget`, which reads empty on PowerShell 5.1 even for a real junction
+  and so silently skips the delete. `cmd /c rmdir` no-ops and still returns 0,
+  so confirm with `Test-Path` rather than an exit code. Full recipe: CLAUDE.md
+  "Worktree teardown".
 - **`.claude/` is git-ignored wholesale** -- `.gitignore` has `.claude/*` with
   only `!.claude/skills/` re-included -- so a new file under it is silently
   skipped by `git add` and never reaches the PR. Confirm with
@@ -83,8 +116,12 @@ See CLAUDE.md "Incidental findings: report, fix, record".
   of `main`, re-validates every pushed subject (so bypassing `commit-msg` buys
   nothing), then runs `npm run verify:fast:branch` unless the push is
   docs-only.
-- Run `npm run verify:fast:scoped` before staging and `npm run
-  verify:fast:branch` before pushing, so the hooks pass on the first try.
+- Run `npm run verify:fast:branch` before pushing, so the hooks pass on the
+  first try. Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to
+  the STAGED diff, so on an empty or unrelated index every leg reports
+  `(out of scope)` and it exits 0 having run no tests at all. A green from it
+  proves nothing until the change is staged -- and even then only for the legs
+  whose input globs the diff actually touches.
 - The **PR title** must itself match the commit-subject format
   (`pr-title-lint.yml`), and the **PR body** must carry a literal `Closes #NN`
   or `Refs #NN` (`pr-issue-link.yml`). Both are required status checks -- a
