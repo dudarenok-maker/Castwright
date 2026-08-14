@@ -216,9 +216,11 @@ The remaining 15 books are at exactly **zero**. So the raw gap reproduces:
 16.5–49.2% against ≤2.5%, a 6.7× step.
 
 **Excluding the *Coalfall Commission* family, the corpus's maximum orphan
-share is 1.80%, and 15 of its 16 non-fixture books are at zero.** There is no
-high group among real books at all — which is the question the 2026-08-13 run
-asked and could not answer.
+share is 1.80%, and 14 of its 16 non-fixture books are at zero.** (The 15
+above counts the whole 23-book corpus; this figure excludes all seven fixture
+editions instead, including `コールフォールの依頼` — itself at zero, and so
+not one of the 14.) There is no high group among real books at all — which is
+the question the 2026-08-13 run asked and could not answer.
 
 ### 5b · Why the fixture family is high — measured, not hypothesised
 

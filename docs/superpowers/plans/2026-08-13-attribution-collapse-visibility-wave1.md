@@ -817,7 +817,10 @@ not the metric.
      c. otherwise                              → missing
 4d. unattributedSpeech share ≥ threshold       → unanswered  (Wave 2 — spec R-9C4,
                                                   gated on owner question 5)
-5. orphan share ≥ DRIFT_SHARE_THRESHOLD        → drifted    (Wave 2 — no threshold yet)
+5. STRUCK — was `orphan share ≥ DRIFT_SHARE_THRESHOLD → drifted`.
+   D13 dropped 2026-08-14 (#2357). The slot is NOT reused and the
+   later steps are NOT renumbered: prose here and comments in
+   shipped code cite "steps 1-4 and 7", "step 4d", "step 6".
 6. share ≥ threshold (book or chapter)         → collapsed  (Wave 2 — no threshold yet)
 7. otherwise                                   → ok
 ```
@@ -827,8 +830,9 @@ as `readAnalysisState() === null` the clause compares a Promise to `null`, is
 never true, and makes `missing` **silently unreachable** while every test that
 does not exercise it still passes (spec R-5M5).
 
-**Wave 1 ships steps 1–4 and 7 only.** Steps 5 and 6 have no threshold yet; the
-script prints the shares and the states it can resolve.
+**Wave 1 ships steps 1–4 and 7 only.** Step 6 has no threshold yet — Wave 2 sets
+it from Task 8's run. Step 5 is struck, not deferred: it never gets a threshold.
+The script prints the shares and the states it can resolve.
 
 - [ ] **Step 3: RED — the nine-row fixture table**
 
@@ -944,8 +948,9 @@ Wave 1 shipping moves it to `active`, not `stable` (Wave 2 is unbuilt).
 
 ## What Wave 1 deliberately does not ship
 
-- No threshold constant. `COLLAPSE_SHARE_THRESHOLD`, `DRIFT_SHARE_THRESHOLD`
-  and all four floors are set from Task 8's run, in Wave 2.
+- No threshold constant. `COLLAPSE_SHARE_THRESHOLD` and all four floors are set
+  from Task 8's run, in Wave 2. `DRIFT_SHARE_THRESHOLD` is never set — struck,
+  not deferred.
 - No UI, no badge, no banner, no generation gate, no persisted health file, no
   dismissal.
 - **No change to `isSpokenLine`, `applyNarratorDefault`'s behaviour, or the

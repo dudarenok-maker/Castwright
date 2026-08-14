@@ -1017,14 +1017,14 @@ share              = narratorIdSpoken / attributableSpoken
 `attributableSpoken` is a separate reported field, so a reader can see how much
 of the book the share actually speaks for. When `attributableSpoken` falls under
 `MIN_SPOKEN_FOR_VERDICT` the share is `null` and no verdict is given — the
-honest answer for a book whose ids have drifted wholesale, and the orphan banner
-is the surface that can act on it.
+honest answer for a book whose ids have drifted wholesale, and no surface exists
+today that can act on it (R-8C1).
 
-**This is the one place the spec knowingly under-reports.** A book can be both
-drifted and collapsed, and a reader of the share alone will not see the drift.
-That is why the column is mandatory in Wave 1's output rather than optional, and
-why §Wave 1 acceptance criteria requires it to be visibly non-zero on the books
-that have it.
+**This is the one place the spec knowingly under-reports.** A book can have
+both a collapsed share and ids that have drifted out from under it, and a
+reader of the share alone will not see the drift. That is why the column is
+mandatory in Wave 1's output rather than optional, and why §Wave 1 acceptance
+criteria requires it to be visibly non-zero on the books that have it.
 
 **Shape (Wave 1):**
 
@@ -1486,17 +1486,19 @@ the re-basing, D13 is dropped rather than shipped with a threshold picked off a
 book. That is the same bar §Trigger already sets for `COLLAPSE_SHARE_THRESHOLD`;
 D13 was simply believed to have cleared it already.
 
-**One further consequence the fold did not draw.** `unacknowledgedOrphanSpoken`
-is now a fraction over `spokenTotal`, but three *other* populations have since
-been carved out of `attributableSpoken` — `unattributedSpeech`, `splitSpeech`
-and the orphans themselves. A book with heavy stage-2 omission would have a
-large `spokenTotal`, a small attributable slice, and a drift share diluted by
-spans nobody attributed at all. **The drift share must be over
-`spokenTotal - unattributedSpeech`**, not over `spokenTotal`: an unattributed
-span is not evidence the id drifted, and leaving it in the denominator lets an
-omission suppress a drift warning. Recorded here because it is exactly the
-shape of R-8C3 — a field whose definition was correct when written and stopped
-being correct when a sibling changed.
+**~~One further consequence the fold did not draw.~~ — STRUCK with D13**
+(#2357; R-9M2). `unacknowledgedOrphanSpoken` was a fraction over `spokenTotal`,
+but three *other* populations had since been carved out of `attributableSpoken`
+— `unattributedSpeech`, `splitSpeech` and the orphans themselves. A book with
+heavy stage-2 omission would have had a large `spokenTotal`, a small
+attributable slice, and a drift share diluted by spans nobody attributed at
+all. The argument was that the drift share needed to be over
+`spokenTotal - unattributedSpeech`, not over `spokenTotal`: an unattributed
+span is not evidence the id drifted, and leaving it in the denominator would
+have let an omission suppress a drift warning. Kept here — not deleted —
+because it is a genuinely instructive instance of the R-8C3 shape it names: a
+field whose definition was correct when written and stopped being correct when
+a sibling changed, one level below a rule that no longer exists at all.
 
 **Still owed from the owner, unchanged and now more expensive.** R-8C1 put a
 scope question to the owner: the `drifted` notice points at the Cast orphan
@@ -1534,7 +1536,7 @@ five books and **not one retired id is an orphan anywhere**. Every orphan in
 the corpus came from a path that bypassed the mechanism.
 
 **Excluding that family, there is no high group.** Maximum orphan share among
-real books is **1.80%**, and 15 of the 16 non-fixture books sit at exactly
+real books is **1.80%**, and 14 of the 16 non-fixture books sit at exactly
 zero. So the bimodality this section made D13's approval conditional on does
 **not** survive.
 
@@ -2395,7 +2397,8 @@ formulas at the precision anyone will read, so the fixture is built with the
 orphan count comparable to the narrator-id count — summing them changes the
 share by tens of points, and the test observably goes red when D9 is mutated
 back to a sum. The paired assertion is that `orphanIds` lists the distinct
-unresolvable ids, since a count alone cannot drive the drift surface.
+unresolvable ids — `orphanIds` is a developer-facing diagnostic naming *which*
+ids are unresolvable, and a bare count cannot say that.
 
 **Revision 8 adds a third mistake this fixture must catch.** `attributableSpoken`
 now subtracts three populations, not one, and each has its own way of being
@@ -2800,7 +2803,7 @@ not survive, D13 is dropped despite this answer."*
 > corpus but **every book above it is a development fixture**, and the
 > mechanism is measured — hand-edited `cast.json` renames that bypassed
 > `retireCharacterId`. Excluding that family the corpus maximum is 1.80%, with
-> 15 of 16 real books at zero, and the one book clearing
+> 14 of 16 real books at zero, and the one book clearing
 > `MIN_ORPHAN_FOR_VERDICT` has 87.5% of its orphan mass in ids no user can
 > link. **Question 2 is not reopened by this — it is spent**: its banner-scope
 > answer was conditional on a state that no longer exists, so the
