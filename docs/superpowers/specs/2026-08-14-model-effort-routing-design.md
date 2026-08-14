@@ -1,6 +1,6 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 5 (review rounds 1–3 folded; decision 0 resolved)_
+_Design spec — 2026-08-14 · rev 6 (rounds 1–3 folded; decision 0 resolved; `medium` norm declared)_
 
 > **STATUS: decision 0 is RESOLVED — POSITIVE. The roster proceeds.**
 >
@@ -194,6 +194,27 @@ Two side results, both Confirmed: `tools:` **is** honoured and is surfaced in th
 listing (M8) — closing round 3's open question — and project-level definitions
 **are** loaded and dispatchable (M9), which was Asserted in every prior rev.
 
+### 0b. `medium` is the declared repo-wide norm
+
+*(New in rev 6, answering round 3's question #3. Revs 1–5 measured every role's
+effort as "up" or "down" without naming a baseline; the implicit one was
+`effortLevel` **on the repo owner's box**, a per-user setting, so the same spec
+described opposite changes on two machines.)*
+
+**`medium` is this repo's declared default reasoning effort.** It is the anchor
+every role's `effort:` is stated against, and it is a *declaration*, not a
+mechanism — nothing reads it at runtime. It exists so "raised" and "lowered" mean
+the same thing to every reader, on every machine.
+
+Three consequences:
+
+1. **Every role declares `effort:` explicitly — including the two sitting at the
+   norm** (`implementer`, `fix-agent`). Omitting the key would make them inherit
+   the dispatching session's effort, which is precisely the ungoverned behaviour
+   this spec exists to end. At-norm is a stated value, not an absent one.
+2. **The session rule's bands re-anchor on it** — see decision 6.
+3. **The net direction of this change is upward.** See [Cost](#cost).
+
 ### 1. The tier table is not modified
 
 It answers a different question — ad-hoc dispatch and session judgment ("this
@@ -313,9 +334,14 @@ have a home.)*
 | Band | Values | The session is doing |
 |---|---|---|
 | Mechanical | `low` | Running commands, transcribing a decided edit, formatting. |
-| Routine | `medium` | Straightforward implementation against a settled plan; summarizing output. |
-| Working default | `high` | Coordination, debugging, triage, non-obvious implementation. |
+| **Norm** | **`medium`** | **The declared default (0b):** routine implementation against a settled plan, coordination, summarizing output. |
+| Raised | `high` | Non-obvious debugging, triage of a failure whose cause is unknown. |
 | Judgment | `xhigh`, `max` | Adversarial or design work in-session: spec design, an ambiguous defect hunt, an irreversible call. |
+
+*(Rev 6: revs 3–5 labelled `high` "the working default", which was a description
+of this box's setting rather than a decision. With 0b declaring `medium` the
+norm, `high` becomes a deliberate raise and the bands are re-anchored. An integer
+`effort:` — legal per M2 — maps to the band containing its nearest named level.)*
 
 **"Drifted" means** the current unit of work sits in a different *band* than the
 band containing the value read — not a different value, which would fire on
@@ -425,22 +451,26 @@ exists to end. The spec committed its own target error one section later. The
 claim is withdrawn rather than repaired, because there is no substitute
 measurement to put in its place.)*
 
-What can be said without measuring, **and only relative to a baseline of `high`**:
-two roles move **up** (`pr-reviewer`, `spec-checker` → `xhigh`), three move
-**down** (`implementer`, `fix-agent` → `medium`; `scout` → `low`), and one is
-**unchanged** (`task-reviewer` → `high`). Six roles, not five.
+**Direction: upward.** Against the `medium` norm declared in 0b — a fixed
+anchor, not a per-machine reading — three roles are **raised** (`pr-reviewer`,
+`spec-checker` to `xhigh`, two rungs; `task-reviewer` to `high`, one), two sit
+**at the norm** (`implementer`, `fix-agent`), and one is **lowered** (`scout` to
+`low`). Six roles.
 
-*(Rev 4, round-3 findings: rev 3's "two up, three down" omitted `task-reviewer`
-and did not sum to the roster. More importantly it never named its baseline —
-`high` is **`effortLevel` on this box today** (M3), a per-user setting, while
-this spec is repo-wide. On a machine configured `low`, five of six roles move
-**up** and the section's direction inverts. There is no repo-wide declared
-default to measure against, and this spec does not create one.)*
+*(Rev 6 reversed this section's conclusion. Revs 3–5 said "two up, three down" —
+true only against a baseline of `high`, which was `effortLevel` on the repo
+owner's box (M3), not a decision. Declaring the norm re-anchors it and flips the
+sign: the same roster that read as a net reduction is a net **increase**. Stated
+plainly rather than left as the flattering reading — it is also the correct
+outcome for driver 1, "hard passes underthink", which asks for exactly this.)*
 
-Which direction dominates also depends on relative dispatch volume, **which this
-repo does not currently record.** No claim of savings — or of cost — goes into
-`CLAUDE.md` or the skill. If the decision-0 Differential step runs, its
-wall-clock numbers land in the probe doc as the only figures anyone should cite.
+**How much it costs is still unmeasured**, and this spec does not estimate it:
+magnitude depends on relative dispatch volume, which this repo does not record.
+The one downward move (`scout`) is the highest-volume role, so the arithmetic is
+not obviously dominated either way — but "not obviously" is not a number. No
+claim of savings **or of cost** goes into `CLAUDE.md` or the skill. If the
+decision-0 Differential step is ever run, its wall-clock figures land in the
+probe doc as the only ones anyone should cite.
 
 ## Incidental findings
 
@@ -498,7 +528,7 @@ pass tempted to "fix" that citation should read #2320's comments first.
 | `.claude/skills/model-routing/SKILL.md` | Role table; session-effort rule; escalation asymmetry |
 | `.claude/skills/pr-review-gate/SKILL.md` | effort→depth; dispatch by `subagent_type`; why `tools:` is not the mechanism; **"Per-agent mapping" reworded** — it currently says "a non-fork `Agent` dispatch at the routing table's Premium tier", which becomes a `subagent_type` dispatch, and the Cline comparison table under it moves with it. **The #2320 citation at line 144 is NOT touched** (see F2 withdrawn) |
 | `.claude/skills/pr-review-gate/references/*.md` | effort→depth where it appears |
-| `CLAUDE.md` "Model routing" | **One sentence + a link to the role table. No second table** — the section is the quick reference and must not become a third home for the same rows. |
+| `CLAUDE.md` "Model routing" | **The `medium`-norm declaration (0b) + a link to the role table. No second table** — the section is the quick reference and must not become a third home for the same rows. The norm is the one sentence worth putting there, since it is what every other statement of effort is relative to. |
 | `scripts/sync-agent-skills.mjs` | `model-routing` joins the mirror (F1) |
 | `scripts/tests/review-gate-mechanism.test.mjs` | New cases (decision 7) |
 | `docs/testing/agent-skill-resolution-probe.md` | Second probe run (decision 9) |
