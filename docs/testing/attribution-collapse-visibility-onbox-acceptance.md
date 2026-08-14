@@ -219,10 +219,13 @@ The remaining 15 books are at exactly **zero**. So the raw gap reproduces:
 share is 1.80%, and 14 of its 16 non-fixture books are at zero.** (The 15
 above counts the whole 23-book corpus; this figure excludes all seven fixture
 editions instead, including `コールフォールの依頼` — itself at zero, and so
-not one of the 14.) Two of those 14 are never-analysed `Ночной дозор` C2/C3
-throwaway duplicates, whose zero reflects no analysis having run rather than
-a measured absence of orphans. There is no high group among real books at
-all — which is the question the 2026-08-13 run asked and could not answer.
+not one of the 14.) Four of those 14 are structurally forced to zero rather
+than measured — `orphanSpoken` is vacuously 0 whenever `unattributedSpeech
+=== spokenTotal`: the two never-analysed `Ночной дозор` C2/C3 throwaway
+duplicates, the analysed `Ночной дозор (C2 throwaway)`, and `Unlocked`, whose
+9,569 cached sentences align to none of its 2,057 speech spans. There is no
+high group among real books at all — which is the question the 2026-08-13
+run asked and could not answer.
 
 ### 5b · Why the fixture family is high — measured, not hypothesised
 
@@ -257,7 +260,7 @@ one produces a drift signal.
 
 **A corollary worth stating plainly: `retireCharacterId` works.** Fourteen
 retirements exist across five books, and **not one retired id appears as an
-orphan anywhere in the corpus.** Every orphan measured here arose from a path
+orphan in the book that retired it.** Every orphan measured here arose from a path
 that bypassed the mechanism — which, for a hand-edited fixture, is exactly
 what one would expect and is not reachable through the UI.
 

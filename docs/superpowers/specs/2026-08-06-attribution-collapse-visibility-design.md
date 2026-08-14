@@ -1532,15 +1532,17 @@ The clean demonstration is a natural experiment inside the fixture family:
 `cast-id-history.json` and carries **zero** orphan spans for it; the English
 edition, where the identical rename was hand-applied, carries **28**. The
 corollary is a positive result for #2040 — fourteen retirements exist across
-five books and **not one retired id is an orphan anywhere**. Every orphan in
-the corpus came from a path that bypassed the mechanism.
+five books and **not one retired id is an orphan in the book that retired
+it**. Every orphan in the corpus came from a path that bypassed the mechanism.
 
 **Excluding that family, there is no high group.** Maximum orphan share among
 real books is **1.80%**, and 14 of the 16 non-fixture books sit at exactly
-zero — two of them never-analysed `Ночной дозор` C2/C3 throwaway duplicates,
-whose zero reflects no analysis having run rather than a measured absence of
-orphans. So the bimodality this section made D13's approval conditional on
-does **not** survive.
+zero — four of them structurally forced to zero rather than measured
+(`orphanSpoken` is vacuously 0 whenever `unattributedSpeech === spokenTotal`):
+the two never-analysed `Ночной дозор` C2/C3 throwaway duplicates, the
+analysed `Ночной дозор (C2 throwaway)`, and `Unlocked`, whose 9,569 cached
+sentences align to none of its 2,057 speech spans. So the bimodality this
+section made D13's approval conditional on does **not** survive.
 
 **Worse, the one real book that clears `MIN_ORPHAN_FOR_VERDICT` is the "gate
 with no exit" case.** `Ночной дозор` has 32 orphan spans, of which 27 (84.4%)
@@ -2810,8 +2812,9 @@ not survive, D13 is dropped despite this answer."*
 > corpus but **every book above it is a development fixture**, and the
 > mechanism is measured — hand-edited `cast.json` renames that bypassed
 > `retireCharacterId`. Excluding that family the corpus maximum is 1.80%, with
-> 14 of 16 non-fixture books at zero (two of them never-analysed throwaway
-> duplicates, not independent measurements), and the one book clearing
+> 14 of 16 non-fixture books at zero (four of them structurally zero —
+> `unattributedSpeech === spokenTotal`, including `Unlocked` — rather than
+> independent measurements), and the one book clearing
 > `MIN_ORPHAN_FOR_VERDICT` has 84.4% of its orphan mass in ids no user can
 > link. **Question 2 is not reopened by this — it is spent**: its banner-scope
 > answer was conditional on a state that no longer exists, so the
