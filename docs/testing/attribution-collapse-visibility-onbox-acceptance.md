@@ -123,8 +123,8 @@ this is the second time that has been demonstrated on this corpus.
 blank. [x] both CJK books `spokenTotal > 0` (128 each). [x] `dashOnlySpoken`
 non-zero on both Russian books (17, 1719). [x] `orphanSpoken` non-zero on
 several books, all reported alongside the share and never summed into it —
-concentrated in the *Coalfall Commission* family (0/23/32/2/62/18 across its
-five language editions), matching D9's "reported, not summed" design; the
+concentrated in the *Coalfall Commission* family (0/2/3/18/23/32/62 across its
+seven language editions), matching D9's "reported, not summed" design; the
 share stays a clean 0.0–2.5% on those same books despite the orphan counts.
 [x] `unattributedSpeech` printed (as a real number, including 0) on every
 row. `demotedNarrator: 0` on all 23 — this is the "no book re-analysed
@@ -216,9 +216,16 @@ The remaining 15 books are at exactly **zero**. So the raw gap reproduces:
 16.5–49.2% against ≤2.5%, a 6.7× step.
 
 **Excluding the *Coalfall Commission* family, the corpus's maximum orphan
-share is 1.80%, and 15 of its 16 non-fixture books are at zero.** There is no
-high group among real books at all — which is the question the 2026-08-13 run
-asked and could not answer.
+share is 1.80%, and 14 of its 16 non-fixture books are at zero.** (The 15
+above counts the whole 23-book corpus; this figure excludes all seven fixture
+editions instead, including `コールフォールの依頼` — itself at zero, and so
+not one of the 14.) Four of those 14 are structurally forced to zero rather
+than measured — `orphanSpoken` is vacuously 0 whenever `unattributedSpeech
+=== spokenTotal`: the two never-analysed `Ночной дозор` C2/C3 throwaway
+duplicates, the analysed `Ночной дозор (C2 throwaway)`, and `Unlocked`, whose
+9,569 cached sentences align to none of its 2,057 speech spans. There is no
+high group among real books at all — which is the question the 2026-08-13
+run asked and could not answer.
 
 ### 5b · Why the fixture family is high — measured, not hypothesised
 
@@ -253,7 +260,7 @@ one produces a drift signal.
 
 **A corollary worth stating plainly: `retireCharacterId` works.** Fourteen
 retirements exist across five books, and **not one retired id appears as an
-orphan anywhere in the corpus.** Every orphan measured here arose from a path
+orphan in the book that retired it.** Every orphan measured here arose from a path
 that bypassed the mechanism — which, for a hand-edited fixture, is exactly
 what one would expect and is not reachable through the UI.
 
@@ -271,7 +278,20 @@ production resolver:
 | `vampire-boy` | 1 | 0.06% | no |
 | `vampire-girl` | 1 | 0.06% | no |
 
-**28 of 32 spans (87.5%) belong to ids no user can ever link** — the exact
+The per-id column sums to 33, one more than the book's 32 orphan spans, for
+the same reason §1 records this book as the corpus's one multiplicity case:
+`orphanSpoken` counts a span at most once even when it carries several
+unresolvable ids, while the table above (like `orphanIds`) lists every
+unresolvable id a span carries (`attribution-health.ts:230-249`). Measured
+directly against the production resolver over the real cache (one throwaway
+probe replicating that exact span loop, not a re-derivation from the
+aggregate counts): the one doubled span carries `driver` and `woman-in-taxi`
+together — **not** `boris-igoryevich`, whose 5 spans are all its own. So the
+32 spans break down as 21 `driver`-only + 3 `woman-in-taxi`-only + 1 shared
+`driver`+`woman-in-taxi` + 5 `boris-igoryevich` + 1 `vampire-boy` + 1
+`vampire-girl` — 32 distinct spans, of which 27 belong to an unlinkable id.
+
+**27 of 32 spans (84.4%) belong to ids no user can ever link** — the exact
 class §"Not the same character" names (`unknown-male`, `voix-inconnue`,
 `the-jogger`, `driver`, `woman-in-taxi`). The only linkable id accounts for
 0.28%. `Playing with Fire`'s sole orphan id is `pool-player-2` (6 spans,
@@ -293,7 +313,7 @@ a user cannot perform. That leaves no threshold that badges a real problem:
 
 - **≥ 2.5%** — badges only the *Coalfall Commission* family, i.e. nothing a
   reader's library would contain.
-- **≤ 1.8%** — badges `Ночной дозор`, where 87.5% of the orphan mass is
+- **≤ 1.8%** — badges `Ночной дозор`, where 84.4% of the orphan mass is
   unlinkable and the only exit is untested. That is R-8M1's "gate with no
   exit," arriving on the very first real book D13 fires on.
 
@@ -307,10 +327,16 @@ hand-edited casts, which is a real (developer-facing) defect the column
 surfaced on its first real run. The finding is about the fifth *state*, not
 the column.
 
-**This is an owner decision, and it is recorded in the spec** (§D13 re-gated
-→ *Re-gate outcome*) and tracked as
-[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357) rather
-than settled here. The options and the recommendation live in both.
+**Decided: the repo owner confirmed the drop on 2026-08-14**, taking the
+first of the three options — drop the `drifted` state, keep
+`orphanSpoken`/`orphanIds` as reported columns. Closed as
+[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357); recorded
+in the spec at §D13 re-gated → *Re-gate outcome*, which also carries the one
+paragraph saying what evidence would reopen D13. **Wave 2 ships four states,
+not five**, and the `drifted` surface — the fifth badge, the second notice
+variant, `alsoCollapsed`, `attributionVerdictKey`,
+`unacknowledgedOrphanSpoken` and the cache-sourced orphan-banner tier — is
+not built.
 
 ### 5f · Reproducing this
 
