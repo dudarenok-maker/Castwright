@@ -387,6 +387,33 @@ describe('POST /api/books — fs-2 language persistence', () => {
     expect(stateJson.language).toBe('ru');
   });
 
+  /* #2246 Task 3 (R1) — a surrender is not a decision. When the confirm body
+     omits `language` and detection surrendered (languageFallback:true), the
+     write must NOT persist the confidence-floor 'en' guess: it writes `null`
+     (stated absence, key present) so the book stays unset for the ambiguity
+     prompt. This is the "still owed" behaviour #2337 deliberately did not
+     deliver. */
+  it('writes language: null when the confirm body omits it and detection surrendered (#2246)', async () => {
+    const md = '# Terse\n\n## Chapter One\n\nToo short to corroborate itself.';
+    const importRes = await request(app).post('/api/import').send({ text: md, fileName: 'terse.md' });
+    // Fixture sanity: this text must genuinely surrender, or the test proves nothing.
+    expect(importRes.body.candidate.languageFallback).toBe(true);
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Terse Author',
+      title: 'Terse Book',
+      seriesPosition: null,
+      isStandalone: true,
+      // language deliberately omitted — detection surrendered, so no guess
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect('language' in stateJson).toBe(true);
+    expect(stateJson.language).toBeNull();
+  });
+
   /* #2337 review F1 — "no choice" is a CLASS, not one spelling. Testing only
      `=== undefined` left `{"language": ""}` (an unfilled form field, or
      `detected ?? ''`) persisting English over a Russian detection: the same

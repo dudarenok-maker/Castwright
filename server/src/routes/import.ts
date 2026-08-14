@@ -34,8 +34,7 @@ import {
   stateJsonPath,
   slug,
 } from '../workspace/paths.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -345,11 +344,20 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     // import.test.ts's "#2337 review C2" describe block) kept on as dead
     // code: always `false` post-guard, never reachable as `true`.
     const languageChosen = typeof body.language === 'string' && body.language.trim() !== '';
-    const language =
-      !languageChosen && entry.detectedLanguageSupported && !entry.detectedLanguageFallback
-        ? normaliseBookLanguage(entry.detectedLanguage)
+    /* #2246 Task 3 (R1) — when the caller left `language` out AND the
+       detection did NOT confidently decide it (it surrendered — fallback:true
+       — or detected an unsupported language), do NOT persist the
+       confidence-floor 'en' guess as if it were a decision. Write `null`
+       ("stated absence"); the book stays unset and the ambiguity prompt
+       (Tasks 9/10) resolves it. A confident detection still fills the gap, and
+       an explicitly stated language still wins outright. */
+    const language: string | null =
+      !languageChosen
+        ? entry.detectedLanguageSupported && !entry.detectedLanguageFallback
+          ? normaliseBookLanguage(entry.detectedLanguage)
+          : null
         : normaliseBookLanguage(body.language);
-    if (!isSupportedLanguage(language)) {
+    if (language !== null && !isSupportedLanguage(language)) {
       return res.status(400).json({
         error: 'unsupported_language',
         message: `Unsupported language "${language}". Supported languages: ${supportedLanguages()
@@ -411,7 +419,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         excluded: isExcluded || undefined,
       };
     });
-    const state: BookStateJson = {
+    const state: BookStateJsonWrite = {
       bookId,
       manuscriptId,
       title,
@@ -433,7 +441,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       language,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
+    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be
