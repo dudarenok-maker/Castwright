@@ -3176,7 +3176,7 @@ was only ever read, never written): a row for every book, none blank; both
 live CJK books (`煤落的委托`, `コールフォールの依頼`) at `spokenTotal > 0`;
 `dashOnlySpoken` non-zero on both Russian books (`Юный дрессировщик` 17,
 `Ночной дозор` 1719); `orphanSpoken` non-zero on several books, concentrated
-in the *Coalfall Commission* family (2–62 across its five language
+in the *Coalfall Commission* family (0–62 across its seven language
 editions); `unattributedSpeech` printed for every book. **Re-verified
 2026-08-13** after a #2328 review-gate fix to `orphanSpoken` (it was
 double-counting per unresolvable model id sharing one split span, instead

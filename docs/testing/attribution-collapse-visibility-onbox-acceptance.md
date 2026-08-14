@@ -219,8 +219,10 @@ The remaining 15 books are at exactly **zero**. So the raw gap reproduces:
 share is 1.80%, and 14 of its 16 non-fixture books are at zero.** (The 15
 above counts the whole 23-book corpus; this figure excludes all seven fixture
 editions instead, including `コールフォールの依頼` — itself at zero, and so
-not one of the 14.) There is no high group among real books at all — which is
-the question the 2026-08-13 run asked and could not answer.
+not one of the 14.) Two of those 14 are never-analysed `Ночной дозор` C2/C3
+throwaway duplicates, whose zero reflects no analysis having run rather than
+a measured absence of orphans. There is no high group among real books at
+all — which is the question the 2026-08-13 run asked and could not answer.
 
 ### 5b · Why the fixture family is high — measured, not hypothesised
 
@@ -273,7 +275,20 @@ production resolver:
 | `vampire-boy` | 1 | 0.06% | no |
 | `vampire-girl` | 1 | 0.06% | no |
 
-**28 of 32 spans (87.5%) belong to ids no user can ever link** — the exact
+The per-id column sums to 33, one more than the book's 32 orphan spans, for
+the same reason §1 records this book as the corpus's one multiplicity case:
+`orphanSpoken` counts a span at most once even when it carries several
+unresolvable ids, while the table above (like `orphanIds`) lists every
+unresolvable id a span carries (`attribution-health.ts:230-249`). Measured
+directly against the production resolver over the real cache (one throwaway
+probe replicating that exact span loop, not a re-derivation from the
+aggregate counts): the one doubled span carries `driver` and `woman-in-taxi`
+together — **not** `boris-igoryevich`, whose 5 spans are all its own. So the
+32 spans break down as 21 `driver`-only + 3 `woman-in-taxi`-only + 1 shared
+`driver`+`woman-in-taxi` + 5 `boris-igoryevich` + 1 `vampire-boy` + 1
+`vampire-girl` — 32 distinct spans, of which 27 belong to an unlinkable id.
+
+**27 of 32 spans (84.4%) belong to ids no user can ever link** — the exact
 class §"Not the same character" names (`unknown-male`, `voix-inconnue`,
 `the-jogger`, `driver`, `woman-in-taxi`). The only linkable id accounts for
 0.28%. `Playing with Fire`'s sole orphan id is `pool-player-2` (6 spans,
@@ -295,7 +310,7 @@ a user cannot perform. That leaves no threshold that badges a real problem:
 
 - **≥ 2.5%** — badges only the *Coalfall Commission* family, i.e. nothing a
   reader's library would contain.
-- **≤ 1.8%** — badges `Ночной дозор`, where 87.5% of the orphan mass is
+- **≤ 1.8%** — badges `Ночной дозор`, where 84.4% of the orphan mass is
   unlinkable and the only exit is untested. That is R-8M1's "gate with no
   exit," arriving on the very first real book D13 fires on.
 

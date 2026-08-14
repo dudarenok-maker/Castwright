@@ -1537,14 +1537,21 @@ the corpus came from a path that bypassed the mechanism.
 
 **Excluding that family, there is no high group.** Maximum orphan share among
 real books is **1.80%**, and 14 of the 16 non-fixture books sit at exactly
-zero. So the bimodality this section made D13's approval conditional on does
-**not** survive.
+zero — two of them never-analysed `Ночной дозор` C2/C3 throwaway duplicates,
+whose zero reflects no analysis having run rather than a measured absence of
+orphans. So the bimodality this section made D13's approval conditional on
+does **not** survive.
 
 **Worse, the one real book that clears `MIN_ORPHAN_FOR_VERDICT` is the "gate
-with no exit" case.** `Ночной дозор` has 32 orphan spans, of which 28 (87.5%)
+with no exit" case.** `Ночной дозор` has 32 orphan spans, of which 27 (84.4%)
 belong to `driver`, `woman-in-taxi`, `vampire-boy` and `vampire-girl` — ids
 naming no character, the exact unlinkable class §"Not the same character" was
-written for. Only `boris-igoryevich` (5 spans, 0.28%) is linkable. And the
+written for. Only `boris-igoryevich` (5 spans, 0.28%) is linkable — the
+per-id spans sum to 33, one over the book's 32, because one span carries two
+unresolvable ids (`driver` and `woman-in-taxi`, not `boris-igoryevich`) and
+`orphanIds` lists every id a span carries while `orphanSpoken` counts the
+span once (attribution-health.ts:230-249; see the run sheet's §1/§5c for the
+measured breakdown). And the
 exit R-8M1 added for precisely this case has never been exercised: **no book
 in the corpus has a bare `rejected` entry**, so `unacknowledgedOrphanSpoken`
 equals `orphanSpoken` everywhere and the acknowledgement path has zero
@@ -2803,8 +2810,9 @@ not survive, D13 is dropped despite this answer."*
 > corpus but **every book above it is a development fixture**, and the
 > mechanism is measured — hand-edited `cast.json` renames that bypassed
 > `retireCharacterId`. Excluding that family the corpus maximum is 1.80%, with
-> 14 of 16 real books at zero, and the one book clearing
-> `MIN_ORPHAN_FOR_VERDICT` has 87.5% of its orphan mass in ids no user can
+> 14 of 16 non-fixture books at zero (two of them never-analysed throwaway
+> duplicates, not independent measurements), and the one book clearing
+> `MIN_ORPHAN_FOR_VERDICT` has 84.4% of its orphan mass in ids no user can
 > link. **Question 2 is not reopened by this — it is spent**: its banner-scope
 > answer was conditional on a state that no longer exists, so the
 > cache-sourced banner tier goes with D13, and `alsoCollapsed`, the fifth
