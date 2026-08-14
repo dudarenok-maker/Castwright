@@ -404,3 +404,84 @@ describe('createCastMergeBase — the directory is resolved at WRITE time (#2165
     }
   });
 });
+
+describe('createCastMergeBase — async/sync resolvers (#2196 preparation)', () => {
+  it('an ASYNC resolver (returns Promise<string>) writes to the right dir and advances the baseline', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
+      const baselineBefore = await captureOf(dir);
+      /* Prefer a resolver that itself wraps `Promise.resolve` — it still
+         exercises the await path, and lets a later guard swap in an async
+         identity check with zero further change here. */
+      const base = createCastMergeBase(async () => Promise.resolve(dir), baselineBefore);
+      const onConflict = vi.fn();
+
+      const payload = { characters: [{ id: 'a' }, { id: 'b' }] };
+      await base.writeChecked(payload, onConflict);
+
+      expect(onConflict).not.toHaveBeenCalled();
+      /* The write landed in the resolved dir... */
+      const after = await readJsonWithFingerprint<{ characters: Array<{ id: string }> }>(
+        castJsonPath(dir),
+      );
+      expect(after.value?.characters.map((c) => c.id)).toEqual(['a', 'b']);
+      /* ...and the baseline advanced to the just-written bytes. */
+      expect(base.value).toBe(fingerprintOfWrite(payload));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an ASYNC resolver that REJECTS makes writeChecked reject and NO write lands', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
+      /* The future guard path throws its BookDirUnresolvedError from an async
+         resolver; today we prove the rejection propagates through the await. */
+      const base = createCastMergeBase(
+        async () => {
+          throw new Error('book dir unresolved');
+        },
+        await captureOf(dir),
+      );
+      const onConflict = vi.fn();
+
+      await expect(base.writeChecked({ characters: [{ id: 'b' }] }, onConflict)).rejects.toThrow(
+        'book dir unresolved',
+      );
+
+      /* No write could have landed: the resolver never returned a dir, so the
+         lock was never taken and writeJsonAtomic was never reached. */
+      const after = await readJsonWithFingerprint<{ characters: Array<{ id: string }> }>(
+        castJsonPath(dir),
+      );
+      expect(after.value?.characters.map((c) => c.id)).toEqual(['a']);
+      expect(onConflict).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a SYNC resolver still works (backward compatibility, unchanged behaviour)', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
+      const onConflict = vi.fn();
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
+
+      const payload = { characters: [{ id: 'a' }, { id: 'b' }] };
+      await base.writeChecked(payload, onConflict);
+
+      expect(onConflict).not.toHaveBeenCalled();
+      const after = await readJsonWithFingerprint<{ characters: Array<{ id: string }> }>(
+        castJsonPath(dir),
+      );
+      expect(after.value?.characters.map((c) => c.id)).toEqual(['a', 'b']);
+      expect(base.value).toBe(fingerprintOfWrite(payload));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

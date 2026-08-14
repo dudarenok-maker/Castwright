@@ -343,17 +343,17 @@ describe('reconcileRejectEdgesOnDisk', () => {
        without this the helper could be exported and never called and the whole
        branch would stay green. Mirrors cast-lock.guard.test.ts's approach. */
     const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
-    const calls = src.match(/await reconcileRejectEdgesOnDisk\(record\.bookDir,/g) ?? [];
+    const calls = src.match(/await reconcileRejectEdgesOnDisk\(writeDir,/g) ?? [];
 
     expect(
       calls,
       'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3',
     ).toHaveLength(2);
     expect(src).toContain(
-      'await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist)',
+      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist)',
     );
     expect(src).toContain(
-      'await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist)',
+      'await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist)',
     );
   });
 
@@ -380,11 +380,11 @@ describe('reconcileRejectEdgesOnDisk', () => {
         blockStart,
       );
       const firstRewriteIdx = src.indexOf(
-        `await recordRetirements(record.bookDir, ${bookIdBinding},`,
+        `await recordRetirements(writeDir, ${bookIdBinding},`,
         blockStart,
       );
       const reconcileIdx = src.indexOf(
-        `await reconcileRejectEdgesOnDisk(record.bookDir, ${bookIdBinding}, log, historyStatusBeforePersist)`,
+        `await reconcileRejectEdgesOnDisk(writeDir, ${bookIdBinding}, log, historyStatusBeforePersist)`,
         blockStart,
       );
 
