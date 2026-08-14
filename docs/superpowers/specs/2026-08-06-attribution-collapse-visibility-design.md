@@ -1527,6 +1527,72 @@ decides whether `alsoCollapsed`, the fifth library state, the fifth notice
 variant and `attributionVerdictKey` are built at all. It is the first of the
 four owner decisions listed in §Open questions.
 
+### Re-gate outcome (2026-08-14) — the calibration re-run, and what it found
+
+The re-run this section asked for has happened, from the primary checkout at
+`df49a261`. Full evidence, tables and reproduction method:
+[the run sheet §5](../../testing/attribution-collapse-visibility-onbox-acceptance.md).
+Summarised here because it changes a decision.
+
+**The gap reproduces, and it is an artifact.** Raw shares still separate
+16.5–49.2% (four books) from ≤2.5% (nineteen). But all four high books are
+*The Coalfall Commission* language editions, and the mechanism is now measured
+rather than guessed: their orphan ids are **hand-edited `cast.json` renames
+that never went through `retireCharacterId`**. `coalfall` (28 spans) and
+`oduvan` (22) — both sitting in `cast.json.bak.prewipe-20260714`, absent from
+the live cast, never retired — are 50 of the top book's 62 orphan spans on
+their own.
+
+The clean demonstration is a natural experiment inside the fixture family:
+`Заказ Коалфолла` **records** `"coalfall": "coalfall-dragon"` in its
+`cast-id-history.json` and carries **zero** orphan spans for it; the English
+edition, where the identical rename was hand-applied, carries **28**. The
+corollary is a positive result for #2040 — fourteen retirements exist across
+five books and **not one retired id is an orphan anywhere**. Every orphan in
+the corpus came from a path that bypassed the mechanism.
+
+**Excluding that family, there is no high group.** Maximum orphan share among
+real books is **1.80%**, and 15 of the 16 non-fixture books sit at exactly
+zero. So the bimodality this section made D13's approval conditional on does
+**not** survive.
+
+**Worse, the one real book that clears `MIN_ORPHAN_FOR_VERDICT` is the "gate
+with no exit" case.** `Ночной дозор` has 32 orphan spans, of which 28 (87.5%)
+belong to `driver`, `woman-in-taxi`, `vampire-boy` and `vampire-girl` — ids
+naming no character, the exact unlinkable class §"Not the same character" was
+written for. Only `boris-igoryevich` (5 spans, 0.28%) is linkable. And the
+exit R-8M1 added for precisely this case has never been exercised: **no book
+in the corpus has a bare `rejected` entry**, so `unacknowledgedOrphanSpoken`
+equals `orphanSpoken` everywhere and the acknowledgement path has zero
+real-data support.
+
+**No threshold badges a real problem.** Above 2.5%, D13 fires only on a
+development fixture; at or below 1.8%, it fires on one book whose badge cannot
+be cleared. This section's own bar — *"if the bimodality does not survive the
+re-basing, D13 is dropped rather than shipped with a threshold picked off a
+book"* — is therefore met on the drop side.
+
+**Owner confirmation owed — this fires §Open questions' question-2 caveat**
+(*"Wave 1 must re-measure D13 under the current unit; if the gap does not
+survive, D13 is dropped despite this answer"*), rather than opening a new
+question. It is a confirmation and not an automatic application because the
+condition's evaluation is not the clean yes/no that clause was written for:
+the gap *did* survive, only its non-fixture half did not. Recommended: **(a) drop
+the `drifted` state from Wave 2, keep `orphanSpoken`/`orphanIds` as reported
+columns.** The columns earned their place on this run — they correctly found
+four books with stale caches behind hand-edited casts — but that is a
+developer-facing diagnostic, not a user-facing badge. Alternatives, both
+costing more for less: **(b)** gate on *linkability* rather than share, which
+would fire on `boris-igoryevich` alone and needs a linkability test that does
+not exist; **(c)** keep D13 unbuilt and revisit when a real library shows
+drift. Note that (a) and (c) produce the same Wave 2 — four states, not five —
+and differ only in whether the door is documented as open.
+
+**What this does not touch.** D13's *mechanism* is still sound, and the four
+fold-era verifications in the table above still hold. Nothing here says id
+drift is unimportant; it says this corpus cannot calibrate a threshold for it,
+and that the one real instance is unactionable by the user.
+
 ## Trigger (D2, revised)
 
 Revision 1 triggered on the book-level share alone. That leaves partial damage
@@ -2900,6 +2966,22 @@ the decision holds but **its numbers do not** — the round-7 order-of-magnitude
 gap was measured under the old unit. Landing the banner scope does not
 re-establish that evidence. **Wave 1 must re-measure D13 under the current unit**;
 if the gap does not survive, D13 is dropped despite this answer.
+
+> **That re-measurement has now run (2026-08-14), and the caveat has fired.**
+> See §D13 re-gated → *Re-gate outcome*. The short form: the gap reproduces in
+> the raw corpus but **every book above it is a development fixture**, and the
+> mechanism is measured — hand-edited `cast.json` renames that bypassed
+> `retireCharacterId`. Excluding that family the corpus maximum is 1.80%, with
+> 15 of 16 real books at zero, and the one book clearing
+> `MIN_ORPHAN_FOR_VERDICT` has 87.5% of its orphan mass in ids no user can
+> link. **The clause above says drop, and that is the recommendation.** It is
+> written as a confirmation rather than a decision because the owner already
+> agreed the conditional here — but the condition's evaluation is not the
+> clean yes/no it was written for (the gap *did* survive; only its
+> non-fixture half did not), so it is worth confirming rather than applying
+> silently. Question 2's banner-scope answer is not reopened: if D13 goes,
+> the cache-sourced banner tier goes with it and `alsoCollapsed`, the fifth
+> library state and `attributionVerdictKey` are not built.
 
 **Still open, neither blocking Wave 1:** question 3 (is Wave 2's surface still
 right at this size) and question 5 (`unanswered` as a sixth state, its threshold,

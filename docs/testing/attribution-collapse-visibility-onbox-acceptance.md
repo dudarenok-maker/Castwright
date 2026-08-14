@@ -78,6 +78,32 @@ Full JSON report generated at
 `server/handoff/cache/attribution-measurement-report.json` (git-ignored,
 local to the worktree that ran it — not attached to this doc).
 
+**Result: COMPLETE, 2026-08-14, primary checkout at `df49a261`.** The
+full-checkout run this item actually asks for. Run from
+`C:\Claude\Projects\Audiobook-Generator` after `npm --prefix server run
+build`, against `WORKSPACE_DIR=C:\AudiobookWorkspace`, read-only throughout —
+no copied caches, so every book's `hasCacheFile`/`state` reflects its real
+analysis history rather than a worktree's subset. A row for every one of the
+23 books, none blank; 21 measurable, and the two `ok (not analysed)` rows are
+genuinely un-analysed C2/C3 throwaways rather than the worktree artifact that
+forced the 2026-08-13 caveat.
+
+**Twenty of the 23 books are numerically identical in every column to the
+table above.** Diffed column-by-column against it, exactly three moved:
+
+| Book | What changed |
+|---|---|
+| Everblaze | `spoken` 4265 → 4266 |
+| Keeper of the Lost Cities | `spoken` 3795 → 3796 |
+| Ночной дозор (Tetralogy) | `spoken` 1928 → **2122**, `tag` 521 → 605, `narrIdSpoken` 147 → 229, `unattr` 12 → 9, `split` 250 → 337, `orphan` 29 → **32**, `tagNarr` 443 → 544, `dashOnly` 1719 → 1940 |
+
+That is the parser work merged between the two runs finding ~194 more speech
+spans in the one dash-convention Russian book. **It is not #2286**: the same
+corpus was measured on both sides of that merge and every cell of every row
+was identical, so the twelve added `secondaryQuotePairs` moved nothing here.
+Treat `tagTotal` and `spokenTotal` as volatile across analyzer versions —
+this is the second time that has been demonstrated on this corpus.
+
 ## 2 · What the run must show
 
 - [ ] A row for every live book, none blank.
@@ -147,37 +173,161 @@ Compute, per book, `orphanSpoken / (spokenTotal - unattributedSpeech -
 splitSpeech)` (spec §D13 re-gated's corrected denominator) and check whether
 a separating gap survives D14's rebasing.
 
-**Result: PARTIAL, from the §1 table above — RE-VERIFIED 2026-08-13 against
-the finding-1-fixed `orphanSpoken`.** Non-zero orphan shares
-(`orphanSpoken / (spokenTotal - unattributedSpeech - splitSpeech)`, sorted):
-`The Coalfall Commission` 49.2%, `El Encargo de Coalfall` 26.0%, `La Commande
-de Coalfall` 18.3%, `Заказ Коалфолла` 16.5% — then a gap down to `煤落的委托`
-2.5%, `Ночной дозор (Tetralogy)` 1.7%, `Der Auftrag von Coalfall` 1.6%,
-`Playing with Fire` 0.34%, then zero on the remaining 15 books (previously
-this row named `The Lost Art of World Domination` instead of `Ночной дозор
-(Tetralogy)` for the second book in that middle pair — that was always
-wrong, `The Lost Art of World Domination`'s own `orphanSpoken` is 0; fixed
-here alongside the finding-1 re-measurement). All four top-group
-percentages, and the low-group max (`煤落的委托` 2.5%), are numerically
-**unchanged** by the finding-1 fix — none of those five books' split spans
-carried more than one bogus id, so the fix's only real-corpus effect landed
-on `Ночной дозор (Tetralogy)` (1.80%→1.74%), which was never in the "high"
-group. **The gap is real but roughly 6–7×, not the round-7 gate's claimed
-order of magnitude (~10×), and — this is the more important caveat — the
-entire "high" group is one book family** (*The Coalfall Commission*'s five language editions,
-Castwright's own canonical e2e/regression fixture, which has been
-re-analysed and re-cast repeatedly during development). A repeatedly-
-retested fixture book is exactly the shape that would accumulate unusual
-`cast-id-history.json` churn independent of anything a real reader's library
-would produce, so this sample cannot distinguish "D13's bimodality survives
+**Result: COMPLETE, 2026-08-14, primary checkout at `df49a261`.** The
+2026-08-13 partial run below is kept for provenance; the re-gate proper is
+the section that follows it, and it answers the question that run left open.
+
+<details>
+<summary>2026-08-13 partial run (superseded — kept for provenance)</summary>
+
+Non-zero orphan shares, sorted: `The Coalfall Commission` 49.2%, `El Encargo
+de Coalfall` 26.0%, `La Commande de Coalfall` 18.3%, `Заказ Коалфолла` 16.5%
+— then a gap down to `煤落的委托` 2.5%, `Ночной дозор (Tetralogy)` 1.7%, `Der
+Auftrag von Coalfall` 1.6%, `Playing with Fire` 0.34%, then zero on the
+remaining 15 books. **The gap is real but roughly 6–7×, not the round-7
+gate's claimed order of magnitude (~10×), and the entire "high" group is one
+book family.** That run could not distinguish "D13's bimodality survives
 D14's rebasing" from "one heavily-churned test book dominates the top of a
-23-book sample." **Verdict: inconclusive, not disqualifying.** The mechanism
-(D13's design — orphan share as its own state, never summed into the
-collapse share) still holds; nothing here contradicts it. But this sample is
-not sufficient evidence to set `DRIFT_SHARE_THRESHOLD` from — Wave 2 needs at
-minimum the Coalfall family excluded or re-weighted, and ideally a wider
-non-fixture sample, before treating this gap as calibration rather than a
-single suggestive data point.
+23-book sample," and recorded **inconclusive, not disqualifying**, asking for
+the Coalfall family excluded or re-weighted before the gap was treated as
+calibration.
+
+</details>
+
+### 5a · The shares, re-measured at `df49a261`
+
+Same formula, same corpus, run from the **primary checkout** (so this is also
+the full-checkout run E11 item 1 asks for — see §1). Twenty of the 23 books
+are **numerically identical in every column** to the 2026-08-13 table; the
+three that moved are named in §1. Sorted, non-zero only:
+
+| Book | orphan / denominator | share | family |
+|---|---|---|---|
+| The Coalfall Commission | 62 / 126 | **49.21%** | fixture |
+| El Encargo de Coalfall | 32 / 123 | **26.02%** | fixture |
+| La Commande de Coalfall | 23 / 126 | **18.25%** | fixture |
+| Заказ Коалфолла | 18 / 109 | **16.51%** | fixture |
+| 煤落的委托 | 3 / 122 | 2.46% | fixture |
+| Ночной дозор (Tetralogy) | 32 / 1776 | 1.80% | real |
+| Der Auftrag von Coalfall | 2 / 122 | 1.64% | fixture |
+| Playing with Fire | 6 / 1753 | 0.34% | real |
+
+The remaining 15 books are at exactly **zero**. So the raw gap reproduces:
+16.5–49.2% against ≤2.5%, a 6.7× step.
+
+**Excluding the *Coalfall Commission* family, the corpus's maximum orphan
+share is 1.80%, and 15 of its 16 non-fixture books are at zero.** There is no
+high group among real books at all — which is the question the 2026-08-13 run
+asked and could not answer.
+
+### 5b · Why the fixture family is high — measured, not hypothesised
+
+The prior run *hypothesised* `cast-id-history.json` churn. That hypothesis is
+now testable and turns out to be the wrong mechanism with the right instinct:
+these books' orphans do not come from recorded id history, they come from
+**hand-edited `cast.json` renames that never went through `retireCharacterId`
+at all.**
+
+Per book, each orphan id was classified against three sources on disk — the
+live `cast.json`, every `cast.json.bak.*` beside it, and
+`cast-id-history.json`:
+
+| Book | orphan ids | present in a `cast.json` **backup**, absent live, never retired |
+|---|---|---|
+| The Coalfall Commission | `berrin`, `brann`, `coalfall`, `oduvan` | `coalfall`, `oduvan` — both in `cast.json.bak.prewipe-20260714` |
+| El Encargo de Coalfall | 5 ids | **all five** |
+| La Commande de Coalfall | `berrin`, `brann`, `pell-hollis`, `voix-inconnue` | first three |
+| Заказ Коалфолла | `berrin`, `brann`, `lessom`, `unknown-male` | first three, plus `unknown-male` |
+
+The live casts carry the renamed forms (`master-oduvan`, `coalfall-dragon`,
+`brann-weir`, `berrin-weir`); the caches still carry the pre-rename ids. Split
+through the production resolver, `coalfall` (28 spans) and `oduvan` (22)
+account for **50 of The Coalfall Commission's 62 orphan spans** on their own.
+
+**The natural experiment settles it.** `Заказ Коалфолла` records exactly the
+same rename — `"coalfall": "coalfall-dragon"` in its `cast-id-history.json` —
+and consequently carries **zero** orphan spans for `coalfall`. The English
+edition, where the identical rename was applied by hand, carries **28**. Same
+rename, one edition recorded it, the other did not, and only the unrecorded
+one produces a drift signal.
+
+**A corollary worth stating plainly: `retireCharacterId` works.** Fourteen
+retirements exist across five books, and **not one retired id appears as an
+orphan anywhere in the corpus.** Every orphan measured here arose from a path
+that bypassed the mechanism — which, for a hand-edited fixture, is exactly
+what one would expect and is not reachable through the UI.
+
+### 5c · The real-book residual is unlinkable by construction
+
+`Ночной дозор (Tetralogy)` is the only non-fixture book that clears
+`MIN_ORPHAN_FOR_VERDICT = 20`. Splitting its 32 spans per id, through the
+production resolver:
+
+| orphan id | spans | share | linkable? |
+|---|---|---|---|
+| `driver` | 22 | 1.24% | no — names no character |
+| `boris-igoryevich` | 5 | 0.28% | **yes** |
+| `woman-in-taxi` | 4 | 0.23% | no |
+| `vampire-boy` | 1 | 0.06% | no |
+| `vampire-girl` | 1 | 0.06% | no |
+
+**28 of 32 spans (87.5%) belong to ids no user can ever link** — the exact
+class §"Not the same character" names (`unknown-male`, `voix-inconnue`,
+`the-jogger`, `driver`, `woman-in-taxi`). The only linkable id accounts for
+0.28%. `Playing with Fire`'s sole orphan id is `pool-player-2` (6 spans,
+0.34%), also unlinkable, and below the floor regardless.
+
+### 5d · D13's only exit has never been exercised
+
+R-8M1 added the bare-`rejected` acknowledgement specifically so a book whose
+residual orphans are unlinkable is not permanently badged and blocked. **No
+book in this corpus has a `rejected` entry — the key is absent from all five
+`cast-id-history.json` files.** So `unacknowledgedOrphanSpoken ===
+orphanSpoken` on all 23 books, and the exit has zero real-data support.
+
+### 5e · Verdict
+
+**The bimodality does not survive.** A separating gap exists, but every book
+above it is a development fixture whose orphans were produced by an operation
+a user cannot perform. That leaves no threshold that badges a real problem:
+
+- **≥ 2.5%** — badges only the *Coalfall Commission* family, i.e. nothing a
+  reader's library would contain.
+- **≤ 1.8%** — badges `Ночной дозор`, where 87.5% of the orphan mass is
+  unlinkable and the only exit is untested. That is R-8M1's "gate with no
+  exit," arriving on the very first real book D13 fires on.
+
+Against the spec's own bar — *"if the bimodality does not survive the
+re-basing, D13 is dropped rather than shipped with a threshold picked off a
+book"* — **this re-gate fails, and the bar says drop.**
+
+**What is not in question:** the measurement itself is useful. `orphanSpoken`
+and `orphanIds` correctly found four books with stale caches behind
+hand-edited casts, which is a real (developer-facing) defect the column
+surfaced on its first real run. The finding is about the fifth *state*, not
+the column.
+
+**This is an owner decision, and it is recorded in the spec** (§D13 re-gated
+→ *Re-gate outcome*) rather than settled here. The options and the
+recommendation live there.
+
+### 5f · Reproducing this
+
+```
+cd server && npm run build && cd ..
+WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs
+```
+
+for §5a. §5b–§5c were measured with two throwaway harnesses that import the
+**compiled** `attribution-health-io.js` / `attribution-health.js` and
+re-implement nothing: one classifying each orphan id against the live cast,
+the `cast.json.bak.*` files and `cast-id-history.json`; one splitting spans
+per id by doctoring `history.supersededBy` so that every orphan id *except*
+the target resolves, leaving the recomputed `orphanSpoken` as that id's own
+count. Both carried positive controls that can fail — notably "redirect
+**every** orphan id and `orphanSpoken` must reach 0", without which an inert
+doctoring would print a plausible table of noise. All controls passed. The
+harnesses are scratch, not shipped; the method above is the record.
 
 ## 6 · Owner question 4 — how far `tagTotal` moves against the case heuristic
 

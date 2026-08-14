@@ -955,4 +955,18 @@ Wave 1 shipping moves it to `active`, not `stable` (Wave 2 is unbuilt).
 
 ## Ship notes
 
-_(filled at merge)_
+**Shipped 2026-08-13, `090168a5`** (PR [#2328](https://github.com/dudarenok-maker/Castwright/issues/2328)).
+Measurement only — no threshold, no badge, no UI, as scoped. Left empty at
+merge; filled 2026-08-14 alongside the D13 re-gate.
+
+**Not archived, deliberately.** Wave 2's shape is the live question: the D13
+re-gate this wave was required to run has now run, and its verdict is *drop
+the `drifted` state* — see spec §D13 re-gated → *Re-gate outcome* and
+[the run sheet §5](../../testing/attribution-collapse-visibility-onbox-acceptance.md).
+That is an owner confirmation, not a settled fact, so this plan stays out of
+`archive/` until Wave 2's surface is decided.
+
+**Acceptance still owed** (register row E11, which stays open): the
+dash-stripped re-run invariance check, and re-analysing one book post-D18 to
+confirm `demotedNarrator`/`modelNarrator` populate outside a unit fixture.
+E11's item 1 — the full primary-checkout run — discharged 2026-08-14.
