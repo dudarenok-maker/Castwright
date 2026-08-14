@@ -94,7 +94,7 @@ export async function patchStateCover(
     fetchedAt: new Date().toISOString(),
   };
   state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, state);
+  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
 }
 
 /** Inverse of patchStateCover — DELETE reverts to the procedural gradient. */
@@ -104,7 +104,7 @@ export async function clearStateCover(bookDir: string): Promise<void> {
   if (!state) return;
   delete state.coverImage;
   state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, state);
+  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
 }
 
 /** Fire-and-forget import hook. Priority-order first hit across all

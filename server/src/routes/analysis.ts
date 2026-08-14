@@ -5963,7 +5963,7 @@ export async function runMainAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeStateJsonAtomic(statePath, next);
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
           }
         }
       } catch (persistErr) {
@@ -7508,7 +7508,7 @@ export async function runSubsetAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeStateJsonAtomic(statePath, next);
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
           }
         }
       } catch (persistErr) {

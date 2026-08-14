@@ -708,7 +708,7 @@ async function scanBook(
        even if the segments pass finds nothing to write. */
     if (ensureChapterUuids(state)) {
       try {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
       } catch {
         /* best-effort — the next scan retries; in-memory state already
            carries the uuids for this caller. */
@@ -1053,7 +1053,7 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), upgraded);
+      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...upgraded, language: upgraded.language ?? null });
       return { state: upgraded, totalSec };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call

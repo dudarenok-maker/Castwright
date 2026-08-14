@@ -433,7 +433,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       language,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be

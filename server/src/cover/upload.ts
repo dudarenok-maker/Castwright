@@ -108,7 +108,7 @@ export async function patchStateLocalCover(
     uploadedAt: new Date().toISOString(),
   };
   state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, state);
+  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
 }
 
 export function clampFraming(framing: CoverFraming): CoverFraming {
@@ -126,7 +126,7 @@ export async function patchStateFraming(bookDir: string, framing: CoverFraming):
   if (!state.coverImage) return false;
   state.coverImage.framing = clampFraming(framing);
   state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, state);
+  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
   return true;
 }
 

@@ -168,7 +168,7 @@ async function applyRestructure(
   // in-memory hints → audio ops → analysis cache. If any step throws past
   // here, earlier writes are already on disk; partial state is recoverable
   // via the reconciliation filter in book-state.ts:166-185.
-  await writeStateJsonAtomic(stateJsonPath(bookDir), result.state);
+  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
   await writeJsonAtomic(editsPath, { sentences: result.sentences });
 
   // Update in-memory ManuscriptRecord so the next analysis/generation

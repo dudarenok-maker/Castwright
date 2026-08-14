@@ -395,7 +395,7 @@ export async function finalizeChapterAudioWrite(
       ),
       updatedAt: new Date().toISOString(),
     };
-    await writeStateJsonAtomic(statePath, next);
+    await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
   }
 
   return {

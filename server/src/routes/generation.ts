@@ -1450,7 +1450,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                 ),
                 updatedAt: new Date().toISOString(),
               };
-              await writeStateJsonAtomic(statePath, next);
+              await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
             }
           } catch (persistErr) {
             console.warn(
@@ -2236,7 +2236,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             ),
             updatedAt: new Date().toISOString(),
           };
-          await writeStateJsonAtomic(statePath, next);
+          await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
         }
       } catch (persistErr) {
         console.warn(

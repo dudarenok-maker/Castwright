@@ -227,7 +227,7 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       updatedAt: titlesChanged ? new Date().toISOString() : state.updatedAt,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
     return nextState;
   } catch (err) {
     console.warn(`[book-state] title-refresh failed for ${state.bookId}:`, (err as Error).message);
@@ -246,7 +246,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        web player's source of truth), persisting once so the Listen view's
        resume can resolve by uuid. Idempotent. */
     if (ensureChapterUuids(state)) {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
@@ -938,7 +938,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              empty directories so it naturally leaves siblings alone, and
              errors are swallowed (orphan empty dirs are cosmetic, not a
              correctness problem). */
-          await writeStateJsonAtomic(stateJsonPath(newDir), next);
+          await writeStateJsonAtomic(stateJsonPath(newDir), { ...next, language: next.language ?? null });
           const oldSeriesDir = dirname(bookDir);
           const oldAuthorDir = dirname(oldSeriesDir);
           await rmdir(oldSeriesDir).catch(() => {
@@ -948,7 +948,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
             /* not empty or locked → leave it */
           });
         } else {
-          await writeStateJsonAtomic(stateJsonPath(bookDir), next);
+          await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
         }
         break;
       }
@@ -1026,7 +1026,7 @@ async function applyReparse(
     castConfirmed: false,
     updatedAt: new Date().toISOString(),
   };
-  await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
 
   const carryoverPath = castReuseCarryoverJsonPath(bookDir);
   const ad = audioDir(bookDir);
@@ -1354,7 +1354,7 @@ bookStateRouter.post(
         chapters: nextChapters,
         updatedAt: new Date().toISOString(),
       };
-      await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
 
       /* Propagate to the live ManuscriptRecord if it's loaded. The
        analysis route reads chapterHints directly from this; without
@@ -1442,7 +1442,7 @@ bookStateRouter.post(
         chapters: nextChapters,
         updatedAt: new Date().toISOString(),
       };
-      await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
 
       res.json({
         id: updated.id,
