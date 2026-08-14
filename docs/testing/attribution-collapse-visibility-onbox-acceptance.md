@@ -308,8 +308,9 @@ surfaced on its first real run. The finding is about the fifth *state*, not
 the column.
 
 **This is an owner decision, and it is recorded in the spec** (§D13 re-gated
-→ *Re-gate outcome*) rather than settled here. The options and the
-recommendation live there.
+→ *Re-gate outcome*) and tracked as
+[#2357](https://github.com/dudarenok-maker/Castwright/issues/2357) rather
+than settled here. The options and the recommendation live in both.
 
 ### 5f · Reproducing this
 
