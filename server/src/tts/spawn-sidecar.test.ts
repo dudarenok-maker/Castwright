@@ -17,7 +17,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSidecar, sidecarCeilingMismatch } from './spawn-sidecar.js';
+import { spawnSidecar, sidecarCeilingMismatch, findListenerPid } from './spawn-sidecar.js';
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -1215,5 +1215,58 @@ describe('sidecarCeilingMismatch — per-card free floor', () => {
   it('is null when every reported card free-floor matches (or no expectation is configured)', () => {
     const health = { memRestartMb: null, vramRestartMb: null, gpus: [{ idx: 0, freeFloorMb: null }] } as any;
     expect(sidecarCeilingMismatch(health)).toBeNull();
+  });
+});
+
+describe('findListenerPid — bounded with a deadline', () => {
+  interface HangingChild extends EventEmitter {
+    pid: number;
+    stdout: EventEmitter;
+    stderr: null;
+    kill: ReturnType<typeof vi.fn>;
+  }
+
+  /* A probe child that never emits 'exit' or 'error' — it simulates a hung
+     powershell/lsof. Under fake timers the deadline setTimeout is what fires. */
+  function makeHangingChild(pid = 9001): HangingChild {
+    const ee = new EventEmitter() as HangingChild;
+    ee.pid = pid;
+    ee.stdout = new EventEmitter();
+    ee.stderr = null;
+    ee.kill = vi.fn(() => true);
+    return ee;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves null and kills the child when the probe never exits (deadline)', async () => {
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+    const deadlineMs = 1000;
+
+    const promise = findListenerPid(9000, 'win32', spawnFn, deadlineMs);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(deadlineMs + 1);
+    await expect(promise).resolves.toBeNull();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('still resolves the pid when the probe exits before the deadline', async () => {
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+    const deadlineMs = 1000;
+
+    const promise = findListenerPid(9000, 'win32', spawnFn, deadlineMs);
+    child.stdout.emit('data', '4242\n');
+    child.emit('exit', 0, null);
+
+    await expect(promise).resolves.toBe(4242);
+    expect(child.kill).not.toHaveBeenCalled();
   });
 });

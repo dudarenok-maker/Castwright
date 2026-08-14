@@ -294,10 +294,18 @@ export async function probeSidecarHealth(
     file (`.run/tts.pid`) is NOT used here: a stale sidecar is often a process
     we did NOT spawn (orphan across a `tsx watch` reload, or a manual launch),
     so its PID differs from the last one we recorded. */
+/** Bound on how long `findListenerPid` may wait for its child. If the spawned
+    probe (`powershell ... Get-NetTCPConnection`, `sh -c lsof`) never exits, an
+    unsupervised `findListenerPid` promise never settles — so on expiry we kill
+    the probe child and resolve `null` ("can't tell"), which every caller already
+    handles by leaving the process in place. */
+export const LISTENER_PID_DEADLINE_MS = 5000;
+
 export function findListenerPid(
   port: number,
   platform: NodeJS.Platform = process.platform,
   spawnFn: typeof spawn = spawn,
+  deadlineMs: number = LISTENER_PID_DEADLINE_MS,
 ): Promise<number | null> {
   const cmd =
     platform === 'win32'
@@ -318,14 +326,26 @@ export function findListenerPid(
     } catch {
       return resolve(null);
     }
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const settle = (value: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
     child.stdout?.on('data', (d) => {
       out += String(d);
     });
-    child.once('error', () => resolve(null));
+    child.once('error', () => settle(null));
     child.once('exit', () => {
       const pid = parseInt(out.trim().split(/\s+/)[0] ?? '', 10);
-      resolve(Number.isInteger(pid) && pid > 0 ? pid : null);
+      settle(Number.isInteger(pid) && pid > 0 ? pid : null);
     });
+    timer = setTimeout(() => {
+      settle(null);
+      child.kill();
+    }, deadlineMs);
   });
 }
 
