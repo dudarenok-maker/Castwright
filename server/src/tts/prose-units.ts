@@ -330,8 +330,8 @@ export const PROSE_UNIT_FLOOR = 20;
    RETRACTED round 2's finding-3(a) fix — see the finding-3 block above.
 
    Finding C2 (0.2 ceiling re-opens the ticket's acceptance class for the
-   commonest real Chinese TOC layout, HIGH, NOT CLOSED — owner decision
-   named, not guessed at): the finding-2 fixture above ("N、<title>。", 60
+   commonest real Chinese TOC layout, HIGH — CLOSED by the #2341 structural
+   gate below, not guessed at here): the finding-2 fixture above ("N、<title>。", 60
    entries, digitTokenShare≈0.36) is not the shape most real Chinese TOCs
    use. The standard layout is "第N章<title>" ("Chapter N: Title") with a
    roughly 4-character title. Re-measured (round 4 pinned the CONSTRUCTION
@@ -611,18 +611,23 @@ const CHAPTER_MARKER_PREFIX_RE = new RegExp(
  *  Segments prose units with the SAME SENTENCE_TERMINAL_RE the other gates
  *  use, so it inherits joinSamplesForGates' order-invariance (the split is a
  *  property of the sample, and a deterministic function of the resulting unit
- *  multiset). The marker is anchored at the unit START and requires the 章
- *  ender, so a unit opening with a date numeral ("第N年…") or a mid-sentence
- *  mention never counts. Deliberately NOT deduped before measuring: dedup is
- *  for countering real prose's verbatim repetition, but a numbered TOC's
- *  entries are each distinct already (their own number + title), so dedup
- *  barely changes the denominator here and would only obscure the harness's
- *  same intent. 0 for an empty sample. */
+ *  multiset). DEDUPES EXACT unit strings first, matching the sibling gates'
+ *  documented "dedupe EXACT prose units before measuring" invariant: a
+ *  numbered TOC's entries are each distinct (their own number + title), so
+ *  dedup leaves their share ≈1 untouched, while a unit that repeats verbatim
+ *  (this repo's own repeat-a-real-sentence test-fixture convention) cannot
+ *  inflate its own share. The marker is anchored at the unit START and
+ *  requires the 章 ender, so a unit opening with a date numeral ("第N年…") or
+ *  a mid-sentence mention never counts. 0 for an empty sample. */
 export function chapterMarkerUnitShare(sample: string): number {
-  const units = sample
-    .split(SENTENCE_TERMINAL_RE)
-    .map((u) => u.trim())
-    .filter((u) => u.length > 0);
+  const units = [
+    ...new Set(
+      sample
+        .split(SENTENCE_TERMINAL_RE)
+        .map((u) => u.trim())
+        .filter((u) => u.length > 0),
+    ),
+  ];
   if (units.length === 0) return 0;
   const marked = units.filter((u) => CHAPTER_MARKER_PREFIX_RE.test(u)).length;
   return marked / units.length;
