@@ -435,9 +435,15 @@ Design rationale:
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `npm run skills:sync` — mirror `.claude/skills/pr-review-gate/` **and**
   `.claude/skills/model-routing/` into
-  `~/.agents/skills/`, the only skill store Cline (and the five other agents
-  sharing it) resolves — it does **not** read a workspace `.claude/skills/`
-  (probed 2026-08-13, `docs/testing/agent-skill-resolution-probe.md`). A
+  `~/.agents/skills/`, the skill store Cline (and the five other agents sharing
+  it) is known to resolve — it does **not** read a workspace `.claude/skills/`
+  (probed 2026-08-13, `docs/testing/agent-skill-resolution-probe.md`). "The
+  ONLY store it resolves" overstated that probe, which tested two paths, not
+  the loader's whole search list: it composes skill roots from its rule
+  directories (`skillsPath: join(<ruleDir>, "skills")`), so workspace roots may
+  work too and would make this per-machine step avoidable. Untested, and code
+  presence is not proof — `~/.cline/skills` is in that same list and was proven
+  dead — so it stays unverified pending #2368. A
   **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
   fresh clone has no mirror. Re-run after any change under either directory;
   the drift guard in `scripts/tests/review-gate-mechanism.test.mjs` checks

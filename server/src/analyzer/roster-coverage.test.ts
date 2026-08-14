@@ -313,6 +313,16 @@ describe('roster guard — localized detection (es/ru/fr/de) #1051', () => {
     expect(res.ok).toBe(true);
     expect(res.missingSpeakers).toEqual([]);
   });
+  it('does NOT flag a Russian conjunction opener "как" (stopword, finding J, #2355)', () => {
+    const body = 'Как сказал маг, в амулете оставался один заряд. Как сказала Ольга, двенадцать лет назад всё было иначе.';
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.missingSpeakers.map((s) => s.name)).not.toContain('Как');
+  });
+  it('still flags a genuine unrostered Russian speaker despite the "как" stopword (#2355 control)', () => {
+    const body = 'Как сказал маг, в амулете оставался один заряд. «Слушай», — сказал Гесер мне в детстве.';
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Гесер');
+  });
 });
 
 describe('validateAttributionCoverage — localized half-state (es/ru) #1051', () => {

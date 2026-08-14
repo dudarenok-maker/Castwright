@@ -51,7 +51,13 @@ function readWorkspaceOverrideFrom(path: string): string | null {
        (a few hundred bytes); missing or malformed falls through silently. */
     if (!existsSync(path)) return null;
     const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw) as { workspaceDirOverride?: unknown };
+    /* Strip a leading UTF-8 BOM (U+FEFF) if present — mirrors state-io.ts's
+       readJson. Node does not strip it when reading with 'utf8' encoding, and
+       JSON.parse rejects the BOM as invalid. Windows editors and PowerShell
+       5.1's -Encoding utf8 write a BOM, so a hand-edited user-settings.json
+       would otherwise silently lose workspaceDirOverride to this catch. */
+    const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
+    const parsed = JSON.parse(stripped) as { workspaceDirOverride?: unknown };
     const override = parsed?.workspaceDirOverride;
     return typeof override === 'string' && override.trim().length > 0 ? override.trim() : null;
   } catch {

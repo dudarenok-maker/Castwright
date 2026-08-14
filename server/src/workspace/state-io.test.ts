@@ -28,7 +28,7 @@ function setRenameImpl(fn: ((src: string, dest: string) => Promise<void>) | null
 }
 
 /* Import AFTER vi.mock so state-io.ts picks up the mocked rename. */
-const { writeJsonAtomic, readJsonWithRecovery } = await import('./state-io.js');
+const { writeJsonAtomic, readJson, readJsonWithRecovery } = await import('./state-io.js');
 const { jitteredDelayMs } = await import('./atomic-rename.js');
 
 let workdir: string;
@@ -314,6 +314,76 @@ describe('readJsonWithRecovery — fallback to .bak.N on corrupt JSON', () => {
     await expect(readJsonWithRecovery<{ v: number }>(target, { keep: 3 })).rejects.toThrow(
       /json|expected|unexpected/i,
     );
+  });
+
+  it('readJson parses a normal (non-BOM) JSON file correctly', async () => {
+    /* Degradation net: if the BOM-check were broken (e.g. startsWith('')
+       always true), this normal file read would fail because the first
+       character '{' would be chopped off. This test catches regressions
+       where the BOM logic corrupts non-BOM files. */
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 42, status: 'ok' });
+
+    const value = await readJson<{ v: number; status: string }>(target);
+
+    expect(value).toEqual({ v: 42, status: 'ok' });
+  });
+
+  it('readJson parses a BOM-prefixed JSON file and returns the object', async () => {
+    /* Node does NOT strip a UTF-8 BOM (U+FEFF, bytes EF BB BF) when
+       reading with 'utf8' encoding. A file with a leading BOM causes
+       JSON.parse to reject it as invalid. This test asserts that readJson
+       strips the BOM before parsing. */
+    const target = join(workdir, 'state.json');
+    const bomContent = '\ufeff' + '{"v": 1, "name": "test"}';
+    await writeFile(target, bomContent, 'utf8');
+
+    const value = await readJson<{ v: number; name: string }>(target);
+
+    expect(value).toEqual({ v: 1, name: 'test' });
+  });
+
+  it('readJsonWithRecovery parses a BOM-prefixed MAIN file and does NOT fall back to backup', async () => {
+    /* A BOM on the main file should be stripped before parsing; recovery
+       must NOT kick in. Write a different object to .bak.1 and assert the
+       returned value comes from the main file, not the backup. This proves
+       the recovery path was not taken. */
+    const target = join(workdir, 'state.json');
+    const bomContent = '\ufeff' + '{"v": 99, "source": "main"}';
+    await writeFile(target, bomContent, 'utf8');
+    await writeFile(`${target}.bak.1`, JSON.stringify({ v: 1, source: 'backup' }), 'utf8');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const value = await readJsonWithRecovery<{ v: number; source: string }>(target, { keep: 3 });
+
+    expect(value).toEqual({ v: 99, source: 'main' });
+    /* No fallback should have occurred. */
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('readJsonWithRecovery parses a BOM-prefixed BACKUP file when the main file is corrupt (#2365 N2)', async () => {
+    /* The BOM strip inside the recovery loop's OWN readFile (state-io.ts,
+       the `try { const raw = await readFile(backupPath, 'utf8'); ... }`
+       block) is a separate strip from the one on the main-file read above —
+       it has to run again because this is a second, independent read of a
+       different file. A BOM'd backup is not exotic: it's the same
+       Notepad/PowerShell hand-edit as the main-file case, applied to the
+       exact file a user is told to look at when recovering. Mirrors the
+       existing ".bak.1 fallback" test above, but with a BOM on the backup
+       instead of plain JSON. */
+    const target = join(workdir, 'state.json');
+    await writeFile(target, '{ not valid json', 'utf8');
+    const bomBackup = '\ufeff' + '{"v": 1, "source": "backup"}';
+    await writeFile(`${target}.bak.1`, bomBackup, 'utf8');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const value = await readJsonWithRecovery<{ v: number; source: string }>(target, { keep: 3 });
+
+    expect(value).toEqual({ v: 1, source: 'backup' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/recovered from .*state\.json\.bak\.1/);
+    warn.mockRestore();
   });
 });
 

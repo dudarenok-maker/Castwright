@@ -289,6 +289,17 @@ function registerManuscript(manuscriptId: string): ChapterHint[] {
     chapterHints,
     bookDir,
   });
+  /* #2196 — the guard now verifies `.audiobook/state.json`'s identity BEFORE
+     any analysis persist write (production always has
+     state.json.manuscriptId === the book's real manuscriptId). `seedStateJson`
+     wrote 'placeholder'; push the per-test real id in so the fixture mirrors a
+     real workspace book and the full identity check in the persist block
+     passes. Without this the slow-path re-hydrate (`findBookByManuscriptId`)
+     can't locate the per-test manuscript and the run halts with
+     STALE_BOOK_DIR. */
+  const statePath = join(bookDir, '.audiobook', 'state.json');
+  const state = JSON.parse(readFileSync(statePath, 'utf8')) as { manuscriptId: string };
+  writeFileSync(statePath, JSON.stringify({ ...state, manuscriptId }));
   return chapterHints;
 }
 

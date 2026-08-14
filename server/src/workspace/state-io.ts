@@ -45,7 +45,12 @@ export interface WriteJsonOpts {
 export async function readJson<T>(path: string): Promise<T | null> {
   if (!existsSync(path)) return null;
   const raw = await readFile(path, 'utf8');
-  return JSON.parse(raw) as T;
+  /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
+     when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
+     invalid. Windows editors and PowerShell 5.1's -Encoding utf8 write a
+     BOM, so this handles user hand-edits and automated writes. */
+  const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
+  return JSON.parse(stripped) as T;
 }
 
 /** Read `path`. On JSON parse failure, fall back to `path.bak.1`,
@@ -69,14 +74,21 @@ export async function readJsonWithRecovery<T>(
   if (!existsSync(path)) return null;
   try {
     const raw = await readFile(path, 'utf8');
-    return JSON.parse(raw) as T;
+    /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
+       when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
+       invalid. Windows editors and PowerShell 5.1's -Encoding utf8 write a
+       BOM, so this handles user hand-edits and automated writes. */
+    const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
+    return JSON.parse(stripped) as T;
   } catch (originalErr) {
     for (let i = 1; i <= opts.keep; i += 1) {
       const backupPath = `${path}.bak.${i}`;
       if (!existsSync(backupPath)) continue;
       try {
         const raw = await readFile(backupPath, 'utf8');
-        const value = JSON.parse(raw) as T;
+        /* Strip a leading UTF-8 BOM (U+FEFF) if present. */
+        const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
+        const value = JSON.parse(stripped) as T;
         console.warn(
           `[state-io] ${path} was unreadable (${(originalErr as Error).message}); ` +
             `recovered from ${backupPath}.`,
