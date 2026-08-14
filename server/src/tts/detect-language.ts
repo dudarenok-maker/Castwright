@@ -27,6 +27,8 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
+  chapterMarkerUnitShare,
+  CHAPTER_MARKER_UNIT_MAJORITY,
   joinSamplesForGates,
 } from './prose-units.js';
 
@@ -271,6 +273,23 @@ function voteLanguage(
   const winningSample = joinSamplesForGates(winningSamples);
   if (guiraudR(winningSample) < LEXICAL_RICHNESS_FLOOR) return resultFor('en', true);
   if (digitTokenShare(winningSample) > DIGIT_TOKEN_SHARE_CEILING) return resultFor('en', true);
+
+  /* #2341 — the third junk gate. The two ratio gates above miss a REAL, common
+     Chinese TOC shape: "第N章<title>。" ("Chapter N: Title"). "第"/"章" are
+     ordinary (non-numeral) Han word tokens, so with a ~4-char title each entry
+     is 7 tokens with 1 digit-like one — digitTokenShare lands at ≈0.17, below
+     DIGIT_TOKEN_SHARE_CEILING and point-identical to real short-sentence prose
+     (the ranges OVERLAP, so no ceiling fix can separate them). The structural
+     signal, chapterMarkerUnitShare, fires instead: a "第<numeral>章" prefix on
+     a STRICT-MAJORITY of the joined winning sample's prose units is a numbered
+     TOC by construction (real prose never opens even half its units with one).
+     A share above CHAPTER_MARKER_UNIT_MAJORITY surrenders exactly like the
+     other junk gates. Order-invariant because it segments with the same
+     SENTENCE_TERMINAL_RE the ratio gates' tokenizer uses (see
+     chapterMarkerUnitShare in prose-units.ts). Only the chapter-aware entry
+     point routes here — detectManuscriptLanguage's own script pre-pass decides
+     CJK directly and has no comparable junk gates. */
+  if (chapterMarkerUnitShare(winningSample) > CHAPTER_MARKER_UNIT_MAJORITY) return resultFor('en', true);
 
   return resultFor(winner, false);
 }

@@ -13,6 +13,8 @@ import {
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
   joinSamplesForGates,
+  chapterMarkerUnitShare,
+  CHAPTER_MARKER_UNIT_MAJORITY,
 } from './prose-units.js';
 
 describe('detectManuscriptLanguage', () => {
@@ -1034,19 +1036,22 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
     expect(fullwidthResult).toEqual({ language: 'en', supported: true, fallback: true });
   });
 
-  /* #2256 independent review round 3, finding C2 (HIGH, NOT CLOSED — see
-     prose-units.ts's own header and
-     https://github.com/dudarenok-maker/Castwright/issues/2341 for the
-     owner decision owed). The finding-2 test above uses "N、<title>。"
+  /* #2256 independent review round 3, finding C2 (HIGH — closed by #2341; see
+     prose-units.ts's own header). The finding-2 test above uses "N、<title>。"
      numbering; the standard real Chinese TOC/chapter-heading layout is
      "第N章<title>" ("Chapter N: Title") — "第"/"章" tokenize as ordinary
      (non-numeral) Han word tokens, diluting digitTokenShare below
-     DIGIT_TOKEN_SHARE_CEILING regardless of entry count. This test PINS
-     the current, imperfect behavior (it backfills) rather than asserting
-     the desired-but-unimplemented behavior, so the gap stays visible in
-     the test suite instead of silently reading as "closed" — flip the
-     expectation once #2341 lands a fix, don't delete this test. */
-  it('finding C2 (KNOWN, TRACKED GAP — issue #2341) — a "第N章<title>" numbered Chinese TOC still backfills zh, not caught by either gate', () => {
+     DIGIT_TOKEN_SHARE_CEILING regardless of entry count, so neither the
+     richness nor the digit gate fires on it (fixture sanity below confirms
+     that, so this test exercises ONLY the structural #2341 gate). The fix is
+     chapterMarkerUnitShare (see prose-units.ts): the "第<numeral>章" prefix
+     recursing at the START of a majority of prose units is a numbered-TOC
+     shape, not prose, and a token-ratio signal can't separate them because
+     the digit ranges overlap (real short-sentence prose 0.10-0.14 vs this
+     junk 0.15-0.17). Now asserts the DESIRED behavior (surrenders to en
+     with fallback:true), flipped from the old imperfect backfill assertion
+     when #2341 landed. */
+  it('finding C2 (CLOSED by #2341) — a "第N章<title>" numbered Chinese TOC surrenders to en, caught by the structural chapter-marker gate', () => {
     const titles2 = [
       '卷首语', '引子', '初遇', '离别', '归途', '夜话', '旧梦', '新生', '远行', '告白',
       '暗涌', '浮光', '孤舟', '长夜', '清晨', '余音', '迷雾', '归鸿', '惊蛰', '立秋',
@@ -1066,18 +1071,100 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
     const titles4 = titles2.map((t, i) => t + titles2[(i + 7) % titles2.length]);
     const toc = titles4.map((t, i) => `第${toHanNumeral(i + 1)}章${t}。`).join('');
 
-    // Fixture sanity: neither gate fires. Richness is unremarkable (the
-    // titles are all distinct, so R clears the floor easily) and the digit
-    // share lands at ~0.17 — under the 0.2 ceiling, and well under the
-    // 0.36+ range finding 4 called "evidenced junk". THAT is the gap: this
-    // shape reads as junk to a human and as prose to both gates.
+    // Fixture sanity: neither the richness NOR the digit gate fires — the
+    // richness gate clears the floor (the titles are all distinct, so R is
+    // unremarkable) and the digit share lands at ~0.17, under the 0.2 ceiling
+    // and well under the 0.36+ range finding 4 called "evidenced junk". THAT
+    // is the gap #2341 closes: this shape reads as junk to a human and as
+    // prose to both token-ratio gates. The structural gate MUST be the one
+    // that fires instead (every one of the 60 units starts 第N章, so its
+    // chapter-marker unit share is 1.0, far above the strict majority).
     expect(digitTokenShare(toc)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
     expect(guiraudR(toc)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+    expect(chapterMarkerUnitShare(toc)).toBeGreaterThan(CHAPTER_MARKER_UNIT_MAJORITY);
 
     const result = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: toc }]);
-    // KNOWN GAP, tracked by #2341 -- this is the CURRENT (imperfect)
-    // behavior, not the desired one. It backfills instead of surrendering.
-    expect(result).toEqual({ language: 'zh', supported: true, fallback: false });
+    // FIXED by #2341 -- surrenders instead of backfilling zh.
+    expect(result).toEqual({ language: 'en', supported: true, fallback: true });
+  });
+
+  /* #2341 — the structural gate must catch the SAME "第N章" TOC shape under
+     all three numeral renderings the tokenizer recognises (Han numeral,
+     fullwidth digit, ASCII digit — prose-units.ts's own header names all
+     three), not just the Han-numeral fixture finding C2 uses. */
+  it('finding C2 variants (issue #2341) — a "第N章" TOC surrenders under Han-numeral, fullwidth-digit and ASCII-digit numbering alike', () => {
+    // title pool, ~4-char titles (mirrors finding C2's own fixture pool).
+    const titles2 = [
+      '卷首语', '引子', '初遇', '离别', '归途', '夜话', '旧梦', '新生', '远行', '告白',
+      '暗涌', '浮光', '孤舟', '长夜', '清晨', '余音', '迷雾', '归鸿', '惊蛰', '立秋',
+      '寒露', '霜降', '小雪', '大雪', '冬至', '小寒', '大寒', '立春', '雨水', '惊雷',
+      '春分', '清明', '谷雨', '立夏', '小满', '芒种', '夏至', '小暑', '大暑', '处暑',
+      '白露', '秋分', '寒露二', '霜降二', '立冬', '小雪二', '大雪二', '冬至二', '小寒二', '大寒二',
+      '尾声', '后记', '附录', '番外', '终章', '别篇', '外传', '余话', '跋', '附言',
+    ];
+    const titles4 = titles2.map((t, i) => t + titles2[(i + 7) % titles2.length]);
+    function fullwidthDigits(n: number): string {
+      return String(n)
+        .split('')
+        .map((d) => String.fromCharCode(0xff10 + Number(d)))
+        .join('');
+    }
+    const hanToc = titles4.map((t, i) => `第${toHanNumeral(i + 1)}章${t}。`).join('');
+    const fullwidthToc = titles4.map((t, i) => `第${fullwidthDigits(i + 1)}章${t}。`).join('');
+    const asciiToc = titles4.map((t, i) => `第${i + 1}章${t}。`).join('');
+
+    // Fixture sanity: all three read as prose to the token-ratio gates (the
+    // digits dilute below the ceiling) but as a majority-第N章 prefix to the
+    // structural gate.
+    for (const toc of [hanToc, fullwidthToc, asciiToc]) {
+      expect(digitTokenShare(toc)).toBeLessThanOrEqual(DIGIT_TOKEN_SHARE_CEILING);
+      expect(guiraudR(toc)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+      expect(chapterMarkerUnitShare(toc)).toBeGreaterThan(CHAPTER_MARKER_UNIT_MAJORITY);
+    }
+
+    for (const toc of [hanToc, fullwidthToc, asciiToc]) {
+      const result = detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: toc }]);
+      expect(result).toEqual({ language: 'en', supported: true, fallback: true });
+    }
+  });
+
+  /* #2341, regression lock — the structural gate must NOT fire on real zh
+     prose even when the digit share is unremarkable. A book's prose units do
+     not START with the "第...章" marker: real narrative occasionally names a
+     chapter title, but never a MAJORITY of its units. Two counter-shapes
+     must stay silent: (1) a bare "第N年" chronicle (the C1 shape) whose units
+     start with a numeral run but NEVER the chapter ender 章; and (2) real
+     prose with a HANDFUL of units that open by naming a chapter out loud. */
+  it('regression (issue #2341) — real zh prose, a chronicle, and prose with occasional 第N章 mention all still resolve as zh, not surrendered', () => {
+    const EVENTS = ['筑', '修', '通', '建', '毁', '成', '迁', '并', '立', '废'];
+    const chronicle = Array.from(
+      { length: 25 },
+      (_, k) =>
+        `${toHanNumeral(1 + ((k + 1) % 99))}年${toHanNumeral(1 + ((k + 1) % 12))}月${toHanNumeral(1 + ((k + 1) % 28))}日，${EVENTS[(k + 1) % EVENTS.length]}。`,
+    ).join('');
+    expect(chapterMarkerUnitShare(chronicle)).toBe(0);
+
+    const narrative = ZH_POOL.join('');
+    const withFewReferences = [
+      '第一章里已经写过如何冶炼第一炉铁。',
+      ...ZH_POOL.slice(0, 12),
+      '到了第三章，情况变得不同。',
+      ...ZH_POOL.slice(12, 24),
+    ].join('');
+    expect(chapterMarkerUnitShare(narrative)).toBe(0);
+    // Strict majority: FEWER than half of this fixture's units are 第N章-headed.
+    expect(chapterMarkerUnitShare(withFewReferences)).toBeLessThanOrEqual(CHAPTER_MARKER_UNIT_MAJORITY);
+
+    expect(detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: narrative }])).toEqual({
+      language: 'zh',
+      supported: true,
+      fallback: false,
+    });
+    expect(detectManuscriptLanguageFromChapters([{ title: 'Chapter One', body: withFewReferences }])).toEqual({
+      language: 'zh',
+      supported: true,
+      fallback: false,
+    });
   });
 
   /* #2256 independent review round 3, finding C1 — round 2's

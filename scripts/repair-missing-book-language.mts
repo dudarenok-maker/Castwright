@@ -75,8 +75,7 @@
  *   3. Neither readable → skip and name the book in the report. Never guess
  *      with no material to look at.
  *
- * #2256 (closed except for one named, tracked shape — see #2341 at the end
- * of this note) — the prose-unit floor alone rejected the three original
+ * #2256 (closed) — the prose-unit floor alone rejected the three original
  * evidenced junk classes (a TOC-only sample, a nav-only EPUB stub, an
  * OCR-noise sample — all measured at 1 prose unit, 20x under the floor) but
  * not a *punctuated* one: a long numbered TOC or a periods-and-page-numbers
@@ -97,8 +96,9 @@
  * sample at a sentence terminator so the dedup step cannot glue one
  * chapter's trailing text onto the next one's first sentence. See
  * prose-units.ts's own header for the corpus both were measured against,
- * the margins on each side, and the one real Chinese chapter-heading
- * layout (`第N章<title>`) that still clears both gates, tracked as #2341.
+ * the margins on each side, and the closing of the one real Chinese
+ * chapter-heading layout (`第N章<title>`) that cleared both token-ratio
+ * gates (#2341) via the third, structural `chapterMarkerUnitShare` gate.
  *
  * Write path: `writeStateJsonAtomic` (server/src/workspace/state-migrate.ts)
  * — the same schema-stamp + rotating-backup helper every other state.json
