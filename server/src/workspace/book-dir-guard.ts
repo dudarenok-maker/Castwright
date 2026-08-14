@@ -24,6 +24,29 @@ import { stateJsonPath } from './paths.js';
 import { getOrHydrateManuscript, removeManuscript } from '../store/manuscripts.js';
 import type { BookStateJson } from './scan.js';
 
+/* #2196 review fix (🟠) — a TRANSIENT .audiobook/state.json read failure (a
+   cloud-sync lock, a momentary EIO, a half-synced shadow) on a HEALTHY in-tree
+   book must not terminate the run. Without a retry the identity check treats
+   the unreadable as a miss, falls to the slow path's removeManuscript +
+   re-hydrate, and — if the re-scan also blips — throws BookDirUnresolvedError,
+   halting a perfectly good run for a flicker. Retrying the read a bounded
+   number of times absorbs the transient case; only a PERSISTENT unreadable (or
+   an identity mismatch / missing dir) falls through to the slow path, which the
+   guard is meant to refuse. */
+const STATE_READ_MAX_ATTEMPTS = 3;
+const STATE_READ_RETRY_DELAY_MS = 50;
+
+async function readStateWithRetry(candidateBookDir: string): Promise<BookStateJson | null> {
+  for (let attempt = 0; attempt < STATE_READ_MAX_ATTEMPTS; attempt++) {
+    const state = await readJson<BookStateJson>(stateJsonPath(candidateBookDir)).catch(() => null);
+    if (state) return state;
+    if (attempt < STATE_READ_MAX_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, STATE_READ_RETRY_DELAY_MS));
+    }
+  }
+  return null;
+}
+
 /** Thrown when a write target cannot be proven to be this manuscript's book.
     The code is a stable marker callers can switch on (e.g. to surface the
     stale-folder state to the UI instead of a generic ENOENT). */
@@ -84,9 +107,10 @@ async function resolveVerifiedBookDir(
     /* FULL PATH (identityBearing, default true): the candidate dir must carry
        this manuscript's identity in .audiobook/state.json (and, when supplied,
        the expected bookId too). Any failure — missing dir, unreadable/missing
-       state.json, or an identity mismatch (incl. a stale A-path now holding
-       book B) — refuses the candidate and diverts to the slow path. */
-    const state = await readJson<BookStateJson>(stateJsonPath(candidate)).catch(() => null);
+       state.json (after the transient-read retry above), or an identity mismatch
+       (incl. a stale A-path now holding book B) — refuses the candidate and
+       diverts to the slow path. */
+    const state = await readStateWithRetry(candidate);
     if (
       state &&
       state.manuscriptId === manuscriptId &&

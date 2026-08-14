@@ -8,11 +8,35 @@
    real book folders under BOOKS_ROOT (state.json + a plaintext manuscript), and
    put ManuscriptRecords in the in-memory store. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ManuscriptRecord } from '../store/manuscripts.js';
+
+/* #2196 review-fix (🟠) — regression gate for the guard's transient-read retry:
+   prove a HEALTHY in-tree book whose state.json read fails once (a cloud-sync
+   lock / momentary EIO) still verifies ok instead of halting. We wrap
+   state-io.readJson so it can be told to fail a controllable number of times
+   before delegating to the real reader; the dedicated test below sets the
+   counter while the rest of the file (counter 0) is untouched pass-through. */
+const { readJsonTransientFailsRemaining } = vi.hoisted(() => ({
+  readJsonTransientFailsRemaining: { n: 0 },
+}));
+vi.mock('./state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./state-io.js')>();
+  return {
+    ...actual,
+    readJson: async (...args: unknown[]) => {
+      if (readJsonTransientFailsRemaining.n > 0) {
+        readJsonTransientFailsRemaining.n -= 1;
+        throw new Error('transient .audiobook/state.json read failure');
+      }
+      return (actual as unknown as { readJson: (...a: unknown[]) => Promise<unknown> }).readJson(...args);
+    },
+  };
+});
+
 
 let workspaceRoot: string;
 let guard: typeof import('./book-dir-guard.js');
@@ -138,6 +162,32 @@ describe('verifyBookDirForWrite', () => {
 
     expect(result).toEqual({ status: 'ok', bookDir });
   });
+
+  it(
+    '🟠 a TRANSIENT state.json READ failure is absorbed by the bounded retry, not a halt',
+    async () => {
+      const { bookId, bookDir } = seedBook('GuardAuthor', 'Standalones', 'CaseRetry', 'm_retry');
+      const before = record('m_retry', bookId, bookDir);
+      store.putManuscript(before);
+
+      /* One transient read failure (a cloud-sync lock / momentary EIO), then the
+         real reader must succeed. Without the retry this healthy in-tree book
+         would be treated as an identity miss and (if the re-scan blipped too)
+         terminate the run STALE_BOOK_DIR. */
+      readJsonTransientFailsRemaining.n = 1;
+      const result = await guard.verifyBookDirForWrite({
+        manuscriptId: 'm_retry',
+        candidateBookDir: bookDir,
+      });
+
+      /* The blip consumed exactly one failure and was retried into success: the
+         counter drained, the SAME candidate verified ok, and the in-memory
+         record was untouched (no slow-path invalidation). */
+      expect(readJsonTransientFailsRemaining.n).toBe(0);
+      expect(result).toEqual({ status: 'ok', bookDir });
+      expect(store.getManuscript('m_retry')).toBe(before);
+    },
+  );
 
   it('2. missing dir → slow path re-hydrates and returns the fresh bookDir', async () => {
     const { bookId, bookDir } = seedBook('GuardAuthor', 'Standalones', 'CaseTwo', 'm_case2');
