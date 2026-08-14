@@ -1,11 +1,16 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14_
+_Design spec — 2026-08-14 · rev 2 (after adversarial review round 1)_
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
 adds *how hard it thinks*, and gives both axes a mechanism that can be checked
 rather than asserted.
+
+**Rev 2 changed the shape of the work, not just its wording.** Round 1 found the
+design resting on an unobservable premise, and a guard test that would not have
+run on the diffs it guards. The roster is now gated behind a falsifiability
+probe, and four other decisions changed. Corrections are marked inline.
 
 ## Problem
 
@@ -27,216 +32,339 @@ That produces three concrete failures, all named by the repo owner:
    session doing design work at `low`, or transcription at `xhigh`, goes
    unremarked.
 
-A fourth problem surfaced while probing the first three, and is fixed here as an
-incidental finding rather than filed: **the Cline mirror's links to
-`model-routing` are dead** (see [Incidental finding](#incidental-finding-the-mirrors-dead-routing-links)).
+Two further problems surfaced while probing the first three, and are fixed here
+as incidental findings rather than filed — see
+[Incidental findings](#incidental-findings).
 
 This is a governance spec. No application code changes; the deliverables are
-project instructions, six agent-definition files, one sync-script extension, and
-one guard test.
+project instructions, a probe, up to six agent-definition files, one
+sync-script extension, one scope-glob addition, and guard-test cases.
 
 ## Verified mechanism facts
 
 Every decision below rests on one of these. Each was checked on this box on
-2026-08-14, not assumed — the predecessor spec's round-1 correction (a routing
-rule that was "silently void" for forks) is the failure mode being avoided.
+2026-08-14 — the predecessor spec's round-1 correction (a routing rule that was
+"silently void" for forks) is the failure mode being avoided. **M2 is the one
+that is not settled, and decision 0 exists because of it.**
 
-| # | Fact | How it was checked |
-|---|---|---|
-| M1 | The `Agent` tool has **no** `effort` parameter. Its properties are `description`, `isolation`, `model`, `prompt`, `subagent_type`. | The tool's own schema. |
-| M2 | Agent-definition frontmatter **does** carry `effort:`, alongside `model:`. `model: inherit` is legal. | `claude-security/agents/patch-generator.md` in the installed plugin cache declares `model: inherit` + `effort: xhigh`. Tally across all installed definitions: `effort: xhigh` ×6, `effort: medium` ×1, `model: inherit` ×21. |
-| M3 | Session effort is **readable**: `"effortLevel": "high"` in `~/.claude/settings.json`, sibling to `"model": "opus[1m]"`. | Read directly. |
-| M4 | `.claude/agents/` is **git-ignored**. `.gitignore:33` is `.claude/*`; line 34 negates `!.claude/skills/` only. | `git check-ignore -v .claude/agents/pr-reviewer.md` → `.gitignore:33`. |
-| M5 | Cline resolves skills from `~/.agents/skills/` only, **cannot select a subagent's model**, and its agent-definition resolution is **untested**. `~/.agents/agents/` does not exist. | [`docs/testing/agent-skill-resolution-probe.md`](../../testing/agent-skill-resolution-probe.md): `CLINE_TIER_SELECTABLE: no — observed deepseek-v4-flash`. Directory absence checked directly. |
+| # | Fact | How it was checked | Status |
+|---|---|---|---|
+| M1 | The `Agent` tool has **no** `effort` parameter. Its properties are `description`, `isolation`, `model`, `prompt`, `subagent_type`. | The tool's own schema. | Confirmed |
+| M2 | Agent-definition frontmatter **carries** `effort:` alongside `model:`; `model: inherit` is legal. | `claude-security/agents/patch-generator.md` in the plugin cache declares `model: inherit` + `effort: xhigh`. Tally across installed definitions: `effort: xhigh` ×6, `effort: medium` ×1, `model: inherit` ×21. | **Asserted — the key exists in a file. That this harness *honours* it, for a *project-level* definition, is unverified: `claude-security` is not among this session's enabled agent types.** |
+| M3 | Session effort is **readable**: `"effortLevel": "high"` in `~/.claude/settings.json`, sibling to `"model": "opus[1m]"`. | Read directly. | Confirmed |
+| M4 | `.claude/agents/` is **git-ignored**. `.gitignore:33` is `.claude/*`; line 34 negates `!.claude/skills/` only, and five files are tracked beneath it. | `git check-ignore -v .claude/agents/pr-reviewer.md` → `.gitignore:33`; `git ls-files .claude`. | Confirmed |
+| M5 | Cline resolves skills from `~/.agents/skills/` only, **cannot select a subagent's model**, and its agent-definition resolution is **untested**. `~/.agents/agents/` does not exist. | [`agent-skill-resolution-probe.md`](../../testing/agent-skill-resolution-probe.md): `CLINE_TIER_SELECTABLE: no — observed deepseek-v4-flash`. Directory absence checked directly. | Confirmed |
+| M6 | `test:hooks` runs `scripts/tests/*.test.mjs` under `node:test`, and is in pre-commit, pre-push and `test:all`. Its scope-filter inputs are `scripts/**/*.{mjs,cjs,js,mts,cts,ts}`, `scripts/tests/fixtures/**`, `pinokio-scripts/**`, `.github/workflows/**`, `.github/actions/**`, `.claude/skills/**`. **`.claude/agents/**` is not among them.** | `scripts/run-hooks-tests.mjs:10`; `scripts/verify-cache.mjs:76–153`. | Confirmed |
+| M7 | Real PR comments carry `effort <level>` in their header: 7 across PRs #2339, #2337, #2350 — all `effort high`. | `gh pr view <n> --json comments`. | Confirmed |
 
 M1 and M2 together are the load-bearing pair: **effort is not settable per
-dispatch, only per role.** Every design decision follows from that.
+dispatch, only per role.** Every decision follows from that — which is exactly
+why M2 being merely Asserted is the spec's central risk.
 
 ## Decisions
 
-1. **The tier table is not modified.** It answers a different question —
-   ad-hoc dispatch and session judgment ("this work is Premium-shaped"). Roles
-   do not map onto tiers 1:1 (two roles sit on Opus at different efforts), so an
-   Effort column would assert a correspondence that does not exist. `model-routing`
-   gains a **second table** for named roles instead, each row naming the tier it
-   sits on so the two cannot drift apart conceptually.
+### 0. Probe before roster — the falsifiability gate
 
-2. **Six named roles, one definition file each,** under `.claude/agents/`.
-   Dispatch changes from `Agent({model: 'opus'})` to
-   `Agent({subagent_type: 'pr-reviewer'})`. The roster is taken from the dispatch
-   surface `CLAUDE.md`'s execution model already describes, not invented:
+*(New in rev 2. Round-1 finding: the design's premise was unobservable, and its
+own guard test could only ever assert that a file's text says `xhigh` — never
+that a dispatch ran at `xhigh`. A subagent cannot report its own reasoning
+effort. Building six definitions on that would have been the
+`f_measurement_instrument_cannot_fail` shape the spec's own Problem section
+warns about.)*
 
-   | Role | Tier | `model:` | `effort:` | `tools:` |
-   |---|---|---|---|---|
-   | `pr-reviewer` | Premium | opus | xhigh | Read, Glob, Grep, Bash |
-   | `spec-checker` | Premium | opus | xhigh | Read, Glob, Grep, Bash, Skill |
-   | `task-reviewer` | Default | sonnet | high | Read, Glob, Grep, Bash |
-   | `implementer` | Default | sonnet | medium | Read, Write, Edit, Bash, Glob, Grep, Skill |
-   | `fix-agent` | Cheap | haiku | medium | Read, Write, Edit, Bash, Glob, Grep |
-   | `scout` | Cheap | haiku | low | Read, Glob, Grep |
+**Nothing in decisions 1–9 is built until one throwaway definition has produced
+a positive observable.** Task zero creates a single
+`.claude/agents/probe-effort.md` and looks for **any** signal that the harness
+parses the key, in this order — the first positive is enough:
 
-   Four of those values are choices rather than transcription:
+1. **Enumeration.** Does the definition appear in the session's available
+   agent-type list after a restart, and does that listing disclose `model:` /
+   `effort:` the way it discloses `Tools:`?
+2. **Validation.** Does `effort: not-a-level` produce a load error, warning, or
+   rejection? A harness that *rejects* an invalid value demonstrably *parses*
+   the key. This is the sharpest of the three and costs one restart.
+3. **Differential.** Same non-trivial prompt dispatched to two otherwise
+   identical definitions at `effort: low` and `effort: max`; compare wall-clock
+   and output length. Noisy and weakest — used only if 1 and 2 are silent, and
+   a null result here is recorded as **inconclusive, not negative.**
 
-   - **`fix-agent` is `medium`, not `low`.** `CLAUDE.md` routes it to Haiku
-     ("the typing is Haiku's"), but it owes a paired regression test that fails
-     before the fix and passes after. This repo's most-repeated recorded failure
-     is a red-phase test that could not have failed. Cheap model, not cheap
-     reasoning.
-   - **`scout` duplicates the built-in `Explore` agent, deliberately.**
-     `Explore`'s model and effort come from its own definition, which this repo
-     cannot set. A repo-local `scout` is what makes the Cheap row actually cheap.
-   - **`xhigh`, not `max`, on the adversarial roles.** `max` is what
-     `/code-review ultra` is for — user-triggered and billed. `xhigh` also
-     matches the only precedent on this box (M2's `patch-generator`, itself an
-     adversarial role).
-   - **Both reviewer roles lose `Edit`/`Write`/`NotebookEdit`.** See decision 3.
+Outcomes, decided in advance so the result cannot be read favourably after the
+fact:
 
-3. **The reviewer roles' tool lists are a structural prohibition, not a
-   replacement for the tree check.** `pr-review-gate` today enforces "never
-   auto-apply" with a **post-hoc** `git rev-parse HEAD && git status --porcelain`
-   comparison — it detects a violation after it happened. Removing the edit tools
-   makes the common case impossible up front. The honest limit, stated in the
-   skill rather than glossed: **both roles still need `Bash`** (`pr-reviewer` must
-   run `gh pr comment`), and `Bash` can write files. So this reduces accidents; it
-   does not close the hole. **The tree check stays, unchanged and still
-   mandatory.**
+- **Positive** (any of 1–3) → proceed to decisions 1–9 unchanged.
+- **Negative** (2 actively shows the key ignored) → the roster is abandoned.
+  What survives is decision 6 (the session rule, whose input M3 confirms),
+  decision 8 (the Cline skill mirror), and the incidental findings. The spec is
+  amended to say so; no definition files ship.
+- **Silent** (nothing observable either way) → definitions ship **with the table
+  marked `effort:` unverified — declares intent, effect unconfirmed**, and the
+  probe doc records it. The one thing that must not happen is the table
+  asserting routing that was never shown to occur.
 
-4. **`.gitignore` gains `!.claude/agents/`,** mirroring the existing
-   `!.claude/skills/` negation (M4). Not `git add -f` per file: force-add works
-   once, then the *next* definition added silently vanishes — the recorded
-   `.claude/`-is-ignored trap re-armed. This line is also what makes decision 7's
-   guard test possible at all; an untracked definition is invisible to CI.
+Results are recorded in a new `docs/testing/agent-effort-resolution-probe.md`,
+following the format of the Cline probe doc — a verdict block with the same
+`KEY: value` shape, so the finding is greppable later.
 
-5. **`pr-review-gate`'s "effort ladder" is renamed to "review depth".** Pinning
-   `effort: xhigh` on `pr-reviewer` (decision 2) contradicts that skill's existing
-   `low`/`medium`/`high` ladder, which scales off the PR's commit type and is
-   stamped into every PR comment header. They genuinely are two different things —
-   one is a model setting, the other is prompt-stated scope — but a reader meeting
-   `effort: xhigh` in the definition and `effort: low` in a comment header has no
-   way to tell. One word, one meaning:
+### 1. The tier table is not modified
 
-   - The ladder keeps its `low`/`medium`/`high` values and its commit-type
-     derivation, unchanged. Only the noun changes.
-   - The PR comment header becomes `## PR review — pass N (head <sha>, depth <level>)`.
-   - **Accepted cost, stated rather than discovered later:** comments already on
-     merged PRs (#2320 and others) say `effort <level>`. They are historical
-     records and are not rewritten. `pr-review-gate` carries one sentence noting
-     that comments before 2026-08-14 use the old noun for the same thing.
-   - The word `effort` thereafter means only the model setting, repo-wide.
+It answers a different question — ad-hoc dispatch and session judgment ("this
+work is Premium-shaped"). Roles do not map onto tiers 1:1 (two roles sit on Opus
+at different efforts), so an Effort column would assert a correspondence that
+does not exist. `model-routing` gains a **second table** for named roles instead,
+each row naming the tier it sits on so the two cannot drift apart conceptually.
 
-6. **A session-effort rule, mirroring the model-drift rule in shape.** Flag and
-   ask; never silent; never claim to have changed it. Its input is real (M3):
-   read `effortLevel` from project `.claude/settings.local.json` first, then
-   `~/.claude/settings.json`, and **state which file the value came from.** Three
-   bands:
+### 2. Six named roles, one definition file each
 
-   | Band | The session is doing |
-   |---|---|
-   | `low` | Mechanical work: running commands, transcribing a decided edit, formatting. |
-   | `high` | The working default: coordination, debugging, triage, implementation. |
-   | `xhigh` / `max` | Adversarial or design judgment in-session: spec design, an ambiguous defect hunt, an irreversible call. |
+Under `.claude/agents/`. Dispatch changes from `Agent({model: 'opus'})` to
+`Agent({subagent_type: 'pr-reviewer'})`. The roster is taken from the dispatch
+surface `CLAUDE.md`'s execution model already describes:
 
-   **"Drifted" means** the current unit of work sits ≥1 band from the value read —
-   by the same standard the model rule already uses, not "I would have phrased
-   that differently." Two limits are stated in the skill, not left implicit: the
-   file holds the **configured** value, so if the user changed it mid-session
-   their statement wins over the file; and the reading is reported, never acted
-   on unilaterally.
+| Role | Tier | `model:` | `effort:` | `tools:` |
+|---|---|---|---|---|
+| `pr-reviewer` | Premium | opus | xhigh | *(unrestricted — see decision 3)* |
+| `spec-checker` | Premium | opus | xhigh | *(unrestricted — see decision 3)* |
+| `task-reviewer` | Default | sonnet | high | *(unrestricted)* |
+| `implementer` | Default | sonnet | medium | *(unrestricted)* |
+| `fix-agent` | Cheap | haiku | medium | *(unrestricted)* |
+| `scout` | Cheap | haiku | low | Read, Glob, Grep |
 
-7. **A guard test keeps the table and the files honest.** In `scripts/tests/`,
-   following the existing `review-gate-mechanism.test.mjs` idiom. For every row in
-   the role table in `model-routing/SKILL.md`, assert:
-   - a `.claude/agents/<name>.md` exists and is **tracked by git**;
-   - its `name:`, `model:` and `effort:` frontmatter equal the row's values;
-   - `pr-reviewer` and `spec-checker` list no `Edit`, `Write` or `NotebookEdit`
-     in `tools:`;
-   - every definition's `effort:` is one of `low`/`medium`/`high`/`xhigh`/`max`.
+Choices rather than transcription:
 
-   The test parses the table out of the skill file and the frontmatter out of the
-   definitions, and compares them **in both directions** — a definition file with
-   no table row fails too. A row without a file is a routing instruction with no
-   mechanism; a file disagreeing with the table is worse, because both look right
-   in isolation.
+- **`fix-agent` is `medium`, not `low`.** `CLAUDE.md` routes it to Haiku ("the
+  typing is Haiku's"), but it owes a paired regression test that fails before the
+  fix and passes after. This repo's most-repeated recorded failure is a red-phase
+  test that could not have failed. Cheap model, not cheap reasoning.
+- **`scout` duplicates the built-in `Explore` agent, deliberately.** `Explore`'s
+  model and effort come from its own definition, which this repo cannot set. A
+  repo-local `scout` is what makes the Cheap row actually cheap — and it is the
+  one role whose `tools:` restriction is real (decision 3).
+- **`xhigh`, not `max`, on the adversarial roles.** `max` is what
+  `/code-review ultra` is for — user-triggered and billed. `xhigh` matches the
+  only precedent on this box (M2's `patch-generator`, itself an adversarial role).
+- **`model: inherit` is not used**, though M2 confirms it legal: `pr-reviewer`
+  and `spec-checker` must land on Opus even when dispatched from a Sonnet
+  session, which is the whole point of the Premium row.
 
-8. **The Cline mirror is extended for skills, and probed before anything else.**
-   Two halves with different evidence behind them (M5):
-   - **Proven, ship it:** `model-routing/SKILL.md` joins
-     `sync-agent-skills.mjs`'s `FILES` list. Cline demonstrably reads
-     `~/.agents/skills/`. This also fixes the incidental finding below, and puts
-     the role table where Cline can read it — with the `model:`/`effort:` columns
-     marked **Claude Code only — Cline cannot select these**, exactly as
-     `pr-review-gate` already marks its tier row.
-   - **Unproven, do not mirror blind:** the six definition files are **not**
-     mirrored in this round. Cline cannot select a subagent's model, and whether
-     it resolves agent definitions at all was never probed. Writing six files
-     carrying `model: opus` / `effort: xhigh` into a harness that can honour
-     neither is a sync that reports six files written and changes nothing.
-     Instead, a **second probe run** is appended to
-     `docs/testing/agent-skill-resolution-probe.md`, asking whether `spawn_agent`
-     accepts a persona/definition name, whether `~/.agents/agents/` is resolved,
-     and whether `model:`/`effort:` frontmatter is honoured. Definitions are
-     mirrored only for whatever the probe says lands. This is the same idiom that
-     caught the original design's wrong workspace-mirror assumption.
+### 3. Tool restriction applies to `scout` only — not the reviewers
 
-## Incidental finding: the mirror's dead routing links
+*(Reversed in rev 2. Round-1 finding, **contradicted vs `pr-review-gate/SKILL.md:176`**:
+that skill mandates the reviewer post its own comment with `gh pr comment
+--body-file <file>`, which requires **creating a file**. Strip `Write` and the
+reviewer's normal, every-pass path becomes a Bash heredoc — so the restriction
+would not merely fail to close the hole, it would make routing around it routine
+and unremarkable. A prohibition that is defeated on the happy path is worse than
+a stated prohibition with a check behind it.)*
 
-Found while checking decision 8, unrelated to the feature, **fixed in this round
-rather than filed** per `CLAUDE.md`'s incidental-findings protocol.
+- **`scout` is genuinely restricted**: `Read, Glob, Grep` — no `Bash`, no write
+  tools, no escape hatch. Here the tool list *is* the boundary.
+- **The reviewer roles carry no `tools:` key.** Their prohibition stays where it
+  already works: prose in `pr-review-gate`, enforced by **the tree check**
+  (`git rev-parse HEAD && git status --porcelain` before and after, any delta a
+  gate failure). Unchanged and still mandatory.
+- `pr-review-gate` gains one sentence recording *why* the tool list is not the
+  mechanism, so this is not re-proposed in six months.
 
-`.claude/skills/pr-review-gate/` links to `../model-routing/SKILL.md` four times
-— three in `SKILL.md`, one in `references/findings-triage.md` — including the
-link that tells a reviewer which tier to dispatch at. `sync-agent-skills.mjs`
-mirrors `pr-review-gate` only, so in `~/.agents/skills/` every one of those
-resolves to a directory that is not there:
+### 4. `.gitignore` gains `!.claude/agents/`
 
-```
-~/.agents/skills/pr-review-gate/{SKILL.md, references/}   present
-~/.agents/skills/model-routing/                            ABSENT
-```
+Mirroring the existing `!.claude/skills/` negation (M4). Not `git add -f` per
+file: force-add works once, then the *next* definition added silently vanishes —
+the recorded `.claude/`-is-ignored trap re-armed. This line is also what makes
+decision 7's guard cases possible; an untracked definition is invisible to CI.
 
-Cline has been reading a runbook with dead routing references since the mirror
-was created. Decision 8's first half is the fix; decision 7's guard test gains a
-case asserting that **every relative cross-skill link in a mirrored file
-resolves to a mirrored path**, so a future skill added to the mirror cannot
-re-open the same hole.
+### 5. `pr-review-gate`'s "effort ladder" is renamed to "review depth"
+
+Pinning `effort: xhigh` on `pr-reviewer` contradicts that skill's existing
+`low`/`medium`/`high` ladder, which scales off the PR's commit type and is
+stamped into every PR comment header. They genuinely are two different things —
+one a model setting, the other prompt-stated scope — but a reader meeting
+`effort: xhigh` in the definition and `effort: low` in a comment header has no
+way to tell. One word, one meaning:
+
+- The ladder keeps its values and its commit-type derivation. Only the noun
+  changes.
+- The header becomes `## PR review — pass N (head <sha>, depth <level>)`.
+- **Migration cost, now counted (M7):** 7 existing comments across PRs #2339,
+  #2337 and #2350 read `effort high`. They are historical records and are not
+  rewritten; `pr-review-gate` carries one sentence noting that comments before
+  2026-08-14 use the old noun for the same thing.
+- The word `effort` thereafter means only the model setting, repo-wide.
+- **`npm run skills:sync` must be re-run** after this rename — a per-machine step
+  CI cannot perform. Listed in the footprint, not left implicit.
+
+### 6. A session-effort rule, mirroring the model-drift rule in shape
+
+Flag and ask; never silent; never claim to have changed it. Its input is real
+(M3): read `effortLevel` from project `.claude/settings.local.json` first, then
+`~/.claude/settings.json`, and **state which file the value came from.**
+
+*(Rev 2: the band table omitted `medium` entirely, leaving a legal `effortLevel`
+value unclassifiable and the drift trigger undefined for it. All five values now
+have a home.)*
+
+| Band | Values | The session is doing |
+|---|---|---|
+| Mechanical | `low` | Running commands, transcribing a decided edit, formatting. |
+| Routine | `medium` | Straightforward implementation against a settled plan; summarizing output. |
+| Working default | `high` | Coordination, debugging, triage, non-obvious implementation. |
+| Judgment | `xhigh`, `max` | Adversarial or design work in-session: spec design, an ambiguous defect hunt, an irreversible call. |
+
+**"Drifted" means** the current unit of work sits in a different *band* than the
+band containing the value read — not a different value, which would fire on
+every routine shift. Raised **once per unit of work**, not per step. Two limits
+are stated in the skill rather than left implicit: the file holds the
+**configured** value, so if the user changed it mid-session their statement wins
+over the file; and the reading is reported, never acted on unilaterally.
+
+### 7. Guard cases extend the existing test — no new file
+
+*(Rev 2. Round-1 finding: `review-gate-mechanism.test.mjs` already reads
+`ROUTING_SKILL_PATH` (line 47), already derives a link scan set over every
+markdown file under `.claude/skills/**` (line 240), and already covers the sync
+(20 references). A second file parsing the same two skills is the enumeration
+and divergence trap that file's own Task-4 comment exists to close.)*
+
+New cases in `scripts/tests/review-gate-mechanism.test.mjs`. For every row in the
+role table in `model-routing/SKILL.md`:
+
+- a `.claude/agents/<name>.md` exists and is **tracked by git**;
+- its `name:`, `model:` and `effort:` frontmatter equal the row's values;
+- every `effort:` is one of `low`/`medium`/`high`/`xhigh`/`max`;
+- `scout` lists no tool outside `Read, Glob, Grep`;
+- **both directions** — a definition file with no table row fails too.
+
+Plus, for the incidental finding: **every relative cross-skill link in the
+mirrored output resolves to a path the mirror also writes.** Computed from
+`buildMirrorContent`'s return value and the `FILES` list — **not** by reading
+`~/.agents/skills/`, which does not exist in CI, where a disk-based check would
+skip exactly as the existing mirror-drift guard does.
+
+**And the step's scope filter must be widened, or none of this runs.**
+
+### 8. `.claude/agents/**` joins `test:hooks`'s input globs
+
+*(New in rev 2, and the round-1 finding rated `Critical` + `Contradicted`.
+**M6**: `test:hooks`'s globs cover `scripts/**`, fixtures, `pinokio-scripts/**`,
+`.github/workflows/**`, `.github/actions/**` and `.claude/skills/**` — but not
+`.claude/agents/**`. A definitions-only diff, e.g. flipping `effort: xhigh` to
+`low`, would print `test:hooks [cached]` and run nothing, locally **and** in
+cloud CI, since `ci-scope.mjs` derives from the same `STEPS[]`. `verify-cache.mjs`
+documents this exact trap (#1847) three separate times, including at line 146 —
+the comment that added `.claude/skills/**` for precisely this reason.)*
+
+`scripts/verify-cache.mjs`'s `test:hooks` entry gains `.claude/agents/**`, with a
+comment in the established idiom naming what would otherwise silently skip.
+
+### 9. The Cline mirror: skills now, definitions after a probe
+
+Two halves with different evidence behind them (M5):
+
+- **Proven, ship it:** `model-routing/SKILL.md` joins `sync-agent-skills.mjs`'s
+  `FILES` list. Cline demonstrably reads `~/.agents/skills/`. This fixes the
+  first incidental finding and puts the role table where Cline can read it —
+  with the `model:`/`effort:` columns marked **Claude Code only — Cline cannot
+  select these**, exactly as `pr-review-gate` already marks its tier row.
+- **Unproven, do not mirror blind:** the definition files are **not** mirrored
+  this round. Cline cannot select a subagent's model, and whether it resolves
+  agent definitions at all was never probed. Writing files carrying `model: opus`
+  / `effort: xhigh` into a harness that can honour neither is a sync reporting
+  files written and changing nothing. A **second probe run** is appended to
+  `docs/testing/agent-skill-resolution-probe.md`, asking whether `spawn_agent`
+  accepts a persona/definition name, whether `~/.agents/agents/` is resolved, and
+  whether the frontmatter is honoured. Definitions are mirrored only for what the
+  probe says lands.
+
+### 10. Escalation overrides model only, and says so
+
+*(New in rev 2. Round-1 gap: `model-routing` mandates "a subagent that fails
+twice is re-dispatched one rung up," and the role world had no expression for
+that — there is no `implementer-opus`.)*
+
+Escalation from a named role re-dispatches the **same** `subagent_type` with an
+explicit `model` override (`Agent({subagent_type: 'implementer', model: 'opus'})`),
+which the `Agent` tool's schema states takes precedence over the definition's
+`model:`. **Effort stays at the role's pinned value** — M1 leaves no way to raise
+it per dispatch. `model-routing` states this asymmetry plainly rather than
+leaving a reader to discover it: escalation buys capability, not depth. If the
+decision-0 probe shows effort is the more load-bearing axis, a follow-up may add
+`-escalated` variants; that is not built speculatively now.
+
+## Cost
+
+*(New in rev 2. Round-1 gap: a spec whose parent exists because "token
+utilization has been driven by habit rather than policy" proposed `xhigh` on
+every gate with no estimate.)*
+
+Two roles move **up** (`pr-reviewer`, `spec-checker` → `xhigh`, from an inherited
+`high` in practice — M7 shows every observed pass ran at the equivalent of the
+session default). Three move **down** (`implementer`, `fix-agent` → `medium`;
+`scout` → `low`), and by volume the downward ones dominate: scouting and fix
+agents are dispatched many times per branch, gates once or twice. The expected
+net is neutral-to-negative on spend, but this is **an argument, not a
+measurement** — the probe doc records observed wall-clock for the differential
+case if it runs, and no claim of savings is made in `CLAUDE.md` or the skill.
+
+## Incidental findings
+
+Found while checking decisions 9 and 5; unrelated to the feature; **fixed in this
+round rather than filed**, per `CLAUDE.md`'s incidental-findings protocol.
+
+**F1 — the mirror's dead routing links.** `.claude/skills/pr-review-gate/` links
+to `../model-routing/SKILL.md` four times (three in `SKILL.md`, one in
+`references/findings-triage.md`), including the link naming which tier to
+dispatch at. `sync-agent-skills.mjs` mirrors `pr-review-gate` only, so in
+`~/.agents/skills/` every one resolves to a directory that is not there. Cline has
+been reading a runbook with dead routing references since the mirror was created.
+The existing link scan could not see it: `linkScanSet()` (line 240) validates
+links in the **canonical** tree, where they resolve. Decision 9's first half is
+the fix; decision 7's mirrored-link case closes the blind spot.
+
+**F2 — the format exemplar cites the wrong PR.** `pr-review-gate/SKILL.md:144`
+introduces the comment format as "following the three comments on PR #2320", but
+#2320 carries **no** `PR review — pass N` header at all (checked via
+`gh pr view 2320 --json comments`). The real exemplars are #2339 (3 passes),
+#2337 (2) and #2350 (2) — M7. The citation is corrected to one of those in the
+same diff as decision 5's rename, which touches that line anyway.
 
 ## Footprint
 
 | File | Change |
 |---|---|
-| `.claude/agents/*.md` ×6 | New — the roster |
+| `docs/testing/agent-effort-resolution-probe.md` | **New — decision 0, gates everything below** |
+| `.claude/agents/*.md` ×6 | New — the roster (only if the probe permits) |
 | `.gitignore` | +1 line, `!.claude/agents/` |
-| `.claude/skills/model-routing/SKILL.md` | Role table; session-effort rule |
-| `.claude/skills/pr-review-gate/SKILL.md` | effort→depth rename; dispatch by `subagent_type` |
+| `scripts/verify-cache.mjs` | `.claude/agents/**` → `test:hooks` globs (decision 8) |
+| `.claude/skills/model-routing/SKILL.md` | Role table; session-effort rule; escalation asymmetry |
+| `.claude/skills/pr-review-gate/SKILL.md` | effort→depth; dispatch by `subagent_type`; why `tools:` is not the mechanism; F2's citation |
 | `.claude/skills/pr-review-gate/references/*.md` | effort→depth where it appears |
-| `CLAUDE.md` "Model routing" | Pointer + one sentence (it is the quick reference) |
-| `scripts/sync-agent-skills.mjs` | `model-routing` joins the mirror |
-| `scripts/tests/` | New guard test (decision 7) |
-| `docs/testing/agent-skill-resolution-probe.md` | Second probe run (decision 8) |
+| `CLAUDE.md` "Model routing" | **One sentence + a link to the role table. No second table** — the section is the quick reference and must not become a third home for the same rows. |
+| `scripts/sync-agent-skills.mjs` | `model-routing` joins the mirror (F1) |
+| `scripts/tests/review-gate-mechanism.test.mjs` | New cases (decision 7) |
+| `docs/testing/agent-skill-resolution-probe.md` | Second probe run (decision 9) |
+| — | **Run `npm run skills:sync`** — per-machine, CI cannot |
 
 ## Testing
 
-- **Guard test** (decision 7) — the primary automated coverage, in both
-  directions, plus the mirrored-link case from the incidental finding.
-- **`sync-agent-skills.mjs`** — its existing test file gains cases for the
-  two-skill `FILES` list: `model-routing/SKILL.md` is written, its frontmatter
-  stays the first line, and its provenance header is spliced below the
-  frontmatter (the trap the script's own header documents).
-- **No e2e, no on-box acceptance.** Nothing here crosses a router/redux/layout
-  seam and nothing needs real hardware to prove.
+- **Guard cases** (decision 7) in the existing test file — the primary automated
+  coverage, both directions, plus the mirrored-link case from F1.
+- **Scope wiring** (decision 8) — `verify-cache.test.mjs` already asserts
+  `stepTouchedByDiff` against real paths; a case is added for
+  `.claude/agents/**`, so the glob cannot be removed without a red test.
+- **`sync-agent-skills.mjs`** — its cases in the same file gain the two-skill
+  `FILES` list: `model-routing/SKILL.md` is written, frontmatter stays the first
+  line, provenance header spliced below it.
+- **No e2e, no on-box acceptance.** Nothing crosses a router/redux/layout seam;
+  nothing needs real hardware.
 
 ## Explicitly out of scope
 
 - **Release notes: skipped.** Process-only, no user- or operator-visible delta —
-  the exemption `CLAUDE.md` before-shipping step 5 already names.
-- **Reproducible/pinned gate depth.** Offered and **not** selected as a driver;
-  the roles happen to pin effort, but nothing here is designed to guarantee a
-  gate's depth is independent of the dispatching session.
+  the exemption `CLAUDE.md` before-shipping step 5 names.
+- **Reproducible/pinned gate depth.** Offered and not selected as a driver.
 - **Per-PR effort scaling for the reviewer** (three `pr-reviewer-{low,medium,high}`
-  definitions). Considered and rejected: M1 means it would take three files to
-  express, and the tier would no longer be pinned.
-- **Mirroring the definitions to Cline.** Deferred to the probe (decision 8),
-  not dropped.
+  definitions). M1 means it would take three files, and the tier would no longer
+  be pinned.
+- **Mirroring definitions to Cline** — deferred to the probe (decision 9).
+- **`-escalated` role variants** — deferred to the probe (decision 10).
 
 ## Open question deferred to implementation
 
@@ -244,4 +372,4 @@ Whether `.claude/settings.local.json` overrides `~/.claude/settings.json` for
 `effortLevel` specifically was **not** verified — only that the user-level key
 exists (M3). Decision 6 is written to read project-then-user and *state which
 file it read*, which is correct under either precedence; the implementation
-should confirm the precedence and record it in the skill.
+confirms the precedence and records it in the skill.
