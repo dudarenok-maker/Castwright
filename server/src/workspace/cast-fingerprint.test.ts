@@ -94,6 +94,35 @@ describe('readJsonWithFingerprint', () => {
     }
   });
 
+  it('parses a BOM-prefixed cast.json, hashing the RAW (unstripped) bytes (#2365 C1)', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    const pNoBom = join(dir, 'cast-no-bom.json');
+    try {
+      const body = '{"characters":[]}';
+      writeFileSync(p, '\ufeff' + body, 'utf8');
+      writeFileSync(pNoBom, body, 'utf8');
+
+      const withBom = await readJsonWithFingerprint(p);
+      const withoutBom = await readJsonWithFingerprint(pNoBom);
+
+      /* The parse must succeed despite the BOM. */
+      expect(withBom.value).toEqual({ characters: [] });
+
+      /* The fingerprint must be over the RAW bytes actually on disk — a BOM'd
+         file and its BOM-less twin are different bytes and MUST fingerprint
+         differently. A stripped-then-hashed implementation would collapse
+         the two, which would silently invalidate every fingerprint stored
+         before this fix (they were computed over un-stripped bytes) the
+         moment a BOM'd file was introduced. */
+      expect(withBom.fingerprint).not.toBe(withoutBom.fingerprint);
+      expect(withBom.fingerprint).toBe(hashBytes('\ufeff' + body));
+      expect(withoutBom.fingerprint).toBe(hashBytes(body));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('returns UNREADABLE — not ABSENT — for a non-ENOENT read failure (#2185 review)', async () => {
     const dir = tmpDir();
     const p = join(dir, 'cast.json');

@@ -95,8 +95,16 @@ export async function readJsonWithFingerprint<T>(
     return { value: null, fingerprint: UNREADABLE };
   }
   const fingerprint = hashBytes(raw);
+  /* Strip a leading UTF-8 BOM (U+FEFF) if present — mirrors state-io.ts's
+     readJson — but ONLY for the parse. The fingerprint above is computed
+     over `raw` unmodified: it must hash exactly what writeJsonAtomic would
+     have produced, and must not depend on whether a caller's own read strips
+     a BOM before hashing. Windows editors and PowerShell 5.1's -Encoding
+     utf8 write a BOM, so a hand-edited cast.json would otherwise fail to
+     parse here and be treated as an empty prior cast. */
+  const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
   try {
-    return { value: JSON.parse(raw) as T, fingerprint };
+    return { value: JSON.parse(stripped) as T, fingerprint };
   } catch {
     return { value: null, fingerprint };
   }

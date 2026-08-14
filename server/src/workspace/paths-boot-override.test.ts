@@ -101,4 +101,22 @@ describe('readBootOverride (#1337)', () => {
 
     expect(readBootOverride(sharedPath, legacyPath, {})).toBe('D:/shared/workspace');
   });
+
+  /* PR #2365 review, C1: readWorkspaceOverrideFrom (the sync reader behind
+     readBootOverride) does its own JSON.parse and swallows any throw in a
+     silent catch — including the BOM throw. state-io.ts's readJson strips a
+     leading BOM before parsing; this reader must do the same, or a
+     hand-edited (Notepad / PowerShell -Encoding utf8) user-settings.json
+     loses workspaceDirOverride entirely, with WORKSPACE_SOURCE falling back
+     to 'default'/'env' and reporting the wrong thing. */
+  it('reads workspaceDirOverride from a BOM-prefixed settings file (#2365 C1)', () => {
+    const sharedPath = join(dir, 'shared-user-settings.json');
+    const legacyPath = join(dir, 'legacy-user-settings.json');
+    writeFileSync(
+      sharedPath,
+      '\ufeff' + JSON.stringify({ workspaceDirOverride: 'D:/Castwright-Library' }),
+    );
+
+    expect(readBootOverride(sharedPath, legacyPath, {})).toBe('D:/Castwright-Library');
+  });
 });

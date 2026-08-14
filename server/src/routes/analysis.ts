@@ -4638,7 +4638,17 @@ export async function runMainAnalyzerJob(
       1,
       `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}…`,
     );
-    log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
+    /* Issue #2354 / #2365 C2 — this log always fires before Phase 0's
+       refinement can have run: Phase 0 is launched un-awaited just above
+       (`phase0PoolPromise = runPhase0Pool()`) and nothing awaits it before
+       this line, in EVERY mode (sequential mode parks Phase 1's *workers* on
+       the watermark, not this setup code). So the number here is always the
+       pre-flight constant computed from the static baseline — never the
+       stage-1-observed rate — and the label says so unconditionally. */
+    log(
+      1,
+      `Estimated stage time: ~${humanSeconds(stage2EstMs)} (pre-flight estimate, refined after stage 1)`,
+    );
     if (cachedChapterCount > 0) {
       log(
         1,
