@@ -948,9 +948,21 @@ Expected: matches only in (a) the new "not effort" disambiguation paragraph, (b)
 
 ```bash
 cd C:/Claude/Projects/wt-model-effort-routing
-git add .claude/skills/pr-review-gate/ scripts/tests/review-gate-mechanism.test.mjs
+git add .claude/skills/pr-review-gate/ \
+        .claude/skills/model-routing/SKILL.md \
+        docs/features/235-model-routing-review-gates.md \
+        scripts/tests/review-gate-mechanism.test.mjs
 git commit -m "docs(docs): rename pr-review-gate's effort ladder to review depth"
 ```
+
+**All six edited files go in this one commit** — the four paths above cover
+`pr-review-gate/SKILL.md` plus its two `references/*.md`, step 4b's two files,
+and the retargeted test. *(The step-4b files were missing from this `git add`
+when step 4b was first added; the executing implementer caught it and committed
+all six rather than leaving two required edits behind. Fixed here so the next
+reader of this plan is not handed the same trap. The general lesson: when a step
+is inserted into a task, its files must be added to that task's `git add` in the
+same edit — an insertion that only appears in the prose is half-applied.)*
 
 The mirror was already re-synced in step 7 — that ordering is load-bearing, not
 stylistic. `skills:sync` is per-machine and CI cannot run it.
