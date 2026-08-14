@@ -13,8 +13,13 @@ TOOLS_KEY_HONOURED: yes — resolved list is surfaced in the agent-type listing
 PROJECT_DEFINITIONS_LOADED: yes — .claude/agents/*.md become dispatchable types
 AGENT_TOOL_HAS_EFFORT_PARAM: no
 WORKFLOW_AGENT_HAS_EFFORT_OPT: yes — opts.effort, same five names
-CLI_EFFORT_FLAGS: claude --effort | copilot --effort/--reasoning-effort | cline --thinking
+CLI_EFFORT_FLAGS_DECLARED: claude --effort | copilot --effort/--reasoning-effort | cline --thinking
 ```
+
+`--help` on each CLI shows the flag is declared, not that it is honoured at
+runtime in every configuration. A parallel session reports that `copilot
+--effort` is not honoured when `--model auto` is set — reported, not
+reproduced here.
 
 ## Method — and why the behavioural probe could not answer it
 

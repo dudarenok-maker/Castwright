@@ -290,7 +290,9 @@ dispatching session's model; the table below does not apply to them.
 **Reasoning effort is the second axis, and `medium` is this repo's declared
 norm** — for dispatched roles, for the main session, and for CLI worker
 dispatch (`claude --effort`, `copilot --effort`, `cline --thinking`; pass it
-explicitly, since omitting it inherits an undeclared default). `high` and
+explicitly, since omitting it inherits an undeclared default — though passing
+it is a declaration, not a guarantee: at least one CLI is reported to ignore
+it in some configurations). `high` and
 above are deliberate, work-shaped raises rather than a resting state. Dispatch
 by named role — `Agent({subagent_type: 'pr-reviewer'})` — rather than by raw
 `model:`; the six roles and their pinned `model:`/`effort:` values live in the

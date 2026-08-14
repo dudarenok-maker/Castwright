@@ -1,6 +1,6 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 10 · **FINAL — plan written and reviewed; ready to execute**_
+_Design spec — 2026-08-14 · rev 11 · **FINAL — plan written and reviewed; ready to execute**_
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
@@ -33,8 +33,8 @@ routing links) and one
 
 ### Revision history
 
-Ten revisions, three adversarial review rounds (the full cap), one empirical
-gate, and two **convergence passes** against a parallel session. Every round found
+Eleven revisions, three adversarial review rounds (the full cap), one empirical
+gate, and three **convergence passes** against a parallel session. Every round found
 a defect in the *previous* round's new prose, so corrections are marked inline as
 `(rev N, round-M finding: …)` rather than silently absorbed:
 
@@ -73,6 +73,19 @@ a defect in the *previous* round's new prose, so corrections are marked inline a
   rationale, inverted: reasoning about a scope glob without checking which hook
   consumes it, once producing a guard that silently *did not* run and once one
   that *did*.
+- **Rev 11 — third convergence pass.** The same parallel session flagged M10 as
+  overstated. `--help` on each CLI verifies that `claude`/`copilot`/`cline` each
+  **declare** a reasoning-effort flag with a fixed value set — that part stands.
+  But "accept reasoning effort per invocation" claimed the flags are **honoured**
+  at runtime, which `--help` cannot show — the same error decision 0's own gate
+  exists to catch, reading an interface and concluding behaviour, this time
+  committed in the spec's own evidence table rather than in the roster it gates.
+  The session also reports that `copilot --effort` is not honoured when
+  `--model auto` is set (Copilot's auto-picked model picks the effort too);
+  `copilot --help` documents `--effort` and `--model auto` as independent flags
+  with no stated interaction, so `--help` can neither confirm nor refute the
+  report. Recorded as reported, not reproduced here. M10's Fact and Status
+  corrected in place.
 
 ## Problem
 
@@ -123,7 +136,7 @@ M1 was generalised one step too far — see the paragraph below the table.
 | M7 | Real PR comments carry `effort <level>` in their header: 7 across PRs #2339, #2337, #2350 — all `effort high`. | `gh pr view <n> --json comments`. | Confirmed — **but this measures the prose *depth ladder*, not the model setting.** It is admissible only for decision 5's migration count. Rev 2 wrongly cited it as evidence about session effort; see [Cost](#cost). |
 | M8 | `tools:` is honoured, and the **resolved** list is surfaced in the agent-type listing. | Probe-c (`tools: Read, Glob, Grep`) enumerated as exactly `(Tools: Read, Glob, Grep)` while the two controls, which set no `tools:`, did not. Corroborated by the same schema block as M2, which carries `tools` plus a sibling "Tools removed from the default set. Ignored if `tools` is set." | **Confirmed** |
 | M9 | Project-level `.claude/agents/*.md` definitions are loaded and become dispatchable agent types. | All three probe definitions appeared in the agent-type list after restart. | **Confirmed** |
-| M10 | All three worker CLIs accept reasoning effort **per invocation**: `claude --effort {low,medium,high,xhigh,max}` — described as *"Effort level for the current session"*, and identical to M2's named enum; `copilot --effort`/`--reasoning-effort {none,minimal,low,medium,high,xhigh,max}`; `cline --thinking {none,low,medium,high,xhigh}`, whose help states bare `--thinking` uses `medium` and **omitting it "leaves provider default"**. | `--help` on each, re-run on this box 2026-08-14 rather than taken from the report that raised it. | **Confirmed** |
+| M10 | All three worker CLIs **declare** a reasoning-effort flag, each with a fixed value set: `claude --effort {low,medium,high,xhigh,max}` — described as *"Effort level for the current session"*, and identical to M2's named enum; `copilot --effort`/`--reasoning-effort {none,minimal,low,medium,high,xhigh,max}`; `cline --thinking {none,low,medium,high,xhigh}`, whose help states bare `--thinking` uses `medium` and **omitting it "leaves provider default"**. **`--help` establishes that a flag is declared and what values it parses — it does not establish that the flag is honoured at runtime, in every configuration.** A parallel session reports that `copilot --effort` is not honoured when `--model auto` is set (Copilot's auto-picked model picks the effort too); `copilot --help` documents `--effort` and `--model auto` as independent flags with no stated interaction, so `--help` can neither confirm nor refute this. **Reported, not reproduced here.** | `--help` on each, re-run on this box 2026-08-14 rather than taken from the report that raised it. | **Confirmed (flag declaration only)** |
 | M11 | `Workflow`'s `agent()` accepts **`opts.effort`** — `'low' \| 'medium' \| 'high' \| 'xhigh' \| 'max'` — overriding reasoning effort **for that one call**, and "omit to inherit the session effort". This is a true per-dispatch effort control inside the same harness as M1. | The `Workflow` tool's own schema — the same evidence class M1 is read from. | **Confirmed** |
 
 M1 and M2 together are the load-bearing pair. Stated precisely — *(rev 9,

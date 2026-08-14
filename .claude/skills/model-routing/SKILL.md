@@ -79,7 +79,10 @@ for which shapes earn which.
 "declare it even at the norm", on a surface where the cost of omission is
 documented rather than inferred: `cline --help` states that omitting
 `--thinking` "leaves provider default" — an effort this repo neither declares
-nor observes.
+nor observes. A flag being accepted is not proof it is honoured: `copilot
+--effort` is reported not to take effect when `--model auto` is set, so on
+those lanes this is a declaration, not an enforcement — exactly as the
+session-effort rule's honest limit says of `effortLevel` below.
 
 **No `tools:` list here is a security boundary.** `scout` omits the write
 tools for hygiene — a search-and-report role has no business holding `Edit` —
