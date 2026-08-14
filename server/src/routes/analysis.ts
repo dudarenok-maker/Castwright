@@ -2739,10 +2739,11 @@ async function resolveVerifiedBookDirForRun(job: AnalysisJob): Promise<string> {
     /* #2196 review (🟡 dead guard surface) — bind the manuscript's OWN bookId
        into the identity check (expectedBookId was previously a test-only
        surface): a candidate whose .audiobook/state.json claims a DIFFERENT
-       book's id is refused outright (cross-book contamination) rather than
-       accepted on manuscriptId alone, and a re-hydration that comes back with
-       a foreign identity also fails. `undefined` for legacy / upload records
-       (no bookId) keeps the check a no-op for them, exactly as before. */
+       book's id is refused on the FULL path (cross-book contamination) rather
+       than accepted on manuscriptId alone, and is diverted to the re-hydration
+       slow path, which re-locates the book by manuscriptId
+       (findBookByManuscriptId). `undefined` for legacy / upload records (no
+       bookId) keeps the check a no-op for them, exactly as before. */
     expectedBookId: record?.bookId,
   });
   /* `verifyBookDirForWrite` already threw on `unresolved`, so the only
@@ -2752,6 +2753,24 @@ async function resolveVerifiedBookDirForRun(job: AnalysisJob): Promise<string> {
     throw new Error('unreachable: verifyBookDirForWrite threw on unresolved');
   }
   return result.bookDir;
+}
+
+/* #2196 review (🟡 TOCTOU) — re-verify the write target immediately before
+   writing the terminal authoritative state.json record. A book-folder move
+   landing mid-persist (after the block-top resolve) leaves `writeDir` stale:
+   this function re-resolves it identity-gated and refuses (throws
+   BookDirUnresolvedError, parked in the persist's `catch (persistErr)` so the
+   run halts loudly) when it can no longer be found OR has re-located to a
+   DIFFERENT dir than this block already persisted to — so a completed-looking
+   state record never lands in a half-migrated pair. Exported so the divergence
+   arm is deterministically regression-tested (review pass 2, minor). */
+export async function assertWriteTargetStable(job: AnalysisJob, writeDir: string): Promise<void> {
+  const stateWriteDir = await resolveVerifiedBookDirForRun(job);
+  if (stateWriteDir !== writeDir) {
+    throw new BookDirUnresolvedError(
+      `book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir}); refusing to write the terminal state record`,
+    );
+  }
 }
 
 async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise<void> {
@@ -5877,22 +5896,14 @@ export async function runMainAnalyzerJob(
             voicedSurvivorsDropped(remapped.priorCast, characters),
           );
           /* #2196 review (🟡 TOCTOU) — re-verify the write target immediately
-             before the terminal authoritative state.json record. A book folder
+             before the terminal authoritative state.json record. A book-folder
              move landing mid-persist (after the block-top resolve) leaves
-             `writeDir` stale: the fresh identity-gated resolution below either
-             (a) throws BookDirUnresolvedError — parked in `catch (persistErr)`
-             and the run halts loudly — or (b) resolves to a DIFFERENT dir than
-             this block has already persisted to, which we also refuse so a
-             completed-looking state record never lands in a half-migrated pair.
-             (The earlier advisory/retirement writes sit inside this same tight
-             block and are best-effort by design; this re-check is the loud guard
-             at the authoritative terminal record.) */
-          const stateWriteDir = await resolveVerifiedBookDirForRun(job);
-          if (stateWriteDir !== writeDir) {
-            throw new BookDirUnresolvedError(
-              `book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir}); refusing to write the terminal state record`,
-            );
-          }
+             `writeDir` stale: abort the terminal write loudly instead of
+             resolving it to a stale/half-migrated path. (The earlier
+             advisory/retirement writes sit inside this same tight block and are
+             best-effort by design; this is the loud guard at the authoritative
+             terminal record.) */
+          await assertWriteTargetStable(job, writeDir);
           const statePath = stateJsonPath(writeDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
@@ -7446,12 +7457,7 @@ export async function runSubsetAnalyzerJob(
           );
           /* #2196 review (🟡 TOCTOU) — mirror the main persist's re-verify of the
              write target immediately before the terminal state.json record. */
-          const stateWriteDir = await resolveVerifiedBookDirForRun(job);
-          if (stateWriteDir !== writeDir) {
-            throw new BookDirUnresolvedError(
-              `book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir}); refusing to write the terminal state record`,
-            );
-          }
+          await assertWriteTargetStable(job, writeDir);
           const statePath = stateJsonPath(writeDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {

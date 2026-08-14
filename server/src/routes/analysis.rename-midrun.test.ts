@@ -681,4 +681,33 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
     30_000,
   );
 
+  it(
+    '#2196 TOCTOU (review pass 2): a mid-persist in-tree move that re-resolves to a DIFFERENT dir refuses the terminal state write (halt)',
+    async () => {
+      const seed = await seedRunnableBook();
+      const { assertWriteTargetStable } = await import('./analysis.js');
+      const { BookDirUnresolvedError } = await import('../workspace/book-dir-guard.js');
+      const { getManuscript, putManuscript, removeManuscript } = await import('../store/manuscripts.js');
+
+      try {
+        /* The persist captured `oldDir` as its writeDir (the block-top resolve).
+           A mid-persist in-tree move then relocates the book and updates the
+           record, so a FRESH identity-gated re-resolve lands on `newDir` — a
+           DIFFERENT dir than this persist already wrote to. That must refuse
+           the terminal state write (halt), never landing a completed-looking
+           state record in a half-migrated pair. */
+        const writeDir = seed.oldDir;
+        putManuscript({ ...getManuscript(seed.manuscriptId)!, bookDir: seed.newDir });
+        await renameWithRetry(seed.oldDir, seed.newDir);
+
+        await expect(assertWriteTargetStable(seed.job, writeDir)).rejects.toBeInstanceOf(
+          BookDirUnresolvedError,
+        );
+      } finally {
+        removeManuscript(seed.manuscriptId);
+      }
+    },
+    30_000,
+  );
+
 });
