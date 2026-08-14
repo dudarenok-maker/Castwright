@@ -1,15 +1,21 @@
 // scripts/sync-agent-skills.mjs
 //
-// Mirrors .claude/skills/pr-review-gate/ into the cross-agent skill store at
-// ~/.agents/skills/pr-review-gate/ — the ONLY location Cline (and reportedly
-// five other agents sharing that store) resolves skills from. Verified
-// 2026-08-13: see docs/testing/agent-skill-resolution-probe.md. Cline does
-// not read this repo's workspace .claude/skills/ at all, so without this
-// mirror the mandated PR review runbook is invisible to it.
+// Mirrors .claude/skills/pr-review-gate/ AND .claude/skills/model-routing/
+// into the cross-agent skill store at ~/.agents/skills/ — the ONLY location
+// Cline (and reportedly five other agents sharing that store) resolves
+// skills from. Verified 2026-08-13: see
+// docs/testing/agent-skill-resolution-probe.md. Cline does not read this
+// repo's workspace .claude/skills/ at all, so without this mirror the
+// mandated PR review runbook is invisible to it. model-routing joined the
+// mirror on 2026-08-14: pr-review-gate/SKILL.md links
+// ../model-routing/SKILL.md four times, including the link naming which
+// tier to dispatch a reviewer at, and every one of those links resolved to a
+// directory the mirror did not write until then.
 //
 // This is a PER-MACHINE step. CI cannot run it — the target lives under
 // $HOME, which is absent on every fresh clone and every CI runner. Run
-// `npm run skills:sync` after any change under .claude/skills/pr-review-gate/.
+// `npm run skills:sync` after any change under .claude/skills/pr-review-gate/
+// or .claude/skills/model-routing/.
 //
 // Three encoding/format traps bit the original hand sync this script
 // replaces. Each produces a file that LOOKS fine and is broken:
@@ -24,17 +30,27 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..');
-const SKILL_NAME = 'pr-review-gate';
-const CANONICAL_ROOT = join(REPO_ROOT, '.claude', 'skills', SKILL_NAME);
-const MIRROR_ROOT = join(homedir(), '.agents', 'skills', SKILL_NAME);
+const SKILLS_ROOT = join(REPO_ROOT, '.claude', 'skills');
+const MIRROR_ROOT = join(homedir(), '.agents', 'skills');
 
-const FILES = ['SKILL.md', 'references/reviewer-brief.md', 'references/findings-triage.md'];
+/** Skill-QUALIFIED relative paths, mirroring the store's own layout. Was a
+ *  bare list under one skill root until 2026-08-14, when model-routing joined:
+ *  pr-review-gate links ../model-routing/SKILL.md four times, including the
+ *  link naming which tier to dispatch at, and every one of them resolved to a
+ *  directory the mirror did not write. Cline had been reading a runbook with
+ *  dead routing references since the mirror was created. */
+export const FILES = [
+  'pr-review-gate/SKILL.md',
+  'pr-review-gate/references/reviewer-brief.md',
+  'pr-review-gate/references/findings-triage.md',
+  'model-routing/SKILL.md',
+];
 
 // The provenance header's closing line, WITH its trailing newline. Module-local:
 // it was briefly exported so the guard test could split a mirrored file on it,
@@ -54,7 +70,7 @@ function header(rel) {
   // mirror is synced to; <repo> stays a literal placeholder for that reason.
   return (
     '<!-- MIRRORED COPY — do not edit here.\n' +
-    `     Canonical source: <repo>/.claude/skills/${SKILL_NAME}/${rel}\n` +
+    `     Canonical source: <repo>/.claude/skills/${rel}\n` +
     '     Regenerate with `npm run skills:sync` from that repo.\n' +
     '     Relative links below resolve against a CASTWRIGHT CHECKOUT, not against\n' +
     PROVENANCE_END
@@ -118,7 +134,7 @@ export function syncOneFile(srcPath, destPath, rel) {
   // exists at this point, so nothing blocks checking it first. Checking it
   // after the write let a malformed canonical source clobber a previously
   // good mirror with an unusable one before the throw ever fired.
-  if (rel === 'SKILL.md' && !mirrored.startsWith('---\n')) {
+  if (basename(rel) === 'SKILL.md' && !mirrored.startsWith('---\n')) {
     throw new Error(`${srcPath}: frontmatter is not the first line`);
   }
 
@@ -132,9 +148,7 @@ export function syncOneFile(srcPath, destPath, rel) {
 export function syncAgentSkills() {
   const written = [];
   for (const rel of FILES) {
-    const srcPath = join(CANONICAL_ROOT, rel);
-    const destPath = join(MIRROR_ROOT, rel);
-    written.push(syncOneFile(srcPath, destPath, rel));
+    written.push(syncOneFile(join(SKILLS_ROOT, rel), join(MIRROR_ROOT, rel), rel));
   }
   return written;
 }
@@ -145,7 +159,7 @@ if (isDirectlyInvoked(import.meta.url)) {
     console.log(
       '\nThis is a per-machine step — CI cannot run it (the target lives in ' +
         '$HOME and is absent on every fresh clone). Re-run `npm run skills:sync` ' +
-        'after any change under .claude/skills/pr-review-gate/.',
+        'after any change under .claude/skills/pr-review-gate/ or .claude/skills/model-routing/.',
     );
   } catch (err) {
     console.error(`skills:sync failed: ${err.message}`);

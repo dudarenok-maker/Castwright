@@ -37,10 +37,10 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
-import { buildMirrorContent, syncOneFile } from '../sync-agent-skills.mjs';
+import { FILES as MIRRORED_FILES, buildMirrorContent, syncOneFile } from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -469,7 +469,6 @@ test('intra-repo .md links in the governance docs and skills resolve to real fil
 // verified 2026-08-13 by asking Cline in this workspace: it listed the 23
 // global skills and answered "pr-review-gate: NO".
 const AGENT_SKILL_STORE = join(homedir(), '.agents', 'skills');
-const MIRRORED_SKILL = 'pr-review-gate';
 
 test('the agent-store mirror matches its canonical source, when it exists', () => {
   // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
@@ -477,31 +476,47 @@ test('the agent-store mirror matches its canonical source, when it exists', () =
   // would turn every never-synced machine red. The trade is deliberate — but
   // it means a GREEN run here proves nothing about a machine that has not
   // synced, so never report this as "the mirror is in sync".
-  const mirrorRoot = join(AGENT_SKILL_STORE, MIRRORED_SKILL);
-  if (!existsSync(mirrorRoot)) {
-    // Not skipped silently: say why, so a reader of CI output can tell the
-    // difference between "verified" and "not checked".
-    console.log(`[skip] no agent-store mirror at ${mirrorRoot} — run npm run skills:sync`);
+  if (!existsSync(AGENT_SKILL_STORE)) {
+    console.log(`[skip] no agent-store mirror at ${AGENT_SKILL_STORE} — run npm run skills:sync`);
     return;
   }
-  const canonicalRoot = join(REPO_ROOT, '.claude', 'skills', MIRRORED_SKILL);
-  for (const rel of ['SKILL.md', 'references/reviewer-brief.md', 'references/findings-triage.md']) {
-    const mirrored = join(mirrorRoot, rel);
+  for (const rel of MIRRORED_FILES) {
+    const mirrored = join(AGENT_SKILL_STORE, rel);
     assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync`);
-    // Compare the whole mirrored file against what the sync script WOULD write
-    // for the current canonical source. Splitting on the provenance marker and
-    // comparing only the tail was the earlier approach, and it forced the
-    // script to duplicate SKILL.md's frontmatter block so that the tail would
-    // equal the canonical file exactly — a wart in the artifact a reviewing
-    // agent actually reads, to save this test one line. Comparing against the
-    // builder covers the header format as well as the body, and needs no
-    // magic delimiter.
     assert.equal(
       readNormalized(mirrored),
-      buildMirrorContent(readNormalized(join(canonicalRoot, rel)), rel),
+      buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel),
       `${rel} has drifted from its canonical copy — run npm run skills:sync`,
     );
   }
+});
+
+test('every cross-skill link in the mirrored output resolves to a path the mirror also writes', () => {
+  // Computed from buildMirrorContent's return value and the FILES list — NOT
+  // by reading ~/.agents/skills/, which does not exist in CI. A disk-based
+  // check here would skip exactly as the mirror-drift test above does, i.e.
+  // it would never run on the machine that gates the merge, which is the
+  // whole reason F1 survived unnoticed since the mirror was created.
+  const mirroredPaths = new Set(MIRRORED_FILES);
+  const broken = [];
+  for (const rel of MIRRORED_FILES) {
+    const content = buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel);
+    for (const [, relPath] of stripFencedBlocks(content).matchAll(INTRA_REPO_MD_LINK)) {
+      // `rel` is already skills-root-relative, so resolve the link inside that
+      // root and compare exactly — no suffix matching.
+      const target = posix.normalize(posix.join(posix.dirname(rel), relPath));
+      // A link that ESCAPES the skills root is a repo document (CLAUDE.md,
+      // CONTRIBUTING.md, a spec under docs/). The mirror never writes those and
+      // never should: the provenance header buildMirrorContent splices in says
+      // outright that relative links resolve against a Castwright checkout. Not
+      // a defect, so not a finding.
+      if (target.startsWith('../')) continue;
+      if (!mirroredPaths.has(target)) {
+        broken.push(`${rel} -> ${relPath} (mirror does not write this path)`);
+      }
+    }
+  }
+  assert.deepEqual(broken, [], `mirrored cross-skill links with no mirrored target:\n  ${broken.join('\n  ')}`);
 });
 
 test('syncOneFile throws when the CANONICAL SOURCE has a UTF-8 BOM, and writes no mirror', () => {
@@ -581,13 +596,13 @@ test('syncOneFile throws when SKILL.md frontmatter is not the first line, and le
 // conditional on that mirror existing.
 test('buildMirrorContent: frontmatter-bearing input keeps frontmatter as the literal first line', () => {
   const input = '---\nname: pr-review-gate\n---\nBody text.\n';
-  const out = buildMirrorContent(input, 'SKILL.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/SKILL.md');
   assert.ok(out.startsWith('---\n'), `expected output to start with '---\\n', got: ${JSON.stringify(out.slice(0, 20))}`);
 });
 
 test('buildMirrorContent: the header is inserted exactly once, after the frontmatter close', () => {
   const input = '---\nname: pr-review-gate\n---\nBody text.\n';
-  const out = buildMirrorContent(input, 'SKILL.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/SKILL.md');
   const marker = 'MIRRORED COPY — do not edit here.';
   const firstIdx = out.indexOf(marker);
   assert.notEqual(firstIdx, -1, 'header must be present');
@@ -598,13 +613,13 @@ test('buildMirrorContent: the header is inserted exactly once, after the frontma
 
 test('buildMirrorContent: a non-frontmatter input gets the header at the top', () => {
   const input = 'Just a plain reference doc, no frontmatter.\n';
-  const out = buildMirrorContent(input, 'references/reviewer-brief.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/references/reviewer-brief.md');
   assert.ok(out.startsWith('<!-- MIRRORED COPY'), 'header must lead a file with no frontmatter block');
 });
 
 test('buildMirrorContent: the canonical body appears exactly once, not duplicated', () => {
   const input = '---\nname: pr-review-gate\n---\nUnique body marker XYZZY appears here.\n';
-  const out = buildMirrorContent(input, 'SKILL.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/SKILL.md');
   const marker = 'Unique body marker XYZZY appears here.';
   const firstIdx = out.indexOf(marker);
   assert.notEqual(firstIdx, -1, 'canonical body text must be present');
