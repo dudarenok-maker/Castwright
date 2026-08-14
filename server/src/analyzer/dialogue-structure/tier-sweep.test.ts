@@ -47,9 +47,13 @@ function variants(lang: string, addedPair: [string, string]) {
      table twice, which passes even if the tier were deleted outright — the
      exact trap this file's own comments warn about. Filtering `addedPair`
      back out of the shipped `secondaryQuotePairs` restores the pre-#2286
-     baseline the pinned counts (74/253/130, 124/632/277) are measured
-     against, so those values are unchanged by this. Verified by mutation,
-     2026-08-14: drop the `.filter(...)` and all six counts collapse to 0.
+     baseline **for es/ru/en** — the `de` arm is the exception, spelled out
+     below — so the counts those three pin (74/253/130, 124/632/277) are
+     unchanged by this. Verified by mutation, 2026-08-14: drop the
+     `.filter(...)` and those six collapse to 0. (`de`'s two would not, for
+     the reason below: its `ref` is not tier-empty either way, so the
+     mutation moves the comparison rather than flattening it — re-run the
+     mutation expecting six, not eight.)
      (The counts themselves moved from 88/225/114 and 116/618/258 when
      #2315's re-open bound landed on `main` — that is #2315's delta, not this
      widening's; the values pinned below are `main`'s own post-#2315 ones.)
