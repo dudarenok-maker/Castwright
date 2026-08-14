@@ -3195,13 +3195,25 @@ this row is what's left: confirming a **freshly re-analysed** real book
 actually produces a non-zero `demotedNarrator`/`modelNarrator` split, which
 requires GPU time this pass did not spend.
 
-**Still owed:** (1) the full run from the **primary checkout** (or with its
-`server/dist` build), so `hasCacheFile`/`state` reflect every book's real
-analysis history rather than a worktree's copied subset; (2) the dash-stripped
-re-run invariance check (Task 9's paired assertion — run twice, second time
-over scratch-path copies of each cache with every leading dash stripped,
-diff every field of every row); (3) re-analysing one book post-D18 to confirm
-`demotedNarrator`/`modelNarrator` actually populate outside a unit fixture.
+**Item (1) DISCHARGED 2026-08-14** — the full run from the primary checkout at
+`df49a261`, read-only, no copied caches, so every book's `hasCacheFile`/`state`
+reflects its real analysis history. All 23 books rowed; 21 measurable, and the
+two `ok (not analysed)` rows are genuinely un-analysed C2/C3 throwaways rather
+than the worktree artifact that forced the 2026-08-13 caveat. **Twenty of 23
+books are identical in every column to the partial run**; the three that moved
+(`Everblaze` +1 spoken, `Keeper of the Lost Cities` +1 spoken, and
+`Ночной дозор (Tetralogy)` across eight columns, `spoken` 1928→2122 and
+`orphan` 29→32) are the parser work merged in between — **measured not to be
+#2286**, which moved nothing in this corpus on either side of its merge. The
+same run completed the **D13 re-gate**, whose verdict is *drop the `drifted`
+state*: see the run sheet §5 and spec §D13 re-gated → *Re-gate outcome*.
+
+**Still owed:** (2) the dash-stripped re-run invariance check (Task 9's paired
+assertion — run twice, second time over scratch-path copies of each cache with
+every leading dash stripped, diff every field of every row); (3) re-analysing
+one book post-D18 to confirm `demotedNarrator`/`modelNarrator` actually
+populate outside a unit fixture. **Both need GPU/analysis time this pass did
+not spend**, which is why the row stays rather than closing.
 
 *Needs:* a checkout (or worktree with `server/handoff/cache/` populated from
 one) whose cache holds the real 20-book library's analyses, `cd server && npm
