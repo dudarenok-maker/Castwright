@@ -35,6 +35,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -46,6 +47,51 @@ const REPO_ROOT = join(HERE, '..', '..');
 const GATE_SKILL_PATH = join(REPO_ROOT, '.claude', 'skills', 'pr-review-gate', 'SKILL.md');
 const ROUTING_SKILL_PATH = join(REPO_ROOT, '.claude', 'skills', 'model-routing', 'SKILL.md');
 const CLAUDE_MD_PATH = join(REPO_ROOT, 'CLAUDE.md');
+const AGENTS_DIR = join(REPO_ROOT, '.claude', 'agents');
+
+/** Legal `effort:` values per the harness's own schema: five named levels OR
+ *  an integer (`Cs([Nr(["low","medium","high","xhigh","max"]), at().int()])`).
+ *  The int branch is admitted deliberately even though this repo uses no
+ *  integer efforts today — a guard that rejects what the harness accepts is a
+ *  guard that gets deleted the first time someone legitimately needs one. */
+const NAMED_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+function isLegalEffort(value) {
+  return NAMED_EFFORTS.includes(value) || /^\d+$/.test(value);
+}
+
+/** Parses the role table out of model-routing/SKILL.md. Rows look like:
+ *    | `pr-reviewer` | Premium | `opus` | `xhigh` | Dispatch for … |
+ *  Derived, never hand-listed here: a literal roster in this file would be a
+ *  third copy of the same six rows, which is the drift this guard exists to
+ *  catch. */
+function parseRoleTable() {
+  const src = readNormalized(ROUTING_SKILL_PATH);
+  const section = /\n## Named dispatch roles\n([\s\S]*?)(?=\n## )/.exec(src);
+  assert.ok(section, 'model-routing/SKILL.md has no "## Named dispatch roles" section');
+  const rows = [];
+  for (const line of section[1].split('\n')) {
+    const m = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/.exec(line);
+    if (m) rows.push({ name: m[1], tier: m[2], model: m[3], effort: m[4] });
+  }
+  return rows;
+}
+
+/** Reads an agent definition's YAML frontmatter into a flat key→string map.
+ *  readNormalized, not readFileSync: the frontmatter regex needs a literal
+ *  '\n---', which misses on a CRLF checkout (#2291). */
+function readAgentFrontmatter(name) {
+  const path = join(AGENTS_DIR, `${name}.md`);
+  assert.ok(existsSync(path), `missing agent definition ${path}`);
+  const fm = /^---\n([\s\S]*?)\n---/.exec(readNormalized(path));
+  assert.ok(fm, `${name}.md has no --- frontmatter block`);
+  return Object.fromEntries(
+    fm[1]
+      .split('\n')
+      .map((l) => /^([a-z-]+):\s*(.*)$/.exec(l))
+      .filter(Boolean)
+      .map((m) => [m[1], m[2].trim()]),
+  );
+}
 
 test('pr-review-gate/SKILL.md exists and does not disable model invocation', () => {
   assert.ok(existsSync(GATE_SKILL_PATH), `missing ${GATE_SKILL_PATH}`);
@@ -283,6 +329,70 @@ test('model-routing/SKILL.md no longer carries the moved PR-review sections', ()
     /pr-review-gate/,
     'model-routing/SKILL.md must keep a pointer to where the PR sections went',
   );
+});
+
+test('the role table is non-empty and parses', () => {
+  // The green-on-awkward-input case, matching githubAnchor's above. Without
+  // it, every assertion below is vacuously true the moment the table heading
+  // is renamed or the row format drifts: an empty rows[] passes each of them
+  // by iterating nothing. This is the assertion that makes the others able
+  // to fail at all.
+  const rows = parseRoleTable();
+  assert.equal(rows.length, 6, `expected 6 roles in the table, parsed ${rows.length}`);
+});
+
+test('every role-table row has a tracked definition file whose frontmatter matches', () => {
+  const tracked = new Set(
+    execFileSync('git', ['ls-files', '.claude/agents'], { cwd: REPO_ROOT, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .map((p) => basename(p, '.md')),
+  );
+  for (const row of parseRoleTable()) {
+    assert.ok(
+      tracked.has(row.name),
+      `.claude/agents/${row.name}.md is not tracked by git — an untracked ` +
+        'definition is invisible to CI, so the guard would certify a file no ' +
+        'other machine has. Check .gitignore carries !.claude/agents/',
+    );
+    const fm = readAgentFrontmatter(row.name);
+    assert.equal(fm.name, row.name, `${row.name}.md frontmatter name: disagrees with its filename`);
+    assert.equal(fm.model, row.model, `${row.name}.md model: is ${fm.model}, table says ${row.model}`);
+    assert.equal(fm.effort, row.effort, `${row.name}.md effort: is ${fm.effort}, table says ${row.effort}`);
+    assert.ok(
+      isLegalEffort(fm.effort),
+      `${row.name}.md effort: "${fm.effort}" is not a named level or an integer`,
+    );
+  }
+});
+
+test('every definition file has a role-table row — the registry is closed', () => {
+  // The reverse direction, and the one with teeth: without it a definition
+  // can be added with any model/effort it likes and nothing notices, which
+  // makes the "table is the registry" claim in model-routing false.
+  const named = new Set(parseRoleTable().map((r) => r.name));
+  const onDisk = readdirSync(AGENTS_DIR)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => basename(f, '.md'));
+  const orphans = onDisk.filter((n) => !named.has(n));
+  assert.deepEqual(
+    orphans,
+    [],
+    `agent definitions with no row in model-routing's role table: ${orphans.join(', ')}. ` +
+      'Add a row (it becomes a governed role) or move the file out of .claude/agents/.',
+  );
+});
+
+test('scout holds no write tool', () => {
+  const fm = readAgentFrontmatter('scout');
+  assert.ok(fm.tools, 'scout.md declares no tools: key — it is the one role that must');
+  for (const writeTool of ['Edit', 'Write', 'NotebookEdit']) {
+    assert.doesNotMatch(
+      fm.tools,
+      new RegExp(`\\b${writeTool}\\b`),
+      `scout.md lists ${writeTool} — a search-and-report role must not hold it`,
+    );
+  }
 });
 
 test('headingAnchors ignores heading-shaped lines inside fenced code blocks', () => {
