@@ -170,6 +170,12 @@ server/src/__wire-fixtures__/
 # reports, mockups). Local scratch output, never committed.
 artifacts/
 
+# Accepted-result scratch written by the token-saver skill, which saves the
+# current result under `.token-saver/` in whatever project it is run from —
+# including any worktree cut from this repo. Model output written without
+# review; never committed.
+.token-saver/
+
 # Local clone of the separate Castwright.wiki.git repo, used by
 # scripts/sync-wiki.mjs as its push staging area. Recreated fresh on every
 # `npm run wiki:sync` run; never committed.
