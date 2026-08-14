@@ -1,6 +1,20 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 3 (after adversarial review rounds 1–2)_
+_Design spec — 2026-08-14 · rev 4 (after adversarial review rounds 1–3, the full cap)_
+
+> **STATUS: NOT APPROVED. Blocked on decision 0's probe, which is armed and
+> waiting on a session restart.**
+>
+> Three throwaway definitions sit in the **primary checkout's** `.claude/agents/`
+> (git-ignored, so invisible to `git status` and to this branch):
+> `probe-a-invalid-effort.md` (invalid `effort:`), `probe-b-invalid-model.md`
+> (invalid `model:` — the **positive control**, without which "no error" is just
+> silence), `probe-c-valid-restricted.md` (valid, restricted `tools:` — tests
+> whether `tools:` is honoured, visible in the agent-type listing).
+>
+> Next session started in that checkout reads the result: any startup complaint,
+> `/agents`, and the injected agent-type list. Then apply the outcome table in
+> decision 0 **by step name**. Cleanup: `rm .claude/agents/probe-*.md`.
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
@@ -103,23 +117,40 @@ parses the key, in this order — the first positive is enough:
 Outcomes, decided in advance so the result cannot be read favourably after the
 fact:
 
-- **Positive** (any of 1–3) → proceed to decisions 1–9 unchanged.
-- **Negative** (2 actively shows the key ignored) → the roster is abandoned.
-  What survives is decision 6 (the session rule, whose input M3 confirms),
-  decision 8 (the Cline skill mirror), and the incidental findings. The spec is
-  amended to say so; no definition files ship.
+**Outcomes are keyed to steps by NAME, never by number** *(rev 4, round-3
+finding rated `Critical` + `Contradicted`: rev 3 reordered the steps and left the
+outcome table pointing at "2", which the reorder had turned into Enumeration —
+the one step the spec itself says can never show the key ignored. Read literally,
+**Negative became unreachable** and every result shipped definitions. A
+falsifiability gate that cannot return its own failure verdict is the exact trap
+this decision exists to escape. Numbers are removed so the next reorder cannot
+disarm it again.)*
+
+- **Positive** (any step) → proceed to decisions 1–9 unchanged.
+- **Negative** (**Validation** shows the key ignored — i.e. the control rejects
+  and `effort:` does not) → the roster is abandoned. What survives is decision 6
+  (the session rule, whose input M3 confirms), decision 9 (the Cline skill
+  mirror), and F1. The spec is amended to say so; no definition files ship.
 - **Silent** (nothing observable either way) → definitions ship **with the table
   marked `effort:` unverified — declares intent, effect unconfirmed**, and the
   probe doc records it. The one thing that must not happen is the table
   asserting routing that was never shown to occur.
+- **Parsed-but-inert** (**Validation** rejects an invalid value, yet
+  **Differential** shows no difference) *(rev 4, round-3 gap: rev 3's table had
+  no owner for this, and sent a bare "the key parsed" straight to "proceed
+  unchanged" — the false-confidence path)* → treated as **Silent**, not
+  Positive. Parsing is not effect.
 
-**What decision 7's guard proves, in every one of the three outcomes:** that the
-table and the definition files **agree with each other**. Never that a dispatch
-ran at the stated effort — no instrument in this design can show that, because a
-subagent cannot report its own reasoning effort. *(Rev 3, round-2 finding: in the
-"silent" outcome the guard would otherwise enforce agreement between two things
-both marked unverified, and a green suite would read as coverage. The guard's
-own comment must say what it does not prove.)*
+**What decision 7's guard proves, in every outcome:** that the table and the
+definition files **agree with each other**. Never that a dispatch ran at the
+stated effort — a subagent cannot report its own reasoning effort, so *the guard*
+has no access to that fact. *(Rev 3, round-2 finding: in the "silent" outcome the
+guard would otherwise enforce agreement between two things both marked
+unverified, and a green suite would read as coverage. The guard's own comment
+must say what it does not prove. **Rev 4, round-3 finding:** rev 3 wrote "no
+instrument **in this design** can show that", which contradicts the Differential
+step one paragraph above — an instrument in this design built to show exactly
+that. The claim is narrowed to the guard, which is what was meant.)*
 
 Results are recorded in a new `docs/testing/agent-effort-resolution-probe.md`,
 following the format of the Cline probe doc — a verdict block with the same
@@ -171,7 +202,7 @@ Choices rather than transcription:
   and `spec-checker` must land on Opus even when dispatched from a Sonnet
   session, which is the whole point of the Premium row.
 
-### 3. Tool restriction applies to `scout` only — not the reviewers
+### 3. No `tools:` list is a boundary — `scout` omits the write tools for hygiene
 
 *(Reversed in rev 2. Round-1 finding, **contradicted vs `pr-review-gate/SKILL.md:176`**:
 that skill mandates the reviewer post its own comment with `gh pr comment
@@ -195,8 +226,16 @@ a stated prohibition with a check behind it.)*
 - `pr-review-gate` gains one sentence recording *why* the tool list is not the
   mechanism, so this is not re-proposed in six months.
 - **Omitting `tools:` is assumed to mean *all tools*, not *no tools*.** Inferred
-  from the `Agent` tool's description, not observed; the probe's enumeration step
-  reports which it is.
+  from the `Agent` tool's description, not observed.
+- **`tools:` rests on the same unverified frontmatter parsing as `effort:`**
+  *(rev 4, round-3 finding)* — same file, same undocumented schema, same disabled
+  plugin; the official reference documents `allowed-tools` for **commands**, a
+  different key. So decision 0's probe tests `tools:` too: one probe definition
+  carries a restricted list while the controls carry none, and the agent-type
+  listing — which **does** render `(Tools: …)` — shows directly whether the
+  restriction was honoured. If `tools:` is ignored, `scout` silently holds every
+  tool while the table says otherwise, and decision 7's guard case passes green
+  on a file the harness never read.
 
 ### 4. `.gitignore` gains `!.claude/agents/`
 
@@ -344,13 +383,22 @@ exists to end. The spec committed its own target error one section later. The
 claim is withdrawn rather than repaired, because there is no substitute
 measurement to put in its place.)*
 
-What can be said without measuring: two roles move **up** (`pr-reviewer`,
-`spec-checker` → `xhigh`), three move **down** (`implementer`, `fix-agent` →
-`medium`; `scout` → `low`). Which direction dominates depends on relative
-dispatch volume, **which this repo does not currently record.** No claim of
-savings — or of cost — goes into `CLAUDE.md` or the skill. If the decision-0
-differential step runs, its wall-clock numbers land in the probe doc as the only
-figures anyone should cite.
+What can be said without measuring, **and only relative to a baseline of `high`**:
+two roles move **up** (`pr-reviewer`, `spec-checker` → `xhigh`), three move
+**down** (`implementer`, `fix-agent` → `medium`; `scout` → `low`), and one is
+**unchanged** (`task-reviewer` → `high`). Six roles, not five.
+
+*(Rev 4, round-3 findings: rev 3's "two up, three down" omitted `task-reviewer`
+and did not sum to the roster. More importantly it never named its baseline —
+`high` is **`effortLevel` on this box today** (M3), a per-user setting, while
+this spec is repo-wide. On a machine configured `low`, five of six roles move
+**up** and the section's direction inverts. There is no repo-wide declared
+default to measure against, and this spec does not create one.)*
+
+Which direction dominates also depends on relative dispatch volume, **which this
+repo does not currently record.** No claim of savings — or of cost — goes into
+`CLAUDE.md` or the skill. If the decision-0 Differential step runs, its
+wall-clock numbers land in the probe doc as the only figures anyone should cite.
 
 ## Incidental findings
 
@@ -375,12 +423,21 @@ the fix; decision 7's mirrored-link case closes the blind spot.
 the citation must be left alone.**
 
 Rev 2 claimed `pr-review-gate/SKILL.md:144` cites the wrong PR, because #2320
-carries no `PR review — pass N` header. It carries **three review comments** —
-`## Full PR review`, `## Second full review (head 4a58615f, all fixes included)`,
-`## Fresh full review - head 1d36ac31 (all fixes folded)` — in an **earlier
-format that today's header was derived from.** The skill says the format
-*follows* those comments; that is provenance, not a claim they match the current
-template.
+carries no `PR review — pass N` header. It carries review comments in an
+**earlier format that today's header was derived from** — `## Full PR review`,
+`## Second full review (head 4a58615f, all fixes included)`,
+`## Adversarial sub-agent review (different angles) — found & fixed a NEW
+fabrication vector`, and `## Fresh full review - head 1d36ac31 (all fixes
+folded)`. The skill says the format *follows* those comments; that is provenance,
+not a claim they match the current template.
+
+*(Rev 4, round-3 finding: rev 3 wrote that #2320 "carries **three** review
+comments" and listed three — omitting the adversarial-sub-agent one. There are
+**four**, and which three the skill's author meant is unknown and does not
+matter. Three was the number the citation needed, and three is what rev 3
+produced: **the section written to record a constructed claim contained a
+constructed claim.** Corrected to four; the conclusion — leave the citation
+alone — is unchanged.)*
 
 The error was in the instrument: rev 2 grepped for **today's** header regex,
 found none, and read that absence as "no review comments exist". Recorded here
