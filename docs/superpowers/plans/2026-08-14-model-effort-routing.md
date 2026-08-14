@@ -1054,14 +1054,18 @@ test('every cross-skill link in the mirrored output resolves to a path the mirro
   for (const rel of MIRRORED_FILES) {
     const content = buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel);
     for (const [, relPath] of stripFencedBlocks(content).matchAll(INTRA_REPO_MD_LINK)) {
-      // Only links that point at another SKILL, i.e. escape this skill's own
-      // directory. Same-skill relative links (references/*.md) are covered by
-      // the repo-side link test above.
-      if (!relPath.includes('../')) continue;
-      const resolved = resolve(dirname(rel), relPath).replace(/\\/g, '/');
-      const suffix = resolved.split('/').slice(-2).join('/');
-      const qualified = [...mirroredPaths].some((p) => p.endsWith(suffix));
-      if (!qualified) broken.push(`${rel} -> ${relPath} (mirror does not write this path)`);
+      // `rel` is already skills-root-relative, so resolve the link inside that
+      // root and compare exactly — no suffix matching.
+      const target = posix.normalize(posix.join(posix.dirname(rel), relPath));
+      // A link that ESCAPES the skills root is a repo document (CLAUDE.md,
+      // CONTRIBUTING.md, a spec under docs/). The mirror never writes those and
+      // never should: the provenance header buildMirrorContent splices in says
+      // outright that relative links resolve against a Castwright checkout. Not
+      // a defect, so not a finding.
+      if (target.startsWith('../')) continue;
+      if (!mirroredPaths.has(target)) {
+        broken.push(`${rel} -> ${relPath} (mirror does not write this path)`);
+      }
     }
   }
   assert.deepEqual(broken, [], `mirrored cross-skill links with no mirrored target:\n  ${broken.join('\n  ')}`);
@@ -1084,7 +1088,20 @@ node --test scripts/tests/review-gate-mechanism.test.mjs 2>&1 | grep -c "mirror 
 git checkout scripts/sync-agent-skills.mjs
 ```
 
-Expected: **≥1** — this is the assertion failing on exactly the state F1 describes, i.e. proof the case would have caught the real bug. If it prints `0`, the case is not reaching the four `../model-routing/SKILL.md` links; fix the link-resolution logic before committing. The suffix-matching in step 6 is the part most likely to be wrong — **do not skip this step and assume it works.**
+Expected: **exactly 4** — the three `../model-routing/SKILL.md` links in `pr-review-gate/SKILL.md` plus the one in `references/findings-triage.md`, which is precisely the set F1 describes. A `0` means the case is not reaching those links at all; anything other than 4 means the resolution logic is off. **Do not skip this step and assume it works.**
+
+> **The logic above was pre-verified by the controller against the real files
+> before this task was dispatched** *(ruling at Task 2 time)*. The first draft
+> filtered on `relPath.includes('../')`, intending "links that leave this
+> skill's directory" — but that also matches `../../../CLAUDE.md`, and the
+> mirror neither writes nor should write repo-root docs. Measured: that version
+> reported **9 broken links on the correct post-fix state**, i.e. it was red on
+> success. The version now in step 6 measures 0 post-fix and exactly 4 pre-fix.
+> It also covers same-skill links (`references/*.md`), which the old filter
+> skipped — so the guard is strictly stronger, and the old comment claiming
+> those were "covered by the repo-side link test" is gone with it.
+
+Add `posix` to the `node:path` import at the top of the file if it is not already there; `resolve`/`dirname` remain in use elsewhere.
 
 - [ ] **Step 8: Sync FIRST, then run everything, then commit**
 
