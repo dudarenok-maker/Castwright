@@ -40,9 +40,19 @@ export const de: LanguageConventions = {
   // real, measured gain on every OTHER arity (one Swiss quote per paragraph —
   // by far the common case — plus `isSpokenLine`, which unions both tiers
   // and gets the line right even where `findQuoteRuns`' run boundary
-  // doesn't) and the collision is rare and design-gated (16 of 63,941
-  // corpus paragraphs, see below). It is not a substitute for fixing #2352.
-  // All three candidates are measured under the tier:
+  // doesn't) and because the collision causes no regression: where it bites,
+  // the entry is simply BLOCKED and the paragraph parses exactly as it did
+  // before this entry existed (see below) — the entry's 16-paragraph gain,
+  // plus `isSpokenLine`, is a small real positive, and keeping the entry
+  // means #2352's eventual fix needs no table change. It is not a
+  // substitute for fixing #2352.
+  // All three candidates are measured under the tier. Every arm below
+  // compares a secondary-populated table against a secondary-empty one, and
+  // `findQuoteRuns` seeds its output with the primary runs verbatim and only
+  // appends (parser.ts:468-470) — so none of them can report a destroyed,
+  // lost, merged or split turn; that is a structural guarantee, not
+  // something any of these arms could have failed to find. What they
+  // measure is the size/distribution of the gain:
   //   - generated sweep, each declared secondary alone: 6,250 shapes each
   //     (18,750 total), 0 DESTROYED (spurious spans, informational only per
   //     the owner's 2026-08-13 "zero destroyed, not zero spurious" decision:
@@ -51,13 +61,22 @@ export const de: LanguageConventions = {
   //     paragraphs, 23,925 with a speech run, 261 CHANGED — all GAINED, 0
   //     LOST / MERGED / SPLIT. Concentrated, not broad: one book
   //     (`pg/de/77073.txt`) is 217 of the 261; 12 books gain dialogue overall.
-  //     These zeros are the M2 gap tier's structural guarantee
-  //     (parser.ts:468-470 — append-only, cannot delete a primary run), not
-  //     something this corpus arm could have failed to find; what it
-  //     measures is the size/distribution of the gain. Separately, isolating
-  //     the Swiss entry alone: it changes the parse of 16 of the 63,941
-  //     paragraphs (15 with exactly one `«`, 1 with two or more) — the #2352
-  //     collision above is what the "two or more" case is.
+  // Separately, isolating the Swiss entry alone against the same corpus: it
+  // CHANGES the parse — i.e. it works — in 16 of the 63,941 paragraphs (15
+  // with exactly one `«`, 1 with two or more — a gain, not a collision
+  // instance). Removing the colliding primary `['»','«']` pair instead
+  // shows what the entry would do without it: BLOCKED in 4,926 of the
+  // 63,941 (4,903 with two or more `«`) — this, not the 16, is the
+  // collision's real footprint, and is what #2352 (parser.test.ts) pins as
+  // a known gap.
+  // The instruments that actually CAN fail, and so carry the safety
+  // argument here, are the ones NOT comparing against a secondary-empty
+  // table: the per-candidate arms that declare a pair PRIMARY instead
+  // (ASCII `"…"` does destroy a turn there — see above, why it stays out of
+  // `quotePairs`), `tier-sweep.test.ts`'s `flat` control (the same pair
+  // added as PRIMARY), and the attribution family measured with
+  // `cutsATagClause` neutralised (0 of 66 with the guard live vs 32 of 66
+  // lost without it).
   quotePairs: [
     ['„', '“'],
     ['„', '”'],

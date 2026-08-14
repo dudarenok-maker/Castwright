@@ -374,8 +374,9 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
   // opener, so `findQuoteRuns` seeds a primary run there and extends it to
   // the next `«` — turn 2's opener — swallowing the attribution between them
   // and reading BOTH real turns as narration. Measured 2026-08-14 over the
-  // 40-book German corpus: 16 of 63,941 paragraphs change under this
-  // collision (15 with exactly one `«`, 1 with two or more). #2352 is filed
+  // 40-book German corpus: this collision BLOCKS the Swiss secondary entry
+  // in 4,926 of 63,941 paragraphs (4,903 with two or more «) — the entry
+  // works cleanly in only 16 of the 63,941 (see de.ts). #2352 is filed
   // to fix this — it needs a design pass (per-paragraph convention detection
   // or positional disambiguation, either of which touches PRIMARY-tier
   // behaviour) — so this test pins CURRENT (wrong) behaviour, derived from a

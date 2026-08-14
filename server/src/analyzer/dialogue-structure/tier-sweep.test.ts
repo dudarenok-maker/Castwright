@@ -17,16 +17,20 @@ import type { LanguageConventions } from './types.js';
        itself a legitimate nested quotation. No other sweep family covers
        this cross-product.
 
-   Restricted to es/ru/en per the plan ("keep it to three languages... if it
-   exceeds ~2s, drop a language — never thin the cross-product"); ru's
-   quotePairs table (4 pairs) is the largest of the three so it sets the pace.
+   Originally restricted to es/ru/en per the plan ("keep it to three
+   languages... if it exceeds ~2s, drop a language — never thin the
+   cross-product"); ru's quotePairs table (4 pairs) is the largest of the
+   three so it sets the pace. `de` was added as a fourth language in the
+   same commit (see LANGS below and its comment for why it uses curly
+   “…” rather than Swiss «…»).
 
    Every shape is driven through the REAL production parser — no env vars, no
    patched module copies, no reimplementation of findQuoteRuns. `tiered` adds
    the candidate pair as SECONDARY (the rule under test); `flat` is the
    control — same pair added as PRIMARY instead, i.e. "what happens without
-   tiering"; `ref` is the untouched table (fixed reference reading, no
-   widening at all). */
+   tiering"; `ref` is `addedPair` filtered back out of the shipped table —
+   for es/ru/en that's tier-empty (the untouched pre-#2286 table), but NOT
+   for `de` (see `variants()` below). */
 
 const speechOf = (body: string, conv: LanguageConventions): string[] =>
   parseChapterStructure(body, buildNameIndex([], conv))
@@ -48,7 +52,22 @@ function variants(lang: string, addedPair: [string, string]) {
      2026-08-14: drop the `.filter(...)` and all six counts collapse to 0.
      (The counts themselves moved from 88/225/114 and 116/618/258 when
      #2315's re-open bound landed on `main` — that is #2315's delta, not this
-     widening's; the values pinned below are `main`'s own post-#2315 ones.) */
+     widening's; the values pinned below are `main`'s own post-#2315 ones.)
+
+     For es/ru/en, filtering `addedPair` back out leaves `secondaryQuotePairs:
+     []` — tier-empty, i.e. the pre-#2286 baseline described above. For `de`
+     it does NOT: `de` ships THREE secondary pairs (ASCII `"…"`, curly
+     “…”, Swiss «…» — see `de.ts`), and this sweep's `addedPair` for `de`
+     is only curly, so `de`'s `ref` still carries `[['"','"'], ['«','»']]` —
+     curly-removed, not tier-empty. `de`'s pinned counts (190, 230 below)
+     therefore measure curly-vs-(ASCII+Swiss), not curly-vs-nothing like the
+     other three languages' — not the same quantity. That also makes `de`
+     the one arm in this file whose `destroys zero real turns` assertion is
+     NOT append-only-guaranteed the same way the others are: `ref` here
+     already carries two secondary pairs of its own, so this compares two
+     secondary-populated tables against each other rather than a
+     secondary-populated one against an empty one — the only one of the
+     four languages here that could genuinely fail. */
   const shipped = conventionsFor(lang)!;
   const ref: LanguageConventions = {
     ...shipped,
