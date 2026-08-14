@@ -146,7 +146,7 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
@@ -5963,7 +5963,7 @@ export async function runMainAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, stampStateSchema(next));
+            await writeStateJsonAtomic(statePath, next);
           }
         }
       } catch (persistErr) {
@@ -7508,7 +7508,7 @@ export async function runSubsetAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, stampStateSchema(next));
+            await writeStateJsonAtomic(statePath, next);
           }
         }
       } catch (persistErr) {

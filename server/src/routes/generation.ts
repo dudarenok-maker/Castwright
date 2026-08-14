@@ -38,8 +38,8 @@ import {
 } from '../workspace/queue-io.js';
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { readJson } from '../workspace/state-io.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
   bookStateLanguage,
@@ -1450,7 +1450,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                 ),
                 updatedAt: new Date().toISOString(),
               };
-              await writeJsonAtomic(statePath, stampStateSchema(next));
+              await writeStateJsonAtomic(statePath, next);
             }
           } catch (persistErr) {
             console.warn(
@@ -2236,7 +2236,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             ),
             updatedAt: new Date().toISOString(),
           };
-          await writeJsonAtomic(statePath, stampStateSchema(next));
+          await writeStateJsonAtomic(statePath, next);
         }
       } catch (persistErr) {
         console.warn(

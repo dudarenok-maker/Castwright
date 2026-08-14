@@ -15,8 +15,8 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import sharp from 'sharp';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { readJson } from '../workspace/state-io.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -108,7 +108,7 @@ export async function patchStateLocalCover(
     uploadedAt: new Date().toISOString(),
   };
   state.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path, stampStateSchema(state));
+  await writeStateJsonAtomic(path, state);
 }
 
 export function clampFraming(framing: CoverFraming): CoverFraming {
@@ -126,7 +126,7 @@ export async function patchStateFraming(bookDir: string, framing: CoverFraming):
   if (!state.coverImage) return false;
   state.coverImage.framing = clampFraming(framing);
   state.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path, stampStateSchema(state));
+  await writeStateJsonAtomic(path, state);
   return true;
 }
 

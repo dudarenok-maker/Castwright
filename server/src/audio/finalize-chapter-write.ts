@@ -15,7 +15,7 @@ import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { formatDuration } from './format-duration.js';
@@ -395,7 +395,7 @@ export async function finalizeChapterAudioWrite(
       ),
       updatedAt: new Date().toISOString(),
     };
-    await writeJsonAtomic(statePath, stampStateSchema(next));
+    await writeStateJsonAtomic(statePath, next);
   }
 
   return {
