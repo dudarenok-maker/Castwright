@@ -750,7 +750,11 @@ first, alone, is red by construction.
 only that the user-level key exists (M3). Decision 6 is written to read
 project-then-user and *state which file it read*, which is correct under either
 precedence; the implementation confirms the precedence and records it in the
-skill.
+skill. *(Rev 11: the precedence check was downgraded to a nice-to-have during
+implementation and never run — it stayed unverified. `model-routing/SKILL.md`
+states the project-then-user read order and, per the sentence above, is
+written to be correct under either precedence and to report which file it
+read; it records no confirmed precedence.)*
 
 **2. Which intake path a piece of work takes — ANSWERED, rev 10.**
 

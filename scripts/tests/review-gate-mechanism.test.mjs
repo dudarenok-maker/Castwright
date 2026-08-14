@@ -276,19 +276,33 @@ function headingAnchors(file) {
   return anchors;
 }
 
-/** The scan set is DERIVED, not hand-listed: the two root governance docs plus
- *  every markdown file under .claude/skills/**. A hand-list would reproduce the
- *  enumeration trap Task 4 exists to close — the next skill doc added would be
+/** The scan set is DERIVED, not hand-listed: the two root governance docs,
+ *  every markdown file under .claude/skills/**, and every markdown file under
+ *  docs/testing/**. A hand-list would reproduce the enumeration trap Task 4
+ *  exists to close — the next skill doc (or testing doc) added would be
  *  unprotected for exactly the same reason the three extraFiles literals were.
- *  Historical plan docs under docs/ are deliberately OUT of scope: measured
- *  2026-08-13, they carry 15 pre-existing dangling links (relative paths
- *  written as if from the repo root), none of which this work touches. */
+ *  docs/testing/** joined 2026-08-14: this branch added two files there and
+ *  nothing scanned the directory, so a dangling link inside it (one was found
+ *  and fixed — ort-marker-onbox-acceptance.md's plan-of-record link) shipped
+ *  invisibly. Historical plan docs under docs/ (outside docs/testing/) are
+ *  deliberately OUT of scope: measured 2026-08-13, they carry 15 pre-existing
+ *  dangling links (relative paths written as if from the repo root), none of
+ *  which this work touches. */
 function linkScanSet() {
   const skillsRoot = join(REPO_ROOT, '.claude', 'skills');
   const skillDocs = readdirSync(skillsRoot, { recursive: true, withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith('.md'))
     .map((d) => join(d.parentPath ?? d.path, d.name));
-  return [join(REPO_ROOT, 'CLAUDE.md'), join(REPO_ROOT, 'CONTRIBUTING.md'), ...skillDocs];
+  const testingRoot = join(REPO_ROOT, 'docs', 'testing');
+  const testingDocs = readdirSync(testingRoot, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.md'))
+    .map((d) => join(d.parentPath ?? d.path, d.name));
+  return [
+    join(REPO_ROOT, 'CLAUDE.md'),
+    join(REPO_ROOT, 'CONTRIBUTING.md'),
+    ...skillDocs,
+    ...testingDocs,
+  ];
 }
 
 test('githubAnchor matches GitHub slugging, including runs of spaces and non-ASCII', () => {
@@ -305,6 +319,28 @@ test('githubAnchor matches GitHub slugging, including runs of spaces and non-ASC
   // untrimmed (leading hyphen), and a non-ASCII letter is kept, not stripped.
   assert.equal(githubAnchor('✅ What is solid'), '-what-is-solid');
   assert.equal(githubAnchor('Café & bar'), 'café--bar');
+});
+
+test("model-routing/SKILL.md's frontmatter name: matches its directory", () => {
+  // Mirrors "pr-review-gate/SKILL.md's frontmatter name: matches its
+  // directory" above. model-routing is now, like pr-review-gate, a mirrored,
+  // name-resolved skill in the cross-agent store (scripts/sync-agent-skills.mjs) —
+  // a broken `name:` breaks Cline's resolution silently, and the sync only
+  // throws if the file lacks `---` entirely, not if `name:` disagrees with
+  // its directory.
+  const expectedName = basename(dirname(ROUTING_SKILL_PATH));
+  const src = readNormalized(ROUTING_SKILL_PATH);
+  const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(src);
+  assert.ok(frontmatterMatch, 'model-routing/SKILL.md has no --- frontmatter block');
+  const frontmatter = frontmatterMatch[1];
+  const nameRegex = new RegExp(`^name:\\s*${expectedName}\\s*$`, 'm');
+  assert.match(
+    frontmatter,
+    nameRegex,
+    `model-routing/SKILL.md's frontmatter name: is not exactly ` +
+      `"${expectedName}" (its own directory basename) — Skill(skill: ` +
+      `"${expectedName}") would no longer resolve to this file`,
+  );
 });
 
 test('model-routing/SKILL.md no longer carries the moved PR-review sections', () => {
@@ -338,8 +374,19 @@ test('the role table is non-empty and parses', () => {
   // by iterating nothing. This is the assertion that makes the others able
   // to fail at all.
   const rows = parseRoleTable();
+  // Exact count, not `>= 1`: that's what closes the vacuous-pass hole above —
+  // an empty or partially-parsed rows[] would satisfy `>= 1` just as easily
+  // as a correct 6-row parse. Adding a legitimate seventh role means bumping
+  // this number in the same change.
   assert.equal(rows.length, 6, `expected 6 roles in the table, parsed ${rows.length}`);
 });
+
+/** Tier is the role table's link back to the model-tier table above it in
+ *  model-routing/SKILL.md — the routing authority a role is supposed to
+ *  inherit from. Nothing else in this file checked it: a row could read
+ *  `| implementer | Cheap | sonnet | medium |` (Tier and model disagreeing)
+ *  and every other assertion here would still pass. */
+const TIER_MODEL = { Premium: 'opus', Default: 'sonnet', Cheap: 'haiku' };
 
 test('every role-table row has a tracked definition file whose frontmatter matches', () => {
   const tracked = new Set(
@@ -362,6 +409,12 @@ test('every role-table row has a tracked definition file whose frontmatter match
     assert.ok(
       isLegalEffort(fm.effort),
       `${row.name}.md effort: "${fm.effort}" is not a named level or an integer`,
+    );
+    assert.equal(
+      TIER_MODEL[row.tier],
+      row.model,
+      `${row.name} row: Tier "${row.tier}" implies model "${TIER_MODEL[row.tier]}", ` +
+        `but the row's model column says "${row.model}"`,
     );
   }
 });

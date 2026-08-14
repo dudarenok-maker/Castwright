@@ -160,6 +160,14 @@ export const STEPS = [
            from this same STEPS[]). The guard would certify the value it just
            stopped checking. Same #1847 trap as fixtures/** above. */
         '.claude/agents/**',
+        /* docs/testing/** is an input because review-gate-mechanism.test.mjs's
+           linkScanSet() now reads every .md file under this directory as TEXT
+           at RUNTIME, alongside CLAUDE.md/CONTRIBUTING.md/.claude/skills/**
+           above. Without this glob, a docs/testing/**-only diff — exactly the
+           shape that adds or breaks a link the scan exists to catch — prints
+           test:hooks [cached] and leaves the guard stale-green. Same #1847
+           trap as .claude/skills/** above. */
+        'docs/testing/**',
       ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.

@@ -1,9 +1,11 @@
 // scripts/sync-agent-skills.mjs
 //
 // Mirrors .claude/skills/pr-review-gate/ AND .claude/skills/model-routing/
-// into the cross-agent skill store at ~/.agents/skills/ — the ONLY location
-// Cline (and reportedly five other agents sharing that store) resolves
-// skills from. Verified 2026-08-13: see
+// into the cross-agent skill store at ~/.agents/skills/ — the skill store
+// Cline (and reportedly five other agents sharing that store) is known to
+// resolve skills from. Not established to be the only one it resolves from —
+// unverified pending a fuller probe of the loader's search list. Verified
+// 2026-08-13: see
 // docs/testing/agent-skill-resolution-probe.md. Cline does not read this
 // repo's workspace .claude/skills/ at all, so without this mirror the
 // mandated PR review runbook is invisible to it. model-routing joined the
