@@ -123,8 +123,8 @@ this is the second time that has been demonstrated on this corpus.
 blank. [x] both CJK books `spokenTotal > 0` (128 each). [x] `dashOnlySpoken`
 non-zero on both Russian books (17, 1719). [x] `orphanSpoken` non-zero on
 several books, all reported alongside the share and never summed into it —
-concentrated in the *Coalfall Commission* family (0/23/32/2/62/18 across its
-five language editions), matching D9's "reported, not summed" design; the
+concentrated in the *Coalfall Commission* family (0/2/3/18/23/32/62 across its
+seven language editions), matching D9's "reported, not summed" design; the
 share stays a clean 0.0–2.5% on those same books despite the orphan counts.
 [x] `unattributedSpeech` printed (as a real number, including 0) on every
 row. `demotedNarrator: 0` on all 23 — this is the "no book re-analysed

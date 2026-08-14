@@ -11,9 +11,9 @@
 > |---|---|---|
 > | 1 | **Does `SentenceOutput.priorCharacterId` land?** (spec D18) | **Answered 2026-08-13: yes.** Tasks 1 and 6 are in scope; acceptance criterion 5 is in scope |
 > | 4 | **Is `parseChapterStructure`'s speech/tag split the D15 rule?** | **Answered 2026-08-13: yes.** Task 3 keeps its planned shape; Wave 1 measures and reports how far `tagTotal` moves against the case heuristic |
-> | 2 | Does D13's banner scope land? | **Answered 2026-08-13: yes** — Wave 2 only, does not block this plan. Its numbers are re-measured under the current unit in this wave regardless (§D13 re-gated) |
+> | 2 | Does D13's banner scope land? | **Answered 2026-08-13: yes** — Wave 2 only, does not block this plan. Its numbers are re-measured under the current unit in this wave regardless (§D13 re-gated). **SPENT — superseded 2026-08-14 by #2357**: the re-measurement's caveat fired, D13 is dropped, and this answer no longer applies |
 > | 3 | Is Wave 2's surface still right at this size? | **Still open.** Wave 2 only. Does not block this plan |
-> | 5 | **Does `unanswered` become a sixth state?** (spec R-9C4) | **Still open.** Wave 2 only. Does not block this plan — Task 8 prints `unattributedSpeech` either way, and that column is what the decision gets made from |
+> | 5 | **Does `unanswered` become a fifth state?** (spec R-9C4) | **Still open.** Wave 2 only. Does not block this plan — Task 8 prints `unattributedSpeech` either way, and that column is what the decision gets made from. (Was "sixth" — Wave 2 ships four states, not five, now that #2357 dropped D13) |
 >
 > **Revision 8 went through the Premium adversarial gate and did not survive its
 > first draft — five Criticals.** All are folded into both documents; spec
