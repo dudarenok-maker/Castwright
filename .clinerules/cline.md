@@ -14,12 +14,12 @@ contains zero `CLAUDE` byte sequences under a binary-safe grep, against
 positive controls that do find `clinerules` and `AGENTS.md`; and a live
 `cline -p` probe in this workspace reported only `Workspace AGENTS.md` +
 `.clinerules/cline.md` in context. One caveat, so nobody re-derives this and
-thinks the note is wrong: `cli-windows-x64/bin/cline.exe` does carry a
-`CLAUDE.md` literal and a `claudeMd` / `claudeMdExcludes` **managed-policy**
-schema. That is enterprise-policy plumbing, not the workspace rule loader, and
-it changed nothing on this box -- but a managed config is the one thing that
-could make this stale. Re-probe rather than assume if you are on a managed
-install.
+thinks the note is wrong: `cli-windows-x64/bin/cline.exe` does carry
+`CLAUDE.md` literals, in a `claudeMd` / `claudeMdExcludes` settings schema
+belonging to the **bundled Claude Agent SDK** that Cline vendors -- not to its
+own rule loader. A vendored schema is not a loader, so those strings do not
+indicate `CLAUDE.md` support and no setting flips them into it. Re-verify if
+Cline's rule loader itself changes.
 
 This file is a summary, not a substitute. It deliberately restates almost
 nothing from them, carrying only rules that are **Cline-specific** or that
@@ -28,12 +28,17 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 
 ## Cline-specific
 
-- **Skills resolve from `~/.agents/skills/` only.** Cline does not read a
-  workspace `.claude/skills/` (probed 2026-08-13,
-  `docs/testing/agent-skill-resolution-probe.md`). Re-run `npm run skills:sync`
-  after any change under `.claude/skills/pr-review-gate/`. It is a per-machine
-  step: the target is under `$HOME`, so CI cannot run it and a fresh clone has
-  no mirror.
+- **Skills resolve from `~/.agents/skills/`; a workspace `.claude/skills/` is
+  not read.** Both proven by probe (2026-08-13,
+  `docs/testing/agent-skill-resolution-probe.md`), as is `~/.cline/skills`
+  being dead. So re-run `npm run skills:sync` after any change under
+  `.claude/skills/pr-review-gate/` -- a per-machine step, since the target is
+  under `$HOME`, so CI cannot run it and a fresh clone has no mirror. Do not
+  read that as an exhaustive list: the loader composes skill roots from its
+  rule directories (`skillsPath: join(<ruleDir>, "skills")`), so workspace
+  roots may also work. They are untested, and presence in the code is not
+  proof -- `~/.cline/skills` sits in that same list and is dead. Treat anything
+  beyond the two probed answers as unverified (#2368).
 - **Model tiers are not selectable, so a Cline review pass does NOT discharge
   the merge gate.** The probe above recorded `CLINE_TIER_SELECTABLE: no`,
   observing a subagent backed by `deepseek-v4-flash`; subagents do start cold
@@ -70,10 +75,13 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
   fails on `main`) -> surface it to the user and do NOT fold the fix in;
   suspected flake -> re-run that test alone once and name it. CLAUDE.md
   "Working practice" states the rule flatly: do not use `--no-verify` to
-  bypass. The single documented exception is a `git commit --no-verify` in a
-  genuine emergency, and that commit still needs fixing before review
-  (CONTRIBUTING.md "Enforcement"). **"I already ran the tests" is not a
-  reason to skip pre-push**: that hook also runs `guard-protected-push` and
+  bypass. Two narrow exceptions are documented, neither of them "the hook is
+  red": a `git commit --no-verify` in a genuine emergency, where the commit
+  still needs fixing before review (CONTRIBUTING.md "Enforcement"), and a
+  `git push --no-verify` when the force-push or branch deletion
+  `guard-protected-push` is refusing is the thing you actually intend
+  (CLAUDE.md "Commit gate", `.husky/pre-push`). **"I already ran the tests" is
+  not a third**: that hook also runs `guard-protected-push` and
   `guard-commit-subjects`, and `verify:fast:branch` runs neither, so bypassing
   drops the backstop that catches a malformed subject when `commit-msg` did
   not fire -- exactly the fresh-worktree case below, and the leak that shipped
