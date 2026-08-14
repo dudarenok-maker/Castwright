@@ -5908,14 +5908,10 @@ export async function runMainAnalyzerJob(
            resolver) must not be swallowed into a false success. Park and
            rethrow after this try/catch, mirroring the lock-timeout below.
            The block-top resolve already threw PAST this catch for the
-           primary stale-dir case, so this only fires mid-run. */
+           primary stale-dir case. The durable STALE_BOOK_DIR fail-loud log
+           is emitted ONCE by the run's top-level catch (V7·1), which both
+           paths reach, so nothing is logged here — just park. */
         if (persistErr instanceof BookDirUnresolvedError) {
-          /* V7·1 — durable fail-loud for a detached (zero-subscriber) run:
-             always-on server error naming manuscriptId + STALE_BOOK_DIR. The
-             in-memory marker is non-observable once endJob deregisters the job. */
-          console.error(
-            `[analysis] ${job.manuscriptId} STALE_BOOK_DIR: refusing to persist into a stale book folder (${(persistErr as Error).message})`,
-          );
           staleBookDirError = persistErr;
         } else {
           console.error('[analysis] failed to persist .audiobook/* for', writeDir, persistErr);
@@ -5975,10 +5971,14 @@ export async function runMainAnalyzerJob(
       /* #2196 — an out-of-process-moved / gone book makes this run's writes
          unresolvable and defuses the stale-folder resurrection (C1). End the
          job terminal `halted`; persistTerminalSnapshot (Task 7) runs in
-         mode:'drop', so no dead-dir halted snapshot is written. V7·1 — the
-         durable detached-run signal (server console.error naming
-         STALE_BOOK_DIR) already fired at the persist site above; this
-         broadcasts the halt over SSE to any attached subscriber. */
+         mode:'drop', so no dead-dir halted snapshot is written. V7·1 — this
+         always-on server error naming manuscriptId + STALE_BOOK_DIR is the
+         durable detached-run fail-loud (the in-memory marker is
+         non-observable once endJob deregisters the job); the endJob broadcast
+         below then surfaces the halt to any attached subscriber. */
+      console.error(
+        `[analysis] ${manuscriptId} STALE_BOOK_DIR: ${(e as Error).message}`,
+      );
       endJob(job, {
         kind: 'error',
         code: 'STALE_BOOK_DIR',
@@ -7445,11 +7445,9 @@ export async function runSubsetAnalyzerJob(
           }
         }
       } catch (persistErr) {
-        /* #2196 — mirror the main job's mid-block stale-dir detection. */
+        /* #2196 — mirror the main job's mid-block stale-dir detection: park
+           only — the durable STALE_BOOK_DIR log lives in the run catch (V7·1). */
         if (persistErr instanceof BookDirUnresolvedError) {
-          console.error(
-            `[analysis-subset] ${job.manuscriptId} STALE_BOOK_DIR: refusing to persist into a stale book folder (${(persistErr as Error).message})`,
-          );
           staleBookDirError = persistErr;
         } else {
           console.error(
@@ -7497,7 +7495,12 @@ export async function runSubsetAnalyzerJob(
     if (e instanceof BookDirUnresolvedError) {
       /* #2196 — mirror the main job: an unresolvable book dir ends this
          subset run terminal `halted`; persistTerminalSnapshot (Task 7) in
-         mode:'drop' writes no dead-dir snapshot. */
+         mode:'drop' writes no dead-dir snapshot. V7·1 — always-on server
+         error naming manuscriptId + STALE_BOOK_DIR (the durable detached-run
+         fail-loud). */
+      console.error(
+        `[analysis-subset] ${manuscriptId} STALE_BOOK_DIR: ${(e as Error).message}`,
+      );
       endJob(job, {
         kind: 'error',
         code: 'STALE_BOOK_DIR',
