@@ -1116,19 +1116,46 @@ test('every cross-skill link in the mirrored output resolves to a path the mirro
 
 The whole point is that it fails on the pre-fix `FILES`. Demonstrate it:
 
-Now that the list is a single exported constant, the mutation is one line in
-the **script**, and the test file is untouched — so restoring it cannot revert
-your work:
+**Save and restore by hand — do NOT use `git checkout` here.** *(Corrected
+during execution. This step used to say "the mutation is one line in the script,
+and the test file is untouched — so restoring it cannot revert your work." That
+is **wrong**: steps 1–3 edit that same script, and at this point none of it is
+committed, so `git checkout scripts/sync-agent-skills.mjs` throws away all of it.
+The executing implementer hit exactly that and had to redo steps 1–3. The
+mutation was moved off the test file to protect the test file, and I then forgot
+that the script is where the rest of the work lives.)*
 
-```bash
-cd C:/Claude/Projects/wt-model-effort-routing
-# Temporarily drop model-routing back out of the mirrored set (pre-fix state)
-sed -i "s|^  'model-routing/SKILL.md',||" scripts/sync-agent-skills.mjs
-node --test scripts/tests/review-gate-mechanism.test.mjs 2>&1 | grep -c "mirror does not write this path"
-git checkout scripts/sync-agent-skills.mjs
+```powershell
+Set-Location C:\Claude\Projects\wt-model-effort-routing
+$f = 'scripts/sync-agent-skills.mjs'
+$saved = Get-Content $f -Raw -Encoding utf8            # save YOUR work, not git's
+(Get-Content $f -Encoding utf8) -notmatch "^\s*'model-routing/SKILL\.md',\s*$" |
+  Set-Content $f -Encoding utf8                        # pre-fix state
+node --test scripts/tests/review-gate-mechanism.test.mjs 2>&1 |
+  Select-String -Pattern 'mirror does not write this path' |
+  ForEach-Object { $_.Line }                           # READ these, do not count them
+Set-Content -Path $f -Value $saved -NoNewline -Encoding utf8   # restore YOUR version
+git diff --stat $f                                     # must show your steps 1-3 still present
 ```
 
-Expected: **exactly 4** — the three `../model-routing/SKILL.md` links in `pr-review-gate/SKILL.md` plus the one in `references/findings-triage.md`, which is precisely the set F1 describes. A `0` means the case is not reaching those links at all; anything other than 4 means the resolution logic is off. **Do not skip this step and assume it works.**
+**Expected: 4 distinct broken links** — the three `../model-routing/SKILL.md`
+links in `pr-review-gate/SKILL.md` plus the one in `references/findings-triage.md`,
+which is precisely the set F1 describes.
+
+**Do not count with `grep -c`.** *(Also corrected during execution: the original
+said `grep -c` and expected 4, and it returned **9**. `grep -c` counts OUTPUT
+LINES containing the phrase, and node's test reporter prints the same finding
+several times — assertion message, diff block, and the one-line array. Nine
+lines, four findings. The implementer diagnosed it correctly and verified 4 via
+the captured array; the controller confirmed 4 independently with a standalone
+reproduction. **The instrument was miscalibrated, not the guard** — which is the
+same class of defect this plan's own guards exist to catch, committed in the
+plan's own verification step.)*
+
+Read the printed lines and count the **distinct** `rel -> relPath` pairs. Four,
+and all four naming `model-routing/SKILL.md`, is the pass. A `0` means the case
+never reaches those links; anything else means the resolution logic is off — fix
+the guard, not the mutation.
 
 > **The logic above was pre-verified by the controller against the real files
 > before this task was dispatched** *(ruling at Task 2 time)*. The first draft
