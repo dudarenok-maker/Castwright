@@ -512,6 +512,55 @@ test('planBookLanguage: repeated "Chapter One." headings (no digits at all) surr
   assert.doesNotMatch(plan.reason, /carry a digit/);
 });
 
+// #2341 — the structural gate's own diagnostic. A "第N章" numbered Chinese TOC
+// clears BOTH token-ratio junk gates (its digit share sits at ≈0.17, below the
+// 0.2 ceiling, because 第/章 are ordinary Han tokens, and its titles are all
+// distinct so richness clears the floor), but flips the chapter-marker
+// majority. The reason must name the structural gate — never fall through to
+// the generic confidence-floor message and never be misattributed to the
+// digit gate.
+function toHanNumeral(n: number): string {
+  const nums = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  if (n < 10) return nums[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return nums[tens] + '十' + (ones === 0 ? '' : nums[ones]);
+}
+const CHAPTER_TITLES = [
+  '卷首语', '引子', '初遇', '离别', '归途', '夜话', '旧梦', '新生', '远行', '告白',
+  '暗涌', '浮光', '孤舟', '长夜', '清晨', '余音', '迷雾', '归鸿', '惊蛰', '立秋',
+  '寒露', '霜降', '小雪', '大雪', '冬至', '小寒', '大寒', '立春', '雨水', '惊雷',
+  '春分', '清明', '谷雨', '立夏', '小满', '芒种', '夏至', '小暑', '大暑', '处暑',
+  '白露', '秋分', '寒露二', '霜降二', '立冬', '小雪二', '大雪二', '冬至二', '小寒二', '大寒二',
+  '尾声', '后记', '附录', '番外', '终章', '别篇', '外传', '余话', '跋', '附言',
+];
+  // Pair adjacent titles so each entry is ~4 chars (the standard Chinese
+  // chapter-title length): short 2-char titles push this fixture's digit share
+  // above the 0.2 ceiling and trip the DIGIT gate FIRST — this test exists to
+  // prove the structural gate fires instead, so the fixture must mirror the
+  // detect-language finding-C2 shape that the ratio gates both clear.
+  const NUMBERED_CHAPTER_MARKER_TOC = CHAPTER_TITLES.map(
+    (t, i) => `第${toHanNumeral(i + 1)}章${t + CHAPTER_TITLES[(i + 7) % CHAPTER_TITLES.length]}。`,
+  ).join('');
+
+test('planBookLanguage: a "第N章" numbered Chinese TOC surrenders via the structural chapter-marker gate, named in the reason (#2341)', () => {
+  const plan = planBookLanguage({
+    bookId: 'book-cjk-chapter-toc',
+    hasLanguageKey: false,
+    cacheChapters: [makeCacheChapter(1, 'Chapter One', NUMBERED_CHAPTER_MARKER_TOC)],
+    manuscriptChapters: null,
+  });
+  assert.equal(plan.action, 'skip-fallback');
+  assert.match(plan.reason, /chapter marker/);
+  assert.match(plan.reason, /numbered table of contents, not/);
+  assert.doesNotMatch(plan.reason, /carry a digit/, 'the digit gate is NOT the reason');
+  assert.doesNotMatch(
+    plan.reason,
+    /detection surrendered \(confidence-floor guess/,
+    'the structural #2341 gate must be named, not the generic fallback',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // #2263 — the required fixture classes from the task's Verification section.
 // ---------------------------------------------------------------------------

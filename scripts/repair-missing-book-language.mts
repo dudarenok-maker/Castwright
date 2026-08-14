@@ -59,8 +59,9 @@
  * `server/src/tts/prose-units.ts` for the shared constants/helpers it and
  * this script both import — since #2256, two more floors live there
  * alongside it). Any of: no readable text, a surrendered (fallback)
- * detection, a too-thin sample, or (since #2256) a too-repetitive or
- * too-numbered one is a skip, reported with a reason naming which.
+ * detection, a too-thin sample, or (since #2256, extended by #2341) a
+ * too-repetitive, too-numbered, or numbered-TOC ("第N章") one is a skip,
+ * reported with a reason naming which.
  * Skipping is fully recoverable; writing a wrong language is what this
  * script exists to prevent.
  *
@@ -134,6 +135,8 @@ import {
   LEXICAL_RICHNESS_FLOOR,
   digitTokenShare,
   DIGIT_TOKEN_SHARE_CEILING,
+  chapterMarkerUnitShare,
+  CHAPTER_MARKER_UNIT_MAJORITY,
   joinSamplesForGates,
 } from '../server/src/tts/prose-units.js';
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
@@ -213,7 +216,14 @@ export type SurrenderDiagnostic =
   | { kind: 'no-majority'; split: string }
   | { kind: 'too-thin'; language: string; split: string; units: number; floor: number }
   | { kind: 'too-repetitive'; language: string; split: string; richness: number; floor: number }
-  | { kind: 'too-numbered'; language: string; split: string; digitShare: number; ceiling: number };
+  | { kind: 'too-numbered'; language: string; split: string; digitShare: number; ceiling: number }
+  | {
+      kind: 'numbered-toc';
+      language: string;
+      split: string;
+      markerShare: number;
+      majority: number;
+    };
 
 /* Diagnostic-only: replays the SAME body-chapter selection and MASS-weighted
    vote detectManuscriptLanguageFromChapters applies internally — reusing its
@@ -239,7 +249,9 @@ export type SurrenderDiagnostic =
    either of the two junk-gate floors voteLanguage applies next (see
    detect-language.ts's own comment): lexical richness (a small repeated
    vocabulary — 'too-repetitive') or digit-token share (a numbered list —
-   'too-numbered'). Checked in the SAME order voteLanguage applies them, on
+   'too-numbered'). #2341 adds the third, structural floor voteLanguage also
+   applies next — chapterMarkerUnitShare (a "第N章" numbered TOC — 'numbered-toc').
+   Checked in the SAME order voteLanguage applies them, on
    the SAME (unwindowed) sample — round-3's independent review (finding C3)
    found this guarantee broken WHILE THE BRANCH WAS IN REVIEW, never in a
    release: an unmerged round-2 revision had voteLanguage computing its two
@@ -307,6 +319,17 @@ function describeSurrenderReason(
   if (digitShare > DIGIT_TOKEN_SHARE_CEILING) {
     return { kind: 'too-numbered', language: winner, split, digitShare, ceiling: DIGIT_TOKEN_SHARE_CEILING };
   }
+  // #2341 — the third gate, in the SAME slot/order voteLanguage applies it.
+  const markerShare = chapterMarkerUnitShare(winningSample);
+  if (markerShare > CHAPTER_MARKER_UNIT_MAJORITY) {
+    return {
+      kind: 'numbered-toc',
+      language: winner,
+      split,
+      markerShare,
+      majority: CHAPTER_MARKER_UNIT_MAJORITY,
+    };
+  }
   return null;
 }
 
@@ -368,6 +391,11 @@ export function planBookLanguage(input: {
                 `${(diag.digitShare * 100).toFixed(0)}% of its tokens carry a digit — over the ` +
                 `${(diag.ceiling * 100).toFixed(0)}% ceiling, the shape of a table of contents or an index, not ` +
                 'prose; a guess is never written'
+            : diag?.kind === 'numbered-toc'
+              ? `${diag.language} won a clear majority across ${sample.source} body chapters (${diag.split}), but ` +
+                `${(diag.markerShare * 100).toFixed(0)}% of its prose units open with a "第N章" chapter marker — ` +
+                `over the ${(diag.majority * 100).toFixed(0)}% majority, the shape of a numbered table of ` +
+                'contents, not prose; a guess is never written'
               : `detection surrendered (confidence-floor guess '${detection.language}') from ${sample.source} ` +
                 'chapters — a guess is never written';
     return {
