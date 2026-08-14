@@ -1,6 +1,6 @@
 # Reasoning-effort routing & named dispatch roles
 
-_Design spec — 2026-08-14 · rev 8 · **FINAL — approved, ready for `writing-plans`**_
+_Design spec — 2026-08-14 · rev 9 · **FINAL — approved, ready for `writing-plans`**_
 
 Extends [2026-07-01-model-routing-and-review-gates-design.md](2026-07-01-model-routing-and-review-gates-design.md),
 which established model-tier routing. That spec routes *which model*; this one
@@ -14,7 +14,7 @@ Everything below is evidence and provenance for these. Nothing is unverified.
 | # | Decision |
 |---|---|
 | **0** | The roster was gated behind a falsifiability probe. **Resolved POSITIVE** — `effort:` is a schema-declared agent key (M2). Settled by reading the harness bundle, *not* by the probe, which could not discriminate. |
-| **0b** | **`medium` is the declared repo-wide effort norm**, for roles *and* sessions. `high`+ are deliberate, work-shaped raises. |
+| **0b** | **`medium` is the declared repo-wide effort norm**, for roles, sessions *and* CLI worker dispatch. `high`+ are deliberate, work-shaped raises. |
 | **1** | The existing model-tier table is **not** modified. A second, separate table holds the named roles. |
 | **2** | **Six named roles**, one `.claude/agents/*.md` each, pinning `model:` + `effort:`. Dispatch by `subagent_type`, not `model`. |
 | **3** | **No `tools:` list is a security boundary.** `scout` omits write tools for hygiene; the reviewers' prohibition stays with the tree check. |
@@ -24,7 +24,7 @@ Everything below is evidence and provenance for these. Nothing is unverified.
 | **7** | Guard cases **extend the existing test file**; no new one. |
 | **8** | `.claude/agents/**` joins `test:hooks`'s scope globs — **without this, none of decision 7 ever runs.** |
 | **9** | Cline mirror: **skills now** (fixes F1), definitions only after their own probe. |
-| **10** | Escalation overrides **model only**; effort stays pinned. Opus is terminal. |
+| **10** | Escalation overrides **model only**; effort stays pinned. Opus is terminal. **The asymmetry is a property of the `Agent` surface, not of escalation** (rev 9). |
 
 Plus one incidental finding fixed in the same round (**F1**, the mirror's dead
 routing links) and one
@@ -33,10 +33,10 @@ routing links) and one
 
 ### Revision history
 
-Eight revisions, three adversarial review rounds (the full cap), one empirical
-gate. Every round found a defect in the *previous* round's new prose, so
-corrections are marked inline as `(rev N, round-M finding: …)` rather than
-silently absorbed:
+Nine revisions, three adversarial review rounds (the full cap), one empirical
+gate, and one **convergence pass** against a parallel session. Every round found
+a defect in the *previous* round's new prose, so corrections are marked inline as
+`(rev N, round-M finding: …)` rather than silently absorbed:
 
 - **Rev 2** — round 1 found the premise unobservable and a guard that would never
   run on the diffs it guards. Roster gated behind decision 0.
@@ -50,6 +50,16 @@ silently absorbed:
   net-down to net-**up**; bands re-anchored and the top band narrowed to
   *adversarial* work.
 - **Rev 8** — final consistency pass.
+- **Rev 9 — convergence pass.** A parallel session building CLI-worker
+  orchestration reported that the spec's load-bearing sentence — *"effort is not
+  settable per dispatch, only per role"* — is true of the `Agent` tool and false
+  as a general claim, since `claude`/`copilot`/`cline` all accept effort per
+  invocation. Reproduced and confirmed (M10). Checking it turned up a **second,
+  stronger counterexample the report missed**: `Workflow`'s `agent()` takes an
+  `effort` option per call, *inside* the harness the spec studied (M11). The
+  sentence is scoped, and the two decisions that reasoned from the unscoped
+  version — 10 and the per-PR-scaling rejection — are repaired. Five smaller
+  findings folded; one deferred with the decision named.
 
 ## Problem
 
@@ -84,9 +94,10 @@ sync-script extension, one scope-glob addition, and guard-test cases.
 
 Every decision below rests on one of these. Each was checked on this box on
 2026-08-14 — the predecessor spec's round-1 correction (a routing rule that was
-"silently void" for forks) is the failure mode being avoided. **All nine are
+"silently void" for forks) is the failure mode being avoided. **All eleven are
 Confirmed.** M2 was the spec's central risk through revs 1–4 and was the reason
-decision 0 existed; it is now settled.
+decision 0 existed; it is now settled. M10 and M11 are rev 9's, and exist because
+M1 was generalised one step too far — see the paragraph below the table.
 
 | # | Fact | How it was checked | Status |
 |---|---|---|---|
@@ -99,10 +110,28 @@ decision 0 existed; it is now settled.
 | M7 | Real PR comments carry `effort <level>` in their header: 7 across PRs #2339, #2337, #2350 — all `effort high`. | `gh pr view <n> --json comments`. | Confirmed — **but this measures the prose *depth ladder*, not the model setting.** It is admissible only for decision 5's migration count. Rev 2 wrongly cited it as evidence about session effort; see [Cost](#cost). |
 | M8 | `tools:` is honoured, and the **resolved** list is surfaced in the agent-type listing. | Probe-c (`tools: Read, Glob, Grep`) enumerated as exactly `(Tools: Read, Glob, Grep)` while the two controls, which set no `tools:`, did not. Corroborated by the same schema block as M2, which carries `tools` plus a sibling "Tools removed from the default set. Ignored if `tools` is set." | **Confirmed** |
 | M9 | Project-level `.claude/agents/*.md` definitions are loaded and become dispatchable agent types. | All three probe definitions appeared in the agent-type list after restart. | **Confirmed** |
+| M10 | All three worker CLIs accept reasoning effort **per invocation**: `claude --effort {low,medium,high,xhigh,max}` — described as *"Effort level for the current session"*, and identical to M2's named enum; `copilot --effort`/`--reasoning-effort {none,minimal,low,medium,high,xhigh,max}`; `cline --thinking {none,low,medium,high,xhigh}`, whose help states bare `--thinking` uses `medium` and **omitting it "leaves provider default"**. | `--help` on each, re-run on this box 2026-08-14 rather than taken from the report that raised it. | **Confirmed** |
+| M11 | `Workflow`'s `agent()` accepts **`opts.effort`** — `'low' \| 'medium' \| 'high' \| 'xhigh' \| 'max'` — overriding reasoning effort **for that one call**, and "omit to inherit the session effort". This is a true per-dispatch effort control inside the same harness as M1. | The `Workflow` tool's own schema — the same evidence class M1 is read from. | **Confirmed** |
 
-M1 and M2 together are the load-bearing pair: **effort is not settable per
-dispatch, only per role.** Every decision follows from that. M2 was the spec's
-central risk through revs 1–4 and is now Confirmed.
+M1 and M2 together are the load-bearing pair. Stated precisely — *(rev 9,
+convergence finding: revs 1–8 said "**effort is not settable per dispatch, only
+per role**", full stop. That is true of the `Agent` tool and false of this repo's
+other dispatch surfaces, and two decisions reasoned from the unscoped version.)*
+
+> **Effort is settable per session, per role, and — on two surfaces — per
+> dispatch. It is not settable on an `Agent`-tool dispatch, which is the surface
+> `CLAUDE.md`'s execution model actually uses.** Every decision below follows
+> from that, and is scoped to `Agent`-surface dispatch unless it says otherwise.
+
+The two exceptions are M10 (the worker CLIs, where each invocation *is* a fresh
+session — `claude --help` calls `--effort` "Effort level for the current
+session", so this is the session axis reached through a different door) and M11
+(`Workflow`'s `agent()`, which is genuinely per-call inside one session). M11 is
+the sharper counterexample of the two, and it sits in the same harness M1 was
+read from; it was missed for eight revisions because the spec only ever asked
+what the `Agent` tool could do. *(This is `f_probed_defaults_not_what_the_app_sends`
+one level out: the question "can effort be set per dispatch?" was answered by
+checking one dispatch mechanism, not by enumerating them.)*
 
 ## Decisions
 
@@ -227,8 +256,9 @@ effort as "up" or "down" without naming a baseline; the implicit one was
 `effortLevel` **on the repo owner's box**, a per-user setting, so the same spec
 described opposite changes on two machines.)*
 
-**`medium` is this repo's declared default reasoning effort — for roles *and* for
-sessions.** It is the anchor every `effort:` is stated against, and it is a
+**`medium` is this repo's declared default reasoning effort — for roles, for
+sessions, and for CLI worker dispatch.** It is the anchor every `effort:` is
+stated against, and it is a
 *declaration*, not a mechanism: nothing reads it at runtime. It exists so
 "raised" and "lowered" mean the same thing to every reader, on every machine.
 `high` and above are deliberate, work-shaped raises rather than a resting state
@@ -242,6 +272,19 @@ Three consequences:
    this spec exists to end. At-norm is a stated value, not an absent one.
 2. **The session rule's bands re-anchor on it** — see decision 6.
 3. **The net direction of this change is upward.** See [Cost](#cost).
+4. **A CLI worker dispatch passes the flag explicitly** *(rev 9, convergence
+   finding)* — `claude --effort medium`, `copilot --effort medium`,
+   `cline --thinking medium`. This is consequence 1 on a second surface, and it
+   is the surface where the cost of omission is documented rather than inferred:
+   `cline --help` says omitting `--thinking` "leaves provider default", i.e. an
+   effort this repo neither declares nor observes. **The rule is
+   pass-it-explicitly, including at the norm** — the same reason roles at
+   `medium` still write the key.
+
+   *Already true downstream:* the parallel session that raised M10 reports its
+   orchestrator config pins `medium` across all three engine templates. That is
+   an application of this decision, not evidence for it, and it lives outside
+   this repo — nothing here reads or checks it.
 
 ### 1. The tier table is not modified
 
@@ -256,6 +299,12 @@ each row naming the tier it sits on so the two cannot drift apart conceptually.
 Under `.claude/agents/`. Dispatch changes from `Agent({model: 'opus'})` to
 `Agent({subagent_type: 'pr-reviewer'})`. The roster is taken from the dispatch
 surface `CLAUDE.md`'s execution model already describes:
+
+**This table governs one surface: Claude Code `subagent_type` dispatch.**
+*(Rev 9, convergence finding: it reads as repo-wide policy.)* Nothing else reads
+`.claude/agents/` — not the worker CLIs of M10, not Cline (M5, and decision 9
+defers even the skills-style mirror until probed). Editing `implementer` here
+changes what `Agent({subagent_type: 'implementer'})` does and nothing else.
 
 | Role | Tier | `model:` | `effort:` | `tools:` |
 |---|---|---|---|---|
@@ -394,6 +443,16 @@ repo can run. 0b declares the norm; decision 6 reads the value and flags a
 mismatch; **neither can set it.** A session is compliant only because someone
 chose to be.
 
+**And it observes one harness of three** *(rev 9, convergence finding)*. Both
+files this rule reads are Claude Code's. A Cline or Copilot session has neither,
+so the drift check is silently inapplicable to two of the three lanes this repo
+dispatches to — it does not misfire there, it simply never fires. On those lanes
+0b's consequence 4 is the whole mechanism: pass `--effort`/`--thinking`
+explicitly at dispatch, because there is no file to read afterwards and no band
+to compare against. **A session-effort rule that cannot see a session is not a
+weaker rule; it is a different one**, and this is the second half of the same
+honest limit rather than a separate caveat.
+
 **"Drifted" means** the current unit of work sits in a different *band* than the
 band containing the value read — not a different value, which would fire on
 every routine shift. Raised **once per unit of work**, not per step. Two limits
@@ -423,6 +482,19 @@ role table in `model-routing/SKILL.md`:
   one.)*;
 - `scout` lists no write tool (`Edit`, `Write`, `NotebookEdit`);
 - **both directions** — a definition file with no table row fails too.
+
+**The reverse direction makes the role table a closed registry, and that is
+intended** *(rev 9, convergence finding: revs 2–8 stated the bidirectionality as
+a guard detail, so its real consequence — that **every** `.claude/agents/*.md`
+in this repo, whoever adds it and for whatever system, must appear in
+`model-routing`'s table or turn the build red — emerged as a surprise rather than
+as a decision).* Stated as one: **`.claude/agents/` holds the roster and nothing
+else.** A future definition has exactly two legal paths — add its row to the
+table, which is one line and makes it a governed role; or keep it out of
+`.claude/agents/`, since decision 4 tracks only that directory and an untracked
+scratch definition is unaffected. There is deliberately no third path, no
+`# unmanaged` escape comment, and no allowlist: an ungoverned definition file is
+the exact thing 0b exists to prevent, and a registry with an opt-out is not one.
 
 Plus, for the incidental finding: **every relative cross-skill link in the
 mirrored output resolves to a path the mirror also writes.** Computed from
@@ -475,13 +547,32 @@ Escalation from a named role re-dispatches the **same** `subagent_type` with an
 explicit `model` override (`Agent({subagent_type: 'implementer', model: 'opus'})`),
 which the `Agent` tool's schema states takes precedence over the definition's
 `model:`. **Effort stays at the role's pinned value** — M1 leaves no way to raise
-it per dispatch. `model-routing` states this asymmetry plainly rather than
+it on an `Agent` dispatch. `model-routing` states this asymmetry plainly rather than
 leaving a reader to discover it: escalation buys capability, not depth. Should
 effort later prove the more load-bearing axis, a follow-up may add `-escalated`
 variants; that is not built speculatively now. *(Rev 8: revs 2–7 made this
 conditional on "if the decision-0 probe shows…". The probe ran and measured
 nothing about relative axis weight — it was never designed to — so the
 conditional pointed at evidence that will never arrive.)*
+
+**The asymmetry belongs to the surface, not to escalation** *(rev 9, convergence
+finding: as written it read as a property of escalation itself, which is what
+made it look like a law rather than a consequence).* On the `Agent` surface it is
+a hard limit — M1, no parameter exists. On the two surfaces of M10/M11 both axes
+are available per dispatch, and a retry there **can** raise effort: a CLI worker
+by re-invoking with a higher `--effort`, a `Workflow` stage by passing a higher
+`opts.effort`. So the rule is *"escalation buys capability, not depth, **because
+the `Agent` tool has no depth control**"* — and `model-routing` must say the
+because-clause, or a reader who has just used `Workflow` will read the rule as
+false and discount the rest.
+
+**This does not change what the roster does.** `CLAUDE.md`'s execution model
+dispatches through the `Agent` tool, and `Workflow` is gated behind an explicit
+user request — so the pinned-effort behaviour is what this repo actually gets on
+its default path. What changes is the *reason* stated: it holds because of the
+dispatch path this repo chose, not because the harness offers nothing. That
+distinction is the difference between a rule that survives someone finding M11
+and one that does not.
 
 **Opus is terminal.** *(Rev 3, round-2 finding: rev 2 stated the mechanism as if
 it applied at every tier.)* A twice-failing `pr-reviewer` or `spec-checker` is
@@ -579,10 +670,10 @@ pass tempted to "fix" that citation should read #2320's comments first.
 | `.claude/agents/*.md` ×6 | New — the roster. **Unblocked**: decision 0 returned Positive |
 | `.gitignore` | +1 line, `!.claude/agents/` |
 | `scripts/verify-cache.mjs` | `.claude/agents/**` → `test:hooks` globs (decision 8) |
-| `.claude/skills/model-routing/SKILL.md` | Role table; session-effort rule; escalation asymmetry |
+| `.claude/skills/model-routing/SKILL.md` | Role table; session-effort rule; escalation asymmetry. **Rev 9 adds three sentences, all scoping:** the role table governs `subagent_type` dispatch only (decision 2); the session-effort rule observes Claude Code's settings files only (decision 6); the escalation asymmetry holds *because* the `Agent` tool has no depth control (decision 10). Plus 0b's CLI clause — pass `--effort`/`--thinking` explicitly, including at the norm |
 | `.claude/skills/pr-review-gate/SKILL.md` | effort→depth; dispatch by `subagent_type`; why `tools:` is not the mechanism; **"Per-agent mapping" reworded** — it currently says "a non-fork `Agent` dispatch at the routing table's Premium tier", which becomes a `subagent_type` dispatch, and the Cline comparison table under it moves with it. **The #2320 citation at line 144 is NOT touched** (see F2 withdrawn) |
 | `.claude/skills/pr-review-gate/references/*.md` | effort→depth where it appears |
-| `CLAUDE.md` "Model routing" | **The `medium`-norm declaration (0b) + a link to the role table. No second table** — the section is the quick reference and must not become a third home for the same rows. The norm is the one sentence worth putting there, since it is what every other statement of effort is relative to. |
+| `CLAUDE.md` "Model routing" | **The `medium`-norm declaration (0b) + a link to the role table. No second table** — the section is the quick reference and must not become a third home for the same rows. The norm is the one sentence worth putting there, since it is what every other statement of effort is relative to. **Rev 9:** that sentence names all three surfaces the norm covers — roles, sessions, CLI workers — because naming two of three is how the unscoped claim happened the first time. |
 | `scripts/sync-agent-skills.mjs` | `model-routing` joins the mirror (F1) |
 | `scripts/tests/review-gate-mechanism.test.mjs` | New cases (decision 7) |
 | `docs/testing/agent-skill-resolution-probe.md` | Second probe run (decision 9) |
@@ -613,8 +704,14 @@ first, alone, is red by construction.
   the exemption `CLAUDE.md` before-shipping step 5 names.
 - **Reproducible/pinned gate depth.** Offered and not selected as a driver.
 - **Per-PR effort scaling for the reviewer** (three `pr-reviewer-{low,medium,high}`
-  definitions). M1 means it would take three files, and the tier would no longer
-  be pinned.
+  definitions). On the `Agent` surface M1 means three files, and the tier would no
+  longer be pinned. *(Rev 9, convergence finding: revs 1–8 rested the rejection on
+  M1 alone, as though the cost were a fact about the idea. Via M11 it costs one
+  `opts.effort` and zero files — so the honest rejection is that **`pr-review-gate`
+  already scales the right thing**: decision 5's review-depth ladder scales the
+  reviewer's remit by commit type, and this would add a second, model-level
+  scaling axis over the same input. One knob per dimension. The three-files cost
+  is a consequence of the chosen surface, not the argument.)*
 - **Mirroring definitions to Cline** — deferred to its own probe (decision 9),
   which has **not** been run. Distinct from decision 0's, which has.
 - **`-escalated` role variants** — deferred indefinitely (decision 10); no
@@ -622,10 +719,43 @@ first, alone, is red by construction.
 - **Changing `effortLevel` on any machine.** 0b declares the norm; decision 6
   reads and flags. Neither sets it, and this spec does not ask CI to.
 
-## Open question deferred to implementation
+## Open questions deferred to implementation
 
-Whether `.claude/settings.local.json` overrides `~/.claude/settings.json` for
-`effortLevel` specifically was **not** verified — only that the user-level key
-exists (M3). Decision 6 is written to read project-then-user and *state which
-file it read*, which is correct under either precedence; the implementation
-confirms the precedence and records it in the skill.
+**1. `effortLevel` precedence.** Whether `.claude/settings.local.json` overrides
+`~/.claude/settings.json` for `effortLevel` specifically was **not** verified —
+only that the user-level key exists (M3). Decision 6 is written to read
+project-then-user and *state which file it read*, which is correct under either
+precedence; the implementation confirms the precedence and records it in the
+skill.
+
+**2. Which intake path a piece of work takes — deferred to a design pass, and
+this names the decision owed.** *(Rev 9, convergence finding.)* The parallel
+session that raised M10 is standing up a CLI-worker queue that routes execution
+work to `cline` rather than to `Agent({subagent_type: 'implementer'})`. If that
+queue becomes the intake path, `implementer` — and, with it, `fix-agent` and
+`task-reviewer` — are roles this repo defines and rarely dispatches.
+
+**The decision owed is not "keep or drop `implementer`."** It is: **does a unit
+of work choose its execution surface by work-shape, by who is dispatching, or by
+a declared default with named exceptions?** All three are defensible, they
+produce different rosters, and only one of them leaves the six-role table as
+written. That is the "more than one defensible outcome" test `CLAUDE.md` sets for
+the one class of finding that may be deferred rather than fixed in-round — so it
+is deferred deliberately, not by omission.
+
+Two reasons it does not block this spec:
+
+- **The roster is correct under all three answers.** Every role here is defined
+  by what `CLAUDE.md`'s execution model already dispatches today. A role that
+  later goes quiet costs one unused file, and the guard of decision 7 keeps it
+  honest in the meantime.
+- **Nothing here has been verified.** This spec's standard is that every claim
+  traces to a mechanism row; the queue's design, its sub-task vocabulary, and
+  whether it will be the intake path are all **reported, not observed** — M10 is
+  the only part of that session's work reproduced on this box. Writing a
+  reconciliation into the spec would be importing an unverified system's
+  vocabulary into a document whose whole discipline is that it does not do that.
+
+**Owner: the repo owner**, who is running both sessions and is the only party who
+can say whether the queue is the intake path or an adjunct. Until then the two
+systems overlap on paper and not in any mechanism either one can check.
