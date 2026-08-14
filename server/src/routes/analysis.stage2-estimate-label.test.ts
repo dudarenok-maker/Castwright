@@ -11,7 +11,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runMainAnalyzerJob, selectStage2EstimateLabel, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
-import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript, getManuscript } from '../store/manuscripts.js';
 
@@ -118,16 +117,7 @@ function makeSpyAnalyzer(): Analyzer {
     async runStage1Chapter() {
       await slowDown();
       return {
-        characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator' }],
-      };
-    },
-    async runStructureChapter() {
-      return {
-        characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator' }],
-        sentences: [],
-        tags: [],
-        turns: [],
-        engagedTurns: 0,
+        characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
       };
     },
     async runStage2Chapter() {
@@ -138,14 +128,11 @@ function makeSpyAnalyzer(): Analyzer {
         ],
       };
     },
-    async runAttributionChapter() {
-      await slowDown();
-      return {
-        characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator' }],
-        sentences: [
-          { id: 1, chapterId: 1, characterId: 'narrator', text: 'A sentence.' },
-        ],
-      };
+    async runStage1() {
+      throw new Error('Legacy whole-book stage 1 not used in test');
+    },
+    async runNonStoryClassification() {
+      throw new Error('Non-story classification not used in test');
     },
     async runEmotionChapter() {
       throw new Error('Emotion analyzer not used in test');
