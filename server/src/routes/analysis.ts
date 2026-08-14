@@ -2783,6 +2783,14 @@ function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   }
 }
 
+/* Issue #2354 — label the stage-2 estimate by its actual basis.
+   In pipelined mode, Phase 1 setup runs before Phase 0 refinement completes,
+   so the estimate is still pre-flight. In sequential/refined modes, the
+   refinement has run. Return the appropriate label. */
+export function selectStage2EstimateLabel(isRefined: boolean): string {
+  return isRefined ? '(based on stage 1 rate)' : '(pre-flight estimate, refined after stage 1)';
+}
+
 /* Exported for unit testing (the chapter-failed replay contract). */
 export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   if (!payload || typeof payload !== 'object') return;
@@ -3333,6 +3341,7 @@ export async function runMainAnalyzerJob(
        *observed* rate, so the second bar reflects actual model speed. */
     const stage1EstMs = clampStageEstMs(sourceChars / STAGE1_BASELINE_RATE);
     let stage2EstMs = clampStageEstMs((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
+    let stage2EstRefined = false;
 
     /* Load any partial progress from a previous attempt. Cached stage 1 is
        reused as-is; cached chapters are skipped in the stage 2 loop. The
@@ -4450,6 +4459,7 @@ export async function runMainAnalyzerJob(
            signal that pipelining is engaged. */
         if (stage1ActualMs > 0) {
           stage2EstMs = clampStageEstMs(stage1ActualMs * STAGE2_STRETCH);
+          stage2EstRefined = true;
           log(
             0,
             `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map((c) => c.name).join(', ')}`,
@@ -4516,7 +4526,7 @@ export async function runMainAnalyzerJob(
       1,
       `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}…`,
     );
-    log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
+    log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} ${selectStage2EstimateLabel(stage2EstRefined)}`);
     if (cachedChapterCount > 0) {
       log(
         1,
