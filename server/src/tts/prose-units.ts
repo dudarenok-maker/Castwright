@@ -330,8 +330,8 @@ export const PROSE_UNIT_FLOOR = 20;
    RETRACTED round 2's finding-3(a) fix — see the finding-3 block above.
 
    Finding C2 (0.2 ceiling re-opens the ticket's acceptance class for the
-   commonest real Chinese TOC layout, HIGH, NOT CLOSED — owner decision
-   named, not guessed at): the finding-2 fixture above ("N、<title>。", 60
+   commonest real Chinese TOC layout, HIGH — CLOSED by the #2341 structural
+   gate below, not guessed at here): the finding-2 fixture above ("N、<title>。", 60
    entries, digitTokenShare≈0.36) is not the shape most real Chinese TOCs
    use. The standard layout is "第N章<title>" ("Chapter N: Title") with a
    roughly 4-character title. Re-measured (round 4 pinned the CONSTRUCTION
@@ -362,29 +362,47 @@ export const PROSE_UNIT_FLOOR = 20;
    NOT hold universally — it holds for the numbering styles measured there,
    not for a "第N章" chapter-marker TOC.
 
-   NOT FIXED HERE. The digit-ratio signal alone cannot separate this TOC
-   shape from genuine short-sentence real prose at any single threshold:
-   finding 4's own worst real-shaped case (verse-numbered short sentences)
-   measures ≈0.10-0.14, and this junk shape measures ≈0.15-0.17 — the two
-   ranges OVERLAP, so no DIGIT_TOKEN_SHARE_CEILING value cleanly separates
-   both without either re-opening finding 4's regression (refusing real
-   short-sentence books) or re-opening this one (backfilling "第N章" TOCs).
-   Closing this needs a DIFFERENT kind of signal than a token ratio — e.g. a
-   STRUCTURAL check for the numbering PATTERN repeating once per prose unit
-   (a "第<numeral>章" prefix recurring across most units), which is a
-   different instrument from Guiraud's R / digitTokenShare and a genuine
-   design decision (exactly which pattern counts, how narrowly scoped,
-   what it costs in false positives on real prose with a recurring opener)
-   — not invented here without a design pass. Recorded as a tracked, open
-   gap rather than silently left to look closed; see
-   https://github.com/dudarenok-maker/Castwright/issues/2341 for the
-   decision owed and detect-language.test.ts's own "finding C2" test,
-   which pins the current (imperfect) behavior so it stays visible.
+   FIXED HERE by #2341 (2026-08-14). The digit-ratio signal alone cannot separate this TOC
+    shape from genuine short-sentence real prose at any single threshold: finding 4's own worst
+    real-shaped case (verse-numbered short sentences) measures ~0.10-0.14, and this junk shape
+    measures ~0.15-0.17, so the two ranges OVERLAP: no DIGIT_TOKEN_SHARE_CEILING value separates
+    both without re-opening finding 4's regression (refusing real short-sentence books) or this
+    one (backfilling "第N章" TOCs). A DIFFERENT kind of signal than a token ratio closes it instead,
+    exactly the structural check this comment originally called for: chapterMarkerUnitShare() /
+    CHAPTER_MARKER_UNIT_MAJORITY count the share of prose units that START with a 第<numeral>章
+    circumfix (the standard real Chinese chapter-marker layout). A numbered TOC has that marker on
+    almost every unit (share ~1), independent of entry count and vocabulary width; real prose
+    essentially never opens even a majority of its units with one (a chronicle unit-initial numbers
+    are 第N年, which has no 章 ender and so never matches). Scoped to the START of a prose unit and
+    to the 章 ender, so a mid-sentence mention or a compound like 第N部队 (a squad, not a chapter)
+    never counts. voteLanguage treats a share above that majority exactly like the other junk gates:
+    a surrender (fallback:true). Closes #2341; see detect-language.test.ts flipped finding C2 test
+    and chapterMarkerUnitShare() own comment below.
 
    Do not re-derive or move any of these numbers without re-measuring
    against the same corpus/fixtures referenced above. */
 export const LEXICAL_RICHNESS_FLOOR = 3;
 export const DIGIT_TOKEN_SHARE_CEILING = 0.2;
+
+/* #2341 — the structural gate for the "第N章" (Chapter N) numbered-TOC shape
+   that the two token-ratio gates above structurally cannot catch. A numbered
+   CJK table of contents or chapter index is laid out "第<numeral>章<title>。"
+   where the "第" and "章" enders are ordinary (non-numeral) Han word tokens:
+   with a ~4-char title each entry is 7 tokens with 1 digit-like, so
+   digitTokenShare sits at ≈0.14-0.17 — BELOW DIGIT_TOKEN_SHARE_CEILING (0.2)
+   and point-identical to real short-sentence prose (finding 4's worst
+   real-shaped case measures ≈0.10-0.14). No DELTA on a digit TOKEN RATIO can
+   separate them; the signal has to be STRUCTURAL: the "第<numeral>章" prefix
+   recursing at the START of the overwhelming majority of prose units is a
+   numbered list by construction — real prose never opens even a majority of
+   its units with one. A strict-majority (> CHAPTER_MARKER_UNIT_MAJORITY, not
+   merely "some") keeps the margin as wide as the other gates' floors: the
+   mechanism is count- and vocabulary-independent (the marker is each such
+   unit's only real content), and legitimate CJK no-match shapes (a "第N年"
+   chronicle — numeral run then 年, no 章 ender; a mid-sentence "……第三章……";
+   a compound like 第N部队 "the Nth squad") never fire because the prefix is
+   anchored at the unit start and requires the 章 ender. */
+export const CHAPTER_MARKER_UNIT_MAJORITY = 0.5;
 
 /* #2256 review round 2 (finding 1, finding 2) — digit detection needs to
    catch three shapes, not just ASCII `\d`: fullwidth digits (U+FF10-FF19,
@@ -575,3 +593,43 @@ export function digitTokenShare(sample: string): number {
   const withDigit = tokens.filter((t) => DIGIT_TOKEN_RE.test(t)).length;
   return withDigit / tokens.length;
 }
+
+/* #2341 — the "第N章" numbered-TOC prefix, anchored at the START of a prose
+   unit, reusing the SAME three numeral run vocabularies digitTokenShare
+   classifies (ASCII digits, fullwidth digits, Han numerals — see CHUNK_RE/DIGIT_TOKEN_RE).
+   The circumfix is 第<numeral>章 (keyword BEFORE the number, matching the
+   repo's CJK chapter-heading shape in parsers/text.ts, but here scoped to the
+   detection gate, not chapter splitting). */
+const CHAPTER_MARKER_PREFIX_RE = new RegExp(
+  `^第(?:[0-9]+|${FULLWIDTH_DIGIT_RUN_RE}|${HAN_NUMERAL_RUN_RE})章`,
+);
+
+/** Share of prose units whose LEADING content is a "第<numeral>章" chapter
+ *  marker — the structural signal that distinguishes a numbered table of
+ *  contents / chapter index (which lays every entry out as "第N章<title>。",
+ *  so the share is ≈1) from real prose, whose units do not open with one.
+ *  Segments prose units with the SAME SENTENCE_TERMINAL_RE the other gates
+ *  use, so it inherits joinSamplesForGates' order-invariance (the split is a
+ *  property of the sample, and a deterministic function of the resulting unit
+ *  multiset). DEDUPES EXACT unit strings first, matching the sibling gates'
+ *  documented "dedupe EXACT prose units before measuring" invariant: a
+ *  numbered TOC's entries are each distinct (their own number + title), so
+ *  dedup leaves their share ≈1 untouched, while a unit that repeats verbatim
+ *  (this repo's own repeat-a-real-sentence test-fixture convention) cannot
+ *  inflate its own share. The marker is anchored at the unit START and
+ *  requires the 章 ender, so a unit opening with a date numeral ("第N年…") or
+ *  a mid-sentence mention never counts. 0 for an empty sample. */
+export function chapterMarkerUnitShare(sample: string): number {
+  const units = [
+    ...new Set(
+      sample
+        .split(SENTENCE_TERMINAL_RE)
+        .map((u) => u.trim())
+        .filter((u) => u.length > 0),
+    ),
+  ];
+  if (units.length === 0) return 0;
+  const marked = units.filter((u) => CHAPTER_MARKER_PREFIX_RE.test(u)).length;
+  return marked / units.length;
+}
+
