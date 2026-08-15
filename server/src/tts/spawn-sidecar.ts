@@ -327,7 +327,6 @@ export function findListenerPid(
       return resolve(null);
     }
     let settled = false;
-    let timer: NodeJS.Timeout;
     const settle = (value: number | null) => {
       if (settled) return;
       settled = true;
@@ -342,7 +341,7 @@ export function findListenerPid(
       const pid = parseInt(out.trim().split(/\s+/)[0] ?? '', 10);
       settle(Number.isInteger(pid) && pid > 0 ? pid : null);
     });
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       settle(null);
       child.kill();
     }, deadlineMs);
