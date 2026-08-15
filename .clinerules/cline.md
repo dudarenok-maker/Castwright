@@ -131,29 +131,29 @@ any test step in scope takes minutes. So a foreground `git commit` cannot
 finish, and retrying it never will.** The cap is internal to Cline -- there is
 no CLI flag (`-t/--timeout` is the whole-run timeout, not the per-command one).
 
-**What is actually in scope** is decided per step by `STEPS[]` in
-`scripts/verify-cache.mjs` -- that file is the source of truth, not a path
-prefix. Pre-commit runs `verify:fast:scoped` over
-`test:hooks,check:budget-poll,test,test:server`, and a step runs when the
-staged diff matches its own `globs` **or** any of its `extraFiles`. So:
+**So commit detached ALWAYS -- do not try to work out whether this diff is one
+of the slow ones.** That prediction is the bug. Three successive revisions of
+this very paragraph tried to enumerate what puts a step in scope, and all three
+were wrong in the same direction: they under-listed, so an agent read its own
+change as exempt and took the foreground path into the 30-second kill. Detached
+costs nothing when the commit is fast -- the first poll returns immediately --
+and it is the only correct route when it is slow. There is no case where
+predicting first helps.
 
-- a `src/**` edit runs `test` -- not only "server" changes are slow;
-- a `server/src/**` edit runs `test:server`;
-- **`openapi.yaml` alone runs both**, while matching no `server/` path at all;
-- **`RELEASE_NOTES.md` and `docs/release-notes-next.md` are `extraFiles` of
-  `test:hooks`** -- and that pair is exactly what CLAUDE.md's before-shipping
-  step 5 makes nearly every PR touch. So "it's only docs" is **not** a reason
-  to expect a fast commit: `test:hooks` is recorded at 41-58 s, over the cap on
-  its own. `test:hooks` also globs `scripts/**`, `.github/workflows/**`,
-  `.github/actions/**`, `.husky/**`, `pinokio-scripts/**` and
-  `docs/testing/**`;
-- a root `package.json` or lockfile edit is `computeShared` -- it busts **every**
-  leg at once, ~12 minutes, and matches no step's globs, so reading only the
-  globs would tell you nothing runs;
-- a diff touching none of the above skips every leg and commits in seconds.
-  That is a real case, but check it rather than assume it -- the honest test is
-  "does this diff match any step's globs, `extraFiles`, or `computeShared`",
-  not "is this a docs change".
+If you do want to know, `STEPS[]` in `scripts/verify-cache.mjs` is the source
+of truth and the only one; pre-commit runs `verify:fast:scoped` over
+`test:hooks,check:budget-poll,test,test:server`, and a step runs when the staged
+diff matches its `globs`, any of its `extraFiles`, or `computeShared`. Read it
+there rather than trusting a summary -- including this one. What makes a
+summary untrustworthy here is that the surprising members are the whole point:
+`test:hooks` alone reaches `.claude/skills/**`, `.claude/agents/**`,
+`CLAUDE.md`, `CONTRIBUTING.md`, and the `RELEASE_NOTES.md` /
+`docs/release-notes-next.md` pair that CLAUDE.md's before-shipping step 5 makes
+nearly every PR touch -- so editing the very skill files this document tells you
+to edit costs 41-58 s, and "it's only docs" predicts nothing. `openapi.yaml`
+runs both `test` and `test:server` while matching no `server/` path. A root
+`package.json` or lockfile edit is `computeShared` and busts every leg at once,
+~12 minutes, while matching no step's globs at all.
 
 **Budget 10-15 minutes when a test step is in scope, and do not call it hung
 before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
@@ -227,9 +227,12 @@ elseif ($done)       { Get-Content "$T\commit.log" -Tail 40 }
 else                 { "child gone with no EXIT= -- check whether HEAD moved before assuming nothing happened" }
 ```
 
-**`alive` outranks `done`.** If the process is still up, any sentinel you can
-see belongs to an earlier attempt -- that combination is a stale read, not a
-result.
+**While it is alive, a sentinel you can see is from an earlier attempt** -- keep
+polling rather than reading it as this run's result. Once the process is gone
+the sentinel is yours. The one thing that settles any disagreement is the repo
+itself: `git -C $W log --oneline -1`. Check that before acting on a surprising
+verdict, because a pid can be reused and a log line can be stale, while a
+commit either exists or does not.
 
 `EXIT=0` means the hook passed; confirm with `git -C $W log --oneline -1`.
 Anything else is a real failure in the log and is yours to fix.
