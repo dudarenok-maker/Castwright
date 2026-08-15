@@ -32,6 +32,7 @@ import {
   readCentroids,
   writeCentroids,
   type CharacterCentroid,
+  type AuditionVoiceRef,
 } from './centroids-io.js';
 import { CENTROID_MIN_N, buildCentroid } from './centroid.js';
 import {
@@ -153,6 +154,11 @@ interface CharacterReference {
   pSevere: number;
   pBand: number;
   referenceKind: 'in-book' | 'audition' | 'too-short';
+  /** #1969 — the voice an 'audition' reference was built from. Unset for
+   *  'in-book'/'too-short' rows (both are rebuilt fresh every pass from the
+   *  current chapter audio). Carried on the persisted row so a match-checked
+   *  reuse rewrites the same identity back instead of silently dropping it. */
+  auditionVoice?: AuditionVoiceRef;
 }
 
 /** Discriminates the three things that can happen when a character's
@@ -174,7 +180,22 @@ type ReferenceOutcome =
 const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
 
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
-  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind };
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice };
+}
+
+/** #1969 — whether a persisted audition centroid's recorded voice identity still matches the
+ *  character's CURRENT render identity. A mismatch — or no recorded identity at all (a legacy
+ *  row written before #1969, or a character whose current voice info is absent) — means the
+ *  reference may describe a speaker the character no longer is, so it must not be trusted as-is:
+ *  the caller discards and rebuilds it. */
+function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacter): boolean {
+  const r = row.auditionVoice;
+  if (row.referenceKind !== 'audition' || r == null) return false;
+  // language is compared when the persisted row recorded one: a recorded language
+  // differing from the current, or a recorded language with a now-unknown current,
+  // is a mismatch -> rebuild. Absence on the row is lenient (pre-#1951 auditions).
+  const langMatch = r.language === undefined || r.language === voiceInfo.language;
+  return r.voiceName === voiceInfo.voiceName && r.modelKey === voiceInfo.modelKey && r.cloned === voiceInfo.cloned && langMatch;
 }
 
 /**
@@ -188,11 +209,15 @@ function persistedAsRef(row: CharacterCentroid): CharacterReference {
  *
  * Too-thin/bimodal path: if `persisted` is already a terminal `'too-short'`
  * row, that state is ABSORBING — return it verbatim, never call
- * `auditionCentroid` again. If `persisted` is a successful `'audition'` row,
- * reuse it verbatim — no new renders. Otherwise (no persisted state, or a
- * stale 'in-book' row that no longer qualifies), attempt the Option-B
- * audition centroid; its three possible outcomes map onto this function's
- * three outcomes 1:1 (see `ReferenceOutcome`'s doc comment).
+ * `auditionCentroid` again. If `persisted` is a successful `'audition'` row
+ * whose recorded identity still matches the character's current voice, reuse
+ * it verbatim — no new renders; a recorded identity that DIFFERS means the
+ * voice (or language/clone context) was reassigned and the stale reference
+ * must be discarded and rebuilt. Otherwise (no persisted state, a stale
+ * 'in-book' row that no longer qualifies, an audition row we cannot trust
+ * because its identity is unknown, or a voice reassignment), attempt the
+ * Option-B audition centroid; its three possible outcomes map onto this
+ * function's three outcomes 1:1 (see `ReferenceOutcome`'s doc comment).
  *
  * @param anchorVecs  Anchor-eligible embedding vectors collected from the book.
  * @param voiceInfo   Optional voice info for Option-B (absent when no snapshot).
@@ -221,7 +246,11 @@ async function resolveCharacterReference(
   if (persisted?.referenceKind === 'too-short') {
     return { status: 'too-short', ref: persistedAsRef(persisted) };
   }
-  if (persisted?.referenceKind === 'audition') {
+  if (
+    persisted?.referenceKind === 'audition' &&
+    voiceInfo != null &&
+    matchesCurrentVoice(persisted, voiceInfo)
+  ) {
     return { status: 'resolved', ref: persistedAsRef(persisted) };
   }
   if (!voiceInfo) {
@@ -244,7 +273,7 @@ async function resolveCharacterReference(
   const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
   const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
   const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition' } };
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────
