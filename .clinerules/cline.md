@@ -120,6 +120,38 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 - **Git-ignored artifacts (`brand/`, `mockups/`, marketing captures) are
   produced in the primary checkout**, never in a worktree: they do not travel
   with the branch and worktree teardown destroys them.
+- **A commit here takes 5-7 minutes, and your runtime kills a command at 30
+  seconds -- so a foreground `git commit` on a `server/**` change can never
+  succeed, however many times you retry.** Pre-commit runs
+  `verify:fast:scoped`, and any staged file under `server/` puts the whole
+  server suite in scope: ~163 s for `test:server` alone. That is the gate
+  working, not a hang. The 30 s cap is internal to the Cline runtime -- there
+  is no CLI flag for it (`--timeout` is the whole-run timeout, not the
+  per-command one) -- and no amount of shrinking the change gets under it,
+  because even a bare `npm run lint` over the repo exceeds it. **Launch the
+  commit detached and poll**; each poll returns instantly, so the cap stops
+  mattering:
+
+  ```powershell
+  $T = $env:TEMP
+  Set-Content "$T\msg.txt" -Encoding utf8 -Value 'fix(scope): subject line'
+  @'
+  git -C <worktree> commit -F "$env:TEMP\msg.txt" *>&1 |
+    Out-File -FilePath "$env:TEMP\commit.log" -Encoding utf8
+  "EXIT=$LASTEXITCODE" | Out-File -FilePath "$env:TEMP\commit.log" -Append -Encoding utf8
+  '@ | Set-Content "$T\commit.ps1" -Encoding utf8
+  $p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$T\commit.ps1" -WindowStyle Hidden -PassThru
+  $p.Id | Set-Content "$T\commit.pid"
+  # then poll (expect 15-20 polls) until EXIT= appears:
+  (Test-Path "$T\commit.log") -and (Select-String -Path "$T\commit.log" -Pattern '^EXIT=' -Quiet)
+  ```
+
+  The message goes in a file so no argument quoting can bite, and the
+  `EXIT=` sentinel is how you read the result once the shell that launched it
+  is gone. `EXIT=0` means the hook passed; anything else is a real failure in
+  the log and is yours to fix. **Never `--no-verify`.** This cost six identical
+  claim-and-fail cycles and twelve commit attempts on #2382 before anyone
+  noticed the cap was the whole story.
 
 ## Findings are fixed, not filed
 
