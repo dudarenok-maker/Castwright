@@ -287,7 +287,6 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
 
   async function spawnOnce(expectedOwnedPid: number | null = null): Promise<void> {
     if (stopped) return;
-    lastSpawnAt = nowFn();
     const base = await buildOpts();
     /* spawnSidecar returns null for six distinct reasons. Two are BENIGN
        no-spawns: autoStart===false, and an already-listening HEALTHY sidecar
@@ -315,6 +314,14 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
         refusedReason = reason;
       },
     });
+    /* Stamp the spawn time only for successful OWNED spawns (handle !== null).
+       This captures the child's actual lifetime later when onChildExit reads it.
+       Refusal paths never read this value (they pass false for freshIncident),
+       and adoption paths set it when a fresh owned child is spawned after the
+       adopted process disappears. */
+    if (handle !== null) {
+      lastSpawnAt = nowFn();
+    }
     if (refusedReason !== null) {
       /* stop() can race in while spawnFn was still in flight (awaited just
          above) — mirrors onChildExit's own stopped guard. Without this, a
@@ -469,8 +476,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     }
     handle = null;
     isRecycling = true; // sidecar gone — hold dispatch until the respawn completes.
-    /* EXIT path: lastSpawnAt was set when this child spawned, so `lived` here
-       is child lifetime — the only place QUICK_DEATH_MS still means that. A
+    /* EXIT path: lastSpawnAt was set when the handle was created in spawnOnce(),
+       after spawnFn successfully returned, so `lived` here is child lifetime only
+       (not attempt latency) — the only place QUICK_DEATH_MS still means that. A
        child that ran a while and then died is a fresh incident and resets the
        crash-loop counter; one that dies fast is part of the loop. */
     const freshIncident = nowFn() - lastSpawnAt >= QUICK_DEATH_MS;
