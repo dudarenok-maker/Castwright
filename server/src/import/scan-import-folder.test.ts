@@ -265,6 +265,7 @@ describe('importPortableBundle', () => {
     const state = fixtureState({
       title: 'Round Trip Test',
       bookId: 'demo__standalones__round-trip-test',
+      language: 'en',
     });
     const manuscript = Buffer.from('chapter one\nchapter two\n', 'utf8');
     const audio1 = Buffer.from('roundtrip-audio-1');
@@ -298,6 +299,35 @@ describe('importPortableBundle', () => {
       ).toBe(0);
     } finally {
       rmSync(importedTarget, { recursive: true, force: true });
+    }
+  });
+
+  it("imports a bundle whose state.json has no language as language:null (key present)", async () => {
+    const state = fixtureState({ title: 'No Language Import' }); // no `language` key
+    const bundle = await makeBundleFixture(state);
+    const target = targetDirFor(state);
+    rmSync(target, { recursive: true, force: true });
+    try {
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      const onDisk = JSON.parse(readFileSync(stateJsonPath(target), 'utf8'));
+      expect('language' in onDisk).toBe(true);
+      expect(onDisk.language).toBeNull();
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('round-trips a language a bundle carries', async () => {
+    const state = fixtureState({ title: 'Language Import', language: 'fr' });
+    const bundle = await makeBundleFixture(state);
+    const target = targetDirFor(state);
+    rmSync(target, { recursive: true, force: true });
+    try {
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      const onDisk = JSON.parse(readFileSync(stateJsonPath(target), 'utf8'));
+      expect(onDisk.language).toBe('fr');
+    } finally {
+      rmSync(target, { recursive: true, force: true });
     }
   });
 });

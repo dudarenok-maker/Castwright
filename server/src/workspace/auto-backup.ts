@@ -21,6 +21,8 @@ import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
+import { writeStateJsonAtomic } from './state-migrate.js';
+import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
 /* YYYYMMDD-HHMMSS in local time — zero-padded so a plain filename sort is
@@ -212,7 +214,19 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
   } catch {
     throw new BackupRestoreError('backup is corrupt');
   }
-  await writeJsonAtomic(stateJsonPath(bookDir), value, { rotate: { keep: 5 } });
+  if (typeof value !== 'object' || value === null) {
+    throw new BackupRestoreError('backup is corrupt');
+  }
+  /* #2246 Tasks 4+5 — a restore whose snapshot has no `language` must land on
+     disk as an explicit `language: null` (key present), and routing through
+     writeStateJsonAtomic also stamps the schema (restore previously wrote
+     unstamped state.json — a second defect fixed in the same change). A
+     snapshot that does carry a language round-trips unchanged. */
+  const parsed = value as BookStateJson;
+  await writeStateJsonAtomic(stateJsonPath(bookDir), {
+    ...parsed,
+    language: parsed.language ?? null,
+  });
 }
 
 /* ── Scheduler ──────────────────────────────────────────────────────────── */

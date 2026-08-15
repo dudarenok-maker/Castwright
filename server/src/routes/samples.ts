@@ -22,11 +22,17 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { parseManuscript } from '../parsers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SAMPLES_ROOT = resolve(__dirname, '..', '..', '..', 'samples');
+/* Testability seam: the committed sample set lives under samples/ next to the
+   module, but tests that need a controlled bundle (e.g. one whose state.json
+   omits `language`) inject their own directory. */
+const SAMPLES_ROOT = process.env.AUDIOBOOK_SAMPLES_DIR
+  ? resolve(process.env.AUDIOBOOK_SAMPLES_DIR)
+  : resolve(__dirname, '..', '..', '..', 'samples');
 
 export const samplesRouter = Router();
 
@@ -61,7 +67,9 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     }
     ensureWorkspace();
 
-    const bundleState = JSON.parse(await readFile(join(src, '.audiobook', 'state.json'), 'utf8'));
+    const bundleState = JSON.parse(
+      await readFile(join(src, '.audiobook', 'state.json'), 'utf8'),
+    ) as BookStateJson;
     const { author, series, title, manuscriptFile } = bundleState;
     let safeManuscriptFile: string;
     try {
@@ -102,6 +110,11 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const now = new Date().toISOString();
     const state = {
       ...bundleState,
+      /* A bundle whose state.json omits `language` must land on disk as an
+         explicit `language: null` (key present) — never a missing key, and
+         never the 'en' guess that makes a surrender indistinguishable from a
+         decision. A bundle that does carry a language round-trips unchanged. */
+      language: bundleState.language ?? null,
       bookId,
       manuscriptId,
       createdAt: now,
