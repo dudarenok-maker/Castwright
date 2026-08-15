@@ -51,6 +51,11 @@ export default tseslint.config(
       // Ad-hoc, local-only repro/bisect scripts (e.g. server/repro-attribution.mts).
       // Throwaway debugging probes — git-ignored and not held to the lint bar.
       'server/repro-*.mts',
+      // Accepted-result scratch written by the token-saver skill (see the
+      // matching .gitignore entry). Unreviewed model output that can land on a
+      // linted extension, and the skill writes it under whatever root it is
+      // pointed at — so match at any depth, not just the repo root.
+      '**/.token-saver/',
     ],
   },
 
