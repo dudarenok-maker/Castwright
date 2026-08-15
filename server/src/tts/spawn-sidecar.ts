@@ -288,12 +288,6 @@ export async function probeSidecarHealth(
   }
 }
 
-/** Best-effort cross-platform "which PID is listening on this port". Returns
-    null when it can't tell (no tool, parse miss, error) — the caller then
-    leaves the process in place rather than killing the wrong thing. The PID
-    file (`.run/tts.pid`) is NOT used here: a stale sidecar is often a process
-    we did NOT spawn (orphan across a `tsx watch` reload, or a manual launch),
-    so its PID differs from the last one we recorded. */
 /** Bound on how long `findListenerPid` may wait for its child. If the spawned
     probe (`powershell ... Get-NetTCPConnection`, `sh -c lsof`) never exits, an
     unsupervised `findListenerPid` promise never settles — so on expiry we kill
@@ -301,6 +295,12 @@ export async function probeSidecarHealth(
     handles by leaving the process in place. */
 export const LISTENER_PID_DEADLINE_MS = 5000;
 
+/** Best-effort cross-platform "which PID is listening on this port". Returns
+    null when it can't tell (no tool, parse miss, error, or deadline expiry) — the caller then
+    leaves the process in place rather than killing the wrong thing. The PID
+    file (`.run/tts.pid`) is NOT used here: a stale sidecar is often a process
+    we did NOT spawn (orphan across a `tsx watch` reload, or a manual launch),
+    so its PID differs from the last one we recorded. */
 export function findListenerPid(
   port: number,
   platform: NodeJS.Platform = process.platform,
