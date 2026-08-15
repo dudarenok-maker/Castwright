@@ -42,8 +42,14 @@ For every non-exempt PR, **review depth** scales with the PR's commit
 type/scope, reusing CONTRIBUTING.md's existing commit-convention vocabulary
 rather than a new classification:
 
-- **`low`** — single-scope `chore`, `test`, `build`, or `ci` (mechanical, no
-  user-facing behavior change).
+- **`low`** — single-scope `chore`, `test`, `build`, `ci`, or `docs`
+  (mechanical, no user-facing behavior change). `docs` sits here because it
+  ships no runtime surface — but note that "docs-type commit" and "docs-only
+  **file set**" are different tests, and only the second one
+  [exempts](#exemption) a PR from the gate entirely. A `docs(...)` PR touching
+  `.clinerules/` or `.claude/skills/` is reviewed at `low`, not skipped; that
+  gap was found the hard way on PR #2385, whose depth had to be argued by
+  analogy because `docs` appeared in no tier.
 - **`medium`** — single-scope `feat` or `fix`.
 - **`high`** — `refactor`, `perf`, or any multi-scope PR (CONTRIBUTING.md's
   own "use sparingly" multi-scope guidance already flags these as

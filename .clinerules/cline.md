@@ -120,38 +120,106 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 - **Git-ignored artifacts (`brand/`, `mockups/`, marketing captures) are
   produced in the primary checkout**, never in a worktree: they do not travel
   with the branch and worktree teardown destroys them.
-- **A commit here takes 5-7 minutes, and your runtime kills a command at 30
-  seconds -- so a foreground `git commit` on a `server/**` change can never
-  succeed, however many times you retry.** Pre-commit runs
-  `verify:fast:scoped`, and any staged file under `server/` puts the whole
-  server suite in scope: ~163 s for `test:server` alone. That is the gate
-  working, not a hang. The 30 s cap is internal to the Cline runtime -- there
-  is no CLI flag for it (`--timeout` is the whole-run timeout, not the
-  per-command one) -- and no amount of shrinking the change gets under it,
-  because even a bare `npm run lint` over the repo exceeds it. **Launch the
-  commit detached and poll**; each poll returns instantly, so the cap stops
-  mattering:
+- **A commit can take longer than your 30-second command cap, so `git commit`
+  has to be run detached.** Not a silent trap -- the timeout is loud -- but the
+  loop it produces is not. See "Committing when a step is in scope" below.
 
-  ```powershell
-  $T = $env:TEMP
-  Set-Content "$T\msg.txt" -Encoding utf8 -Value 'fix(scope): subject line'
-  @'
-  git -C <worktree> commit -F "$env:TEMP\msg.txt" *>&1 |
-    Out-File -FilePath "$env:TEMP\commit.log" -Encoding utf8
-  "EXIT=$LASTEXITCODE" | Out-File -FilePath "$env:TEMP\commit.log" -Append -Encoding utf8
-  '@ | Set-Content "$T\commit.ps1" -Encoding utf8
-  $p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$T\commit.ps1" -WindowStyle Hidden -PassThru
-  $p.Id | Set-Content "$T\commit.pid"
-  # then poll (expect 15-20 polls) until EXIT= appears:
-  (Test-Path "$T\commit.log") -and (Select-String -Path "$T\commit.log" -Pattern '^EXIT=' -Quiet)
-  ```
+## Committing when a step is in scope
 
-  The message goes in a file so no argument quoting can bite, and the
-  `EXIT=` sentinel is how you read the result once the shell that launched it
-  is gone. `EXIT=0` means the hook passed; anything else is a real failure in
-  the log and is yours to fix. **Never `--no-verify`.** This cost six identical
-  claim-and-fail cycles and twelve commit attempts on #2382 before anyone
-  noticed the cap was the whole story.
+**Your runtime kills a single command at 30 seconds. A pre-commit run that has
+any test step in scope takes minutes. So a foreground `git commit` cannot
+finish, and retrying it never will.** The cap is internal to Cline -- there is
+no CLI flag (`-t/--timeout` is the whole-run timeout, not the per-command one).
+
+**What is actually in scope** is decided per step by `STEPS[]` in
+`scripts/verify-cache.mjs` -- that file is the source of truth, not a path
+prefix. Pre-commit runs `verify:fast:scoped` over
+`test:hooks,check:budget-poll,test,test:server`, and a step runs when the
+staged diff matches its own `globs` **or** any of its `extraFiles`. So:
+
+- a `src/**` edit runs `test` -- not only "server" changes are slow;
+- a `server/src/**` edit runs `test:server`;
+- **`openapi.yaml` alone runs both**, while matching no `server/` path at all;
+- a docs-only diff matches nothing and commits in seconds, every leg `[skip]`ped.
+
+**Budget 10-15 minutes when a test step is in scope, and do not call it hung
+before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
+**153.3 s** in the last green `.verify-cache.json`; a contended red run of
+`test:server` took **746.6 s** (`docs/testing/flaky-register.md`). A single
+vitest run can report far less wall-clock on an idle box, so treat these as the
+range, not a constant.
+
+Launch it detached and poll. Each poll returns instantly, so the cap stops
+mattering:
+
+```powershell
+# Per-run directory. A FIXED log path is read by the next poll as the PREVIOUS
+# run's result: Start-Process returns before the child truncates the file, so a
+# stale EXIT=0 reports success for a commit that is still running.
+$run = Get-Date -Format 'yyyyMMdd-HHmmss'
+$T   = Join-Path $env:TEMP "cw-commit-$run"
+$W   = 'C:\Claude\Projects\wt-<your-worktree>'
+New-Item -ItemType Directory -Path $T -Force | Out-Null
+
+# NO BOM. PS 5.1's `Set-Content -Encoding utf8` writes one, `git commit -F` does
+# NOT strip it, and scripts/validate-commit-msg.mjs then rejects the subject --
+# AFTER you have paid the whole battery, with an error echoing a subject that
+# looks perfectly valid because the BOM is invisible.
+[IO.File]::WriteAllText("$T\msg.txt", 'fix(scope): subject line', (New-Object System.Text.UTF8Encoding $false))
+```
+
+The child script takes its paths as parameters, so nothing has to be
+interpolated into the here-string and `$LASTEXITCODE` resolves in the child:
+
+```powershell
+@'
+param([string]$Dir, [string]$Worktree)
+$ErrorActionPreference = 'Continue'
+git -C $Worktree commit -F (Join-Path $Dir 'msg.txt') *>&1 |
+  Out-File -FilePath (Join-Path $Dir 'commit.log') -Encoding utf8
+"EXIT=$LASTEXITCODE" | Out-File -FilePath (Join-Path $Dir 'commit.log') -Append -Encoding utf8
+'@ | Set-Content "$T\commit.ps1" -Encoding utf8
+```
+
+**That closing `'@` must be at column zero** -- indent it (as happens
+automatically inside a markdown list item) and PS 5.1 fails with
+`WhitespaceBeforeHereStringFooter` before running anything, so no log is ever
+created and a naive poll waits forever. Same family as the `.ps1` traps under
+"Never do these".
+
+```powershell
+# Quote each path argument: -ArgumentList does NOT quote its elements.
+$p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
+  '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$T\commit.ps1`"",
+  '-Dir',"`"$T`"",'-Worktree',"`"$W`"")
+$p.Id | Set-Content "$T\commit.pid"
+```
+
+Then poll until it resolves. **Check the process as well as the sentinel** --
+those two disagreeing is how you learn the child died at parse time instead of
+waiting on it forever:
+
+```powershell
+$id    = Get-Content "$T\commit.pid"
+$alive = [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
+$done  = (Test-Path "$T\commit.log") -and (Select-String -Path "$T\commit.log" -Pattern '^EXIT=' -Quiet)
+"alive=$alive done=$done"
+if ($done)                    { Get-Content "$T\commit.log" -Tail 40 }
+elseif (-not $alive)          { "child exited without writing EXIT= -- it died before the commit ran" }
+```
+
+`EXIT=0` means the hook passed; confirm with `git -C $W log --oneline -1`.
+Anything else is a real failure in the log and is yours to fix.
+
+**Do not end your turn while it runs.** Polling is active waiting and is
+correct; ending the run is not -- you are headless and nothing will wake you.
+If it genuinely cannot be delivered from your lane, say so once with the exact
+command and the cap.
+
+**Never `--no-verify`** (the two documented exceptions are under "Never do
+these" and neither is "the hook is slow"). This cost six identical
+claim-and-fail cycles and twelve commit attempts on #2382 before the cap was
+recognised as the whole story.
 
 ## Findings are fixed, not filed
 
