@@ -16,7 +16,7 @@
 //   - the gate skill stays model-invocable and resolvable (path exists, no
 //     disable-model-invocation, frontmatter `name:` == directory basename);
 //   - pr-review-gate/SKILL.md — not model-routing — carries the dispatch
-//     mechanism and the effort ladder, and model-routing carries no second
+//     mechanism and the review-depth ladder, and model-routing carries no second
 //     copy of the sections that moved out of it on 2026-08-13;
 //   - CLAUDE.md's before-shipping step 10 still names the skill;
 //   - both references/*.md exist AND are named by SKILL.md, so the dispatch
@@ -35,17 +35,68 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
-import { buildMirrorContent, syncOneFile } from '../sync-agent-skills.mjs';
+import {
+  FILES as MIRRORED_FILES,
+  buildMirrorContent,
+  syncOneFile,
+  assertFilesNonEmpty,
+} from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
 const GATE_SKILL_PATH = join(REPO_ROOT, '.claude', 'skills', 'pr-review-gate', 'SKILL.md');
 const ROUTING_SKILL_PATH = join(REPO_ROOT, '.claude', 'skills', 'model-routing', 'SKILL.md');
 const CLAUDE_MD_PATH = join(REPO_ROOT, 'CLAUDE.md');
+const AGENTS_DIR = join(REPO_ROOT, '.claude', 'agents');
+
+/** Legal `effort:` values per the harness's own schema: five named levels OR
+ *  an integer (`Cs([Nr(["low","medium","high","xhigh","max"]), at().int()])`).
+ *  The int branch is admitted deliberately even though this repo uses no
+ *  integer efforts today — a guard that rejects what the harness accepts is a
+ *  guard that gets deleted the first time someone legitimately needs one. */
+const NAMED_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+function isLegalEffort(value) {
+  return NAMED_EFFORTS.includes(value) || /^\d+$/.test(value);
+}
+
+/** Parses the role table out of model-routing/SKILL.md. Rows look like:
+ *    | `pr-reviewer` | Premium | `opus` | `xhigh` | Dispatch for … |
+ *  Derived, never hand-listed here: a literal roster in this file would be a
+ *  third copy of the same six rows, which is the drift this guard exists to
+ *  catch. */
+function parseRoleTable() {
+  const src = readNormalized(ROUTING_SKILL_PATH);
+  const section = /\n## Named dispatch roles\n([\s\S]*?)(?=\n## )/.exec(src);
+  assert.ok(section, 'model-routing/SKILL.md has no "## Named dispatch roles" section');
+  const rows = [];
+  for (const line of section[1].split('\n')) {
+    const m = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/.exec(line);
+    if (m) rows.push({ name: m[1], tier: m[2], model: m[3], effort: m[4] });
+  }
+  return rows;
+}
+
+/** Reads an agent definition's YAML frontmatter into a flat key→string map.
+ *  readNormalized, not readFileSync: the frontmatter regex needs a literal
+ *  '\n---', which misses on a CRLF checkout (#2291). */
+function readAgentFrontmatter(name) {
+  const path = join(AGENTS_DIR, `${name}.md`);
+  assert.ok(existsSync(path), `missing agent definition ${path}`);
+  const fm = /^---\n([\s\S]*?)\n---/.exec(readNormalized(path));
+  assert.ok(fm, `${name}.md has no --- frontmatter block`);
+  return Object.fromEntries(
+    fm[1]
+      .split('\n')
+      .map((l) => /^([a-z-]+):\s*(.*)$/.exec(l))
+      .filter(Boolean)
+      .map((m) => [m[1], m[2].trim()]),
+  );
+}
 
 test('pr-review-gate/SKILL.md exists and does not disable model invocation', () => {
   assert.ok(existsSync(GATE_SKILL_PATH), `missing ${GATE_SKILL_PATH}`);
@@ -89,7 +140,7 @@ test("pr-review-gate/SKILL.md's frontmatter name: matches its directory", () => 
   );
 });
 
-test('pr-review-gate/SKILL.md carries the dispatch mechanism and the effort ladder', () => {
+test('pr-review-gate/SKILL.md carries the dispatch mechanism and the review-depth ladder', () => {
   // Retargeted 2026-08-13: this assertion used to read model-routing's
   // "## Mandatory independent review (PRs)" section, which has moved into this
   // skill. It must read the file that now OWNS the rule, or it certifies a
@@ -105,13 +156,13 @@ test('pr-review-gate/SKILL.md carries the dispatch mechanism and the effort ladd
       'inherits the dispatching session, which is the opposite of independent review',
   );
 
-  const ladder = /\n## Effort level\n([\s\S]*?)(?=\n## )/.exec(src);
-  assert.ok(ladder, 'pr-review-gate/SKILL.md has no "## Effort level" section');
+  const ladder = /\n## Review depth\n([\s\S]*?)(?=\n## )/.exec(src);
+  assert.ok(ladder, 'pr-review-gate/SKILL.md has no "## Review depth" section');
   for (const level of ['low', 'medium', 'high']) {
     assert.match(
       ladder[1],
       new RegExp('`' + level + '`'),
-      `the effort ladder no longer names \`${level}\``,
+      `the review-depth ladder no longer names \`${level}\``,
     );
   }
 });
@@ -230,19 +281,33 @@ function headingAnchors(file) {
   return anchors;
 }
 
-/** The scan set is DERIVED, not hand-listed: the two root governance docs plus
- *  every markdown file under .claude/skills/**. A hand-list would reproduce the
- *  enumeration trap Task 4 exists to close — the next skill doc added would be
+/** The scan set is DERIVED, not hand-listed: the two root governance docs,
+ *  every markdown file under .claude/skills/**, and every markdown file under
+ *  docs/testing/**. A hand-list would reproduce the enumeration trap Task 4
+ *  exists to close — the next skill doc (or testing doc) added would be
  *  unprotected for exactly the same reason the three extraFiles literals were.
- *  Historical plan docs under docs/ are deliberately OUT of scope: measured
- *  2026-08-13, they carry 15 pre-existing dangling links (relative paths
- *  written as if from the repo root), none of which this work touches. */
+ *  docs/testing/** joined 2026-08-14: this branch added two files there and
+ *  nothing scanned the directory, so a dangling link inside it (one was found
+ *  and fixed — ort-marker-onbox-acceptance.md's plan-of-record link) shipped
+ *  invisibly. Historical plan docs under docs/ (outside docs/testing/) are
+ *  deliberately OUT of scope: measured 2026-08-13, they carry 15 pre-existing
+ *  dangling links (relative paths written as if from the repo root), none of
+ *  which this work touches. */
 function linkScanSet() {
   const skillsRoot = join(REPO_ROOT, '.claude', 'skills');
   const skillDocs = readdirSync(skillsRoot, { recursive: true, withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith('.md'))
     .map((d) => join(d.parentPath ?? d.path, d.name));
-  return [join(REPO_ROOT, 'CLAUDE.md'), join(REPO_ROOT, 'CONTRIBUTING.md'), ...skillDocs];
+  const testingRoot = join(REPO_ROOT, 'docs', 'testing');
+  const testingDocs = readdirSync(testingRoot, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.md'))
+    .map((d) => join(d.parentPath ?? d.path, d.name));
+  return [
+    join(REPO_ROOT, 'CLAUDE.md'),
+    join(REPO_ROOT, 'CONTRIBUTING.md'),
+    ...skillDocs,
+    ...testingDocs,
+  ];
 }
 
 test('githubAnchor matches GitHub slugging, including runs of spaces and non-ASCII', () => {
@@ -259,6 +324,28 @@ test('githubAnchor matches GitHub slugging, including runs of spaces and non-ASC
   // untrimmed (leading hyphen), and a non-ASCII letter is kept, not stripped.
   assert.equal(githubAnchor('✅ What is solid'), '-what-is-solid');
   assert.equal(githubAnchor('Café & bar'), 'café--bar');
+});
+
+test("model-routing/SKILL.md's frontmatter name: matches its directory", () => {
+  // Mirrors "pr-review-gate/SKILL.md's frontmatter name: matches its
+  // directory" above. model-routing is now, like pr-review-gate, a mirrored,
+  // name-resolved skill in the cross-agent store (scripts/sync-agent-skills.mjs) —
+  // a broken `name:` breaks Cline's resolution silently, and the sync only
+  // throws if the file lacks `---` entirely, not if `name:` disagrees with
+  // its directory.
+  const expectedName = basename(dirname(ROUTING_SKILL_PATH));
+  const src = readNormalized(ROUTING_SKILL_PATH);
+  const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(src);
+  assert.ok(frontmatterMatch, 'model-routing/SKILL.md has no --- frontmatter block');
+  const frontmatter = frontmatterMatch[1];
+  const nameRegex = new RegExp(`^name:\\s*${expectedName}\\s*$`, 'm');
+  assert.match(
+    frontmatter,
+    nameRegex,
+    `model-routing/SKILL.md's frontmatter name: is not exactly ` +
+      `"${expectedName}" (its own directory basename) — Skill(skill: ` +
+      `"${expectedName}") would no longer resolve to this file`,
+  );
 });
 
 test('model-routing/SKILL.md no longer carries the moved PR-review sections', () => {
@@ -283,6 +370,100 @@ test('model-routing/SKILL.md no longer carries the moved PR-review sections', ()
     /pr-review-gate/,
     'model-routing/SKILL.md must keep a pointer to where the PR sections went',
   );
+});
+
+test('the role table is non-empty and parses', () => {
+  // The green-on-awkward-input case, matching githubAnchor's above. Without
+  // it, every assertion below is vacuously true the moment the table heading
+  // is renamed or the row format drifts: an empty rows[] passes each of them
+  // by iterating nothing. This is the assertion that makes the others able
+  // to fail at all.
+  const rows = parseRoleTable();
+  // Exact count, not `>= 1`: that's what closes the vacuous-pass hole above —
+  // an empty or partially-parsed rows[] would satisfy `>= 1` just as easily
+  // as a correct 6-row parse. Adding a legitimate seventh role means bumping
+  // this number in the same change.
+  assert.equal(rows.length, 6, `expected 6 roles in the table, parsed ${rows.length}`);
+});
+
+/** Tier is the role table's link back to the model-tier table above it in
+ *  model-routing/SKILL.md — the routing authority a role is supposed to
+ *  inherit from. Nothing else in this file checked it: a row could read
+ *  `| implementer | Cheap | sonnet | medium |` (Tier and model disagreeing)
+ *  and every other assertion here would still pass. */
+const TIER_MODEL = { Premium: 'opus', Default: 'sonnet', Cheap: 'haiku' };
+
+test('every role-table row has a tracked definition file whose frontmatter matches', () => {
+  const tracked = new Set(
+    execFileSync('git', ['ls-files', '.claude/agents'], { cwd: REPO_ROOT, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .map((p) => basename(p, '.md')),
+  );
+  for (const row of parseRoleTable()) {
+    assert.ok(
+      tracked.has(row.name),
+      `.claude/agents/${row.name}.md is not tracked by git — an untracked ` +
+        'definition is invisible to CI, so the guard would certify a file no ' +
+        'other machine has. Check .gitignore carries !.claude/agents/',
+    );
+    const fm = readAgentFrontmatter(row.name);
+    assert.equal(fm.name, row.name, `${row.name}.md frontmatter name: disagrees with its filename`);
+    assert.equal(fm.model, row.model, `${row.name}.md model: is ${fm.model}, table says ${row.model}`);
+    assert.equal(fm.effort, row.effort, `${row.name}.md effort: is ${fm.effort}, table says ${row.effort}`);
+    assert.ok(
+      isLegalEffort(fm.effort),
+      `${row.name}.md effort: "${fm.effort}" is not a named level or an integer`,
+    );
+    assert.equal(
+      TIER_MODEL[row.tier],
+      row.model,
+      `${row.name} row: Tier "${row.tier}" implies model "${TIER_MODEL[row.tier]}", ` +
+        `but the row's model column says "${row.model}"`,
+    );
+  }
+});
+
+test('every definition file has a role-table row — the registry is closed', () => {
+  // The reverse direction, and the one with teeth: without it a definition
+  // can be added with any model/effort it likes and nothing notices, which
+  // makes the "table is the registry" claim in model-routing false.
+  //
+  // Recursive, mirroring linkScanSet()'s own .claude/skills/** walk below —
+  // a bare readdirSync(AGENTS_DIR) only sees the top level, but the harness's
+  // agent loader recurses into subdirectories. A definition committed one
+  // directory down (e.g. .claude/agents/legacy/rogue.md) was loadable and
+  // dispatchable while being invisible to this guard, leaving the "closed
+  // registry" claim false for anything not directly under AGENTS_DIR.
+  // Reported WITH its subpath, not a bare basename: "rogue" is ambiguous
+  // between .claude/agents/rogue.md and .claude/agents/legacy/rogue.md.
+  const named = new Set(parseRoleTable().map((r) => r.name));
+  const onDisk = readdirSync(AGENTS_DIR, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.md'))
+    .map((d) => {
+      const parentPath = d.parentPath ?? d.path;
+      const rel = join(relative(AGENTS_DIR, parentPath), d.name);
+      return rel.slice(0, -'.md'.length).split(sep).join('/');
+    });
+  const orphans = onDisk.filter((n) => !named.has(n));
+  assert.deepEqual(
+    orphans,
+    [],
+    `agent definitions with no row in model-routing's role table: ${orphans.join(', ')}. ` +
+      'Add a row (it becomes a governed role) or move the file out of .claude/agents/.',
+  );
+});
+
+test('scout holds no write tool', () => {
+  const fm = readAgentFrontmatter('scout');
+  assert.ok(fm.tools, 'scout.md declares no tools: key — it is the one role that must');
+  for (const writeTool of ['Edit', 'Write', 'NotebookEdit']) {
+    assert.doesNotMatch(
+      fm.tools,
+      new RegExp(`\\b${writeTool}\\b`),
+      `scout.md lists ${writeTool} — a search-and-report role must not hold it`,
+    );
+  }
 });
 
 test('headingAnchors ignores heading-shaped lines inside fenced code blocks', () => {
@@ -359,7 +540,24 @@ test('intra-repo .md links in the governance docs and skills resolve to real fil
 // verified 2026-08-13 by asking Cline in this workspace: it listed the 23
 // global skills and answered "pr-review-gate: NO".
 const AGENT_SKILL_STORE = join(homedir(), '.agents', 'skills');
-const MIRRORED_SKILL = 'pr-review-gate';
+
+test('MIRRORED_FILES (sync-agent-skills.mjs FILES) is non-empty and names the expected mirrored skills', () => {
+  // The green-on-awkward-input case, matching "the role table is non-empty
+  // and parses" above. Without it, every test below that does
+  // `for (const rel of MIRRORED_FILES)` is vacuously true the moment FILES
+  // is emptied: `npm run skills:sync` would exit 0 printing success having
+  // written no files, and the mirror-drift / cross-skill-link tests would
+  // both pass by iterating nothing. Exact list, not `.length > 0`: that's
+  // what closes the vacuous-pass hole — a `> 0` check is satisfied just as
+  // easily by a wrong or partial list as by the real one. Adding a
+  // legitimately mirrored file means updating this list in the same change.
+  assert.deepEqual(MIRRORED_FILES, [
+    'pr-review-gate/SKILL.md',
+    'pr-review-gate/references/reviewer-brief.md',
+    'pr-review-gate/references/findings-triage.md',
+    'model-routing/SKILL.md',
+  ]);
+});
 
 test('the agent-store mirror matches its canonical source, when it exists', () => {
   // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
@@ -367,31 +565,47 @@ test('the agent-store mirror matches its canonical source, when it exists', () =
   // would turn every never-synced machine red. The trade is deliberate — but
   // it means a GREEN run here proves nothing about a machine that has not
   // synced, so never report this as "the mirror is in sync".
-  const mirrorRoot = join(AGENT_SKILL_STORE, MIRRORED_SKILL);
-  if (!existsSync(mirrorRoot)) {
-    // Not skipped silently: say why, so a reader of CI output can tell the
-    // difference between "verified" and "not checked".
-    console.log(`[skip] no agent-store mirror at ${mirrorRoot} — run npm run skills:sync`);
+  if (!existsSync(AGENT_SKILL_STORE)) {
+    console.log(`[skip] no agent-store mirror at ${AGENT_SKILL_STORE} — run npm run skills:sync`);
     return;
   }
-  const canonicalRoot = join(REPO_ROOT, '.claude', 'skills', MIRRORED_SKILL);
-  for (const rel of ['SKILL.md', 'references/reviewer-brief.md', 'references/findings-triage.md']) {
-    const mirrored = join(mirrorRoot, rel);
+  for (const rel of MIRRORED_FILES) {
+    const mirrored = join(AGENT_SKILL_STORE, rel);
     assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync`);
-    // Compare the whole mirrored file against what the sync script WOULD write
-    // for the current canonical source. Splitting on the provenance marker and
-    // comparing only the tail was the earlier approach, and it forced the
-    // script to duplicate SKILL.md's frontmatter block so that the tail would
-    // equal the canonical file exactly — a wart in the artifact a reviewing
-    // agent actually reads, to save this test one line. Comparing against the
-    // builder covers the header format as well as the body, and needs no
-    // magic delimiter.
     assert.equal(
       readNormalized(mirrored),
-      buildMirrorContent(readNormalized(join(canonicalRoot, rel)), rel),
+      buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel),
       `${rel} has drifted from its canonical copy — run npm run skills:sync`,
     );
   }
+});
+
+test('every cross-skill link in the mirrored output resolves to a path the mirror also writes', () => {
+  // Computed from buildMirrorContent's return value and the FILES list — NOT
+  // by reading ~/.agents/skills/, which does not exist in CI. A disk-based
+  // check here would skip exactly as the mirror-drift test above does, i.e.
+  // it would never run on the machine that gates the merge, which is the
+  // whole reason F1 survived unnoticed since the mirror was created.
+  const mirroredPaths = new Set(MIRRORED_FILES);
+  const broken = [];
+  for (const rel of MIRRORED_FILES) {
+    const content = buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel);
+    for (const [, relPath] of stripFencedBlocks(content).matchAll(INTRA_REPO_MD_LINK)) {
+      // `rel` is already skills-root-relative, so resolve the link inside that
+      // root and compare exactly — no suffix matching.
+      const target = posix.normalize(posix.join(posix.dirname(rel), relPath));
+      // A link that ESCAPES the skills root is a repo document (CLAUDE.md,
+      // CONTRIBUTING.md, a spec under docs/). The mirror never writes those and
+      // never should: the provenance header buildMirrorContent splices in says
+      // outright that relative links resolve against a Castwright checkout. Not
+      // a defect, so not a finding.
+      if (target.startsWith('../')) continue;
+      if (!mirroredPaths.has(target)) {
+        broken.push(`${rel} -> ${relPath} (mirror does not write this path)`);
+      }
+    }
+  }
+  assert.deepEqual(broken, [], `mirrored cross-skill links with no mirrored target:\n  ${broken.join('\n  ')}`);
 });
 
 test('syncOneFile throws when the CANONICAL SOURCE has a UTF-8 BOM, and writes no mirror', () => {
@@ -465,19 +679,40 @@ test('syncOneFile throws when SKILL.md frontmatter is not the first line, and le
   }
 });
 
+test('assertFilesNonEmpty throws on an empty list, so skills:sync cannot report success having written nothing', () => {
+  // syncAgentSkills() itself calls this before its loop, so an accidentally
+  // emptied FILES throws instead of printing the success hint and exiting 0
+  // having written no files. The commit-time exact-list assert on
+  // MIRRORED_FILES above catches an emptied FILES in THIS repo's git history,
+  // but skills:sync is a per-machine step run by hand — this is the runtime
+  // check for the moments that guard isn't watching. Exercised directly,
+  // like the FILES import right above it, rather than through
+  // syncAgentSkills(), since FILES is a module-level const nothing here can
+  // inject an empty value into.
+  assert.throws(
+    () => assertFilesNonEmpty([]),
+    /FILES is empty/,
+    'assertFilesNonEmpty did not throw for an empty list',
+  );
+  assert.doesNotThrow(
+    () => assertFilesNonEmpty(MIRRORED_FILES),
+    'assertFilesNonEmpty must not throw for the real, non-empty FILES list',
+  );
+});
+
 // buildMirrorContent is a pure function — it needs no filesystem and runs on
 // every machine, unlike the mirror-drift test above which fails open when
 // $HOME has no mirror. These assertions are its only coverage that isn't
 // conditional on that mirror existing.
 test('buildMirrorContent: frontmatter-bearing input keeps frontmatter as the literal first line', () => {
   const input = '---\nname: pr-review-gate\n---\nBody text.\n';
-  const out = buildMirrorContent(input, 'SKILL.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/SKILL.md');
   assert.ok(out.startsWith('---\n'), `expected output to start with '---\\n', got: ${JSON.stringify(out.slice(0, 20))}`);
 });
 
 test('buildMirrorContent: the header is inserted exactly once, after the frontmatter close', () => {
   const input = '---\nname: pr-review-gate\n---\nBody text.\n';
-  const out = buildMirrorContent(input, 'SKILL.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/SKILL.md');
   const marker = 'MIRRORED COPY — do not edit here.';
   const firstIdx = out.indexOf(marker);
   assert.notEqual(firstIdx, -1, 'header must be present');
@@ -488,13 +723,13 @@ test('buildMirrorContent: the header is inserted exactly once, after the frontma
 
 test('buildMirrorContent: a non-frontmatter input gets the header at the top', () => {
   const input = 'Just a plain reference doc, no frontmatter.\n';
-  const out = buildMirrorContent(input, 'references/reviewer-brief.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/references/reviewer-brief.md');
   assert.ok(out.startsWith('<!-- MIRRORED COPY'), 'header must lead a file with no frontmatter block');
 });
 
 test('buildMirrorContent: the canonical body appears exactly once, not duplicated', () => {
   const input = '---\nname: pr-review-gate\n---\nUnique body marker XYZZY appears here.\n';
-  const out = buildMirrorContent(input, 'SKILL.md');
+  const out = buildMirrorContent(input, 'pr-review-gate/SKILL.md');
   const marker = 'Unique body marker XYZZY appears here.';
   const firstIdx = out.indexOf(marker);
   assert.notEqual(firstIdx, -1, 'canonical body text must be present');

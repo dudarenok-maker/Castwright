@@ -79,3 +79,26 @@ from `%APPDATA%\npm`, and the package lost its own `package.json`. Symptoms in
 order were a working call, then `MODULE_NOT_FOUND`, then `command not found`.
 `npm i -g cline` repaired it (EPERM warnings on the temp dir are cosmetic).
 Suspect this before assuming a probe broke something.
+
+## Second run — OWED, not yet performed (2026-08-14)
+
+Decision 9 of [the effort-routing design](../superpowers/specs/2026-08-14-model-effort-routing-design.md)
+mirrors `model-routing/SKILL.md` into `~/.agents/skills/` (proven — Cline reads
+that store) but **deliberately does not mirror the six agent definitions**,
+because nothing here establishes that Cline resolves them.
+
+This run is owed before any definition is mirrored. Three questions:
+
+1. Does Cline's `spawn_agent` accept a persona/definition **name**, or only an
+   inline prompt?
+2. Is `~/.agents/agents/` resolved as a definition store? (It does not exist
+   today — checked directly.)
+3. If a definition is found, is its **frontmatter honoured** — specifically
+   `model:` and `effort:`?
+
+**Do not mirror definitions on a partial answer.** Cline cannot select a
+subagent's model (`CLINE_TIER_SELECTABLE: no — observed deepseek-v4-flash`),
+so writing files carrying `model: opus` / `effort: xhigh` into a harness that
+can honour neither produces a sync that reports files written and changes
+nothing — a mirror that looks maintained and governs nothing. Mirror only what
+the probe says lands.

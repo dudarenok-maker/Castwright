@@ -13,7 +13,7 @@ owner: null
 > lives in `model-routing/SKILL.md`. `## Mandatory independent review (PRs)` and
 > `## PR-gate issue verification` **moved into
 > [`pr-review-gate/SKILL.md`](../../.claude/skills/pr-review-gate/SKILL.md)**,
-> which is now the full runbook (preconditions, exemption, effort ladder,
+> which is now the full runbook (preconditions, exemption, review-depth ladder,
 > dispatch, the per-pass PR comment, triage, re-review loop, issue verification).
 > `model-routing` keeps routing: the tier table, escalation, session drift, the
 > spec/plan `assumption-checker` loop, and the shared judgment-call carve-out.
