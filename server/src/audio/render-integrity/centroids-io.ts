@@ -16,6 +16,18 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from '../../workspace/state-io.js';
 import { audioDir } from '../../workspace/paths.js';
 
+/** Identity of the voice an audition centroid was built from (#1969). */
+export interface AuditionVoiceRef {
+  /** Resolved voice name actually sent to the provider (snapshot resolvedVoiceName, #1972). */
+  voiceName: string;
+  /** The TTS model key the audition rendered under. */
+  modelKey: string;
+  /** Book language the audition rendered in (#1951). Optional — pre-#1951 auditions carry none. */
+  language?: string;
+  /** Whether the voice is a clone on this engine. Always present on built rows. */
+  cloned?: boolean;
+}
+
 /** Per-character centroid stats persisted across the book's render-integrity pass. */
 export interface CharacterCentroid {
   characterId: string;
@@ -33,6 +45,12 @@ export interface CharacterCentroid {
    *  - 'audition': from the character's audition sample (Task 10 Option-B)
    *  - 'too-short': not enough clean segments; segments scored inconclusive */
   referenceKind: 'in-book' | 'audition' | 'too-short';
+  /** #1969 — the voice this centroid was built from, recorded only on 'audition' rows so
+   *  resolveCharacterReference can tell when a voice reassignment has made the persisted
+   *  reference stale. Absent on a legacy row written before this field existed (and on any
+   *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
+   *  rebuilt rather than trusted. */
+  auditionVoice?: AuditionVoiceRef;
 }
 
 const CENTROIDS_FILENAME = 'render-integrity.centroids.json';
