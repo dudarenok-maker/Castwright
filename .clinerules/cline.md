@@ -140,7 +140,20 @@ staged diff matches its own `globs` **or** any of its `extraFiles`. So:
 - a `src/**` edit runs `test` -- not only "server" changes are slow;
 - a `server/src/**` edit runs `test:server`;
 - **`openapi.yaml` alone runs both**, while matching no `server/` path at all;
-- a docs-only diff matches nothing and commits in seconds, every leg `[skip]`ped.
+- **`RELEASE_NOTES.md` and `docs/release-notes-next.md` are `extraFiles` of
+  `test:hooks`** -- and that pair is exactly what CLAUDE.md's before-shipping
+  step 5 makes nearly every PR touch. So "it's only docs" is **not** a reason
+  to expect a fast commit: `test:hooks` is recorded at 41-58 s, over the cap on
+  its own. `test:hooks` also globs `scripts/**`, `.github/workflows/**`,
+  `.github/actions/**`, `.husky/**`, `pinokio-scripts/**` and
+  `docs/testing/**`;
+- a root `package.json` or lockfile edit is `computeShared` -- it busts **every**
+  leg at once, ~12 minutes, and matches no step's globs, so reading only the
+  globs would tell you nothing runs;
+- a diff touching none of the above skips every leg and commits in seconds.
+  That is a real case, but check it rather than assume it -- the honest test is
+  "does this diff match any step's globs, `extraFiles`, or `computeShared`",
+  not "is this a docs change".
 
 **Budget 10-15 minutes when a test step is in scope, and do not call it hung
 before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
@@ -188,6 +201,11 @@ created and a naive poll waits forever. Same family as the `.ps1` traps under
 "Never do these".
 
 ```powershell
+# Clear the log FIRST. Start-Process returns before the child truncates it, so
+# on a RETRY inside the same $T the very first poll reads the PREVIOUS
+# attempt's sentinel and reports a verdict for a run that is still going.
+Remove-Item "$T\commit.log" -ErrorAction SilentlyContinue
+
 # Quote each path argument: -ArgumentList does NOT quote its elements.
 $p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
   '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$T\commit.ps1`"",
@@ -204,12 +222,25 @@ $id    = Get-Content "$T\commit.pid"
 $alive = [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
 $done  = (Test-Path "$T\commit.log") -and (Select-String -Path "$T\commit.log" -Pattern '^EXIT=' -Quiet)
 "alive=$alive done=$done"
-if ($done)                    { Get-Content "$T\commit.log" -Tail 40 }
-elseif (-not $alive)          { "child exited without writing EXIT= -- it died before the commit ran" }
+if ($alive)          { 'still running -- keep polling, and IGNORE any EXIT= you can see' }
+elseif ($done)       { Get-Content "$T\commit.log" -Tail 40 }
+else                 { "child gone with no EXIT= -- check whether HEAD moved before assuming nothing happened" }
 ```
+
+**`alive` outranks `done`.** If the process is still up, any sentinel you can
+see belongs to an earlier attempt -- that combination is a stale read, not a
+result.
 
 `EXIT=0` means the hook passed; confirm with `git -C $W log --oneline -1`.
 Anything else is a real failure in the log and is yours to fix.
+
+**Two ways the log misleads on the way out.** The child redirects with `*>&1`,
+so a *successful* run's tail can still be full of `NativeCommandError` and
+`CategoryInfo` -- that is PowerShell rendering git's stderr progress chatter,
+not a failure; read `EXIT=` and `git log`, not the shape of the text. And if
+the child vanished without a sentinel, **check `git -C $W log --oneline -1`
+before concluding it never ran**: it may have been killed after the commit
+landed, which is exactly what happened on #2382.
 
 **Do not end your turn while it runs.** Polling is active waiting and is
 correct; ending the run is not -- you are headless and nothing will wake you.
