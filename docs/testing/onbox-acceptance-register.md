@@ -289,7 +289,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 46 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -300,7 +300,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**72 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**73 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2469,6 +2469,19 @@ model, which is a finding about the analyzer, not a failure of this fix).
 its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
 two bullets above. *Cost:* short — one import + one chapter-title listen, plus
 one body-line listen if a suitable entity-laden EPUB is available.
+
+### A46 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
+
+When the sidecar exits and respawning runs into a refused spawn (a foreign process occupying `:9000`), the supervisor's crash-loop cap must still accrete monotonically toward exhaustion, and the deadline timer must actually kill a hung listener-enumeration probe. Unit tests (`server/src/tts/sidecar-supervisor.test.ts`, `server/src/tts/spawn-sidecar.test.ts`) fully verify the refusal→cap accounting logic: a slow attempt (one that outlives `QUICK_DEATH_MS`) no longer masquerades as a long-lived child and resets the counter — instead the budget accrues regardless of attempt latency, and a cap on `consecutiveFailures` prevents infinite refusal loops. What no unit test can reach is the *real* race on a contended box: whether `LISTENER_PID_DEADLINE_MS = 5000` milliseconds is actually enough headroom for the listener-enumeration probe (`lsof` on POSIX, `netstat` on Windows) to complete before the deadline fires on real hardware under contention, and whether the deadline timer truly kills a hung probe so the supervisor can proceed to the next backoff instead of blocking forever.
+
+- With a chapter actively rendering, kill the sidecar's OS process directly (e.g. `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the process from Task Manager) — **not** via `POST /api/sidecar/restart`, for the same reason as A34.
+- Immediately after kill, start a foreign listener on `:9000` (e.g. `nc -l 9000` on POSIX, or a simple Node HTTP server binding that port) to hold it occupied and keep spawn attempts refused.
+- Grep the running server's own log for the `consecutiveFailures` counter monotonically advancing across multiple refused attempts (`[refusal] spawn refused: … attempt N of 5`, where N increases to 2, 3, 4, 5) and confirm that no single slow attempt resets it back to 1.
+- Confirm the respawned sidecar eventually surfaces as `'crashed'` on `GET /api/models/status` once the counter exhausts (after ~5 refusal attempts ≈ 52s backoff total, depending on the actual backoff schedule).
+- Confirm no supervisor log shows the deadline firing AND a subsequent attempt failing (if the deadline killed the probe, the next attempt starts fresh; a killed probe should not surface as "stuck probe").
+- Stop the foreign listener, confirm the sidecar respawns and surfaces as ready within one backoff window (~15s for the final backoff in the default schedule).
+
+*Needs:* a live sidecar, a book mid-render, OS-level process-kill access, and ability to bind a foreign listener on `:9000`. *Criteria:* the bullets above; the code-level contract is `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` and the deadline timer in `server/src/tts/spawn-sidecar.ts` (`findListenerPid`'s `deadlineMs` parameter). *Cost:* short — one sidecar kill, one foreign listener binding, ~1 minute of log observation.
 
 ## Group B — local Ollama analyzer only
 
