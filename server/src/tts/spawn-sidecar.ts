@@ -317,7 +317,18 @@ export function findListenerPid(
             `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`,
           ],
         }
-      : { file: 'sh', args: ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null | head -n1`] };
+      : {
+          file: 'sh',
+          args: [
+            '-c',
+            // Must be a single simple command (no pipeline). `sh -c` execs it in place,
+            // so the deadline's child.kill() reaches lsof directly. A pipeline like
+            // `lsof … | head` would keep sh as the parent, so kill() signals sh and
+            // orphans the hung lsof. The split(/\s+/) parse below already takes the
+            // first PID out of multi-line output, so the pipe is redundant and unsafe.
+            `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null`,
+          ],
+        };
   return new Promise((resolve) => {
     let out = '';
     let child: ChildProcess;

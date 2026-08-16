@@ -1269,4 +1269,49 @@ describe('findListenerPid — bounded with a deadline', () => {
     await expect(promise).resolves.toBe(4242);
     expect(child.kill).not.toHaveBeenCalled();
   });
+
+  it('POSIX command must be a single simple command with no pipeline (regression: deadline kill reaches the probe process)', () => {
+    /* The POSIX branch spawns `sh -c 'lsof -ti tcp:PORT -sTCP:LISTEN'`, which
+       `sh -c` execs in place so child.kill() reaches lsof directly. A pipeline
+       like `lsof … | head -n1` keeps sh as the parent — child.kill() signals
+       sh, not the hung lsof, so the deadline orphans the real culprit. This test
+       pins that the command string contains no pipe, enforcing the single-command
+       shape the deadline kill depends on. */
+    const calls: Array<{ file: string; args: readonly string[] }> = [];
+    const spawnFn = vi.fn((file: string, args: readonly string[]) => {
+      calls.push({ file, args });
+      return makeHangingChild();
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    // Force POSIX path by injecting platform
+    findListenerPid(9000, 'linux', spawnFn, 1000);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].file).toBe('sh');
+    expect(calls[0].args).toHaveLength(2);
+    expect(calls[0].args[0]).toBe('-c');
+    // The command string must NOT contain a pipe — it must be a single simple
+    // command that sh -c execs, not a pipeline that spawns sh as a parent.
+    const commandString = calls[0].args[1];
+    expect(commandString).not.toContain('|');
+  });
+
+  it('POSIX lsof with multi-line output parses the first PID correctly (regression: pipe removal must not break parsing)', async () => {
+    /* Removing `| head -n1` means split(/\s+/) must handle multi-line output.
+       This test feeds a fake child with multi-line lsof output (multiple PIDs
+       on separate lines) and verifies that we extract the first one. This proves
+       dropping the pipeline was safe — the existing split() logic already
+       de-duplicates the first line. */
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+
+    const promise = findListenerPid(9000, 'linux', spawnFn, 1000);
+
+    // Simulate lsof output with multiple PIDs on separate lines
+    child.stdout.emit('data', '111\n222\n333\n');
+    child.emit('exit', 0, null);
+
+    await expect(promise).resolves.toBe(111); // First line only
+  });
 });
