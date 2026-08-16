@@ -16,6 +16,18 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from '../../workspace/state-io.js';
 import { audioDir } from '../../workspace/paths.js';
 
+/** Identity of the voice an audition centroid was built from (#1969). */
+export interface AuditionVoiceRef {
+  /** Resolved voice name actually sent to the provider (snapshot resolvedVoiceName, #1972). */
+  voiceName: string;
+  /** The TTS model key the audition rendered under. */
+  modelKey: string;
+  /** Book language the audition rendered in (#1951). Optional — pre-#1951 auditions carry none. */
+  language?: string;
+  /** Whether the voice is a clone on this engine. Always present on built rows. */
+  cloned?: boolean;
+}
+
 /** Per-character centroid stats persisted across the book's render-integrity pass. */
 export interface CharacterCentroid {
   characterId: string;
@@ -33,6 +45,12 @@ export interface CharacterCentroid {
    *  - 'audition': from the character's audition sample (Task 10 Option-B)
    *  - 'too-short': not enough clean segments; segments scored inconclusive */
   referenceKind: 'in-book' | 'audition' | 'too-short';
+  /** #1969 — the voice this centroid was built from, recorded only on 'audition' rows so
+   *  resolveCharacterReference can tell when a voice reassignment has made the persisted
+   *  reference stale. Absent on a legacy row written before this field existed (and on any
+   *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
+   *  rebuilt rather than trusted. */
+  auditionVoice?: AuditionVoiceRef;
 }
 
 const CENTROIDS_FILENAME = 'render-integrity.centroids.json';
@@ -67,4 +85,28 @@ export async function readCentroids(
     throw e;
   }
   return JSON.parse(raw) as Record<string, CharacterCentroid>;
+}
+
+/** #1969 sibling — is a persisted centroid usable to score a character given the
+ *  character's CURRENT resolved voice name + model key from the render's snapshots.
+ *  in-book rows are rebuilt fresh every pass, so they self-heal and stay usable.
+ *  An 'audition' row is usable ONLY when it recorded a voice identity AND that
+ *  identity matches the character's current resolved voice/model — otherwise it is
+ *  a stale reference (possibly for a voice the character no longer is) and must not
+ *  be scored against. A null/absent current (no resolved voice to compare) is never
+ *  trusted.
+ *  NOTE: this is the repair seam's intentionally CONSERVATIVE subset — it compares
+ *  only the voice name + model key (the reassignment signal reliably derivable at
+ *  repair time). The authoritative scoring gate (`matchesCurrentVoice` in aggregate.ts)
+ *  additionally enforces strict language/cloned equality on the next `scoreBook` pass,
+ *  which supersedes any residual language-only staleness between a repair and that pass. */
+export function auditionCentroidUsableForCurrent(
+  row: CharacterCentroid,
+  currentVoiceName: string | undefined,
+  currentModelKey: string,
+): boolean {
+  if (row.referenceKind === 'in-book') return true;
+  if (row.referenceKind !== 'audition') return false; // incl. 'too-short'
+  if (row.auditionVoice == null || currentVoiceName == null) return false;
+  return row.auditionVoice.voiceName === currentVoiceName && row.auditionVoice.modelKey === currentModelKey;
 }

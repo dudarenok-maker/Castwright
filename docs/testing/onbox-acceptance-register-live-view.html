@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">73</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">74</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">8</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">2</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -193,7 +193,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>46</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>47</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>4</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -210,7 +210,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">46 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">47 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -866,6 +866,19 @@
           <li>Cleanup: the manually-started sidecar was already killed by the server as part of the replace above, so its terminal should show it exited on its own — there is nothing left to stop. Restore <code>SIDECAR_NEVER_ADOPT</code> to its prior state (unset, or <code>'0'</code>) and restart the server, so the next run adopts a healthy pre-existing sidecar normally instead of replacing it.</li>
         </ul>
         <p class="src">A live sidecar, a book mid-render, OS-level process-kill access, ability to bind a foreign listener on <code>:9000</code>, ability to start a fresh sidecar manually, and ability to set environment variables on the server · <a href="https://github.com/dudarenok-maker/Castwright/issues/2106">#2106</a>, PR #2398 · criteria: the bullets above (budget exhaustion and deadline timer) · ~2 minutes (Scenario 1: ~1 minute; Scenario 2: ~1 minute; can run sequentially or in separate sessions)</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">A47</span><span class="iname">Reassigning a character's voice rebuilds its persisted audition centroid reference</span><span class="risk">single 8 GB GPU + qwen or coqui resident + a cloneable voice</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><a href="https://github.com/dudarenok-maker/Castwright/issues/1969">#1969</a> / <a href="https://github.com/dudarenok-maker/Castwright/pull/2402">PR #2402</a>: <code>resolveCharacterReference</code> (<code>server/src/render-integrity/aggregate.ts</code>) no longer returns a persisted <code>audition</code> row unconditionally — when a character's voice is reassigned the render-integrity gate rebuilds its persisted audition centroid for the new voice, so the new voice's correct lines are no longer falsely flagged <code>voice-mismatch</code>/<code>severity: severe</code> against the old speaker's reference (the <code>CharacterCentroid</code> in <code>centroids-io.ts</code> now records the voice it was built from). Unblocks A24's final sub-check.</p>
+        <ul>
+          <li>Assign a character to one voice and render it once so <code>render-integrity.centroids.json</code> persists an <code>audition</code> row (a character thin enough on in-book anchors to take the audition-reference path).</li>
+          <li>Reassign it to a clearly different (cloned) voice and re-render.</li>
+          <li>The new voice's lines must <b>not</b> be flagged <code>voice-mismatch</code>/severe — the persisted centroid must be <b>rebuilt for the new voice</b>, not reused against the old speaker's stale reference.</li>
+        </ul>
+        <p class="src">A single 8 GB GPU with Qwen or Coqui resident and a cloneable voice · <a href="https://github.com/dudarenok-maker/Castwright/issues/1969">#1969</a> · records A24's final "no <code>voice-mismatch</code> rows" sub-check · short — one render, one reassignment, one re-render</p>
       </div>
     </details>
 
