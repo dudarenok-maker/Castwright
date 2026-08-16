@@ -86,3 +86,22 @@ export async function readCentroids(
   }
   return JSON.parse(raw) as Record<string, CharacterCentroid>;
 }
+
+/** #1969 sibling — is a persisted centroid usable to score a character given the
+ *  character's CURRENT resolved voice name + model key from the render's snapshots.
+ *  in-book rows are rebuilt fresh every pass, so they self-heal and stay usable.
+ *  An 'audition' row is usable ONLY when it recorded a voice identity AND that
+ *  identity matches the character's current resolved voice/model — otherwise it is
+ *  a stale reference (possibly for a voice the character no longer is) and must not
+ *  be scored against. A null/absent current (no resolved voice to compare) is never
+ *  trusted. */
+export function auditionCentroidUsableForCurrent(
+  row: CharacterCentroid,
+  currentVoiceName: string | undefined,
+  currentModelKey: string,
+): boolean {
+  if (row.referenceKind === 'in-book') return true;
+  if (row.referenceKind !== 'audition') return false; // incl. 'too-short'
+  if (row.auditionVoice == null || currentVoiceName == null) return false;
+  return row.auditionVoice.voiceName === currentVoiceName && row.auditionVoice.modelKey === currentModelKey;
+}
