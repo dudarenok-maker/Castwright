@@ -94,7 +94,12 @@ export async function readCentroids(
  *  identity matches the character's current resolved voice/model — otherwise it is
  *  a stale reference (possibly for a voice the character no longer is) and must not
  *  be scored against. A null/absent current (no resolved voice to compare) is never
- *  trusted. */
+ *  trusted.
+ *  NOTE: this is the repair seam's intentionally CONSERVATIVE subset — it compares
+ *  only the voice name + model key (the reassignment signal reliably derivable at
+ *  repair time). The authoritative scoring gate (`matchesCurrentVoice` in aggregate.ts)
+ *  additionally enforces strict language/cloned equality on the next `scoreBook` pass,
+ *  which supersedes any residual language-only staleness between a repair and that pass. */
 export function auditionCentroidUsableForCurrent(
   row: CharacterCentroid,
   currentVoiceName: string | undefined,
