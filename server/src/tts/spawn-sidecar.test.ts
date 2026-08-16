@@ -1046,9 +1046,13 @@ describe('spawnSidecar', () => {
 
       expect(handle).toBeNull();
       expect(onSpawnRefused).toHaveBeenCalledTimes(1);
-      // Should use the generic parse-miss message, not the timeout message
+      // Should use the parse-miss message with manual-restart advice
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/could not identify the PID.*Restart the sidecar manually/s),
+      );
       expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
-      expect(onSpawnRefused).not.toHaveBeenCalledWith(expect.stringContaining('timed out'));
+      // Must NOT have the timeout/supervisor-retry advice
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/supervisor will retry/));
     });
 
     it('fires with a timeout message when the PID probe deadline expires (Half B)', async () => {
@@ -1082,9 +1086,13 @@ describe('spawnSidecar', () => {
 
       expect(handle).toBeNull();
       expect(onSpawnRefused).toHaveBeenCalledTimes(1);
-      // Should use the timeout message, distinguishing it from a parse miss
+      // Should use the timeout message with supervisor-retry advice, NOT manual-restart
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/probe for the PID on.*timed out.*supervisor will retry/s),
+      );
       expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('timed out'));
-      expect(onSpawnRefused).not.toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
+      // Must NOT have the manual-restart advice
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/Restart the sidecar manually/));
     });
 
     it('fires when the killed stale PID still leaves the port bound', async () => {

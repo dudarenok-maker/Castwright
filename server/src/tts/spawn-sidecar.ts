@@ -693,13 +693,19 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     let deadlineExpired = false;
     const stalePid = await findPidFn(port, () => { deadlineExpired = true; });
     if (stalePid === null) {
-      const reason = deadlineExpired
-        ? `probe for the PID on :${port} timed out (may retry)`
-        : `could not identify the PID on :${port} to replace the stale sidecar`;
-      warn(
-        `[sidecar] ${reason} — leaving it in place. Restart the sidecar manually to pick up the current build.`,
-      );
-      onSpawnRefused?.(reason);
+      if (deadlineExpired) {
+        const reason = `probe for the PID on :${port} timed out`;
+        warn(
+          `[sidecar] ${reason} — the supervisor will retry on backoff. Monitor logs if this persists.`,
+        );
+        onSpawnRefused?.(reason);
+      } else {
+        const reason = `could not identify the PID on :${port} to replace the stale sidecar`;
+        warn(
+          `[sidecar] ${reason} — leaving it in place. Restart the sidecar manually to pick up the current build.`,
+        );
+        onSpawnRefused?.(reason);
+      }
       return null;
     }
     await killTree(stalePid, spawnFn);
