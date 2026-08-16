@@ -3040,6 +3040,14 @@ against a ~0.03 different-speaker floor. The audio is fine; the reference is sta
 **Amplifier:** `SEG_SPK_AUTO_REPAIR=1` is a shipped default, so each affected
 line burns a re-render every pass and still ends up flagged.
 
+**PR #2402 — #1969 fixed; re-runnable.** PR #2402 (branch
+`fix/server-1969-audition-reference-voice`) fixes the blocker above: the
+render-integrity gate now rebuilds a character's persisted `audition` centroid
+reference when its voice is reassigned, so correct new-voice lines are no
+longer falsely scored `voice-mismatch`/`severity: severe` against the old
+speaker's stale reference. A24's final sub-check ("no `voice-mismatch` rows")
+is therefore re-runnable — register row **A46** records that owed run.
+
 **DEF-F · HIGH · #1972 · open · invalidates three run-2 results**
 **What:** a per-character re-record (splice) picks its target segments from the
 chapter's `segments.json` but resolves those segments' sentences — and therefore

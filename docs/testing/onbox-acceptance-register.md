@@ -289,7 +289,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 46 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -300,7 +300,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**73 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**74 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2494,6 +2494,27 @@ When the sidecar exits and respawning runs into a refused spawn (a foreign proce
 - Cleanup: the manually-started sidecar was already killed by the server as part of the replace above, so its terminal should show it exited on its own — there is nothing left to stop. Restore `SIDECAR_NEVER_ADOPT` to its prior state (unset, or `'0'`) and restart the server, so the next run adopts a healthy pre-existing sidecar normally instead of replacing it.
 
 *Needs:* a live sidecar, a book mid-render, OS-level process-kill access, ability to bind a foreign listener on `:9000`, ability to start a fresh sidecar manually, and ability to set environment variables on the server. *Criteria:* the bullets above; the code-level contracts are `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` (budget exhaustion) and the deadline timer in `server/src/tts/spawn-sidecar.ts` at line 694 (`findListenerPid`'s `deadlineMs` parameter). *Cost:* ~2 minutes — Scenario 1 takes ~1 minute (one sidecar kill, one foreign listener binding, supervisor observation); Scenario 2 takes ~1 minute (one manual sidecar start, one SIDECAR_NEVER_ADOPT run, deadline observation). Can run sequentially or in separate sessions.
+### A47 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
+
+PR #2402 fixes the #1969 `voice-mismatch` false-positive: the render-integrity
+gate now rebuilds a character's persisted audition centroid reference when its
+voice is reassigned, so correct new-voice lines are no longer flagged
+`voice-mismatch`/`severity: severe` against the old speaker's stale reference
+(`resolveCharacterReference` no longer returns a persisted `audition` row
+unconditionally, and the `CharacterCentroid` in `centroids-io.ts` now records
+the voice it was built from). Only mock/unit coverage exists — what those
+cannot prove is that the rebuilt reference, not the failed flag, is what a real
+render produces. Confirm on the box: assign a character to one voice and render
+it once so `render-integrity.centroids.json` persists an `audition` row (a
+character thin enough on in-book anchors to take the audition-reference path);
+reassign it to a clearly different (cloned) voice; re-render. The new voice's
+lines must **not** be flagged `voice-mismatch`/severe — the persisted centroid
+must be **rebuilt for the new voice**, not reused against the old speaker's.
+
+*Needs:* a single 8 GB GPU with Qwen or Coqui resident, plus a cloneable voice.
+*Criteria:* the two bullets above. *Cost:* short — one render, one
+reassignment, one re-render. Records A24's final sub-check ("no
+`voice-mismatch` rows").
 
 ## Group B — local Ollama analyzer only
 
