@@ -191,10 +191,11 @@ function persistedAsRef(row: CharacterCentroid): CharacterReference {
 function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacter): boolean {
   const r = row.auditionVoice;
   if (row.referenceKind !== 'audition' || r == null) return false;
-  // language is compared when the persisted row recorded one: a recorded language
-  // differing from the current, or a recorded language with a now-unknown current,
-  // is a mismatch -> rebuild. Absence on the row is lenient (pre-#1951 auditions).
-  const langMatch = r.language === undefined || r.language === voiceInfo.language;
+  // language is compared STRICTLY: a recorded language — or the absence of one —
+  // must equal the current voice's language. A legacy row that recorded no language
+  // while the book now has one is a mismatch -> rebuild once, then it records the
+  // language and stabilises.
+  const langMatch = r.language === voiceInfo.language;
   return r.voiceName === voiceInfo.voiceName && r.modelKey === voiceInfo.modelKey && r.cloned === voiceInfo.cloned && langMatch;
 }
 
@@ -253,6 +254,11 @@ async function resolveCharacterReference(
   ) {
     return { status: 'resolved', ref: persistedAsRef(persisted) };
   }
+  // A character with NO current voice info (no resolvedVoiceName in any snapshot →
+  // voiceInfo undefined) is NOT trusted — neither a persisted audition row nor a
+  // stale in-book reference is reused. It falls to too-short (inconclusive), and
+  // that too-short state is absorbing from here on, until the in-book path supplies
+  // anchors or a reassignment provides snapshot voice info.
   if (!voiceInfo) {
     return { status: 'too-short', ref: TOO_SHORT_REF };
   }

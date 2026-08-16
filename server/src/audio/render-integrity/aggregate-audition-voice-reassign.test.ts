@@ -11,8 +11,11 @@
    - voice mutation (Test 1)            — the issue's core case
    - a legacy row with no auditionVoice (Test 2) — recorded identity is unknown
    - no voice info at all (Test 3)      — the deliberate behavior change: a
-     persisted audition row is NOT trusted, degrades to too-short
+     persisted audition row is NOT trusted, degrades to too-short, and that
+     state is ABSORBING across passes (no later attempt re-renders)
    - a book language change (Test 4)    — same voice, different render context
+   - a language recorded after none (Test 5) — strict `language` match: a row
+     that stored no language is a mismatch once the book records one
 
    `auditionCentroid` is mocked at the module boundary (the real sidecar synth /
    embed path is never invoked), so the assertion surface is the mock's call
@@ -175,6 +178,13 @@ describe("scoreBook — audition centroid reuse is gated on the character's curr
 
     const c = (await readCentroids(dir))!['thurid'];
     expect(c.referenceKind).toBe('too-short');
+
+    // Second pass with the SAME fixture: the too-short state is ABSORBING — still
+    // too-short, and still no audition attempted (nothing may be re-rendered for a
+    // character whose current voice info we cannot build).
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).not.toHaveBeenCalled();
+    expect((await readCentroids(dir))!['thurid'].referenceKind).toBe('too-short');
   });
 
   it('rebuilds the audition centroid when the book language changes, even though the voice is unchanged', async () => {
@@ -194,6 +204,25 @@ describe("scoreBook — audition centroid reuse is gated on the character's curr
 
     c = (await readCentroids(dir))!['thurid'];
     expect(c.auditionVoice?.language).toBe('fr');
+  });
+
+  it('rebuilds when a language is first recorded: a row that stored none is a strict mismatch against a now-languageful book', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-aud-langfirst-'));
+
+    // Pass 1: no state.json → book language unknown → the built auditionVoice
+    // records NO language.
+    await writeThuridBook(dir, { resolvedVoiceName: 'qwen-thurid' });
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect((await readCentroids(dir))!['thurid'].auditionVoice?.language).toBeUndefined();
+
+    // Pass 2: same voice + modelKey, but the book now declares 'de'. Under the
+    // STRICT language rule the recorded (absent) language no longer matches 'de',
+    // so the reference must be rebuilt once — then it records 'de' and stabilises.
+    await writeThuridBook(dir, { resolvedVoiceName: 'qwen-thurid', language: 'de' });
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(2);
+    expect((await readCentroids(dir))!['thurid'].auditionVoice?.language).toBe('de');
   });
 });
 

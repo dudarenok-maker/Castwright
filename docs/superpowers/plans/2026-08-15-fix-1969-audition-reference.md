@@ -10,7 +10,7 @@ Persist an `auditionVoice` identity on audition rows = **`{ voiceName, modelKey,
 
 - **Why these four fields:** `voiceName` is the actual voice sent to the provider (snapshot `resolvedVoiceName`, #1972) and `modelKey` is the render tier — the issue's sanctioned "name + modelKey". `language` (#1951) and `cloned` are the remaining parameters that change what the audition synthesises; including them closes the reviewer's gap where a book **language change** would otherwise leave an old-language audition against new-language chapters. Comparison is on structured, debuggable fields, not an opaque hash.
 - **Reuse gate:** `voiceInfo != null && matchesCurrentVoice(persisted, voiceInfo)`. `voiceInfo` absent → not trusted → falls through to the rebuild path (→ `too-short` when no voice info exists at all) — a deliberate, tested behavior change from today's unconditional reuse.
-- **Legacy (acceptance 3):** a row with no `auditionVoice` (every pre-change `centroids.json`) is "unknown" → rebuilt once. Field rules: `voiceName`/`modelKey`/`cloned` always compared; `language` participates only when the persisted row recorded one (a recorded language that differs from the current, or a recorded language with a now-unknown current, is a mismatch → rebuild).
+- **Legacy (acceptance 3):** a row with no `auditionVoice` (every pre-change `centroids.json`) is "unknown" → rebuilt once — provided the character still has a current resolved voice to rebuild from. Field rules (STRICT): `voiceName`/`modelKey`/`cloned` always compared; `language` must equal the current exactly (a recorded language that differs, or a row that recorded none while the book now records one, is a mismatch → rebuild once, then it stabilises). A character with NO current resolved voice (snapshot has `voiceEngine` but no `resolvedVoiceName`) is neither reused nor rebuilt: it falls to `too-short` (inconclusive), and that state is absorbing until the in-book path supplies anchors or a reassignment provides snapshot voice info.
 - **Coqui same-name caveat (residual, documented):** Coqui designed-voice names are bucket-derived (`voice-mapping.ts:390-394` — `stableHash(characterId) % catalog[profile].length`), so two assignable catalog voices in the same profile bucket can share a `resolvedVoiceName`. Since #1972 the snapshot records the voice *actually sent*, two **explicitly-assigned** distinct Coqui voices have distinct sent names — so the collision only affects *auto-derived* (never-explicitly-assigned) voices, which cannot be "reassigned between distinct voices." Carried as an open confirmation, not silently ignored.
 - **Single covering seam:** the gate lives in the scoring path, upstream of every reassignment route (assign, splice, re-cast). Clear-on-assign in `POST /api/voice-library/:uuid/assign` was **considered and rejected because it is strictly weaker and incomplete** — it misses splice/re-cast/override paths; the score-path gate is the one place that covers all of them.
 - Rejected drift-distance as identity: it cannot reliably distinguish "same voice, different sample" from "different speaker" — the exact false-negative this defect abuses.
@@ -73,10 +73,11 @@ function persistedAsRef(row: CharacterCentroid): CharacterReference {
 function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacter): boolean {
   const r = row.auditionVoice;
   if (row.referenceKind !== 'audition' || r == null) return false;
-  // language is compared when the persisted row recorded one: a recorded language
-  // differing from the current, or a recorded language with a now-unknown current,
-  // is a mismatch -> rebuild. Absence on the row is lenient (pre-#1951 auditions).
-  const langMatch = r.language === undefined || r.language === voiceInfo.language;
+  // language is compared STRICTLY: a recorded language — or the absence of one —
+  // must equal the current voice's language. A legacy row that recorded no language
+  // while the book now has one is a mismatch -> rebuild once, then it records the
+  // language and stabilises.
+  const langMatch = r.language === voiceInfo.language;
   return r.voiceName === voiceInfo.voiceName && r.modelKey === voiceInfo.modelKey && r.cloned === voiceInfo.cloned && langMatch;
 }
 ```
@@ -130,4 +131,4 @@ Run: `npx vitest run src/audio/render-integrity/aggregate-audition-voice-reassig
 - **Voice-info absent** → `too-short` (Test 3), deliberate behavior change.
 - **modelKey best-effort on legacy segments** (`snap.modelKey ?? cd.modelKey ?? 0.6B`): recorded key is what the audition rendered under → self-consistent; a real tier change reads as a mismatch and rebuilds (correct).
 - **Coqui same-name bucket collision** (`voice-mapping.ts:390-394`): residual only for auto-derived, never-explicitly-assigned voices; carried as an open confirmation.
-- **Language recompute:** `readBookLanguage` resolves `'en'` for a state.json with no `language` key; a legacy absent-language audition records no language (lenient rule keeps matching); once a book's language is set/recorded, the next change is caught.
+- **Language recompute:** `readBookLanguage` resolves `'en'` for a state.json with no `language` key. The `language` match is STRICT: a recorded language — or its absence — must equal the current voice's language, so a legacy row that recorded no language is rebuilt once the book records one, then stabilises with the language recorded.
