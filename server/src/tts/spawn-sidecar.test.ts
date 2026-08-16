@@ -197,6 +197,65 @@ describe('spawnSidecar', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
   });
 
+  it('exercises the real default findPidFn on stale-replace path; deadline expiry fires the timeout branch (Mutation A coverage)', async () => {
+    /* Mutation A: the onExpiry parameter at line 607 can be dropped and all
+       tests pass because every stale-replace test stubs findPidFn. This test
+       does NOT stub it, so the wiring from spawnSidecar's default through to
+       findListenerPid's onDeadlineExpiry callback is actually traversed. The
+       timeout sentence only emits when deadlineExpired is true, which only
+       happens when the callback fires — proving the wiring is live. */
+    vi.useFakeTimers();
+    try {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: null, // stale
+        committedMb: null,
+        recyclePending: false,
+      }));
+      /* Do NOT stub findPidFn — use the default that calls findListenerPid.
+         Stub only spawnFn at the child level so the sidecar doesn't actually
+         spawn (we're testing the stale-replace path, not the spawn itself). */
+      const calls: Array<{ cmd: string; args: string[] }> = [];
+      const trackingSpawn = vi.fn((cmd: string, args: string[]) => {
+        calls.push({ cmd, args });
+        const child = makeFakeChild();
+        if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+        return child;
+      });
+
+      const pending = spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        platform: 'win32',
+        spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        /* findPidFn is NOT stubbed — the real default will be used.
+           That default spawns a child to find the listener PID. Make it hang
+           so the deadline fires. */
+        log,
+        warn,
+      });
+      /* The hung findPidFn child (spawned by the real default) will timeout
+         at LISTENER_PID_DEADLINE_MS. Advance past it. */
+      const { LISTENER_PID_DEADLINE_MS } = await import('./spawn-sidecar.js');
+      await vi.advanceTimersByTimeAsync(LISTENER_PID_DEADLINE_MS + 1);
+      const handle = await pending;
+
+      expect(handle).toBeNull();
+      /* The timeout branch emitted — deadlineExpired was set by the callback. */
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/probe for the PID on.*timed out.*supervisor will retry/s),
+      );
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/Restart the sidecar manually/));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('kills a STALE sidecar and spawns the current build (side-8)', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -1417,5 +1476,38 @@ describe('findListenerPid — bounded with a deadline', () => {
 
     await expect(promise).resolves.toBe(4242);
     expect(onDeadlineExpiry).not.toHaveBeenCalled();
+  });
+
+  it('uses LISTENER_PID_DEADLINE_MS as the default deadline when no explicit deadlineMs is passed (Mutation B coverage)', async () => {
+    /* Mutation B: the "Half A coverage" test at line 1290 asserts the constant
+       value but does not verify the default parameter uses it. This test
+       verifies that calling findListenerPid WITHOUT passing deadlineMs uses
+       the constant value. Advancing to the boundary distinguishes them: if the
+       default were 1000, we'd reach it before DEADLINE; if it's 5000, we won't.
+
+       The test MUST NOT pass an explicit deadlineMs so the default is used.
+       The test MUST use the actual constant value to assert at the boundary,
+       not a hardcoded 5000. */
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+    const onDeadlineExpiry = vi.fn();
+
+    // Import the constant to use the actual value, not a hardcoded number
+    const { LISTENER_PID_DEADLINE_MS } = await import('./spawn-sidecar.js');
+
+    // Call WITHOUT explicit deadlineMs — should use the constant
+    const promise = findListenerPid(9000, 'win32', spawnFn, undefined, onDeadlineExpiry);
+
+    // Advance to just before the deadline and verify nothing has fired yet
+    await vi.advanceTimersByTimeAsync(LISTENER_PID_DEADLINE_MS - 1);
+    expect(onDeadlineExpiry).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+
+    // Advance just past the deadline and verify the deadline fires
+    await vi.advanceTimersByTimeAsync(2); // total is now DEADLINE + 1
+    await expect(promise).resolves.toBeNull();
+    expect(onDeadlineExpiry).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledTimes(1);
   });
 });
