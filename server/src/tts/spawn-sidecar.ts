@@ -51,7 +51,7 @@ export interface SpawnSidecarOpts {
   /* Override-points for the stale-sidecar handshake (side-8) — tests stub
      these so they never touch a real port/process. */
   healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
-  findPidFn?: (port: number) => Promise<number | null>;
+  findPidFn?: (port: number, onDeadlineExpiry?: () => void) => Promise<number | null>;
   /* D2 (#2037) — the pid of the supervisor's own OWNED child, if any, that
      just exited immediately before this spawn attempt. Log-only: used
      solely to tell "our own just-exited child's socket, still in TCP
@@ -306,6 +306,7 @@ export function findListenerPid(
   platform: NodeJS.Platform = process.platform,
   spawnFn: typeof spawn = spawn,
   deadlineMs: number = LISTENER_PID_DEADLINE_MS,
+  onDeadlineExpiry?: () => void,
 ): Promise<number | null> {
   const cmd =
     platform === 'win32'
@@ -353,6 +354,7 @@ export function findListenerPid(
       settle(Number.isInteger(pid) && pid > 0 ? pid : null);
     });
     const timer = setTimeout(() => {
+      onDeadlineExpiry?.();
       settle(null);
       child.kill();
     }, deadlineMs);
@@ -602,7 +604,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     spawnFn = spawn,
     probeFn = probeListening,
     healthProbeFn = (h, p) => probeSidecarHealth(h, p),
-    findPidFn = (p) => findListenerPid(p),
+    findPidFn = (p, onExpiry) => findListenerPid(p, undefined, undefined, undefined, onExpiry),
     onExit,
     onAdoptExisting,
     onSpawnRefused,
@@ -688,9 +690,12 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     warn(
       `[sidecar] UNFIT sidecar on :${port} (${reason}) — replacing it with a fresh process to avoid inheriting a stale build or a leak-saturated/recycling one.`,
     );
-    const stalePid = await findPidFn(port);
+    let deadlineExpired = false;
+    const stalePid = await findPidFn(port, () => { deadlineExpired = true; });
     if (stalePid === null) {
-      const reason = `could not identify the PID on :${port} to replace the stale sidecar`;
+      const reason = deadlineExpired
+        ? `probe for the PID on :${port} timed out (may retry)`
+        : `could not identify the PID on :${port} to replace the stale sidecar`;
       warn(
         `[sidecar] ${reason} — leaving it in place. Restart the sidecar manually to pick up the current build.`,
       );

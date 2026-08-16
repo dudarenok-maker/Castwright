@@ -1019,7 +1019,7 @@ describe('spawnSidecar', () => {
       });
     });
 
-    it('fires when a stale sidecar\'s PID cannot be identified', async () => {
+    it('fires with a parse-miss message when a stale sidecar\'s PID cannot be identified (not a timeout)', async () => {
       probeFn.mockResolvedValueOnce(true);
       const healthProbeFn = vi.fn(async () => ({
         reachable: true,
@@ -1028,7 +1028,7 @@ describe('spawnSidecar', () => {
         committedMb: null,
         recyclePending: false,
       }));
-      const findPidFn = vi.fn(async () => null);
+      const findPidFn = vi.fn(async () => null); // returns null but NOT from deadline expiry
       const onSpawnRefused = vi.fn();
 
       const handle = await spawnSidecar({
@@ -1046,7 +1046,45 @@ describe('spawnSidecar', () => {
 
       expect(handle).toBeNull();
       expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+      // Should use the generic parse-miss message, not the timeout message
       expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
+      expect(onSpawnRefused).not.toHaveBeenCalledWith(expect.stringContaining('timed out'));
+    });
+
+    it('fires with a timeout message when the PID probe deadline expires (Half B)', async () => {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: null, // stale
+        committedMb: null,
+        recyclePending: false,
+      }));
+      // Mock findPidFn to signal a deadline expiry via the callback
+      const findPidFn = vi.fn(async (_port, onDeadlineExpiry) => {
+        onDeadlineExpiry?.();
+        return null;
+      });
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+      // Should use the timeout message, distinguishing it from a parse miss
+      expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('timed out'));
+      expect(onSpawnRefused).not.toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
     });
 
     it('fires when the killed stale PID still leaves the port bound', async () => {
@@ -1241,6 +1279,30 @@ describe('findListenerPid — bounded with a deadline', () => {
     vi.useRealTimers();
   });
 
+  it('uses the shipped LISTENER_PID_DEADLINE_MS constant when no explicit deadline is passed (Half A coverage)', async () => {
+    /* The shipped default (5000ms) is never exercised by tests that explicitly
+       pass deadlineMs=1000. Verify: (1) the constant has the expected value,
+       (2) calling findListenerPid without deadlineMs uses it, (3) the deadline
+       fires and kills the child. */
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+
+    // Import the constant and verify its value so a typo fails the test
+    const { LISTENER_PID_DEADLINE_MS } = await import('./spawn-sidecar.js');
+    expect(LISTENER_PID_DEADLINE_MS).toBe(5000);
+
+    // Call without explicit deadlineMs — should use the constant
+    const promise = findListenerPid(9000, 'win32', spawnFn);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    // Advance to the deadline and confirm it fires
+    await vi.advanceTimersByTimeAsync(LISTENER_PID_DEADLINE_MS + 1);
+    await expect(promise).resolves.toBeNull();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves null and kills the child when the probe never exits (deadline)', async () => {
     vi.useFakeTimers();
     const child = makeHangingChild();
@@ -1313,5 +1375,39 @@ describe('findListenerPid — bounded with a deadline', () => {
     child.emit('exit', 0, null);
 
     await expect(promise).resolves.toBe(111); // First line only
+  });
+
+  it('invokes onDeadlineExpiry callback when the deadline fires (Half B)', async () => {
+    /* When the probe times out, a callback fires so the caller can distinguish
+       a timeout ("may retry") from a parse miss ("structural problem"). */
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+    const onDeadlineExpiry = vi.fn();
+    const deadlineMs = 1000;
+
+    const promise = findListenerPid(9000, 'win32', spawnFn, deadlineMs, onDeadlineExpiry);
+
+    await vi.advanceTimersByTimeAsync(deadlineMs + 1);
+    await expect(promise).resolves.toBeNull();
+    expect(onDeadlineExpiry).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not invoke onDeadlineExpiry when the probe exits before the deadline', async () => {
+    /* The callback should only fire on timeout, not on normal exit. */
+    vi.useFakeTimers();
+    const child = makeHangingChild();
+    const spawnFn = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+    const onDeadlineExpiry = vi.fn();
+    const deadlineMs = 1000;
+
+    const promise = findListenerPid(9000, 'win32', spawnFn, deadlineMs, onDeadlineExpiry);
+
+    child.stdout.emit('data', '4242\n');
+    child.emit('exit', 0, null);
+
+    await expect(promise).resolves.toBe(4242);
+    expect(onDeadlineExpiry).not.toHaveBeenCalled();
   });
 });
