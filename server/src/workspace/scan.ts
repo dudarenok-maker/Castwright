@@ -228,7 +228,7 @@ export interface BookStateJson {
      directly. Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
      (plan 27 rename-vs-add policy). Set at confirm time by
      `server/src/routes/import.ts`. */
-  language?: string;
+  language?: string | null;
   /* fs-65 Phase 3 — prosody annotation intent flag. Absent (undefined) ⇒ ON
      (eager default); only an explicit `false` opts out. The Task-13 client
      trigger gate is `prosodyEnabled !== false`. Renamed from `liveInstruct`
@@ -334,6 +334,49 @@ export function bookStateAudioFormat(state: BookStateJson): 'mp3' | 'aac-m4a' | 
  *  normalisation stay in one place. */
 export function bookStateLanguage(state: BookStateJson): string {
   return normaliseBookLanguage(state.language);
+}
+
+/** True when `state` carries no usable language — the field is absent,
+ *  `null` ("stated absence"), empty, or whitespace-only. Absence is a fact,
+ *  not English: a stored `null` (set on a surrendered detection) means unset
+ *  just like a missing key, so the honest readers treat both identically. */
+function bookLanguageIsUnset(state: BookStateJson): boolean {
+  const raw = state.language;
+  return raw === undefined || raw === null || raw.trim() === '';
+}
+
+/** Client-facing error thrown when a book's language is unset — absent key,
+ *  `null`, empty, or whitespace-only. Distinct from `bookStateLanguage`'s
+ *  `'en'` default: an unset field is a fact about the book, not English, and
+ *  the paths that change behaviour on absence (Task 6) must not be told a
+ *  confident lie. The message is deliberately client-facing — this text can
+ *  reach a user over the LAN HTTPS UI — so it points at where they fix it
+ *  ("Book settings") and never at a filesystem path. */
+export class BookLanguageUnsetError extends Error {
+  constructor() {
+    super(
+      'No language is set for this book. Open Book settings and choose a language before proceeding.',
+    );
+    this.name = 'BookLanguageUnsetError';
+  }
+}
+
+/** Honest language reader — `state.language` when the book actually has one,
+ *  else `null`. Never defaults. Absent key, `null`, empty and whitespace-only
+ *  all mean unset. The paths that change behaviour on absence use this; the
+ *  display paths keep `bookStateLanguage` (which must never see `undefined`). */
+export function bookStateLanguageOrNull(state: BookStateJson): string | null {
+  return bookLanguageIsUnset(state) ? null : state.language!;
+}
+
+/** Honest strict reader — returns a book's language or throws
+ *  `BookLanguageUnsetError`. Use where absence must fail loudly rather than
+ *  silently read as English. */
+export function requireBookStateLanguage(state: BookStateJson): string {
+  if (bookLanguageIsUnset(state)) {
+    throw new BookLanguageUnsetError();
+  }
+  return state.language!;
 }
 
 export interface LibraryBook {
