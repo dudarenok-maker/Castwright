@@ -120,7 +120,37 @@ vi.mock('../workspace/scan.js', async () => {
           author: 'A',
           series: 'S',
           title: 'T',
-          state: { manuscriptId, language: override.language } as unknown as BookStateJson,
+          /* manuscriptFile points at a file that does not exist so a POST that
+             sails through the language gate then hits getOrHydrateManuscript's
+             workspace fallback cleanly returns undefined (no abort, no heavy
+             loop) — exactly how the pre-existing 'en' fallback behaved for an
+             unknown book. The direct runMainAnalyzerJob tests never call
+             getOrHydrateManuscript, so this extra field is inert for them. */
+          state: {
+            manuscriptId,
+            language: override.language,
+            manuscriptFile: 'nonexistent-manuscript.txt',
+          } as unknown as BookStateJson,
+        };
+      }
+      /* Task 6c — override the *located-but-unset* case (a book EXISTS on disk
+         but never declared a language), so tests can drive the 409 gate and the
+         in-loop `language_unset` SSE error without touching a real BOOKS_ROOT
+         tree. Mirrors the __analysis_test_book_language_override hook above:
+         it fires only for the manuscriptIds listed, leaving every other test on
+         the real 'en' fallback. */
+      const unset = g.__analysis_test_book_language_unset as string[] | undefined;
+      if (unset && unset.includes(manuscriptId)) {
+        return {
+          bookDir: '/test-language-override',
+          author: 'A',
+          series: 'S',
+          title: 'T',
+          state: {
+            manuscriptId,
+            language: undefined,
+            manuscriptFile: 'nonexistent-manuscript.txt',
+          } as unknown as BookStateJson,
         };
       }
       return actual.findBookByManuscriptId(manuscriptId);
@@ -8073,4 +8103,174 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
     },
     60_000,
   );
+});
+/* Task 6c (#2246) — the analyzer path stops substituting 'en' for a book that
+   never declared a language (the no-op trap). Three required moves:
+     (a) the POST handler answers a real HTTP 409 `{ error: 'language_unset' }`
+         BEFORE the SSE stream opens / the job detaches;
+     (b) the `located === null` (pre-confirm, no book on disk yet) carve-out
+         still resolves 'en' (covered in analysis-language.test.ts);
+     (c) the detached loop (no `res` to answer with) surfaces an unset language
+         as an SSE `error` with code `language_unset` — the same endJob
+         broadcast mechanism classifyAnalysisFailure uses for lock-contention —
+         and the body carries NO filesystem path.
+   Driven through the mocked ../workspace/scan.js findBookByManuscriptId: the
+   `__analysis_test_book_language_unset` hook returns the located-but-absent
+   book so requireBookStateLanguage throws under test without touching a real
+   BOOKS_ROOT tree. */
+describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
+  it('(a) POST /:id/analysis answers a real 409 { error: "language_unset" } before the stream opens', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-lang-unset-gate-${Date.now()}-${Math.random()}`;
+    const g = globalThis as Record<string, unknown>;
+    if (!Array.isArray(g.__analysis_test_book_language_unset)) g.__analysis_test_book_language_unset = [];
+    (g.__analysis_test_book_language_unset as string[]).push(manuscriptId);
+    try {
+      const res = await supertest(app).post(`/api/manuscripts/${manuscriptId}/analysis`).send({});
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: 'language_unset' });
+    } finally {
+      const arr = g.__analysis_test_book_language_unset as string[];
+      const i = arr.indexOf(manuscriptId);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  });
+
+  it('(a) control: a book WITH a language is NOT a 409 - it reaches the SSE stream', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-lang-present-gate-${Date.now()}-${Math.random()}`;
+    (globalThis as Record<string, unknown>).__analysis_test_book_language_override = {
+      manuscriptId,
+      language: 'ru',
+    };
+    try {
+      // No stub manuscript is registered, so the handler proceeds past the
+      // gate and answers with the SSE `unknown_manuscript` error (200) - the
+      // point is it must NOT 409 at the language gate.
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis`)
+        .send({})
+        .buffer(true);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('unknown_manuscript');
+      expect(res.text).not.toContain('language_unset');
+    } finally {
+      delete (globalThis as Record<string, unknown>).__analysis_test_book_language_override;
+    }
+  });
+
+  it('(c) main loop: an unset language emits an SSE error code language_unset with no filesystem path', async () => {
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    const manuscriptId = `test-lang-unset-loop-${Date.now()}-${Math.random()}`;
+    const g = globalThis as Record<string, unknown>;
+    if (!Array.isArray(g.__analysis_test_book_language_unset)) g.__analysis_test_book_language_unset = [];
+    (g.__analysis_test_book_language_unset as string[]).push(manuscriptId);
+
+    const events: unknown[] = [];
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set([{ send: (ev: unknown) => events.push(ev) }]),
+      manuscriptId,
+      kind: 'main',
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+
+    try {
+      await runMainAnalyzerJob(job, undefined as never, undefined as never, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+
+      const err = events.find(
+        (e) => (e as { kind?: string }).kind === 'error',
+      ) as { kind: string; code?: string; message?: string } | undefined;
+      expect(err).toBeDefined();
+      expect(err?.code).toBe('language_unset');
+      expect(err?.message).toBeDefined();
+      // Both halves: assert the ABSENCE of a filesystem path, do not eyeball it.
+      expect(err?.message).not.toMatch(/[A-Za-z]:[\\/]/); // no drive-letter path
+      expect(err?.message).not.toMatch(/(^|[\\/])books[\\/]/i); // no workspace /books/ tree
+      expect(err?.message).not.toMatch(/[\\/]\.audiobook[\\/]/); // no .audiobook dir
+    } finally {
+      const arr = g.__analysis_test_book_language_unset as string[];
+      const i = arr.indexOf(manuscriptId);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  });
+
+  it('(c) subset loop: an unset language emits the same path-free language_unset SSE error', async () => {
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    const manuscriptId = `test-lang-unset-subset-${Date.now()}-${Math.random()}`;
+    const g = globalThis as Record<string, unknown>;
+    if (!Array.isArray(g.__analysis_test_book_language_unset)) g.__analysis_test_book_language_unset = [];
+    (g.__analysis_test_book_language_unset as string[]).push(manuscriptId);
+
+    const events: unknown[] = [];
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set([{ send: (ev: unknown) => events.push(ev) }]),
+      manuscriptId,
+      kind: 'subset',
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+
+    try {
+      await runSubsetAnalyzerJob(
+        job,
+        undefined as never,
+        undefined as never,
+        undefined as never,
+        undefined as never,
+        true,
+      );
+
+      const err = events.find(
+        (e) => (e as { kind?: string }).kind === 'error',
+      ) as { kind: string; code?: string; message?: string } | undefined;
+      expect(err).toBeDefined();
+      expect(err?.code).toBe('language_unset');
+      expect(err?.message).toMatch(/Book settings/); // the curated client-facing sentence
+      expect(err?.message).not.toMatch(/[A-Za-z]:[\\/]/);
+      expect(err?.message).not.toMatch(/(^|[\\/])books[\\/]/i);
+    } finally {
+      const arr = g.__analysis_test_book_language_unset as string[];
+      const i = arr.indexOf(manuscriptId);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  });
 });
