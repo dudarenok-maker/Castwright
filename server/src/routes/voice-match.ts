@@ -307,7 +307,14 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
     const currentBookLanguage = await resolveBookLanguageForBookId(bookId);
     const sameLanguageBookIds = new Set<string>();
     for (const mateBookId of seriesMateBookIds) {
-      if ((await resolveBookLanguageForBookId(mateBookId)) === currentBookLanguage) {
+      const mateLanguage = await resolveBookLanguageForBookId(mateBookId);
+      /* Task 6 (#2246) — null is "cannot prove same language", never a match.
+         A resolved-but-unset book (no stated language) must not auto-match a
+         same-stated-language mate, and two unset books must not match each
+         other; both would silently pass the fs-61 language veto. Only a real,
+         stated equality on both sides is proof of same language. */
+      if (mateLanguage === null || currentBookLanguage === null) continue;
+      if (mateLanguage === currentBookLanguage) {
         sameLanguageBookIds.add(mateBookId);
       }
     }

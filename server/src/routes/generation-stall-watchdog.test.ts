@@ -143,6 +143,7 @@ beforeAll(async () => {
       series: SERIES,
       updatedAt: '2026-06-02T00:00:00.000Z',
       schema: 1,
+      language: 'en',
       chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-1' }],
     }),
   );

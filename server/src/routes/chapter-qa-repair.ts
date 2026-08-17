@@ -20,7 +20,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateAudioFormat, bookStateLanguage, type BookStateJson } from '../workspace/scan.js';
+import { findBookByBookId, bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -100,6 +100,15 @@ chapterQaRepairRouter.post(
     const body = (req.body ?? {}) as QaRepairRequestBody;
     const dryRun = body.dryRun !== false; // default to the safe read-only scan
 
+    /* Task 6 pre-flight — resolve the book and its language BEFORE the SSE
+       stream opens, so an unset language answers a real HTTP `409
+       { error: 'language_unset' }` instead of a streamed 200. The book lookup
+       is hoisted above the header setup (the not-found branch below reuses it). */
+    const located = await findBookByBookId(bookId);
+    if (located && bookStateLanguageOrNull(located.state) === null) {
+      return res.status(409).json({ error: 'language_unset' });
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -113,7 +122,6 @@ chapterQaRepairRouter.post(
 
     if (!Number.isInteger(chapterId)) return fail('chapterId must be an integer.');
 
-    const located = await findBookByBookId(bookId);
     if (!located) return fail(`No book found for id "${bookId}".`);
     const { bookDir, state } = located;
 
@@ -155,7 +163,7 @@ chapterQaRepairRouter.post(
          also flagged for re-record. Cast names form the proper-noun allowlist;
          a non-English book passes its language hint. */
       const asrOn = asrEnabled();
-      const repairLanguage = bookStateLanguage(state);
+      const repairLanguage = requireBookStateLanguage(state);
       const asrLanguage = isNonEnglish(repairLanguage) ? repairLanguage : undefined;
       let asrAllowlist: string[] = [];
       if (asrOn) {
@@ -308,7 +316,7 @@ chapterQaRepairRouter.post(
         return built;
       };
 
-      const bookLanguage = bookStateLanguage(state);
+      const bookLanguage = requireBookStateLanguage(state);
       const nonEnglishBook = isNonEnglish(bookLanguage);
       const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
       const coquiEligible = eligibleEngines.includes('coqui');

@@ -24,7 +24,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguageOrNull, BookLanguageUnsetError } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
@@ -769,7 +769,7 @@ async function runScriptReviewJob(
   const structureEnabled = configValue<boolean>('analyzer.structure.enabled');
   const record = structureEnabled ? await getOrHydrateManuscript(manuscriptId) : undefined;
   const bodyByChapter = new Map<number, string>((record?.chapterHints ?? []).map((h) => [h.id, h.body]));
-  const reviewLanguage = bookStateLanguage(located.state);
+  const reviewLanguage = bookStateLanguageOrNull(located.state);
   /* Pin the local analyzer resident for the whole review run. Review calls land
      minutes apart per chapter — the same cadence as attribution — so a finite
      keep-alive would let Ollama evict the model between chapters and cold-reload
@@ -783,6 +783,16 @@ async function runScriptReviewJob(
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
       const chapterId = chapterIds[i];
+      /* Task 6 (#2246) — an unset book language must not silently review as
+         English. Per-item shape (this route's own per-chapter failure), never
+         a whole-request 409: each chapter whose review needs the language
+         fails on its own `chapter-failed` event. The client-facing message
+         carries no filesystem path. */
+      if (reviewLanguage === null) {
+        const unset = new BookLanguageUnsetError();
+        send({ kind: 'chapter-failed', chapterId, message: unset.message });
+        continue;
+      }
       lastEmittedProgress = i / chapterIds.length;
       send({
         kind: 'phase',
@@ -840,7 +850,9 @@ async function runScriptReviewJob(
          their onEvalTiming sub-calls into one record. */
       const reviewCall: StageCall = {
         signal: job.controller.signal,
-        language: bookStateLanguage(located.state),
+        /* Task 6 (#2246) — the honest (non-null) language resolved above; the
+           chapter-failed gate guarantees it is set before we get here. */
+        language: reviewLanguage,
         onChunk: (info) => heartbeat(0, chapterId, { receivedBytes: info.receivedBytes, elapsedMs: info.elapsedMs, sinceLastChunkMs: info.sinceLastChunkMs }),
         onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: activeSelection.model, waitMs, reason }),
         onFallback: ({ reason }) => switchToFallback(reason),

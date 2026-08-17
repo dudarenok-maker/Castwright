@@ -42,7 +42,7 @@ import { readJson } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
-  bookStateLanguage,
+  requireBookStateLanguage,
   findBookByBookId,
   type BookStateJson,
 } from '../workspace/scan.js';
@@ -793,7 +793,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      into a Russian book. Undesigned characters are then blocked (not silently
      downgraded to Kokoro) by `forbidKokoroFallback` at the synthesiseChapter
      call below. English books are untouched (byte-identical to pre-fs-2). */
-  const bookLanguage = bookStateLanguage(state);
+  /* Task 6 (#2246) — an unset book language must not silently route as
+     English. `requireBookStateLanguage` throws for it; generation's own SSE
+     error frame (`chapter_failed`) surfaces the client-facing message. */
+  let bookLanguage: string;
+  try {
+    bookLanguage = requireBookStateLanguage(state);
+  } catch (e) {
+    send({ type: 'chapter_failed', errorReason: (e as Error).message });
+    return res.end();
+  }
   const nonEnglishBook = isNonEnglish(bookLanguage);
   const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
   const coquiEligible = eligibleEngines.includes('coqui');

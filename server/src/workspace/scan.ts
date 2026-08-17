@@ -853,10 +853,19 @@ async function scanBook(
     /* fs-2 — surface the book language onto the wire, defaulting to 'en'
        at the seam so the card badge / filter pill never see undefined. */
     language: state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
-    eligibleTtsEngines: resolveEligibleEngines(
-      state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
-      ALL_TTS_ENGINES,
-    ),
+    /* Task 6 (#2246) — `eligibleTtsEngines` is client-authoritative (it gates
+       "Proceed anyway", lockedToQwen, and the engine picker), so an unset
+       book must NOT resolve to the most-permissive English set. Fail closed:
+       `[]` when the language is null. Never throw — one unset book must not
+       break the whole library scan (a null `state` — no state.json at all —
+       keeps the historical default). */
+    eligibleTtsEngines:
+      state && bookStateLanguageOrNull(state) === null
+        ? []
+        : resolveEligibleEngines(
+            state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
+            ALL_TTS_ENGINES,
+          ),
   };
 }
 

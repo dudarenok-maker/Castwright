@@ -10,7 +10,7 @@
    reviewed (the analyzer is called exactly once). */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -138,6 +138,10 @@ function writeBook(sentences: unknown[] | null, chapters: unknown[] = []): void 
       series: SERIES,
       seriesPosition: 1,
       isStandalone: true,
+      /* Task 6 (#2246) — an unset book language must not silently review as
+         English (the route now emits a per-chapter `chapter-failed` for a null
+         language), so the positive-path fixture states English explicitly. */
+      language: 'en',
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
       chapters,
@@ -2083,3 +2087,44 @@ describe('script-review — per-chapter reason on a lock timeout (#2292)', () =>
     expect(failed?.message).toBe('Failed to save findings: simulated disk-full');
   });
 });
+describe('POST /api/books/:bookId/script-review — unset book language (Task 6 #2246)', () => {
+  it('emits a per-chapter chapter-failed (never a whole-request 409) when the book has no language', async () => {
+    writeBook(SENTENCES);
+    // Baseline fixture sets language:'en'; carve it out to model an unset book.
+    const dir = bookDir();
+    const statePath = join(dir, '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+    delete state.language;
+    writeFileSync(statePath, JSON.stringify(state));
+    runReview.mockResolvedValue(CANNED_OPS);
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    /* Batch tier shape: the route still 200s and streams, and each chapter
+       that would need the language fails on its OWN `chapter-failed` event.
+       A whole-request 409 is explicitly WRONG here (design Part 2). */
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const failures = events.filter((e) => e.kind === 'chapter-failed');
+    expect(failures.length).toBeGreaterThan(0);
+    /* The reviewer was never asked to run on an unstated language. */
+    expect(runReview).not.toHaveBeenCalled();
+    /* No client-facing message carries a filesystem path. */
+    for (const f of failures) {
+      expect(String(f.message)).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
+    }
+  });
+
+  it('the control: a book WITH a language reviews normally (no chapter-failed)', async () => {
+    writeBook(SENTENCES); // fixture language:'en'
+    runReview.mockImplementation((_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.resolve(CANNED_OPS);
+      return Promise.resolve({ ops: [] });
+    });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+    expect(events.find((e) => e.kind === 'result')).toBeTruthy();
+  });
+});
+

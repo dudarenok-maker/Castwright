@@ -360,6 +360,38 @@ describe('scanLibrary derived stats', () => {
     const book = books.find((b) => b.title === 'Korean Eligibility Test');
     expect(book?.eligibleTtsEngines).toEqual(['qwen']);
   });
+  it('an unset language emits eligibleTtsEngines: [] — never the permissive English set (Task 6)', async () => {
+    /* The control that matters: a book WITH a language keeps its eligible set
+       (covered by the three tests above). An UNSET book must fail closed,
+       because `eligibleTtsEngines` gates "Proceed anyway", lockedToQwen, and
+       the engine picker — defaulting it to English would be the most
+       permissive set exactly where the language is unknown. */
+    bookSkeleton('Unset-Language Book', { language: undefined });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Unset-Language Book');
+    expect(book?.eligibleTtsEngines).toEqual([]);
+    /* The display `language` keeps defaulting for the card badge — only the
+       authoritative engine set fails closed. */
+    expect(book?.language).toBe('en');
+  });
+
+  it('the library scan does not throw on an unset book — it still returns it (Task 6)', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Unset-Language No-Throw Book', {
+      castConfirmed: true,
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'chapter-one', 60);
+    writeFileSync(join(audioRoot, 'chapter-one.mp3'), '');
+    /* scanLibrary must complete and still include the unset book — one unset
+       book breaking the whole library scan is the failure mode Task 6 rules
+       out. */
+    const books = await flatten();
+    const b = books.find((x) => x.title === 'Unset-Language No-Throw Book');
+    expect(b).toBeDefined();
+    expect(b?.eligibleTtsEngines).toEqual([]);
+  });
+
 
   it('malformed segments.json is skipped without breaking the runtime total', async () => {
     const { bookDir, audioRoot, bookId } = bookSkeleton('Mixed Segments Book', {

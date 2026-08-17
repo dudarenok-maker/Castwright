@@ -4231,8 +4231,8 @@ components:
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
           type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, unknown]
-          description: error only — machine-readable whole-run abort reason.
+          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+          description: error only — machine-readable whole-run abort reason. `language_unset` (Task 6, #2246) fires when the book never stated a language — the honest pre-work abort replacing a silent English design; `unsupported_language` fires for a stated language with no sidecar mapping.
         message: { type: string, description: error only — human-readable abort message. }
 
     CastDesignStatusResponse:
@@ -4302,8 +4302,8 @@ components:
         url: { type: string, description: designed only. }
         code:
           type: string
-          enum: [not_found, design_failed, unsupported_language, lock-contention]
-          description: error only.
+          enum: [not_found, design_failed, unsupported_language, lock-contention, language_unset]
+          description: error only. `language_unset` (Task 6, #2246) fires when the book never stated a language — the honest pre-work abort replacing a silent English design; `unsupported_language` fires for a stated language with no sidecar mapping.
         message: { type: string, description: error only. }
 
     SingleDesignStatusResponse:

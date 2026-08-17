@@ -204,7 +204,13 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     const codes = [
       ...new Set([...singleDesignSrc.matchAll(/type:\s*'error',\s*code:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1])),
     ].sort();
-    expect(codes).toEqual(['design_failed', 'lock-contention', 'not_found', 'unsupported_language']);
+    expect(codes).toEqual([
+      'design_failed',
+      'language_unset',
+      'lock-contention',
+      'not_found',
+      'unsupported_language',
+    ]);
     const block = schemaBlock(yaml, 'SingleDesignEvent');
     const codeEnumMatch = /code:\r?\n\s*type: string\r?\n\s*enum: \[([^\]]+)\]/.exec(block);
     expect(codeEnumMatch, 'SingleDesignEvent.code enum not found').not.toBeNull();

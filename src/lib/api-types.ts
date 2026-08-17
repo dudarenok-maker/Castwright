@@ -3015,10 +3015,10 @@ export interface components {
             /** @description character_failed only — the per-character failure message. */
             errorReason?: string;
             /**
-             * @description error only — machine-readable whole-run abort reason.
+             * @description error only — machine-readable whole-run abort reason. `language_unset` (Task 6,
              * @enum {string}
              */
-            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "unknown";
+            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown";
             /** @description error only — human-readable abort message. */
             message?: string;
         };
@@ -3092,10 +3092,10 @@ export interface components {
             /** @description designed only. */
             url?: string;
             /**
-             * @description error only.
+             * @description error only. `language_unset` (Task 6,
              * @enum {string}
              */
-            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention";
+            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention" | "language_unset";
             /** @description error only. */
             message?: string;
         };
