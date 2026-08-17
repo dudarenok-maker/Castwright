@@ -1,304 +1,247 @@
-# Reclaiming a stranded VRAM pool without an admission failure — design
+# What is actually stranded — measurement design for #1996
 
 Status: **draft** ·
 Issue: [#1996](https://github.com/dudarenok-maker/Castwright/issues/1996)
 (`needs-plan`) ·
-Closes on merge: [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976),
+Parent: [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976),
 whose criterion 1 is #1996's whole content ·
-Supersedes attempt 1: [PR #2029](https://github.com/dudarenok-maker/Castwright/pull/2029)
-(its `/unload` hook was rejected with a Critical and removed) ·
+Prior attempts: [PR #2029](https://github.com/dudarenok-maker/Castwright/pull/2029)
+(the `/unload` hook — rejected in review) and **this document's own first
+revision** (`cff012ec`, the idle-watchdog reclaim — withdrawn before approval;
+see §1) ·
 Follows: [PR #1993](https://github.com/dudarenok-maker/Castwright/pull/1993),
-which shipped the admission-failure-path reclaim this design deliberately does
-not touch.
+the shipped admission-failure-path reclaim.
 
 ---
 
 ## Summary
 
-A finished render leaves a reserved-but-unallocated PyTorch caching-allocator
-pool on the render card — measured at **3968 MB on an 8 GB card** with the
-engine reporting unloaded. The driver counts it as used, so `/capacity` reads
-several GB pessimistic and later operations are refused on a figure that is
-wrong. The memory is **fully reclaimable**: a load/unload cycle on that same
-stranded state recovered it to 389 MB.
+Two designs for #1996 have now failed for the same underlying reason: **nobody
+has measured what the stranded pool is made of.** Both assumed it was
+reclaimable cache that simply never got an `empty_cache()` call, and built a
+lever to schedule one. The repo's own code contradicts that assumption in three
+independent places (§1).
 
-PR #1993 already reclaims it *the instant any operation would be refused*. The
-residual gap — this design's entire subject — is the case where **nobody asks**:
-the pool sits there, the card looks full to every other process on the box, and
-nothing in the sidecar ever calls `empty_cache()` again.
+This revision therefore does not design a lever. It designs the **measurement
+that decides which lever is even applicable**, specifies the small read-only
+diagnostic that measurement needs, and records the constraints any future lever
+must satisfy — so the next attempt starts from evidence rather than re-deriving
+the same traps a third time.
 
-The lever is a fourth idle watchdog that fires a reclaim when a card has been
-quiet long enough, holds a pool big enough to matter, and has no live
-reservation. It is **owner-agnostic**, which is what makes it buildable: it
-never needs to know which engine stranded the pool.
+**One reading settles it.** If the pool is uncollected cache, a scheduled
+reclaim is the fix. If it is allocator fragmentation, `empty_cache()` can never
+return it and the fix is a boundary recycle — machinery that already ships.
+These have nothing in common, so building either before the reading is a coin
+flip.
 
 ---
 
-## 1. What is already shipped
+## 1. Why the lever premise was withdrawn
 
-#1976 listed five acceptance criteria. Four are discharged; this design is the
-fifth. Verified against `main` at `1d9ea75c`, not taken from the issue text.
+#1976 states the pool is "**fully reclaimable** — a load/unload cycle on that
+same stranded state recovered it — it simply never gets reclaimed", and
+concludes "It is not fragmentation that `empty_cache()` cannot compact." Both of
+this issue's design attempts inherited that sentence. It does not survive
+contact with the code.
 
-| # | Criterion | State |
+| # | Evidence | Where |
 |---|---|---|
-| 1 | Reserved pool returns to near-baseline after a render, no restart | **open — this design** |
-| 2 | A failed admission reclaims + re-probes once before refusing | shipped, `main.py:4011` `_reclaim_stranded_cache`, PR #1993 |
-| 3 | Regression test: an admission failing on the stale figure succeeds after reclaim | shipped, `tests/test_placement.py:1048-1352` |
-| 4 | `/health` reports per-device reserved VRAM | shipped, `main.py:8015` `_cuda_vram_mb_per_device` |
-| 5 | ASR reservation accounts for residency | shipped, split out as #2094, closed |
+| 1 | An unconditional, process-wide `gc.collect()` + `empty_cache()` **already runs every 60 s** whenever RSS ≥ 8192 MB — no residency precondition, no device key. That is exactly the action a new watchdog would schedule. | `main.py:7915` (`_MEM_WATCHDOG_INTERVAL`, commented "how often to LOG the memory line + **run the reclaim**"), `:8613-8614`, threshold `:7953-7960` |
+| 2 | The repo already records that this class of pool may be unreclaimable in-process on the primary platform: *"On Windows torch has no `expandable_segments` …, so a fragmented reserved pool … `empty_cache()` can't compact it back, so only a fresh process resets it."* | `main.py:7986-7990` |
+| 3 | The strand was measured **after** an unload whose own `_reclaim_after_drop` had already run `gc.collect()` + `empty_cache()`. | #1976's table (`qwen_loaded: false`); `main.py:1936-1943` |
+
+**The load/unload inference is unsound.** #1976 concludes "not fragmentation"
+because a load/unload cycle recovered the memory. But a **load** is an
+allocation pass that refills and coalesces segments — recovery via load/unload is
+the signature of fragmentation *as much as* of an uncalled reclaim, and
+distinguishes nothing. The one thing it does rule out is "permanently leaked",
+which was never the competing hypothesis.
+
+**A second, independent failure of the withdrawn lever.** Every engine idle TTL
+is exactly `120.0` s — VoiceDesign (`main.py:7678`), Qwen 1.7B-Base (`:7704`),
+ASR (`:7762`), SPK (`:7815`) — and each drops its model and reclaims
+process-wide when it fires. A quiet-window trigger set at that same grain is
+redundant by construction: the moment it could fire, four existing watchdogs
+already have. And the reported state — ASR and SPK resident *and being
+exercised* — is the one state such a trigger can never fire in, because activity
+keeps its clock moving.
+
+The residual set is therefore much smaller than either attempt assumed: the
+engines with **no** background TTL at all — **Coqui** (`main.py:2066-2068`
+records the omission as deliberate), **Kokoro**, and **Qwen Base 0.6B**. Whether
+any of those was resident during the measured strand is unknown, and is one of
+the things §3 measures.
 
 ---
 
-## 2. The mechanism
+## 2. The two candidate mechanisms
 
-### 2.1 Why the pool survives
+| | **A — uncollected cache** | **B — fragmentation** |
+|---|---|---|
+| What is holding the memory | Cached blocks nothing references, awaiting an `empty_cache()` that never comes | Cached blocks split around live tensors; `empty_cache()` returns only whole free segments |
+| `inactive_split_bytes` | Small relative to `reserved − allocated` | Dominates `reserved − allocated` |
+| A manual `empty_cache()` on the stranded state | `reserved` drops sharply | `reserved` barely moves |
+| The fix | Schedule a reclaim on a trigger the existing TTLs don't already cover | A **process recycle at a chapter boundary** — already built (`recycle_pending`, `_VRAM_SOFT_FRACTION`/`_VRAM_HARD_FRACTION` at `main.py:8150-8151`); the open question becomes whether its 90%-of-card threshold is the right trigger, since ~48% of the card stranded never approaches it |
+| Effort | New watchdog + clock + predicate + tests | Threshold/trigger change to shipped machinery |
 
-Every reclaim in `main.py` is a **side effect of dropping a resident model**.
-`unload()`, `unload_design()`, `maybe_free_idle*` and all three idle watchdogs
-converge on `_reclaim_after_drop`, which runs `gc.collect()` then
-`torch.cuda.empty_cache()`.
-
-`empty_cache()` is **process-wide**, not per-device. `main.py:3788-3804` records
-this as verified against the installed torch 2.11.0+cu128: the call takes no
-device argument, and `NativeCachingAllocator::emptyCache()` loops every device's
-allocator internally.
-
-Those two facts together give the exact residual condition:
-
-> **Whichever engine drops next clears the whole process's stranded pool,
-> whoever stranded it.** The pool therefore survives exactly one state: something
-> is resident and keeps being touched, so no TTL elapses and no drop happens —
-> *and* nothing gets refused, so #1993 never fires.
-
-That is precisely the reported state: `qwen_loaded: false` with `asr_loaded:
-true` and `spk_loaded: true`, both being exercised.
-
-### 2.2 Why "which engine owns the pool" stops being load-bearing
-
-#1996 records this as an open question blocking the design, because a hook keyed
-on one engine's unload path would miss a pool owned by a different engine. That
-is true — and it is an argument against *that kind of hook*, which review has
-already killed for an unrelated reason.
-
-**A reclaim with no residency precondition does not need the answer.** It frees
-whatever the allocator is holding and nothing references, on every device, in
-one call. The question is worth settling for its own sake, and §6 makes the
-instrument that settles it a by-product — but it is not a prerequisite for
-this work.
+Mechanism B is not a worse outcome — it is a **cheaper** one, and it reuses code
+that exists. What would be expensive is building A's watchdog and discovering
+afterwards that it frees nothing, which is the failure mode both prior attempts
+were on course for.
 
 ---
 
-## 3. Rejected alternatives
+## 3. What must be measured
 
-**A. Hook the reclaim onto `POST /unload`** — attempt 1, PR #2029. Rejected in
-review, recorded on #1996. Nothing issues `/unload` at render completion (the
-three producers fire at run *start*, *mid*-render at a phase boundary, and on
-user action), its engine allowlist is `{coqui, kokoro, qwen}` so ASR and SPK
-cannot reach it at all, and because `evictEngineForPhase` calls it **during** a
-render, a reclaim there would run a full-heap `gc.collect()` and a
-device-synchronising `cudaFree` up to ~80 times on a 40-chapter mixed book.
+Four readings, on the box, with a real render. Each exists to discriminate, not
+to characterise.
 
-**B. Hook it onto the three existing idle watchdogs.** This is where #1996's own
-comment points, and it is wrong in both directions. When a watchdog fires it
-already reclaims via `_reclaim_after_drop` — the hook adds nothing. When no
-watchdog fires there is nothing resident to free — the hook never runs. It
-covers everything except the one state §2.1 identifies.
-
-**C. Node signals render completion.** Matches criterion 1's literal wording and
-fires promptly, at the cost of a new cross-process contract and a second
-producer to keep correct — and it inherits attempt 1's failure mode, where the
-assumed completion caller turned out not to be on the completion path. It also
-misses every non-render source of a stranded pool (a design-mint batch, an
-aborted render, a direct sidecar user). Rejected in favour of an autonomous
-sidecar, which needs no cooperation from anything.
-
-**D. Quiet-only, with no pool-size floor.** Simplest predicate, but it runs a
-full-heap collection and a device-synchronising `cudaFree` on cards holding
-nothing worth reclaiming. The floor costs one subtraction.
+1. **The split.** Per device: `reserved_bytes.all.current`,
+   `allocated_bytes.all.current`, `inactive_split_bytes.all.current` from
+   `torch.cuda.memory_stats(i)`, at four points — fresh sidecar, mid-render,
+   immediately post-render, and 180 s post-render (past every 120 s TTL).
+   *Discriminates A from B, and shows whether the strand self-heals at the TTL.*
+2. **The before/after pair.** On the stranded state, a **bare** `empty_cache()`
+   with no load, and the same three figures immediately after.
+   *This is the decisive reading.* It must be a bare reclaim: a load/unload cycle
+   conflates the reclaim with an allocation pass and is what produced the unsound
+   inference in the first place.
+3. **Residency at the moment of the strand.** Which engines report loaded, from
+   `/debug/memory`'s `engines` block — specifically whether any of Coqui,
+   Kokoro or Qwen Base 0.6B (the three with no TTL) is among them.
+   *Decides whether §1's residual set is the real one, and settles #1996's own
+   "which engine owns the pool" question as a by-product.*
+4. **RSS at the moment of the strand**, against the 8192 MB warn threshold.
+   *Decides whether evidence row 1 actually applies to the observed session — if
+   RSS sat below 8192 MB the 60 s reclaim was never firing, which weakens that
+   row without rescuing the premise.*
 
 ---
 
-## 4. The design
+## 4. The diagnostic surface this needs
 
-Four parts, all in `server/tts-sidecar/main.py`.
+**The existing surfaces cannot produce readings 1 or 2.** `/debug/memory`
+(`main.py:9477`) reports `allocated_mb` and `reserved_mb` for the **current
+device only** (`:9523-9532`) and carries no `inactive_split_bytes`;
+`_cuda_vram_mb_per_device` (`:8015`) is per-device but reports only
+`reserved_mb`/`total_mb`. Nothing anywhere exposes a bare, on-demand reclaim.
 
-### 4.1 The quiet clock — `ReservationLedger`
+Two additions, both small, read-only in effect, and useful under either
+mechanism:
 
-`ReservationLedger` (`main.py:3662`) records a per-device `_last_release`
-monotonic stamp inside `release()` (`main.py:3685`), under the lock that method
-already holds, and exposes a `quiet_seconds(device_key)` reader.
+- **Extend `/debug/memory`** with a per-device `memory_stats` block carrying
+  `reserved`, `allocated`, `inactive_split` and `num_alloc_retries`. Purely
+  additive; no existing field changes meaning.
+- **Add `POST /debug/reclaim`** — one bare `_reclaim_device_cache()` call
+  returning the per-device figures before and after, in one response. This is
+  reading 2 in a single request, which matters because the two snapshots must
+  bracket the reclaim with nothing else in between.
 
-**Why here and nowhere else.** All eleven GPU entry points run inside `async
-with _placement.reservation(...)` (`main.py:9628, 9663, 9688, 9729, 9907, 10029,
-10125, 10328, 10549, 10714, 10789`), and every one of them ends at the single
-`self.ledger.release(held)` in that context manager's `finally`
-(`main.py:4456`). A stamp there cannot miss an entry point. A hand-maintained
-list of handlers can, and enumerating callers by hand is exactly what sank
-attempt 1.
+Both sit alongside the existing `/debug/codec-timing` pair (`main.py:9562`,
+`:9567`), so the route family and its conventions already exist.
 
-A hold that is never released (a crashed worker) leaves `engines_holding`
-non-empty, so the predicate blocks rather than fires. The failure direction is
-safe.
-
-### 4.2 The watchdog
-
-`_stranded_cache_watchdog`, started and stopped alongside the existing three in
-the lifespan block (`main.py:665-678`), matching their established shape: a
-fixed tick, `asyncio.to_thread` for anything that can block, `CancelledError`
-re-raised, every other exception logged and swallowed so a watchdog never dies.
-
-Tick interval follows the same derivation the others use
-(`min(30.0, max(5.0, ttl / 4))`) — 30 s at the default TTL.
-
-Per tick, for each device, when the predicate holds it calls
-`PlacementController._reclaim_stranded_cache(device_key)` (`main.py:4011`) —
-**not** `_reclaim_device_cache` and not `self.reclaim` directly. That method
-carries the in-use check and the 30 s per-device cooldown, and calling anything
-below it re-opens the guards PR #1993's review put there. Attempt 1 called the
-wrong level and passed `f"unload:{engine_id}"` as a device key, which made
-`engines_holding()` vacuously empty.
-
-### 4.3 The predicate
-
-All four must hold for a device:
-
-1. **No live reservation** — `ledger.engines_holding(device_key)` is empty.
-2. **Quiet** — `quiet_seconds(device_key) >= _STRANDED_IDLE_SECONDS`.
-3. **A pool worth reclaiming** — `reserved_mb - allocated_mb >=
-   _STRANDED_FLOOR_MB` on that device.
-4. **Not already reclaimed for this quiet period** — a latch keyed on the
-   `_last_release` stamp the reclaim ran against, cleared only when a new
-   operation on that device moves the stamp.
-
-**Clause 4 is load-bearing, not defensive decoration.** A pool that
-`empty_cache()` genuinely cannot return — because it is allocated, not cached —
-leaves clauses 1–3 permanently true on an idle box. Without the latch the
-watchdog would run a full-heap `gc.collect()` and a device-synchronising
-`cudaFree` every cooldown interval, forever, on a machine doing nothing. The 30 s
-cooldown inside `_reclaim_stranded_cache` rate-limits that; it does not stop it.
-
-### 4.4 Device-key derivation — a binding constraint
-
-The watchdog **must** derive its device keys from the same source the ledger and
-`probe_capacity` use, where `kind = "rocm" if _cuda_is_rocm() else "cuda"`
-(`main.py:3491`).
-
-`_cuda_vram_mb_per_device()` hardcodes `f"cuda:{i}"` (`main.py:8038`). On an AMD
-box the ledger's live reservations are keyed `rocm:0` while that helper reports
-`cuda:0`, so a watchdog iterating its keys would call `engines_holding("cuda:0")`,
-get an empty set, and **reclaim during a live operation** — bypassing guard 1
-entirely on exactly the platform nobody tests on. Either fix the helper's prefix
-or bridge it explicitly; do not iterate its keys as-is.
+**Scope note.** `POST /debug/reclaim` performs a real reclaim, so it is not
+inert. It is guarded by being a `/debug` route on a loopback-bound sidecar, and
+it does exactly what the memory watchdog already does unprompted every 60 s.
 
 ---
 
-## 5. Constants, not knobs
+## 5. The run sheet
 
-`_STRANDED_IDLE_SECONDS = 120.0` and `_STRANDED_FLOOR_MB = 512` are module
-constants.
-
-This follows `_RECLAIM_COOLDOWN_SECONDS`' stated reasoning (`main.py:3839-3845`):
-a registry knob is for a tradeoff an operator would want to make, and per
-CLAUDE.md it costs a registry entry, a `config:sync`, a Settings row, an
-`.env.example` line and a wiki row. These two have one defensible value each.
-
-120 s matches the grain of the existing TTLs (`ASR_IDLE_TTL`,
-`QWEN_DESIGN_IDLE_TTL`) and is comfortably longer than a between-chapter gap, so
-a live book render is never pessimised by having its pool freed and re-grown.
-512 MB is well above incidental allocator slack and well below the ~3.9 GB
-measured strand.
+The executable procedure lives at
+[`docs/testing/1996-stranded-vram-measurement.md`](../../testing/1996-stranded-vram-measurement.md)
+— exact requests, the four capture points, and a results table to fill in. It is
+a **diagnostic** run, not an acceptance run: nothing is being accepted, so it
+does not take a row in the on-box acceptance register.
 
 ---
 
-## 6. The instrument
+## 6. The decision tree
 
-`_cuda_vram_mb_per_device()` reports `reserved_mb` and `total_mb` but not
-**allocated**, so `reserved - allocated` — the stranded quantity itself, and
-clause 3's own input — cannot be read from outside the process today.
+| Reading 2 result | Mechanism | Next |
+|---|---|---|
+| `reserved` drops sharply on a bare `empty_cache()` | **A** | Design the trigger — but only for the residency set §1 identifies, at an interval that does **not** collide with the 120 s TTL band, and subject to every constraint in §7 |
+| `reserved` barely moves; `inactive_split` dominates | **B** | Re-open the recycle threshold instead. No new watchdog; #1996's criterion 1 is answered by a boundary recycle, and the issue text needs correcting |
+| The strand is gone at the 180 s capture | **Neither** | The pool self-heals at the existing TTLs. #1996's criterion 1 is already satisfied on `main`; what remains is #1993's admission-path reclaim covering the window before that, and the issue closes on evidence |
 
-Adding `allocated_mb` to that payload makes `/health` show the pool appear after
-a render and vanish after the reclaim. That is the predicate's input, the
-on-box acceptance evidence, and the measurement that settles #1996's
-"which engine owns the pool" question, all from one field.
-
-The existing scalar `vram_reserved_mb` keeps its current-device-only meaning; a
-live Node consumer reads it (`server/src/routes/sidecar-health.ts`), and its own
-docstring (`main.py:8019-8029`) records that PR #1993 added the per-device map
-*alongside* it deliberately rather than redefining the existing field.
+The third row is a live possibility and must not be treated as a null result —
+it is the cheapest outcome and the one the current evidence most nearly
+supports.
 
 ---
 
-## 7. Testing
+## 7. Constraints on any future lever
 
-Unit-testable in full via the seams `tests/test_placement.py` already uses — an
-injected `reclaim` hook and an injected probe — plus an injected clock and an
-injected per-device pool reader.
+Findings from the adversarial pass over the withdrawn design. They are recorded
+here because each cost real review effort to find, and each would otherwise be
+re-derived — or shipped as a defect — by the next attempt.
 
-**The bar is set by attempt 1's failure.** Its five tests all passed with the
-reclaim moved to *before* the model was freed, because they asserted that the
-hook was called rather than when. Every clause here therefore ships with a
-mutation that must turn a test red:
-
-| Mutation | Test that must fail |
-|---|---|
-| Remove the floor check (clause 3) | no reclaim when the pool is below the floor |
-| Remove the quiet check (clause 2) | no reclaim before the idle window elapses |
-| Remove the in-use check (clause 1) | no reclaim while a reservation is held |
-| Remove the latch (clause 4) | **exactly one** reclaim across N ticks with no intervening operation |
-| Iterate `cuda:` keys on a ROCm-keyed ledger | no reclaim when the ledger holds `rocm:0` |
-
-And the one that matters most — **a positive**, per the standing lesson that
-proving a guard blocks proves nothing until you prove it permits:
-
-> With an engine **resident but idle**, a pool above the floor, and the quiet
-> window elapsed, the reclaim **does** fire.
-
-That is the #1976 shape. A suite that only proved the guards block would pass
-while covering none of the reported bug.
-
----
-
-## 8. On-box acceptance
-
-This cannot be proven at PR time — it needs a real render on a real card, so per
-the Before-shipping checklist it converts into a register row rather than
-blocking the merge. Recording it does block: the row, the run sheet and the live
-view all move in the shipping PR.
-
-What to observe:
-
-1. Render a chapter to completion on the 8 GB card. Confirm via `/health`'s new
-   `allocated_mb` and `nvidia-smi` that a pool above the floor is stranded.
-2. Leave the box idle. Within one tick past the idle window, the pool returns to
-   near-baseline (`nvidia-smi` under ~500 MiB) with **no process restart**, and
-   the reclaim logs exactly once.
-3. **The negative:** during a live multi-chapter render, confirm the reclaim
-   never fires between chapters — no log line for the whole book.
-4. Record which device held the pool, settling #1996's open question as a
-   by-product.
-
----
-
-## 9. Not in scope
-
-The admission-failure path (#1993, shipped — unchanged by this work), ASR
-footprint sizing (#2094, closed), the memory watchdog's recycle thresholds
-(`_VRAM_SOFT_FRACTION` / `_VRAM_HARD_FRACTION`, `main.py:8150-8151` — a
-different metric with its own path; note #1976's issue body cites these at
-`:6980-6994`, which the file has since outgrown), the scalar
-`vram_reserved_mb` field's meaning, and any Node-side change.
+1. **A per-device in-use check does not guard a process-wide action.**
+   `_reclaim_stranded_cache` checks `engines_holding(device_key)` for one key
+   (`main.py:4052`) while `empty_cache()` frees every device
+   (`:3788-3804`). On a dual-GPU box — #1976's own topology — a quiet, stranded
+   `cuda:0` passes the check while a render runs on `cuda:1`, and the reclaim
+   fires a full-heap `gc.collect()` plus a device-synchronising `cudaFree` into
+   it. Any unprompted trigger needs an **all-device** quiet check.
+2. **The reclaim cooldown is shared mutable state.** `_last_reclaim`
+   (`main.py:4055-4058`) is written by `_reclaim_stranded_cache` and read by the
+   admission path. A new caller can put #1993's reclaim on cooldown and
+   reintroduce the exact refusal #1993 exists to prevent. Separate the state or
+   ship a regression test for it.
+3. **`SEG_CAPACITY_ADMISSION=0` disables the ledger.** All eleven reservation
+   sites are wrapped in `if _capacity_admission_enabled():` (`main.py:4473-4474`,
+   the documented rollback path). With it off, nothing holds or releases, so any
+   ledger-derived quiet signal reads "permanently quiet" and a trigger built on
+   it fires into live work. Such a trigger must disable itself when the flag is
+   off.
+4. **A latch keyed on per-device activity wedges on the stranded card.** A
+   stranded device reports less headroom, so `best_fit`/`try_hold`
+   (`main.py:3713-3753`) route subsequent work *away* from it — its activity
+   stamp never moves, and a latch waiting on that stamp never clears. The card
+   that needs reclaiming is the one permanently excluded.
+5. **Device keys are not uniformly `cuda:N`.** `probe_capacity` uses
+   `kind = "rocm" if _cuda_is_rocm() else "cuda"` (`main.py:3491`) and also emits
+   `cpu` and `mps:0` keys (`:3506-3510`), while `_cuda_vram_mb_per_device`
+   hardcodes `f"cuda:{i}"` (`:8038`). Iterating the latter to key into the
+   ledger silently bypasses the in-use guard on AMD. Note that *fixing* the
+   prefix changes the keys of the shipped `/health` field
+   `vram_reserved_mb_by_device`, which Node types and forwards
+   (`server/src/routes/sidecar-health.ts:186`, `:491-492`) — that is a wire
+   contract, not an implementation detail.
+6. **Adding a background loop breaks a pinned test.**
+   `tests/test_lifespan_order.py:44-54` hard-codes the nine startup handlers and
+   asserts against the real lifespan. A fourth watchdog must update it, and must
+   decide where in the ordering it belongs.
+7. **The test bar is an ordering assertion, not a call assertion.** Attempt 1's
+   five tests all stayed green when the reviewer moved the reclaim to *before*
+   the model was freed. A mutation that relocates the call must turn a test red —
+   including one that calls a lower level (`_reclaim_device_cache` or `reclaim`
+   directly) and thereby skips the guards.
+8. **`_reclaim_after_drop` is not one function.** There are separate
+   implementations at `main.py:1917` (Coqui), `:7371` (ASR) and `:7599` (SPK),
+   plus `_reclaim_host_and_vram` (`:1086`) and `_reclaim_device_cache` (`:3767`).
+   A brief that names it in the singular sends an implementer looking for one
+   thing that is five.
 
 ---
 
-## 10. Risks
+## 8. Not in scope
 
-- **A pool that is allocated, not cached, is not reclaimable by anything here.**
-  The predicate will observe it, fire once, free nothing, and latch. That is the
-  correct outcome — a genuine leak is a different bug — but the log line must
-  report before/after so the on-box run can tell the two apart rather than
-  reading a no-op as a success.
-- **The idle window is a guess about between-chapter gaps.** If a real book
-  render pauses longer than 120 s between chapters (a slow analyzer step, a long
-  assembly), the pool is freed and the next chapter's first line pays a fresh
-  `cudaMalloc`. Correctness is unaffected; throughput takes a one-off hit. Step 3
-  of the on-box run is what would catch it.
+The admission-failure path (#1993, shipped), ASR footprint sizing (#2094,
+closed), and any lever for criterion 1 — which is the point of this revision:
+the lever is chosen by §6, after the reading, not before it.
+
+---
+
+## 9. Risks
+
+- **The measurement may not reproduce.** The strand was observed once, during a
+  session that also hit the committed-memory ceiling twice. If three renders
+  produce no strand, that is itself the answer (decision-tree row 3) and must be
+  recorded as such rather than retried until it appears.
+- **`POST /debug/reclaim` mutates.** It performs a real reclaim, so a run sheet
+  that calls it mid-render measures the wrong thing. The run sheet orders the
+  captures so it is only ever called on a quiet box.
+- **Correcting #1976's text is part of the work.** Its "fully reclaimable / not
+  fragmentation" sentences are what sent two attempts down the same path; if the
+  reading contradicts them, leaving them in place will send a third.
