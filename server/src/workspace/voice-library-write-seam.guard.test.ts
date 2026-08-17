@@ -99,14 +99,19 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
+const SIBLING_GUARD = join(__dirname, 'cast-lock.guard.test.ts');
 
 /*
- * Helpers reused from cast-lock.guard.test.ts (server/src/workspace/). They are
- * not exported there, so copied verbatim - do not refactor the source file to
- * export them; that file is not this step's.
+ * `collectSourceFiles` is reused from cast-lock.guard.test.ts (same directory);
+ * it is small, stable and not exported there, so it stays copied. The
+ * opaque-range tokenizer below is a different matter: it is duplicated
+ * DELIBERATELY and its two copies are pinned byte-identical by the drift test
+ * at the bottom of this file. See that block's own header for why it is not an
+ * imported module.
  */
 /** Every non-test `.ts` file under `server/src`, recursively. */
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
@@ -121,62 +126,144 @@ function collectSourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** If `src[i]` opens a string/template literal or a comment, return the index
-    just past its end; otherwise -1. */
-function skipOpaqueToken(src: string, i: number): number {
-  const n = src.length;
-  const ch = src[i];
-  if (ch === '"' || ch === "'" || ch === '`') {
-    const quote = ch;
-    let j = i + 1;
-    while (j < n) {
-      if (src[j] === '\\') {
-        j += 2;
-        continue;
-      }
-      if (src[j] === quote) {
-        j++;
+/* ===== SHARED OPAQUE-RANGE TOKENIZER - BEGIN =================================
+   Duplicated BYTE-FOR-BYTE between
+   `server/src/workspace/cast-lock.guard.test.ts` and
+   `server/src/workspace/voice-library-write-seam.guard.test.ts`. A drift test in
+   the latter fails the build if the two copies stop matching.
+
+   It is duplicated rather than extracted to an imported module ON PURPOSE. The
+   out-of-tree census harnesses that verify this tokenizer in both directions
+   load it by transpiling a guard file standalone and reading
+   `computeOpaqueRanges` / `isOpaque` out of that file's own module scope, so a
+   tokenizer behind an `import` is invisible to them and the correctness
+   property below becomes unmeasurable. The drift test is the enforceable
+   stand-in for a shared module.
+
+   WHAT IT IS FOR: both guards scan raw source text for a write primitive and
+   must ignore a match that only appears in prose (a comment) or in data (a
+   string / template / regex literal). Getting that wrong is dangerous in BOTH
+   directions:
+     - OVER-REACH (fails OPEN): a range that covers live code hides a real call
+       site, so the guard passes on a genuine violation.
+     - UNDER-REACH (fails CLOSED): a real comment left uncovered makes prose
+       quoting the pattern count as a call site, reddening the guard on correct,
+       unchanged code and destroying the negative control both headers
+       advertise.
+
+   WHY THE TypeScript PARSER AND NOT A HAND-ROLLED WALKER: the walker this
+   replaces opened an opaque range on any `"`, `'` or backtick and ran to the
+   next matching one. Two shapes desynced it, and both failed OPEN:
+     1. A regex literal holding a quote - /["'\s]/ - opened a "string" at the
+        quote INSIDE the character class and ran to the next quote anywhere
+        later in the file.
+     2. A NESTED template literal - a backtick inside a `${...}` slot - ended
+        the outer range at the inner literal's OPENING backtick, leaving the
+        walker permanently out of phase.
+   A bare `ts.createScanner` does NOT fix (1): it cannot resolve the
+   regex-vs-division ambiguity and emits a SlashToken. Only the parser knows.
+
+   DELIBERATE SCOPE DECISION - `${...}` SLOTS ARE LIVE CODE. TemplateHead /
+   TemplateMiddle / TemplateTail cover only a template's literal text chunks, so
+   an expression inside an interpolation is NOT opaque and IS scanned. That is
+   stricter than the walker it replaces, which skipped a template whole and so
+   hid any real call site written inside a `${...}`.
+
+   COMMENTS come from per-node trivia, not a text scan, because a `//` inside a
+   string literal is not a comment. Every node is asked for its leading and
+   trailing comment ranges, de-duplicated by span since one comment is reachable
+   from several nodes.
+   ============================================================================ */
+interface OpaqueRange {
+  start: number;
+  end: number;
+}
+
+/** Every [start, end) span of `content` that is a string / template-chunk /
+    regex literal or a comment, sorted and merged so the spans are disjoint and
+    ascending (`opaqueEnd` binary-searches them). Parses `content` ONCE - a
+    caller scanning a file must compute these once and thread them through,
+    never call this per match. */
+function computeOpaqueRanges(content: string): OpaqueRange[] {
+  const sf = ts.createSourceFile('guard-scan.ts', content, ts.ScriptTarget.Latest, true);
+  const raw: OpaqueRange[] = [];
+  const seenComments = new Set<string>();
+
+  const addComment = (range: ts.CommentRange): void => {
+    const key = `${range.pos}:${range.end}`;
+    if (seenComments.has(key)) return;
+    seenComments.add(key);
+    raw.push({ start: range.pos, end: range.end });
+  };
+
+  const visit = (node: ts.Node): void => {
+    switch (node.kind) {
+      case ts.SyntaxKind.StringLiteral:
+      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts.SyntaxKind.RegularExpressionLiteral:
+      case ts.SyntaxKind.TemplateHead:
+      case ts.SyntaxKind.TemplateMiddle:
+      case ts.SyntaxKind.TemplateTail:
+        raw.push({ start: node.getStart(sf), end: node.getEnd() });
         break;
-      }
-      j++;
+      default:
+        break;
     }
-    return j;
+    for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
+    for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sf);
+  for (const range of ts.getLeadingCommentRanges(content, 0) ?? []) addComment(range);
+
+  raw.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: OpaqueRange[] = [];
+  for (const range of raw) {
+    const last = merged[merged.length - 1];
+    // `>=` merges touching spans too. That adds no characters to the union, so
+    // it cannot over-reach onto live code.
+    if (last && last.end >= range.start) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ start: range.start, end: range.end });
+    }
   }
-  if (ch === '/' && src[i + 1] === '/') {
-    let j = i + 2;
-    while (j < n && src[j] !== '\n') j++;
-    return j;
-  }
-  if (ch === '/' && src[i + 1] === '*') {
-    let j = i + 2;
-    while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
-    j += 2;
-    return j;
+  return merged;
+}
+
+/** True iff `index` sits inside one of `ranges` - inside a literal or a
+    comment, not real code. */
+function isOpaque(ranges: OpaqueRange[], index: number): boolean {
+  return opaqueEnd(ranges, index) !== -1;
+}
+
+/** The end offset of the opaque range containing `index`, or -1 when `index` is
+    live code. Lets a character walker jump a literal or comment whole. */
+function opaqueEnd(ranges: OpaqueRange[], index: number): number {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const range = ranges[mid];
+    if (index < range.start) hi = mid - 1;
+    else if (index >= range.end) lo = mid + 1;
+    else return range.end;
   }
   return -1;
 }
+/* ===== SHARED OPAQUE-RANGE TOKENIZER - END =================================== */
 
-/** Every [start, end) span in `content` that is a string/template literal or a
-    comment. */
-function computeOpaqueRanges(content: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = [];
-  const n = content.length;
-  let i = 0;
-  while (i < n) {
-    const skip = skipOpaqueToken(content, i);
-    if (skip !== -1) {
-      ranges.push({ start: i, end: skip });
-      i = skip;
-      continue;
-    }
-    i++;
+/** `computeOpaqueRanges` parses the whole file, and both G1 and G2 scan every
+    file, so memoize per content string rather than parsing each file twice. */
+const opaqueCache = new Map<string, OpaqueRange[]>();
+function opaqueRangesFor(content: string): OpaqueRange[] {
+  let ranges = opaqueCache.get(content);
+  if (!ranges) {
+    ranges = computeOpaqueRanges(content);
+    opaqueCache.set(content, ranges);
   }
   return ranges;
-}
-
-/** True iff `index` falls inside one of `ranges`. */
-function isOpaque(ranges: Array<{ start: number; end: number }>, index: number): boolean {
-  return ranges.some((r) => index >= r.start && index < r.end);
 }
 
 function lineOf(content: string, index: number): number {
@@ -189,7 +276,7 @@ function lineOf(content: string, index: number): number {
 
 /** Plain-substring, non-opaque occurrences of `re` in `content` with line nums. */
 function countNonOpaque(content: string, re: RegExp): { count: number; lines: number[] } {
-  const opaque = computeOpaqueRanges(content);
+  const opaque = opaqueRangesFor(content);
   const lines: number[] = [];
   let count = 0;
   re.lastIndex = 0;
@@ -330,5 +417,99 @@ describe('voice-library write seam - static guard (#1826 Step 2)', () => {
     }
 
     expect(problems, problems.join('\n\n')).toEqual([]);
+  });
+});
+
+/* Regression tests for the shared opaque-range tokenizer itself.
+
+   Every case below was verified RED against the tokenizer it replaces before
+   being written down - a tokenizer test that passes against the bug it is named
+   for proves nothing, and the previous attempt at this fix shipped exactly that
+   (a `${expr}` fixture with no nesting, which the old hand-rolled walker handled
+   identically).
+
+   T1/T2 are red against the hand-rolled walker at HEAD (both are OVER-reach: an
+   opaque range swallowing live code, which fails OPEN). T3 is red against the
+   AST rewrite that preceded this one, which collected comments only at offset 0
+   and at EOF and so left every mid-file comment uncovered (UNDER-reach, which
+   fails CLOSED and destroys the NC row in the mutation table above). T3 is green
+   against HEAD by construction - HEAD's bug was over-reach, not under-reach - so
+   its red phase is stated against the attempt it actually guards. */
+describe('opaque-range tokenizer', () => {
+  it('T1: a regex literal containing a quote does not open a runaway string range', () => {
+    // /["'\s]/ - the old walker opened a "string" at the double quote INSIDE the
+    // character class and ran to the next quote anywhere later in the file,
+    // hiding everything between.
+    const src = [String.raw`const RE = /["'\s]/;`, 'await writeEntry(entry);'].join('\n');
+    const opaque = computeOpaqueRanges(src);
+
+    // the regex body, quote and all, is opaque
+    expect(isOpaque(opaque, src.indexOf('"'))).toBe(true);
+    expect(isOpaque(opaque, src.indexOf("'"))).toBe(true);
+    // ...and the real call on the next line is still LIVE CODE
+    expect(isOpaque(opaque, src.indexOf('writeEntry('))).toBe(false);
+  });
+
+  it('T2: a nested template literal does not leave the tokenizer out of phase', () => {
+    // A backtick inside a `${...}` slot. The old walker scanned backtick-to-next-
+    // backtick, so it ended the OUTER range at the INNER template's OPENING
+    // backtick and resumed mid-template - where the apostrophe in `it's` opened a
+    // single-quoted "string" that ran to EOF.
+    const src = ["const msg = `outer ${flag ? `it's` : `no`} tail`;", 'await writeEntry(entry);'].join(
+      '\n',
+    );
+    const opaque = computeOpaqueRanges(src);
+
+    // the inner template's own text is opaque
+    expect(isOpaque(opaque, src.indexOf("it's"))).toBe(true);
+    // the `${...}` slot holds LIVE CODE and is deliberately not opaque - see the
+    // scope decision in the tokenizer block header
+    expect(isOpaque(opaque, src.indexOf('flag'))).toBe(false);
+    // and the real call after the template is still counted
+    expect(isOpaque(opaque, src.indexOf('writeEntry('))).toBe(false);
+  });
+
+  it('T3: a mid-file comment is opaque, so prose quoting the pattern is not a call site', () => {
+    // The negative control the mutation table's NC row depends on.
+    const src = [
+      'export function noop(): void {',
+      '  // prose: never call writeEntry(entry) directly here.',
+      '  return;',
+      '}',
+      '/* block prose: writeEntry(entry) is the unlocked primitive. */',
+      'const tail = 1;',
+    ].join('\n');
+    const opaque = computeOpaqueRanges(src);
+
+    const lineComment = src.indexOf('writeEntry(');
+    const blockComment = src.indexOf('writeEntry(', lineComment + 1);
+    expect(blockComment).toBeGreaterThan(lineComment);
+    expect(isOpaque(opaque, lineComment)).toBe(true);
+    expect(isOpaque(opaque, blockComment)).toBe(true);
+    // real code after the block comment is untouched
+    expect(isOpaque(opaque, src.indexOf('const tail'))).toBe(false);
+    // ...and the whole-file scan agrees: zero non-opaque occurrences
+    expect(countNonOpaque(src, /writeEntry\(/g).count).toBe(0);
+  });
+
+  it('T4: the tokenizer block is byte-identical in both guard files', () => {
+    // The tokenizer is duplicated rather than imported (see the block header for
+    // why the census harnesses require that). This is what stops the two copies
+    // drifting - the failure mode that produced the bug T1/T2 fix.
+    const BEGIN = '/* ===== SHARED OPAQUE-RANGE TOKENIZER - ' + 'BEGIN';
+    const END = '/* ===== SHARED OPAQUE-RANGE TOKENIZER - ' + 'END';
+    const extract = (path: string): string => {
+      const text = readFileSync(path, 'utf8');
+      const from = text.indexOf(BEGIN);
+      const to = text.indexOf(END);
+      expect(from, `${path}: missing tokenizer BEGIN sentinel`).toBeGreaterThanOrEqual(0);
+      expect(to, `${path}: missing tokenizer END sentinel`).toBeGreaterThan(from);
+      return text.slice(from, text.indexOf('*/', to) + 2);
+    };
+
+    const mine = extract(fileURLToPath(import.meta.url));
+    const sibling = extract(SIBLING_GUARD);
+    expect(mine.length).toBeGreaterThan(1000);
+    expect(sibling).toBe(mine);
   });
 });
