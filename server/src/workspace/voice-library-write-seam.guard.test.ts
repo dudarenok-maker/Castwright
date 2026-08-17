@@ -44,12 +44,11 @@
  * fewer (the entry is stale) - the both-directions assertion.
  *
  * G2 - FAIL CLOSED ON ABSENT EVIDENCE. A per-file expected-count map of
- * non-opaque `updateEntry(` occurrences across `server/src` production files,
- * plus a global floor. A bare global floor is too slack: it would not notice a
- * file that ALIASES its `updateEntry` import (`import { updateEntry as ue }`
- * + renaming its uses) because the global total is unchanged. Requiring each
- * file's exact count is what makes an alias redden: the renamed file's count
- * collapses to zero while the floor stays satisfied by the other files.
+ * non-opaque `updateEntry(` occurrences across `server/src` production files.
+ * Requiring each file's exact count catches aliases and other mutations: a file
+ * that aliases its `updateEntry` import (`import { updateEntry as ue }` + renaming
+ * its uses) has that file's count collapse to zero, failing the presence check
+ * that expects every mapped file to be present in scans.
  *
  * G3 - THE HEADER DECLARES THE BLIND SPOTS, VERBATIM AND IN FULL. A guard
  * whose limits are undocumented gets trusted past them. They are:
@@ -317,9 +316,8 @@ const G1_ALLOWLIST = new Map<string, { count: number; why: string }>([
 ]);
 
 /* G2 per-file expected counts of non-opaque `updateEntry(` across server/src
-   production files, plus the global floor. Re-derived 2026-08-17: voice-library.ts
-   scans at 1 (its :248/:253 `updateEntry(` hits are prose inside template
-   literals and are OPAQUE). floor = 4+6+1+1+1 = 13. */
+   production files. Re-derived 2026-08-17: voice-library.ts scans at 1 (its :248/:253
+   `updateEntry(` hits are prose inside template literals and are OPAQUE). */
 const G2_EXPECTED = new Map<string, number>([
   ['routes/voice-library.ts', 4],
   ['tts/clone-voice-resolver.ts', 6],
@@ -327,7 +325,7 @@ const G2_EXPECTED = new Map<string, number>([
   ['workspace/purge-clone-artifacts.ts', 1],
   ['workspace/voice-library.ts', 1],
 ]);
-const G2_GLOBAL_FLOOR = 13;
+
 describe('voice-library write seam - static guard (#1826 Step 2)', () => {
   it('G1: every `writeEntry(` occurrence outside the seam sits on the pinned count-keyed allowlist', () => {
     const problems: string[] = [];
@@ -373,10 +371,9 @@ describe('voice-library write seam - static guard (#1826 Step 2)', () => {
     expect(problems, problems.join('\n\n')).toEqual([]);
   });
 
-  it('G2: per-file `updateEntry(` counts fail closed, and the global floor holds', () => {
+  it('G2: per-file `updateEntry(` counts fail closed', () => {
     const problems: string[] = [];
     const seen = new Set<string>();
-    let globalTotal = 0;
 
     for (const file of collectSourceFiles(SRC_ROOT)) {
       const rel = relative(SRC_ROOT, file).split(sep).join('/');
@@ -384,7 +381,6 @@ describe('voice-library write seam - static guard (#1826 Step 2)', () => {
       const { count, lines } = countNonOpaque(content, UPDATE_RE);
       if (count === 0) continue;
 
-      globalTotal += count;
       seen.add(rel);
       const expected = G2_EXPECTED.get(rel);
       if (expected === undefined) {
@@ -408,12 +404,6 @@ describe('voice-library write seam - static guard (#1826 Step 2)', () => {
             'occurrences - stale map entry (or its import was aliased away).',
         );
       }
-    }
-
-    if (globalTotal < G2_GLOBAL_FLOOR) {
-      problems.push(
-        `global updateEntry( floor: found ${globalTotal}, expected >= ${G2_GLOBAL_FLOOR}`,
-      );
     }
 
     expect(problems, problems.join('\n\n')).toEqual([]);
