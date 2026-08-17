@@ -1,49 +1,24 @@
 # The tag-clause guard declines genuine turns — design
 
-Status: **active — owner decided 2026-08-18: fix defect B (the false positive), price defect A as an accepted residual. Encoding: a name-shape conjunct.** · Issue: [#2346](https://github.com/dudarenok-maker/Castwright/issues/2346) · Follows: [`2026-08-13-primary-pair-straddle-design.md`](2026-08-13-primary-pair-straddle-design.md) ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), shipped PR [#2340](https://github.com/dudarenok-maker/Castwright/pull/2340)) · Strand: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) M1/M2, [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286)
+Status: **active — owner decided 2026-08-18: fix defect B (the false positive), price defect A as an accepted residual. Encoding: the colon separator rule (issue option 2), after two other encodings were built and falsified.** · Issue: [#2346](https://github.com/dudarenok-maker/Castwright/issues/2346) · Follows: [`2026-08-13-primary-pair-straddle-design.md`](2026-08-13-primary-pair-straddle-design.md) ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), shipped PR [#2340](https://github.com/dudarenok-maker/Castwright/pull/2340)) · Strand: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) M1/M2, [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286)
 
 ---
 
 ## Summary
 
-`cutsATagClause` (`server/src/analyzer/dialogue-structure/parser.ts:439`) exists
-to stop a gained secondary-tier run from truncating a tag clause and stripping
-the neighbouring turn's speaker. It uses **"does a primary run end before this
-candidate?"** as its proxy for **"is this verb a trailing tag?"** That proxy is
-wrong in *both* directions, producing two mirror defects.
+`cutsATagClause` (`server/src/analyzer/dialogue-structure/parser.ts:439`) uses
+**"does a primary run end before this candidate?"** as its proxy for **"is this
+verb a trailing tag?"** The proxy is wrong in both directions:
 
-This design fixes one of them and prices the other. The two are not equally
-priced and not equally risky, and that asymmetry — not their raw counts — is
-what decided the scope.
+| | defect | measured, 331 books / 7 languages | a fix means |
+|---|---|---|---|
+| **A** | guard **inert** — no primary run precedes, so a name inside secondary quotes is admitted and the adjacent turn loses its speaker | **≤21** of 1,164 proxy firings | making the guard decline **more** |
+| **B** | guard **fires wrongly** — an unrelated earlier primary run makes the proxy true and a *leading* tag's genuine turn is dropped | **1** unambiguous case of 102 declines | making the guard decline **less** |
 
-| | defect | measured harm, 331 books / 7 languages | a fix means |
-|---|---|---:|---|
-| **A** | guard **inert** — the proxy is false when no primary run *precedes*, so a name inside secondary quotes is admitted as speech and the adjacent real turn loses its speaker | **≤21** of 1,164 proxy firings | making the guard decline **more** |
-| **B** | guard **fires wrongly** — an unrelated earlier primary run makes the proxy true, and a *leading* tag's genuine turn is silently dropped | **1** unambiguous case, of 102 total declines | making the guard decline **less** |
-
-**B ships. A is accepted and pinned.**
-
-## Why this split, and not "fix both"
-
-The issue asks for a single discriminator separating *"the verb belongs to the
-preceding turn's trailing tag"* (decline) from *"the verb introduces the
-following turn"* (admit). Both defects do resolve to that one question. But the
-two directions have opposite risk profiles:
-
-- **Fixing B is admit-only.** It can only move candidates *out* of the 102
-  declines, and all 102 are enumerated (`scratchpad/s2286/mc-cost-real.mts`).
-  The blast radius is bounded by a list we hold.
-- **Fixing A is decline-widening**, with no such bound. The obvious repair —
-  pass `out` (primary plus already-accepted secondary runs) instead of
-  `primaryRuns` — fixes A's three cases and **re-declines 5,892 genuine spans in
-  `pg/zh/23835.txt`**, reinstating PR #2340 round 1's MAJOR finding under a new
-  trigger, in the same book that finding was about.
-
-B is also the defect that **destroys a turn**, which the reading of record
-established for this strand — *"a rule must never destroy a turn; a spurious
-narration-read-as-speech span is a lesser harm"* (#2288 Task 0, decided
-2026-08-13) — refuses categorically rather than numerically. One instance in 331
-books does not make that principle inapplicable; it makes it cheap to honour.
+**B ships, via a colon rule. A is accepted and pinned.** Fixing A requires
+decline-widening — the move that re-declines 5,892 spans in `pg/zh/23835.txt`
+and reinstates PR #2340 round 1's MAJOR finding. Fixing B is admit-only and,
+measured, touches **2 of 102** declines.
 
 ### The case B is about
 
@@ -52,205 +27,198 @@ books does not make that principle inapplicable; it makes it cheap to honour.
 > …Aber wenn wir Ulebuhle nach all dem fragten, dann **sagte** er nur in seiner
 > knurrigen Weise**:** «Schnickschnack und Finger davon! Das versteht ihr nicht!»
 
-An unrelated primary-tier run earlier in the paragraph (`»Tick-Tack …
-Tick-Tack«`, a clock) sets `precededByPrimaryRun`; the clause back to the
-nearest sentence boundary contains `sagte`; the guard declines the candidate as
-a name inside a tag clause. It is not a name — it is the entire spoken
+An unrelated primary run earlier in the paragraph (`»Tick-Tack … Tick-Tack«`, a
+clock) sets `precededByPrimaryRun`; the clause carries `sagte`; the guard
+declines the candidate as a name inside a tag clause. It is the entire spoken
 sentence, and it is silently dropped.
 
-This also disposes of the issue's **option 1** (a per-language
-`tagPrecedesTurn` flag): German's dominant convention is verb-*after*-turn, yet
-here it is verb-before-turn via a colon. One flag per language cannot express a
-language that does both.
+## Three encodings were built and run. Two are dead.
+
+This section is the design's main content, because the two dead encodings are
+individually plausible and each was recommended before being falsified. Recording
+why they die is what stops them being re-proposed.
+
+| encoding | verdict | falsified by |
+|---|---|---|
+| **1. per-language `tagPrecedesTurn` flag** | dead | German uses **both** orders — trailing `, sagte er.` and leading `sagte er …: «…»`. One flag per language cannot express it. (#2346 comment, 2026-08-13) |
+| **2. candidate is NAME-SHAPED** (short, unpunctuated, ≤3 words / ≤5 CJK chars) | dead | A sentence-shaped candidate can **contain** a roster name. Probed on the real parser: `„Hallo“, sagte «Der Mann heisst Ulebuhle!»` keeps `speaker=ule` today because the guard fires; under this rule the candidate is admitted, the name is swallowed into a speech span, and the neighbouring turn loses its speaker. It **reintroduces defect 2** — the harm the guard exists for. |
+| **3. candidate contains a ROSTER NAME** | dead | Already evaluated and rejected by the #2315 design (`2026-08-13-primary-pair-straddle-design.md`, rejected-rules list): *"it fails on a turn that is a bare name (`«Антон!», сказала она.`)"*. Probed independently: it also breaks M2 residual 2 (`parser.test.ts`, `The sign said «Stop».`) and 4 `tier-sweep` cases — **5 failures**, because it neutralises the guard for every candidate that merely lacks a name. |
+| **4. COLON separator** (issue option 2) | **survives** | measured below |
+
+Encodings 2 and 3 fail from opposite sides and for the same underlying reason:
+each picks a property of the **candidate**, and the distinction being drawn is a
+property of the **separator** between the verb and the candidate.
 
 ## The rule
 
-One new conjunct, placed first so the guard's whole meaning stays readable in
-one function:
-
 ```ts
 function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], conv: LanguageConventions): boolean {
-  /* #2346. This guard exists to stop a NAME-shaped run truncating a tag clause
-     and stripping the neighbouring turn's speaker. A candidate that cannot be a
-     name is never that harm, so it is never declined — which is what stopped a
-     genuine German turn (`sagte er …: «…»`) from being dropped. */
-  if (!isNameShaped(line.slice(cand.start + cand.openLen, cand.end - cand.closeLen))) return false;
+  /* #2346. A colon immediately before the candidate means the verb INTRODUCES
+     what follows — `sagte er …: «…»`, the Latin analogue of CJK's `：`. The
+     guard's remaining tests all assume the verb ATTRIBUTES something already
+     parsed, so they must not run on a leading tag. */
+  const lastCh = line.slice(0, cand.start).replace(/\s+$/u, '').slice(-1);
+  if (lastCh === ':' || lastCh === '：') return false;
   /* …existing precededByPrimaryRun / sentence-boundary / hasStem logic, unchanged… */
 }
 ```
 
-## Why this is safe by construction, not by measurement
+Three lines, no new plumbing, no signature change, no new dependency. It is
+**admit-only**: it can only remove candidates from the decline set.
 
-`cutsATagClause` has exactly one call site (`parser.ts:500`), in the form:
+**Admit-only is not the same as safe**, and this document does not claim it is.
+The guard's purpose is preventing *speaker loss on the adjacent turn*, not
+preventing run deletion; admitting more runs is one of the ways speaker loss is
+produced (`parser.ts:409-412`, and the #2315 design's correction to M2's residual
+pricing). Safety here rests on the attribution measurement below, not on the
+shape of the change.
 
-```ts
-if (cutsATagClause(line, c, primaryRuns, conv)) continue;
+## Measured
+
+All four measurements were run against the **real parser** in this worktree, not
+a port. Instruments and corpus are session `c1002188`'s scratchpad (331 books:
+`books/` 391 files, `epubs/en/` 100) — they exist and were re-run, not cited.
+
+### 1. Corpus decline delta — the blast radius
+
+Every decline the shipped guard makes across the 331-book corpus, tallied by the
+character preceding the candidate:
+
+```
+lang   declined   colon-preceded (WOULD FLIP)   name-shaped   colon & name-shaped
+de           1                            1              0                     0
+ja           1                            0              1                     0
+zh         100                            1             51                     0
+TOTAL      102                            2             52                     0
 ```
 
-It can only ever **decline** a candidate; it never accepts, creates, or moves
-one. Adding a conjunct can therefore only *shrink* the decline set. Three
-properties follow without needing a corpus run:
+**2 of 102 flip. Zero of them are name-shaped**, so the rule cannot cost a
+speaker by swallowing a name — the mechanism defect 2 is about is untouched by
+construction of the measurement, not by assumption.
 
-1. it cannot delete a primary run (it never sees the accept path for one);
-2. it cannot create a run that did not already exist as a candidate;
-3. it is a provable no-op on any language whose `secondaryQuotePairs` is empty,
-   because `findQuoteRuns` returns before the guard is reached
-   (`parser.ts:484`).
+The preceding-character histogram explains why the CJK exposure feared when this
+option was first raised does not materialise: `zh` declines sit after ordinary
+Han characters (`個` 10, `著` 8, `說` 7, `，` 6, `道` 3 …), because CJK leading
+tags are typed `高颎道：“…”` and `“…”` is a **primary** zh pair — those candidates
+never reach the guard at all.
 
-M1's never-delete invariant and the 270-test `dialogue-structure` suite hold by
-construction, in the same way M2's rule B held them. Measurement is still owed
-for *how much* moves — see Acceptance — but not for *whether the change is
-containable*.
+The two flips, in full:
 
-## The predicate
+| lang | book | candidate | status |
+|---|---|---|---|
+| `de` | `pg/de/63460.txt` | `Schnickschnack und Finger davon! Das versteht ihr nicht!` | **the target — the turn this design exists to save** |
+| `zh` | `pg/zh/52200.txt` | `我圖他潤肺。` | sentence-shaped, inside a nested-quote passage. **Not yet adjudicated in context — an acceptance item, not a cleared case.** |
 
-```ts
-/** #2346. The ticket's own NAME-shaped classifier, moved from the measurement
-    instrument into the parser so the guard and the published ≤21 harm figure
-    share ONE definition. */
-function isNameShaped(text: string): boolean {
-  const t = text.trim();
-  if (!t) return false;
-  if ([...t].some((ch) => SENTENCE_END_CHARS.has(ch))) return false;
-  return CJK_RE.test(t) ? [...t].length <= 5 : t.split(/\s+/).length <= 3;
-}
+### 2. Attribution — the instrument that carries the safety case
+
+#2315's design names the attribution-aware family as the instrument that decides
+safety, because every geometry instrument in this strand is blind to speaker loss
+by construction. Reproduced here against the real parser, all four arms in one
+process:
+
+```
+arm                                             cases  ATTRIBUTED  SPEAKER-LOST  TURN-LOST  EXTRA
+POSITIVE CONTROL (no secondary pair declared)      42          42             0          0      0
+FIRING CONTROL  (wide tables, guard OFF)           42          21            21          0     21
+wide tables, SHIPPED guard                         42          42             0          0      0
+wide tables, SHIPPED guard + COLON RULE            42          42             0          0      0
 ```
 
-Three deliberate choices:
+**Both required controls fire.** The positive control proves the metric can read
+a speaker at all; the firing control proves it can see the class (21 lost with
+the guard off). This independently reproduces #2315's published **21 → 0**. The
+colon rule moves nothing.
 
-- **Thresholds are the ticket's, not fresh ones.** ≤3 words / ≤5 CJK characters,
-  unpunctuated, is the exact classifier PR #2340 round 3 used to establish that
-  the raw 1,164 proxy overstated defect A's harm by ~100× and the real figure is
-  ≤21. Re-deriving a threshold here would mean the fix and the published number
-  no longer refer to the same thing — the recurring defect in this strand has
-  been a figure measured against one rule presented as evidence for another.
-- **"Unpunctuated" reuses `SENTENCE_END_CHARS`** (`parser.ts:374` — `.!?。！？`),
-  the constant the guard's own sentence-boundary walk already uses. Sentence
-  punctuation is exactly what separates a clause from a name.
-- **`[...t].length` counts code points, not UTF-16 units.** `name-matcher.ts:68`
-  already documents supplementary-plane Han (CJK Ext-B, U+20000+) as a real
-  case, where `.length` would double-count every glyph.
+### 3. Behavioural probes on the real parser
 
-### One bias inversion, named on purpose
+| case | shipped | + colon rule |
+|---|---|---|
+| `pg/de/63460` target shape | turn swallowed into the tag | **own speech span — turn saved** |
+| `„Hallo“, sagte «Der Mann heisst Ulebuhle!»` (encoding 2's counter-example) | `Hallo` speaker=`ule` | **unchanged** |
+| `“Hi”, he said. The sign said «Stop». “Bye”, she said.` (M2 residual 2) | `«Stop»` declined | **unchanged** |
+| `“Hi”, he said. Then she called: «Ulebuhle»` (encoding 3's bare-name failure) | declined | **admitted** |
 
-The classifier was built as a **generous upper bound on NAME-shaped**, so that
-defect A's harm figure could not be accused of under-counting. Reused as a
-runtime conjunct, that generosity inverts: *generous toward NAME-shaped* means
-*generous toward declining*, which is the direction of defect B — the very thing
-being fixed.
+### 4. Suite
 
-This is accepted deliberately, because the conservative direction here is the
-one that changes least: a stricter predicate would flip more of the 102 declines
-than the evidence supports. It is safe for the target case specifically —
-`«Schnickschnack und Finger davon! Das versteht ihr nicht!»` is two sentences
-carrying `!`, so it is sentence-shaped under any threshold in this family. The
-inversion is recorded here so that a future tightening is a deliberate act
-rather than a rediscovery.
-
-### Where `CJK_RE` comes from
-
-`CJK_RE` is currently module-local to `name-matcher.ts:54`. It must be
-**exported and imported**, not copied — a second regex defining "is this CJK"
-is precisely the duplicated-mechanism shape this codebase's conventions refuse
-(cf. "don't add a second id matcher" in CLAUDE.md).
-
-## What should move
-
-Predicted, **to be verified rather than assumed** — of the 102 corpus declines:
-
-| lang | declined today | name-shaped → still declined | sentence-shaped → now admitted |
-|---|---:|---:|---:|
-| `de` | 1 | 0 | **1** ← the target; turn saved |
-| `ja` | 1 | 1 | 0 |
-| `zh` | 100 | 51 | 49 |
-| `en`/`es`/`fr`/`ru` | 0 | 0 | 0 |
-| **total** | **102** | **52** | **50** |
-
-The 49 `zh` flips are almost entirely one messy plain-text edition
-(`pg/zh/24264.txt`, 紅樓夢) whose unbalanced quote punctuation sweeps narration
-into candidate spans. Read in context, most are not dialogue. Admitting them
-therefore buys nothing and costs narration-read-as-speech — **explicitly the
-lesser harm class** under the reading of record, and the price of a rule stated
-in terms of the guard's purpose rather than fitted to one book.
+`server/src/analyzer/dialogue-structure/` — **382 of 382 pass** with the rule
+applied (encoding 3, for contrast, produced 5 failures). This is **necessary and
+not sufficient**: the same suite is documented as blind to attribution, which is
+why measurement 2 exists.
 
 ## Acceptance
 
+Each item can fail, and the note says how. An item that cannot fail is not an
+acceptance criterion.
+
 1. **The German turn survives.** A regression test on the `pg/de/63460.txt`
-   shape: `sagte` + colon + a sentence-shaped secondary candidate yields the
-   speech span. Red before the change, green after.
-2. **Mutation receipt with observed output.** Remove the conjunct, re-run, and
-   report the actual failure text — not a claim that it fails.
-3. **Defect A is untouched.** The three pinned cases at `parser.test.ts:1420`,
-   `:1426`, `:1432` stay green *unchanged*. An admit-only rule cannot fix them,
-   so a flip there means the change is not admit-only.
-4. **Round 1's MAJOR finding does not return.** The zh leading-tag family
-   (`reopen-sweep.test.ts:405`) stays green, and `pg/zh/23835.txt` shows **no**
-   newly-declined spans.
-5. **Corpus movement matches the table above** — `mc-cost-real.mts` re-run:
-   102 → 52 declines, with **zero** name-shaped declines lost.
-6. **The 270-test `dialogue-structure` + `narrator-default` suite stays green.**
-7. **A corpus replay is not clearance.** Three diagnoses in this strand have
-   been wrong and two passed a clean 0-of-747-chapter replay. The corpus shows
-   safety, never sufficiency; item 1's generated shape is the instrument that
-   decides.
-
-### Expected, and requiring adjudication rather than silent repair
-
-The guard's own suite (`parser.test.ts:466`, "with real `secondaryQuotePairs`")
-was written when the guard had two conjuncts. Any case there whose candidate is
-sentence-shaped **will now be admitted**. Each such flip must be adjudicated
-individually and its expectation updated *with a comment saying why* — a test
-adjusted merely to pass again is how a guard silently loses its purpose.
+   shape. *Fails if* the rule is absent or mis-scoped — verified red-before /
+   green-after during design.
+2. **Mutation receipt with observed output.** Delete the two-line rule, re-run,
+   and paste the actual failure text.
+3. **M2 residual 2 stays declined** (`parser.test.ts`, `The sign said «Stop».`).
+   *Fails if* the rule over-admits — encoding 3 failed exactly here, so this is a
+   live check, not a formality.
+4. **The attribution family reports 42/42/0 with BOTH controls firing.** A run
+   whose firing control does not show 21 lost is void and must not be reported as
+   a pass.
+5. **The corpus decline delta is exactly the 2 rows above**, and
+   `colon & name-shaped` is **0**. *Fails if* the flip set differs in size or
+   membership.
+6. **The `zh` flip (`pg/zh/52200.txt`) is read in context and adjudicated** as
+   gain, neutral, or cost, and the verdict recorded. It is currently unread.
+7. **The 382-test suite stays green** — necessary, not sufficient (see above).
+8. **A corpus replay is not clearance.** Three diagnoses in this strand have been
+   wrong and two passed a clean 0-of-747-chapter replay. Items 1 and 4 decide.
 
 ## Residual: defect A, accepted and priced
 
-Defect A stays open, at a measured **≤21** of 1,164 proxy firings (2,202
-paragraphs exposed at paragraph level; 2,221 paragraphs / 8,802 runs at run
-level — the paragraph figure is a conservative under-count, not an over-count).
+Defect A stays open at **≤21** of 1,164 proxy firings (2,202 paragraphs exposed
+at paragraph level; 2,221 paragraphs / 8,802 runs at run level — the paragraph
+figure is a conservative under-count).
 
-**Do not target the raw 1,164.** It fires on an ordinary correctly-parsed
-two-turn paragraph as readily as on the harmful shape, and 94% of its mass is
-the former. A fix that drives it toward zero will very likely reinstate the
-5,892-span regression on `pg/zh/23835.txt`.
+**Do not target the raw 1,164.** It fires on ordinary correctly-parsed two-turn
+paragraphs as readily as on the harmful shape; ≥1,143 of 1,164 (98.2%) are
+sentence-shaped second turns, not names. Driving it toward zero will very likely
+reinstate the 5,892-span regression on `pg/zh/23835.txt`.
 
-The pinned gap test (`parser.test.ts:1375`) **stays**, because defect A remains
-real. Its comment does not: it currently reads *"this test is expected to start
-FAILING the moment #2346 is fixed, at which point it should be deleted"*. With B
-fixed and A priced, that sentence becomes false and must be corrected in the
-same diff.
+**A and B are disjoint populations, not two slices of one measurement.**
+`precededByPrimaryRun` separates them: A is measured where the guard is *inert*,
+B where the guard *declines*. Their language footprints barely overlap — A is
+`es`/`fr`/`zh`, B is `de`/`ja`/`zh`. Any future work must not average them.
+
+The pinned gap test (`parser.test.ts:1375`) **stays** — defect A remains real.
 
 ## Chores this change makes owed
 
-Each is fixed in this round, not filed (CLAUDE.md, *Incidental findings*):
-
-- `parser.test.ts:1410` — the "expected to start FAILING" comment, above.
-- `parser.ts:409-438` — the guard's header comment describes a two-conjunct
-  rule and must describe the third, including why it exists.
-- `#2346` — re-scoped to defect A alone, carrying the accepted price, so the
-  ticket stops claiming a decision is owed on B.
-- Both release-notes documents (`docs/release-notes-next.md` and
-  `RELEASE_NOTES.md`) — this is a user-visible attribution fix.
-- The issue's claim that it *"blocks full closure of #2286"* is restated: with
-  A priced, it does not.
+- `parser.test.ts:1410` — "expected to start FAILING the moment #2346 is fixed"
+  becomes false once B ships and A is priced. Reword to name **defect A**.
+- `parser.ts:409-438` — the guard's header documents a two-test rule; it must
+  document the colon test and why it comes first.
+- `parser.test.ts:459-465` — the describe header describes the guard as declining
+  "when a primary-tier turn precedes it **and** the clause carries a verb stem".
+  Now incomplete.
+- **#2346 re-scoped to defect A alone**, carrying its price, and its "blocks full
+  closure of #2286" line corrected — with A priced, it does not.
+- Both release-notes documents — this is a user-visible attribution fix.
+- **State the arity limit.** The German target is a `«…»` secondary run after a
+  `»…«` primary — the #2352 reversed-pair collision. `de.ts:63-71` records that a
+  **second** Swiss quote in the same paragraph seeds a primary run that swallows
+  the attribution anyway. So this fix saves the turn at **one** Swiss quote per
+  paragraph and is unreachable at two or more. That qualification belongs in the
+  test comment and the release note.
 
 ## Not in scope
 
-- **Defect A**, in any form — including the `out`-based repair, which is
-  rejected above with a measured reason.
-- **The colon/separator encoding** (the issue's option 2) and the
-  **roster-name encoding**. Both were considered and set aside on 2026-08-18;
-  recorded in this document's decision line so they are not re-litigated as
-  new ideas.
-- **#2352** (German `»…«` primary vs `«…»` secondary being exact reverses) — a
-  separate, still-open decision on a different mechanism.
-- Any change to `quotePairs` / `secondaryQuotePairs` tables.
-- Any change to the primary tier, `scanQuoteRuns`, or `crossExamine`'s
+- **Defect A** in any form, including the `out`-based repair.
+- **Encodings 1–3**, falsified above. Recorded so they are not re-proposed.
+- **#2352** — German's reversed primary/secondary pairs; a separate open decision.
+- Any change to the tables, the primary tier, `scanQuoteRuns`, or `crossExamine`'s
   `dialogueOpen` contract.
 
-## Instruments — do not rebuild
+## Instruments
 
-`scratchpad/s2286/mc-cost-real.mts` (the 102-decline inventory),
-`mc-de-sample-full.mts`, `remeasure-report.md`; `scratchpad/s2315/`'s
-`reprice-f2-exposed.mts`, `reprice-f2-classify.mts`, `reprice-f2-runlevel.mts`.
-The 331-book corpus is listed in
-[#2288 comment 5275015405](https://github.com/dudarenok-maker/Castwright/issues/2288#issuecomment-5275015405).
+Session `c1002188` scratchpad — `2288-corpus-lib.mts` (loader + the 331-book
+corpus), `s2286/mc-cost-real.mts` (the decline inventory), `s2315/attrib.mts`
+(the attribution family, whose four arms this design re-derives against the real
+parser). **These are in a Claude session temp directory, not the repository** —
+they are not repo-relative paths, and nothing in git preserves them.
