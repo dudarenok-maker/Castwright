@@ -676,6 +676,14 @@ export interface LibraryBook {
       but typed optional so the ~20 test fixtures + mock factories that build a
       LibraryBook don't all need updating; consumers default to 'en'. */
   language?: string;
+  /** Task 8 (#2246) — honest "is the language actually set?" signal. `language`
+      above is the resolved display value (unset books still read 'en' for the
+      badge), so it alone cannot tell a book that declared a language from one
+      that never did; `languageSet` is that distinction — `true` when the book
+      actually declared one, `false` when absent/null/empty. Optional for the
+      same pre-existing-fixture reason as `language`; the server always emits
+      it, consumers default it `?? false`. */
+  languageSet?: boolean;
   /** fs-60 — which TTS engines are eligible for this book's language
       (independent of which engines are installed on this deployment — the
       frontend intersects this with its own installed-engines list). Optional

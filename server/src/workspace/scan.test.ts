@@ -34,7 +34,7 @@ function bookSkeleton(
   opts: {
     castConfirmed?: boolean;
     chapters?: Array<{ id: number; slug: string; generationState?: 'failed' }>;
-    language?: string;
+    language?: string | null;
   } = {},
 ) {
   const bookId = makeBookId(AUTHOR, SERIES, title);
@@ -373,6 +373,43 @@ describe('scanLibrary derived stats', () => {
     /* The display `language` keeps defaulting for the card badge — only the
        authoritative engine set fails closed. */
     expect(book?.language).toBe('en');
+  });
+
+  it('an unset book carries languageSet: false — the honest signal (Task 8)', async () => {
+    /* The mutation target for Task 8's receipt: force languageSet to a
+       constant `true` and this must go red — an unset book really is `false`,
+       and the whole point of the field is that `language` (still 'en' here for
+       the badge) does NOT tell you that. */
+    bookSkeleton('Unset-Language Signal Book', { language: undefined });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Unset-Language Signal Book');
+    expect(book?.languageSet).toBe(false);
+    /* The display value keeps defaulting — only the honest signal flips. */
+    expect(book?.language).toBe('en');
+    expect(book?.eligibleTtsEngines).toEqual([]);
+  });
+
+  it('a book with a language carries languageSet: true (Task 8 additive control)', async () => {
+    /* The control that proves the change is additive: a book WITH a language
+       reports `true`, and its `language` / `eligibleTtsEngines` are exactly
+       what they were before this task landed. */
+    bookSkeleton('Set-Language Control Book', { language: 'ru' });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Set-Language Control Book');
+    expect(book?.languageSet).toBe(true);
+    expect(book?.language).toBe('ru');
+    expect(book?.eligibleTtsEngines?.slice().sort()).toEqual(['coqui', 'qwen']);
+  });
+
+  it('a stored null language behaves as unset, not as en — languageSet false (Task 8)', async () => {
+    /* A surrendered detection persists `null` on disk; that is stated absence,
+       exactly like a missing key — `languageSet` must be false and the engine
+       set must fail closed, never resolve to the permissive English set. */
+    bookSkeleton('Stored-Null-Language Book', { language: null });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Stored-Null-Language Book');
+    expect(book?.languageSet).toBe(false);
+    expect(book?.eligibleTtsEngines).toEqual([]);
   });
 
   it('the library scan does not throw on an unset book — it still returns it (Task 6)', async () => {

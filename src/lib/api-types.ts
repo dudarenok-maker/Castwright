@@ -3722,13 +3722,31 @@ export interface components {
              */
             tags?: string[];
             /**
-             * @description fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). Defaults to
-             *     `en` for books written before the field landed. Drives
-             *     same-language narration (a non-`en` book routes every character,
-             *     incl. the narrator, to a designed Qwen voice and never falls back
-             *     to English Kokoro) and the library language badge + filter pill.
+             * @description fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). This is the
+             *     **resolved display value**: a book whose language was never set is
+             *     still surfaced as `en` so the card badge / filter pill never see
+             *     undefined. Drives same-language narration (a non-`en` book routes
+             *     every character, incl. the narrator, to a designed Qwen voice and
+             *     never falls back to English Kokoro) and the library language badge
+             *     + filter pill. Pair with `languageSet` — reading `language` alone
+             *     cannot tell a book that declared English from one that never
+             *     declared anything.
              */
             language?: string;
+            /**
+             * @description Task 8 (#2246) — the honest "is the language actually set?"
+             *     signal. `language` (above) is the resolved display value, so it
+             *     alone cannot distinguish a book that really declared its language
+             *     from one that never did; `languageSet` is that distinction.
+             *     `true` when the book's state.json carries a usable language,
+             *     `false` when it is absent, `null`, empty or whitespace-only (or
+             *     there is no state.json at all). Always populated by `scan.ts`, but
+             *     kept optional (NOT added to `required`) — like `language` and
+             *     `eligibleTtsEngines` — so existing test fixtures that construct a
+             *     `LibraryBook` object literal without every field don't all need
+             *     updating; frontend consumers default it with `?? false`.
+             */
+            languageSet?: boolean;
             /**
              * @description fs-60 — which TTS engines are eligible for this book's language
              *     (independent of which engines are actually installed on this

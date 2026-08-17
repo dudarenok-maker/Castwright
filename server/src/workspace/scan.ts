@@ -422,6 +422,14 @@ export interface LibraryBook {
       `'en'` for books whose state.json predates the field) so the library
       card's language badge + filter pill have a non-optional source. */
   language: string;
+  /** Task 8 (#2246) — the honest "is the language actually set?" signal.
+      `language` above is the resolved display value (an unset book is still
+      surfaced as 'en' so the card badge / filter pill never see undefined);
+      `languageSet` is what tells a consumer a book really declared English
+      from one that never declared anything. False when state.json carries no
+      usable language (absent key, `null`, empty or whitespace-only) or there
+      is no state.json at all. */
+  languageSet: boolean;
   /** fs-60 — which TTS engines are eligible for this book's language,
       independent of install state (frontend intersects with its own
       installed-engines list). Computed via resolveEligibleEngines against
@@ -853,6 +861,13 @@ async function scanBook(
     /* fs-2 — surface the book language onto the wire, defaulting to 'en'
        at the seam so the card badge / filter pill never see undefined. */
     language: state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
+    /* Task 8 (#2246) — the honest "is the language actually set?" signal.
+       `language` above stays the resolved display value (an unset book still
+       reads 'en' for the badge); `languageSet` is what the frontend uses to
+       tell a book that really declared a language from one that never did.
+       False for a null `state` (no state.json = nothing declared), mirroring
+       `eligibleTtsEngines`'s fail-closed `[]`. */
+    languageSet: state ? bookStateLanguageOrNull(state) !== null : false,
     /* Task 6 (#2246) — `eligibleTtsEngines` is client-authoritative (it gates
        "Proceed anyway", lockedToQwen, and the engine picker), so an unset
        book must NOT resolve to the most-permissive English set. Fail closed:
