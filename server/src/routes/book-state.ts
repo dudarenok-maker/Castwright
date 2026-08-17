@@ -54,6 +54,8 @@ import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-sta
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
 import { isAnalysisBusy } from '../tts/design-lock.js';
+import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
+import { normaliseBookLanguage } from '../tts/language.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
@@ -740,6 +742,31 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         // Whitelist: only allow updating known editorial fields, not bookId /
         // manuscriptId / paths.
         const patch = body.patch as Partial<BookStateJson>;
+        /* #2246 Task 9 — the state slice can now set/clear language. A literal
+           `null` is "stated absence" (distinct from both a value and an absent
+           key) and must survive to disk, so only a non-empty unsupported value
+           is rejected. Mirrors import.ts's unsupported_language contract. */
+        if (patch.language !== undefined && patch.language !== null && typeof patch.language !== 'string') {
+          return res.status(400).json({
+            error: 'unsupported_language',
+            message: `Unsupported language ${JSON.stringify(patch.language)}. Supported languages: ${supportedLanguages()
+              .map((l) => l.code)
+              .join(', ')}.`,
+            supportedLanguages: supportedLanguages(),
+          });
+        }
+        if (typeof patch.language === 'string' && patch.language.trim() !== '') {
+          const normalised = normaliseBookLanguage(patch.language);
+          if (!isSupportedLanguage(normalised)) {
+            return res.status(400).json({
+              error: 'unsupported_language',
+              message: `Unsupported language "${normalised}". Supported languages: ${supportedLanguages()
+                .map((l) => l.code)
+                .join(', ')}.`,
+              supportedLanguages: supportedLanguages(),
+            });
+          }
+        }
         const pickString = (incoming: unknown, fallback: string): string =>
           typeof incoming === 'string' && incoming.trim() ? incoming : fallback;
         const pickNullable = (
@@ -751,6 +778,23 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           if (typeof incoming !== 'string') return fallback ?? null;
           const trimmed = incoming.trim();
           return trimmed ? trimmed : null;
+        };
+        /* #2246 Task 9 — language: a literal `null` is "stated absence" and must
+           survive to disk as null; an omitted key preserves the stored value
+           (a string stays that string, a null stays null); an empty/whitespace
+           string is not a decision, so it also preserves. A real value was
+           already validated above and is normalised to its BCP-47 primary
+           subtag so it aligns with the registry keys isSupportedLanguage uses. */
+        const pickLanguage = (
+          incoming: unknown,
+          fallback: string | null | undefined,
+        ): string | null | undefined => {
+          if (incoming === undefined) return fallback;
+          if (incoming === null) return null;
+          if (typeof incoming !== 'string') return fallback;
+          const trimmed = incoming.trim();
+          if (!trimmed) return fallback;
+          return normaliseBookLanguage(incoming);
         };
         /* Notes preserve interior whitespace verbatim (markdown line breaks
            matter), unlike pickNullable which trims. Empty / whitespace-only
@@ -836,6 +880,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           description: pickNullable(patch.description, state.description),
           notes: pickNotes(patch.notes, state.notes),
           audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
+          language: pickLanguage(patch.language, state.language),
           tags: pickTags(patch.tags, state.tags),
           prosodyEnabled: typeof (patch as { prosodyEnabled?: unknown }).prosodyEnabled === 'boolean'
             ? (patch as { prosodyEnabled: boolean }).prosodyEnabled

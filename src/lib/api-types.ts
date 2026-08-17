@@ -9987,7 +9987,19 @@ export interface operations {
                     /** @enum {string} */
                     slice: "cast" | "manuscript" | "revisions" | "state" | "changeLog";
                     /** @description The whole slice payload; shape depends on `slice`. */
-                    patch: unknown;
+                    patch: {
+                        /**
+                         * @description #2246 Task 9 — BCP-47 book language for the `state`
+                         *     slice. `null` is "stated absence" (a book whose
+                         *     language the user has not set), distinct from both a
+                         *     value and an absent key. An absent key preserves
+                         *     whatever is already stored (including a stored `null`).
+                         *     A `state`-slice patch with a non-empty unsupported
+                         *     value is rejected with `400 unsupported_language` and
+                         *     nothing is written.
+                         */
+                        language?: string | null;
+                    };
                 };
             };
         };

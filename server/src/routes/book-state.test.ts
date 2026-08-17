@@ -753,6 +753,73 @@ describe('book-state router — state slice editable metadata', () => {
     const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(onDisk.schema).toBe(1);
   });
+
+  /* #2246 Task 9 — the state slice may now set/change a book's language.
+     The following cases share one on-disk file, so they run in order and
+     each starts from a known value. */
+
+  it('PUT slice=state round-trips a supported language normalised to its primary subtag', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { language: ' ru ' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    /* normaliseBookLanguage lowercases the primary subtag, so the stored
+       value lines up with the registry keys isSupportedLanguage uses. */
+    expect(onDisk.language).toBe('ru');
+  });
+
+  it('PUT slice=state rejects an unsupported language and leaves the stored value unchanged', async () => {
+    /* Precondition from the previous case: language === 'ru'. */
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { language: 'xx' } });
+    expect(put.status).toBe(400);
+    expect(put.body.error).toBe('unsupported_language');
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.language).toBe('ru');
+  });
+
+  it('PUT slice=state preserves the stored language when the patch omits it (string shown)', async () => {
+    /* Carried forward from the round-trip case: language === 'ru'. */
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { narratorCredit: 'Omit-Language Witness' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.narratorCredit).toBe('Omit-Language Witness');
+    expect(onDisk.language).toBe('ru');
+  });
+
+  it('PUT slice=state stores explicit null for cleared language', async () => {
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { language: null } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    /* Literal null is "stated absence" and must survive as null, NOT be
+       defaulted back to 'en'. */
+    expect(onDisk.language).toBeNull();
+    expect('language' in onDisk).toBe(true);
+  });
+
+  it('PUT slice=state keeps a stored null untouched when the patch omits language', async () => {
+    /* Precondition from the previous case: language === null. */
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { genre: 'Omitting-Null Witness' } });
+    expect(put.status).toBe(204);
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    /* A literal null stays null, key present — never collapsed to 'en'. */
+    expect(onDisk.language).toBeNull();
+    expect('language' in onDisk).toBe(true);
+    expect(onDisk.genre).toBe('Omitting-Null Witness');
+  });
 });
 
 describe('book-state router — POST /chapters/:chapterId/exclude', () => {
