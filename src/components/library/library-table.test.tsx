@@ -396,3 +396,49 @@ describe('LibraryTable — series-memory chip (fe-41)', () => {
     expect(screen.getByText('North One')).toBeInTheDocument();
   });
 });
+describe('LibraryTable — language affordance (Task 9, #2246)', () => {
+  const unsetBook = (bookId = 'a1'): LibraryBook =>
+    /* languageSet false but `language` carries the resolved display value 'en' —
+       the exact case that must branch on languageSet, not language. */
+    makeBook({ bookId, title: 'A One', languageSet: false, language: 'en' });
+  const authorsFor = (book: LibraryBook): LibraryAuthor[] => [
+    { name: 'Author A', series: [{ name: 'S', books: [book] }] },
+  ];
+
+  it('shows the unset affordance when languageSet is false even though language resolves to en (acceptance 1)', () => {
+    renderTable({ authors: authorsFor(unsetBook()) });
+    expect(screen.getByTestId('library-language-unset-a1')).toHaveTextContent('Language unset');
+  });
+
+  it('shows the badge when the language is set (acceptance 1)', () => {
+    renderTable({ authors: authorsFor(makeBook({ bookId: 'a1', title: 'A One', languageSet: true, language: 'ru' })) });
+    expect(screen.getByTestId('library-language-badge-a1')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-language-unset-a1')).toBeNull();
+  });
+
+  it('opens the edit modal in guard mode with the language field empty (acceptances 2 & 4)', () => {
+    renderTable({ authors: authorsFor(unsetBook()) });
+    fireEvent.click(screen.getByTestId('library-language-unset-a1'));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    // even though the book's `language` resolves to 'en', guard mode starts empty
+    expect((screen.getByTestId('edit-book-language') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('saving a chosen language calls onEditBook with the language in the patch (acceptance 3)', () => {
+    const onEditBook = vi.fn().mockResolvedValue(undefined);
+    renderTable({ authors: authorsFor(unsetBook()), onEditBook });
+    fireEvent.click(screen.getByTestId('library-language-unset-a1'));
+    fireEvent.change(screen.getByTestId('edit-book-language'), { target: { value: 'ru' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    expect(onEditBook).toHaveBeenCalledTimes(1);
+    expect(onEditBook.mock.calls[0][1].language).toBe('ru');
+  });
+
+  it('the unset affordance carries the 44px min touch target (acceptance 5)', () => {
+    renderTable({ authors: authorsFor(unsetBook()) });
+    const btn = screen.getByTestId('library-language-unset-a1');
+    expect(btn.className).toContain('min-h-[44px]');
+    expect(btn.className).toContain('fine-pointer:min-h-0');
+  });
+});
+
