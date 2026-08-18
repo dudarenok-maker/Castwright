@@ -1076,3 +1076,73 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** none (sidecar venv only)
 - **Est. box time:** 10
+
+### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2192` → `{"closedAt":"2026-08-08T02:55:52Z","state":"CLOSED"}` — the fix landed. Plan 282's frontmatter reads `status: active` (`docs/features/282-ort-pip-consistency-marker.md:2`), not `stable`, and its Ship notes section (`:310-312`) reads only "(Filled in when status flips to `stable`.)" — never filled in. Run sheet `docs/testing/ort-marker-onbox-acceptance.md` §8.3 (`:300-307`) has every `Result:` line unfilled (`Log line observed`, `pip check after boot`, `Repair command output`, `pip check after repair`, `Kokoro execution provider after repair`, `Run by`/`Date` all `_(fill in)_`) — no on-box run recorded. `server/src/tts/ort-ensure-marker.test.ts` exists and, per the row's own text (register.md:2263-2270), pins the refuse-and-log branch against synthetic fixtures only, never a real clobbered venv where the GPU dist-info survives while CPU files sit on disk.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Manufacture a real clobbered venv (`pip install --force-reinstall onnxruntime` over an existing `onnxruntime-gpu` install), boot the server and confirm `ensureOrtMarker` returns `'clobbered'` with the exact remedy command logged and no marker written over the real distribution, then run the remedy command and confirm the box is actually repaired (`pip check` clean, Kokoro reports `CUDAExecutionProvider`).
+- **Decision owed:** n/a
+- **Hardware still required:** sidecar venv, no GPU
+- **Est. box time:** 10
+
+### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2192` → `{"closedAt":"2026-08-08T02:55:52Z","state":"CLOSED"}` — the fix landed. Plan 282's frontmatter still reads `status: active` and its Ship notes section is unfilled (`docs/features/282-ort-pip-consistency-marker.md:2,310-312`). Run sheet `docs/testing/ort-marker-onbox-acceptance.md` §9.3 (`:340-346`) has every `Result:` line unfilled (`Marker absent during overlay install`, `Marker present + correct version`, `pip check after upgrade`, `Forced-failure marker state`, `Run by`/`Date`/`Release version` all `_(fill in)_`). `server/src/upgrade/apply-ort-marker.test.ts` exists and, per the row's own text (register.md:2298-2306), exercises the new dependency-injection seam only — real `spawn`, a real `venvDir`, and a real packaged release directory have never driven it, and the row explicitly notes A39 (`bootstrap-venv.mjs`) passing proves nothing about this separate consumer of `planOrtSwap`.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Take a real installed (packaged `release/`, not dev-checkout) Castwright release on NVIDIA with a marker already present, trigger the in-app upgrade to a release whose sidecar requirements changed, confirm the marker is deleted before the overlay install and rewritten only after the swap steps succeed, confirm `pip check` is clean afterward, and — if practical — force a swap-step failure and confirm the marker stays deleted.
+- **Decision owed:** n/a
+- **Hardware still required:** sidecar venv, no GPU
+- **Est. box time:** 15
+
+### A43 · Linking an orphaned `characterId` through the Cast screen actually reconnects its segments ([#2238](https://github.com/dudarenok-maker/Castwright/issues/2238), plan [278](../features/278-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped for the script half**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2238` → `{"closedAt":"2026-08-10T22:09:50Z","state":"CLOSED"}` — the fix landed. Plan 278's frontmatter reads `status: active` (`docs/features/278-cast-character-identity.md:2`) and its Ship notes section reads only "Not yet `stable`. Fill in when Wave 3 ships (PR merges) and the three on-box rows above are discharged or explicitly deferred with the repo owner's sign-off." (`:646-649`) — not filled in. The Amendment 2026-08-10 section (`docs/features/278-cast-character-identity.md:20-31`) states plainly "Four constraints, all of which have tests" — unit-level only. `docs/testing/cast-id-drift-onbox-acceptance.md`, the existing run sheet for this same script/workspace, has no section for the link-orphan-match UI action at all (its sections run through §9, dated 2026-08-05/2026-08-11 runs, none touching `POST .../link-orphan-match` or the "Compare against…" picker) — the Amendment shipped 2026-08-10 and was never folded into a run sheet.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** With the server stopped, run `repair-cast-id-drift.mjs` against the real workspace and record the baseline `reported for human decision` count; start the server, link an orphaned id (e.g. *Exile* `silveny` or *Everblaze* `lady-alina`) through the Cast screen; confirm it moves to auto-reconciled and `cast-id-history.json` gains a `supersededBy` entry; stop the server and re-run the dry pass to confirm the count dropped; and confirm the negative case (*Exile* `unknown-male`, a reserved fold bucket) is refused both in the UI and via a direct `POST .../link-orphan-match` (expect 400).
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 20
+
+### A44 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2026` → `{"closedAt":null,"state":"OPEN"}` — the parent issue for the remaining defects is still open. `gh pr view 2050` → `{"mergedAt":"2026-08-01T03:16:56Z","state":"MERGED","title":"fix(server,sidecar): pause on a leading dash, add coqui degeneracy guard"}` — only the leading-dash text transform and the degeneracy guard code landed; the row's own text says PR #2050 fixed one of #2026's three defects and deliberately shipped no register row, deferred to #2057. `gh issue view 2057` → `{"closedAt":"2026-08-11T02:48:19Z","state":"CLOSED"}` — that issue only tracked reconciling the register (adding this row and republishing the HTML twin), not running the acceptance itself. The run sheet section `docs/testing/fs38-wave3-onbox-acceptance.md:2657-2667` (`#2026 — additional acceptance criteria: Russian XTTS quality`) has its `Result:` line still at the unchecked `☐ P ☐ F ☐ B ☐ N/A` template with no notes filled in. `server/src/tts/text-normalize.test.ts` and `server/tts-sidecar/tests/test_coqui_degeneracy_guard.py` both exist and, per the row's own text, pin the dash transform as a wire-text change and the degeneracy guard against a scripted fake — neither confirms real audio.
+- **What changed since the row was written:** Nothing found; #2026 remains open for the two undischarged defects (degeneracy guard live-check, neuter -ee standing invariant), and the leading-dash-by-ear confirmation from PR #2050 is also still unrun.
+- **Remains owed:** On a Coqui-resident sidecar with a Russian book (stock voice `Damien Black`), listen to a leading-em-dash dialogue line and confirm an audible pause versus a same-line-no-punctuation control and an interior-dash control; confirm `tts.coqui.degenGuard` doesn't false-positive on ordinary short Russian lines and, if a live collapse can be captured, whether the retry recovers it; and confirm the neuter `-ее` mispronunciation still reproduces on `main` as a standing baseline.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
+
+### A45 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2310` → `{"closedAt":"2026-08-13T04:25:10Z","state":"CLOSED"}`; `gh pr view 2316` → `{"mergedAt":"2026-08-13T04:43:29Z","state":"MERGED","title":"fix(server): widen named-entity decode to the full HTML5 set (#2310)"}` — the fix landed. The plan's own Task 8 (`docs/superpowers/plans/2026-08-13-entity-decode-layer.md:622-630`) explicitly names the on-box row (this one, A45) as the only proof that "a real EPUB with named entities produces clean audio end-to-end," and states the text change alone is fully proved by CI (Tasks 2-7). `server/src/parsers/html-utils.test.ts` and `server/src/tts/entity-dialogue-e2e.test.ts` both exist, confirming the row's own claim that every layer is proved only by unit/e2e tests fixing the sentence text explicitly, not by a real EPUB import. No run sheet or dated result exists anywhere under `docs/testing/` recording a real EPUB import/listen for this fix.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Import an EPUB whose first chapter heading carries named entities (e.g. `<h1>L&rsquo;&Eacute;t&eacute;</h1>`) and confirm the spoken title beat says "L'Été" cleanly; secondarily, on a real (or hand-modified) es/fr/ru EPUB with named entities in body text, confirm a dash-opened dialogue line pauses rather than being spoken aloud, accented words render correctly, and the manuscript view shows real glyphs — recording whether the body-line symptom reproduced pre-fix at all, which per the plan is itself new information rather than a gate on the fix.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
+
+### A46 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2106` → `{"closedAt":"2026-08-16T03:05:14Z","state":"CLOSED"}`; `gh pr view 2398` → `{"mergedAt":"2026-08-16T03:05:13Z","state":"MERGED","title":"fix(server): bound the sidecar respawn budget on the refusal path"}` — the fix landed. `server/src/tts/sidecar-supervisor.test.ts` and `server/src/tts/spawn-sidecar.test.ts` both exist and, per the row's own text (register.md:2475), fully verify the refusal→cap accounting logic in unit tests but cannot reach the real race — whether `LISTENER_PID_DEADLINE_MS = 5000` is enough headroom for the real listener-enumeration probe under contention, and whether the deadline timer actually kills a hung probe. No run sheet under `docs/testing/` covers #2106 or PR #2398 at all — no `Result:` lines exist to check.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Scenario 1 — kill the sidecar OS process directly, bind a foreign non-responding listener on `:9000`, confirm the supervisor's attempt counter advances monotonically across refused attempts in the log and that the sidecar surfaces as `'crashed'` once exhausted; confirm recovery via `POST /api/sidecar/restart`. Scenario 2 — with `SIDECAR_NEVER_ADOPT=1`, manually start a fresh sidecar so the server doesn't own its PID, confirm the UNFIT/stale-replace path fires, the PID lookup completes under the 5000ms deadline (or the deadline-timeout log fires and the supervisor proceeds to the next backoff instead of hanging), and the newly-spawned sidecar becomes owned and ready.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 10
+
+### A47 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1969` → `{"closedAt":"2026-08-16T03:56:07Z","state":"CLOSED"}`; `gh pr view 2402` → `{"mergedAt":"2026-08-16T03:56:05Z","state":"MERGED","title":"fix(server): rebuild the audition centroid when a character's voice is reassigned (#1969)"}` — the fix landed. `server/src/audio/render-integrity/aggregate-audition-voice-reassign.test.ts` exists, confirming the row's own claim that only mock/unit coverage exists for `resolveCharacterReference`'s persisted-`audition`-row handling and `centroids-io.ts`'s `CharacterCentroid` voice-tagging — a real render producing the rebuilt reference (not the failed flag) has never been observed. No run sheet under `docs/testing/` covers #1969 or PR #2402.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Assign a character thin enough on in-book anchors to take the audition-reference path to one voice and render once so `render-integrity.centroids.json` persists an `audition` row; reassign the character to a clearly different cloned voice; re-render and confirm the new voice's lines are not flagged `voice-mismatch`/`severe` — i.e. that the persisted centroid was rebuilt for the new voice rather than reused against the old speaker's.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 25
