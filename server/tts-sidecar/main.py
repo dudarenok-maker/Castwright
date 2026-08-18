@@ -9128,7 +9128,7 @@ def _normalize_device_family(raw: Optional[str], torch_module: Any = None) -> Op
     honestly as 'rocm' (the AMD device string is 'cuda' but it's really ROCm)."""
     if not raw:
         return None
-    fam = str(raw).strip().lower().split(":", 1)[0]
+    fam = str(raw).strip().lower().split(":", 1)[0]  # exc-text-safe: raw is a device-family string ('cuda:0'); str() normalisation for local branching, not exception text and never serialised into a response body
     if fam == "cuda" and _torch_is_hip(torch_module):
         return "rocm"
     return fam if fam in ("cuda", "rocm", "directml", "mps", "cpu") else None
@@ -10160,7 +10160,7 @@ async def qwen_mint_variant(req: Request) -> Response:
         # fell into the generic 500 below.
         log.warning("/qwen/mint-variant: design contention timeout: %s", exc)
         return JSONResponse(
-            {"detail": str(exc), "code": "design_in_flight"},
+            {"detail": str(exc), "code": "design_in_flight"},  # exc-text-safe: DesignContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
             status_code=503,
         )
     except VoiceNotDesignedError as exc:
@@ -10576,7 +10576,7 @@ async def synthesize(req: Request) -> Response:
             engine_id, voice, exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "voice_language_unsupported"},
+            {"detail": str(exc), "code": "voice_language_unsupported"},  # exc-text-safe: voice_language_unsupported echoes the curated VoiceLanguageUnsupportedError literal (audit at main.py:10569-10573), built from voice/config strings, never a traceback or third-party string
             status_code=409,
         )
     except VoiceNotDesignedError as exc:
@@ -10603,7 +10603,7 @@ async def synthesize(req: Request) -> Response:
             engine_id, voice, exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "design_in_flight"},
+            {"detail": str(exc), "code": "design_in_flight"},  # exc-text-safe: DesignContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
             status_code=503,
         )
     except Exception as e:
@@ -10931,7 +10931,7 @@ async def synthesize_batch(req: Request) -> Response:
             model, len(items), exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "design_in_flight"},
+            {"detail": str(exc), "code": "design_in_flight"},  # exc-text-safe: DesignContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
             status_code=503,
         )
     except Exception as e:

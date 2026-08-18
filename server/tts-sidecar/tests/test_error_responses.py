@@ -16,13 +16,17 @@ def test_no_exception_text_reaches_a_response():
     src = open(os.path.join(SIDECAR_ROOT, "main.py"), encoding="utf-8").read()
     for ln in src.splitlines():
         # A line may opt out with an audited `# exc-text-safe: <why>` marker when
-        # the str(e)/repr(e) local is used purely for branching (e.g. OOM
-        # classification) and demonstrably never reaches a response body.
+        # its str()/repr() of an exception local is used purely for branching
+        # (e.g. OOM classification) and demonstrably never reaches a response
+        # body. These checks are identifier-agnostic: an exception may be spelled
+        # `e`, `exc`, `err`, ... so they match the pattern under ANY Python
+        # identifier, not just the literal text `e`.
         if "exc-text-safe" in ln:
             continue
         code = ln.split("#", 1)[0]  # ignore comments
-        # (a) no str(e)/repr(e) directly on a response-building line …
+        exc_local = r"(str|repr)\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"
+        # (a) no str()/repr() of an exception directly on a response-building line …
         if "JSONResponse" in code or '"error"' in code or '"detail"' in code:
-            assert "str(e)" not in code and "repr(e)" not in code, ln
-        # (b) … and no `err_str = str(e)` / `= repr(e)` local that later feeds a body
-        assert not re.search(r"=\s*(str|repr)\(e\)", code), ln
+            assert not re.search(exc_local, code), ln
+        # (b) … and no `err_str = str(exc)` / `= repr(exc)` local that later feeds a body
+        assert not re.search(r"=\s*" + exc_local, code), ln
