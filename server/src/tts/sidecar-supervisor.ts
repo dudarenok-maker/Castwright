@@ -34,10 +34,13 @@ async function defaultRecycleSidecar(host: string, port: number): Promise<boolea
 }
 const DEFAULT_DRAIN_WAIT_MS = 185_000;
 
-/* A child that dies faster than this counts toward the crash-loop cap; one
-   that lived longer is treated as a fresh incident and resets the counter, so
-   a sidecar that runs fine for an hour and then dies once still gets respawned
-   even if an earlier boot had flaked. */
+/* Child-lifetime threshold, nothing more: the crash-loop cap counts only a
+   child that died faster than this. One that lived longer is a fresh incident
+   and resets the counter — a sidecar that runs fine for an hour and then dies
+   once still gets respawned even if an earlier boot had flaked. The refusal
+   path never consults this value: a slow spawn attempt is attempt latency,
+   not child lifetime, and must not masquerade as a long-lived child
+   (#2106 step 2). */
 const QUICK_DEATH_MS = 30_000;
 const DEFAULT_BACKOFFS_MS = [2_000, 5_000, 15_000];
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 5;
@@ -240,6 +243,14 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   function scheduleRespawnAttempt(
     attemptLabel: string,
     giveUpLabel: string,
+    /* Whether this attempt follows a child that RAN A WHILE before dying — the
+       caller's judgement, because only it knows which meaning `lived` has on
+       its path. True resets the crash-loop counter (a child that died after a
+       healthy life is a fresh incident, not part of the loop). False accretes
+       it — a refused respawn is the same foreign process still holding the
+       port, so a slow attempt (> QUICK_DEATH_MS) must never be read as a
+       long-lived child and silently wipe the budget (#2106 step 2). */
+    freshIncident: boolean,
     /* D2 (#2037) — the pid of our own owned child that just exited, if this
        retry chain started from an exit. Threaded through (not stored on the
        supervisor) so it only ever describes the SPECIFIC exit this chain is
@@ -249,8 +260,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
        recovery, which is this function's own backoff/cap regardless. */
     expectedOwnedPid: number | null = null,
   ): void {
-    const lived = nowFn() - lastSpawnAt;
-    if (lived >= QUICK_DEATH_MS) consecutiveFailures = 0; // ran a while → fresh incident.
+    if (freshIncident) consecutiveFailures = 0;
     consecutiveFailures += 1;
     if (consecutiveFailures > maxConsecutiveFailures) {
       warn(
@@ -277,7 +287,6 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
 
   async function spawnOnce(expectedOwnedPid: number | null = null): Promise<void> {
     if (stopped) return;
-    lastSpawnAt = nowFn();
     const base = await buildOpts();
     /* spawnSidecar returns null for six distinct reasons. Two are BENIGN
        no-spawns: autoStart===false, and an already-listening HEALTHY sidecar
@@ -305,6 +314,14 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
         refusedReason = reason;
       },
     });
+    /* Stamp the spawn time only for successful OWNED spawns (handle !== null).
+       This captures the child's actual lifetime later when onChildExit reads it.
+       Refusal paths never read this value (they pass false for freshIncident),
+       and adoption paths set it when a fresh owned child is spawned after the
+       adopted process disappears. */
+    if (handle !== null) {
+      lastSpawnAt = nowFn();
+    }
     if (refusedReason !== null) {
       /* stop() can race in while spawnFn was still in flight (awaited just
          above) — mirrors onChildExit's own stopped guard. Without this, a
@@ -318,6 +335,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
       scheduleRespawnAttempt(
         `spawn refused: ${refusedReason}`,
         `spawn refusals (${refusedReason})`,
+        /* A refusal is never a fresh incident — it is the same foreign process
+           still holding the port. Pass false so the attempt latency of a slow
+           spawn (one that outlives QUICK_DEATH_MS, e.g. a hung teardown probe)
+           can never masquerade as a long-lived child and reset the budget. */
+        false,
         expectedOwnedPid,
       );
       return;
@@ -454,9 +476,16 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     }
     handle = null;
     isRecycling = true; // sidecar gone — hold dispatch until the respawn completes.
+    /* EXIT path: lastSpawnAt was set when the handle was created in spawnOnce(),
+       after spawnFn successfully returned, so `lived` here is child lifetime only
+       (not attempt latency) — the only place QUICK_DEATH_MS still means that. A
+       child that ran a while and then died is a fresh incident and resets the
+       crash-loop counter; one that dies fast is part of the loop. */
+    const freshIncident = nowFn() - lastSpawnAt >= QUICK_DEATH_MS;
     scheduleRespawnAttempt(
       `child exited (code=${code} signal=${signal})`,
       `sidecar exits (last code=${code} signal=${signal})`,
+      freshIncident,
       exitedPid,
     );
   }

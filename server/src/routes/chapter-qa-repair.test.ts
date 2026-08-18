@@ -856,6 +856,141 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect(segFile.segments[1].suspect).toBeUndefined();
     expect(segFile.segments[1].qa?.status).toBe('ok');
   });
+  /* F4 regression (#1969 sibling): a persisted 'audition' centroid built from a
+     voice a character no longer IS (voice reassignment happened after the
+     centroid was recorded) must not gate/score a repair re-render. Mirror
+     scaffoldAcousticOnlyBook (healthy take, pure acoustic-only candidate from
+     the verdict file) but: the snapshot shows castor's CURRENT voice as
+     'castor-alden-B' while the audition centroid recorded 'castor-alden-A'
+     (reassigned) — so the reference is stale and must behave as "no centroid". */
+  async function scaffoldStaleAuditionBook(
+    bookTitle: string,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorHealthy = tone(1.0, 12000); // healthy — signal scan won't flag it
+    const chapterPcm = Buffer.concat([amy, castorHealthy]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        /* The character's CURRENT identity from this render's snapshot — the
+           voice is 'castor-alden-B', the model it now resolves to. */
+        characterSnapshots: {
+          castor: { voiceEngine: 'kokoro', resolvedVoiceName: 'castor-alden-B', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          centroid: unitVec(0),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'audition',
+          /* The OLD voice the audition centroid was built from — the character
+             has since been reassigned to 'castor-alden-B'. */
+          auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  it('F4 — does not accept/re-score a repair against a stale audition reference after a voice reassignment (#1969)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted if it were reached
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldStaleAuditionBook('Stale Audition Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    // The stale audition centroid behaves exactly like "no usable centroid": the
+    // acoustic-only candidate is skipped up front and never re-rendered.
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+    // PRE-FIX this segment WAS re-rendered and scored against the stale audition
+    // reference (synthesiseChapterMock called). Post-fix it is dropped before the
+    // synth callback, so the re-record path is never entered with a centroid.
+    expect(synthesiseChapterMock).not.toHaveBeenCalled();
+  });
+
 });
 
 /* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts/chapter-splice.ts's

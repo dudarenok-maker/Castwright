@@ -66,7 +66,7 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { configValue } from '../config/resolver.js';
 import { readVerdicts, writeVerdicts } from '../audio/render-integrity/verdicts-io.js';
-import { readCentroids, type CharacterCentroid } from '../audio/render-integrity/centroids-io.js';
+import { readCentroids, auditionCentroidUsableForCurrent, type CharacterCentroid } from '../audio/render-integrity/centroids-io.js';
 import { cosineToCentroid, scoreSegment } from '../audio/render-integrity/score.js';
 import { embedSegment } from '../tts/embed-client.js';
 import { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION, type EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
@@ -392,7 +392,30 @@ chapterQaRepairRouter.post(
          accept-check inside the synth callback. Null when no centroid file exists
          yet (scoredBook hasn't run) — the acoustic gate then applies no cosine
          constraint (safe: a centroid-less character can't have a fixable verdict). */
-      const centroids: Record<string, CharacterCentroid> | null = await readCentroids(bookDir).catch(() => null);
+      const readCentroidsMap: Record<string, CharacterCentroid> | null = await readCentroids(bookDir).catch(() => null);
+      /* F4 (#1969 sibling): this route is a SECOND consumer of the persisted
+         `audition` centroids alongside aggregate.ts's gate. An 'audition' row is
+         usable to score a re-render ONLY when it recorded the voice identity the
+         character now resolves to — the per-character snapshot's resolvedVoiceName
+         + modelKey (falling back to the chapter/segFile-level modelKey). A stale
+         row — the character was since reassigned to a different voice/model — must
+         not gate or score this repair, so drop it ONCE here: after this filter a
+         filtered-out character behaves exactly like "no centroid" at every
+         downstream `centroids?.[charId]` site. in-book rows are always kept
+         (rebuilt fresh every pass, self-healing); models we cannot derive a voice
+         for are conservative — treated as unusable. */
+      const centroids: Record<string, CharacterCentroid> | null =
+        readCentroidsMap &&
+        Object.fromEntries(
+          Object.entries(readCentroidsMap).filter(([charId, row]) => {
+            const snap = segFile.characterSnapshots?.[charId];
+            return auditionCentroidUsableForCurrent(
+              row,
+              snap?.resolvedVoiceName,
+              snap?.modelKey ?? segFile.modelKey,
+            );
+          }),
+        );
 
       /* Edit 6 (srv-36): capture accepted re-render embeddings by segment index.
          Populated inside the synth callback; flushed to disk after finalize. */

@@ -265,6 +265,65 @@ describe('sidecar supervisor (srv-15)', () => {
       expect(spawnFn.mock.calls.length).toBeGreaterThan(beforeRecovery);
     });
 
+    it('a SLOW refusal (an attempt outliving QUICK_DEATH_MS) still exhausts the budget — attempt latency must not reset the counter (#2106 step 2)', async () => {
+      /* Regression for #2106 step 2. Before the fix, scheduleRespawnAttempt
+         derived "did this child live a while?" from
+         lived = nowFn() - lastSpawnAt. On the refusal path lastSpawnAt had
+         been set moments earlier at the top of spawnOnce, so a SLOW spawn
+         attempt (one that outlives QUICK_DEATH_MS — e.g. a hung teardown
+         probe) made `lived` look like a long-lived child and reset
+         consecutiveFailures to 0 every attempt: the cap never tripped,
+         exhaustedEvent() never flipped, and the supervisor probed a foreign
+         port forever. Here each refused attempt advances the fake clock past
+         QUICK_DEATH_MS, so without the fix the counter resets each time and
+         the 3rd refusal would NOT exhaust. The fix passes an explicit "not a
+         fresh incident" on the refusal path, so the budget accrues
+         monotonically to exhaustion regardless of attempt latency.
+         The delayFn is release-gated so the run is deterministic and bounded:
+         each backoff blocks until explicitly released (mirroring the HEADLINE
+         refusal test), and a leaking (buggy) supervisor blocks on the next
+         delay instead of spinning. */
+      let now = 0;
+      const releases: Array<() => void> = [];
+      const delayFn = vi.fn(
+        async () => new Promise<void>((resolve) => releases.push(resolve)),
+      );
+      const slowSpawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        now += 35_000; // the attempt itself outlives QUICK_DEATH_MS (30s)
+        opts.onSpawnRefused?.('port still held');
+        return null;
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: slowSpawnFn,
+        delayFn,
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 2,
+      });
+
+      await sup.start(); // attempt 1 — refused and SLOW; backoff is now held
+      await vi.waitFor(() => expect(slowSpawnFn).toHaveBeenCalledTimes(1));
+      expect(sup.exhaustedEvent()).toBe(false); // accrued once, cap(2) not tripped
+
+      releases.shift()?.(); // release backoff #1 → attempt 2
+      await vi.waitFor(() => expect(slowSpawnFn).toHaveBeenCalledTimes(2));
+
+      releases.shift()?.(); // release backoff #2 → attempt 3
+      await vi.waitFor(() => expect(slowSpawnFn).toHaveBeenCalledTimes(3));
+      // cap=2 → the 3rd refusal trips exhaustion. A SLOW attempt latency must
+      // not have reset the counter along the way, or this stays false forever.
+      expect(sup.exhaustedEvent()).toBe(true);
+      expect(sup.recycling()).toBe(true); // never reads "ready" while exhausted
+
+      const before = slowSpawnFn.mock.calls.length;
+      await sup.resetAndRespawn();
+      expect(sup.exhaustedEvent()).toBe(false); // recovery still clears exhaustion
+      expect(slowSpawnFn.mock.calls.length).toBeGreaterThan(before);
+    });
+
     it('autoStart:false and a healthy adopt still settle recycling()===false and do NOT retry (the benign/non-benign split)', async () => {
       // autoStart:false — benign, no onSpawnRefused fired.
       {
@@ -957,6 +1016,79 @@ describe('sidecar supervisor (srv-15)', () => {
         await Promise.resolve();
       }
       expect(sup.exhaustedEvent()).toBe(true);
+    });
+
+    it('[REGRESSION] a slow spawn followed by a quick-death child should NOT reset the crash counter (#2106 step 2b)', async () => {
+      /* Regression for #2106 step 2b. Before the fix, spawnOnce() set
+         lastSpawnAt at the TOP of the function (before buildOpts and spawn),
+         not after the spawn succeeded. So a SLOW spawn attempt (one outliving
+         QUICK_DEATH_MS) followed by a quick-death child made `lived =
+         nowFn() - lastSpawnAt` look like the child lived a long time (attempt
+         latency + child lifetime), even though the child died fast. This
+         triggered freshIncident=true and reset consecutiveFailures to 0 every
+         attempt, so the counter never accumulated to exhaustion and the
+         supervisor retried forever.
+
+         The fix moves lastSpawnAt to after spawnFn succeeds, so `lived`
+         measures only the child lifetime, not attempt latency. Now a
+         quick-death child correctly triggers freshIncident=false and the
+         counter accretes monotonically to exhaustion. */
+      let now = 0;
+      let callCount = 0;
+      const captures: SpawnSidecarOpts['onExit'][] = [];
+      const slowSpawnThenQuitFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        callCount += 1;
+        // Simulate a slow spawn attempt: advance the clock by 35s (> QUICK_DEATH_MS of 30s).
+        now += 35_000;
+        // Capture the exit handler so we can trigger child death later.
+        captures.push(opts.onExit);
+        return makeHandle() as SidecarHandle;
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: slowSpawnThenQuitFn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 2,
+      });
+
+      await sup.start(); // spawn #1 (slow, now=35_000)
+      expect(sup.exhaustedEvent()).toBe(false);
+      expect(callCount).toBe(1);
+
+      // Child 1 dies quick (1ms after spawn, so now=35_001)
+      now += 1;
+      captures[0]?.(1, null);
+      await Promise.resolve();
+      // After backoff, spawn #2 happens (slow again, now=70_001)
+      await vi.waitFor(() => expect(callCount).toBe(2));
+      expect(sup.exhaustedEvent()).toBe(false); // only 1 failure so far (cap=2)
+
+      // Child 2 dies quick (now=70_002)
+      now += 1;
+      captures[1]?.(1, null);
+      await Promise.resolve();
+      // After backoff, spawn #3 happens (slow again, now=105_003)
+      await vi.waitFor(() => expect(callCount).toBe(3));
+      expect(sup.exhaustedEvent()).toBe(false); // still only 2 failures (cap=2)
+
+      // Child 3 dies quick (now=105_004)
+      now += 1;
+      captures[2]?.(1, null);
+      await Promise.resolve();
+      // Without the fix: lastSpawnAt was set 35s before spawn resolved,
+      // so lived = now - lastSpawnAt = (large value)
+      // would have looked like > QUICK_DEATH_MS, so counter kept resetting
+      // back to 0 each time, never accumulating to 3 > cap(2).
+      // With the fix: lastSpawnAt is set AFTER spawn (so ~35_000 ms after it
+      // started), and each child died 1ms later, so lived = 1ms < QUICK_DEATH_MS,
+      // so freshIncident=false and counter accumulated: 1, 2, 3 > cap(2).
+      // After the 3rd child death, exhaustedEvent() must be true.
+      await vi.waitFor(() => expect(sup.exhaustedEvent()).toBe(true));
+      expect(sup.recycling()).toBe(true); // never reads "ready" while exhausted
     });
 
     it('resetAndRespawn clears exhaustedEvent and spawns a fresh child after plain exhaustion', async () => {
