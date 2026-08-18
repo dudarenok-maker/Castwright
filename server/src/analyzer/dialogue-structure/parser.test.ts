@@ -364,6 +364,13 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
   // `quotePairs` carries `['»','«']`), so it can seed a primary run that
   // swallows the attribution between two Swiss turns — see #2352, pinned
   // below as a known gap.
+  // #2346: `dort: «Zu»` is the only shipped fixture with a colon before a
+  // secondary candidate, so it is the one place the new colon rule and the
+  // pre-existing `hasStem` test overlap. It was green before the rule and is
+  // green after it — but for DIFFERENT reasons (no verb stem, then the colon),
+  // which is a coincidence, not a guarantee. It cannot detect a regression in
+  // either mechanism; the `#2346 defect B` describe below is what pins the rule.
+
   it('de: two genuine „…" turns survive a secondary-Swiss-quoted sign in the gap between them', () => {
     const body = '„Guten Tag", sagte er. Das Schild dort: «Zu». „Und du?", fragte sie.';
     expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Zu', 'Und du?']);
@@ -500,6 +507,69 @@ describe('parser — #2315 guard `cutsATagClause` with real secondaryQuotePairs 
     expect(tagText).toBe(' said «Anton».');
   });
 });
+/* #2346 defect B (#2427) — the guard fires on a LEADING tag and deletes the turn
+   it introduces. A colon immediately before the candidate means the verb
+   INTRODUCES what follows (`sagte er …: «…»`, the Latin analogue of CJK's `：`);
+   the guard's remaining tests all assume the verb ATTRIBUTES something already
+   parsed.
+
+   The body is the REAL paragraph from Gutenberg 63460, not a reduced shape.
+   The reduction is what hides the bug: the trigger is the unrelated
+   `»Tick-Tack ... Tick-Tack«` clock earlier in the same paragraph, which sets
+   `precededByPrimaryRun` for a candidate it has nothing to do with. Shorten the
+   body and the test passes for the wrong reason.
+
+   This is a SEGMENTATION assertion, not an attribution one — the recovered turn
+   has no speaker, and this suite is documented as blind to attribution. */
+describe('parser — #2346 defect B: a colon-introduced turn is not eaten by the tag-clause guard', () => {
+  const spoken = (body: string, lang: string) =>
+    spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor(lang)!)))
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  const DE_63460 =
+    'Es war gruselig und dunkel auf der Stiege, aber dann zündete Ulebuhle sein Öllämpchen an, der Schlüssel ' +
+    'drehte sich kreischend im Schloß, und knarrend öffnete sich die Turmtür, um uns einzulassen in den ' +
+    'geheimnisvollen Raum. -- Da stand in der Mitte auf einer Säule ein großes Ding, wie eine Kanone, und so ' +
+    'dick, daß die dünnsten von uns wohl hätten durch das Rohr hindurchkriechen können. Es blinkte daran von ' +
+    'allerlei Schrauben und Griffen, von Stahl und Messing. Oben war ein großes Glas im Rohr, wohl wie ein ' +
+    'Teller, und unten ein ganz winziges, durch das man hindurchschauen mußte. Und dann tickte da noch eine ' +
+    'große Uhr in einem Glasgehäuse, mit einem langen Perpendikel, der mächtig vornehm und langsam hin und her ' +
+    'schwang und unablässig ganz bedächtig sein »Tick-Tack ... Tick-Tack« sagte. -- Da waren auch noch allerlei ' +
+    'Apparate in den Ecken und an den Wänden, und Bilder hingen da von Mond und Sternen, und dicke Bücher lagen ' +
+    'in den Fächern. Aber wenn wir Ulebuhle nach all dem fragten, dann sagte er nur in seiner knurrigen ' +
+    'Weise: «Schnickschnack und Finger davon! Das versteht ihr nicht!»';
+
+  it('de: the colon-introduced turn survives as its own speech span (real paragraph)', () => {
+    expect(spoken(DE_63460, 'de')).toEqual([
+      'Tick-Tack ... Tick-Tack',
+      'Schnickschnack und Finger davon! Das versteht ihr nicht!',
+    ]);
+  });
+
+  it('de: a colon-introduced turn with NO whitespace before the quote also survives', () => {
+    expect(spoken('„Guten Tag\", sagte er. Dann sagte er:«Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
+  });
+
+  /* The full-width `：` arm must use a SECONDARY zh pair. `“…”` is a zh PRIMARY
+     pair, so `他说：“你好”。` never reaches the guard at all and already returns
+     `['你好']` on shipped code — measured. A test written on that shape cannot
+     fail, in either direction. `‘…’` is zh's secondary pair, and the leading
+     `“早安”` supplies the primary run the guard requires before it will act. */
+  it('zh: a full-width colon introduces the turn the same way', () => {
+    expect(spoken('“早安”，他说。然后他说：‘你好’。', 'zh')).toEqual(['早安', '你好']);
+  });
+
+  it('zh: the same shape WITHOUT the colon is still declined', () => {
+    expect(spoken('“早安”，他说。然后他说‘你好’。', 'zh')).toEqual(['早安']);
+  });
+
+  it('de: a TRAILING tag is still declined — the guard is not disabled generally', () => {
+    expect(spoken('„Guten Tag\", sagte «Ulebuhle». Und dann ging er.', 'de')).toEqual(['Guten Tag']);
+  });
+});
+
+
 
 describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 1)', () => {
   const enIdx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);
