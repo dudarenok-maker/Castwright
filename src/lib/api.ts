@@ -90,6 +90,9 @@ import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import { parseDuration } from './time';
+/* Task 9 (#2246) — the language-guard seam: the four 409 sites route a
+   language-unset failure to the global guard modal through this bus. */
+import { emitLanguageGuard, isLanguageUnsetBody } from './language-guard-bus';
 /* Bundled mock audio assets — two short tones so the a/b player + mini
    player + voice samples have something audible to render under
    VITE_USE_MOCKS. ~88 KB each. stub-a (440 Hz) is the "current/A" /
@@ -5879,11 +5882,36 @@ async function realStreamSplice({
       },
     );
     if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '');
+      const body = await res.text().catch(() => '');
+      /* Task 9 (#2246) — a 409 whose body marks an unset book language opens
+         the language-guard modal instead of a generic splice error. The retry
+         replays this same call once a language is chosen and saved. */
+      if (
+        !res.ok &&
+        isLanguageUnsetBody(res.status, body) &&
+        emitLanguageGuard({
+          bookId,
+          shape: '409',
+          onRetry: () =>
+            realStreamSplice({
+              bookId,
+              chapterId,
+              mode,
+              characterId,
+              gainDb,
+              segmentIndices,
+              modelKey,
+              onTick,
+              signal,
+            }),
+        })
+      ) {
+        return;
+      }
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Splice failed (${res.status}): ${detail || res.statusText}`,
+        errorReason: `Splice failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
@@ -5943,11 +5971,25 @@ async function realStreamQaRepair({
       },
     );
     if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '');
+      const body = await res.text().catch(() => '');
+      /* Task 9 (#2246) — a 409 whose body marks an unset book language opens
+         the language-guard modal instead of a generic repair error. The retry
+         replays this same call once a language is chosen and saved. */
+      if (
+        !res.ok &&
+        isLanguageUnsetBody(res.status, body) &&
+        emitLanguageGuard({
+          bookId,
+          shape: '409',
+          onRetry: () => realStreamQaRepair({ bookId, chapterId, onTick, signal }),
+        })
+      ) {
+        return;
+      }
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Audio repair failed (${res.status}): ${detail || res.statusText}`,
+        errorReason: `Audio repair failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
