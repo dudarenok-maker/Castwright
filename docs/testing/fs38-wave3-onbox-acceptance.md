@@ -1355,8 +1355,8 @@ re-read and its write, citing §6 KL-j(1)/#1826. That gap is now closed —
 promise-chain lock (`withEntryLock`) across the ENTIRE fresh-read + mutate +
 write span, and both the revoke route's `revokedAt` stamp and the resolver's
 `statusStampMutate` write go through it, so neither can act on a stale
-snapshot of the other's change (see §6 KL-j(1)/(2), now marked
-appears-fixed-in-source). **If you land inside the old millisecond window and
+snapshot of the other's change (see §6 KL-j(1)/(2), fixed in source and proven
+by the Step 1 regression tests). **If you land inside the old millisecond window and
 `revokedAt` still comes back clobbered, that is now a regression — file it,
 don't wave it through as expected.**
 
@@ -2264,11 +2264,11 @@ character in **each**; both books routed to Qwen.
 - **Repeat once with a repair in play**: delete `$K.pt` first, then start both
   renders so both workers try to repair the same voice concurrently. Both should
   still complete; one or both derives fire. §6 KL-j(2) (the two-worker corner
-  this repeat exists to exercise) now **appears fixed in source** — the same
-  per-uuid lock that closes KL-j(1) also serialises worker A's and worker B's
-  status-stamp writes here. **A `.pt` surviving a revoke in this scenario is
-  now a regression, not an expected KL-j(2) hit** — file it rather than
-  recording it against that item.
+  this repeat exists to exercise) is fixed in source and proven by the Step 1
+  regression tests — the same per-uuid lock that closes KL-j(1) also serialises
+  worker A's and worker B's status-stamp writes here. **A `.pt` surviving a revoke
+  in this scenario is now a regression, not an expected KL-j(2) hit** — file it
+  rather than recording it against that item.
 
 **Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
 
