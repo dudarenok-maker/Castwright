@@ -54,7 +54,9 @@ async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Pr
   } catch (err) {
     failed.push(f);
     console.warn(
-      `[purge-clone-artifacts] failed to erase "${f}" for voice "${voiceUuid}" — artifact may still be on disk:`,
+      '[purge-clone-artifacts] failed to erase "%s" for voice "%s" — artifact may still be on disk:',
+      f,
+      voiceUuid,
       err,
     );
     return false;
@@ -119,8 +121,10 @@ async function sweepKeyPrefixedFiles(
     // erasure — that is the exact mis-report this fix exists to prevent.
     failed.push(`sweep:${dir}`);
     console.warn(
-      `[purge-clone-artifacts] could not scan "${dir}" for stray artifacts of voice ` +
-        `"${voiceUuid}" — crash-orphaned temp files may still be on disk:`,
+      '[purge-clone-artifacts] could not scan "%s" for stray artifacts of voice ' +
+        '"%s" — crash-orphaned temp files may still be on disk:',
+      dir,
+      voiceUuid,
       err,
     );
     return;
@@ -432,9 +436,11 @@ export async function purgeCloneArtifacts(
     if (!result.ok) {
       failed.push(`sidecar:qwen:${voiceId}`);
       console.warn(
-        `[purge-clone-artifacts] sidecar evict failed for qwen voice "${voiceId}" ` +
-          `(library voice "${voiceUuid}") — it may still be resident in the sidecar's ` +
-          `in-process cache:`,
+        '[purge-clone-artifacts] sidecar evict failed for qwen voice "%s" ' +
+          '(library voice "%s") — it may still be resident in the sidecar\'s ' +
+          'in-process cache:',
+        voiceId,
+        voiceUuid,
         result.detail,
       );
     }
@@ -446,9 +452,11 @@ export async function purgeCloneArtifacts(
   if (!xttsEvictResult.ok) {
     failed.push(`sidecar:xtts:${xttsKey}`);
     console.warn(
-      `[purge-clone-artifacts] sidecar evict failed for xtts voice "${xttsKey}" ` +
-        `(library voice "${voiceUuid}") — XTTS's latents cache has no TTL and may retain ` +
-        `the voice until the sidecar process restarts:`,
+      '[purge-clone-artifacts] sidecar evict failed for xtts voice "%s" ' +
+        '(library voice "%s") — XTTS\'s latents cache has no TTL and may retain ' +
+        'the voice until the sidecar process restarts:',
+      xttsKey,
+      voiceUuid,
       xttsEvictResult.detail,
     );
   }
@@ -479,9 +487,11 @@ export async function purgeCloneArtifacts(
       await removeEntryDir(voiceUuid);
     } else {
       console.warn(
-        `[purge-clone-artifacts] KEEPING the voice-library manifest for "${voiceUuid}" — ` +
-          `${failed.length} artifact(s) survived the purge, and removing the manifest would ` +
-          `leave them ungated (the consent gates read it). Retry the delete, or revoke:`,
+        '[purge-clone-artifacts] KEEPING the voice-library manifest for "%s" — ' +
+          '%d artifact(s) survived the purge, and removing the manifest would ' +
+          'leave them ungated (the consent gates read it). Retry the delete, or revoke:',
+        voiceUuid,
+        failed.length,
         failed,
       );
     }

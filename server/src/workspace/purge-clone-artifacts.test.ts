@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { format } from 'node:util';
 
 const { purgeVoiceSamples, purgeVoiceSamplesActual } = vi.hoisted(() => ({
   purgeVoiceSamples: vi.fn(),
@@ -243,7 +244,14 @@ describe('purgeCloneArtifacts', () => {
 
     expect(result.failed).toContain(ptFile);
     expect(existsSync(ptFile)).toBe(true); // never actually removed
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(ptFile), expect.anything());
+    // The path is no longer baked into the format-string argument; it is now
+    // the %s placeholder value, and the trailing error survives after it.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.not.stringContaining(ptFile),
+      ptFile,
+      'u1',
+      expect.objectContaining({ code: 'EBUSY' }),
+    );
 
     warnSpy.mockRestore();
   });
@@ -452,7 +460,14 @@ describe('purgeCloneArtifacts', () => {
     expect(result.failed).toEqual([ptFile]);
     expect(existsSync(ptFile)).toBe(true); // never actually removed
     expect(existsSync(jsonFile)).toBe(false); // the OTHER file's removal still ran
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(ptFile), expect.anything());
+    // The path is no longer baked into the format-string argument; it is now
+    // the %s placeholder value, and the trailing error survives after it.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.not.stringContaining(ptFile),
+      ptFile,
+      'u1',
+      expect.objectContaining({ code: 'EBUSY' }),
+    );
 
     warnSpy.mockRestore();
   });
@@ -708,4 +723,41 @@ describe('purgeCloneArtifacts — deleteMasterClip (revoke recording erasure)', 
 
     warnSpy.mockRestore();
   });
+  /* CodeQL #211 (js/tainted-format-string) — console.warn treats its FIRST
+     argument as a format string when more arguments follow. A `%s` appearing
+     inside the interpolated VOICE UUID (diagnostic data that echoes user
+     input) used to be absorbed into that format string and swallow the
+     trailing `err` — the exact harm this warning exists to surface. This test
+     proves the placeholder conversion (voiceUuid is now an ARGUMENT, not part
+     of the format string) renders the injected `%s` literally AND keeps the
+     error as the rendered line's own tail, instead of letting user data eat it. */
+  it('CodeQL #211: a %s injected via the uuid no longer swallows the trailing error in the failure warn', async () => {
+    const injectedUuid = 'vo%suuid';
+    const ptFile = seed(`qwen-${injectedUuid}`, 'pt');
+    const boom = Object.assign(new Error('EBUSY: clone artifact pinned open'), { code: 'EBUSY' });
+    rmMock.mockImplementation(async (f: string, opts?: unknown) => {
+      if (f === ptFile) throw boom;
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.rm(f, opts as never);
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await purge.purgeCloneArtifacts(injectedUuid);
+
+    const warnCall = warnSpy.mock.calls.find((c) => String(c[0]).includes('failed to erase'));
+    expect(warnCall).toBeDefined();
+    const rendered = format(...(warnCall as unknown[]));
+    // The injected `%s` is ARGUMENT text now, not part of the format string —
+    // it must render verbatim. Pre-fix it was absorbed into the format and
+    // vanished (that is what eats the following error), so this alone goes red.
+    expect(rendered).toContain(injectedUuid);
+    // And the trailing error is still rendered, AFTER the placeholder that used
+    // to swallow it — it was not consumed by the injected `%`.
+    expect(rendered.indexOf('EBUSY: clone artifact pinned open')).toBeGreaterThan(
+      rendered.indexOf(injectedUuid),
+    );
+
+    warnSpy.mockRestore();
+  });
+
 });
