@@ -92,7 +92,11 @@
  *   NC  negative control: with no code change, add (a) a prose comment quoting
  *       `await writeEntry(entry);` verbatim and (b) a string literal
  *       containing `writeEntry(`  ->  must stay GREEN, else the opaque-range
- *       skipping is broken.
+ *       skipping is broken. Place (a) as the LAST LINE OF A BLOCK, i.e. with
+ *       `}` as its only following token, not mid-block: that placement is the
+ *       one the tokenizer used to miss entirely (see T5/T6 and the tokenizer
+ *       block header), so a mid-block comment runs this row without exercising
+ *       the case it exists to catch.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -168,10 +172,40 @@ function collectSourceFiles(dir: string, out: string[] = []): string[] {
    stricter than the walker it replaces, which skipped a template whole and so
    hid any real call site written inside a `${...}`.
 
-   COMMENTS come from per-node trivia, not a text scan, because a `//` inside a
-   string literal is not a comment. Every node is asked for its leading and
-   trailing comment ranges, de-duplicated by span since one comment is reachable
-   from several nodes.
+   COMMENTS come from token trivia, not a text scan, because a `//` inside a
+   string literal is not a comment. The walk descends through
+   `node.getChildren(sf)` to the LEAF TOKENS and asks each leaf for its leading
+   and trailing comment ranges, de-duplicated by span since one comment is
+   reachable from two directions.
+
+   WHY LEAF TOKENS AND NOT `ts.forEachChild` - this cost 276 uncovered comments.
+   `forEachChild` yields only syntactically significant child NODES; it never
+   yields punctuation tokens (`}`, `]`, `,`). Every comment in a file is the
+   LEADING trivia of exactly one token, or the TRAILING trivia of the token
+   before it on the same line - and `getTrailingCommentRanges` stops at the
+   first newline. So a comment on its own line whose next token is punctuation
+   belonged to a token `forEachChild` never visits, and nobody asked for it. The
+   commonest shape there is is a comment as the last line of a block:
+
+       try {
+         something();
+         // historical: this used to be withCastLock(dir, async () => {
+       }
+
+   Measured with a token-descent oracle, that left 276 comments across 79 of
+   `server/src`'s 427 non-test files uncovered - `config/registry.ts` alone had
+   92 - and it broke both guards in BOTH directions named above: prose quoting
+   an unbalanced `withCastLock(dir, async () => {` in that position fabricated a
+   lock range over a genuinely unlocked write (fails OPEN), and prose quoting a
+   write primitive in that position counted as a real call site (fails CLOSED).
+   `getChildren` DOES yield punctuation, so descending it to the leaves reaches
+   every token and therefore every comment. It costs more - `getChildren`
+   materialises a token array per node - which is why callers memoize the
+   ranges per file content rather than recomputing them per match.
+
+   LITERALS still come from the AST node kinds, NOT from the token stream: the
+   parser is what resolves the regex-vs-division ambiguity (see (1) above), and
+   a leaf-token walk that trusted a raw scanner would reintroduce it.
    ============================================================================ */
 interface OpaqueRange {
   start: number;
@@ -208,9 +242,19 @@ function computeOpaqueRanges(content: string): OpaqueRange[] {
       default:
         break;
     }
-    for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
-    for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
-    ts.forEachChild(node, visit);
+    const children = node.getChildren(sf);
+    if (children.length === 0) {
+      /* A LEAF TOKEN - punctuation included, which is the whole point (see the
+         block header). Asking only the leaves is sufficient AND cheaper than
+         asking every node: a comment is always the leading trivia of some token
+         or the trailing trivia of the token before it, and an interior node's
+         `pos`/`end` coincide with its first/last leaf's anyway, so an interior
+         node can never contribute a range a leaf does not. */
+      for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
+      for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
+      return;
+    }
+    for (const child of children) visit(child);
   };
 
   visit(sf);
@@ -424,7 +468,11 @@ describe('voice-library write seam - static guard (#1826 Step 2)', () => {
    and at EOF and so left every mid-file comment uncovered (UNDER-reach, which
    fails CLOSED and destroys the NC row in the mutation table above). T3 is green
    against HEAD by construction - HEAD's bug was over-reach, not under-reach - so
-   its red phase is stated against the attempt it actually guards. */
+   its red phase is stated against the attempt it actually guards.
+
+   T5/T6 are red against the `forEachChild` traversal that preceded the
+   leaf-token descent (UNDER-reach again, and the one T3 was too weak to catch);
+   T4 is the drift test and is red whenever the two copies disagree. */
 describe('opaque-range tokenizer', () => {
   it('T1: a regex literal containing a quote does not open a runaway string range', () => {
     // /["'\s]/ - the old walker opened a "string" at the double quote INSIDE the
@@ -501,5 +549,58 @@ describe('opaque-range tokenizer', () => {
     const sibling = extract(SIBLING_GUARD);
     expect(mine.length).toBeGreaterThan(1000);
     expect(sibling).toBe(mine);
+  });
+
+  /* T5/T6 pin the PUNCTUATION blind spot - the `forEachChild` traversal that
+     preceded the leaf-token descent never visited `}`, `]` or `,`, so a comment
+     whose only following token was one of those was asked for by nobody and
+     stayed live code. See the tokenizer block header for the mechanism.
+
+     Both are red against the tokenizer they replace, measured (not asserted):
+       T5  isOpaque -> false, countNonOpaque -> 1   (want true / 0)
+       T6  isOpaque -> false, false, countNonOpaque -> 2  (want true / true / 0)
+     T3 above did NOT catch this: its line comment is followed by `return;` and
+     its block comment by `const tail`, both of which `forEachChild` does visit. */
+  it('T5: a comment as the LAST LINE of a block (next token `}`) is opaque', () => {
+    const src = [
+      'export function noop(): void {',
+      '  doWork();',
+      '  // prose: never call writeEntry(entry) directly here.',
+      '}',
+      'const tail = 1;',
+    ].join('\n');
+    const opaque = computeOpaqueRanges(src);
+
+    expect(isOpaque(opaque, src.indexOf('writeEntry('))).toBe(true);
+    // the real code either side of it is untouched - no over-reach
+    expect(isOpaque(opaque, src.indexOf('doWork'))).toBe(false);
+    expect(isOpaque(opaque, src.indexOf('const tail'))).toBe(false);
+    expect(countNonOpaque(src, /writeEntry\(/g).count).toBe(0);
+  });
+
+  it('T6: a comment whose only following token is `]` or `,` is opaque', () => {
+    const src = [
+      'const nested = [',
+      '  1',
+      '  // prose before the close bracket: writeEntry(entry)',
+      '];',
+      'call(',
+      '  arg',
+      '  // prose before the comma: writeEntry(entry)',
+      '  ,',
+      '  other,',
+      ');',
+    ].join('\n');
+    const opaque = computeOpaqueRanges(src);
+
+    const beforeBracket = src.indexOf('writeEntry(');
+    const beforeComma = src.indexOf('writeEntry(', beforeBracket + 1);
+    expect(beforeComma).toBeGreaterThan(beforeBracket);
+    expect(isOpaque(opaque, beforeBracket)).toBe(true);
+    expect(isOpaque(opaque, beforeComma)).toBe(true);
+    // no over-reach onto the surrounding live code
+    expect(isOpaque(opaque, src.indexOf('arg'))).toBe(false);
+    expect(isOpaque(opaque, src.indexOf('other'))).toBe(false);
+    expect(countNonOpaque(src, /writeEntry\(/g).count).toBe(0);
   });
 });

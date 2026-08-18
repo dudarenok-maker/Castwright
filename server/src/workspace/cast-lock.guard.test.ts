@@ -197,11 +197,28 @@
        an early draft of this very header did exactly that to itself); a
        comment quoting it INSIDE a lock range used to be silently absorbed as
        a "locked" site with no real write behind it at all, which is the
-       opposite failure — a fabricated pass. Both are closed now: occurrence
-       matching is comment/string-aware via the same `computeOpaqueRanges`
-       tokenizer as step 1, so prose that quotes the pattern is invisible to
-       the scan in either position. Verified both directions for this task,
-       and re-verified at guard level under #2405's rewrite.
+       opposite failure — a fabricated pass. Occurrence matching is
+       comment/string-aware via the same `computeOpaqueRanges` tokenizer as
+       step 1, so prose that quotes the pattern is invisible to the scan in
+       either position.
+
+       "Both are closed now" was claimed here prematurely, twice, and was only
+       ever true of the comments the tokenizer could actually SEE. Until the
+       leaf-token descent landed it walked with `ts.forEachChild`, which never
+       visits punctuation, so a comment whose only following token was `}`, `]`
+       or `,` — a comment on the last line of a block, the commonest placement
+       there is — was never marked opaque at all. 276 such comments across 79
+       of this tree's 427 non-test files, and BOTH failures above were live
+       through them: prose in that position quoting the write pattern counted
+       as a call site (fails CLOSED), and prose in that position quoting an
+       unbalanced `withCastLock(dir, async () => {` fabricated a lock range
+       over a real unlocked write (fails OPEN). The regression test that was
+       supposed to pin the second one passed only because its fixture sat on
+       line 1, which `getLeadingCommentRanges(content, 0)` covers whatever the
+       traversal does; it now has a last-line-of-block twin at the bottom of
+       this file. Both directions are closed as of that change, verified at
+       guard level and against an out-of-tree oracle that descends to leaf
+       tokens independently of the tokenizer it measures.
    An honest guard with stated limits beats one that implies total coverage.
 
    MUTATION-PROOF (see task-12-brief.md Step 2, and the report this task
@@ -285,10 +302,40 @@ function collectSourceFiles(dir: string, out: string[] = []): string[] {
    stricter than the walker it replaces, which skipped a template whole and so
    hid any real call site written inside a `${...}`.
 
-   COMMENTS come from per-node trivia, not a text scan, because a `//` inside a
-   string literal is not a comment. Every node is asked for its leading and
-   trailing comment ranges, de-duplicated by span since one comment is reachable
-   from several nodes.
+   COMMENTS come from token trivia, not a text scan, because a `//` inside a
+   string literal is not a comment. The walk descends through
+   `node.getChildren(sf)` to the LEAF TOKENS and asks each leaf for its leading
+   and trailing comment ranges, de-duplicated by span since one comment is
+   reachable from two directions.
+
+   WHY LEAF TOKENS AND NOT `ts.forEachChild` - this cost 276 uncovered comments.
+   `forEachChild` yields only syntactically significant child NODES; it never
+   yields punctuation tokens (`}`, `]`, `,`). Every comment in a file is the
+   LEADING trivia of exactly one token, or the TRAILING trivia of the token
+   before it on the same line - and `getTrailingCommentRanges` stops at the
+   first newline. So a comment on its own line whose next token is punctuation
+   belonged to a token `forEachChild` never visits, and nobody asked for it. The
+   commonest shape there is is a comment as the last line of a block:
+
+       try {
+         something();
+         // historical: this used to be withCastLock(dir, async () => {
+       }
+
+   Measured with a token-descent oracle, that left 276 comments across 79 of
+   `server/src`'s 427 non-test files uncovered - `config/registry.ts` alone had
+   92 - and it broke both guards in BOTH directions named above: prose quoting
+   an unbalanced `withCastLock(dir, async () => {` in that position fabricated a
+   lock range over a genuinely unlocked write (fails OPEN), and prose quoting a
+   write primitive in that position counted as a real call site (fails CLOSED).
+   `getChildren` DOES yield punctuation, so descending it to the leaves reaches
+   every token and therefore every comment. It costs more - `getChildren`
+   materialises a token array per node - which is why callers memoize the
+   ranges per file content rather than recomputing them per match.
+
+   LITERALS still come from the AST node kinds, NOT from the token stream: the
+   parser is what resolves the regex-vs-division ambiguity (see (1) above), and
+   a leaf-token walk that trusted a raw scanner would reintroduce it.
    ============================================================================ */
 interface OpaqueRange {
   start: number;
@@ -325,9 +372,19 @@ function computeOpaqueRanges(content: string): OpaqueRange[] {
       default:
         break;
     }
-    for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
-    for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
-    ts.forEachChild(node, visit);
+    const children = node.getChildren(sf);
+    if (children.length === 0) {
+      /* A LEAF TOKEN - punctuation included, which is the whole point (see the
+         block header). Asking only the leaves is sufficient AND cheaper than
+         asking every node: a comment is always the leading trivia of some token
+         or the trailing trivia of the token before it, and an interior node's
+         `pos`/`end` coincide with its first/last leaf's anyway, so an interior
+         node can never contribute a range a leaf does not. */
+      for (const range of ts.getLeadingCommentRanges(content, node.pos) ?? []) addComment(range);
+      for (const range of ts.getTrailingCommentRanges(content, node.end) ?? []) addComment(range);
+      return;
+    }
+    for (const child of children) visit(child);
   };
 
   visit(sf);
@@ -618,6 +675,40 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
 
     const result = scanFile(src);
     expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
+    expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+  });
+
+  /* THE SAME FABRICATED PASS, one line lower - and this is the version that
+     actually bites.
+
+     The test above survived the punctuation blind spot only because its prose
+     sits on LINE 1, where `getLeadingCommentRanges(content, 0)` picks it up
+     unconditionally. Move the identical comment to the last line of a block and
+     the pre-fix tokenizer never reached it: its next token is `}`, which
+     `ts.forEachChild` does not visit (see the tokenizer block header). The
+     comment stayed live code, `collectLockRanges`'s `isOpaque` guard therefore
+     never fired, and the enclosing `run(...)` call's own `)` closed the range
+     the prose had opened - swallowing a genuinely unlocked write.
+
+     Measured against the pre-fix tokenizer on this exact fixture:
+       scanFile      -> null                          (guard GREEN, violation invisible)
+       collectLockRanges -> [{ start: 104, end: 191 }]  (a lock that does not exist)
+     After the fix: `writes: 1` naming line 7, and zero lock ranges. */
+  it('prose on the LAST LINE OF A BLOCK does not fabricate a lock range either', () => {
+    const src = [
+      'await run(async () => {',
+      '  try {',
+      '    await doSomething();',
+      '  } catch {',
+      '    // historical: this used to be withCastLock(dir, async () => {',
+      '  }',
+      '  await writeJsonAtomic(castJsonPath(dir), cast);',
+      '});',
+    ].join('\n');
+
+    const result = scanFile(src);
+    expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 7');
     expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
   });
 });
