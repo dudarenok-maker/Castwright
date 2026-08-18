@@ -26,4 +26,26 @@ describe('normaliseIdKey', () => {
     expect(normaliseIdKey('мэйрин')).toBe('мэйрин');
     expect(normaliseIdKey('奥杜万')).toBe('奥杜万');
   });
+
+  it('is output-identical to the previous trim-ReDoS implementation', () => {
+    const legacy = (id: string): string =>
+      id.toLowerCase().replace(/[-_\s]+/g, '-').replace(/^-+|-+$/g, '');
+    const inputs = [
+      '',
+      '-',
+      '---',
+      '___',
+      '   ',
+      '-a-',
+      '--a--',
+      '_a b-c_',
+      'A-B_C',
+      'мэйрин-',
+      '奥杜万--',
+      '-'.repeat(200) + 'x',
+    ];
+    for (const input of inputs) {
+      expect(normaliseIdKey(input)).toBe(legacy(input));
+    }
+  });
 });
