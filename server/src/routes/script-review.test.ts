@@ -2112,6 +2112,12 @@ describe('POST /api/books/:bookId/script-review — unset book language (Task 6 
     for (const f of failures) {
       expect(String(f.message)).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
     }
+    /* Task 9b (#2409) — each language-unset chapter-failed carries the
+       machine-readable code the frontend keys on, with the message unchanged. */
+    for (const f of failures) {
+      expect(f.code).toBe('language_unset');
+      expect(String(f.message)).toBeTruthy();
+    }
   });
 
   it('the control: a book WITH a language reviews normally (no chapter-failed)', async () => {

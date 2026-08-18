@@ -3288,7 +3288,7 @@ export interface ReviewScriptOpts {
   onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
-  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
+  onChapterFailed?: (e: { chapterId: number; message: string; code?: string }) => void;
   onCheckpoint?: (ev: { chapterId: number; version: number }) => void;
   onHeartbeat?: (ev: { chapterId: number; streaming: boolean }) => void;
 }
@@ -3353,7 +3353,11 @@ async function realReviewScript(
         break;
       case 'chapter-failed':
         if (typeof p.chapterId === 'number') {
-          onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
+          onChapterFailed?.({
+            chapterId: p.chapterId,
+            message: typeof p.message === 'string' ? p.message : 'Chapter review failed.',
+            ...(typeof p.code === 'string' ? { code: p.code } : {}),
+          });
         }
         break;
       case 'checkpoint':
@@ -3772,7 +3776,11 @@ async function realAttachScriptReview(
         break;
       case 'chapter-failed':
         if (typeof p.chapterId === 'number') {
-          onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
+          onChapterFailed?.({
+            chapterId: p.chapterId,
+            message: typeof p.message === 'string' ? p.message : 'Chapter review failed.',
+            ...(typeof p.code === 'string' ? { code: p.code } : {}),
+          });
         }
         break;
       case 'checkpoint':

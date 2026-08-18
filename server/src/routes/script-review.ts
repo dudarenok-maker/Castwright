@@ -238,7 +238,7 @@ export interface ScriptReviewSubscriber {
 
 export interface ScriptReviewReplayState {
   opsEvents: Array<{ kind: 'ops'; chapterId: number; ops: unknown[] }>;
-  chapterFailedEvents: Array<{ kind: 'chapter-failed'; chapterId: number; message: string }>;
+  chapterFailedEvents: Array<{ kind: 'chapter-failed'; chapterId: number; message: string; code?: string }>;
   lastPhase: Record<string, unknown> | null;
   result: { kind: 'result'; done: true; reviewedChapters: number; totalOps: number } | null;
   errorEvent: Record<string, unknown> | null;
@@ -790,7 +790,7 @@ async function runScriptReviewJob(
          carries no filesystem path. */
       if (reviewLanguage === null) {
         const unset = new BookLanguageUnsetError();
-        send({ kind: 'chapter-failed', chapterId, message: unset.message });
+        send({ kind: 'chapter-failed', chapterId, message: unset.message, code: 'language_unset' });
         continue;
       }
       lastEmittedProgress = i / chapterIds.length;

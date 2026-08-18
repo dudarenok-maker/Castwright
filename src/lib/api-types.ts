@@ -2537,7 +2537,7 @@ export interface paths {
          *     `chapterId` is provided, only that chapter is reviewed. SSE event
          *     kinds: `phase`, `throttle`, `heartbeat`, `ops`
          *     (`{ chapterId, ops: [{ id, op, anchor?, newText?, rationale, ... }] }`),
-         *     `chapter-failed`,
+         *     `chapter-failed` (`{ chapterId, message, code?: 'language_unset' }`),
          *     `error` (`code: no_attribution | no_such_chapter | quota_exhausted`),
          *     and a terminal `result` (`{ done, reviewedChapters, totalOps }`).
          */
