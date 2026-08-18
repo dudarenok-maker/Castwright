@@ -448,3 +448,260 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** single 8 GB card
 - **Est. box time:** 20
+
+### A10 · Per-character re-record / splice (plan 176)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/176-character-splice.md` frontmatter
+  `status: active` (`:2`), body `> Status: active` (`:9`). Ship notes
+  (`:53-59`) state the substantive scope (remix + re-record engine, route,
+  cast-drawer UI, the fs-10 line-level Listen entry via `#480`) fully shipped
+  but "Status remains `active` (not `stable`) until the owed **live-GPU
+  re-record acceptance** runs." The 2026-07-24 correction section (`:61-93`,
+  closes fs-10/`#412`) is a bug-fix + regression-pin round for the
+  marker→segment index-alignment bug, not a live-GPU walkthrough — it adds
+  four *automated* pin points (`chapter-audio.test.ts`,
+  `resolve-segment-for-sec.test.ts`, `splice-chapter.test.ts:224`,
+  `chapter-splice.test.ts` "fs-10 title-led index mapping"), all unit/route
+  tests against fixtures, none touching a real sidecar. `gh pr view 500
+  --repo dudarenok-maker/Castwright --json state,mergedAt,title` →
+  `{"mergedAt":"2026-06-03T08:52:45Z","state":"MERGED","title":"feat(server,frontend):
+  per-character re-record / splice (fs-26)"}` — matches the row. `gh issue
+  view 412 --repo dudarenok-maker/Castwright --json state,title,closedAt` →
+  `{"closedAt":"2026-07-24T03:23:40Z","state":"CLOSED","title":"fs-10 — Render
+  the chapter-title segment on the Listen view timeline"}` — the fix that
+  prompted the correction is closed, but closing the *bug* is not the same as
+  running the *acceptance*. `e2e/character-splice.spec.ts` exists and is
+  mock-mode only (`the mock api.streamSplice resolves…`, `:16`) — confirms
+  the row's framing that no automated path substitutes for the live-GPU gain
+  + re-record walkthrough.
+- **What changed since the row was written:** The fs-10 index-alignment bug
+  (which would have made a live re-record acceptance run land on the wrong
+  line) is now fixed and pinned by four automated tests, so a future live
+  acceptance run is less likely to trip over that specific defect. The debt
+  itself — the live-GPU +3 dB gain and re-record walkthrough — is unchanged
+  and still unrun.
+- **Remains owed:** The full manual walkthrough per `:50-51`: rendered book →
+  a character's profile → Fix audio → +3 dB gain across all chapters
+  (louder, duration unchanged, `.previous.*` written, A/B works, ≈−16 LUFS),
+  then re-record one chapter's lines (timing integrity, no seam, no doubled
+  title), on the canonical manuscript.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
+
+### A11 · Structured failure taxonomy (plan 173, fs-19)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/173-failure-taxonomy.md` frontmatter
+  `status: active` (`:2`), body `> Status: active — automated coverage
+  green; live multi-failure acceptance owed.` (`:9`). Ship notes (`:43-51`)
+  confirm shipped commit `affa489`, closes `#469`, and state "**Owed:** live
+  acceptance across ≥2 distinct real failure modes," followed by a
+  description of later, unrelated work (analysis-path classification, fe-29
+  Help deep-links) that extends the taxonomy's downstream consumers but does
+  not touch the owed live-failure walkthrough. `gh issue view 469 --repo
+  dudarenok-maker/Castwright --json state,title,closedAt` →
+  `{"closedAt":"2026-06-03T00:28:08Z","state":"CLOSED","title":"fs-19 —
+  Structured failure taxonomy + plain-language remediation"}` — closed as a
+  dev-complete ticket, matching the row; closing the implementation ticket is
+  not the acceptance itself. `server/src/routes/failure-taxonomy.test.ts`
+  feeds captured error *strings* (a synthetic XTTS tensor error, a synthetic
+  CUDA assert, a synthetic 429 body) — confirmed by the plan's own test-plan
+  text (`:40`) — not a live sidecar kill or a real VRAM oversubscription.
+- **What changed since the row was written:** Nothing found that touches the
+  live multi-failure walkthrough; later plan-173 work only extended
+  classification to the analysis path and added a Help-view deep-link
+  consumer of the existing codes.
+- **Remains owed:** Force ≥2 distinct real failure modes on the live sidecar
+  — stop the sidecar mid-run (`sidecar-unreachable`) and oversubscribe VRAM
+  (`vram-spill`) — and confirm the friendly message plus remediation line on
+  both the Generate row and the toast.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A12 · Post-synthesis audio QA gate (plan 174, srv-27)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/174-audio-qa-gate.md` frontmatter
+  `status: active` (`:2`), body `> Status: active — automated coverage
+  green; live acceptance owed.` (`:9`). Ship notes (`:38-40`): "Shipped on
+  `feat/server-generation-quality`... commit `84a45ff`. Closes #465...
+  **Owed:** live acceptance with a deliberately degraded render." `gh issue
+  view 465 --repo dudarenok-maker/Castwright --json state,title,closedAt` →
+  `{"closedAt":"2026-06-03T00:28:04Z","state":"CLOSED","title":"srv-27 —
+  Post-synthesis audio QA gate"}` — closed as dev-complete, matching the row.
+  `server/src/tts/audio-qa.test.ts` (per the plan's own test-plan text,
+  `:35`) crafts near-silent/clipped/truncated/runaway cases as *numeric
+  fixtures* fed straight to `evaluateChapterQa`, not a real degraded audio
+  file run through the actual synthesis + loudnorm pipeline.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Craft a near-silent / clipped / truncated chapter on the
+  real sidecar and confirm the amber "Suspect" badge appears on both the
+  Generate row and the Listen row, per the plan's own manual test-plan line
+  (`:36`).
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A13 · Per-run resource telemetry + admin trend panel (plan 175, fs-20)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/175-resource-telemetry.md` frontmatter
+  `status: active` (`:2`), body `> Status: active — automated coverage
+  green; live acceptance owed.` (`:9`). Ship notes (`:42-44`): "Shipped on
+  `feat/server-generation-quality`... commit `ee22859`. Closes #470...
+  **Owed:** live acceptance after a multi-chapter run on the GPU box." `gh
+  issue view 470 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-06-03T00:28:10Z","state":"CLOSED",
+  "title":"fs-20 — Per-run resource telemetry log + trend view"}` — closed as
+  dev-complete, matching the row. The plan's own architectural-impact notes
+  (`:22,27-28`) describe two later polish rounds (2026-06-07 `bookTitle`
+  grouping/scroll fix, 2026-07-06 QA column + column-alignment fix) — both
+  are UI/data-shape fixes confirmed by Vitest/Playwright per the test plan
+  (`:39`), not a live multi-chapter GPU run; `e2e/admin.spec.ts` is
+  explicitly described as using "the mock's value" for the QA column.
+- **What changed since the row was written:** Two rounds of polish landed
+  (per-book grouping/scroll, QA column + alignment fix) since the row's
+  framing, all covered by mock-mode/unit tests only — neither substitutes
+  for the owed live multi-chapter run the ship notes still gate on.
+- **Remains owed:** A real multi-chapter run on the GPU box, then confirm
+  `#/admin` → "Resource trends" shows RTF / QA / VRAM / wall-time rows and
+  the sparkline actually tracks RTF.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A14 · Qwen VoiceDesign persona-prompt rewrite (plan 160) · **oldest debt here**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/160-voicedesign-persona-format.md`
+  frontmatter `status: active` (`:2`), body `> Status: active — code
+  shipped, GPU audition validation owed to the user` (`:9`). Ship notes
+  (`:132-136`) are still the unfilled placeholder: "(Filled in when status
+  flips to `stable` after the GPU audition confirms the quality delta.
+  Append shipped date + commit SHA, then move to `docs/features/archive/`.)"
+  — no shipped date or SHA recorded, matching the row's framing exactly.
+  `git log --oneline -- docs/features/160-voicedesign-persona-format.md`
+  shows commit `0a2f8bd8` ("feat(server): align Qwen voice-design persona
+  prompt with official VoiceDesign format (plan 160)") plus a later
+  2026-06-16 follow-up ("make age audible," `ca4b4a93`) that is itself
+  framed in the plan text (`:108-130`) as landing from a *manual demo-book
+  audition* that surfaced the age-acoustics gap — i.e. someone did listen at
+  least once informally, but the plan's own text does not treat that as
+  discharging the acceptance walkthrough: it stays a "Follow-up," the
+  Ship-notes placeholder is unchanged, and the walkthrough's own step 2
+  ("Design voice → audition. Compare against a character still on an
+  old-format persona") specifically calls for an A/B against the old format,
+  which the informal fix-driving audition did not do. Automated coverage
+  (`server/src/analyzer/voice-style.test.ts`, cited `:80-86`) asserts prompt
+  *text* contains the right words (pitch, purpose clause, objective-quality
+  language, word-count band) — it cannot assert the rendered audio actually
+  sounds different, which is the entire point of the row.
+- **What changed since the row was written:** The 2026-06-16 age-audibility
+  follow-up is new since the plan's initial framing and is genuinely informed
+  by a live listen, but it addresses a narrower defect (age not translated to
+  acoustics) found informally, not the full three-step walkthrough
+  (regenerate persona → design → audition → A/B against old format) the plan
+  itself still lists as owed.
+- **Remains owed:** All three walkthrough steps in `:88-98`: regenerate a
+  persona and confirm it hits the pitch/purpose-clause format; design voice →
+  audition, compared against a character still on the old-format persona,
+  confirming the new wording changes the rendered voice; confirm an
+  un-regenerated character's existing designed voice is unaffected.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A15 · A/B "current vs proposed" voice audition (plan 161)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/161-voice-design-compare.md` frontmatter
+  `status: active` (`:2`), body `> Status: active — code shipped, GPU
+  audition validation owed` (`:9`). Ship notes (`:117-121`) are the same
+  unfilled placeholder pattern as A14: "(Filled in when status flips to
+  `stable` after the GPU audition confirms the non-destructive re-design +
+  the audible delta...)" — no shipped date or SHA. `git log --oneline --
+  docs/features/161-voice-design-compare.md` shows one commit,
+  `6fb41b7a` ("feat(frontend): A/B current-vs-proposed voice audition in the
+  Qwen design flow (plan 161)") — no later commit revisits the file, so
+  nothing has moved since. Automated coverage (`:76-98`) is extensive
+  (Vitest unit + route + Playwright e2e) but every listed suite is mock-mode
+  or mocked-dispatch; the pytest sidecar suite (`test_qwen_evict.py`) is
+  explicitly flagged in the plan's own text as "venv-gated → CI skips; runs
+  on a bootstrapped dev box," i.e. it exercises the evict *endpoint*
+  mechanics, not an audible A/B delta.
+- **What changed since the row was written:** Nothing found — no commit
+  since the initial landing touches this plan file or its acceptance state.
+- **Remains owed:** All four manual walkthrough steps in `:100-109`: the A/B
+  modal opens with current on Side A / proposed on Side B; edit persona on
+  Side B → re-design → audition again; Cancel after a re-design leaves the
+  live `.pt` byte-for-byte untouched (only `-preview` artifacts written then
+  discarded); "Use proposed voice" → Save → generate a chapter confirms the
+  new voice is actually used. Directly downstream of A14 — the plan's own
+  text recommends running them together.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A16 · fe-16 Qwen auto-load on a Russian book (plan 165)
+
+- **Verdict:** AMBIGUOUS
+- **Evidence:** `docs/features/165-fe-15-16-language-and-revision-e2e.md`
+  frontmatter `status: active` (`:2`) directly contradicts its own body
+  `> Status: stable (shipped together; manual acceptance owed only for the
+  live Qwen auto-load)` (`:9`) — confirmed by direct read, not just the
+  register's paraphrase. Ship notes (`:103-108`): "Shipped 2026-06-01 on
+  branch `feat/frontend-fe-15-16` (PR pending)... fe-16 Qwen auto-load is
+  wired and unit-covered; live GPU acceptance is the only owed item." No PR
+  number is filled in anywhere in the file — "(PR pending)" is still literal
+  text, not a placeholder later replaced. `git log --oneline --
+  docs/features/165-fe-15-16-language-and-revision-e2e.md` shows the plan
+  was renumbered from 163 (`6ed2fb8d`, "renumber fe-15/16 plan 163 -> 165")
+  but no subsequent commit revisits acceptance state or fills the PR number.
+  Automated coverage (`src/views/cast.test.tsx`, cited `:76`) asserts "Qwen
+  auto-loads when installed" against a mocked install probe — mock-mode
+  only, does not reach a real Qwen load or a real analyzer eviction.
+- **What changed since the row was written:** Nothing found regarding the
+  live-GPU walkthrough itself.
+- **Remains owed:** Open a real Russian book's cast view and confirm the
+  Qwen banner shows and Qwen auto-loads with the analyzer evicted (walkthrough
+  step 4, `:94-95`), on real hardware.
+- **Decision owed:** Whether this plan is `active` (per frontmatter, meaning
+  the whole plan is still open work) or `stable` (per its own body line,
+  meaning only the live-GPU item remains) is a direct self-contradiction in
+  the plan file itself, which this audit is not authorised to resolve — a
+  human must pick the correct frontmatter value and, separately, decide
+  whether "PR pending" with no PR number anywhere in the file is itself a
+  second, unrelated staleness problem worth routing.
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 15
+
+### A17 · Emotion-chip preview from the manuscript (plan 180, fe-31)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/180-fe31-emotion-chip-preview.md`
+  frontmatter `status: active` (`:2`), body `> Status: active` (`:9`), and
+  Ship notes (`:55-57`) still read the bare placeholder "(Filled in when
+  status flips to `stable`.)" — no shipped date, no commit SHA, confirming
+  the row's "Ship notes still a placeholder — no shipped date recorded."
+  Body text (`:48`) states verbatim: "**Live GPU acceptance owed:** the
+  audible difference between a designed variant and the base voice can only
+  be confirmed on a real sidecar (CI has no sidecar venv). Mock mode proves
+  the wiring + cache-scope selection only." `e2e/manuscript-emotion-preview.spec.ts`
+  exists (per the plan's own test-plan text, `:39`) and runs "in the
+  manuscript view (mock mode)... assert the sample `play()` path fires and
+  no error note surfaces" — confirmed mock-mode-only, asserting the play
+  call fires, not that the audio differs.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** The full manual walkthrough in `:41-46` (mock-mode steps
+  1 and 3-4 are already covered by the e2e spec; step 2 — flip the speaking
+  character to Qwen with a designed `angry` variant and confirm the ▶
+  preview audibly plays the designed variant, not the base voice — is the
+  live-GPU step and is unrun), plus the plan's own explicit live-GPU
+  acceptance line (`:48`): confirming an audible difference between a
+  designed variant and the base voice on a real sidecar.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
