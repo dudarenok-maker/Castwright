@@ -1455,3 +1455,200 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** real workspace, no GPU
 - **Est. box time:** 15 (batches with C2/C3's session; no dedicated session required per the row's own text)
+
+### D1 · Non-English ASR content-QA calibration ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1527 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":null,"state":"OPEN","title":"srv: on-box
+  maxWer calibration for es/fr/de/ru (#1084 follow-up)"}`; `gh issue view 1084
+  --repo dudarenok-maker/Castwright --json state,title,closedAt` →
+  `{"closedAt":null,"state":"OPEN","title":"srv: ASR content-QA never
+  tuned/validated for non-English (gate went live on non-EN at 3a56bf74)"}` —
+  both open. `server/src/config/registry.ts:300-338` defines the four
+  per-language override knobs the row calls for (`qa.asr.maxWer.{es,ru,fr,de}`),
+  and every one still `default: 0.4` — identical to the global default, i.e.
+  no observed-data calibration has been entered for any language. The knobs'
+  own `help` text says as much: "defaults to the global ASR max WER until
+  tuned on-box (#1084)". `server/src/tts/segment-asr-qa.test.ts:688-711`
+  exercises only the resolver mechanism (`resolveAsrThresholds`) against
+  synthetic override values (`0.55`, `0.5`) fed in by the test itself — it
+  proves the plumbing reads a set knob, not that any knob has been set from a
+  real es/ru/fr/de render-and-inspect pass.
+- **What changed since the row was written:** The per-language override
+  scaffold has landed since the row's prerequisite paragraph was written —
+  `qa.asr.maxWer.{es,ru,fr,de}` config knobs, env vars, and the
+  `resolveAsrThresholds(_, language)` resolver now exist to receive values.
+  This is infrastructure only; it does not itself discharge the row.
+- **Remains owed:** Render real audio in es/ru (then fr/de), run the ASR
+  content-QA gate against it, inspect the WER distribution per language, and
+  set the four `qa.asr.maxWer.*` knobs from what's observed — plus the two
+  named residual-risk checks (gendered-number mismatch rate, Russian
+  oblique-case declension mismatches) and confirming Whisper's German output
+  matches the single-fused-token assumption for compound numbers.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 90 (four languages, largely unattended batch render + inspect per the row's own text)
+
+### D2 · fs-61 zh/ja placeholder voices ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1600 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":null,"state":"OPEN","title":"fs-61 —
+  backfill designed voices + covers onto the zh/ja Coalfall placeholder
+  samples"}`. Comparing the sample trees directly: `samples/the-coalfall-
+  commission-es/` (one of D1's five *done* languages) has both
+  `manuscript.epub` and a `voices/` directory of designed voice artifacts;
+  `samples/the-coalfall-commission-zh/` and `samples/the-coalfall-commission-
+  ja/` have neither — each holds only `.audiobook/`, `README.md`, and
+  `manuscript.md` (not even the `.epub` the pipeline expects). The voice-
+  design pipeline has visibly never been run against either.
+- **What changed since the row was written:** Nothing found — the zh/ja
+  sample trees are still pre-pipeline placeholders.
+- **Remains owed:** Run the shipped Qwen VoiceDesign pipeline against the
+  zh/ja Coalfall placeholder samples, same as was already done for the five
+  languages D1 covers.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 25 (two languages, unattended pipeline run per the row's own framing)
+
+### D3 · The re-open bound's recovered turn actually sounds right when voiced ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), plan [`docs/superpowers/plans/2026-08-13-primary-pair-straddle.md`](../superpowers/plans/2026-08-13-primary-pair-straddle.md))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2315 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-08-13T21:32:45Z","state":"CLOSED",
+  "title":"srv — findQuoteRuns destroys 579 of 2,456 well-formed turns on
+  main, using a language's own primary quotePairs"}` — merged and closed. The
+  plan's own Ship notes (`docs/superpowers/plans/2026-08-13-primary-pair-
+  straddle.md:608-634`) record Tasks 1-11 as implemented and every measured
+  figure (Arm A, Arm B, attribution family, M2 pairwise, tag-cut proxy)
+  reproduced against the shipped code — but every one of those figures is a
+  corpus-instrument or unit-test measurement (text preservation, mid-word
+  checks, attribution-family loss counts), never a real render that a human
+  listened to. No file under `docs/testing/` mentions issue #2315 or
+  "primary-pair-straddle" at all (a search for both terms across
+  `docs/testing/` returns only the register and this audit file itself), so
+  no run sheet records the design doc's worked zh/ja continuation-paragraph
+  example being rendered and confirmed by ear.
+- **What changed since the row was written:** The PR merged and shipped
+  (Ship notes filled in), but the listening check the row asks for is a
+  separate, still-unexercised step — the plan's own on-box-acceptance
+  checklist item (`:591-598`) explicitly defers it to this register row.
+- **Remains owed:** Generate a `zh` or `ja` chapter containing a continuation
+  paragraph (the design doc quotes two worked examples), confirm the
+  previously-swallowed inner turn now renders as its own speech turn in the
+  character's own cast voice, and that the boundary doesn't land mid-word or
+  drop a syllable. The `ru`/`de` secondary check remains lower priority per
+  the row's own text.
+- **Decision owed:** n/a
+- **Hardware still required:** real CJK manuscript
+- **Est. box time:** 20 (single chapter render + listen, any TTS engine per the row's own text)
+
+### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 822 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":null,"state":"OPEN","title":"ops-16 —
+  Pinokio installer on-box acceptance (Windows + macOS)"}`. `gh issue view
+  1859 --repo dudarenok-maker/Castwright --json state,closedAt` →
+  `{"closedAt":"2026-07-27T03:11:35Z","state":"CLOSED"}` — matches the row's
+  own account of the Node-pin escalation landing in a follow-up chore.
+  Nothing in `docs/testing/` mentions macOS testing having occurred (a
+  case-insensitive search for "macos" across `docs/testing/` matches only
+  `flake-evidence.md` — a CI-runner-OS-matrix document unrelated to this row
+  — plus the register and this audit file).
+- **What changed since the row was written:** Nothing found beyond what the
+  row itself already documents (the #1859 escalation and its follow-up
+  chore).
+- **Remains owed:** All of it — macOS has had zero on-box exercise on any
+  axis (install, venv-from-conda, API spelling); Windows native-Stop actually
+  reaping the sidecar is unconfirmed; the pinned-Node checks the row
+  describes in detail (fresh install reports `24.x`, a pre-pin-release
+  Update-once still shows the bundled version as expected behaviour, a
+  second Update converges to `24.x`, `node_modules` survives the Node-major
+  swap) are all unproven on-box.
+- **Decision owed:** n/a
+- **Hardware still required:** phone / Mac / browser
+- **Est. box time:** 30 (20-40 min macOS install alone plus a short Windows follow-up, per the row's own estimate)
+
+### E2 · LAN HTTPS on by default (plan 250)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/250-lan-https-default.md:2` → `status: active`
+  (not `stable`); its `## On-box acceptance (owed)` section at `:43-48` is
+  unchanged and lists the same four items the row cites verbatim. Searching
+  `docs/testing/` for `LAN_HTTPS`/`mkcert`/`castwright.local` turns up three
+  incidental mentions — `cast-id-drift-onbox-acceptance.md:405` ("Result:
+  2026-08-05 ... `LAN HTTPS 8443 only`"), `fs38-wave3-onbox-acceptance.md:123`,
+  and `night-watch-reanalysis-onbox-acceptance.md:504` — but all three are
+  the *same developer's* dev-box sessions running with `LAN_HTTPS=1` already
+  set as an environment side-effect of other acceptance work, not a run of
+  this row's own checklist: none installs the mkcert root CA on a real phone,
+  none browses `castwright.local` from that phone, and none exercises the
+  `LAN_HTTPS=0`/cert-deletion fallback.
+- **What changed since the row was written:** Nothing that discharges the
+  row — incidental same-dev-box HTTPS boots are not a substitute for the
+  real-phone pairing and fallback checks the row specifically asks for.
+- **Remains owed:** Fresh install boots HTTPS on :8443 with the cert-
+  provisioned log line; the Open-Web-UI tab loads with no cert warning; a
+  real phone installs the mkcert root CA and completes pairing over
+  `castwright.local`; forcing `LAN_HTTPS=0` or deleting the certs degrades to
+  loopback HTTP without a crash.
+- **Decision owed:** n/a
+- **Hardware still required:** phone / Mac / browser
+- **Est. box time:** 20 (shares the phone + host session with E3, per the row's own text)
+
+### E3 · Pair from `castwright.local` (plan 256)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/256-lan-pair-from-friendly-hostname.md:2` →
+  `status: active`. Same search as E2 above — no run sheet under
+  `docs/testing/` records a real phone authorizing a device from
+  `https://castwright.local/#/admin`, name-first pairing showing the chosen
+  name in the admin list, or a bare-LAN-IP request receiving the
+  loopback-only 403.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Authorize a device from the friendly hostname with no
+  403; name-first pairing from the Listen tab shows the chosen name in the
+  admin list; a bare-LAN-IP request still gets the loopback-only 403
+  guidance.
+- **Decision owed:** n/a
+- **Hardware still required:** phone / Mac / browser
+- **Est. box time:** 15 (same session as E2, per the row's own text)
+
+### E4 · fe-51 engine-recommendation CPU caveat (plan 259)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `server/src/tts/engine-recommendation.ts:34` still defines
+  `CAVEAT_VRAM` at the exact line the row cites, and its use at `:67`
+  (`caveat: fits ? null : CAVEAT_VRAM`) is unchanged. `docs/features/259-
+  fe51-engine-recommendation.md:183` still reads "On-box acceptance item
+  (real hardware, not mock mode) — owed." verbatim.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Force Qwen onto CPU via the voice-engine device setting
+  on real hardware and confirm it still renders — slow, not crashing. If
+  false, the plan's own named fallback is to soften `CAVEAT_VRAM` at the
+  cited line.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15 (pairs with Group B's CPU-only sub-cases per the row's own text)
+
+### E5 · fe-39 touch press-feedback — DevTools smoke-check ([#1795](https://github.com/dudarenok-maker/Castwright/pull/1795))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh pr view 1795 --repo dudarenok-maker/Castwright --json
+  state,mergedAt,title` → `{"mergedAt":"2026-07-24T04:43:32Z","state":
+  "MERGED","title":"fix(frontend): touch press-feedback parity via
+  group-active mirrors (fe-39)"}`. No file under `docs/testing/` mentions
+  "press-feedback" or "group-active" (only the register and this audit file
+  match). Grepping `e2e/` for the same terms returns no Playwright coverage
+  either — consistent with the row's own claim that jsdom cannot compile the
+  variant and an automated test cannot stand in for the DevTools check.
+- **What changed since the row was written:** Nothing found — the PR
+  remains merged with no recorded manual DevTools pass.
+- **Remains owed:** A one-time DevTools touch-emulation check of the four
+  named controls (continue-listening play badge, "Add book" tile, wizard
+  "Review ›" chip, voice-library drag icon).
+- **Decision owed:** n/a
+- **Hardware still required:** phone / Mac / browser
+- **Est. box time:** 5 (any machine, per the row's own text)
