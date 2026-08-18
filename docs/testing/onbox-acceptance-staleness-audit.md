@@ -1006,3 +1006,73 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** real workspace, no GPU
 - **Est. box time:** 15
+
+### A34 · Supervisor respawn survives a refused spawn attempt ([#2037](https://github.com/dudarenok-maker/Castwright/issues/2037)) · **single 8 GB card, live sidecar**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2037` → `{"closedAt":"2026-08-05T00:37:01Z","state":"CLOSED"}` — the underlying fix landed. `server/src/tts/sidecar-supervisor.test.ts` and `server/src/tts/spawn-sidecar.test.ts` both exist and, per the row's own text (register.md:2016-2028), fully pin the backoff/cap logic against injected refusal signals — no real OS socket, no real teardown timing. No later issue, PR, commit, or run sheet records a real kill-and-observe pass against `scheduleRespawnAttempt`/`onSpawnRefused`.
+- **What changed since the row was written:** Nothing found. Issue #2037 closing (2026-08-05) predates the row's own text; no follow-up references a real socket-teardown measurement.
+- **Remains owed:** Kill the sidecar OS process directly (not via `/api/sidecar/restart`) mid-render, confirm a fresh `[sidecar] spawned pid=` line appears within the ~52s backoff budget with a different pid, confirm `GET /api/setup/models-status` never reports the TTS engine ready while nothing listens on `:9000`, and confirm the in-flight chapter either rides out the respawn or fails cleanly and resumably.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 10
+
+### A35 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2070` → `{"closedAt":"2026-08-05T05:54:35Z","state":"CLOSED"}` — the fix landed. `server/tts-sidecar/tests/test_design_contention.py` exists and, per the row's own text (register.md:2059-2067), pins `unload_design`'s wait/raise logic against a simulated `_design_in_flight` claim — not a real cold 0.6B load. No later issue, PR, or run sheet records an overlapped design/render pass on real hardware.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Start a voice design, trigger an overlapping chapter render on a different voice mid-design, confirm the render waits rather than erroring, confirm the design completes and its audition plays, and — if practical — force a genuinely wedged design and confirm the waiting synth times out into the `design_in_flight` 503 near the 150s bound rather than hanging forever.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A36 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2094` → `{"closedAt":"2026-08-05T05:54:36Z","state":"CLOSED"}` — the fix landed. `server/tts-sidecar/tests/test_footprints.py`, `test_transcribe_embed_admission.py`, and `test_asr_footprint_measurement.py` all exist and, per the row's own text (register.md:2090-2105), pin the reservation-key split and the measurement mechanism against a scripted `_device_free_mb` sequence — no real allocator, no real card. No later issue, PR, or run sheet records the 128 MB seed being revisited against real resident-ASR observations.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** With `ASR_DEVICE=cuda` and content-QA on, render a chapter so ASR goes resident, trigger several back-to-back `/transcribe` calls and confirm none 503 `noCapacity` on a card with genuine room, and watch `FootprintTable`'s learned `asr.warm` p95 settle after ≥5 real observations, recording the converged figure.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15 (rides along with A20)
+
+### A37 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2055` → `{"closedAt":"2026-08-05T05:54:36Z","state":"CLOSED"}` — the fix landed. `server/src/tts/segment-asr-qa.test.ts` exists and, per the row's own text (register.md:2134-2149), pins `classifyTranscript`'s override logic against injected transcripts/signals — including a Russian near-silence repro — but never against a real, intermittent #2026-style collapse. No later issue, PR, or run sheet records a real re-render reproducing the collapse.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** With ASR content-QA on and a Russian (or French/Spanish) book on the Coqui engine, reproduce #2026's language-collapse per its own recipe and confirm a genuine collapse now gets caught (`asr.verdict: drift`, reason mentioning "catastrophically wrong"); across the same or a longer healthy-content render, confirm the override does not fire on ordinary hard-to-transcribe-but-correct lines.
+- **Decision owed:** n/a
+- **Hardware still required:** Coqui/XTTS resident, ASR content-QA on
+- **Est. box time:** 40
+
+### A38 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2179` → `{"closedAt":"2026-08-07T01:52:50Z","state":"CLOSED"}`; `gh pr view 2210` → `{"mergedAt":"2026-08-07T01:52:49Z","state":"MERGED"}` — the fix landed. `server/.env.example` still ships all three vars commented out — `# SIDECAR_RESTART_MB=0` (`:659`), `# SIDECAR_VRAM_RECYCLE_SOFT_MB=0` (`:661`), `# SIDECAR_VRAM_RESTART_MB=0` (`:663`) — matching the row's described post-fix state (absent, so the auto-computed thresholds apply). Per the row's own text (register.md:2181-2183), the three threshold functions in `server/tts-sidecar/main.py` are unit-tested only for env-present/absent MATH, not for whether a real process ever crosses a live threshold and recycles/exits. No later issue, PR, or run sheet records a real fresh-install threshold-crossing run.
+- **What changed since the row was written:** Nothing found; `.env.example`'s commented-out state is confirmed still current.
+- **Remains owed:** Confirm a fresh install (all three vars absent) computes and uses the auto thresholds at startup; drive committed RAM toward the ~70% ceiling and confirm the sidecar self-exits with code 43 for the supervisor to respawn; drive reserved VRAM toward the 90% soft threshold and confirm a clean chapter-boundary recycle fires, then toward the 98% hard threshold and confirm a hard self-exit; and watch an ordinary render for thrash (no routine firing in the high-80s/90s%).
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 35
+
+### A39 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2192` → `{"closedAt":"2026-08-08T02:55:52Z","state":"CLOSED"}` — the fix landed. Plan 282's frontmatter reads `status: active` (`docs/features/282-ort-pip-consistency-marker.md:2`). Run sheet `docs/testing/ort-marker-onbox-acceptance.md` §3.3 (`:88-93`) has every `Result:` line unfilled (`Marker present + version`, `pip check exit code`, `Kokoro execution provider`, `Run by`/`Date` all `_(fill in)_`) — no on-box run recorded. `bootstrap-venv-helpers.test.ts`'s ordering assertions, per the row's own text (register.md:2222-2228), only exercise the seam, never a real pip venv.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Wipe or freshly clone the sidecar venv, run a genuine from-scratch bootstrap on the nvidia profile, inspect `site-packages` for the correct `onnxruntime-<version>.dist-info`, run `pip check` (expect exit 0), and load Kokoro to confirm `CUDAExecutionProvider`.
+- **Decision owed:** n/a
+- **Hardware still required:** none (sidecar venv only)
+- **Est. box time:** 15
+
+### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2192` → `{"closedAt":"2026-08-08T02:55:52Z","state":"CLOSED"}` — this is the fix for #2192 itself. Run sheet `docs/testing/ort-marker-onbox-acceptance.md` §4.3 (`:120-125`) has every `Result:` line unfilled (`Qwen3 install outcome`, `WinError 5 present/absent`, `Kokoro execution provider after install`, `Run by`/`Date` all `_(fill in)_`) — no in-app re-confirmation recorded since the fix landed. Per the row's own text (register.md:2246-2247), §5's self-heal proof exercises boot, not an in-app package install, so it does not substitute.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** Start the app on the NVIDIA profile with a bootstrapped sidecar venv, install Qwen3 from the app UI (Model Manager → the Qwen engine's Install action), confirm no `WinError 5`/`Accès refusé` on any `.dll` under `site-packages/onnxruntime/capi/`, and load Kokoro afterward to confirm it still reports `CUDAExecutionProvider`.
+- **Decision owed:** n/a
+- **Hardware still required:** none (sidecar venv only)
+- **Est. box time:** 10
