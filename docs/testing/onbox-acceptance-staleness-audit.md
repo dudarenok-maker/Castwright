@@ -34,7 +34,44 @@ number by being unable to check is worse than no instrument at all.
 
 ## Roll-up
 
-_Placeholder — the final verify child of this chain computes this._
+**No row has been discharged by this audit. The register is unchanged.**
+
+**Verdict counts (74 rows total):**
+
+| Verdict | Count |
+|---|---|
+| STILL OWED | 69 |
+| PROPOSE DISCHARGE | 0 (legitimate — no row's evidence cleared the artifact-plus-pasted-output bar) |
+| SHRUNK | 2 |
+| AMBIGUOUS | 3 |
+
+**Counts and estimated box time per hardware prerequisite** (bucketed by the row's leading hardware phrase; rows whose field lists more than one prerequisite are grouped under "multi-hardware"):
+
+| Hardware | Rows | Est. minutes |
+|---|---|---|
+| single 8 GB card | 39 | 830 |
+| real workspace, no GPU | 12 | 465 |
+| phone / Mac / browser | 5 | 90 |
+| sidecar venv, no GPU | 4 | 75 |
+| none / no GPU needed | 4 | 50 |
+| real CJK manuscript | 3 | 50 |
+| 2-card boot | 3 | 85 |
+| GitHub Actions | 2 | 10 |
+| Coqui/XTTS resident, ASR content-QA | 1 | 40 |
+| Android device (+ CarPlay/Android Auto head unit for one item) | 1 | not estimated |
+
+**Total estimated box time: 1695 minutes (~28.2 hours)** across the 72 rows carrying a numeric estimate. Two rows fall outside that total and are not batchable into it:
+
+- **A1** — "multi-hour" (the row's own unchanged estimate; same box, no additional prerequisites beyond what's already counted for the rest of its family).
+- **F1** — "not estimated in the plan — an entire untested axis, not batchable with any other group" (needs a real Android device, and for one item a CarPlay/Android Auto head unit).
+
+**AMBIGUOUS rows — the operator's design-pass queue (3):**
+
+- **A2** (Capacity-aware GPU placement, plan 264) — whether plan rows 6-8 count as already-exercised on-box, per the walkthrough section's declarative step wording and the header's own "S1/S2/S4/S6" claim, or as still-owed-and-deferred-by-choice, per the same header's closing sentence.
+- **A16** (fe-16 Qwen auto-load on a Russian book, plan 165) — whether the plan is `active` (frontmatter) or `stable` (its own body line) — a direct self-contradiction in the plan file the audit is not authorised to resolve.
+- **A22** (Real-corpus true-peak distribution, plan 274, feeds #1909) — whether #1909's closure ("no change," decided by subjective A/B listen) retires A22, or whether A22's real-corpus true-peak-vs-`QA_CLIP_TP_DB` observation remains independently owed.
+
+**PROPOSE DISCHARGE rows — the operator's confirmation queue:** none. No row in this audit proposed a discharge.
 
 ### G1 · Quarantine-lane health report — first live dispatch (ops-32, #1864, PR #1873)
 
