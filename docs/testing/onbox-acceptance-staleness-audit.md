@@ -36,7 +36,7 @@ number by being unable to check is worse than no instrument at all.
 
 _Placeholder — the final verify child of this chain computes this._
 
-## G1 · Quarantine-lane health report — first live dispatch (ops-32, #1864, PR #1873)
+### G1 · Quarantine-lane health report — first live dispatch (ops-32, #1864, PR #1873)
 
 - **Verdict:** STILL OWED
 - **Evidence:** Three real cron dispatches now exist, not two: `event:
@@ -84,7 +84,7 @@ _Placeholder — the final verify child of this chain computes this._
 - **Hardware still required:** GitHub Actions
 - **Est. box time:** 5
 
-## G2 · The published release body now comes from the committed file, not the tag annotation (#2137, PR #2168)
+### G2 · The published release body now comes from the committed file, not the tag annotation (#2137, PR #2168)
 
 - **Verdict:** STILL OWED
 - **Evidence:** `gh pr view 2168 --json state,mergedAt,title` → merged
@@ -106,7 +106,7 @@ _Placeholder — the final verify child of this chain computes this._
 - **Hardware still required:** GitHub Actions
 - **Est. box time:** 5
 
-## H1 · Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)
+### H1 · Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)
 
 - **Verdict:** STILL OWED
 - **Evidence:** `ls C:\AudiobookWorkspace\books\Castwright\Standalones\`
@@ -127,7 +127,7 @@ _Placeholder — the final verify child of this chain computes this._
 - **Hardware still required:** real CJK manuscript
 - **Est. box time:** 15
 
-## H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
+### H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
 
 - **Verdict:** STILL OWED
 - **Evidence:** Same directory listing as H1 — no new Han-script manuscript
@@ -146,7 +146,7 @@ _Placeholder — the final verify child of this chain computes this._
 - **Hardware still required:** real CJK manuscript
 - **Est. box time:** 15
 
-## A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · 20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · 20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted
 
 - **Verdict:** SHRUNK
 - **Evidence:** Every artifact this row cites resolves exactly as described,
@@ -234,14 +234,20 @@ _Placeholder — the final verify child of this chain computes this._
   → retries → succeeds" — worded as an executed observation, not a pending
   step, and step 6 (2-card cold `/load` steer) and step 7 (`design_voice`
   evicts Ollama) restate items 6–7 as still-numbered walkthrough steps with no
-  internal "done" marker either way. The header explicitly calls out this
-  exact contradiction is NOT present in the header text itself — re-reading
-  closely, the header never actually names "S6" (that framing is the
-  register's own paraphrase, not the plan's wording) — the plan file itself
-  does not contain a token "S6" (`grep -n "S6" docs/features/264-vram-aware-gpu-placement.md`
-  → no matches), so the specific self-contradiction the register describes
-  ("lists S6 as both exercised and item-6-not-force-driven") could not be
-  independently located in the plan text as worded. Separately, PR #1732
+  internal "done" marker either way. Re-running the cited grep confirms a
+  match, not a miss: `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md`
+  → `16:> (S1/S2/S4/S6 below). The manual **evict-under-contention** rows (6–8: cold`.
+  The header's "S1/S2/S4/S6" is shorthand for walkthrough steps 1, 2, 4, and 6
+  (S1→step 1, S2→step 2, S4→step 4 name the same analyzer/render-pressure
+  synthesis-path steps as the walkthrough numbering), so S6 corresponds to
+  walkthrough item 6 — it is not a distinct label from the "rows 6-8" the next
+  sentence names. That means the header's own claim that S1/S2/S4/S6 were part
+  of the exercised "on-box synthesis-path acceptance" directly contradicts its
+  next sentence, which lists rows 6-8 (including item 6, the 2-card cold
+  `/load` steer) as "not force-driven on-box." The register's original
+  self-contradiction claim holds up: the header names step 6 as both exercised
+  (via S6) and not-force-driven (via row 6-8) within the same paragraph.
+  Separately, PR #1732
   ("fix(sidecar): keep every heavy-GPU op's device on its admitted card
   (#1730)") confirmed `state: MERGED`, `mergedAt: 2026-07-19T22:44:02Z` —
   matches the row's citation. Automated coverage confirmed real:
@@ -258,14 +264,16 @@ _Placeholder — the final verify child of this chain computes this._
   instruction. Steps 6-8 (evict-under-contention) status depends on the
   decision below.
 - **Decision owed:** Whether plan rows 6-8 count as already-exercised
-  on-box (per the walkthrough section's declarative step wording) or as
-  still-owed-and-deferred-by-choice (per the header's closing sentence) is a
-  single-sentence-resolvable disagreement inside the plan text itself that
-  this audit is not authorised to settle; note for routing per #2435 that the
-  literal "S6" self-contradiction the original row asserted was not
-  reproducible verbatim in the current plan text (no `S6` token exists in the
-  file) — worth a human recheck of whether the row was describing an earlier
-  plan revision.
+  on-box (per the walkthrough section's declarative step wording, and per the
+  header's own "S1/S2/S4/S6" on-box synthesis-path acceptance claim) or as
+  still-owed-and-deferred-by-choice (per the header's closing sentence listing
+  rows 6-8 as not force-driven) is a single-sentence-resolvable disagreement
+  inside the plan text itself that this audit is not authorised to settle; the
+  header's own text confirms the register's original "S6 listed as both
+  exercised and item-6-not-force-driven" self-contradiction — S6 is shorthand
+  for walkthrough step 6 (S1/S2/S4 map to steps 1/2/4 the same way), and that
+  step is named as both exercised (via S6) and not-force-driven (as row 6 of
+  rows 6-8) in the same header paragraph.
 - **Hardware still required:** 2-card boot
 - **Est. box time:** 20 (step 9 alone, short); steps 6-8 (if owed) add ~15
   more on the single 8 GB card
