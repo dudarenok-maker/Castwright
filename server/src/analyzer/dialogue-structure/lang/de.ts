@@ -31,7 +31,7 @@ export const de: LanguageConventions = {
   // failure the paragraph above describes — so a table entry there does work.
   // Plain `"…"` and curly `“…”` are genuinely clean under it at every arity
   // (any number of turns per paragraph). Swiss `«…»` is a NARROWER case:
-  // it is near-unreachable, not clean, because the PRIMARY table already
+  // it is degraded at two or more, not unreachable, because the PRIMARY table already
   // claims `«` as `»`'s closer (`['»','«']` above) — a `»` that closes one
   // Swiss turn is also a valid primary opener, so a SECOND `«…»` turn in the
   // same paragraph seeds a primary run there that swallows the attribution

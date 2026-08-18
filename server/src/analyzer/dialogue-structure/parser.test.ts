@@ -469,7 +469,12 @@ describe('parser — #2286 residual: accepted spurious spans under the gap tier 
    attribution tag. On `main`, `secondaryQuotePairs` is empty for every
    language, so this is the first change under which the guard is reachable
    from the real shipped tables. Without the guard, a secondary run would cut
-   the tag at the quoted name, leaving the turn with its text but no speaker. */
+   the tag at the quoted name, leaving the turn with its text but no speaker.
+   Since #2427 the guard also returns EARLY, declining nothing, when a colon
+   immediately precedes the candidate (whitespace stripped) — a leading tag
+   introduces its turn rather than attributing one. The cases in this block all
+   use trailing tags, so none of them exercise that path; the `#2346 defect B`
+   describe does. */
 describe('parser — #2315 guard `cutsATagClause` with real secondaryQuotePairs (#2286)', () => {
   const assertSpansOf = (body: string, lang: string, roster: Array<{ id: string; name: string }>) => {
     const conv = conventionsFor(lang)!;
@@ -1477,8 +1482,12 @@ describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert when
      words / <=5 CJK characters), the true figure is <=21 of 1,164 (1.8%).
      **Do not target the raw 1,164 for reduction — #2346 has the full
      breakdown and says this explicitly.** Pinned here as a KNOWN, TRACKED
-     gap — this test is expected to start FAILING the moment #2346 is fixed,
-     at which point it should be deleted, not adjusted to pass again. */
+     gap — this test pins DEFECT A (the guard is INERT where no primary run
+     precedes the candidate), which #2346's design accepted and priced rather
+     than fixed; it is expected to keep passing. The shipped change is defect B
+     (the guard FIRING on a leading tag, #2427), a disjoint population separated
+     by `precededByPrimaryRun` — never average the two. Delete this test only if
+     defect A is itself fixed, not adjusted to pass again. */
   const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
   const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
   const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
