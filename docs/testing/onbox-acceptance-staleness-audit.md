@@ -1652,3 +1652,188 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** phone / Mac / browser
 - **Est. box time:** 5 (any machine, per the row's own text)
+
+---
+
+### E6 · ops-35 ffmpeg floor — below-floor + Re-check walkthrough (#1877, plan 269)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `server/src/diagnostics/ffmpeg.test.ts:14-16` still mocks
+  `node:child_process`'s `spawnSync` via `vi.mock`, and
+  `scripts/tests/ffmpeg-version.test.mjs` still feeds the parser canned
+  banner strings rather than a real binary. `docs/features/269-ffmpeg-
+  version-floor.md:214-215` reads "its on-box acceptance (register row E6)
+  is still owed" verbatim. `gh issue view 1877 --repo dudarenok-maker/
+  Castwright --json state,closedAt` → `{"state":"CLOSED","closedAt":
+  "2026-07-27T08:50:16Z"}` — the bug is fixed and shipped, which is exactly
+  what makes the *on-box* walkthrough (never exercised against a real old or
+  real upgraded ffmpeg build) the remaining debt. No file under
+  `docs/testing/` records an ffmpeg-floor run sheet.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** The full six-step walkthrough on a box where ffmpeg can
+  be swapped between a real <4.4 build and a real ≥6.0 build — preflight
+  exit 1, the amber wizard card, the admin health dot, Re-check without a
+  restart, the `minimum: null` rollback, and confirming the upgrade advice
+  itself actually clears the card. Also owed: the Pinokio `"ffmpeg>=6"`
+  constraint on a real conda env (group with E1).
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card (any machine, no GPU
+  strictly required, but grouped with E1's Pinokio box)
+- **Est. box time:** 30 (six-step walkthrough plus the Pinokio constraint
+  check, shared setup with E1)
+
+### E7 · fe-57 venv-bootstrap progress card — the fix nothing automated can prove (#1883, plan 270)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `src/components/venv-bootstrap.test.tsx:8,18-19` still stubs
+  `fetch` globally (`vi.stubGlobal('fetch', fetchMock)`) rather than driving
+  a real bootstrap job. `docs/features/270-openapi-setup-surface.md:166`
+  reads "On-box acceptance owed — register row E7" verbatim. `gh issue view
+  1883 --repo dudarenok-maker/Castwright --json state,closedAt` →
+  `{"state":"CLOSED","closedAt":"2026-07-27T23:03:10Z"}` — the type-drift
+  bug itself is fixed and pinned by an `it.each` regression, but that
+  regression also mocks `fetch`, so it cannot prove the fix against a real
+  multi-minute bootstrap.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** On a box with no `server/tts-sidecar/.venv`, click
+  "Set up the voice engine runtime" and observe the progress card appear
+  within ~1.5s, the step text change as the real job advances, the
+  terminal green "ready" card with `onBootstrapped` refetching, and — if
+  cheap to induce — the red failure card with a working "Try again".
+- **Decision owed:** n/a
+- **Hardware still required:** none (any machine, no GPU)
+- **Est. box time:** 15 (dominated by the real ~2GB download/install)
+
+### E8 · ops-36 golden-assembly on a second ffmpeg build (#1880, plan 272)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `package.json:71` defines `"test:golden-audio:assembly":
+  "npm --prefix server run test:golden"`, and grepping
+  `.github/workflows/*.yml` for `golden-audio`/`golden-assembly` returns no
+  matches — the tier is confirmed absent from CI, so it never runs against
+  more than the one ffmpeg build available in any single CI/dev
+  environment. `docs/features/272-golden-assembly-comparison.md:140,208,222`
+  all reference "the owed on-box acceptance row" for the cross-build half.
+  `gh issue view 1880 --repo dudarenok-maker/Castwright --json
+  state,closedAt` → `{"state":"CLOSED","closedAt":
+  "2026-07-28T10:38:55Z"}`.
+- **What changed since the row was written:** Nothing found. The LOOSE
+  branch itself remains demonstrated (synthetic banner mismatch, 24.79%
+  RMS-error against a 16% tolerance) — only the genuinely-different-build
+  case is unproven.
+- **Remains owed:** Run `npm run test:golden-audio:assembly` on a box whose
+  real `ffmpeg -version` banner differs from the baseline's; record which of
+  L1/L2/L3 fire and their deltas, whether L4 takes the LOOSE path, and
+  L4-loose's actual RMS-error.
+- **Decision owed:** n/a
+- **Hardware still required:** none (any machine with a different ffmpeg
+  build, no GPU)
+- **Est. box time:** 10
+
+### E9 · ORT marker — the Pinokio update path (#2192, plan 282) · group with E1
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/testing/ort-marker-onbox-acceptance.md:236-245`
+  (§6.3 "Criterion 4 — Pinokio update path (E9)" Result section) has every
+  field still reading `_(fill in)_` — `reqHash` branch taken, `pip check`
+  immediately post-Update, the self-heal-at-boot observation, the Qwen3
+  install result, the `install.js` pass outcome, and the run metadata are
+  all blank. `gh issue view 2192 --repo dudarenok-maker/Castwright --json
+  state,closedAt` → `{"state":"CLOSED","closedAt":
+  "2026-08-08T02:55:52Z"}` — the bug is fixed; this row is the unexercised
+  out-of-process (Update/Install entry point) acceptance criterion.
+- **What changed since the row was written:** Nothing found — the run
+  sheet's own criterion-4 section is unchanged and unfilled.
+- **Remains owed:** On a machine with Pinokio and an existing pre-fix
+  install, run Update on the nvidia profile, confirm the `noop`/
+  `pip-in-place` branch behaves as documented (including the self-heal at
+  next server boot if `noop`), confirm Qwen3 installs with no `WinError 5`,
+  and in the same session run a fresh `install.js` pass confirming the
+  same outcome.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card (nvidia profile; shares
+  setup with E1's Pinokio box)
+- **Est. box time:** 30 (per the row's own estimate, shared with E1)
+
+### E10 · revoke is loopback-only — the forwarder boundary and the copy that replaces the button (#2269, PR #2280, plan 225) · group with E2/E3
+
+- **Verdict:** STILL OWED
+- **Evidence:** `server/src/routes/devices.test.ts:370-371` still
+  fabricates a request object with `ip: '127.0.0.2'` / `socket.
+  remoteAddress: '127.0.0.2'` rather than going through the real `:443`
+  forwarder (`lan-port-forwarder.ts`), and no file under `docs/testing/`
+  (searched for "revoke"/"loopback") records a real-forwarder,
+  real-phone-paired revoke run. `gh issue view 2269 --repo dudarenok-maker/
+  Castwright --json state,closedAt` → `{"state":"CLOSED","closedAt":
+  "2026-08-12T00:57:15Z"}`; `gh pr view 2280 --repo dudarenok-maker/
+  Castwright --json state,mergedAt` → `{"state":"MERGED","mergedAt":
+  "2026-08-12T00:57:14Z"}`.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** With `LAN_HTTPS_PORT` set to a **non-default** value and
+  the `:443` forwarder actually bound: revoke succeeds from
+  `https://localhost:<port>`; from `https://localhost/` (through the
+  forwarder) the button renders but returns 403 with the actionable
+  direct-port sentence, not a raw `revoke failed (403)`; from a paired
+  phone on `castwright.local` no Revoke control renders anywhere and the
+  explanation appears once below the list (check with ≥3 paired devices);
+  and a direct `DELETE /api/devices/<host id>` from a paired LAN device
+  returns 403 with the host's own record left live afterward.
+- **Decision owed:** n/a
+- **Hardware still required:** phone / Mac / browser
+- **Est. box time:** 20 (shares its whole setup with E2 and E3, per the
+  row's own text)
+
+### E11 · `measure-attribution.mjs` against the real workspace (#1984 Wave 1)
+
+- **Verdict:** SHRUNK
+- **Evidence:** `docs/testing/attribution-collapse-visibility-onbox-
+  acceptance.md:170-178` (§5, D13 verdict) is marked "COMPLETE, 2026-08-14,
+  primary checkout at `df49a261`" — this discharges item (1), the full
+  read-only run proving real book state, matching the register's own
+  "Item (1) DISCHARGED 2026-08-14" note. But §4 "Dash-stripped invariance
+  (criterion 3, on-box)" (`:157-168`) still reads "**Result: NOT YET RUN**",
+  and lines `:116-144` (`demotedNarrator`/`modelNarrator` re-analysis
+  investigation) are still unchecked `- [ ]` boxes. `gh issue view 1984
+  --repo dudarenok-maker/Castwright --json state,closedAt` →
+  `{"state":"CLOSED","closedAt":"2026-08-13T08:42:45Z"}`.
+- **What changed since the row was written:** Nothing beyond what the
+  register itself already records (item 1 discharged 2026-08-14, D13
+  re-gate closed as #2357). The two GPU-dependent items the register
+  already flagged as still owed remain owed, unchanged.
+- **Remains owed:** (2) the dash-stripped re-run invariance check — run the
+  script twice, second time over scratch-path copies of each cache with
+  every leading dash stripped, diff every field of every row; (3)
+  re-analysing one book post-D18 to confirm `demotedNarrator`/
+  `modelNarrator` actually populate outside a unit fixture. Both need
+  GPU/analysis time.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU needed for (1)
+  (already discharged); (2) and (3) need GPU/analysis time
+- **Est. box time:** under 5 (item 1, discharged); (2) and (3) not
+  estimated in the row — need GPU time to scope
+
+### F1 · Android companion app — v1 live-device acceptance (plan 188) · an entire untested axis
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/188-android-companion-app.md:24` still reads
+  "all built, tested, and merged. The only thing left is the batched
+  live-device acceptance pass" verbatim, and every named module row
+  (`app-3` through `app-14`) plus the Ship-notes table (`:790-845`) still
+  carries "**Live device acceptance owed**" / "**Live device/head-unit
+  acceptance owed**" against every entry. No file under `docs/testing/`
+  records a live-device run.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** The full plan 188 live-device pass — v1 core end-to-end
+  (QR pairing, library browse, offline download/playback with lock-screen
+  and Bluetooth controls, dual-book resume, targeted re-sync of a
+  regenerated chapter, in-car listening-position push-back), app-9
+  (Android Auto / CarPlay media-browse and playback on a real head unit),
+  and app-10 (stream-over-LAN: instant start, mid-chapter seek, lock-screen
+  transport, backgrounding survival, no cert-install prompt, and the
+  download-to-play fallback when streaming is off or off-Wi-Fi).
+- **Decision owed:** n/a
+- **Hardware still required:** Android device (a real phone, plan names a
+  Pixel 10 Pro; app-9 additionally needs a real Android Auto/CarPlay head
+  unit)
+- **Est. box time:** not estimated in the plan — an entire untested axis,
+  not batchable with any other group
