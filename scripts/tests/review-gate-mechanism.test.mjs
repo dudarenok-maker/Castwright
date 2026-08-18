@@ -281,6 +281,39 @@ function headingAnchors(file) {
   return anchors;
 }
 
+/** Files staged for the commit this hook run is gating, or `null` when there
+ *  is nothing staged (e.g. a plain `npm run test:hooks` / CI run against an
+ *  already-committed tree) — the signal linkScanSet() uses to tell "gating a
+ *  commit" apart from "auditing the whole repo".
+ *
+ *  Strips the `GIT_*` env vars (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, …)
+ *  git hooks set on their own process before spawning this one. Passing only
+ *  `cwd` is not enough to redirect a `git` subprocess: those vars, when
+ *  present, override `cwd` for repo discovery — inherited unmodified here
+ *  they would point `git` at the caller's OWN repo/index regardless of `cwd`.
+ *  This mattered even for the REPO_ROOT default: `stagedFiles()` runs from
+ *  inside pre-commit for its real job, so this default call is the same
+ *  hook-env case as the tmpDir test below, just without the tmpDir masking
+ *  it — omitting the strip here silently no-ops in production too. */
+function stagedFiles(cwd = REPO_ROOT) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) delete env[key];
+  }
+  let out;
+  try {
+    out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
+      cwd,
+      env,
+      encoding: 'utf8',
+    });
+  } catch {
+    return null;
+  }
+  const files = out.split('\n').filter(Boolean).map((p) => resolve(cwd, p));
+  return files.length > 0 ? new Set(files) : null;
+}
+
 /** The scan set is DERIVED, not hand-listed: the two root governance docs,
  *  every markdown file under .claude/skills/**, and every markdown file under
  *  docs/testing/**. A hand-list would reproduce the enumeration trap Task 4
@@ -292,7 +325,18 @@ function headingAnchors(file) {
  *  invisibly. Historical plan docs under docs/ (outside docs/testing/) are
  *  deliberately OUT of scope: measured 2026-08-13, they carry 15 pre-existing
  *  dangling links (relative paths written as if from the repo root), none of
- *  which this work touches. */
+ *  which this work touches.
+ *
+ *  When something is staged (the pre-commit case), the set is further
+ *  narrowed to sources that are themselves part of THIS commit — a doc that
+ *  intentionally forward-links to siblings a later commit will add (e.g. a
+ *  multi-step chain's plan-of-record) would otherwise fail every intermediate
+ *  commit in the chain until the last sibling lands, even though none of
+ *  those commits touched the forward-linking file (#2463). A full,
+ *  everything-on-disk scan still runs whenever nothing is staged — a normal
+ *  `npm run test:hooks` or the CI `verify.yml` leg — so the guard's coverage
+ *  of the committed tree is unchanged; only the pre-commit-time false
+ *  positive on a not-yet-complete chain is narrowed. */
 function linkScanSet() {
   const skillsRoot = join(REPO_ROOT, '.claude', 'skills');
   const skillDocs = readdirSync(skillsRoot, { recursive: true, withFileTypes: true })
@@ -302,12 +346,14 @@ function linkScanSet() {
   const testingDocs = readdirSync(testingRoot, { recursive: true, withFileTypes: true })
     .filter((d) => d.isFile() && d.name.endsWith('.md'))
     .map((d) => join(d.parentPath ?? d.path, d.name));
-  return [
+  const all = [
     join(REPO_ROOT, 'CLAUDE.md'),
     join(REPO_ROOT, 'CONTRIBUTING.md'),
     ...skillDocs,
     ...testingDocs,
   ];
+  const staged = stagedFiles();
+  return staged === null ? all : all.filter((f) => staged.has(resolve(f)));
 }
 
 test('githubAnchor matches GitHub slugging, including runs of spaces and non-ASCII', () => {
@@ -503,6 +549,52 @@ test('headingAnchors strips a closed-ATX heading\'s trailing hashes', () => {
       !anchors.has('foo-'),
       'closed-ATX trailing hashes leaked into the anchor as "foo-" instead of being stripped to "foo"',
     );
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('stagedFiles() returns null with nothing staged, and the staged set when something is', () => {
+  // #2463: a multi-step chain's plan-of-record can legitimately forward-link
+  // to sibling docs a later commit will add. Without narrowing, every
+  // intermediate commit in the chain fails the link-scan gate on files it
+  // never touched. This pins the primitive linkScanSet() narrows on: null
+  // (full scan) when the index is clean, the staged paths (and only those)
+  // when it isn't.
+  //
+  // Runs its own `git` subprocesses against a throwaway repo under a tmpDir,
+  // NOT this repo — but a `git` child process honours inherited GIT_DIR/
+  // GIT_WORK_TREE/GIT_INDEX_FILE env vars over its `cwd` argument. Run this
+  // test from inside a git hook (pre-commit sets exactly those vars) without
+  // stripping them here, and 'git init'/'add'/'commit' below silently operate
+  // on THIS repo's real index instead of tmpDir's — which is how an earlier
+  // draft of this test committed its own scratch file into this repo's real
+  // history the first time it ran under pre-commit. Strip every GIT_* var,
+  // not just the well-known three: git recognises others (GIT_COMMON_DIR,
+  // GIT_OBJECT_DIRECTORY, …) that same way.
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) delete env[key];
+  }
+  const tmpDir = mkdtempSync(join(tmpdir(), 'staged-files-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: tmpDir, env });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir, env });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir, env });
+    const committed = join(tmpDir, 'committed.md');
+    writeFileSync(committed, 'already committed\n', 'utf8');
+    execFileSync('git', ['add', 'committed.md'], { cwd: tmpDir, env });
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: tmpDir, env });
+
+    assert.equal(stagedFiles(tmpDir), null, 'clean index must report null (triggers a full scan)');
+
+    const staged = join(tmpDir, 'staged.md');
+    writeFileSync(staged, 'new, staged\n', 'utf8');
+    execFileSync('git', ['add', 'staged.md'], { cwd: tmpDir, env });
+
+    const result = stagedFiles(tmpDir);
+    assert.ok(result, 'a staged file must produce a non-null set');
+    assert.deepEqual([...result], [resolve(tmpDir, 'staged.md')], 'only the staged file, not the committed one');
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
