@@ -156,6 +156,7 @@
 
 - **Behind the scenes: Castwright can now measure how much of a book's dialogue is quietly being read by the narrator instead of its own characters.** This doesn't change anything you see or hear yet — no badge, no warning, nothing new on screen — but it's the groundwork for a future one that will actually tell you when a book has slipped into this state, so it stops sitting unnoticed until you happen to hear it for yourself.
 - **The speech service can no longer fail silently and leave your book stranded.** The speech service sometimes refuses to start — usually because another program on your computer is already holding the connection it needs. Castwright used to see it wasn't running but would report it as ready anyway, so when you tried to narrate a chapter it would just sit there looking busy with nothing to tell you something was wrong. Now it tries to start the service again — a few times — and if it still won't come up, it tells you plainly. You know to look into what's in the way, instead of facing a book that looks ready but where nothing ever happens.
+- **Security: refreshed the bundled dependencies to clear all outstanding advisories.**
 
 # Castwright 1.14.0
 
