@@ -705,3 +705,224 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** single 8 GB card
 - **Est. box time:** 15
+
+### A18 · Device-pin resolution survives a respawn ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870), closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)) · **2-card boot**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh pr view 1870 --repo dudarenok-maker/Castwright --json state,mergedAt,title` →
+  `{"mergedAt":"2026-07-27T01:53:26Z","state":"MERGED","title":"fix(server,sidecar):
+  deterministic device env for the sidecar; codec knob resolves UUID pins"}`.
+  `gh issue view 1857 --repo dudarenok-maker/Castwright --json state,title,closedAt` →
+  `{"closedAt":"2026-07-27T01:53:27Z","state":"CLOSED","title":"GPU device-list cache is
+  never warmed unless Advanced settings is opened"}`. `server/src/tts/sidecar-env.test.ts`
+  exists and covers `buildSidecarEnv` at unit level. The row's own text (register.md:825-827)
+  states the behaviour was "Verified by unit tests and CI; **never watched on real cards**,"
+  and names the respawn-after-enumeration-change case as "the regression the change exists to
+  prevent" — precisely the part no CI test can reach.
+- **What changed since the row was written:** Nothing found. The PR merged and the issue
+  closed before this row was written (2026-07-27), and no later commit, run sheet, or
+  register annotation records a real two-card respawn test.
+- **Remains owed:** All four on-box bullets in register.md:829-842 — pin-survives-respawn,
+  pin-survives-enumeration-reorder, codec pin actually lands on the named card, and
+  codec pin against an absent card falls back to CPU rather than `auto`'s GPU choice.
+- **Decision owed:** n/a
+- **Hardware still required:** 2-card boot
+- **Est. box time:** 20
+
+### A19 · Mixed Qwen+Coqui evict fails soft ([#1893](https://github.com/dudarenok-maker/Castwright/issues/1893)) · **single 8 GB card**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1893 --repo dudarenok-maker/Castwright --json state,title,closedAt`
+  → `{"closedAt":"2026-07-27T23:44:24Z","state":"CLOSED","title":"srv — fs-60's trailing
+  coqui-for-qwen VRAM evict has no failure isolation"}`. `gh issue view 1898` (the criteria
+  issue cited in register.md:930) → `{"closedAt":"2026-07-27T23:44:23Z","state":"MERGED",
+  "title":"fix(server): fail soft when the mixed-phase Qwen evict fails"}`. The row's own
+  2026-08-01 correction block (register.md:879-908) is the authoritative current state: a
+  **quiet-box** rerun of the ordinary (non-forced-evict) mixed Qwen+Coqui chapter completed
+  71/71 with both engines resident at 3.7 GB combined — comfortably inside 8 GB — reversing
+  the earlier 2026-07-31 OOM observation, which the correction attributes to a foreign
+  process (another worktree's real-GPU Qwen pytest suite) holding cuda:0, not to a card-size
+  limit. The block's own conclusion, verbatim: "**So A19's question is still entirely open**
+  — the unforced case does not reliably spill on an 8 GB card... Caveat in the other
+  direction: our own peak across a 1,588-sample trace was 6,727 MB... which on an 8 GB card
+  leaves little headroom." The block further records a **box policy change since 2026-08-01**
+  pinning renders to the 16 GB card via `server/.env` (`COQUI_DEVICE=cuda:1` /
+  `QWEN_DEVICE=cuda:1` / `ASR_DEVICE=cuda:1`), and states explicitly: "A19's forced-evict run
+  must temporarily undo those pins, or it will not exercise the single-8 GB-card scenario
+  this row is about." `server/.env` is git-ignored and not present in this worktree, so its
+  current pin state cannot be verified from the repo alone.
+- **What changed since the row was written:** Two real on-box datapoints were gathered
+  (2026-07-31 and 2026-08-01) but neither exercises the row's actual scenario — a *forced*
+  evict failure. The 2026-08-01 correction explicitly retracts the 2026-07-31 reading and
+  leaves the row's central question open. A box-level env pin change (2026-08-01) now sits
+  between any future run and the 8 GB card, and must be temporarily undone to run this row.
+- **Remains owed:** The forced-evict scenario itself (register.md:910-923) — proxy or stub
+  `POST /unload` to 500, confirm the chapter completes with the
+  `fs-60 Qwen→Coqui evict failed; continuing into the Coqui phase` log line, and classify the
+  outcome as clean completion / self-describing sidecar OOM / crash-recycle-storm. Also the
+  pause-during-stalled-evict abort check (register.md:922-923). The `server/.env` device
+  pins must be temporarily reverted first.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
+
+### A20 · Idle Coqui is reclaimed under VRAM pressure ([#1894](https://github.com/dudarenok-maker/Castwright/issues/1894)) · **single 8 GB card**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1894 --repo dudarenok-maker/Castwright --json state,title,closedAt`
+  → `{"closedAt":"2026-07-28T05:48:34Z","state":"CLOSED","title":"srv — fs-60's Coqui VRAM
+  residency is never evicted after the last Coqui chapter"}`. `gh issue view 1921` (the Stop
+  control fix referenced in register.md:961-963) → `{"closedAt":"2026-07-28T11:27:04Z",
+  "state":"CLOSED","title":"Stop during a Coqui render reports a 2s timeout, then unloads
+  anyway"}`. `server/tts-sidecar/main.py:7829-7849` confirms `_COQUI_IDLE_TTL_DEFAULT = 30.0`
+  is still the shipped default, matching the row's stated "30 s TTL" with no evidence it was
+  ever retuned against real chapter gaps. No run sheet, register annotation, or ship-notes
+  entry records any of the row's four on-box bullets (pinned-card admission test, idle-TTL
+  tuning observation, Stop-during-Coqui-render behaviour) having been exercised on real
+  hardware — unlike A19, this row carries no dated observation block at all.
+- **What changed since the row was written:** Nothing found beyond the two cited issues and
+  #1921 merging (2026-07-28), all of which predate the row and are already reflected in its
+  text ("Since #1921, `POST /api/sidecar/unload` carries its own 90 s budget").
+- **Remains owed:** All four bullets in register.md:941-967 — the pinned-card
+  `CUDA_VISIBLE_DEVICES=0` admission test (idle Coqui reclaim actually admits a blocked Qwen
+  op), the mixed-book evict/reload-cycle observation to validate or retune
+  `COQUI_IDLE_TTL`, and the Stop-button-during-Coqui-render behaviour/timing observation.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 25
+
+### A21 · Real-book QA/badge agreement after the loudness measurement hoist (plan [274](../features/archive/274-loudness-measurement-provenance.md), [#1922](https://github.com/dudarenok-maker/Castwright/issues/1922), [#1923](https://github.com/dudarenok-maker/Castwright/issues/1923))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/archive/274-loudness-measurement-provenance.md` frontmatter
+  `status: stable`, `shipped: 2026-07-29` (`:2-3`); Ship notes (`:975-995`) confirm T1-T10
+  landed exactly as designed and record on-box rows A21-A23 as registered but explicitly
+  state "none block this merge" (`:995`) — i.e. shipping did not require running them.
+  `gh issue view 1922` / `gh issue view 1923` both `CLOSED` `2026-07-29T22:43:34Z`. Plan §6
+  (`:856-864`) names A21's exact criterion: "for every chapter, the Suspect badge's true-peak
+  reason (when present) and the Listen-view loudness badge's dBTP figure quote the same
+  number." The only real-hardware render found in the repo's history since is #1909's
+  closing A/B (2026-07-31, 4-pass real cast render measured with independent `ebur128`), but
+  that comparison measured LRA/gain-delta between two loudnorm treatments for a listening
+  test — it did not check or report Suspect-badge-vs-Listen-badge dBTP agreement.
+- **What changed since the row was written:** Nothing found that discharges this specific
+  observation; the only adjacent real-render evidence (#1909's A/B) answers a different
+  question.
+- **Remains owed:** A full multi-chapter real-book render with per-chapter confirmation that
+  the Suspect badge's true-peak reason and the Listen-view dBTP figure agree, per plan 274
+  §6 row 1.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 10
+
+### A22 · Real-corpus true-peak distribution (plan [274](../features/archive/274-loudness-measurement-provenance.md)) · feeds [#1909](https://github.com/dudarenok-maker/Castwright/issues/1909)
+
+- **Verdict:** AMBIGUOUS
+- **Evidence:** `gh issue view 1909 --repo dudarenok-maker/Castwright --json state,title,closedAt`
+  → `{"closedAt":"2026-07-31T08:24:47Z","state":"CLOSED","title":"srv — loudnorm rides
+  syllables on most chapters: linear requested, dynamic applied"}`. The closing comment
+  (2026-07-31T08:24:45Z) reads: "**Verdict: the current pipeline is preferred. Closing
+  without a code change.**" — a 4-pass real cast render A/B (dynamic vs. linear+alimiter),
+  judged by the repo owner listening, decided to keep the current loudnorm mode/target/
+  ceiling as-is. The row's own text (register.md:997-999) frames its purpose as feeding
+  "#1909's ceiling/mode question," and states Decision 3 of plan 274 "deliberately left
+  `QA_CLIP_TP_DB` untuned... once #1909 settles the ceiling/mode question." #1909 has now
+  settled that question (no change), but the #1909 closure evidence measured LRA/gain-delta
+  for a listening comparison, not the per-chapter true-peak spread against `QA_CLIP_TP_DB`
+  that A22 specifically asks for (register.md:1001-1003).
+- **What changed since the row was written:** The issue A22 was written to feed (#1909) is
+  now closed, and closed with a decision (no mode/ceiling/target change) rather than left
+  open pending A22's data.
+- **Remains owed:** A22's literal on-box criterion — recording the measured `tp` spread per
+  chapter across a real book render and confirming whether any chapter approaches the
+  `-0.1` dBTP clip threshold — has still never been run.
+- **Decision owed:** Whether #1909's closure ("no change," decided on different evidence —
+  a subjective A/B listen, not a `tp`-per-chapter distribution) retires A22 as no-longer-
+  needed, or whether A22's real-corpus `tp` observation remains independently owed for any
+  future `QA_CLIP_TP_DB` retune now that #1909 is no longer a blocker on it.
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 10
+
+### A23 · Measurement-failure path renders as untrusted, not as a fabricated reading (plan [274](../features/archive/274-loudness-measurement-provenance.md))
+
+- **Verdict:** STILL OWED
+- **Evidence:** Plan 274 §6 row 3 (`:869-872`): "A chapter whose `ebur128` pass fails renders
+  as untrusted, not as `-1.5`-measured... Hard to force naturally, T6 covers it at unit
+  level, this row confirms on real hardware." Ship notes (`:975-995`) record no on-box run
+  of this row; it is listed among A21-A23 as registered but not blocking the merge. No later
+  run sheet, register annotation, or issue comment records a real `ebur128` failure being
+  caught or forced during a live render.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** The entire opportunistic observation — catch or force a real-render
+  `ebur128` failure and confirm the sidecar carries `measurementSource: 'loudnorm'` with
+  both the Listen-view badge and the report-card row showing "No measurement" rather than a
+  fabricated figure.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 10 (opportunistic — no dedicated session; ride along with any real render)
+
+### A24 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/275-clone-voice-language.md` frontmatter `status: active`
+  (`:2`) — not yet `stable` (`:401-402`: "**Not yet `stable`**... register row A24 is only
+  partly discharged"). `gh issue view 1951` → `CLOSED` `2026-07-30T04:26:44Z` (the shipped
+  fix). The row's own 2026-07-31 correction block (register.md:1027-1061) withdraws the
+  chapter-level claim and names two blockers: `gh issue view 1972` →
+  `{"closedAt":"2026-07-31T09:45:45Z","state":"CLOSED","title":"Splice picks target segments
+  from segments.json but resolves their voices from the analysis cache — stale attribution
+  renders a character in another character's voice"}`, fixed by PR #1992 (merged
+  2026-07-31T09:45:44Z, "refuse a splice when the render and analysis disagree on a
+  segment's owner"); and `gh issue view 1969` →
+  `{"closedAt":"2026-08-16T03:56:07Z","state":"CLOSED","title":"Reassigning a character's
+  voice keeps scoring it against the old voice's persisted audition centroid"}`, fixed by PR
+  #2402 (merged 2026-08-16T03:56:05Z, "rebuild the audition centroid when a character's
+  voice is reassigned"). Both blockers named in the row's correction are now resolved in
+  code. Neither resolution is itself an on-box observation, though: plan 275's own Ship
+  notes (`:407-456`) record Step 2 (designed self-heal → restart → identical) and Step 3 /
+  C-17 as "**NOT RUN**," and no later run sheet or register annotation records a rerun of
+  the chapter-level criterion, the self-heal/restart check, or the QA voice-mismatch
+  sub-check on real hardware since #1972 and #1969 landed.
+- **What changed since the row was written:** Both code blockers the correction block named
+  (#1972, #1969) are now merged and closed — #1969 as recently as 2026-08-16, two days
+  before this audit. That removes the two reasons the correction gave for the chapter-level
+  and QA-sub-check portions being unrunnable/invalid, but no on-box rerun exploiting the
+  fixes has happened yet.
+- **Remains owed:** Re-run the chapter-level criterion (a non-English chapter with a cloned
+  voice, transcribed via Whisper auto-detect) now that #1972 no longer corrupts splice
+  attribution; the designed-self-heal → sidecar-restart → identical-output check (Step 2,
+  still NOT RUN); Step 3 / C-17 (still NOT RUN); and the QA `voice-mismatch` sub-check on the
+  cloned character, now that #1969's centroid-rebuild fix is in place.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 30 (one chapter render plus a sidecar restart, per plan 275's own
+  estimate)
+
+### A25 · `/health` stays live through a contended eviction on the default Qwen path (plan [273](../features/archive/273-sidecar-lock-event-loop.md), [#1919](https://github.com/dudarenok-maker/Castwright/issues/1919)) · **single 8 GB card**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/archive/273-sidecar-lock-event-loop.md` frontmatter
+  `status: stable`, `shipped: 2026-07-31` (`:2-3`); Ship notes (`:1006-1056`) confirm T1-T8
+  landed as designed (commits `0245e4b7` through `89799cdf`) and record "On-box acceptance
+  row A25 recorded... does not block this merge; run sheet at
+  `docs/testing/sidecar-evict-latency-onbox-acceptance.md`" (`:1054-1056`). `gh issue view
+  1919` → `{"closedAt":"2026-07-31T00:32:59Z","state":"CLOSED","title":"an idle-evict that
+  loses the race to a starting forward blocks the sidecar event loop"}`. The run sheet
+  `docs/testing/sidecar-evict-latency-onbox-acceptance.md` §5 "Result" section (`:72-77`) is
+  entirely unfilled: `**Maximum /health inter-response gap:** _(fill in, ms)_`,
+  `**Second admission outcome (fit vs. noCapacity):** _(fill in)_`,
+  `**Run by:** _(fill in)_ **Date:** _(fill in)_`, `**Optional ASR pass run?** _(yes/no...)_`
+  — a template with no data entered, confirming the run has not happened. The row's own text
+  (register.md:1107-1111) states automated tests prove the eviction step runs off the loop
+  but explicitly cannot prove `/health` stays responsive under a real contended lock.
+- **What changed since the row was written:** The underlying code shipped and #1919 closed
+  (2026-07-31), and a follow-up plan-273 gap (three more Qwen in-lock-cold-load sites) was
+  separately found and fixed via PR #1968, #2019, #2064 (merged through 2026-08-01) — but
+  none of that is an on-box `/health`-latency measurement, which is what this row asks for.
+- **Remains owed:** The entire run-sheet procedure — warm-resident Qwen VoiceDesign, an
+  in-flight Qwen chapter render, a concurrent second admission on the same card, and a
+  `GET /health` poll throughout to record the maximum inter-response gap and confirm the
+  second admission actually succeeds rather than 503-ing `noCapacity`.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
