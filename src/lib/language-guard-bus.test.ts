@@ -35,18 +35,29 @@ describe('isLanguageUnsetBody', () => {
 
 describe('language-guard bus', () => {
   it('routes a request to the registered handler and reports it was accepted', () => {
-    const handler = vi.fn();
+    const handler = vi.fn(() => true);
     setLanguageGuardHandler(handler);
-    const req = { bookId: 'b1', shape: '409' as const, onRetry: () => {} };
-    const accepted = emitLanguageGuard(req);
+    const req = { selector: { bookId: 'b1' }, shape: '409' as const, onRetry: () => {} };
+    expect(emitLanguageGuard(req)).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(req);
-    expect(accepted).toBe(true);
     setLanguageGuardHandler(null);
   });
 
   it('reports false (no handling) when no handler is mounted', () => {
     setLanguageGuardHandler(null);
-    expect(emitLanguageGuard({ bookId: 'b1', shape: '409', onRetry: () => {} })).toBe(false);
+    expect(
+      emitLanguageGuard({ selector: { bookId: 'b1' }, shape: '409', onRetry: () => {} }),
+    ).toBe(false);
+  });
+
+  it('reports false when the handler refuses the request (selector matched no library book)', () => {
+    const handler = vi.fn(() => false);
+    setLanguageGuardHandler(handler);
+    expect(
+      emitLanguageGuard({ selector: { manuscriptId: 'm_unknown' }, shape: '409', onRetry: () => {} }),
+    ).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(1);
+    setLanguageGuardHandler(null);
   });
 });

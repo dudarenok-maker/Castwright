@@ -9,12 +9,13 @@
    Pairs with src/hooks/use-reverse-local-analyzer-guard.test.tsx (same shape). */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { librarySlice } from '../store/library-slice';
 import { useLanguageGuard } from './use-language-guard';
-import { emitLanguageGuard } from '../lib/language-guard-bus';
+import { emitLanguageGuard, type LanguageGuardSelector } from '../lib/language-guard-bus';
 import { api } from '../lib/api';
 import type { LibraryBook } from '../lib/types';
 
@@ -30,6 +31,7 @@ const mockedApi = vi.mocked(api);
 function unsetBook(): LibraryBook {
   return {
     bookId: 'b_marlow',
+    manuscriptId: 'm_marlow',
     title: 'The Coalfall Commission',
     author: 'Della Renwick',
     series: 'The Hollow Tide',
@@ -55,11 +57,31 @@ function makeStore(book: LibraryBook | null) {
   return store;
 }
 
-function Harness({ onProceed }: { onProceed: () => void }) {
+function Harness({
+  onProceed,
+  onDismiss,
+  selector = { bookId: 'b_marlow' },
+}: {
+  onProceed: () => void;
+  onDismiss?: () => void;
+  selector?: LanguageGuardSelector;
+}) {
   const { guard, modal } = useLanguageGuard();
   return (
     <>
-      <button onClick={() => guard('b_marlow', '409', onProceed)}>Trigger</button>
+      <button onClick={() => void guard(selector, '409', onProceed, onDismiss)}>Trigger</button>
+      {modal}
+    </>
+  );
+}
+
+function ReturnHarness() {
+  const { guard, modal } = useLanguageGuard();
+  const [ok, setOk] = useState<boolean | null>(null);
+  return (
+    <>
+      <button onClick={() => setOk(guard({ bookId: 'b_missing' }, '409', () => {}))}>Go</button>
+      <div data-testid="ok">{ok === null ? 'none' : String(ok)}</div>
       {modal}
     </>
   );
@@ -117,6 +139,68 @@ describe('useLanguageGuard', () => {
     expect(retry).not.toHaveBeenCalled();
   });
 
+  it('opens the guard for a book resolved by manuscriptId (analysis pathway, acceptance 5)', () => {
+    const store = makeStore(unsetBook());
+    render(
+      <Provider store={store}>
+        <Harness onProceed={() => {}} selector={{ manuscriptId: 'm_marlow' }} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+  });
+
+  it('reports false and opens nothing when the selector matches no library book (acceptance 8)', () => {
+    const store = makeStore(unsetBook());
+    render(
+      <Provider store={store}>
+        <ReturnHarness />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(screen.getByTestId('ok').textContent).toBe('false');
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('refuses through the bus too when the selector matches no library book (acceptance 8)', () => {
+    const store = makeStore(unsetBook());
+    render(
+      <Provider store={store}>
+        <Harness onProceed={() => {}} />
+      </Provider>,
+    );
+
+    let accepted = true;
+    act(() => {
+      accepted = emitLanguageGuard({
+        selector: { manuscriptId: 'm_unknown' },
+        shape: '409',
+        onRetry: () => {},
+      });
+    });
+    expect(accepted).toBe(false);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('calls onDismiss when the guard modal is dismissed without saving (acceptance 7)', () => {
+    const store = makeStore(unsetBook());
+    const onDismiss = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={() => {}} onDismiss={onDismiss} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
   it('registers itself as the bus handler so the api layer can route a 409 here', () => {
     const store = makeStore(unsetBook());
     const retry = vi.fn();
@@ -129,7 +213,7 @@ describe('useLanguageGuard', () => {
     // Simulate the api layer routing a language-unset 409 through the bus.
     let accepted = false;
     act(() => {
-      accepted = emitLanguageGuard({ bookId: 'b_marlow', shape: '409', onRetry: retry });
+      accepted = emitLanguageGuard({ selector: { bookId: 'b_marlow' }, shape: '409', onRetry: retry });
     });
     expect(accepted).toBe(true);
     expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();

@@ -3,13 +3,17 @@
    returning `{ guard, modal }`, called once in layout.tsx, with `{modal}`
    rendered near the end of the layout tree.
 
-   The four 409 sites in src/lib/api.ts mark an unset book language with a
-   409 body. Instead of surfacing the generic error toast for that case, the
-   API layer routes the failure through this hook (via the shared
-   language-guard-bus): `guard(bookId, shape, onRetry)` opens
-   EditBookMetaModal in guard mode, the user chooses a language, the language
-   patch is persisted, and `onRetry` re-runs the original call that the unset
-   language had failed.
+   The four 409 sites in src/lib/api.ts mark an unset book language with a 409
+   body. Instead of surfacing the generic error toast for that case, the API
+   layer routes the failure through this hook (via the shared
+   language-guard-bus): `guard(selector, shape, onRetry, onDismiss)` resolves
+   the book — analysis names it by `manuscriptId`, the other three by `bookId`
+   — opens EditBookMetaModal in guard mode, the user chooses a language, the
+   language patch is persisted, and `onRetry` re-runs the original call the
+   unset language had failed. When the selector matches no library book the
+   guard reports false so the API layer keeps its existing error path.
+   Dismissing without saving calls `onDismiss` so value-returning callers can
+   reject their awaiting promise instead of hanging on it.
 
    Shape 1 of three — the pre-flight 409. The sse and batch shapes are the
    next child (#2407). */
@@ -23,21 +27,43 @@ import {
   type EditBookMetaPatch,
   type LanguageGuardShape,
 } from '../modals/edit-book-meta';
-import { setLanguageGuardHandler } from '../lib/language-guard-bus';
+import { setLanguageGuardHandler, type LanguageGuardSelector } from '../lib/language-guard-bus';
+import type { LibraryBook } from '../lib/types';
 
 interface PendingGuard {
-  bookId: string;
+  selector: LanguageGuardSelector;
   shape: LanguageGuardShape;
   onRetry: () => void;
+  onDismiss?: () => void;
 }
 
 export interface LanguageGuardResult {
   /** Open the guard modal for a book whose call just failed with a
-      language-unset 409. `onRetry` is re-run after the language is saved. */
-  guard: (bookId: string, shape: LanguageGuardShape, onRetry: () => void) => void;
+      language-unset 409. `selector` names the book by `bookId` (splice,
+      QA-repair, qwen voice-design) or `manuscriptId` (analysis), resolved
+      against the loaded library. `onRetry` is re-run after the language is
+      saved; `onDismiss`, when given, fires if the user closes the modal
+      without saving. Returns true only when the selector matched a known book
+      and the modal opened — false lets the caller keep its existing error
+      path. */
+  guard: (
+    selector: LanguageGuardSelector,
+    shape: LanguageGuardShape,
+    onRetry: () => void,
+    onDismiss?: () => void,
+  ) => boolean;
   /** Render once, near the end of the layout tree. The modal mounts only
       while a guard request is pending. */
   modal: ReactNode;
+}
+
+function resolveIn(
+  books: LibraryBook[],
+  selector: LanguageGuardSelector,
+): LibraryBook | null {
+  return 'bookId' in selector
+    ? (books.find((b) => b.bookId === selector.bookId) ?? null)
+    : (books.find((b) => b.manuscriptId === selector.manuscriptId) ?? null);
 }
 
 export function useLanguageGuard(): LanguageGuardResult {
@@ -48,35 +74,50 @@ export function useLanguageGuard(): LanguageGuardResult {
 
   const [pending, setPending] = useState<PendingGuard | null>(null);
 
+  const resolve = useCallback(
+    (selector: LanguageGuardSelector) => resolveIn(libraryBooks, selector),
+    [libraryBooks],
+  );
+
   /* Registered as the live bus handler so the API layer can route a
-     409 language-unset straight here without a React import. */
+     409 language-unset straight here without a React import. When the
+     selector matches no library book the request is refused (false) so the
+     caller's ordinary error path fires. */
   const guard: LanguageGuardResult['guard'] = useCallback(
-    (bookId, shape, onRetry) => setPending({ bookId, shape, onRetry }),
-    [],
+    (selector, shape, onRetry, onDismiss) => {
+      if (!resolve(selector)) return false;
+      setPending({ selector, shape, onRetry, onDismiss });
+      return true;
+    },
+    [resolve],
   );
 
   useEffect(() => {
-    setLanguageGuardHandler((req) => guard(req.bookId, req.shape, req.onRetry));
+    setLanguageGuardHandler((req) => guard(req.selector, req.shape, req.onRetry, req.onDismiss));
     return () => setLanguageGuardHandler(null);
   }, [guard]);
 
   const close = useCallback(() => setPending(null), []);
 
-  const book = pending
-    ? (libraryBooks.find((b) => b.bookId === pending.bookId) ?? null)
-    : null;
+  const book = pending ? resolve(pending.selector) : null;
 
   const modal = book && pending ? (
     <EditBookMetaModal
       open
       book={book}
       guard={pending.shape}
-      onClose={close}
+      onClose={() => {
+        const dismiss = pending.onDismiss;
+        close();
+        dismiss?.();
+      }}
       onSave={async (patch: EditBookMetaPatch) => {
         /* Guard-mode save IS the retry gate: persist the chosen language,
            refresh the library so other surfaces see the set language, and
-           return the write promise — the modal calls onRetry once it settles. */
-        await api.putBookState(pending.bookId, { slice: 'state', patch });
+           return the write promise — the modal calls onRetry once it settles.
+           `book` (not the selector) supplies the bookId, so the manuscriptId
+           pathway still persists to the book the selector resolved. */
+        await api.putBookState(book.bookId, { slice: 'state', patch });
         const fresh = await api.getLibrary().catch(() => null);
         if (fresh) dispatch(libraryActions.hydrate(fresh));
       }}
