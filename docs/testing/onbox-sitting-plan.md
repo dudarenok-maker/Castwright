@@ -47,13 +47,21 @@ sitting; A1 is several sittings inside one pack.
 | Pack file | Rows | Est. min |
 |---|---|---|
 | [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A2, A3, A8, A18 | 110 |
-| [`onbox-sitting-vram-contention.md`](onbox-sitting-vram-contention.md) | A5, A16, A19, A20, A25, A28, A34, A35, A36 | 155 |
-| [`onbox-sitting-voice-design.md`](onbox-sitting-voice-design.md) | A4, A6, A7, A14, A15, A17, A30 | 155 |
-| [`onbox-sitting-qa-gate.md`](onbox-sitting-qa-gate.md) | A9, A10, A11, A12, A13, A21, A22, A23, A37 | 155 |
-| [`onbox-sitting-cloning-identity.md`](onbox-sitting-cloning-identity.md) | A24, A26, A31, A32, A44, A45, A46, A47 | 170 |
-| [`onbox-sitting-multilanguage.md`](onbox-sitting-multilanguage.md) | D1, D2, A38, E4 | 165 |
-| [`onbox-sitting-device-browser.md`](onbox-sitting-device-browser.md) | E1, E2, E3, E5, E6, E9, E10 | 150 |
-| [`onbox-sitting-fs38-wave3.md`](onbox-sitting-fs38-wave3.md) | A1 | multi-hour, several sittings |
+| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A25, A28, A34, A35, A36 | 155 |
+| `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A30 | 155 |
+| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A23, A37 | 155 |
+| `onbox-sitting-cloning-identity.md` | A24, A26, A31, A32, A44, A45, A46, A47 | 170 |
+| `onbox-sitting-multilanguage.md` | D1, D2, A38, E4 | 165 |
+| `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E9, E10 | 150 |
+| `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
+
+<!-- The seven rows above are plain code spans, not links, until their pack
+files exist — review of PR #2470 (attempting to fix this a different way)
+found that this repo's docs/testing link-scan guard (test:hooks) walks the
+WHOLE tree on every commit, so a real .md link to a not-yet-written sibling
+fails every intermediate commit in this chain, not just the one that would
+add the dangling link. #2454's final commit (once all eight packs exist)
+flips these back to real links. See #2463 for the incident this avoids. -->
 
 **Row count:** 4 + 9 + 7 + 9 + 8 + 4 + 7 + 1 = **49**.
 
@@ -78,9 +86,9 @@ moment the hardware lands, but the sitting cannot be scheduled until acquisition
 
 | Pack file | Rows | Est. min |
 |---|---|---|
-| [`onbox-sitting-blocked-prerequisites.md`](onbox-sitting-blocked-prerequisites.md) | F1, H1, H2, D3 | 50 (F1 unestimated) |
+| `onbox-sitting-blocked-prerequisites.md` | F1, H1, H2, D3 | 50 (F1 unestimated) |
 
-**Row count:** **4**.
+**Row count:** **4**. (Plain code span, not a link — same not-yet-written-sibling reason as §2.1's table; see the note there.)
 
 ### Arithmetic
 
