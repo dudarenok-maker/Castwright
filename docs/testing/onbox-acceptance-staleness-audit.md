@@ -1146,3 +1146,312 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** single 8 GB card
 - **Est. box time:** 25
+
+### B1 · Analysing view honesty for local analyzers (plan 216)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/216-analysing-local-analyzer-honesty.md` frontmatter
+  `status: active`, `shipped: null` (`:2-5`). Body (`:17-19`): "All are bug
+  fixes with paired automated tests. Live-GPU on-box acceptance is owed (the
+  device probe, the live ETA refinement, and the truncation recovery all want
+  a real Ollama + a long chapter to confirm end to end)." The "Manual
+  acceptance (live GPU, owed)" section (`:124-142`) lists exactly the six
+  steps the row's heading summarizes, unmarked. Ship notes (`:144-147`) are
+  the unfilled placeholder: "_Pending: shipped date + merge SHA on merge._" —
+  no shipped date recorded. Automated coverage is real but seam-level only:
+  `server/src/routes/analysis.test.ts` mocks `detectOllamaDevice` to always
+  return `'cuda'` (`:66-70`, `detectOllamaDeviceMock: vi.fn(async ()... =>
+  'cuda')`) and unit-tests `projectChapterEstMsFromOutput` as a pure function
+  (`:786-801`) against synthetic byte counts, not a real Ollama stream. No run
+  sheet under `docs/testing/` references plan 216, B1, or this walkthrough by
+  name (`grep` for `216-analysing` and `B1 ` across `docs/testing/` returns
+  nothing outside the register itself).
+- **What changed since the row was written:** Nothing found — no commit to
+  the plan file, no run sheet, no ship-notes fill-in since the row's framing.
+- **Remains owed:** All six manual steps on a real local Ollama daemon and a
+  ~110k-char chapter: Gemini→Qwen fallback label honesty, realistic
+  per-chapter ETA that tightens within ~10s of streaming, dense-paragraph
+  truncation recovery, the CPU-only slow-ETA seed case, and `LiveChapterTicker`
+  at K=4 with a monotonic per-phase bar.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 20
+
+### B2 · Per-model analyzer keep-alive (plan 263)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/263-per-model-keepalive.md` frontmatter
+  `status: active`, `shipped: null` (`:2-3`). Header (`:9`): "Status: active —
+  server + frontend + tests landed; on-box `ollama ps` acceptance owed." The
+  "Manual acceptance walkthrough" (`:242-299`) lists exactly eight numbered
+  steps, matching the row's own count and its note that an earlier register
+  version undercounted at seven; step 8 (`:296-299`, voice-design persona
+  keep-alive unregressed by the per-model resolver) is present and unmarked.
+  Ship notes (`:314-317`) are the unfilled placeholder: "(Fill in when status
+  flips to `stable`: shipped date, commit SHA, and move this file to
+  `docs/features/archive/` in the same PR.)" Automated coverage — confirmed
+  real: `server/src/analyzer/ollama.test.ts` (`keepAliveFor` /
+  `resolveKeepAliveSeconds`), `server/src/routes/ollama-health.test.ts` (the
+  `/load` warm route) — is explicitly called out by the plan's own test plan
+  (`:238-240`) as no substitute: "the live-hardware `ollama ps` countdown
+  behavior (Acceptance walkthrough below) has no automated equivalent — it is
+  an on-box manual check, called out explicitly rather than silently
+  omitted." No run sheet under `docs/testing/` references plan 263, B2, or
+  this walkthrough by name.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** All eight walkthrough steps against a real local Ollama
+  daemon with `ollama ps` open in a second terminal, including the step-4
+  regression check (keep-alive `0` stays pinned mid-run but a manual Load
+  pill still warms with a 30s floor) and step 8 (custom analyzer model with
+  no override leaves persona keep-alive at `300`, CPU-only clamp override
+  check per the row's own text).
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 20
+
+### B3 · Cast/analysis `characterId` drift — Wave 2 stops new drift (#2040, implementation plan)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2040 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-08-04T17:40:01Z","state":"CLOSED",
+  "title":"Cast/analysis characterId drift causes silent narrator-voice
+  substitution (upstream of #2023)"}` — the parent bug is closed as
+  dev-complete, matching the row's framing that Wave 1 (a different register
+  row, A32) already discharged the render-time half. `docs/testing/cast-id-drift-onbox-acceptance.md`
+  §7 ("Wave 2 — stopping new drift at re-analysis time", `:167-238`) is this
+  row's own cited run sheet. Every `Result:` line in §7.4-7.6 is blank
+  (`:206`, `:208`, `:210`, `:220`, `:222`, `:228`, `:230` all read
+  `Result (...): ______________`), and §7.7's outcome checklist
+  (`:234-235`) is unchecked: `- [ ] §§7.4-7.6 run` / `- [ ] Defects filed:
+  ____________________________________`. `docs/superpowers/plans/2026-08-01-cast-character-identity.md`
+  exists and its Task 15 ("Wave 2 gate", `:970`) confirms the implementation
+  plan the row cites is real and covers the early-remap mechanism the row
+  describes.
+- **What changed since the row was written:** Nothing found — the run sheet
+  section is exactly as blank as the row's own text implies.
+- **Remains owed:** The full §7.4-7.6 sequence against the real *Заказ
+  Коалфолла* fixture: record the pre-re-analysis `cast.json` ids for Мэйрин
+  and Коалфолл plus confirm `cast-id-history.json` is absent; trigger a full
+  (not subset) re-analysis; confirm the ids are either kept unchanged or, if
+  the analyzer minted different strings, that `cast-id-history.json`'s
+  `supersededBy` map records the retirement through `retireCharacterId`; and
+  spot-check the rest of the 13-character roster for duplicates or silent
+  renames.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 10
+
+### B4 · Stage-1 returns cast names in the manuscript's own script (#2313, PR #2317)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2313 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-08-13T05:48:18Z","state":"CLOSED",
+  "title":"srv — stage-1 returns cast names in whatever script the model
+  picks; a Russian book got a 59% Latin-transliterated roster"}`; `gh pr view
+  2317 --repo dudarenok-maker/Castwright --json state,mergedAt,title` →
+  `{"mergedAt":"2026-08-13T05:48:17Z","state":"MERGED","title":"fix(server):
+  ask stage-1 for cast names in the manuscript's own script"}` — the fix
+  landed, matching the row. The PR's own body (fetched) confirms the row's
+  framing verbatim: "The fix is a prompt instruction... Four tests in
+  `server/src/routes/analysis.test.ts`, each mutation-verified individually" —
+  i.e. the PR author's own words state the tests prove the rule renders, not
+  that a real model obeys it, matching the row's "three unit tests prove the
+  rule renders — not that the model obeys it" claim (off by one test count in
+  the row's text — the PR body cites four — but the substance is identical
+  and does not change the verdict). The row's fold-into-B3 plan
+  (`**Fold this into B3's run**`) is unexecuted: B3's own run sheet
+  (`docs/testing/cast-id-drift-onbox-acceptance.md` §7) has every relevant
+  `Result:` line blank (see B3 above), and no section anywhere in that file
+  mentions cast-name script/Cyrillic-vs-Latin checks, ASCII-kebab-case id
+  verification, or near-duplicate-pair detection — this row's own specific
+  criteria appear nowhere in the run sheet it is supposed to piggyback on.
+- **What changed since the row was written:** Nothing found — the fix
+  remains merged and unexercised on a real re-analysis.
+- **Remains owed:** Everything the row specifies, on the same *Заказ
+  Коалфолла* re-analysis B3 needs: every character's `name` in the resulting
+  `cast.json` is in Cyrillic (zero Latin transliterations); every `id` stays
+  ASCII kebab-case; no character gained a second, near-duplicate id; and the
+  roster size holds against B3's recorded 13 characters.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 0 (folds into B3; no cost of its own if run together, per the row's own text)
+
+### C1 · Free-tier Gemma cloud pass completes end to end (#1685)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1685 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":null,"state":"OPEN","title":"Verify
+  #1682 cloud request sizing on-box + calibrate stage-2 local input
+  fraction"}` — open, matching the row. `docs/testing/night-watch-reanalysis-onbox-acceptance.md`
+  §4 "Results" (`:636-638`) lists this row's three cited criteria with their
+  `Result:` lines completely blank: "**C1 — cloud pass on `gemma-4-31b-it`
+  incl. script-review:** _Result:_", "**C1 — per-minute 429 retried, not
+  misclassified:** _Result:_", "**C1 — working `localInputFraction` for zero
+  truncation drops:** _Result:_" — no text follows any of the three. The
+  row's claim that 429 classification is already covered offline checks out:
+  `server/src/analyzer/gemini.test.ts` carries `retries a per-minute 429
+  honoring retry-delay from details[]` (`:494`) and `retries a per-minute RPM
+  429 (quotaValue":"15") — not DailyQuotaExhaustedError (#1695)` (`:583`),
+  matching the row's citation of `:551`/`:583` (line numbers shifted slightly
+  but the same two named test cases exist). **New finding, not in the row:**
+  the row's "remaining draw" — that this cloud pass "doubles as the cloud arm
+  of #2306's control" — is now stale. `gh issue view 2306 --repo
+  dudarenok-maker/Castwright --json state,closedAt` → `{"state":"CLOSED",
+  "closedAt":"2026-08-14T07:43:15Z"}`, closed "no longer reproduces... cause
+  undetermined," on the strength of a fresh 2026-08-14 re-run of the *same*
+  local book (not this row's cloud pass) — chapters 1-2 only, narrated-speech
+  1.1%/0.9% against a 60% bar, well under the collapsed run's 93%+. That
+  closure removes the "sharpest test available" justification the row's own
+  text leans on, without touching the row's three primary criteria (which are
+  independent of #2306).
+- **What changed since the row was written:** #2306 — the issue this row's
+  "remaining draw" paragraph is built around — closed 2026-08-14 as
+  non-reproducing/cause-undetermined, on evidence from a different
+  (local-only, 2-chapter, GitHub-issue-comment-only, not run-sheet-recorded)
+  session than this row calls for. This weakens the row's secondary framing
+  but does not discharge or shrink its primary, independently-stated
+  criteria.
+- **Remains owed:** The full cloud-arm walkthrough exactly as specified: a
+  throwaway re-import analyzed end to end on `gemma-4-31b-it` including the
+  script-review pass, confirming the book completes with no dropped chapters
+  or hang under real throttling, the per-minute 429 retry path fires live,
+  and the `localInputFraction` local-calibration half converges on zero
+  truncation drops.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 30
+
+### C2 · Dialogue-convention invariant end to end (#2253)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2253 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-08-11T11:21:35Z","state":"CLOSED",
+  "title":"srv — plan 247 target 1 (flagged <= ~500/chapter) is unsound..."}`
+  — closed as dev-complete, matching the row's framing that the fix itself is
+  proven but the end-to-end run is separate. `docs/testing/night-watch-reanalysis-onbox-acceptance.md`
+  §4 confirms exactly what the row already states as passed/failed for the
+  2026-08-12/13 run (labelled "C3" in the run sheet per the register's own
+  renumbering note): "**C3 — `unresolved` populated, `flagged` at conflict
+  scale:** _Result:_ **PASS**" (`:602-608`) and "**C3 — ch5's dash-opening
+  sentences no longer rewritten to `narrator`:** _Result:_ **FAIL.** ch5 went
+  69.7% → 87.2% narrator... book-wide 87.4%... Filed as #2306" (`:610-623`).
+  **New finding:** `gh issue view 2306 --json state,closedAt` →
+  `{"state":"CLOSED","closedAt":"2026-08-14T07:43:15Z"}` — closed "no longer
+  reproduces on this book under this configuration. Cause undetermined,"
+  citing a fresh 2026-08-14 re-run (chapters 1-2 only) with the server's own
+  per-chapter narrated-speech check reading 1.1%/0.9%, both well under the
+  60% bar and cleaner than the known-good 2026-08-06 baseline. That run is
+  **not** recorded in `night-watch-reanalysis-onbox-acceptance.md` or any
+  other file under `docs/testing/` — it exists only as a GitHub issue
+  comment, is a 2-of-9-chapter partial, and the register's own hold note
+  above this row ("Hold the full 12-hour re-run... Wait for [#2288 and
+  #2279], then take C2 and C3 in one session") is only half-satisfied: `gh
+  issue view 2279 --json state,closedAt` → `CLOSED` `2026-08-14T00:25:18Z`,
+  but `gh issue view 2288 --json state,closedAt` → `{"closedAt":null,
+  "state":"OPEN"}` — the in-flight speaker-separation work (M2, gap-tiered
+  quote-run fix) the hold explicitly names is still open, per its own last
+  comment (2026-08-13) describing M2 as dispatched but not confirmed merged
+  into a closing state. A run taken while #2288 is still open is exactly the
+  "moving target... has to be repeated" scenario the register's hold warns
+  against.
+- **What changed since the row was written:** #2306 closed 2026-08-14 on the
+  strength of a small, out-of-band, unrecorded re-run showing the collapse
+  does not reproduce on the two chapters checked — encouraging, but it covers
+  neither the full 9-chapter book this row's own criteria require, nor is it
+  captured in the run sheet the row cites as its criteria's source, nor did
+  it wait for #2288 to close as the register's own hold instructs.
+- **Remains owed:** A full 9-chapter re-analysis, taken after #2288 lands (per
+  the register's own hold), recorded in the run sheet, confirming: `unresolved`
+  populated and `flagged` at conflict scale (already PASS on the prior run,
+  worth reconfirming since the engine changed); ch5's (and book-wide)
+  dash-opening dialogue is not collapsed to `narrator`; `state.json`'s
+  `analysisProvenance.report` carries a populated `unresolved` key; and the
+  wall-clock target, separately missed by 2.5-6x in the prior run for reasons
+  (VRAM spillover) that need different hardware or a smaller quantisation to
+  re-test.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 300 (12+ hours, per the prior run's own recorded wall-clock; unchanged until re-tested on different hardware)
+
+### C3 · A deterministic stage-2 failure actually clears when the span is halved (#2304)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2304 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-08-13T01:35:13Z","state":"CLOSED",
+  "title":"analyzer: the stage-2 coverage retry burns its whole budget
+  re-running a deterministic failure, then reports it as transient"}` — the
+  wiring fix landed, matching the row's own framing that unit tests already
+  prove the wiring. `docs/testing/night-watch-reanalysis-onbox-acceptance.md`
+  §4 records the ch8 event only generically, under a bucket explicitly
+  labelled as non-criterion: "**C2/C3 — model-quality events observed
+  (recorded, not a criterion):** four stage-2 attribution coverage-check
+  failures, all on ch8, all the same `repeat-loop` at offset 19, across two
+  server lifetimes — deterministic, not sampling variance — plus one Ollama
+  output truncation. ch8 did eventually clear after ~2.5 h. Fixed under
+  #2304." (`:630-635`). This confirms the reproducer fired exactly as the row
+  describes, but none of the row's three specific named observations — the
+  retry halting on the repeated signature before budget exhaustion at the
+  correct attempt N, the `re-attributing a <N>-char section...` log line
+  appearing, and ch8's sentence count coming back whole — are recorded as
+  distinct checked results anywhere in this run sheet or any other file under
+  `docs/testing/`.
+- **What changed since the row was written:** Nothing found beyond the
+  generic "ch8 did eventually clear" note already reflected in the run
+  sheet's non-criterion bucket — no dedicated recording of this row's three
+  named observations exists.
+- **Remains owed:** On a local re-analysis that reaches Ночной дозор ch8 (this
+  row is explicitly not blocked on #2288/#2279, unlike C2): confirm the
+  analyzer log shows the retry halting on the repeated failure signature
+  before the `coverageRetries` budget is spent, at whatever attempt N it
+  actually lands on; confirm (or note the absence of, which is not itself a
+  failure) the `re-attributing a <N>-char section as <M> smaller ones (split
+  depth D)` log line; and confirm ch8's final sentence count is whole, not a
+  partial take.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 15 (batches with any local re-analysis reaching ch8; no dedicated session required per the row's own text)
+
+### C4 · The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book (#2325, #2342)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 2325 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-08-13T08:03:43Z","state":"CLOSED",
+  "title":"srv: no guard on attribution quality — an all-narrator book passes
+  the coverage check silently"}`; `gh issue view 2342 --repo dudarenok-maker/Castwright
+  --json state,title,closedAt` → `{"closedAt":"2026-08-13T22:22:17Z",
+  "state":"CLOSED","title":"The #2325 dialogue-collapse guard: six defects and
+  a design question from PR #2333's review gate"}` — both fixes landed,
+  matching the row. The row's own text states its criteria's home is the row
+  itself ("no source file duplicates them at that granularity, so this row is
+  their canonical home") and explicitly requires **a second dash-language
+  book** to import, since only one Cyrillic book in the workspace has an
+  evaluable speech population (>=20 halves) and the other two hold 19 and 15.
+  No such second book, and no run sheet entry anywhere under `docs/testing/`,
+  records any of the row's four bulleted observations (healthy-book
+  under-60%-per-chapter distribution on a *different* book, retry-keeps-the-
+  less-collapsed-take, `attribution-collapse` vs `attribution-incomplete`
+  copy, or the marker-loss ratio-near-0.5-escalation check). The 2026-08-14
+  re-run that closed #2306 (see C2 above) reused the *same* Ночной дозор book,
+  measured only 2 of 9 chapters, is recorded only as a GitHub issue comment
+  rather than a run sheet, and — per the #2306 closing comment itself —
+  "Zero retries fired. The #2342 guard never repaired anything: the collapse
+  did not occur, rather than occurring and being caught" — meaning even that
+  partial, off-criteria data point does not exercise this row's retry-fires
+  or wrong-copy-vs-right-copy checks at all.
+- **What changed since the row was written:** Nothing found that touches this
+  row's own criteria directly. The 2026-08-14 #2306-closing re-run is a
+  same-book, partial-chapter, non-run-sheet data point that happens to show
+  two chapters clearing the 60% bar without a collapse — informative context,
+  but it does not satisfy the row's explicit requirement for a *second*
+  dash-language book, nor any of its guard-behavior checks (retry, message
+  copy, marker-loss control).
+- **Remains owed:** Import a second real dash-convention (Russian, Spanish or
+  French) book with an evaluable dialogue population; on a real local
+  re-analysis, record the per-chapter narrated-speech-share distribution on a
+  healthy run; confirm a genuinely breaching section's retry keeps the less-
+  collapsed take; confirm the `attribution-collapse` copy (not
+  `attribution-incomplete`) fires on a chapter that still breaches; and
+  confirm the marker-loss ratio stays well above 0.5 on at least one chapter.
+- **Decision owed:** n/a
+- **Hardware still required:** real workspace, no GPU
+- **Est. box time:** 15 (batches with C2/C3's session; no dedicated session required per the row's own text)
