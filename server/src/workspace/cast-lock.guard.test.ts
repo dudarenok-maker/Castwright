@@ -217,8 +217,12 @@
        line 1, which `getLeadingCommentRanges(content, 0)` covers whatever the
        traversal does; it now has a last-line-of-block twin at the bottom of
        this file. Both directions are closed as of that change, verified at
-       guard level and against an out-of-tree oracle that descends to leaf
-       tokens independently of the tokenizer it measures.
+       guard level and against an out-of-tree oracle whose comment reference
+       is a `ts.createScanner` trivia stream. The scanner is the load-bearing
+       detail: a leaf-token oracle would now share its traversal with this
+       tokenizer and could only confirm itself, which is exactly how an
+       earlier `forEachChild` oracle certified a `forEachChild` tokenizer as
+       having zero uncovered comments while 276 went unseen.
    An honest guard with stated limits beats one that implies total coverage.
 
    MUTATION-PROOF (see task-12-brief.md Step 2, and the report this task

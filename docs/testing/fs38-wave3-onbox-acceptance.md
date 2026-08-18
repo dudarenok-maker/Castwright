@@ -57,9 +57,9 @@ all three plans:
   which is now fixed, not a known limitation; a re-derive is no longer a
   silent dead pause. (3) the manual override-link consent hole and the
   invisible sidecar-evict-on-revoke failure — see §6 KL-q.
-- **Two consent-bypass gaps — both now appear fixed in source, but both
-  issues are still open. Verify the SHA under test before trusting either as
-  closed.** A manual cast-link route bypass
+- **Two consent-bypass gaps — both fixed in source, and both issues closed
+  as completed on 2026-07-29. Verify the SHA under test: an older build may
+  predate the fix even though the issue reads closed.** A manual cast-link route bypass
   ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885), §6
   KL-p) covered TWO routes; both are now guarded as of this source read —
   `cast-link-prior.ts` refuses to denormalise a cloned voice onto/from
@@ -70,10 +70,10 @@ all three plans:
   guard the sibling denormalise path already used. A wholesale cast-write
   route with no consent check
   ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), §6
-  KL-r) now appears closed in source (`preserve-cast-voices.ts`'s
-  `rejectForeignCloneKeys`, wired into `routes/book-state.ts`) — but the
-  GitHub issue itself is still open, so confirm the commit is actually in
-  your SHA before treating it as fixed. Neither has a normal-UI repro on
+  KL-r) is closed in source (`preserve-cast-voices.ts`'s
+  `rejectForeignCloneKeys`, wired into `routes/book-state.ts`), and the
+  GitHub issue was closed as completed on 2026-07-29 — still confirm the
+  commit is actually in your SHA before treating it as fixed. Neither has a normal-UI repro on
   this sheet — recorded for awareness, not as tests to run here.
 - **Catalogue rebuild (Wave 2)** — deferred, unaffected by this arc.
 - **Consolidating the two engine→modelKey mappers: SHIPPED, not open.**
