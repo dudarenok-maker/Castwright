@@ -218,3 +218,233 @@ _Placeholder — the final verify child of this chain computes this._
 - **Est. box time:** multi-hour (row's own estimate, unchanged; the six
   follow-up checks add a further short session per `271`'s pass/fail
   criteria, same box, no additional prerequisites)
+
+### A2 · Capacity-aware GPU placement (plan 264) · **two distinct debts**
+
+- **Verdict:** AMBIGUOUS
+- **Evidence:** `docs/features/264-vram-aware-gpu-placement.md` frontmatter
+  `status: active` (`:2`). Header (`:9-22`) reads: "The manual
+  **evict-under-contention** rows (6–8: cold `/load` steer, `design_voice`
+  evicts Ollama, GPU-ASR 503→evict→retry) were **not** force-driven on-box —
+  they rest on automated coverage for now," and closes "This plan flips to
+  `stable` (and archives) once the evict-under-contention rows 6–8 are driven
+  on-box." But the manual walkthrough section (`:129-179`) step 1 reads: "8 GB
+  card alone, render a book → no OOM; if the analyzer is resident, a heavy
+  synth (or a cold `/load` / `design_voice`) 503s → Node evicts Ollama (idle)
+  → retries → succeeds" — worded as an executed observation, not a pending
+  step, and step 6 (2-card cold `/load` steer) and step 7 (`design_voice`
+  evicts Ollama) restate items 6–7 as still-numbered walkthrough steps with no
+  internal "done" marker either way. The header explicitly calls out this
+  exact contradiction is NOT present in the header text itself — re-reading
+  closely, the header never actually names "S6" (that framing is the
+  register's own paraphrase, not the plan's wording) — the plan file itself
+  does not contain a token "S6" (`grep -n "S6" docs/features/264-vram-aware-gpu-placement.md`
+  → no matches), so the specific self-contradiction the register describes
+  ("lists S6 as both exercised and item-6-not-force-driven") could not be
+  independently located in the plan text as worded. Separately, PR #1732
+  ("fix(sidecar): keep every heavy-GPU op's device on its admitted card
+  (#1730)") confirmed `state: MERGED`, `mergedAt: 2026-07-19T22:44:02Z` —
+  matches the row's citation. Automated coverage confirmed real:
+  `server/tts-sidecar/tests/test_placement.py`, `test_load_admission.py`,
+  `test_footprints.py`, `test_devices.py` all exist; the plan's own text
+  (`:105-127`) lists the matching Vitest/pytest suite. None of it substitutes
+  for the owed on-box walkthrough per the plan's own gating sentence.
+- **What changed since the row was written:** Nothing found in the plan text
+  or PR history since the row's framing was written; #1732 remains merged and
+  unconfirmed on-box exactly as the row states.
+- **Remains owed:** Walkthrough step 9 (2-card cross-device-steer confirmation
+  of #1730) unconditionally, regardless of how the 6-8 ambiguity resolves.
+  Step 3 (eGPU fault-drop) stays observe-only/Blocked-N-A per the plan's own
+  instruction. Steps 6-8 (evict-under-contention) status depends on the
+  decision below.
+- **Decision owed:** Whether plan rows 6-8 count as already-exercised
+  on-box (per the walkthrough section's declarative step wording) or as
+  still-owed-and-deferred-by-choice (per the header's closing sentence) is a
+  single-sentence-resolvable disagreement inside the plan text itself that
+  this audit is not authorised to settle; note for routing per #2435 that the
+  literal "S6" self-contradiction the original row asserted was not
+  reproducible verbatim in the current plan text (no `S6` token exists in the
+  file) — worth a human recheck of whether the row was describing an earlier
+  plan revision.
+- **Hardware still required:** 2-card boot
+- **Est. box time:** 20 (step 9 alone, short); steps 6-8 (if owed) add ~15
+  more on the single 8 GB card
+
+### A3 · srv-57 Multi-GPU Wave 2 · **2-card boot**
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh issue view 1230 --repo dudarenok-maker/Castwright --json state,title,closedAt`
+  → `{"closedAt":null,"state":"OPEN","title":"srv-57 — Multi-GPU Wave 2 — on-box
+  acceptance + Task 16/16.5 auto-revert follow-up"}`. Issue body lists all ten
+  checklist items as unchecked `- [ ]` boxes, matching the row's "ten unchecked
+  items" count exactly, including per-card UUID confirmation, the
+  `SIDECAR_VRAM_FREE_FLOOR_MB` starve-to-code-43 check, same-card vs
+  different-card `QWEN_DEVICE`/`KOKORO_DEVICE` pinning, the two three-code-43-
+  in-ten-minutes streak-guard variants (card-specific vs not), and the
+  analyzer CPU/GPU serialization checks. Issue body confirms Task 16/16.5 is
+  "deliberately excluded from Plan 2a (#1222, shipped 2026-07-03)... gated on
+  item 1" — matches the row's framing verbatim. `test:sidecar` is called out
+  in the issue body itself as "venv-gated so CI never exercises the real CUDA
+  paths" for this checklist.
+- **What changed since the row was written:** Nothing — issue #1230 is still
+  open with all ten items unchecked.
+- **Remains owed:** All ten checklist items in #1230, on a real 2-card boot;
+  Task 16/16.5 remains unbuilt and gated on item 1 as stated.
+- **Decision owed:** n/a
+- **Hardware still required:** 2-card boot
+- **Est. box time:** 45
+
+### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh pr view 1849 --repo dudarenok-maker/Castwright --json state,mergedAt,title`
+  → `{"mergedAt":"2026-07-26T21:39:59Z","state":"MERGED","title":"fix(frontend,server):
+  audition in the character's engine at the book's tier"}` — confirms the fix
+  merged as the row states. No run sheet or issue references a subsequent
+  on-box listening pass; this row's four listening checks (Kokoro-override
+  preview, 1.7B-tier preview, instant-replay cache, Coqui-named capacity
+  error) are not covered by any Playwright/Vitest suite located (all are
+  audio-output/perceptual checks by construction — "never listened to" per
+  the row is an accurate description of a fix verified only by tests and CI).
+- **What changed since the row was written:** Nothing — no evidence of an
+  on-box listening session since the PR merged.
+- **Remains owed:** All four listening checks, on the real sidecar with
+  Kokoro, Coqui and both Qwen tiers installed, plus VRAM pressure sufficient
+  to force a genuine capacity refusal with Coqui resident.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 15
+
+### A5 · fs-60 XTTS per-language engine eligibility (plan 249)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/249-fs60-xtts-language-eligibility.md`
+  frontmatter `status: active` (`:2`); header (`:9`) reads "Live-GPU
+  acceptance owed (mock-mode e2e only...)"; body (`:58`) states verbatim:
+  "**Explicitly not covered — Live-GPU acceptance is owed.** The e2e spec
+  above is mock-mode UI-seam + pill coverage only; the real render-time Coqui
+  fallback... has not been exercised on an 8 GB box. This plan's status stays
+  `active`, not `stable`, until that walkthrough runs." The five-step manual
+  walkthrough (`:60-68`) matches the row's description exactly, and step 4
+  is explicitly annotated "(real sidecar required)" in the plan text itself.
+  `e2e/generation/coqui-fallback-non-english.spec.ts` exists and its own
+  header comments (grepped) explicitly disclaim real-render coverage: "which
+  mock-mode generation never calls," "out of scope here," "mock generation
+  has no per-..." — confirming the plan's own claim that this is mock-only.
+- **What changed since the row was written:** Nothing found.
+- **Remains owed:** All five walkthrough steps on a real sidecar, 8 GB-class
+  GPU, a Russian book with an undesigned character, and the Chinese
+  hard-block regression check.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
+
+### A6 · Bulk voice-design recycle resilience (plan 200)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/200-bulk-design-recycle-resilience.md` Ship
+  notes (`:104-115`): "Shipped to `main` 2026-06-10 in **274522d0**... Closes
+  bug **#690**... Live-GPU acceptance (restart via `start-prod.bat` so the
+  sidecar comes up with the correct `.env` ceilings) is the **only remaining
+  check**." `gh issue view 690 --repo dudarenok-maker/Castwright --json
+  state,title,closedAt` → `{"closedAt":"2026-06-09T21:29:55Z","state":"CLOSED",
+  "title":"Design full cast halts after the first voice (sidecar recycle not
+  recovered)"}` — closed, matching the row. No run sheet or subsequent commit
+  references the forced-`/recycle`-mid-run walkthrough having executed.
+- **What changed since the row was written:** Nothing — the row's own note
+  that bugs #1156/#1532/#1557/#1570 exercised the flow informally is
+  unchanged and still does not substitute for the specific forced-recycle
+  walkthrough the ship notes gate on.
+- **Remains owed:** The full "Design full cast" bulk run over a multi-voice
+  cast on the 8 GB box with the sidecar started via `start-prod.bat`, plus a
+  forced `/recycle` mid-run with confirmation the pill rides through the
+  respawn.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
+
+### A7 · Design full cast — bulk Qwen voice design (plan 195)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `gh pr view 637 --repo dudarenok-maker/Castwright --json
+  state,mergedAt,title` → `{"mergedAt":"2026-06-07T11:37:03Z","state":"MERGED",
+  "title":"feat(frontend,server): Design full cast (bulk Qwen voice design)"}`;
+  `gh pr view 638 ... ` → `{"mergedAt":"2026-06-07T11:57:28Z","state":"MERGED",
+  "title":"docs(docs): fill plan 195 ship notes (date + commit SHA)"}` — both
+  merged as the row states. `docs/features/195-design-full-cast.md` Ship
+  notes (`:74-82`): "Shipped: 2026-06-07 · commit `7f0d5f4b`... Plan stays
+  `active` — it flips to `stable` once the live-GPU acceptance below is
+  signed off. **Live-GPU acceptance owed**... pill ticks + survives
+  navigation; reload mid-run resumes the pill; rows flip; terminal
+  ... summary; series propagation to a sibling book; VRAM headroom across a
+  long run (VoiceDesign 1.7B + resident Ollama is the plan-108 OOM); a 2nd-tab
+  single design is serialized... designed voices survive an attempted
+  re-analysis (409)." — matches the row's list of checks, still phrased as
+  owed, unedited by PR #638 beyond filling the SHA.
+- **What changed since the row was written:** Nothing — the acceptance bullet
+  in the ship notes remains open exactly as the row describes.
+- **Remains owed:** All items in the ship-notes acceptance bullet: pill
+  survival across navigation/reload-mid-run, terminal summary counts, series
+  propagation, VRAM headroom across a long run, 2nd-tab serialization, and the
+  409-on-reanalysis check.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 30 (a full bulk-cast run plus a sibling-book series check)
+
+### A8 · GPU residency safety + coexistence (plan 222)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/222-gpu-residency-and-analysing-honesty.md`
+  frontmatter `status: active`, `shipped: 2026-06-16` (`:2-3`); header
+  (`:9`): "**on-box GPU acceptance owed** (real 8 GB eviction + 409 refusal +
+  12/16 GB coexistence)." Manual walkthrough (`:54-59`) is titled
+  "USER-RUN, live GPU — OWED" and lists the five steps the row describes
+  verbatim (VRAM steady during analysis, eviction before generation, 409
+  refusal under contention, eviction before voice design, no-eviction on
+  12/16 GB). `gh pr view 840 --repo dudarenok-maker/Castwright --json
+  state,mergedAt,title` → merged 2026-06-16T11:02:20Z, "evict resident Ollama
+  before sidecar loads + safe keep_alive flip"; `gh pr view 841` → merged
+  2026-06-16T11:02:59Z, "analysing-view model honesty + per-chapter section
+  progress" — both match the GPU-residency/coexistence feature. **Finding
+  (not routed, reported per #2435):** `gh pr view 839` → merged
+  2026-06-16T11:29:25Z but titled "fix(server): tolerate stray model keys in
+  analyzer schema validation," and its body (fetched) is about Ollama JSON
+  schema salvage, unrelated to GPU residency/eviction — the register's PR
+  list for this row (#839/#840/#841) appears to misattribute #839; #840 and
+  #841 are the real match. This does not change the row's verdict since the
+  walkthrough-owed statement is independently confirmed from the plan's own
+  header and ship-notes text.
+- **What changed since the row was written:** Nothing found regarding the
+  walkthrough itself; the #839 citation discrepancy is a new finding, not a
+  change in debt status.
+- **Remains owed:** All five walkthrough steps, including the 12/16 GB
+  coexistence check which needs a second, roomier card the 8 GB box alone
+  cannot provide.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card | 2-card boot (step 5 alone
+  needs a 12/16 GB card; steps 1-4 run on the 8 GB box)
+- **Est. box time:** 25
+
+### A9 · Batch the QA re-record loops (plan 228)
+
+- **Verdict:** STILL OWED
+- **Evidence:** `docs/features/228-batch-qa-rerecords.md` (`:95-100`):
+  "## Acceptance (manual, on-box) — OWED / Regenerate a QA-flagging Qwen
+  chapter... and confirm RTF lands near ~1.2 (down from ~1.9)... Deferred
+  until the GPU box is free." `gh pr view 1072 --repo dudarenok-maker/Castwright
+  --json state,mergedAt,title,body` → merged 2026-06-24T06:02:36Z, body's own
+  final line: "On-box RTF acceptance (~1.2 target) to be confirmed on the next
+  clean multi-chapter render." — matches the row's claim that the PR itself
+  never asserted the RTF target was hit. `server/src/tts/synthesise-chapter-asr.test.ts`
+  exists and covers the batching logic (round-based re-record batching,
+  drop-on-recovery) but is a Vitest unit suite exercising mocked dispatch, not
+  a real-sidecar RTF measurement — it does not discharge the on-box timing
+  claim.
+- **What changed since the row was written:** Nothing — no subsequent commit
+  or run sheet records a real multi-chapter RTF measurement.
+- **Remains owed:** A real regenerate of a QA-flagging Qwen chapter (e.g. KotLC
+  "Chapter Three") with `SEG_ASR_ENABLED=1` and re-records at 2, measuring RTF
+  against the ~1.2 target with the same suspect/asrSuspect flagging behaviour.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card
+- **Est. box time:** 20
