@@ -145,3 +145,76 @@ _Placeholder — the final verify child of this chain computes this._
 - **Decision owed:** n/a
 - **Hardware still required:** real CJK manuscript
 - **Est. box time:** 15
+
+## A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · 20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted
+
+- **Verdict:** SHRUNK
+- **Evidence:** Every artifact this row cites resolves exactly as described,
+  confirmed live rather than taken at the row's word:
+  - Bug fixes it claims closed/merged all check out: `gh issue view` shows
+    `#1941`, `#1967`, `#1969`, `#1972`, `#1943`, `#2017`, `#2023`, `#2180`,
+    `#1945`, `#1962`, `#1963`, `#1944` all `state: closed`,
+    `state_reason: completed`. `gh pr view` shows `#1942` merged
+    `2026-07-29T22:58:51Z`, `#1978` merged `2026-07-31T06:06:02Z`, `#2039`
+    merged `2026-08-01T02:05:35Z`, `#2041` merged `2026-08-01T02:30:37Z`,
+    `#2205` merged `2026-08-07T01:07:18Z` — all consistent with the dates
+    and content the row attributes to them.
+  - `#2026` (Russian XTTS quality, cited as opened by run 3) is still
+    `state: open` (`reopened`) — correctly left off the "discharged" list.
+  - Plans `docs/features/267-fs38-wave3-voice-clone.md`,
+    `268-fs38-wave3b2-resolver.md`, `271-fs38-wave3c-xtts.md` all carry
+    `status: active` in frontmatter, matching the row's framing that none
+    archive until this walkthrough runs; 271's own Ship notes (`:756-761`)
+    name row A1 by path as the gate.
+  - The run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` exists;
+    its §7.1 result table (`:2703-`) is genuinely filled — e.g. `A-01 | **P**
+    | 202; real Whisper transcript; 20.0 s; 24000 Hz; …` — with real,
+    specific evidence per row, not placeholder text. (Note: the *inline*
+    `**Result:** ☐ P ☐ F ☐ B ☐ N/A` checkboxes under each individual test's
+    own write-up, e.g. `:534`, are all still blank across all 62 occurrences
+    checked — only §7.1's summary table carries the actual marks. Cosmetic:
+    the row cites "§7.1 completed," which is accurate; it does not claim the
+    inline checkboxes are filled.)
+  - Cited automated-coverage-is-mock-only claims hold up:
+    `server/src/routes/chapter-qa-repair.test.ts` and
+    `server/src/routes/voice-library.clone-fidelity.test.ts` exist (the
+    latter is the one the row says discharges B-06 without on-box
+    acceptance — its existence is the entire basis for that sub-claim), and
+    `src/components/voices/voice-library-card.test.tsx` exists for the
+    Preview-engine follow-up check. None of these reach the real sidecar, so
+    none discharge anything past what the row already credits them for.
+- **What changed since the row was written:** One thing not yet reflected in
+  the row's text: **`#1972`** — the stale-attribution bug that forced the
+  three run-2 retractions (A24 identity half, E-01 identity half, C-17's
+  `F`) — is now `closed`/`completed`. The row already treats those three
+  results as withdrawn rather than failing, which is still the correct
+  reading; a closed root-cause bug does not retroactively restore a result
+  that was never actually observed. It does mean a re-run of those three
+  specific sub-tests is no longer blocked by the bug that invalidated them
+  the first time — worth noting for wave-2 session planning, since it was
+  previously an open question whether re-running them would just retract
+  again.
+- **Remains owed:** Everything the row's own "Still owed (~40)" section
+  lists, independently confirmed still unresolved: browser/mic (A-07, A-08,
+  A-09, B-02 — real browser + real mic); by-ear (B-03, E-06 — no instrument
+  substitutes); Section E's E-03, E-06, E-07 (runnable, not yet run); the
+  rest of Section C (18, incl. the starred, highest-risk C-01/C-08/C-12/
+  C-17) and all of Section D (3) — untouched; C-02/D-02 and any full-book
+  work, still blocked by the side-11 host-memory leak on this row's own
+  account (no single open issue number is cited for the *current* recurrence
+  of that leak, so this audit cannot independently re-verify it beyond the
+  row's own description — treated as still owed, fail-closed); a genuine
+  re-run of the three `#1972`-retracted sub-tests now that the blocking bug
+  is fixed; and all six of the post-32 follow-up campaign checks
+  (`preparing-voice` phase, end-to-end XTTS render, revoke-then-render on
+  Coqui, VRAM partitioning across a mixed chapter, the `voice_language_mismatch`
+  toast on the real stream, and Preview-on-ready-engine), none of which have
+  a real-hardware run recorded anywhere this audit could find.
+- **Decision owed:** n/a
+- **Hardware still required:** single 8 GB card | 2-card boot | real browser
+  with microphone (both cited by sub-tests within this row; unlike the
+  register's single-value field, this row does not reduce to one hardware
+  class — see the row text's own per-bullet hardware notes)
+- **Est. box time:** multi-hour (row's own estimate, unchanged; the six
+  follow-up checks add a further short session per `271`'s pass/fail
+  criteria, same box, no additional prerequisites)
