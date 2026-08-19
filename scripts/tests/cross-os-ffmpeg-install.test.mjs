@@ -50,7 +50,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { readNormalized } from '../lib/read-normalized.mjs';
@@ -171,11 +171,11 @@ const PWSH_SKIP_REASON = PWSH_EXE
       ...PWSH_DISCOVERY.attempts.map((a) => `  - ${a}`),
     ].join('\n');
 
-function runPowerShellFile(scriptPath, extraArgs = []) {
+function runPowerShellFile(scriptPath, extraArgs = [], envOverrides = {}) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-File', scriptPath, ...extraArgs);
-  return spawnSync(PWSH_EXE, args, { encoding: 'utf8' });
+  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env: { ...process.env, ...envOverrides } });
 }
 
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser
@@ -242,12 +242,35 @@ function parsePowerShellSyntaxErrors(scriptText) {
 // and leaves a marker behind — proving the delay actually fires, without
 // the test paying the 15s wall-clock cost and without changing a single
 // character of the shipped script.
+// GITHUB_PATH and LOCALAPPDATA are real, live environment variables when
+// this test itself runs inside GitHub Actions (test:hooks is scoped in by
+// this diff on every OS, including ubuntu-latest, where LOCALAPPDATA is
+// never set). Without isolating them, the stubbed script under test would
+// either crash (Join-Path against a null LOCALAPPDATA) or, worse, silently
+// append a test-only path to the CI job's OWN $GITHUB_PATH file, corrupting
+// PATH for every later step of the real job the test is running inside.
+// Each invocation gets its own throwaway GITHUB_PATH file and LOCALAPPDATA
+// directory so the script's real control flow can be observed without
+// touching (or depending on) the host job's actual environment.
 function runStubbedFfmpegScript(scriptBody, stubPreamble) {
   const dir = mkdtempSync(join(tmpdir(), 'pwsh-behave-'));
   const scriptPath = join(dir, 'scenario.ps1');
   writeFileSync(scriptPath, `${stubPreamble}\n${scriptBody}\n`, 'utf8');
+  const githubPathFile = join(dir, 'github_path.txt');
+  const localAppDataDir = join(dir, 'LocalAppData');
   try {
-    return runPowerShellFile(scriptPath);
+    const proc = runPowerShellFile(scriptPath, [], {
+      GITHUB_PATH: githubPathFile,
+      LOCALAPPDATA: localAppDataDir,
+    });
+    let githubPathContents = '';
+    try {
+      githubPathContents = readFileSync(githubPathFile, 'utf8');
+    } catch {
+      // Never written -- valid when the script never reached the
+      // PATH-persist branch (e.g. the choco-works-first-try path).
+    }
+    return { ...proc, githubPathContents, localAppDataDir };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -407,6 +430,26 @@ for (const path of WORKFLOWS) {
       proc.stdout,
       /ffmpeg verified working \(attempt 1\/3\)\./,
       'expected the post-winget ffmpeg re-check to succeed',
+    );
+    // Pins the #2478 fix itself: the step must persist the ffmpeg install
+    // directory to $GITHUB_PATH so LATER steps in the job (Verify, Build,
+    // ...) — fresh processes that never re-read the registry PATH this
+    // step patched in-process — can still find it. Isolated GITHUB_PATH /
+    // LOCALAPPDATA (see runStubbedFfmpegScript) means this exercises the
+    // real branch rather than skipping it, which is what let the original
+    // #2478 fix ship with this exact defect (Join-Path against a null
+    // LOCALAPPDATA crashes; the crash was masked locally because
+    // GITHUB_PATH is unset outside CI, so the guard never entered the
+    // branch at all).
+    assert.equal(proc.status, 0, `did not expect the PATH-persist step to fail the job; stderr:\n${proc.stderr}`);
+    assert.match(
+      proc.githubPathContents,
+      /Microsoft[\\/]WinGet[\\/]Links/,
+      `expected the ffmpeg install directory to be appended to $GITHUB_PATH; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+    assert.ok(
+      proc.githubPathContents.includes(join(proc.localAppDataDir, 'Microsoft', 'WinGet', 'Links')),
+      `expected the persisted directory to be rooted under this run's LOCALAPPDATA; got:\n${JSON.stringify(proc.githubPathContents)}`,
     );
   });
 
