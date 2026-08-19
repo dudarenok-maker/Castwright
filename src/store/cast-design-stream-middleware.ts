@@ -26,6 +26,7 @@ import { api, type CastDesignCallbacks } from '../lib/api';
 import { castDesignActions, type DesignAllRequestedPayload } from './cast-design-slice';
 import { castActions } from './cast-slice';
 import { notificationsActions } from './notifications-slice';
+import { emitLanguageGuard } from '../lib/language-guard-bus';
 
 const REQUESTED_TYPE = castDesignActions.designAllRequested.type;
 const RESUBSCRIBE_TYPE = castDesignActions.resubscribe.type;
@@ -43,6 +44,11 @@ interface CastDesignRootState {
 export function createCastDesignMiddleware(): Middleware {
   return (store) => {
     let handle: { bookId: string; controller: AbortController } | null = null;
+    /* Task 9d (#2407) — the action that opened the current stream, replayed
+       verbatim when the language guard's Save resolves the unset language.
+       `handle` is single by design (one design op per book), so one slot
+       mirrors it. */
+    let restart: (() => void) | null = null;
     const dispatch = store.dispatch as Dispatch;
 
     const close = (): void => {
@@ -136,15 +142,32 @@ export function createCastDesignMiddleware(): Middleware {
           }
         }, SUMMARY_LINGER_MS);
       },
-      onError: ({ message }) => {
-        dispatch(castDesignActions.halt({ bookId, lastTickAt: Date.now() }));
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message,
-            dedupeKey: `cast-design:${bookId}`,
-          }),
-        );
+      onError: ({ code, message }) => {
+        const fail = (): void => {
+          dispatch(castDesignActions.halt({ bookId, lastTickAt: Date.now() }));
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message,
+              dedupeKey: `cast-design:${bookId}`,
+            }),
+          );
+        };
+        /* Task 9d (#2407) — streaming shape. An unset book language is not a
+           generic stream failure: route it to the language-guard host instead of
+           the error toast, and replay the action that opened this stream once the
+           language is saved. A dismissed guard falls back to the ordinary error
+           path, so the pill never sits spinning on a modal the user closed. */
+        if (code === 'language_unset') {
+          const replay = restart;
+          if (emitLanguageGuard({
+            selector: { bookId },
+            shape: 'sse',
+            onRetry: () => { close(); replay?.(); },
+            onDismiss: fail,
+          })) return;
+        }
+        fail();
       },
     });
 
@@ -236,15 +259,32 @@ export function createCastDesignMiddleware(): Middleware {
           }
         }, SUMMARY_LINGER_MS);
       },
-      onError: ({ message }) => {
-        dispatch(castDesignActions.halt({ bookId, lastTickAt: Date.now() }));
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message,
-            dedupeKey: `single-design:${bookId}`,
-          }),
-        );
+      onError: ({ code, message }) => {
+        const fail = (): void => {
+          dispatch(castDesignActions.halt({ bookId, lastTickAt: Date.now() }));
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message,
+              dedupeKey: `single-design:${bookId}`,
+            }),
+          );
+        };
+        /* Task 9d (#2407) — streaming shape. An unset book language is not a
+           generic stream failure: route it to the language-guard host instead of
+           the error toast, and replay the action that opened this stream once the
+           language is saved. A dismissed guard falls back to the ordinary error
+           path, so the pill never sits spinning on a modal the user closed. */
+        if (code === 'language_unset') {
+          const replay = restart;
+          if (emitLanguageGuard({
+            selector: { bookId },
+            shape: 'sse',
+            onRetry: () => { close(); replay?.(); },
+            onDismiss: fail,
+          })) return;
+        }
+        fail();
       },
     });
 
@@ -256,9 +296,11 @@ export function createCastDesignMiddleware(): Middleware {
         bookId: string,
         controller: AbortController,
       ) => CastDesignCallbacks = buildCallbacks,
+      replay: (() => void) | null = null,
     ): void => {
       const localHandle = { bookId, controller };
       handle = localHandle;
+      restart = replay;
       const callbacks = makeCallbacks(bookId, controller);
       void (async () => {
         try {
@@ -303,8 +345,12 @@ export function createCastDesignMiddleware(): Middleware {
             lastTickAt: Date.now(),
           }),
         );
-        runStream(bookId, controller, (cb) =>
-          api.startCastDesign(bookId, { characterIds, modelKey, scope, variantTasks }, cb),
+        runStream(
+          bookId,
+          controller,
+          (cb) => api.startCastDesign(bookId, { characterIds, modelKey, scope, variantTasks }, cb),
+          buildCallbacks,
+          () => dispatch(castDesignActions.designAllRequested(a.payload as DesignAllRequestedPayload)),
         );
         return result;
       }
@@ -314,7 +360,13 @@ export function createCastDesignMiddleware(): Middleware {
         if (handle || !bookId) return result; // already streaming, or nothing to do
         const controller = new AbortController();
         /* No upfront begin — the server replays `resume_from` to seed the slice. */
-        runStream(bookId, controller, (cb) => api.subscribeCastDesign(bookId, cb));
+        runStream(
+          bookId,
+          controller,
+          (cb) => api.subscribeCastDesign(bookId, cb),
+          buildCallbacks,
+          () => dispatch(castDesignActions.resubscribe({ bookId })),
+        );
         return result;
       }
 
@@ -356,6 +408,7 @@ export function createCastDesignMiddleware(): Middleware {
               cb,
             ),
           buildSingleCallbacks,
+          () => dispatch(castDesignActions.designSingleRequested(p)),
         );
         return result;
       }
@@ -371,6 +424,7 @@ export function createCastDesignMiddleware(): Middleware {
           controller,
           (cb) => api.subscribeSingleDesign(bookId, cb),
           buildSingleCallbacks,
+          () => dispatch(castDesignActions.resubscribeSingle({ bookId })),
         );
         return result;
       }
