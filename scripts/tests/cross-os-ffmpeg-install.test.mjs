@@ -465,18 +465,21 @@ for (const path of WORKFLOWS) {
     );
   });
 
-  // Mutation-differentiating: this is the exact shape (GITHUB_PATH present,
-  // LOCALAPPDATA absent) that ubuntu-latest's Hooks-tests leg hits, and that
-  // broke the #2478 fix's first attempt (PR #2479 review pass 1) -- the
-  // pre-fix guard (`if ($ffmpegOk -and $env:GITHUB_PATH)`, no LOCALAPPDATA
-  // check) crashes `Join-Path $null ...`, gets swallowed by the surrounding
-  // try/catch, and the whole install verdict flips to failed. Running this
-  // scenario against that pre-fix script body reproduces exactly that:
-  // `winget fallback unavailable: Cannot bind argument to parameter 'Path'
-  // because it is null` and a fallthrough to a second attempt. This test
-  // fails on that code and passes on the current guard
-  // (`... -and $env:LOCALAPPDATA`), which is the property worth pinning --
-  // not just "the happy path with LOCALAPPDATA set still works".
+  // This is the exact shape (GITHUB_PATH present, LOCALAPPDATA absent) that
+  // ubuntu-latest's Hooks-tests leg hits, and that broke the #2478 fix's
+  // first attempt (PR #2479 review pass 1) -- the pass-1 script had no
+  // dedicated try/catch around the PATH-persist logic at all, so
+  // `Join-Path $null ...` crashed straight into the winget-install
+  // try/catch, which flipped the whole install verdict to failed (attempt
+  // 2/3, not 1/3). Round 2 fixed the CRASH by giving the persist logic its
+  // own try/catch -- which the `attempt 1/3` + empty-$GITHUB_PATH
+  // assertions below pin -- but that alone still let a real box missing
+  // LOCALAPPDATA skip the persist with zero signal. This test's final
+  // assertion (the explicit `::warning::` line) is what actually pins the
+  // LOCALAPPDATA-specific guard: round-3 review proved that folding
+  // `$env:LOCALAPPDATA` back into the single outer condition (undoing the
+  // nested if/else) leaves every OTHER assertion in this test green, since
+  // the crash containment alone already accounts for them.
   test(`${rel}: Windows ffmpeg install behaviour -- choco fails, winget rescues it, but LOCALAPPDATA is unset (ubuntu-latest's Hooks-tests leg)`, {
     skip: PWSH_SKIP_REASON ?? false,
   }, () => {
@@ -496,6 +499,17 @@ for (const path of WORKFLOWS) {
       proc.githubPathContents,
       '',
       `expected $GITHUB_PATH untouched when LOCALAPPDATA is absent; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+    // The skip must be LOUD (round-2 review, PR #2479): folding
+    // `$env:LOCALAPPDATA` back into the single outer `if` condition
+    // (instead of the nested if/else this pins) makes the exact same three
+    // assertions above pass -- ffmpeg still verifies working, PATH still
+    // stays untouched -- while silently dropping this warning, which is
+    // the only signal a real box missing LOCALAPPDATA would ever produce.
+    assert.match(
+      proc.stdout,
+      /::warning::LOCALAPPDATA is not set/,
+      'expected an explicit warning when LOCALAPPDATA is absent, not a silent skip',
     );
   });
 

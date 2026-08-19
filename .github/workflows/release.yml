@@ -166,20 +166,29 @@ jobs:
                 # `-ErrorAction Stop` forces Add-Content's own failures to
                 # be catchable here (its default is a non-terminating
                 # error, which a bare try/catch does not observe at all).
-                # Guarded on both $env:GITHUB_PATH and $env:LOCALAPPDATA
-                # being set: this step only runs on windows-latest, where
-                # both are always present for a real job, but
-                # scripts/tests/cross-os-ffmpeg-install.test.mjs executes
-                # this same script directly via pwsh -- including with
-                # LOCALAPPDATA deliberately absent, to pin the guard
-                # against exactly the crash that broke PR #2479's first
-                # attempt at this fix (`Join-Path $null ...`).
-                if ($ffmpegOk -and $env:GITHUB_PATH -and $env:LOCALAPPDATA) {
-                  try {
-                    $ffmpegDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
-                    Add-Content -Path $env:GITHUB_PATH -Value $ffmpegDir -ErrorAction Stop
-                  } catch {
-                    Write-Host "::warning::failed to persist ffmpeg's install directory to `$GITHUB_PATH for later steps -- later steps in this job may not find ffmpeg on PATH: $_"
+                # Gated on $env:GITHUB_PATH: absent outside GitHub Actions
+                # (a local shell, or
+                # scripts/tests/cross-os-ffmpeg-install.test.mjs's
+                # parser/parse-only checks), where there is nothing to
+                # persist to. $env:LOCALAPPDATA is checked separately, NOT
+                # folded into this same condition -- this step only runs on
+                # windows-latest, where it is always present for a real
+                # job, but a silent skip on the rare box where it genuinely
+                # isn't would recreate #2478 downstream with zero signal.
+                # The regression test deliberately unsets LOCALAPPDATA
+                # (mirrors ubuntu-latest's Hooks-tests leg, which also
+                # executes this script) specifically to pin that the
+                # missing case warns rather than skips quietly.
+                if ($ffmpegOk -and $env:GITHUB_PATH) {
+                  if ($env:LOCALAPPDATA) {
+                    try {
+                      $ffmpegDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+                      Add-Content -Path $env:GITHUB_PATH -Value $ffmpegDir -ErrorAction Stop
+                    } catch {
+                      Write-Host "::warning::failed to persist ffmpeg's install directory to `$GITHUB_PATH for later steps -- later steps in this job may not find ffmpeg on PATH: $_"
+                    }
+                  } else {
+                    Write-Host "::warning::LOCALAPPDATA is not set -- cannot determine the winget-installed ffmpeg directory to persist to `$GITHUB_PATH; later steps in this job may not find ffmpeg on PATH."
                   }
                 }
               } else {
