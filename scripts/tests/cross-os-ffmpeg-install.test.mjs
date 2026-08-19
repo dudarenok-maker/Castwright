@@ -50,7 +50,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { readNormalized } from '../lib/read-normalized.mjs';
@@ -171,11 +171,11 @@ const PWSH_SKIP_REASON = PWSH_EXE
       ...PWSH_DISCOVERY.attempts.map((a) => `  - ${a}`),
     ].join('\n');
 
-function runPowerShellFile(scriptPath, extraArgs = []) {
+function runPowerShellFile(scriptPath, extraArgs = [], env = process.env) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-File', scriptPath, ...extraArgs);
-  return spawnSync(PWSH_EXE, args, { encoding: 'utf8' });
+  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env });
 }
 
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser
@@ -242,12 +242,42 @@ function parsePowerShellSyntaxErrors(scriptText) {
 // and leaves a marker behind — proving the delay actually fires, without
 // the test paying the 15s wall-clock cost and without changing a single
 // character of the shipped script.
-function runStubbedFfmpegScript(scriptBody, stubPreamble) {
+// GITHUB_PATH and LOCALAPPDATA are real, live environment variables when
+// this test itself runs inside GitHub Actions (test:hooks is scoped in by
+// this diff on every OS, including ubuntu-latest, where LOCALAPPDATA is
+// never set). Without isolating them, the stubbed script under test would
+// either crash (Join-Path against a null LOCALAPPDATA) or, worse, silently
+// append a test-only path to the CI job's OWN $GITHUB_PATH file, corrupting
+// PATH for every later step of the real job the test is running inside.
+// Each invocation gets its own throwaway GITHUB_PATH file and, by default,
+// its own LOCALAPPDATA directory, so the script's real control flow can be
+// observed without touching (or depending on) the host job's actual
+// environment. `withLocalAppData: false` deliberately UNSETS it (deleted
+// from the child's env entirely, not set to '') to reproduce the shape that
+// actually broke #2478's first fix attempt: GITHUB_PATH present,
+// LOCALAPPDATA absent -- exactly ubuntu-latest's Hooks-tests leg.
+function runStubbedFfmpegScript(scriptBody, stubPreamble, { withLocalAppData = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pwsh-behave-'));
   const scriptPath = join(dir, 'scenario.ps1');
   writeFileSync(scriptPath, `${stubPreamble}\n${scriptBody}\n`, 'utf8');
+  const githubPathFile = join(dir, 'github_path.txt');
+  const localAppDataDir = withLocalAppData ? join(dir, 'LocalAppData') : null;
+  const env = { ...process.env, GITHUB_PATH: githubPathFile };
+  if (withLocalAppData) {
+    env.LOCALAPPDATA = localAppDataDir;
+  } else {
+    delete env.LOCALAPPDATA;
+  }
   try {
-    return runPowerShellFile(scriptPath);
+    const proc = runPowerShellFile(scriptPath, [], env);
+    let githubPathContents = '';
+    try {
+      githubPathContents = readFileSync(githubPathFile, 'utf8');
+    } catch {
+      // Never written -- valid when the script never reached the
+      // PATH-persist branch (e.g. the choco-works-first-try path).
+    }
+    return { ...proc, githubPathContents, localAppDataDir };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -389,6 +419,12 @@ for (const path of WORKFLOWS) {
     const proc = runStubbedFfmpegScript(scriptBody, STUB_CHOCO_WORKS_FIRST_TRY);
     assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
     assert.match(proc.stdout, /ffmpeg verified working \(attempt 1\/3\)\./);
+    // The PATH-persist branch lives inside the winget-fallback path only --
+    // choco succeeding on the first try must never touch $GITHUB_PATH. A
+    // guard that dropped its `$ffmpegOk` (or its winget-only scoping) would
+    // still pass every other assertion in this file; this is the one that
+    // would catch it.
+    assert.equal(proc.githubPathContents, '', 'expected $GITHUB_PATH untouched on the choco-succeeds path');
   });
 
   test(`${rel}: Windows ffmpeg install behaviour -- choco fails, winget rescues it`, {
@@ -408,6 +444,73 @@ for (const path of WORKFLOWS) {
       /ffmpeg verified working \(attempt 1\/3\)\./,
       'expected the post-winget ffmpeg re-check to succeed',
     );
+    // Pins the #2478 fix itself: the step must persist the ffmpeg install
+    // directory to $GITHUB_PATH so LATER steps in the job (Verify, Build,
+    // ...) — fresh processes that never re-read the registry PATH this
+    // step patched in-process — can still find it. Isolated GITHUB_PATH /
+    // LOCALAPPDATA (see runStubbedFfmpegScript) means this exercises the
+    // real branch rather than skipping it, which is what let the original
+    // #2478 fix ship with this exact defect (Join-Path against a null
+    // LOCALAPPDATA crashes; the crash was masked locally because
+    // GITHUB_PATH is unset outside CI, so the guard never entered the
+    // branch at all).
+    assert.match(
+      proc.githubPathContents,
+      /Microsoft[\\/]WinGet[\\/]Links/,
+      `expected the ffmpeg install directory to be appended to $GITHUB_PATH; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+    assert.ok(
+      proc.githubPathContents.includes(join(proc.localAppDataDir, 'Microsoft', 'WinGet', 'Links')),
+      `expected the persisted directory to be rooted under this run's LOCALAPPDATA; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+  });
+
+  // This is the exact shape (GITHUB_PATH present, LOCALAPPDATA absent) that
+  // ubuntu-latest's Hooks-tests leg hits, and that broke the #2478 fix's
+  // first attempt (PR #2479 review pass 1) -- the pass-1 script had no
+  // dedicated try/catch around the PATH-persist logic at all, so
+  // `Join-Path $null ...` crashed straight into the winget-install
+  // try/catch, which flipped the whole install verdict to failed (attempt
+  // 2/3, not 1/3). Round 2 fixed the CRASH by giving the persist logic its
+  // own try/catch -- which the `attempt 1/3` + empty-$GITHUB_PATH
+  // assertions below pin -- but that alone still let a real box missing
+  // LOCALAPPDATA skip the persist with zero signal. This test's final
+  // assertion (the explicit `::warning::` line) is what actually pins the
+  // LOCALAPPDATA-specific guard: round-3 review proved that folding
+  // `$env:LOCALAPPDATA` back into the single outer condition (undoing the
+  // nested if/else) leaves every OTHER assertion in this test green, since
+  // the crash containment alone already accounts for them.
+  test(`${rel}: Windows ffmpeg install behaviour -- choco fails, winget rescues it, but LOCALAPPDATA is unset (ubuntu-latest's Hooks-tests leg)`, {
+    skip: PWSH_SKIP_REASON ?? false,
+  }, () => {
+    const source = readNormalized(path);
+    const scriptBody = windowsFfmpegScriptBody(windowsFfmpegStepBlock(source));
+    const proc = runStubbedFfmpegScript(scriptBody, STUB_CHOCO_FAILS_WINGET_RESCUES, { withLocalAppData: false });
+    assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
+    assert.match(
+      proc.stdout,
+      /ffmpeg verified working \(attempt 1\/3\)\./,
+      'expected the winget-rescued ffmpeg install to still be reported successful with LOCALAPPDATA absent',
+    );
+    // The PATH-persist branch must be SKIPPED, not crash and not fall
+    // through to a later attempt -- with no LOCALAPPDATA there is nowhere
+    // correct to derive a WinGet Links directory from.
+    assert.equal(
+      proc.githubPathContents,
+      '',
+      `expected $GITHUB_PATH untouched when LOCALAPPDATA is absent; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+    // The skip must be LOUD (round-2 review, PR #2479): folding
+    // `$env:LOCALAPPDATA` back into the single outer `if` condition
+    // (instead of the nested if/else this pins) makes the exact same three
+    // assertions above pass -- ffmpeg still verifies working, PATH still
+    // stays untouched -- while silently dropping this warning, which is
+    // the only signal a real box missing LOCALAPPDATA would ever produce.
+    assert.match(
+      proc.stdout,
+      /::warning::LOCALAPPDATA is not set/,
+      'expected an explicit warning when LOCALAPPDATA is absent, not a silent skip',
+    );
   });
 
   test(`${rel}: Windows ffmpeg install behaviour -- both choco and winget fail all 3 attempts -> exit 1 with the CI message, retrying with a real delay`, {
@@ -417,6 +520,14 @@ for (const path of WORKFLOWS) {
     const scriptBody = windowsFfmpegScriptBody(windowsFfmpegStepBlock(source));
     const proc = runStubbedFfmpegScript(scriptBody, STUB_BOTH_FAIL_ALL_ATTEMPTS);
     assert.equal(proc.status, 1, `expected exit 1; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
+    // Guards against a mutated condition that drops `$ffmpegOk` from the
+    // PATH-persist gate: ffmpeg never actually installed here, so nothing
+    // should be written to $GITHUB_PATH across any of the 3 attempts.
+    assert.equal(
+      proc.githubPathContents,
+      '',
+      `expected $GITHUB_PATH untouched when ffmpeg never verified working; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
     assert.match(
       proc.stderr,
       /CI: ffmpeg install failed after 3 attempts/,
