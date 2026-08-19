@@ -142,6 +142,22 @@ export function resolveAll(): Record<string, KnobValueState> {
   return out;
 }
 
+/** Knob keys whose env-sourced value is INDISTINGUISHABLE from having no
+    override at all — resolveKnobInner picked it up from process.env, but
+    it equals the knob's own shipped default. On an install predating
+    #2179's fix, ~110 of these can exist at once from a straight
+    .env.example copy; see #2194's decision comment for why this is
+    surfaced rather than auto-rewritten. */
+export function envCleanupCandidateKeys(): string[] {
+  const out: string[] = [];
+  for (const k of allKnobs()) {
+    if (k.isPrompt || !k.env) continue;
+    const state = resolveKnob(k);
+    if (state.source === 'env' && state.effective === k.default) out.push(k.key);
+  }
+  return out;
+}
+
 /** Effective scalar for a read-site. Throws on unknown key. */
 export function configValue<T extends number | boolean | string>(key: string): T {
   const knob = allKnobs().find((k) => k.key === key);

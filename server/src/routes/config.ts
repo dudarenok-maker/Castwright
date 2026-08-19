@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { allKnobDescriptors } from '../config/descriptors.js';
-import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate } from '../config/resolver.js';
+import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate, envCleanupCandidateKeys } from '../config/resolver.js';
 import { PAIR_RULES } from '../config/pair-rules.js';
 import {
   writeConfigOverride,
@@ -53,6 +53,7 @@ configRouter.get('/', async (_req, res) => {
     values: resolveAll(),
     restartPending: false,
     cudaEnvShadow: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.CUDA_DEVICE_ORDER),
+    envCleanupCandidates: envCleanupCandidateKeys(),
   });
 });
 

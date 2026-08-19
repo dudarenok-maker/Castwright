@@ -14,6 +14,7 @@ import {
   coerceAndValidate,
   configValue,
   isEnvValueRejected,
+  envCleanupCandidateKeys,
 } from './resolver.js';
 import { getKnob } from './registry.js';
 import * as us from '../workspace/user-settings.js';
@@ -352,5 +353,35 @@ describe('resolveKnobForSidecarEnv — deliberately does NOT reconcile (#1857)',
     const st = resolveKnobForSidecarEnv(getKnob('tts.qwen.device')!);
     expect(st.effective).toBe('auto');
     expect(st.source).toBe('default');
+  });
+});
+
+describe('envCleanupCandidateKeys', () => {
+  beforeEach(() => {
+    delete process.env.STAGE2_MIN_COVERAGE;
+    (us.readConfigOverrides as any).mockReturnValue({});
+  });
+
+  it('returns key when env is set to default', () => {
+    process.env.STAGE2_MIN_COVERAGE = '0.6'; // default
+    const keys = envCleanupCandidateKeys();
+    expect(keys).toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('does not return key when env differs from default', () => {
+    process.env.STAGE2_MIN_COVERAGE = '0.7';
+    const keys = envCleanupCandidateKeys();
+    expect(keys).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('does not return key when env is unset', () => {
+    const keys = envCleanupCandidateKeys();
+    expect(keys).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('skips knobs with no env', () => {
+    const keys = envCleanupCandidateKeys();
+    // Ensure prompt knob never appears
+    expect(keys.every(k => k !== 'prompt.castDetection')).toBe(true);
   });
 });
