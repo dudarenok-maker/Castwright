@@ -105,6 +105,28 @@ jobs:
                   $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
                   & ffmpeg -version | Out-Null
                   $ffmpegOk = ($LASTEXITCODE -eq 0)
+                  if ($ffmpegOk -and $env:GITHUB_PATH) {
+                    # The re-read above only fixes PATH for *this* step's
+                    # process. Every later step (Verify, Build, ...) is a
+                    # fresh process spawned by the runner service, which
+                    # still carries the PATH it had at job start -- so
+                    # without this, ffmpeg resolves here but goes missing
+                    # again by the time `npm run verify:quick` runs
+                    # `pretest`'s ffmpeg preflight (observed 2026-08-19,
+                    # cross-os run 32209846581). $GITHUB_PATH is the
+                    # documented mechanism for a step to prepend a
+                    # directory onto PATH for the rest of the job. A
+                    # per-user winget install (no admin elevation, the case
+                    # on GitHub-hosted runners) always lands under this
+                    # WinGet Links dir -- that observed CI path is more
+                    # reliable here than `Get-Command ffmpeg`, which
+                    # resolves to a shim with no real `.Source` in some
+                    # shells. Guarded on $env:GITHUB_PATH being set at all,
+                    # since it's a GitHub Actions-only mechanism -- absent
+                    # in a local shell or this step's own regression test.
+                    $ffmpegDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+                    Add-Content -Path $env:GITHUB_PATH -Value $ffmpegDir
+                  }
                 } catch {
                   Write-Host "winget fallback unavailable: $_"
                   $ffmpegOk = $false
