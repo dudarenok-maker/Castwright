@@ -155,26 +155,31 @@ jobs:
                 # (observed 2026-08-19, cross-os run 32209846581, same step
                 # shape as this file's). $GITHUB_PATH is the documented
                 # mechanism for a step to prepend a directory onto PATH for
-                # the rest of the job. A per-user winget install (no admin
-                # elevation, the case on GitHub-hosted runners) always
-                # lands under this WinGet Links dir. Deliberately its OWN
-                # try/catch, outside the one above: a failure persisting
-                # this bookkeeping entry must never retract an ffmpeg
-                # install that actually verified working, nor fail the
-                # whole install silently -- it can only warn. Guarded on
-                # both $env:GITHUB_PATH and $env:LOCALAPPDATA being set:
-                # this step only runs on windows-latest, where both are
-                # always present for a real job, but
+                # the rest of the job. winget's Gyan.FFmpeg package places
+                # its shim here -- the exact path observed in the real CI
+                # failure this fixes (cross-os run 32209846581,
+                # C:\Users\runneradmin\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe).
+                # Deliberately its OWN try/catch, outside the one above: a
+                # failure persisting this bookkeeping entry must never
+                # retract an ffmpeg install that actually verified working,
+                # nor fail the whole install silently -- it can only warn.
+                # `-ErrorAction Stop` forces Add-Content's own failures to
+                # be catchable here (its default is a non-terminating
+                # error, which a bare try/catch does not observe at all).
+                # Guarded on both $env:GITHUB_PATH and $env:LOCALAPPDATA
+                # being set: this step only runs on windows-latest, where
+                # both are always present for a real job, but
                 # scripts/tests/cross-os-ffmpeg-install.test.mjs executes
-                # this same script directly via pwsh (including on
-                # ubuntu-latest, where LOCALAPPDATA is never set) to pin its
-                # control flow against stubbed choco/winget/ffmpeg.
+                # this same script directly via pwsh -- including with
+                # LOCALAPPDATA deliberately absent, to pin the guard
+                # against exactly the crash that broke PR #2479's first
+                # attempt at this fix (`Join-Path $null ...`).
                 if ($ffmpegOk -and $env:GITHUB_PATH -and $env:LOCALAPPDATA) {
                   try {
                     $ffmpegDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
-                    Add-Content -Path $env:GITHUB_PATH -Value $ffmpegDir
+                    Add-Content -Path $env:GITHUB_PATH -Value $ffmpegDir -ErrorAction Stop
                   } catch {
-                    Write-Host "warning: failed to persist ffmpeg's install directory to `$GITHUB_PATH for later steps: $_"
+                    Write-Host "::warning::failed to persist ffmpeg's install directory to `$GITHUB_PATH for later steps -- later steps in this job may not find ffmpeg on PATH: $_"
                   }
                 }
               } else {
