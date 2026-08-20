@@ -49,6 +49,7 @@ const CATEGORIES = {
      file-level classes rather than with `analysis`, even though the analysis
      run is where it currently surfaces. */
   'lock-contention': 'files',
+  'language-unset': 'voices',
   auth: 'analysis',
   unknown: 'other',
 } satisfies Record<FailureCode, CategoryId>;
@@ -74,6 +75,7 @@ const TITLES = {
   'voice-not-designed': 'Non-English chapter missing a designed voice',
   'cloned-voice-broken': "Cloned voice can't render as itself",
   'lock-contention': 'Something else had the book open',
+  'language-unset': "Book's language not set",
   auth: 'Gemini API key problem',
   unknown: 'Unrecognised error',
 } satisfies Record<FailureCode, string>;

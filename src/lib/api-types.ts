@@ -3015,7 +3015,11 @@ export interface components {
             /** @description character_failed only — the per-character failure message. */
             errorReason?: string;
             /**
-             * @description error only — machine-readable whole-run abort reason. `language_unset` (Task 6,
+             * @description error only — machine-readable whole-run abort reason.
+             *     `language_unset` (Task 6, #2246) fires when the book never
+             *     stated a language — the honest pre-work abort replacing a
+             *     silent English design; `unsupported_language` fires for a
+             *     stated language with no sidecar mapping.
              * @enum {string}
              */
             code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown";
@@ -3092,7 +3096,10 @@ export interface components {
             /** @description designed only. */
             url?: string;
             /**
-             * @description error only. `language_unset` (Task 6,
+             * @description error only. `language_unset` (Task 6, #2246) fires when the
+             *     book never stated a language — the honest pre-work abort
+             *     replacing a silent English design; `unsupported_language`
+             *     fires for a stated language with no sidecar mapping.
              * @enum {string}
              */
             code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention" | "language_unset";
@@ -5068,7 +5075,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -9986,20 +9993,24 @@ export interface operations {
                 "application/json": {
                     /** @enum {string} */
                     slice: "cast" | "manuscript" | "revisions" | "state" | "changeLog";
-                    /** @description The whole slice payload; shape depends on `slice`. */
-                    patch: {
-                        /**
-                         * @description #2246 Task 9 — BCP-47 book language for the `state`
-                         *     slice. `null` is "stated absence" (a book whose
-                         *     language the user has not set), distinct from both a
-                         *     value and an absent key. An absent key preserves
-                         *     whatever is already stored (including a stored `null`).
-                         *     A `state`-slice patch with a non-empty unsupported
-                         *     value is rejected with `400 unsupported_language` and
-                         *     nothing is written.
-                         */
-                        language?: string | null;
-                    };
+                    /**
+                     * @description The whole slice payload; shape depends on `slice`.
+                     *     For the `state` slice the patch carries ~16 fields
+                     *     (title, author, series, tags, notes, audioFormat,
+                     *     prosodyEnabled, castConfirmed, chapters, and more);
+                     *     the same endpoint also serves the `cast`,
+                     *     `manuscript`, `revisions`, and `changeLog` slices
+                     *     with entirely different payloads.
+                     *     #2246 Task 9 — BCP-47 `language` field on the `state`
+                     *     slice: string | null. `null` is "stated absence" (a
+                     *     book whose language the user has not set), distinct
+                     *     from both a value and an absent key. An absent key
+                     *     preserves whatever is already stored (including a
+                     *     stored `null`). A `state`-slice patch with a
+                     *     non-empty unsupported value is rejected with
+                     *     `400 unsupported_language` and nothing is written.
+                     */
+                    patch: unknown;
                 };
             };
         };

@@ -3361,20 +3361,22 @@ paths:
                   type: string
                   enum: [cast, manuscript, revisions, state, changeLog]
                 patch:
-                  description: The whole slice payload; shape depends on `slice`.
-                  properties:
-                    language:
-                      type: string
-                      nullable: true
-                      description: |
-                        #2246 Task 9 — BCP-47 book language for the `state`
-                        slice. `null` is "stated absence" (a book whose
-                        language the user has not set), distinct from both a
-                        value and an absent key. An absent key preserves
-                        whatever is already stored (including a stored `null`).
-                        A `state`-slice patch with a non-empty unsupported
-                        value is rejected with `400 unsupported_language` and
-                        nothing is written.
+                  description: |
+                    The whole slice payload; shape depends on `slice`.
+                    For the `state` slice the patch carries ~16 fields
+                    (title, author, series, tags, notes, audioFormat,
+                    prosodyEnabled, castConfirmed, chapters, and more);
+                    the same endpoint also serves the `cast`,
+                    `manuscript`, `revisions`, and `changeLog` slices
+                    with entirely different payloads.
+                    #2246 Task 9 — BCP-47 `language` field on the `state`
+                    slice: string | null. `null` is "stated absence" (a
+                    book whose language the user has not set), distinct
+                    from both a value and an absent key. An absent key
+                    preserves whatever is already stored (including a
+                    stored `null`). A `state`-slice patch with a
+                    non-empty unsupported value is rejected with
+                    `400 unsupported_language` and nothing is written.
       responses:
         '204':
           description: Slice written
@@ -4245,7 +4247,12 @@ components:
         code:
           type: string
           enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
-          description: error only — machine-readable whole-run abort reason. `language_unset` (Task 6, #2246) fires when the book never stated a language — the honest pre-work abort replacing a silent English design; `unsupported_language` fires for a stated language with no sidecar mapping.
+          description: |
+            error only — machine-readable whole-run abort reason.
+            `language_unset` (Task 6, #2246) fires when the book never
+            stated a language — the honest pre-work abort replacing a
+            silent English design; `unsupported_language` fires for a
+            stated language with no sidecar mapping.
         message: { type: string, description: error only — human-readable abort message. }
 
     CastDesignStatusResponse:
@@ -4316,7 +4323,11 @@ components:
         code:
           type: string
           enum: [not_found, design_failed, unsupported_language, lock-contention, language_unset]
-          description: error only. `language_unset` (Task 6, #2246) fires when the book never stated a language — the honest pre-work abort replacing a silent English design; `unsupported_language` fires for a stated language with no sidecar mapping.
+          description: |
+            error only. `language_unset` (Task 6, #2246) fires when the
+            book never stated a language — the honest pre-work abort
+            replacing a silent English design; `unsupported_language`
+            fires for a stated language with no sidecar mapping.
         message: { type: string, description: error only. }
 
     SingleDesignStatusResponse:
@@ -6896,6 +6907,7 @@ components:
         - voice-not-designed
         - cloned-voice-broken
         - lock-contention
+        - language-unset
 
     ChapterQaVerdict:
       type: object

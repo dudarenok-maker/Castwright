@@ -234,6 +234,16 @@ export const FAILURE_REMEDIATIONS = {
       'never overwrite each other. A second change waits its turn and gives up after ten seconds ' +
       'rather than waiting forever. It is almost always over by the time you retry.',
   },
+  'language-unset': {
+    /* #2509 — a chapter was rendered without a book language, so the voice
+       engine had no language mapping for the cast. The chapter is skipped
+       rather than guessed. */
+    userMessage:
+      "This book doesn't have a language set yet, so the voice engine can't pick the right voice for " +
+      'the cast. Set the language in the book settings and try again.',
+    remediation:
+      'Open the book settings, choose a language for the book, then retry the chapter.',
+  },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */
     userMessage:

@@ -229,4 +229,21 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     expect(typeEnum(crlf, 'SingleDesignEvent')).toEqual(typeEnum(lf, 'SingleDesignEvent'));
     expect(describedDesignPaths(crlf).sort()).toEqual(describedDesignPaths(lf).sort());
   });
+
+  /* #2509 B2 — the two `code.description` scalars on CastDesignEvent and
+     SingleDesignEvent were plain (unquoted, non-block) scalars that contain
+     the text ` #2246`. YAML parsing treats ` #` as a comment opener, so
+     everything from `#2246)` onward was silently discarded. The fix converts
+     both to block scalars (`description: |`). This test pins the block-scalar
+     form: if either description is ever converted back to a plain scalar,
+     the `description: |` match fails and the truncation is caught. */
+  it('CastDesignEvent.code and SingleDesignEvent.code descriptions use block scalars to avoid YAML comment truncation (#2509 B2)', () => {
+    const castBlock = schemaBlock(yaml, 'CastDesignEvent');
+    expect(castBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
+    expect(castBlock).toContain('stated language with no sidecar mapping');
+
+    const singleBlock = schemaBlock(yaml, 'SingleDesignEvent');
+    expect(singleBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
+    expect(singleBlock).toContain('stated language with no sidecar mapping');
+  });
 });
