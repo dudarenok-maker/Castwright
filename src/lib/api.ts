@@ -9292,7 +9292,7 @@ export async function mockDesignLibraryVoice(body: {
   await wait(300);
   const now = new Date().toISOString();
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-${Math.random().toString(36).slice(2, 10)}`,
+    voiceUuid: `lib-${crypto.randomUUID()}`,  
     name: body.name,
     provenance: 'designed',
     tags: [],
@@ -9352,7 +9352,7 @@ export async function mockPromoteToLibrary(body: {
   await wait(60);
   const now = new Date().toISOString();
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-${Math.random().toString(36).slice(2, 10)}`,
+    voiceUuid: `lib-${crypto.randomUUID()}`,
     name: body.name,
     provenance: 'designed',
     tags: [],
@@ -9659,7 +9659,7 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
     );
   }
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,
+    voiceUuid: `lib-clone-${crypto.randomUUID()}`,  
     name: body.name?.trim() || body.consent.personName,
     provenance: 'cloned',
     tags: [],
