@@ -65,15 +65,19 @@ describe('ensureOrtMarker', () => {
   it('deletes a lying marker when the CPU build owns the namespace', () => {
     const { root, sp } = venv({ owner: 'plain' });
     writeOrtMarker(sp, '1.27.0');
-    expect(ensureOrtMarker(root)).toBe('deleted');
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('deleted');
     expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
+    expect(lines.join('\n')).toContain('[ort-marker]');
   });
 
   it('deletes a lying marker after an INTERRUPTED SWAP — no runtime at all', () => {
     const { root, sp } = venv({ owner: 'none' });
     writeOrtMarker(sp, '1.27.0');
-    expect(ensureOrtMarker(root)).toBe('deleted');
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('deleted');
     expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
+    expect(lines.join('\n')).toContain('[ort-marker]');
   });
 
   it('never throws on a venv that does not exist', () => {
@@ -101,7 +105,9 @@ describe('ensureOrtMarker', () => {
 
   it('returns noop when no runtime exists and no marker is present (row 6)', () => {
     const { root } = venv({ owner: 'none' });
-    expect(ensureOrtMarker(root)).toBe('noop');
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('noop');
+    expect(lines.length).toBe(0);
   });
 
   it('never throws even when the caller-supplied log itself throws', () => {

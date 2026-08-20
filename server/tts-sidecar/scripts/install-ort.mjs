@@ -333,7 +333,14 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       return 'wrote';
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
-    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
+    if (deleteOrtMarkerIfOurs(sp)) {
+      safeLog(
+        '[ort-marker] This venv is now owned by a plain onnxruntime (or nothing) rather than the GPU ' +
+          'runtime, so our recorded swap marker no longer matches its actual owner — it has been removed.',
+      );
+      return 'deleted';
+    }
+    return 'noop';
   } catch (err) {
     safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';
