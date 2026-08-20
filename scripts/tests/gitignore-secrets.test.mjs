@@ -60,9 +60,10 @@ test('gitignore: server/.env.tmp-* temp files are ignored (env-cleanup failure c
   );
 });
 
-test('gitignore: .env.tmp-* files in root are also covered by the pattern', () => {
-  // The pattern server/.env.tmp-* should match files in the server/ directory.
-  // Verify that the pattern works correctly.
+test('gitignore: a second server/.env.tmp-* path (different pid/timestamp/random) is also covered', () => {
+  // Same pattern as the test above, exercised against a different
+  // representative filename to confirm the rule isn't accidentally
+  // over-fit to one specific string.
   assert.equal(
     isGitIgnored('server/.env.tmp-999-9999999999999-5-xyz'),
     true,
