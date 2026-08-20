@@ -258,6 +258,15 @@ export function parseRegister(markdown) {
     if (!file) continue;
 
     const testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    if (testNames.length === 0) {
+      // Fallback: the register's actual Test cell format is prose — typically
+      // `#NNNN — <test name>` — not backtick-quoted spans. The backtick path
+      // above handles the multi-test expansion case (one row → one entry per
+      // backtick-quoted name); this handles the real register rows where
+      // only the File column is backtick-quoted.
+      const proseMatch = testCell.match(/#\d+\s*—\s*(.+)/);
+      if (proseMatch) testNames.push(proseMatch[1].trim());
+    }
     if (testNames.length === 0) continue;
 
     const issueNumbers = [...(issueCell ?? '').matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
@@ -269,14 +278,54 @@ export function parseRegister(markdown) {
   return entries;
 }
 
-// The `|---|---|` markdown table separator row. Given the current
-// testCell-must-contain-backticks requirement above, a row this matches can
-// never also survive the backtick check (its first cell is provably just
-// dashes+whitespace, never backtick-quoted text) — so parseRegister's own
-// integration behaviour can't distinguish "guard present" from "guard
-// removed" for real register content. Pinned directly (quarantine-health.
-// test.mjs) rather than via a contrived parseRegister fixture, so the guard's
-// own contract stays asserted even though it's currently redundant defense.
+// Counts the number of well-formed data rows (| ... | with ≥ 5 cells, not a
+// separator or header) in a register markdown string. Mirrors parseRegister's
+// own row-identification logic, but without the test-name extraction — used by
+// main() to detect the "data rows present but zero entries parsed" case,
+// which is a parser bug (silent failure) rather than a genuinely empty
+// register. Exported for unit testing.
+export function countRegisterDataRows(markdown) {
+  let count = 0;
+  let inComment = false;
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    let visible = '';
+    let remainder = rawLine;
+    while (remainder.length > 0) {
+      if (inComment) {
+        const closeIdx = remainder.indexOf('-->');
+        if (closeIdx === -1) {
+          remainder = '';
+        } else {
+          inComment = false;
+          remainder = remainder.slice(closeIdx + 3);
+        }
+      } else {
+        const openIdx = remainder.indexOf('<!--');
+        if (openIdx === -1) {
+          visible += remainder;
+          remainder = '';
+        } else {
+          visible += remainder.slice(0, openIdx);
+          inComment = true;
+          remainder = remainder.slice(openIdx + 4);
+        }
+      }
+    }
+    const line = visible.trim();
+    if (!line.startsWith('|')) continue;
+    if (isSeparatorRow(line)) continue;
+    if (isHeaderRow(line)) continue;
+    const cells = splitTableRow(line);
+    if (cells.length < 5) continue;
+    count++;
+  }
+  return count;
+}
+
+// The `|---|---|` markdown table separator row. Pinned directly (quarantine-
+// health.test.mjs) rather than via a contrived parseRegister fixture, so the
+// guard's own contract stays asserted even though it's currently redundant
+// defense.
 export function isSeparatorRow(line) {
   return /^\|\s*-+\s*\|/.test(line);
 }
@@ -774,6 +823,18 @@ function main() {
 
   const rows = parseRegister(markdown);
   if (rows.length === 0) {
+    // A register with well-formed data rows that parses to zero entries is a
+    // guard that fails open: it goes silent exactly when it has lost the
+    // ability to see. Distinguish this from a genuinely empty register (no
+    // data rows at all), which IS a clean no-op.
+    const dataRowCount = countRegisterDataRows(markdown);
+    if (dataRowCount > 0) {
+      console.error(
+        `quarantine-health: ${REGISTER_PATH} contains ${dataRowCount} data row(s) but parseRegister returned 0 entries — the parser is silently dropping rows. This is a bug, not a clean no-op.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
     emit(formatReport({ entries: [], runs: 0, issueStates: new Map() }));
     return; // clean no-op — exit 0
   }

@@ -4,6 +4,7 @@ import {
   resolveRuns,
   classifyRunsOverride,
   parseRegister,
+  countRegisterDataRows,
   isSeparatorRow,
   isHeaderRow,
   splitTableRow,
@@ -24,6 +25,9 @@ import {
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
 } from '../quarantine-health.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 // --- resolveRuns (finding 12: QUARANTINE_HEALTH_RUNS=0/negative guard) -----
 
@@ -70,7 +74,7 @@ test('classifyRunsOverride: a valid but fractional value -> fractional (floored,
 
 // --- parseRegister -----------------------------------------------------
 
-test('parseRegister returns no entries for the current (empty) register table', () => {
+test('parseRegister returns no entries for a genuinely empty register table (no data rows)', () => {
   const markdown = `# Flaky-test register
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
@@ -97,6 +101,88 @@ test('parseRegister expands a multi-test row into one entry per backtick-quoted 
     assert.equal(e.file, 'server/src/routes/generation.test.ts');
     assert.deepEqual(e.issueNumbers, [399]);
   }
+});
+
+test('parseRegister extracts the test name from the real register prose format (#NNNN — <name>)', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older same-format manifest when a re-export of the same format finishes | \`server/src/routes/export.test.ts\` | intermittent under full-suite box contention | Fails on retry | #2235 | Quarantined |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].testName, 'revokes the older same-format manifest when a re-export of the same format finishes');
+  assert.equal(entries[0].file, 'server/src/routes/export.test.ts');
+  assert.deepEqual(entries[0].issueNumbers, [2235]);
+});
+
+// Regression test: drives the parser against the REAL register file,
+// docs/testing/flaky-register.md. The old parser extracted test names only
+// from backtick-quoted spans in the Test cell, but the real register's Test
+// column is prose (only the File column is backtick-quoted), so every row
+// was silently dropped and parseRegister returned []. This test fails against
+// the unfixed parser and passes after the prose-format fallback was added.
+test('parseRegister returns one entry per data row of the real flaky-register.md (regression)', () => {
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
+  const markdown = readFileSync(registerPath, 'utf8');
+  const entries = parseRegister(markdown);
+  // The real register currently has 2 data rows (#1981 and #2235).
+  assert.ok(entries.length >= 2, `expected at least 2 entries from the real register, got ${entries.length}`);
+  // Both quarantined rows must be present.
+  const files = entries.map((e) => e.file);
+  assert.ok(files.includes('server/src/routes/book-state-preserve-voices.test.ts'), 'missing #1981 row');
+  assert.ok(files.includes('server/src/routes/export.test.ts'), 'missing #2235 row');
+  // Issue numbers must be extracted from the Issue cell, not the Test cell.
+  const by1981 = entries.find((e) => e.issueNumbers.includes(2226));
+  assert.ok(by1981, '#1981 row must carry tracking issue #2226');
+  const by2235 = entries.find((e) => e.issueNumbers.includes(2235));
+  assert.ok(by2235, '#2235 row must carry tracking issue #2235');
+});
+
+test('countRegisterDataRows counts well-formed data rows, ignoring headers, separators, prose, and comments', () => {
+  const markdown = `# Flaky-test register
+
+| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT | \`server/src/routes/foo.test.ts\` | intermittent | Fails | #2226 | Not quarantined |
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | intermittent | Fails on retry | #2235 | Quarantined |
+
+_Empty — no other tests are currently quarantined._
+
+<!-- Graduated 2026-07-27: old row | \`foo.test.ts\` | ... | ... | ... | ... | -->
+`;
+  assert.equal(countRegisterDataRows(markdown), 2);
+});
+
+test('countRegisterDataRows returns 0 for a genuinely empty register', () => {
+  const markdown = `# Flaky-test register
+
+| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+_Empty — no tests are currently quarantined._
+`;
+  assert.equal(countRegisterDataRows(markdown), 0);
+});
+
+// The loud-failure guard: when data rows are present but parseRegister
+// returns zero entries, the runner must detect the mismatch rather than
+// reporting a clean no-op. This test drives both functions against the same
+// input to verify the guard's precondition — the runner's main() checks
+// exactly this and exits non-zero when it fires.
+test('a register with data rows that parses to zero entries is detectable (loud-failure precondition)', () => {
+  // Simulate a format the parser cannot handle: data rows with neither
+  // backtick-quoted test names nor the #NNNN — prose pattern.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| some opaque test reference | \`server/src/routes/foo.test.ts\` | timing | races | #1234 | 2026-08-01 |
+| another opaque reference | \`server/src/routes/bar.test.ts\` | timing | races | #5678 | 2026-08-02 |
+`;
+  const entries = parseRegister(markdown);
+  const dataRows = countRegisterDataRows(markdown);
+  assert.equal(entries.length, 0, 'parser should return 0 for unrecognized format');
+  assert.equal(dataRows, 2, 'countRegisterDataRows should see 2 data rows');
+  // The guard in main() checks exactly this: dataRows > 0 && entries.length === 0 → error.
 });
 
 test('parseRegister ignores prose lines, the header row and the separator row', () => {
