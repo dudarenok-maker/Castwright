@@ -364,6 +364,13 @@ describe('parser — #2279 added quote pairs (closer-driven)', () => {
   // `quotePairs` carries `['»','«']`), so it can seed a primary run that
   // swallows the attribution between two Swiss turns — see #2352, pinned
   // below as a known gap.
+  // #2346: `dort: «Zu»` is the only shipped fixture with a colon before a
+  // secondary candidate, so it is the one place the new colon rule and the
+  // pre-existing `hasStem` test overlap. It was green before the rule and is
+  // green after it — but for DIFFERENT reasons (no verb stem, then the colon),
+  // which is a coincidence, not a guarantee. It cannot detect a regression in
+  // either mechanism; the `#2346 defect B` describe below is what pins the rule.
+
   it('de: two genuine „…" turns survive a secondary-Swiss-quoted sign in the gap between them', () => {
     const body = '„Guten Tag", sagte er. Das Schild dort: «Zu». „Und du?", fragte sie.';
     expect(spoken(body, 'de')).toEqual(['Guten Tag', 'Zu', 'Und du?']);
@@ -462,7 +469,12 @@ describe('parser — #2286 residual: accepted spurious spans under the gap tier 
    attribution tag. On `main`, `secondaryQuotePairs` is empty for every
    language, so this is the first change under which the guard is reachable
    from the real shipped tables. Without the guard, a secondary run would cut
-   the tag at the quoted name, leaving the turn with its text but no speaker. */
+   the tag at the quoted name, leaving the turn with its text but no speaker.
+   Since #2427 the guard also returns EARLY, declining nothing, when a colon
+   immediately precedes the candidate (whitespace stripped) — a leading tag
+   introduces its turn rather than attributing one. The cases in this block all
+   use trailing tags, so none of them exercise that path; the `#2346 defect B`
+   describe does. */
 describe('parser — #2315 guard `cutsATagClause` with real secondaryQuotePairs (#2286)', () => {
   const assertSpansOf = (body: string, lang: string, roster: Array<{ id: string; name: string }>) => {
     const conv = conventionsFor(lang)!;
@@ -498,6 +510,73 @@ describe('parser — #2315 guard `cutsATagClause` with real secondaryQuotePairs 
     const { speechText, tagText } = assertSpansOf(body, 'en', [{ id: 'anton', name: 'Anton' }]);
     expect(speechText).toBe('Hi,');
     expect(tagText).toBe(' said «Anton».');
+  });
+});
+/* #2346 defect B (#2427) — the guard fires on a LEADING tag and deletes the turn
+   it introduces. A colon immediately before the candidate means the verb
+   INTRODUCES what follows (`sagte er …: «…»`, the Latin analogue of CJK's `：`);
+   the guard's remaining tests all assume the verb ATTRIBUTES something already
+   parsed.
+
+   The body is the REAL paragraph from Gutenberg 63460, not a reduced shape.
+   A reduction CAN pin the trailing-whitespace strip on its own (see the
+   minimal case below), but not this paragraph's specific failure: the
+   trigger here is the unrelated `»Tick-Tack ... Tick-Tack«` clock earlier in
+   the same paragraph, which sets `precededByPrimaryRun` for a candidate it
+   has nothing to do with. An over-reduction that drops that primary run
+   passes for the wrong reason, which is why the full paragraph stays.
+
+   This is a SEGMENTATION assertion, not an attribution one — the recovered turn
+   has no speaker, and this suite is documented as blind to attribution. */
+describe('parser — #2346 defect B: a colon-introduced turn is not eaten by the tag-clause guard', () => {
+  const spoken = (body: string, lang: string) =>
+    spansOf(parseChapterStructure(body, buildNameIndex([], conventionsFor(lang)!)))
+      .filter((s) => s.kind === 'speech')
+      .map((s) => body.slice(s.start, s.end));
+
+  const DE_63460 =
+    'Es war gruselig und dunkel auf der Stiege, aber dann zündete Ulebuhle sein Öllämpchen an, der Schlüssel ' +
+    'drehte sich kreischend im Schloß, und knarrend öffnete sich die Turmtür, um uns einzulassen in den ' +
+    'geheimnisvollen Raum. -- Da stand in der Mitte auf einer Säule ein großes Ding, wie eine Kanone, und so ' +
+    'dick, daß die dünnsten von uns wohl hätten durch das Rohr hindurchkriechen können. Es blinkte daran von ' +
+    'allerlei Schrauben und Griffen, von Stahl und Messing. Oben war ein großes Glas im Rohr, wohl wie ein ' +
+    'Teller, und unten ein ganz winziges, durch das man hindurchschauen mußte. Und dann tickte da noch eine ' +
+    'große Uhr in einem Glasgehäuse, mit einem langen Perpendikel, der mächtig vornehm und langsam hin und her ' +
+    'schwang und unablässig ganz bedächtig sein »Tick-Tack ... Tick-Tack« sagte. -- Da waren auch noch allerlei ' +
+    'Apparate in den Ecken und an den Wänden, und Bilder hingen da von Mond und Sternen, und dicke Bücher lagen ' +
+    'in den Fächern. Aber wenn wir Ulebuhle nach all dem fragten, dann sagte er nur in seiner knurrigen ' +
+    'Weise: «Schnickschnack und Finger davon! Das versteht ihr nicht!»';
+
+  it('de: the colon-introduced turn survives as its own speech span (real paragraph)', () => {
+    expect(spoken(DE_63460, 'de')).toEqual([
+      'Tick-Tack ... Tick-Tack',
+      'Schnickschnack und Finger davon! Das versteht ihr nicht!',
+    ]);
+  });
+
+  it('de: a colon-introduced turn with NO whitespace before the quote also survives', () => {
+    expect(spoken('„Guten Tag", sagte er. Dann sagte er:«Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
+  });
+
+  it('de: a minimal reduction pins the trailing-whitespace strip on its own', () => {
+    expect(spoken('„Guten Tag", sagte er. Dann sagte er: «Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
+  });
+
+  /* The full-width `：` arm must use a SECONDARY zh pair. `“…”` is a zh PRIMARY
+     pair, so `他说：“你好”。` never reaches the guard at all and already returns
+     `['你好']` on shipped code — measured. A test written on that shape cannot
+     fail, in either direction. `‘…’` is zh's secondary pair, and the leading
+     `“早安”` supplies the primary run the guard requires before it will act. */
+  it('zh: a full-width colon introduces the turn the same way', () => {
+    expect(spoken('“早安”，他说。然后他说：‘你好’。', 'zh')).toEqual(['早安', '你好']);
+  });
+
+  it('zh: the same shape WITHOUT the colon is still declined', () => {
+    expect(spoken('“早安”，他说。然后他说‘你好’。', 'zh')).toEqual(['早安']);
+  });
+
+  it('de: a TRAILING tag is still declined — the guard is not disabled generally', () => {
+    expect(spoken('„Guten Tag", sagte «Ulebuhle». Und dann ging er.', 'de')).toEqual(['Guten Tag']);
   });
 });
 
@@ -1407,8 +1486,12 @@ describe('parser — #2315 / #2346 known gap: the tag-clause guard is inert when
      words / <=5 CJK characters), the true figure is <=21 of 1,164 (1.8%).
      **Do not target the raw 1,164 for reduction — #2346 has the full
      breakdown and says this explicitly.** Pinned here as a KNOWN, TRACKED
-     gap — this test is expected to start FAILING the moment #2346 is fixed,
-     at which point it should be deleted, not adjusted to pass again. */
+     gap — this test pins DEFECT A (the guard is INERT where no primary run
+     precedes the candidate), which #2346's design accepted and priced rather
+     than fixed; it is expected to keep passing. The shipped change is defect B
+     (the guard FIRING on a leading tag, #2427), a disjoint population separated
+     by `precededByPrimaryRun` — never average the two. Delete this test only if
+     defect A is itself fixed, not adjusted to pass again. */
   const ruTier: LanguageConventions = { ...conventionsFor('ru')!, secondaryQuotePairs: [['‘', '’']] };
   const enTier: LanguageConventions = { ...conventionsFor('en')!, secondaryQuotePairs: [['«', '»']] };
   const speakersOf = (body: string, conv: LanguageConventions, roster: Array<{ id: string; name: string }>) =>
