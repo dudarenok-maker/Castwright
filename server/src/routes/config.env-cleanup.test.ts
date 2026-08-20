@@ -6,11 +6,12 @@
       GET run in the same process, so process.env has not been reloaded).
    2. (Part B) A second cleanup call with no remaining candidates does not
       overwrite the .env.bak backup from the first cleanup.
+   3. (Part C) Query parameters like ?envPath are ignored (security regression test).
 
-   Uses a temp .env file injected via the ?envPath query param so the test
+   Uses _setServerEnvPathForTest() to inject a temp .env path so the test
    doesn't touch the real server/.env. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +21,7 @@ import request from 'supertest';
 let tmpDir: string;
 let app: Express;
 let envTestPath: string;
+let setServerEnvPathForTest: (path: string | null) => void;
 
 beforeAll(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'config-env-cleanup-test-'));
@@ -42,7 +44,9 @@ beforeAll(async () => {
   );
 
   // Import and create the config router
-  const { configRouter } = await import('./config.js');
+  const configModule = await import('./config.js');
+  const { configRouter } = configModule;
+  setServerEnvPathForTest = configModule._setServerEnvPathForTest;
 
   app = express();
   app.use(express.json());
@@ -51,31 +55,33 @@ beforeAll(async () => {
 
 afterAll(() => {
   rmSync(tmpDir, { recursive: true, force: true });
+  setServerEnvPathForTest(null);
+});
+
+beforeEach(() => {
+  // Reset the test path override before each test
+  setServerEnvPathForTest(null);
 });
 
 describe('POST /api/config/env-cleanup', () => {
   it('(Part A) after cleanup, GET /api/config no longer lists the candidate', async () => {
+    setServerEnvPathForTest(envTestPath);
+
     // Before cleanup, GET should list STAGE2_MIN_COVERAGE as a candidate
     // because the .env file contains "STAGE2_MIN_COVERAGE=0.6" which matches
     // the shipped default 0.6.
-    const getBeforeRes = await request(app)
-      .get('/api/config')
-      .query({ envPath: envTestPath });
+    const getBeforeRes = await request(app).get('/api/config');
     expect(getBeforeRes.status).toBe(200);
     expect(getBeforeRes.body.envCleanupCandidates).toContain('analyzer.stage2.minCoverage');
 
     // Call cleanup
-    const cleanupRes = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: envTestPath });
+    const cleanupRes = await request(app).post('/api/config/env-cleanup');
     expect(cleanupRes.status).toBe(200);
     expect(cleanupRes.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
 
     // After cleanup (in the SAME process, no restart), GET should no longer
     // list the candidate because the .env file now has the line commented out.
-    const getAfterRes = await request(app)
-      .get('/api/config')
-      .query({ envPath: envTestPath });
+    const getAfterRes = await request(app).get('/api/config');
     expect(getAfterRes.status).toBe(200);
     expect(getAfterRes.body.envCleanupCandidates).not.toContain('analyzer.stage2.minCoverage');
   });
@@ -96,11 +102,10 @@ describe('POST /api/config/env-cleanup', () => {
     );
 
     const bakPath = `${env2Path}.bak`;
+    setServerEnvPathForTest(env2Path);
 
     // First cleanup: should write the original .env to .env.bak and comment out the candidate
-    const cleanup1Res = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: env2Path });
+    const cleanup1Res = await request(app).post('/api/config/env-cleanup');
     expect(cleanup1Res.status).toBe(200);
     expect(cleanup1Res.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
 
@@ -118,9 +123,7 @@ describe('POST /api/config/env-cleanup', () => {
     // - Return empty cleaned array
     // - NOT overwrite .env.bak (it should stay unchanged)
     // - NOT modify .env (no changes to make)
-    const cleanup2Res = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: env2Path });
+    const cleanup2Res = await request(app).post('/api/config/env-cleanup');
     expect(cleanup2Res.status).toBe(200);
     expect(cleanup2Res.body.cleaned).toEqual([]);
 
@@ -131,5 +134,80 @@ describe('POST /api/config/env-cleanup', () => {
     // Verify the current .env is still the same (no new changes)
     const envAfterSecond = readFileSync(env2Path, 'utf-8');
     expect(envAfterSecond).toEqual(envAfterFirst);
+  });
+
+  it('(Part C) query parameter envPath is ignored (security regression test)', async () => {
+    // Create two different .env files with different content
+    const realEnvPath = join(tmpDir, '.env.real');
+    const attackerPath = join(tmpDir, '.env.attacker');
+
+    writeFileSync(
+      realEnvPath,
+      [
+        '# Real server env',
+        'STAGE2_MIN_COVERAGE=0.6',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    writeFileSync(
+      attackerPath,
+      [
+        '# Attacker-controlled file',
+        'GEMINI_API_KEY=fake-key',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    setServerEnvPathForTest(realEnvPath);
+
+    // Try to use a query parameter to point at the attacker-controlled path.
+    // The handler MUST ignore this and still use the real path.
+    const getRes = await request(app)
+      .get('/api/config')
+      .query({ envPath: attackerPath });
+
+    expect(getRes.status).toBe(200);
+    // The response should contain candidates from realEnvPath, not attackerPath
+    expect(getRes.body.envCleanupCandidates).toContain('analyzer.stage2.minCoverage');
+    // GEMINI_API_KEY is not a cleanup candidate (it's a secret), so this proves
+    // we read from the real path, not the attacker's path
+  });
+
+  it('(Part D) POST also ignores envPath query parameter', async () => {
+    // Create a distinct test file for this check
+    const postTestPath = join(tmpDir, '.env.post-test');
+    const attackerPath = join(tmpDir, '.env.post-attacker');
+
+    writeFileSync(
+      postTestPath,
+      [
+        '# Real POST test env',
+        'STAGE2_MIN_COVERAGE=0.6',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    writeFileSync(attackerPath, '# Empty attacker file\n', 'utf-8');
+    setServerEnvPathForTest(postTestPath);
+
+    // Try POST with a malicious envPath query parameter pointing to attacker's file
+    const postRes = await request(app)
+      .post('/api/config/env-cleanup')
+      .query({ envPath: attackerPath });
+
+    expect(postRes.status).toBe(200);
+    // Should have cleaned from the real path, not the attacker path
+    expect(postRes.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
+
+    // Verify the real file was cleaned, not the attacker's
+    const realFileContent = readFileSync(postTestPath, 'utf-8');
+    expect(realFileContent).toContain('# STAGE2_MIN_COVERAGE=0.6');
+
+    const attackerFileContent = readFileSync(attackerPath, 'utf-8');
+    expect(attackerFileContent).toBe('# Empty attacker file\n'); // unchanged
   });
 });

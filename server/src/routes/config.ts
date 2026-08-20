@@ -35,6 +35,10 @@ export const configRouter = Router();
    in the same millisecond don't collide on temp-file names. */
 let tmpSeq = 0;
 
+/* Test-only: override the server .env path without exposing it over HTTP.
+   Production code never sets this; only test code calls _setServerEnvPathForTest. */
+let serverEnvPathOverride: string | null = null;
+
 /* resolveAll() -> resolveKnob() reconciles a stored 'cuda-uuid:<uuid>'
    override against getLastKnownGpuDevices()'s cache SYNCHRONOUSLY — it's
    only ever warmed by GET /api/gpu/devices's own handler (or toUuidForm,
@@ -61,9 +65,7 @@ configRouter.get('/', async (req, res) => {
   // Determine env cleanup candidates from the actual .env file content,
   // not from process.env (which can be shadowed by the shell/OS).
   let envCleanupCandidates: string[] = [];
-  // Allow tests to inject a path without touching the real server/.env.
-  const queryPath = typeof req.query.envPath === 'string' ? req.query.envPath : undefined;
-  const envPath = queryPath ?? resolveServerEnvPath();
+  const envPath = resolveServerEnvPath();
   if (existsSync(envPath)) {
     try {
       const fileContent = readFileSync(envPath, 'utf-8');
@@ -219,17 +221,23 @@ configRouter.post('/reset', async (req, res) => {
 // ── POST /env-cleanup ────────────────────────────────────────────────────────
 
 /** Resolve the server .env path the same way load-env.ts does: relative to
-    the server process's cwd. Exported so tests can override via the
-    `envPath` query param without monkey-patching process.cwd. */
+    the server process's cwd. */
 export function resolveServerEnvPath(): string {
+  if (serverEnvPathOverride !== null) {
+    return serverEnvPathOverride;
+  }
   return resolve(process.cwd(), '.env');
 }
 
+/** Test-only: override the .env path resolver so tests can point at a temp
+    file without touching the real server/.env. Production code never calls
+    this; it only exists for test dependency injection. */
+export function _setServerEnvPathForTest(path: string | null): void {
+  serverEnvPathOverride = path;
+}
+
 configRouter.post('/env-cleanup', async (req, res) => {
-  /* Allow tests to inject a path without touching the real server/.env.
-     Production callers omit this — it resolves to cwd/.env as usual. */
-  const queryPath = typeof req.query.envPath === 'string' ? req.query.envPath : undefined;
-  const envPath = queryPath ?? resolveServerEnvPath();
+  const envPath = resolveServerEnvPath();
 
   if (!existsSync(envPath)) {
     res.status(404).json({ error: `server .env not found at ${envPath}` });
