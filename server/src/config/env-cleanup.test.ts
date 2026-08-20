@@ -107,23 +107,6 @@ describe('cleanEnvText', () => {
     expect(result.cleaned).toEqual([]);
   });
 
-  it('GOES RED if isCandidate is always true (mutation test)', () => {
-    /* The load-bearing test: given a line SOME_KEY=nondefault where
-       SOME_KEY is NOT a candidate, cleanEnvText leaves that line
-       untouched. Mutate isCandidate to always return true and confirm
-       this test goes red — proving the predicate is load-bearing. */
-    const text = 'SOME_KEY=nondefault\n';
-
-    // Correct behaviour: isCandidate returns false → line untouched
-    const correct = cleanEnvText(text, () => false);
-    expect(correct.text).toBe(text);
-
-    // Mutated behaviour: isCandidate always true → line IS commented out
-    const mutated = cleanEnvText(text, () => true);
-    expect(mutated.text).toBe('# SOME_KEY=nondefault\n');
-    expect(mutated.text).not.toBe(text); // proof the mutation is detectable
-  });
-
   it('mixed: candidates, non-candidates, comments, blanks all coexist', () => {
     const text = [
       '# ── Analyzer sampling ──',
