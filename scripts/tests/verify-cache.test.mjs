@@ -542,7 +542,14 @@ test('stepTouchedByDiff: a .env.mock diff matches test:hooks via extraFiles (dev
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
-test('stepTouchedByDiff: a .gitignore diff matches test:hooks via extraFiles (gitignore-secrets.test.mjs reads it at runtime via git check-ignore)', () => {
+// #2532 review, finding C1 — gitignore-secrets.test.mjs drives
+// `git check-ignore` against .gitignore's OWN patterns at RUNTIME, no
+// module-graph edge, so the automated transitive-closure completeness guard
+// (which walks imports) cannot see this dependency. Without this extraFiles
+// entry, a .gitignore-only diff — precisely the shape that could silently
+// drop a secret pattern — prints test:hooks [cached] locally and skips its
+// CI leg too. Same #1847 trap as .env.mock above.
+test('stepTouchedByDiff: a .gitignore diff matches test:hooks via extraFiles (gitignore-secrets.test.mjs reads it at runtime)', () => {
   const diff = ['.gitignore'];
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });

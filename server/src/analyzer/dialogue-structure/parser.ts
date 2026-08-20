@@ -435,8 +435,38 @@ function isGuardSentenceEnd(line: string, i: number): boolean {
     The window is the CLAUSE, not the whole gap: scoping it to the gap was
     measured and only moved the corpus figure 265 -> 165, because a long
     paragraph's gap contains earlier sentence-final punctuation. Secondary-tier
-    only, so it is a measured no-op on every shipped table. */
+    only, so it is a measured no-op on every shipped table.
+
+    #2346 defect B (#2427) added a THIRD test, and it runs FIRST: a colon
+    immediately before the candidate (whitespace stripped) means the verb
+    introduces the turn rather than attributing one, so the guard declines
+    nothing at all there. That is a switch-off, not a narrowing — see the note
+    on the rule itself. The proxy remains wrong in the other direction too
+    (defect A: the guard is inert where no primary run precedes the candidate),
+    which is accepted, priced at <=21 of 1,164, and pinned in `parser.test.ts`.
+ */
 function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], conv: LanguageConventions): boolean {
+  /* #2346 defect B (#2427). A colon immediately before the candidate means the
+     verb INTRODUCES what follows — `sagte er …: «…»`, the Latin analogue of
+     CJK's `：`. Every test below assumes the opposite (that the verb ATTRIBUTES
+     a turn already parsed), so none of them may run on a leading tag.
+
+     Where this fires the guard is switched OFF entirely — it is an early
+     `return false` ahead of every other test, not an extra condition. That is
+     safe here only because the real corpus contains exactly TWO paragraphs
+     where it fires and both were read (`pg/de/63460.txt`, `pg/zh/52200.txt`);
+     it is an empirical bound, not a structural one, and it must be re-measured
+     if the tables or the corpus change.
+
+     The trailing-whitespace strip is LOAD-BEARING for the German paragraph
+     specifically: its colon is followed by a space. It is NOT load-bearing for
+     the Chinese one, which fires raw-adjacent (`：` is never followed by a
+     space in CJK) — the corpus carries ~266,900 raw colon-adjacent contexts,
+     not zero. Measured: remove the strip and corpus A/B still reports 1
+     changed paragraph (the zh one); only the German half is lost. */
+  const lastCh = line.slice(0, cand.start).replace(/\s+$/u, '').slice(-1);
+  if (lastCh === ':' || lastCh === '：') return false;
+
   let from = 0;
   let precededByPrimaryRun = false;
   for (const r of primaryRuns) {
