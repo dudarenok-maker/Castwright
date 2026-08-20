@@ -15,6 +15,7 @@ import {
   configValue,
   isEnvValueRejected,
   envCleanupCandidateKeys,
+  envCleanupCandidateKeysFromFileContent,
 } from './resolver.js';
 import { getKnob } from './registry.js';
 import * as us from '../workspace/user-settings.js';
@@ -383,5 +384,61 @@ describe('envCleanupCandidateKeys', () => {
     const keys = envCleanupCandidateKeys();
     // Ensure prompt knob never appears
     expect(keys.every(k => k !== 'prompt.castDetection')).toBe(true);
+  });
+});
+
+describe('envCleanupCandidateKeysFromFileContent — ambient-shadowing fix (#2194 finding 5)', () => {
+  it('does not mark as candidate when file value differs from default, even if process.env matches default', () => {
+    /* Regression test for the ambient-shadowing bug: the shell exports
+       STAGE2_MIN_COVERAGE=0.6 (the default), but the .env FILE has
+       STAGE2_MIN_COVERAGE=0.7 (a deliberate pin). process.loadEnvFile()
+       does NOT overwrite an already-set process.env key, so process.env
+       reads the shell's value (0.6). The old code checked process.env
+       and wrongly classified this as a candidate for cleanup. The fixed
+       code reads the file and correctly keeps it off the candidate list. */
+
+    // Set process.env to the default (simulating shell export)
+    process.env.STAGE2_MIN_COVERAGE = '0.6';
+
+    // But the .env file has a non-default value
+    const fileContent = 'STAGE2_MIN_COVERAGE=0.7\n';
+
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('marks as candidate when file value equals default', () => {
+    const fileContent = 'STAGE2_MIN_COVERAGE=0.6\n';
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('does not mark as candidate when key is missing from file', () => {
+    const fileContent = 'SOME_OTHER_KEY=value\n';
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('does not mark as candidate when file value is invalid', () => {
+    // File has an invalid value for this numeric knob
+    const fileContent = 'STAGE2_MIN_COVERAGE=not-a-number\n';
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('handles multiple keys in file correctly', () => {
+    /* Ensure the function distinguishes between candidates and non-candidates
+       when multiple keys are present. */
+    const fileContent =
+      'STAGE2_MIN_COVERAGE=0.6\n' +   // default — is a candidate
+      'STAGE2_MIN_COVERAGE=0.7\n' +   // later occurrence overwrites — not a candidate
+      'SEG_ASR_ENABLED=false\n';      // default boolean (default is false) — is a candidate
+
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+
+    // The later STAGE2_MIN_COVERAGE=0.7 overwrite means it's not default
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+    // SEG_ASR_ENABLED=false is the default for qa.asr.enabled
+    expect(candidates).toContain('qa.asr.enabled');
   });
 });

@@ -15,13 +15,27 @@
     Group 1: the var name (upper-case letters, digits, underscores).
     Group 2: the rest of the line (the value, including any trailing
     whitespace or inline comment — preserved verbatim on comment-out). */
-const ENV_LINE_RE = /^([A-Z0-9_]+)=(.*)$/gm;
+export const ENV_LINE_RE = /^([A-Z0-9_]+)=(.*)$/gm;
 
 export interface CleanEnvResult {
   /** The full file text after commenting-out. */
   text: string;
   /** Env-var NAMES actually commented out (in file order). */
   cleaned: string[];
+}
+
+/** Parse an env file's uncommented KEY=VALUE lines into a map of name -> value.
+    Commented-out lines, blanks, and section headers are ignored.
+    Returns a Map where each key appears at most once (file order preserved —
+    later occurrences overwrite earlier ones, matching .env semantics). */
+export function parseEnvFileLines(fileContent: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const regex = new RegExp(ENV_LINE_RE.source, ENV_LINE_RE.flags);
+  let match;
+  while ((match = regex.exec(fileContent)) !== null) {
+    map.set(match[1], match[2]);
+  }
+  return map;
 }
 
 /** Comment out every uncommented `KEY=VALUE` line whose KEY satisfies

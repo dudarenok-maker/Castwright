@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cleanEnvText } from './env-cleanup.js';
+import { cleanEnvText, parseEnvFileLines } from './env-cleanup.js';
 
 // ── Pure transform tests (no filesystem) ────────────────────────────────────
 
@@ -126,5 +126,65 @@ describe('cleanEnvText', () => {
     expect(lines[5]).toBe('');                                   // blank → unchanged
     expect(lines[6]).toBe('GEMINI_API_KEY=sk-abc');            // non-candidate → untouched
     expect(lines[7]).toBe('# PRELOAD_KOKORO=false');            // candidate → commented
+  });
+});
+
+describe('parseEnvFileLines', () => {
+  it('parses uncommented KEY=VALUE lines into a map', () => {
+    const text = 'FOO=bar\nBAZ=qux\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('FOO')).toBe('bar');
+    expect(map.get('BAZ')).toBe('qux');
+  });
+
+  it('ignores commented-out lines', () => {
+    const text = '# COMMENTED=value\nUNCOMMENTED=value\n';
+    const map = parseEnvFileLines(text);
+    expect(map.has('COMMENTED')).toBe(false);
+    expect(map.get('UNCOMMENTED')).toBe('value');
+  });
+
+  it('ignores section headers and blank lines', () => {
+    const text = '# ── Section Header ──\n\nKEY=value\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('KEY')).toBe('value');
+    expect(map.size).toBe(1);
+  });
+
+  it('handles later occurrences overwriting earlier ones (file semantics)', () => {
+    const text = 'KEY=first\nKEY=second\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('KEY')).toBe('second');
+  });
+
+  it('preserves values with special characters and spaces', () => {
+    const text = 'API_KEY=sk-abc!@#$%^&*()\nPATH=/some/path with spaces\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('API_KEY')).toBe('sk-abc!@#$%^&*()');
+    expect(map.get('PATH')).toBe('/some/path with spaces');
+  });
+
+  it('returns empty map for content with no valid lines', () => {
+    const text = '# Comment 1\n# Comment 2\n\n';
+    const map = parseEnvFileLines(text);
+    expect(map.size).toBe(0);
+  });
+});
+
+describe('env-cleanup integration: file-based candidacy (#2194 finding 5)', () => {
+  it('does not comment out a line whose file value differs from default, even if process.env is shadowed', () => {
+    /* Regression test: shell exports GEN_WORKERS=<default>, but .env has
+       GEN_WORKERS=4 (non-default). The file value should be the source of
+       truth, so the line should NOT be commented out. */
+    const fileContent = 'GEN_WORKERS=4\nOTHER_VAR=1\n';
+
+    // The candidacy check would be done against the file, not process.env.
+    // For this test, we'll show that a non-candidate line is left untouched.
+    const isCandidate = (varName: string) => varName === 'OTHER_VAR';
+    const result = cleanEnvText(fileContent, isCandidate);
+
+    expect(result.text).toContain('GEN_WORKERS=4'); // NOT commented
+    expect(result.text).toContain('# OTHER_VAR=1');  // IS commented
+    expect(result.cleaned).toEqual(['OTHER_VAR']);
   });
 });

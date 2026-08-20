@@ -2,6 +2,7 @@ import type { ConfigKnob, KnobValueState } from './types.js';
 import { allKnobs } from './registry.js';
 import { readConfigOverrides } from '../workspace/user-settings.js';
 import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { parseEnvFileLines } from './env-cleanup.js';
 
 function parseEnv(knob: ConfigKnob, raw: string): number | boolean | string | null {
   const r = coerceAndValidate(knob, raw);
@@ -154,6 +155,35 @@ export function envCleanupCandidateKeys(): string[] {
     if (k.isPrompt || !k.env) continue;
     const state = resolveKnob(k);
     if (state.source === 'env' && state.effective === k.default) out.push(k.key);
+  }
+  return out;
+}
+
+/** Knob keys whose env-file line value equals the shipped default.
+    This determines candidacy by reading the actual .env FILE's content,
+    not process.env — fixing the ambient-shadowing bug where a shell
+    exports a variable with the default value, masking a deliberately-
+    pinned .env value (#2194 finding 5). The file value is the source of
+    truth for which lines should be cleaned up; process.env can be
+    shadowed by the shell/OS before .env is loaded.
+
+    @param fileContent  Full text of the server/.env file */
+export function envCleanupCandidateKeysFromFileContent(fileContent: string): string[] {
+  const out: string[] = [];
+  const fileValues = parseEnvFileLines(fileContent);
+
+  for (const k of allKnobs()) {
+    if (k.isPrompt || !k.env) continue;
+
+    // Get the value from the .env file itself
+    const fileValue = fileValues.get(k.env);
+    if (fileValue === undefined) continue; // Key not in file
+
+    // Parse and validate the file value
+    const r = coerceAndValidate(k, fileValue);
+    if (r.ok && r.value === k.default) {
+      out.push(k.key);
+    }
   }
   return out;
 }

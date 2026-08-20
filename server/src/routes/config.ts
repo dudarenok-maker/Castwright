@@ -15,7 +15,7 @@ import { resolve, join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { allKnobDescriptors } from '../config/descriptors.js';
-import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate, envCleanupCandidateKeys } from '../config/resolver.js';
+import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate, envCleanupCandidateKeysFromFileContent } from '../config/resolver.js';
 import { cleanEnvText } from '../config/env-cleanup.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { PAIR_RULES } from '../config/pair-rules.js';
@@ -57,13 +57,28 @@ async function ensureGpuDeviceListWarm(): Promise<void> {
 configRouter.get('/', async (_req, res) => {
   await ensureGpuDeviceListWarm();
   const descriptors = allKnobDescriptors();
+
+  // Determine env cleanup candidates from the actual .env file content,
+  // not from process.env (which can be shadowed by the shell/OS).
+  let envCleanupCandidates: string[] = [];
+  const envPath = resolveServerEnvPath();
+  if (existsSync(envPath)) {
+    try {
+      const fileContent = readFileSync(envPath, 'utf-8');
+      envCleanupCandidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    } catch {
+      // If we can't read the file, fall back to empty list
+      // (the POST handler will report the error when it tries)
+    }
+  }
+
   res.json({
     groups: GROUPS,
     descriptors,
     values: resolveAll(),
     restartPending: false,
     cudaEnvShadow: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.CUDA_DEVICE_ORDER),
-    envCleanupCandidates: envCleanupCandidateKeys(),
+    envCleanupCandidates,
   });
 });
 
@@ -219,8 +234,19 @@ configRouter.post('/env-cleanup', async (req, res) => {
     return;
   }
 
+  let original: string;
+  try {
+    original = readFileSync(envPath, 'utf-8');
+  } catch (err) {
+    res.status(500).json({ error: `failed to read ${envPath}: ${(err as Error).message}` });
+    return;
+  }
+
   // Re-derive the candidate set AT WRITE TIME — never trust a cached GET response.
-  const candidateKeys = envCleanupCandidateKeys();
+  // Determine candidacy from the actual .env FILE's content, not process.env,
+  // to avoid the ambient-shadowing bug where the shell exports a variable with
+  // the default value, masking a deliberately-pinned .env value (#2194 finding 5).
+  const candidateKeys = envCleanupCandidateKeysFromFileContent(original);
   const candidateSet = new Set(
     candidateKeys
       .map((key) => {
@@ -229,14 +255,6 @@ configRouter.post('/env-cleanup', async (req, res) => {
       })
       .filter((env): env is string => env != null),
   );
-
-  let original: string;
-  try {
-    original = readFileSync(envPath, 'utf-8');
-  } catch (err) {
-    res.status(500).json({ error: `failed to read ${envPath}: ${(err as Error).message}` });
-    return;
-  }
 
   const result = cleanEnvText(original, (varName) => candidateSet.has(varName));
 
