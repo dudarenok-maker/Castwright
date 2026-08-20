@@ -53,7 +53,7 @@ vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
   return {
     ...actual,
-    selectTtsProvider: () => ({ synthesize: vi.fn() }),
+    selectTtsProvider: vi.fn(() => ({ synthesize: vi.fn() })),
   };
 });
 /* No sidecar in the test. The preload gate now POLLS through a respawn (plan
@@ -507,10 +507,11 @@ describe('POST /api/books/:bookId/generation', () => {
       .send({ modelKey: 'not-a-real-model' });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks).toHaveLength(1);
+    expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].chapterId).toBeUndefined();
     expect(ticks[0].errorReason).toMatch(/modelKey/i);
+    expect(ticks[1].type).toBe('idle');
   });
 
   it('srv-28: emits a disk_low warning tick (warn mode) when free space is tight, run proceeds', async () => {
@@ -536,11 +537,61 @@ describe('POST /api/books/:bookId/generation', () => {
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks).toHaveLength(1);
+    expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].errorCode).toBe('disk-full');
     expect(ticks[0].chapterId).toBeUndefined();
     expect(String(ticks[0].remediation)).toMatch(/free up disk space/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('emits idle after a book-not-found chapter_failed', async () => {
+    const res = await request(app)
+      .post(`/api/books/does-not-exist/generation`)
+      .send({ modelKey: 'gemini-2.5-flash' });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(String(ticks[0].errorReason)).toMatch(/No book found/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('emits idle after a provider-selection chapter_failed', async () => {
+    const { selectTtsProvider } = await import('../tts/index.js');
+    const mockedSelect = selectTtsProvider as unknown as ReturnType<typeof vi.fn>;
+    mockedSelect.mockImplementationOnce(() => {
+      throw new Error('no provider available in test');
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash' });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(String(ticks[0].errorReason)).toMatch(/no provider available/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('emits idle after a cast-not-confirmed chapter_failed', async () => {
+    const fsModule = await import('node:fs');
+    const castPath0 = join(bookDir, '.audiobook', 'cast.json');
+    const originalCast = fsModule.readFileSync(castPath0, 'utf8');
+    fsModule.writeFileSync(castPath0, JSON.stringify({ characters: [] }));
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash' });
+      expect(res.status).toBe(200);
+      const ticks = parseTicks(res.text);
+      expect(ticks).toHaveLength(2);
+      expect(ticks[0].type).toBe('chapter_failed');
+      expect(String(ticks[0].errorReason)).toMatch(/Cast not confirmed/i);
+      expect(ticks[1].type).toBe('idle');
+    } finally {
+      fsModule.writeFileSync(castPath0, originalCast);
+    }
   });
 
   /* ── Pause endpoint + sticky-across-reload contract ──────────────── */
@@ -1037,9 +1088,10 @@ describe('POST /api/books/:bookId/generation — plan 70c auto-heal', () => {
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks).toHaveLength(1);
+    expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].errorReason as string).toMatch(/No analysed sentences cached/i);
+    expect(ticks[1].type).toBe('idle');
   });
 });
 
@@ -1220,6 +1272,8 @@ describe('POST /api/books/:bookId/generation — unsupported persisted language 
     expect(failed?.errorReason as string).toMatch(
       /unsupported language reached the voice pipeline/i,
     );
+    const idleTick = ticks[ticks.length - 1];
+    expect(idleTick.type).toBe('idle');
   });
 });
 

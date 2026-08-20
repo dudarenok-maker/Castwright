@@ -733,6 +733,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       errorReason:
         'modelKey must be a supported TTS model id (e.g. coqui-xtts-v2, gemini-2.5-flash).',
     });
+    send({ type: 'idle' });
     return res.end();
   }
   const modelKey: TtsModelKey = body.modelKey;
@@ -752,12 +753,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     provider = selectTtsProvider(modelKey);
   } catch (e) {
     send({ type: 'chapter_failed', errorReason: (e as Error).message });
+    send({ type: 'idle' });
     return res.end();
   }
 
   const located = await findBookByBookId(bookId);
   if (!located) {
     send({ type: 'chapter_failed', errorReason: `No book found for id "${bookId}".` });
+    send({ type: 'idle' });
     return res.end();
   }
   const { bookDir, state } = located;
@@ -771,6 +774,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       type: 'chapter_failed',
       errorReason: 'Cast not confirmed yet — open the cast view first.',
     });
+    send({ type: 'idle' });
     return res.end();
   }
 
@@ -831,6 +835,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       sidecarLang = sidecarLanguageName(bookLanguage);
     } catch (e) {
       send({ type: 'chapter_failed', errorReason: (e as Error).message });
+      send({ type: 'idle' });
       return res.end();
     }
     const clearedVoices = await clearMismatchedDesignedVoices(
@@ -922,6 +927,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       `Qwen, then regenerate.`;
     console.warn(`[generation] ${message}`);
     send({ type: 'chapter_failed', errorReason: message });
+    send({ type: 'idle' });
     return res.end();
   }
   if (qwenUnavailable && nonEnglishBook && coquiEligible) {
@@ -1002,6 +1008,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       type: 'chapter_failed',
       errorReason: 'No analysed sentences cached for this book. Re-run analysis first.',
     });
+    send({ type: 'idle' });
     return res.end();
   }
 
@@ -1056,6 +1063,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             'Free up disk space on the workspace volume (delete old exports, or move the ' +
             'workspace to a larger drive), then start the run again.',
         });
+        send({ type: 'idle' });
         return res.end();
       }
     } catch (e) {
