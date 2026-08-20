@@ -1,22 +1,34 @@
-# On-box sitting pack — cloning + character-identity (A24, A26, A31, A32, A44, A45, A46, A47)
+# On-box sitting pack — cloning + character-identity (A24, A26, A31, A32, A33, A43, A44, A45, A46, A47)
 
 > **Sitting pack** for wave 2 of `#2435`, step 6 of the `#2453` chain. Covers
-> register rows **A24, A26, A31, A32, A44, A45, A46, A47** — clone-derive,
-> clone-readiness, `characterId` drift and resolution, Russian XTTS quality,
-> entity decode, and the audition-centroid fix. Follows the shared format
-> fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the
-> re-resolution rule of §6 was applied to every row (see
+> register rows **A24, A26, A31, A32, A33, A43, A44, A45, A46, A47** —
+> clone-derive, clone-readiness, `characterId` drift and resolution, Russian
+> XTTS quality, entity decode, and the audition-centroid fix. Follows the
+> shared format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5;
+> the re-resolution rule of §6 was applied to every row (see
 > [`## Excluded on re-resolution`](#excluded-on-re-resolution) — nothing was
 > excluded).
 >
-> **Box/card target:** the operator's GPU box, **single 8 GB card**, pinned
-> via `CUDA_VISIBLE_DEVICES=0`.
+> **A33 and A43 added 2026-08-20**, wave-3 step 9 of `#2497`, per
+> `docs/testing/onbox-wave3-plan.md` §§2-3: both rows' remaining debt is a
+> real TTS render + human listening (A33 §8.7) and/or a live-browser Cast-
+> screen observation (A33 §8.8, A43 steps 2-3/5) — neither is agent-runnable,
+> and both are the same character-identity family already anchored here by
+> A32, on the same real workspace. Wave-3 step 4 confirmed both verdicts by
+> re-reading the plan's own citations; no new evidence was gathered beyond
+> that re-resolution.
 >
-> **Running time total (recomputed 2026-08-20):** **170 minutes** — A24 ≈ 30,
-> A26 ≈ 15, A31 ≈ 30, A32 ≈ 20, A44 ≈ 20, A45 ≈ 20, A46 ≈ 10, A47 ≈ 25. Sum =
-> 170, matching the plan of record's stated total for this pack
-> ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1) exactly — all eight
-> rows re-resolved as still owed, so nothing changed the arithmetic.
+> **Box/card target:** the operator's GPU box, **single 8 GB card**, pinned
+> via `CUDA_VISIBLE_DEVICES=0` (A32/A33). A43 needs no GPU — script + browser
+> only.
+>
+> **Running time total (recomputed 2026-08-20):** **170 minutes** for the
+> original eight rows (A24 ≈ 30, A26 ≈ 15, A31 ≈ 30, A32 ≈ 20, A44 ≈ 20,
+> A45 ≈ 20, A46 ≈ 10, A47 ≈ 25 — matching
+> [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1 exactly), **plus
+> ≈ 30 minutes for A33 (§8.7/§8.8: one re-render + listen, one Cast-screen
+> cross-check) and ≈ 20 minutes for A43 (dry-run baseline, UI link, dry-run
+> confirm, negative-case UI check)** — new total **≈ 220 minutes**.
 
 ## Preconditions
 
@@ -56,6 +68,18 @@ Stated once for the sitting; do not repeat per row.
       access** (A46) — `taskkill`/Task Manager, ability to bind a foreign
       listener on `:9000`, ability to start a fresh sidecar manually, and
       ability to set `SIDECAR_NEVER_ADOPT` on the server process.
+- [ ] **A33/A43 (added 2026-08-20):** the same *Заказ Коалфолла* real
+      workspace book already staged for A32-adjacent work (`.audiobook/cast-
+      id-history.json` should already carry `mayrin→mairin`,
+      `coalfall→coalfall-dragon` from the wave-3 `--apply` run of 2026-08-05
+      — confirm present before starting, do not re-run `--apply`), plus
+      *Everblaze* for A33's second aliased book. A43 additionally needs
+      *Exile* (its `unknown-male`/`unknown-female` negative-control rows)
+      and a book with a real needs-your-decision row to link (e.g. *Exile*'s
+      `silveny` or *Everblaze*'s `lady-alina` — confirm via a dry run of
+      `scripts/repair-cast-id-drift.mjs` before the sitting which id has
+      real rendered segments behind it). A live browser on the Cast screen
+      (`#/books/<id>/cast`) for both rows' UI checks.
 - [ ] SHA and a clean tree recorded below.
 
 SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
@@ -181,6 +205,62 @@ last, alone, since it deliberately crashes the sidecar twice.
     no longer named; `pool-player-2` still named).
     - Result:
 
+### A33 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
+
+> **Criteria source:** [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
+> §8.7–§8.8 — cited, not restated. **Added 2026-08-20**, wave-3 step 9, per
+> `docs/testing/onbox-wave3-plan.md` §2. The write path (`--apply`) is
+> already DISCHARGED (register row A33, run 2026-08-05) — **do not re-run
+> `--apply`**. Only §8.7 (does the fix reach actual audio) and §8.8
+> (Cast-screen banner cross-check) remain owed, both because they need a
+> real render + human listening and a live-browser observation respectively
+> — neither is agent-runnable. Same book/Qwen residency as A32 above.
+
+26. Run §8.7 — re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall`
+    orphaned chapter) and confirm the fresh `segments.json` gains
+    `characterSnapshots` entries for `mayrin`/`coalfall` naming their own
+    live voices, not the narrator. **Listen** to confirm audibly — this is
+    the criterion, not just the JSON.
+    - Result:
+27. Run §8.8 — Cast-screen cross-check for both aliased books: *Заказ
+    Коалфолла*'s auto-reconciled section now names `mairin`/`coalfall-
+    dragon`; *Everblaze*'s names `dame-alina`. Needs-your-decision still
+    names the ~93 ids untouched by the wave-3 `--apply` run (spot-check
+    `unknown-male` in *Exile* as the negative control).
+    - Result:
+
+### A43 · Linking an orphaned `characterId` through the Cast screen actually reconnects its segments ([#2238](https://github.com/dudarenok-maker/Castwright/issues/2238), plan [278](../features/278-cast-character-identity.md))
+
+> **Criteria source:** `onbox-acceptance-register.md` A43 — full procedure
+> already spelled out there, cited not restated. **Added 2026-08-20**,
+> wave-3 step 9, per `docs/testing/onbox-wave3-plan.md` §3. Steps 1 and 4
+> below (dry-run counts) are script-only and could in principle run
+> unattended, but are included here so the whole row discharges in one
+> sitting — the load-bearing steps (2, 3, and half of 5) need a real browser
+> and cannot run any other way.
+
+28. With the server **stopped**, run
+    `WORKSPACE_DIR="C:/AudiobookWorkspace" node scripts/repair-cast-id-drift.mjs`
+    and record `reported for human decision`. Check the `books scanned:`
+    line first.
+    - Result:
+29. Start the server, open `#/books/<id>/cast` for the book/id chosen in
+    Preconditions, pick the right character in that row's **Compare
+    against…**, press **Link to this character**. Confirm the row leaves
+    "needs your decision" and appears under **auto-reconciled**, and that
+    `.audiobook/cast-id-history.json` gained a `supersededBy` entry.
+    - Result:
+30. Stop the server, re-run the dry pass, confirm the reported count
+    dropped by that id and `re-render candidates` dropped by its segment
+    count.
+    - Result:
+31. **The negative case.** Open *Exile*, whose `unknown-male` row carries 21
+    segments across 3 chapters. Confirm the link action is **disabled** on
+    that row with a visible reason (rendered UI, not just an API check), and
+    that a direct `POST .../link-orphan-match` with
+    `orphanedId: "unknown-male"` returns **400**.
+    - Result:
+
 ### A45 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
 
 > **Criteria source:** `onbox-acceptance-register.md` A45. Re-resolved
@@ -296,9 +376,18 @@ last, alone, since it deliberately crashes the sidecar twice.
 
 ## Excluded on re-resolution
 
-None excluded. All eight rows were re-resolved against live repo/issue/PR
+None excluded. All ten rows were re-resolved against live repo/issue/PR
 state and the plan-of-record/run-sheet files themselves on 2026-08-20 and
 remain owed:
+
+- **A33** — write path (`--apply`) already DISCHARGED 2026-08-05, not
+  re-litigated. §8.7 (render + listen) and §8.8 (Cast-screen cross-check)
+  re-confirmed still owed by wave-3 step 4/9 (re-read the plan's own §2
+  citation, nothing new found). STILL OWED, OPERATOR-only.
+- **A43** — #2238's acceptance criterion 5 is explicitly "linked through the
+  UI"; wave-3 step 4/9 confirmed no API-only substitute exists anywhere in
+  the row's own text. STILL OWED, OPERATOR-only (steps 1/4 are script-only
+  and included here for convenience, not because they need a sitting).
 
 - **A24** — `gh issue view 1951/1972/1969` all closed as the row describes;
   plan 275 Ship notes still record Step 2 and Step 3/C-17 as NOT RUN, no
@@ -337,6 +426,8 @@ A16's genuine frontmatter-vs-body contradiction handled in
 - [ ] Restore the *Playing with Fire* workspace book from the backups taken
       in Preconditions if either re-render (A32 §§13-14) needs reverting, or
       confirm the new state is intentionally kept.
+- [ ] Confirm *Заказ Коалфолла* ch2's re-render (A33 §8.7) is intentionally
+      kept or reverted — same backup-before-reverting discipline as A32.
 - [ ] Confirm any A26 static-FFmpeg-box changes (env vars, PATH) are left as
       found.
 - [ ] Confirm the card returns to baseline (`nvidia-smi` ≈ idle) before

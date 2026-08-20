@@ -161,11 +161,38 @@ cache with every sentence's leading dash stripped
 (`s/^\s*[-–—]\s*//` on `text`). Diff the two JSON reports — **every field of
 every row must be identical.**
 
-**Result: NOT YET RUN.** The equivalent property is pinned in
+**Result: RUN 2026-08-20, from wave-3 step 4, worktree `wt-2497-onbox-wave3-run`
+@ `f260ce93`. FAILS the invariance property on 1 of 23 books.** 22 of 23 books
+are byte-identical across every measured field between the straight run and
+the dash-stripped run. `Ночной дозор (Tetralogy)` — the corpus's heaviest
+dash-convention book (`dashOnlySpoken` 1719/1940) — diverges on 8 book-level
+fields and 6 chapter-level fields: `narratorIdSpoken` 229→223,
+`unknownOriginNarrator` 229→223, `share` 0.1302→0.1273, `unattributedSpeech`
+9→7, `splitSpeech` 337→346, `tagNarratorSpan` 544→536, plus per-chapter
+`attributableSpoken`/`narratorIdSpoken`/`unattributedSpeech` shifts of 1-2 in
+chapters 0, 5, 6, 7, 8. Full diff: [`onbox-wave3-results/step-4-real-workspace-scripts.md`](onbox-wave3-results/step-4-real-workspace-scripts.md).
+**Mechanism:** `alignSentences` (`server/src/analyzer/dialogue-structure/aligner.ts:317,360`)
+locates each cached sentence in the chapter body by substring-searching
+`normalize(s.text)` (the needle) against the normalized body (the haystack).
+Stripping a leading dash from the *cached copy's* `text` changes the needle
+for every dash-led line without touching the body being searched, which
+shifts which body offsets the needle locates at for at least some of those
+lines — moving spans between `unattributedSpeech`/`splitSpeech`/attributed
+buckets with no actual attribution change, exactly the D14 property this
+metric's own header comment (`attribution-health.ts:9-11`) says must never
+happen from re-punctuation alone. `dashOnlySpoken` itself does not move
+(it's computed straight from `body`, never from cached `text` —
+`attribution-health.ts:198-219` — so it's outside the blast radius), which is
+why only the alignment-derived fields shift.
+**Fix decision owed:** whether `alignSentences`' needle should itself be
+normalized against a leading-dash-tolerant match (so a model transcript that
+includes or omits the paragraph's opening dash marker locates the same span
+either way), scoped to `server/src/analyzer/dialogue-structure/aligner.ts`.
+The equivalent property is pinned in
 `server/src/store/attribution-health.criteria.test.ts`'s two-tier
 punctuation-invariance suite (Tier A/B, per-language-family fixtures) and
-confirmed there; this is the real-corpus repeat of that same check, still
-owed.
+passes there — this real-corpus run is what surfaces the gap the synthetic
+fixtures don't cover.
 
 ## 5 · D13 verdict — re-measure the orphan-share gap under the current unit
 

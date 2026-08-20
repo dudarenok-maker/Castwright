@@ -197,42 +197,44 @@ Wave 1 (§§1-6 above) resolves drift that already exists, at render time. Wave 
 - [ ] `cast.json` and (absence of) `cast-id-history.json` recorded below *before* re-analysing.
 - [ ] SHA and a clean tree recorded below.
 
-SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
+SHA: `c0c988eed781`  Clean tree: ☑  Date: `2026-08-20`  Run by: `Claude (wave-3 step 5, wt-2497-onbox-wave3-run)`
 
 ### 7.4 Before re-analysis — record the baseline
 
 Read `.audiobook/cast.json` for *Заказ Коалфолла* directly.
 
-Result (`cast.json` id for Мэйрин): ______________ (expect `mairin`)
+Result (`cast.json` id for Мэйрин): `mairin` (matches expected)
 
-Result (`cast.json` id for Коалфолл): ______________ (expect `coalfall-dragon`)
+Result (`cast.json` id for Коалфолл): `coalfall-dragon` (matches expected)
 
-Result (`.audiobook/cast-id-history.json` present?): ______________ (expect: absent)
+Result (`.audiobook/cast-id-history.json` present?): **PRESENT — re-resolution discrepancy from this doc's stated precondition.** Contents (read directly before re-analysing): `{"supersededBy":{"mayrin":"mairin","coalfall":"coalfall-dragon"},"seq":1,"recordedAtIso":{"mayrin":"2026-08-11T04:36:43.849Z","coalfall":"2026-08-11T04:36:43.849Z"}}` — dated 2026-08-11, i.e. some prior real run (not this session, and not attributable to any Wave-3 step run before this one) already exercised Wave 2's retirement path against this book once. This section's own §7.2 states the file was absent as of 2026-08-04; that was true then and is stale now. Per `onbox-sitting-plan.md` §6's re-resolution rule, this is recorded rather than silently trusted, and the run below proceeds anyway (the row's job is to re-analyse *again* and confirm the ids are still kept, which is independent of whether an earlier run already produced one supersession).
 
 ### 7.5 Re-analyse the book
 
 Trigger a **full** re-analysis of *Заказ Коалфолла* (not a subset/chapter re-analysis — the early remap ships on both the main and subset paths, but only the main path is exercised by simply re-running analysis on an unedited manuscript). Let it complete.
 
+**Run record:** `POST /api/manuscripts/mns_af35ec3ced/analysis` (SSE), local Ollama `qwen36-cw-iq4-32k:latest`, against a worktree server bound to `WORKSPACE_DIR=C:\AudiobookWorkspace` on isolated port 8190. Started 2026-08-20 15:43:07, completed 16:02:50 (real wall-clock ~19m43s — the SSE capture connection itself dropped partway through, but the job ran to completion server-side independent of that connection, confirmed by `server/dist` log timestamps and `cast.json`'s own mtime moving to 16:02:50).
+
 ### 7.6 After re-analysis — confirm the id was kept, or the change was recorded
 
 Read `.audiobook/cast.json` and `.audiobook/cast-id-history.json` again.
 
-Result (`cast.json` id for Мэйрин, still `mairin`?): ______________
+Result (`cast.json` id for Мэйрин, still `mairin`?): **YES — unchanged.**
 
-Result (`cast.json` id for Коалфолл, still `coalfall-dragon`?): ______________
+Result (`cast.json` id for Коалфолл, still `coalfall-dragon`?): **YES — unchanged.**
 
-**If both ids are unchanged:** that is the primary proof — the early remap adopted the cast's existing ids instead of persisting whatever the analyzer minted this run, even though the analyzer is free (and was observed, on the run that produced the 21 already-orphaned segments) to mint a different string for the same character.
+**Both ids are unchanged** — the primary proof holds. Stronger than a coincidental match: the analyzer's *raw* fresh ids this run were `мэйрин` and `коалфолл` (lowercase Cyrillic, genuinely different strings from `mairin`/`coalfall-dragon`), confirmed by the new `cast-id-history.json` entries below — so the early remap demonstrably did something, not just reproduced the kept ids on its own.
 
-**If either id changed anyway** (the analyzer's output is non-deterministic in both directions — a match this run isn't guaranteed either): confirm `.audiobook/cast-id-history.json` now exists and its `supersededBy` map records an entry from the analyzer's fresh id to the cast's kept id (e.g. `"mayrin": "mairin"`) — proving the retirement went through `retireCharacterId` and was recorded, rather than silently dropped the way every pre-Wave-2 rebuild-from-field-list site did (design §4.1).
+**Either id changed anyway** — yes, at the raw-analyzer-output layer (see above), correctly caught and recorded.
 
-Result (history entry present and correctly directed, if applicable): ______________
+Result (history entry present and correctly directed, if applicable): **YES.** `cast-id-history.json`'s `supersededBy` map gained three new entries this run (seq 2-4, `recordedAtIso` 2026-08-20T06:02:50.3xxZ, i.e. this session): `"мэйрин": "mairin"`, `"коалфолл": "coalfall-dragon"`, and `"widow-casper": "widow-kasper"` (a third character, Вдова Каспер, whose id the analyzer also drifted this run — same correct mechanism, an extra data point beyond the row's own two named characters). All three are correctly directed (fresh id → the cast's kept id), proving `retireCharacterId` fired and was recorded for all three, not silently dropped.
 
-Result (roster otherwise intact — still 13 characters, no duplicate row, no character silently renamed onto another's id): ______________
+Result (roster otherwise intact — still 13 characters, no duplicate row, no character silently renamed onto another's id): **FAILS.** Roster grew from 13 to **16** characters. One addition is legitimate (`unknown-man` / "Неизвестный мужчина", a background voice not previously detected — a real, small manuscript, so a miss/catch either way is plausible and not itself a defect). The other two are a genuine regression: `brann-wire` ("Бранн Уир") and `berrin-wire` ("Беррин Уир") are **near-duplicate rows** of the pre-existing `brann-weir` ("Бранн") and `berrin-weir` ("Беррин") — same role ("Один из близнецов-каменщиков"/quarry-working twins), same evidence quotes verbatim (e.g. "Так это, стало быть, дракон?"), confirming these are the same two characters, not new ones. Neither pair appears in `cast-id-history.json`'s `supersededBy` map — the name-fallback match never fired for them, so no retirement happened; they simply coexist as orphaned duplicates now. **Root cause (for a fix agent, cold):** the name-fallback match in `server/src/store/merge-analysis-cast.ts` keys on an exact normalized-name equality (`nameOf()` at `:205-206`, `normaliseForMatch(c.name)`, consumed by the fallback lookup at `:282-284`, `dropMatchCandidateByName.get(key)`). This run's analyzer output included a surname for both twins ("Бранн Уир"/"Беррин Уир") where the existing cast held only the given name ("Бранн"/"Беррин") — the normalized keys differ, so the fallback candidate is never found and a fresh id (`brann-wire`/`berrin-wire`) is minted instead of retiring onto the existing one. This is exactly the split-identity failure mode this row's own text (and B4, riding the same run) names as "the one way this change could make things worse rather than better."
 
 ### 7.7 Outcome
 
-- [ ] §§7.4-7.6 run
-- [ ] Defects filed: ____________________________________
+- [x] §§7.4-7.6 run — 2026-08-20, real local-Ollama re-analysis against the live workspace book, evidence above.
+- [x] Defects filed: **not filed as a GitHub issue by this step** (docs-only wave-3 step, per the campaign rule this is reported for a fix agent to pick up cold rather than fixed or filed here) — full detail recorded in `docs/testing/onbox-wave3-results/step-5-group-b.md` and above. Mechanism: `server/src/store/merge-analysis-cast.ts:205-206,282-284` (exact-name-match fallback has no tolerance for a name gaining/losing a trailing surname token between analyzer runs).
 
 Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
 
