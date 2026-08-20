@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { scrubGitEnv } from '../git-env.mjs';
 
 const repoRoot = process.cwd();
 
@@ -15,14 +16,18 @@ const repoRoot = process.cwd();
  * whether that path happens to be tracked. Uses `--no-index` (#2531 review,
  * finding 2): without it, `git check-ignore` skips pattern-matching
  * entirely for a path that is already in the index and reports "not
- * ignored" regardless of what the patterns say — which would make the
- * `.env.example` negative control below pass for the wrong reason (it
- * reports "not ignored" just because it's tracked, not because `!.env.example`
- * actually matched).
+ * ignored" regardless of what the patterns say — the negative control below
+ * would then report "not ignored" just because the file is tracked, not
+ * because pattern matching actually ran and found no match. `scrubGitEnv`
+ * (#2532 review round 3, finding 1) stops an ambient GIT_DIR/GIT_WORK_TREE
+ * from silently redirecting this call to a different repository than the
+ * `cwd` it's pinned to — the #2169/#2216 class `scripts/lib/module-graph.mjs`'s
+ * own `check-ignore` caller already guards against.
  */
 function isGitIgnored(filePath) {
   const result = spawnSync('git', ['check-ignore', '-q', '--no-index', filePath], {
     cwd: repoRoot,
+    env: scrubGitEnv(),
   });
   if (result.error || result.status === null) {
     throw new Error(
@@ -92,10 +97,10 @@ test('gitignore: server/.env.save is ignored', () => {
   assert.equal(isGitIgnored('server/.env.save'), true, 'server/.env.save should be gitignored');
 });
 
-test('gitignore: .env.example is NOT ignored (is tracked)', () => {
+test('gitignore: server/.env.example is NOT matched by the ignore patterns', () => {
   assert.equal(
     isGitIgnored('server/.env.example'),
     false,
-    'server/.env.example is an intentional tracked file'
+    'server/.env.example is an intentional tracked file and must not match any secret pattern'
   );
 });
