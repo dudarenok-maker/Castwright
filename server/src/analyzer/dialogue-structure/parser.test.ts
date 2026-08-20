@@ -553,7 +553,7 @@ describe('parser — #2346 defect B: a colon-introduced turn is not eaten by the
   });
 
   it('de: a colon-introduced turn with NO whitespace before the quote also survives', () => {
-    expect(spoken('„Guten Tag\", sagte er. Dann sagte er:«Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
+    expect(spoken('„Guten Tag", sagte er. Dann sagte er:«Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
   });
 
   /* The full-width `：` arm must use a SECONDARY zh pair. `“…”` is a zh PRIMARY
@@ -570,7 +570,7 @@ describe('parser — #2346 defect B: a colon-introduced turn is not eaten by the
   });
 
   it('de: a TRAILING tag is still declined — the guard is not disabled generally', () => {
-    expect(spoken('„Guten Tag\", sagte «Ulebuhle». Und dann ging er.', 'de')).toEqual(['Guten Tag']);
+    expect(spoken('„Guten Tag", sagte «Ulebuhle». Und dann ging er.', 'de')).toEqual(['Guten Tag']);
   });
 });
 
