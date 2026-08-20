@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { cleanEnvText, parseEnvFileLines } from './env-cleanup.js';
+import { allKnobs } from './registry.js';
+import { coerceAndValidate } from './resolver.js';
 
 // ── Pure transform tests (no filesystem) ────────────────────────────────────
 
@@ -378,34 +380,26 @@ export ANALYZER_OLLAMA_CONCURRENCY=2
 # End of config
 `;
 
-    // Known default candidates (these vars have values matching registry defaults
-    // in the fixture above and should be commented out)
-    const candidateVars = new Set([
-      'OLLAMA_TEMPERATURE',           // 0.2 (default)
-      'OLLAMA_RETRY_TEMPERATURE',     // 0.6 (default)
-      'ANALYZER_NUM_PREDICT',         // -1 (default)
-      'ANALYZER_MAX_OUTPUT_TOKENS',   // 8192 (default)
-      'GEMINI_TEMPERATURE',           // 0.2 (default)
-      'PRELOAD_COQUI',                // false (default)
-      'PRELOAD_KOKORO',               // false (default)
-      'PORT',                         // 8080 (default)
-      'BIND_HOST',                    // 127.0.0.1 (default)
-      'AUDIO_LOUDNORM_ENABLED',       // true (default)
-      'WORKSPACE_DIR',                // ../audiobook-workspace (default)
-      'ACCELERATOR',                  // auto (default)
-      'COQUI_DEVICE',                 // auto (default)
-      'KOKORO_DEVICE',                // auto (default)
-      'QWEN_DEVICE',                  // auto (default)
-      'SEG_QA_MAX_RERECORDS',         // 2 (default)
-      'SEG_QA_SILENCE_RMS',           // 0.003 (default)
-      'SEG_QA_MIN_RATIO',             // 0.4 (default)
-      'GEN_WORKERS',                  // 1 (default)
-      'STAGE2_MIN_COVERAGE',          // 0.6 (default)
-      'STAGE2_MAX_COVERAGE',          // 1.6 (default)
-      'STAGE2_MIN_DUP_RUN',           // 4 (default)
-      'OLLAMA_URL',                   // default (indented in fixture)
-      'ANALYZER_OLLAMA_CONCURRENCY',  // 2 (export-prefixed in fixture)
-    ]);
+    // Derive the REAL candidate env vars from the fixture content.
+    // A var is a candidate when:
+    // 1. It has a registry knob with an env var mapping
+    // 2. The file value matches the registry default
+    // This exercises the actual production logic at realistic scale.
+    const fileValues = parseEnvFileLines(envContent);
+    const candidateVars = new Set<string>();
+
+    for (const knob of allKnobs()) {
+      if (knob.isPrompt || !knob.env) continue;
+
+      const fileValue = fileValues.get(knob.env);
+      if (fileValue === undefined) continue; // Key not in file
+
+      // Parse and validate against the registry default
+      const r = coerceAndValidate(knob, fileValue);
+      if (r.ok && r.value === knob.default) {
+        candidateVars.add(knob.env);
+      }
+    }
 
     const isCandidate = (varName: string) => candidateVars.has(varName);
     const result = cleanEnvText(envContent, isCandidate);

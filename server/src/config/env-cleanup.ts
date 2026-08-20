@@ -53,8 +53,9 @@ export function parseEnvFileLines(fileContent: string): Map<string, string> {
 
     @param text       Full text of the .env file (may or may not end with \n).
     @param isCandidate  Predicate: true when the env-var name is a leftover-
-                        default candidate at write time (re-derived from live
-                        process.env + registry default — never a cached GET). */
+                        default candidate — derived from the actual file content
+                        passed to this function, comparing each line's value
+                        against the registry default for that env var. */
 export function cleanEnvText(
   text: string,
   isCandidate: (envVarName: string) => boolean,
