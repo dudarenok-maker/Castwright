@@ -18,6 +18,7 @@ dist/
 
 # Env
 .env
+.env.bak
 
 # Agent-created git worktrees (superpowers:using-git-worktrees)
 /.worktrees/
