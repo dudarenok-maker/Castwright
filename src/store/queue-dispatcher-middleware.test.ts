@@ -542,6 +542,32 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('failed');
     });
 
+    it('#2515: language-unset failures never trip the breaker', async () => {
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+
+      for (let i = 0; i < 3; i++) {
+        failStream(
+          'book-A',
+          3,
+          "This book's language has not been set. Choose it in Book settings before continuing.",
+          'language-unset',
+        );
+        await flushMicro();
+        if (i < 2) {
+          requeue(store, 'a3');
+          await flushMicro();
+        }
+      }
+
+      expect(store.getState().queue.paused).toBe(false);
+      expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
+        false,
+      );
+      expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('failed');
+    });
+
     it('resets the streak on a successful chapter so prior failures do not accumulate', async () => {
       const store = makeStore(1);
       seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);

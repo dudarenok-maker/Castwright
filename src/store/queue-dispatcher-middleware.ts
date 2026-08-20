@@ -161,7 +161,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                awaiting_confirm park, which was ALSO exempt from this streak),
                not the "something's systemically wrong" signal the breaker
                exists to catch — it shouldn't pause unrelated books' queues. */
-            if (failure.errorCode !== 'voice-not-designed') {
+            if (failure.errorCode !== 'voice-not-designed' && failure.errorCode !== 'language-unset') {
               const streak = failureStreakByBook.get(bookId);
               if (streak && streak.reason === failure.reason) {
                 streak.count += 1;
