@@ -4,7 +4,7 @@
    without monkey-patching process.cwd. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -175,6 +175,47 @@ describe('POST /api/config/env-cleanup', () => {
     for (const name of osTmpAfter) {
       expect(osTmpBefore.has(name), `temp file leaked to os.tmpdir(): ${name}`).toBe(true);
     }
+
+    delete process.env.OLLAMA_TEMPERATURE;
+  });
+
+  it('preserves file mode on POSIX systems (0o600 → 0o600, not 0o644)', async () => {
+    /* Regression test for finding 7: on POSIX systems, the .env file holding
+       secrets (GEMINI_API_KEY, LAN_AUTH_TOKEN, etc.) is typically created with
+       restrictive mode 0o600 (owner read/write only). The env-cleanup route
+       must preserve this mode when rewriting the file; writeFileSync creates
+       files with default mode 0o644 (world-readable), so a rename without
+       preserving mode would widen the permissions silently.
+
+       This test is skipped on Windows since POSIX modes don't apply there. */
+    if (process.platform === 'win32') {
+      // Windows ACLs don't support POSIX mode bits; skip this test
+      return;
+    }
+
+    process.env.OLLAMA_TEMPERATURE = '0.2';
+
+    const originalContent = 'OLLAMA_TEMPERATURE=0.2\n';
+    writeFileSync(envFilePath, originalContent, 'utf-8');
+
+    // Set the original file to restrictive mode (0o600 = owner read/write only)
+    const restrictiveMode = 0o600;
+    chmodSync(envFilePath, restrictiveMode);
+
+    // Verify the file was actually set to 0o600
+    const originalMode = statSync(envFilePath).mode & 0o777;
+    expect(originalMode).toBe(restrictiveMode);
+
+    const res = await request(app)
+      .post('/api/config/env-cleanup')
+      .query({ envPath: envFilePath });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cleaned).toContain('OLLAMA_TEMPERATURE');
+
+    // After the cleanup, the file should still have 0o600 mode, not the default 0o644
+    const finalMode = statSync(envFilePath).mode & 0o777;
+    expect(finalMode).toBe(restrictiveMode);
 
     delete process.env.OLLAMA_TEMPERATURE;
   });

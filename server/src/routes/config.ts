@@ -9,7 +9,7 @@
    The GET response shape is stable so the frontend can reconstruct the UI from it. */
 
 import { Router } from 'express';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, chmodSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -255,11 +255,26 @@ configRouter.post('/env-cleanup', async (req, res) => {
   // one filesystem (no EXDEV cross-device errors) and avoids leaking temp
   // directories to os.tmpdir(). Same rename helper as state-io's atomic
   // JSON writes — cloud-sync-safe on Windows.
+  //
+  // Preserve the original file's mode (e.g., 0o600 for a secrets file) to
+  // avoid widening permissions when the temp file defaults to 0o644.
+  let originalMode: number | undefined;
+  try {
+    originalMode = statSync(envPath).mode;
+  } catch {
+    // If we can't read the original mode, we'll skip chmod below.
+    // (This shouldn't happen since existsSync already passed above.)
+  }
+
   try {
     const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
     const rnd = randomBytes(4).toString('hex');
     const tmp = `${envPath}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
     writeFileSync(tmp, result.text, 'utf-8');
+    // Restore the original file's permissions to the temp file before renaming.
+    if (originalMode !== undefined) {
+      chmodSync(tmp, originalMode);
+    }
     try {
       await renameWithRetry(tmp, envPath);
     } catch (renameErr) {
