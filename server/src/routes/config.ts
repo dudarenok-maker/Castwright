@@ -222,7 +222,7 @@ configRouter.post('/reset', async (req, res) => {
 
 /** Resolve the server .env path the same way load-env.ts does: relative to
     the server process's cwd. */
-export function resolveServerEnvPath(): string {
+function resolveServerEnvPath(): string {
   if (serverEnvPathOverride !== null) {
     return serverEnvPathOverride;
   }
