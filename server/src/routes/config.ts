@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { readFileSync, writeFileSync, existsSync, statSync, chmodSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { resolve, join, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { allKnobDescriptors } from '../config/descriptors.js';
@@ -58,7 +58,7 @@ async function ensureGpuDeviceListWarm(): Promise<void> {
   if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
 }
 
-configRouter.get('/', async (req, res) => {
+configRouter.get('/', async (_req, res) => {
   await ensureGpuDeviceListWarm();
   const descriptors = allKnobDescriptors();
 
@@ -236,7 +236,7 @@ export function _setServerEnvPathForTest(path: string | null): void {
   serverEnvPathOverride = path;
 }
 
-configRouter.post('/env-cleanup', async (req, res) => {
+configRouter.post('/env-cleanup', async (_req, res) => {
   const envPath = resolveServerEnvPath();
 
   if (!existsSync(envPath)) {

@@ -12,8 +12,17 @@
    doesn't touch the real server/.env. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir, platform } from 'node:os';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  chmodSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
@@ -286,5 +295,35 @@ describe('POST /api/config/env-cleanup', () => {
     const cleanedContent = readFileSync(defaultEnvPath, 'utf-8');
     expect(cleanedContent).toContain('# STAGE2_MIN_COVERAGE=0.6');
     expect(cleanedContent).not.toMatch(/^STAGE2_MIN_COVERAGE=/m);
+  });
+
+  it('preserves file mode on POSIX systems (0o600 → 0o600, not 0o644)', async () => {
+    /* Regression test for finding 7: on POSIX systems, the .env file holding
+       secrets (GEMINI_API_KEY, LAN_AUTH_TOKEN, etc.) is typically created with
+       restrictive mode 0o600 (owner read/write only). The env-cleanup route
+       must preserve this mode when rewriting the file; writeFileSync creates
+       files with default mode 0o644 (world-readable), so a rename without
+       preserving mode would widen the permissions silently.
+
+       Windows ACLs don't support POSIX mode bits, so this test is skipped there. */
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const modeTestPath = join(tmpDir, '.env.mode-test');
+    writeFileSync(modeTestPath, 'STAGE2_MIN_COVERAGE=0.6\n', 'utf-8');
+
+    const restrictiveMode = 0o600;
+    chmodSync(modeTestPath, restrictiveMode);
+    expect(statSync(modeTestPath).mode & 0o777).toBe(restrictiveMode);
+
+    setServerEnvPathForTest(modeTestPath);
+
+    const res = await request(app).post('/api/config/env-cleanup');
+    expect(res.status).toBe(200);
+    expect(res.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
+
+    const modeAfterCleanup = statSync(modeTestPath).mode & 0o777;
+    expect(modeAfterCleanup).toBe(restrictiveMode);
   });
 });
