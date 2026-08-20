@@ -411,21 +411,15 @@ export ANALYZER_OLLAMA_CONCURRENCY=2
     const result = cleanEnvText(envContent, isCandidate);
 
     // Verify all candidates were commented out
-    expect(result.cleaned.sort()).toEqual(
-      Array.from(candidateVars).sort(),
-      'All registry-default candidates should be identified and commented',
-    );
+    expect(result.cleaned.sort()).toEqual(Array.from(candidateVars).sort());
 
-    // Count lines before and after
+    // Count lines before and after (no lines added/deleted)
     const linesBefore = envContent.split('\n');
     const linesAfter = result.text.split('\n');
-    expect(linesAfter.length).toBe(
-      linesBefore.length,
-      'Line count must remain unchanged (no lines added/deleted)',
-    );
+    expect(linesAfter.length).toBe(linesBefore.length);
 
-    // Verify non-candidates are byte-identical
-    const nonCandidateVar = 'GEMINI_API_KEY'; // value sk-custom-key-not-default (not default)
+    // Verify non-candidates are byte-identical (GEMINI_API_KEY is pinned to a
+    // non-default value and must survive the cleanup untouched)
     const expectedNonCandidateLine = 'GEMINI_API_KEY=sk-custom-key-not-default';
     expect(result.text).toContain(expectedNonCandidateLine);
 
@@ -463,11 +457,11 @@ export ANALYZER_OLLAMA_CONCURRENCY=2
         uncommentedPattern.test(result.text) &&
         !exportPattern.test(result.text) &&
         !indentedPattern.test(result.text);
-      expect(hasUncommented).toBe(false, `${candidateVar} should not have uncommented form`);
+      expect(hasUncommented).toBe(false);
 
       // Should have commented form (allowing for indentation and export prefix)
       const commentedPattern = new RegExp(`#.*${candidateVar}=`, 'm');
-      expect(commentedPattern.test(result.text)).toBe(true, `${candidateVar} should have commented form`);
+      expect(commentedPattern.test(result.text)).toBe(true);
     }
   });
 });

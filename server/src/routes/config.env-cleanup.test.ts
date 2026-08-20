@@ -361,9 +361,6 @@ describe('POST /api/config/env-cleanup', () => {
 
     setServerEnvPathForTest(tempTestPath);
 
-    // Record files in tmpDir before cleanup
-    const filesBefore = new Set(readdirSync(tmpDir));
-
     // Perform a cleanup
     const res = await request(app).post('/api/config/env-cleanup');
     expect(res.status).toBe(200);
@@ -374,7 +371,7 @@ describe('POST /api/config/env-cleanup', () => {
 
     // Verify no .tmp-* files exist (whether new or pre-existing)
     const tmpFiles = filesAfter.filter((f: string) => f.includes('.tmp-'));
-    expect(tmpFiles.length).toBe(0, 'No .tmp-* files should exist after cleanup completes');
+    expect(tmpFiles.length).toBe(0);
 
     // Sanity checks: verify the test files exist (so the test actually ran)
     expect(filesAfter).toContain('.env.part-e-test');
