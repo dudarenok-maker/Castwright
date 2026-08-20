@@ -11,7 +11,7 @@
    Uses _setServerEnvPathForTest() to inject a temp .env path so the test
    doesn't touch the real server/.env. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,10 @@ let tmpDir: string;
 let app: Express;
 let envTestPath: string;
 let setServerEnvPathForTest: (path: string | null) => void;
+
+// Global test state snapshots for cleanup (prevents cross-test leaks)
+let savedCwd: string;
+let savedEnv: Record<string, string | undefined>;
 
 beforeAll(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'config-env-cleanup-test-'));
@@ -61,6 +65,30 @@ afterAll(() => {
 beforeEach(() => {
   // Reset the test path override before each test
   setServerEnvPathForTest(null);
+
+  // Snapshot global state to prevent cross-test leaks
+  savedCwd = process.cwd();
+  savedEnv = { ...process.env };
+});
+
+afterEach(() => {
+  // Restore global state unconditionally, even if the test threw
+  // This prevents mutation leaks into subsequent tests
+  setServerEnvPathForTest(null);
+
+  if (process.cwd() !== savedCwd) {
+    process.chdir(savedCwd);
+  }
+
+  // Restore process.env: remove any added keys and restore modified ones
+  for (const key in process.env) {
+    if (!(key in savedEnv)) {
+      delete process.env[key];
+    }
+  }
+  for (const key in savedEnv) {
+    process.env[key] = savedEnv[key];
+  }
 });
 
 describe('POST /api/config/env-cleanup', () => {
@@ -218,52 +246,45 @@ describe('POST /api/config/env-cleanup', () => {
     //
     // Strategy: Change to a temp directory that contains a .env file, ensure
     // the override is null, call the route, and verify it uses the default path.
-    // Then restore the original cwd.
+    // Cleanup is guaranteed by the afterEach hook that restores process.cwd().
 
-    const originalCwd = process.cwd();
     const testEnvDir = join(tmpDir, '.env-default-test');
     mkdirSync(testEnvDir, { recursive: true });
     const defaultEnvPath = join(testEnvDir, '.env');
 
-    try {
-      // Create a .env file in the test directory
-      writeFileSync(
-        defaultEnvPath,
-        [
-          '# Test .env using default path resolution',
-          'STAGE2_MIN_COVERAGE=0.6',
-          'SOME_OTHER_VAR=value',
-          '',
-        ].join('\n'),
-        'utf-8',
-      );
+    // Create a .env file in the test directory
+    writeFileSync(
+      defaultEnvPath,
+      [
+        '# Test .env using default path resolution',
+        'STAGE2_MIN_COVERAGE=0.6',
+        'SOME_OTHER_VAR=value',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
 
-      // Change to the test directory so that resolve(process.cwd(), '.env')
-      // points to our test .env file
-      process.chdir(testEnvDir);
+    // Change to the test directory so that resolve(process.cwd(), '.env')
+    // points to our test .env file.
+    // The afterEach hook will restore the original cwd unconditionally.
+    process.chdir(testEnvDir);
 
-      // Ensure override is null (beforeEach should have already done this)
-      setServerEnvPathForTest(null);
+    // Ensure override is null (beforeEach should have already done this)
+    setServerEnvPathForTest(null);
 
-      // GET /api/config should read from the default .env location
-      const getRes = await request(app).get('/api/config');
-      expect(getRes.status).toBe(200);
-      expect(getRes.body.envCleanupCandidates).toContain('analyzer.stage2.minCoverage');
+    // GET /api/config should read from the default .env location
+    const getRes = await request(app).get('/api/config');
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.envCleanupCandidates).toContain('analyzer.stage2.minCoverage');
 
-      // POST /api/config/env-cleanup should also use the default path
-      const cleanupRes = await request(app).post('/api/config/env-cleanup');
-      expect(cleanupRes.status).toBe(200);
-      expect(cleanupRes.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
+    // POST /api/config/env-cleanup should also use the default path
+    const cleanupRes = await request(app).post('/api/config/env-cleanup');
+    expect(cleanupRes.status).toBe(200);
+    expect(cleanupRes.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
 
-      // Verify the file was actually cleaned (not some override)
-      const cleanedContent = readFileSync(defaultEnvPath, 'utf-8');
-      expect(cleanedContent).toContain('# STAGE2_MIN_COVERAGE=0.6');
-      expect(cleanedContent).not.toMatch(/^STAGE2_MIN_COVERAGE=/m);
-    } finally {
-      // Always restore original cwd, even if test fails
-      process.chdir(originalCwd);
-      // Clean up the test directory and override
-      setServerEnvPathForTest(null);
-    }
+    // Verify the file was actually cleaned (not some override)
+    const cleanedContent = readFileSync(defaultEnvPath, 'utf-8');
+    expect(cleanedContent).toContain('# STAGE2_MIN_COVERAGE=0.6');
+    expect(cleanedContent).not.toMatch(/^STAGE2_MIN_COVERAGE=/m);
   });
 });
