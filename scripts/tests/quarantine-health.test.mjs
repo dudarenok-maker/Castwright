@@ -4,6 +4,9 @@ import {
   resolveRuns,
   classifyRunsOverride,
   parseRegister,
+  countRegisterDataRows,
+  countUnparsedDataRows,
+  planRegisterRun,
   isSeparatorRow,
   isHeaderRow,
   splitTableRow,
@@ -18,12 +21,16 @@ import {
   formatReport,
   buildVitestArgs,
   classifyRunResult,
+  buildParseFailureMessage,
   worstCaseRunMs,
   budgetExceeded,
   VITEST_RUN_TIMEOUT_MS,
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
 } from '../quarantine-health.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 // --- resolveRuns (finding 12: QUARANTINE_HEALTH_RUNS=0/negative guard) -----
 
@@ -70,7 +77,7 @@ test('classifyRunsOverride: a valid but fractional value -> fractional (floored,
 
 // --- parseRegister -----------------------------------------------------
 
-test('parseRegister returns no entries for the current (empty) register table', () => {
+test('parseRegister returns no entries for a genuinely empty register table (no data rows)', () => {
   const markdown = `# Flaky-test register
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
@@ -97,6 +104,122 @@ test('parseRegister expands a multi-test row into one entry per backtick-quoted 
     assert.equal(e.file, 'server/src/routes/generation.test.ts');
     assert.deepEqual(e.issueNumbers, [399]);
   }
+});
+
+test('parseRegister extracts the test name from the real register prose format (#NNNN — <name>)', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older same-format manifest when a re-export of the same format finishes | \`server/src/routes/export.test.ts\` | intermittent under full-suite box contention | Fails on retry | #2235 | Quarantined |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].testName, 'revokes the older same-format manifest when a re-export of the same format finishes');
+  assert.equal(entries[0].file, 'server/src/routes/export.test.ts');
+  assert.deepEqual(entries[0].issueNumbers, [2235]);
+});
+
+// Regression test: drives the parser against the REAL register file,
+// docs/testing/flaky-register.md. The old parser extracted test names only
+// from backtick-quoted spans in the Test cell, but the real register's Test
+// column is prose (only the File column is backtick-quoted), so every row
+// was silently dropped and parseRegister returned []. This test fails against
+// the unfixed parser and passes after the prose-format fallback was added.
+// Also asserts that the real register parses cleanly with zero unparsed rows
+// (finding 6: the >= 2 assertion alone cannot catch a regression where a new
+// row starts failing while the old ones keep passing).
+test('parseRegister returns one entry per data row of the real flaky-register.md (regression)', () => {
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
+  const markdown = readFileSync(registerPath, 'utf8');
+  const entries = parseRegister(markdown);
+  // The real register currently has 2 data rows (#1981 and #2235).
+  assert.ok(entries.length >= 2, `expected at least 2 entries from the real register, got ${entries.length}`);
+  // Both quarantined rows must be present.
+  const files = entries.map((e) => e.file);
+  assert.ok(files.includes('server/src/routes/book-state-preserve-voices.test.ts'), 'missing #1981 row');
+  assert.ok(files.includes('server/src/routes/export.test.ts'), 'missing #2235 row');
+  // Issue numbers must be extracted from the Issue cell, not the Test cell.
+  const by1981 = entries.find((e) => e.issueNumbers.includes(2226));
+  assert.ok(by1981, '#1981 row must carry tracking issue #2226');
+  const by2235 = entries.find((e) => e.issueNumbers.includes(2235));
+  assert.ok(by2235, '#2235 row must carry tracking issue #2235');
+  // The real register must parse cleanly with zero unparsed rows (finding 6).
+  // This assertion strengthens the >= 2 check above and would catch a new row
+  // silently starting to fail while the old ones keep passing.
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 0, 'the real register must parse cleanly with zero unparsed/malformed rows');
+});
+
+test('countRegisterDataRows counts well-formed (≥5 cell) data rows, ignoring headers, separators, prose, and comments', () => {
+  const markdown = `# Flaky-test register
+
+| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT | \`server/src/routes/foo.test.ts\` | intermittent | Fails | #2226 | Not quarantined |
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | intermittent | Fails on retry | #2235 | Quarantined |
+
+_Empty — no other tests are currently quarantined._
+
+<!-- Graduated 2026-07-27: old row | \`foo.test.ts\` | ... | ... | ... | ... | -->
+`;
+  assert.equal(countRegisterDataRows(markdown), 2);
+});
+
+test('countRegisterDataRows returns 0 for a genuinely empty register', () => {
+  const markdown = `# Flaky-test register
+
+| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+_Empty — no tests are currently quarantined._
+`;
+  assert.equal(countRegisterDataRows(markdown), 0);
+});
+
+test('countRegisterDataRows and countUnparsedDataRows handle empty File cells correctly (Bug A)', () => {
+  // Bug A fix: countRegisterDataRows now counts structurally-well-formed rows
+  // (≥5 cells) as "data rows" regardless of File cell contents, so the
+  // loud-failure guard can detect empty File cells as unparsed entries.
+  // parseRegister still skips rows with empty files when building entries
+  // (can't use a row with no file), but both counters agree on what is a
+  // "structurally well-formed data row" — enabling the guard.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races | #1981 | 2026-08-01 |
+| #1982 — empty file cell | | timing | races | #1982 | 2026-08-02 |
+| #1983 — whitespace-only file | \`   \` | timing | races | #1983 | 2026-08-03 |
+`;
+  // parseRegister skips the last two rows (empty file cells), so entries.length === 1
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'parseRegister skips rows with empty/whitespace File cells (can\'t create entries without a file)');
+  // countRegisterDataRows now sees all 3 structurally-well-formed rows
+  const dataRows = countRegisterDataRows(markdown);
+  assert.equal(dataRows, 3, 'countRegisterDataRows counts all structurally-well-formed rows, including those with empty File cells');
+  // countUnparsedDataRows counts the 2 rows with empty File cells as unparsed
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 2, 'countUnparsedDataRows counts rows with empty File cells as unparsed');
+});
+
+// The loud-failure guard: when data rows are present but parseRegister
+// returns zero entries, the runner must detect the mismatch rather than
+// reporting a clean no-op. This test drives both functions against the same
+// input to verify the guard's precondition — planRegisterRun() checks
+// exactly this and returns parse-failure when it fires.
+test('a register with data rows that parses to zero entries is detectable (loud-failure precondition)', () => {
+  // Simulate a format the parser cannot handle: data rows with neither
+  // backtick-quoted test names nor the #NNNN — prose pattern.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| some opaque test reference | \`server/src/routes/foo.test.ts\` | timing | races | #1234 | 2026-08-01 |
+| another opaque reference | \`server/src/routes/bar.test.ts\` | timing | races | #5678 | 2026-08-02 |
+`;
+  const entries = parseRegister(markdown);
+  const dataRows = countRegisterDataRows(markdown);
+  assert.equal(entries.length, 0, 'parser should return 0 for unrecognized format');
+  assert.equal(dataRows, 2, 'countRegisterDataRows should see 2 data rows');
+  // The guard in planRegisterRun() checks exactly this: dataRows > 0 && unparsedCount > 0 → parse-failure.
+  const plan = planRegisterRun(markdown);
+  assert.equal(plan.outcome, 'parse-failure', 'should detect the parse failure');
 });
 
 test('parseRegister ignores prose lines, the header row and the separator row', () => {
@@ -200,6 +323,76 @@ test('parseRegister handles a comment that opens and closes on the SAME line as 
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1);
   assert.equal(entries[0].testName, 'a live test');
+});
+
+// --- Bug A regression: empty File cell with well-formed Test cell ----
+// A row with an empty File cell but a well-formed, parseable Test cell
+// (e.g., #NNNN — test name) must trigger parse-failure via the loud-failure
+// guard, not silently vanish as if it doesn't exist.
+
+test('parseRegisterRun returns parse-failure for a row with empty File cell but well-formed Test cell (Bug A)', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #9999 — some test name | | timing | races | #9999 | 2026-08-01 |
+`;
+  const result = planRegisterRun(markdown);
+  // Bug A: before the fix, this returns 'empty' (row is invisible to the generator)
+  // After the fix, it must return 'parse-failure' (row is counted as data but has empty File)
+  assert.equal(result.outcome, 'parse-failure', 'empty File cell with well-formed Test cell should trigger parse-failure, not disappear silently');
+  assert.equal(result.unparsedCount, 1, 'the malformed row should be counted toward unparsedCount');
+});
+
+// --- Bug C regression: prose Test cell with incidental backticks ----
+// A Test cell shaped like `#2301 — retries the \`POST /api/x\` call once`
+// (prose format with an incidental backtick inside the name) must extract
+// the whole prose remainder, not just the backtick-quoted substring.
+
+test('parseRegister extracts the full prose test name when it contains incidental backticks (Bug C)', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'should parse 1 entry');
+  // Bug C: before the fix, testName is 'POST /api/x' (just the backtick-quoted part)
+  // After the fix, testName is the whole prose remainder including the backticks
+  const expectedName = 'retries the `POST /api/x` call once';
+  assert.equal(entries[0].testName, expectedName, `should extract full prose name with backticks intact, not just the backtick-quoted substring`);
+});
+
+test('parseRegister with prose prefix treats all backtick-quoted text as part of one name (not expansion)', () => {
+  // Fix 1: a Test cell with prose prefix should NOT expand 2+ backtick-quoted spans.
+  // The WHOLE remainder (including all backticks) becomes a single test name.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — retries \`test A\`, \`test B\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'should parse 1 entry (not expand the prose remainder)');
+  assert.equal(entries[0].testName, 'retries `test A`, `test B`', 'should preserve full prose name with backticks intact');
+});
+
+test('parseRegister keeps single incidental backtick-quoted text as part of prose name, not as separate test (Bug 2)', () => {
+  // Bug 2: a Test cell with prose prefix and exactly 1 backtick pair should keep whole remainder as testName
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'should parse 1 entry (not expand the single backtick pair)');
+  assert.equal(entries[0].testName, 'retries the `POST /api/x` call once', 'should preserve full prose name with single backtick pair intact');
+});
+
+test('parseRegister regression: prose description with multiple distinct backtick-quoted terms stays one entry (round-4 false positive)', () => {
+  // Round-4 false positive: the expansion logic split this real test description into 2 bogus entries.
+  // Fix 1: prose format takes precedence, the whole remainder (including all backticks) is one test name.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — fails when \`POST /api/x\` follows \`GET /api/y\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'should parse 1 entry (not split into 2 on the backtick boundaries)');
+  assert.equal(entries[0].testName, 'fails when `POST /api/x` follows `GET /api/y`', 'should preserve the full prose description with all backticks intact');
 });
 
 // --- parseRegister / splitTableRow: escaped `|` in a cell (finding 1) ------
@@ -931,6 +1124,223 @@ test('budgetExceeded is true once elapsed + one more run\'s worst case would exc
   assert.equal(budgetExceeded(5000, 5000, 10000), false); // exactly at the budget: fits
   assert.equal(budgetExceeded(5001, 5000, 10000), true);
   assert.equal(budgetExceeded(9999, 2, 10000), true);
+});
+
+// --- countUnparsedDataRows (Finding 1: detect partial drops) ---------------
+
+test('countUnparsedDataRows counts data rows that yield zero test names', () => {
+  // Two good rows (prose format), one row that cannot be parsed (neither format).
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
+| unparseable test without format | \`server/src/routes/foo.test.ts\` | timing | races | #1234 | 2026-08-02 |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-03 |
+`;
+  assert.equal(countUnparsedDataRows(markdown), 1, 'should count 1 unparsed row');
+});
+
+test('countUnparsedDataRows returns 0 when all rows parse successfully', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-02 |
+`;
+  assert.equal(countUnparsedDataRows(markdown), 0, 'should count 0 unparsed rows');
+});
+
+test('planRegisterRun returns parse-failure when any data rows yield zero test names (finding 1)', () => {
+  // Regression: partial row drop must be detected. One row uses a hyphen instead
+  // of an em dash, the other parses successfully.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 - broken hyphen (not em dash) | \`server/src/routes/foo.test.ts\` | timing | races | #1981 | 2026-08-01 |
+| #2235 — valid em dash | \`server/src/routes/bar.test.ts\` | timing | races | #2235 | 2026-08-02 |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'parse-failure', 'should detect partial drop');
+  assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
+test('buildParseFailureMessage formats the parse-failure error for the job summary (finding 3)', () => {
+  // Fixing finding 3: the parse-failure message was never reaching
+  // $GITHUB_STEP_SUMMARY because main() only called console.error, not emit().
+  // This tests the pure message-building function so the main() branch can
+  // reliably call emit() with it.
+  const registerPath = '/c/Claude/Projects/Audiobook-Generator/docs/testing/flaky-register.md';
+  const message = buildParseFailureMessage(registerPath, 2, 1);
+  assert.ok(message.includes('quarantine-health:'), 'message should start with tool name');
+  assert.ok(message.includes(registerPath), 'message should include register path');
+  assert.ok(message.includes('contains 2 data row(s)'), 'message should name the data row count');
+  assert.ok(message.includes('but 1 could not be fully parsed'), 'message should name the unparsed count');
+  assert.ok(message.includes('either the parser') || message.includes('register itself is malformed'), 'message should cover both parser limitations and register-authoring typos');
+});
+
+// --- Bug B regression: emit() for parse-failure (finding 3 end-to-end) ----
+// The parse-failure message must actually reach $GITHUB_STEP_SUMMARY via emit(),
+// not just be logged to console. This regression test verifies the emit() path.
+
+test('buildParseFailureMessage and reportParseFailure reach $GITHUB_STEP_SUMMARY end-to-end (Bug B)', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { reportParseFailure } = await import('../quarantine-health.mjs');
+
+  // Create a temp file to simulate $GITHUB_STEP_SUMMARY
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-test-'));
+  const summaryPath = join(tempDir, 'summary.md');
+
+  // Save the original env var and exit code
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalExitCode = process.exitCode;
+
+  try {
+    // Set the temp file as $GITHUB_STEP_SUMMARY
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.exitCode = 0; // reset for this test
+
+    // Call the real reportParseFailure function, which calls the real emit()
+    reportParseFailure('/path/to/register.md', 3, 2);
+
+    // Verify the exit code was set
+    assert.equal(process.exitCode, 1, 'exit code should be set to 1');
+
+    // Read back the file and verify the message was written via emit()
+    const { readFileSync } = await import('node:fs');
+    const written = readFileSync(summaryPath, 'utf8');
+    assert.ok(written.includes('quarantine-health:'), 'message should be in GITHUB_STEP_SUMMARY via emit()');
+    assert.ok(written.includes('3 data row(s)'), 'message should contain data row count in GITHUB_STEP_SUMMARY');
+    assert.ok(written.includes('2 could not be fully parsed'), 'message should contain unparsed count in GITHUB_STEP_SUMMARY');
+  } finally {
+    // Restore the original env var and exit code
+    if (originalSummaryPath === undefined) {
+      delete process.env.GITHUB_STEP_SUMMARY;
+    } else {
+      process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    }
+    process.exitCode = originalExitCode;
+
+    // Clean up temp file
+    try {
+      const { rmSync } = await import('node:fs');
+      rmSync(summaryPath, { force: true });
+      rmSync(tempDir, { force: true });
+    } catch {}
+  }
+});
+
+test('planRegisterRun returns ok when all data rows parse successfully', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-02 |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'ok', 'should return ok for valid rows');
+  assert.equal(result.unparsedCount, 0, 'should report 0 unparsed rows');
+  assert.equal(result.entries.length, 2, 'should parse 2 entries');
+});
+
+test('countUnparsedDataRows detects rows with fewer than 5 cells as malformed (Fix 3)', () => {
+  // A row with fewer than 5 cells is structurally invalid and must count as unparsed.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races |
+| #1982 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1982 | 2026-08-02 |
+`;
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 1, 'should count 1 unparsed row (the 4-cell malformed row)');
+});
+
+test('planRegisterRun returns parse-failure when any row has fewer than 5 cells (Fix 3)', () => {
+  // A register with one well-formed row and one malformed row (4 cells) should fire parse-failure.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races |
+| #1982 — another test | \`server/src/routes/bar.test.ts\` | timing | races | #1982 | 2026-08-02 |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'parse-failure', 'should detect malformed row with <5 cells');
+  assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
+test('planRegisterRun returns parse-failure when the only row is malformed (Fix 3)', () => {
+  // A register with ONLY a malformed row should return parse-failure, not empty.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| some opaque reference | \`server/src/routes/foo.test.ts\` | timing |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'parse-failure', 'should detect a single malformed row');
+  assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
+test('planRegisterRun returns empty when no data rows exist', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+_Empty — no tests are currently quarantined._
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'empty', 'should return empty for genuinely empty register');
+  assert.equal(result.unparsedCount, 0, 'should report 0 unparsed rows');
+  assert.equal(result.entries.length, 0, 'should parse 0 entries');
+});
+
+test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fix 2)', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+
+  // Create a temp directory for our test files
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-main-test-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+
+  // Write an unparseable register (a row with <5 cells — Fix 3)
+  const unparseable = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — unparseable row | \`server/src/routes/foo.test.ts\` | timing |
+`;
+  writeFileSync(registerPath, unparseable, 'utf8');
+
+  // Save original env vars and exit code
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalExitCode = process.exitCode;
+
+  try {
+    // Set up the test environment
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.exitCode = 0;
+
+    // Call main() with the temp register file
+    main(registerPath);
+
+    // Verify exit code was set to 1
+    assert.equal(process.exitCode, 1, 'main() should set exit code to 1 on parse-failure');
+
+    // Verify the parse-failure message was written to GITHUB_STEP_SUMMARY
+    const written = readFileSync(summaryPath, 'utf8');
+    assert.ok(written.includes('quarantine-health:'), 'message should be in GITHUB_STEP_SUMMARY');
+    assert.ok(written.includes('1 data row(s)'), 'message should name the data row count');
+    assert.ok(written.includes('1 could not be fully parsed'), 'message should name the unparsed count');
+    assert.ok(written.includes('either the parser') || written.includes('register itself is malformed'), 'message should cover both parser limitations and register-authoring typos');
+  } finally {
+    // Restore env vars and exit code
+    if (originalSummaryPath === undefined) {
+      delete process.env.GITHUB_STEP_SUMMARY;
+    } else {
+      process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    }
+    process.exitCode = originalExitCode;
+
+    // Clean up temp files
+    try {
+      rmSync(summaryPath, { force: true });
+      rmSync(registerPath, { force: true });
+      rmSync(tempDir, { force: true });
+    } catch {}
+  }
 });
 
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {

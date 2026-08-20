@@ -89,7 +89,14 @@ Design notes Copilot should know:
 - Type generation: run npm run openapi:types after changing openapi.yaml; prefer the generated src/lib/api-types.ts.
 - Mock flag: VITE_USE_MOCKS toggles mock vs real API. Use it when running e2e vs unit tests as intended.
 - Precommit & prepush lifecycle:
-  - prepare runs husky; pre-commit runs verify:fast:scoped; pre-push runs full verify.
+  - prepare runs husky; pre-commit runs verify:fast:scoped; pre-push runs verify:fast:branch (branch-diff-scoped, not the full verify battery), and is skipped entirely for a docs-only push. Cloud verify.yml is the enforcing gate.
+- **Committing: launch it detached and poll. Always.**
+  - A commit here takes 5–7 minutes: pre-commit runs verify:fast:scoped, and any staged file under `server/` puts the whole server suite in scope. A push costs the same again through pre-push.
+  - **The Copilot CLI kills a single command at 30 seconds.** So a foreground `git commit` or `git push` on a server change cannot finish here, and retrying it never will — the cap has nothing to do with the size of your change. A foreground attempt is not slow, it is killed.
+  - **Launch the command detached**, redirect its output to a file under `%TEMP%`, and poll with short commands until the process exits; then read that file for the result. Each poll returns instantly, so the cap stops mattering. Polling is active waiting and is correct — what is wrong is ending your turn while it runs.
+  - **Do this always — do not try to predict whether this particular diff is one of the slow ones.** That prediction is the bug: it under-lists what is in scope, you read your own change as exempt, and you take the foreground path into the kill. Detached costs nothing when the commit is fast, because the first poll returns immediately.
+  - **Never `--no-verify`.** This is the exact failure that tempts it, and reaching for it is the tell: it means you have diagnosed a *slow* command when what you actually have is a *capped* one. It also does not save you — it makes the commit instant while the push still runs a hook and still dies at 30s. On 2026-08-19 an agent did precisely this and produced correct, well-tested code that never left the box.
+  - The full recipe, with argument-quoting and the sentinel rationale, is in `.clinerules/cline.md` under "Committing when a step is in scope". It is written for Cline, but the cap and the pattern are identical here.
 - Tests organization:
   - Frontend vitest next to code. Server vitest under server/. Sidecar pytest under server/tts-sidecar. Scripts Pester tests under scripts/tests.
 

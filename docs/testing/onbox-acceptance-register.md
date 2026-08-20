@@ -289,7 +289,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -300,7 +300,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**72 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**74 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2034,7 +2034,7 @@ real measurement behind it (D1).
 - Grep the running server's own log for a fresh `[sidecar] spawned pid=` line
   appearing on its own, with no operator action, within the backoff window.
   Confirm the pid differs from the one killed.
-- While recovery is in flight, poll `GET /api/models/status` and confirm it
+- While recovery is in flight, poll `GET /api/setup/models-status` and confirm it
   never reports the TTS engine ready while no sidecar is listening on
   `:9000` — that silent "reports healthy while nothing is there" gap is
   exactly what #2037 shipped.
@@ -2469,6 +2469,52 @@ model, which is a finding about the analyzer, not a failure of this fix).
 its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
 two bullets above. *Cost:* short — one import + one chapter-title listen, plus
 one body-line listen if a suitable entity-laden EPUB is available.
+
+### A46 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
+
+When the sidecar exits and respawning runs into a refused spawn (a foreign process occupying `:9000`), the supervisor's crash-loop cap must still accrete monotonically toward exhaustion, and the deadline timer must actually kill a hung listener-enumeration probe. Unit tests (`server/src/tts/sidecar-supervisor.test.ts`, `server/src/tts/spawn-sidecar.test.ts`) fully verify the refusal→cap accounting logic: a slow attempt (one that outlives `QUICK_DEATH_MS`) no longer masquerades as a long-lived child and resets the counter — instead the budget accrues regardless of attempt latency, and a cap on `consecutiveFailures` prevents infinite refusal loops. What no unit test can reach is the *real* race on a contended box: whether `LISTENER_PID_DEADLINE_MS = 5000` milliseconds is actually enough headroom for the listener-enumeration probe (`lsof` on POSIX, Windows PowerShell `Get-NetTCPConnection` query) to complete before the deadline fires on real hardware under contention, and whether the deadline timer truly kills a hung probe so the supervisor can proceed to the next backoff instead of blocking forever. Two scenarios test these separately: a foreign listener for the budget-exhaustion half (exercises the not-ours refusal path), and a manually-started sidecar under prod policy for the deadline-timer half (exercises the stale-replace path where the deadline callback is active).
+
+**Scenario 1: Supervisor crash-loop cap (foreign listener, not-ours refusal path)**
+
+- With a chapter actively rendering, kill the sidecar's OS process directly (e.g. `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the process from Task Manager) — **not** via `POST /api/sidecar/restart`, for the same reason as A34.
+- Immediately after kill, start a foreign listener on `:9000` that does NOT respond like a valid sidecar (e.g. `nc -l 9000` on POSIX, which accepts TCP but doesn't answer HTTP; or an HTTP server that returns a non-200 status or malformed body). This ensures the spawn attempt fails the identity check and enters the not-ours refusal path (`spawn-sidecar.ts:681`).
+- Grep the running server's own log for the supervisor counter monotonically advancing across multiple refused attempts. Expected log format: `[sidecar] supervisor: spawn refused: <reason>; respawning in <delayMs>ms (attempt <K>/<max>).` Confirm the attempt counter increases (1, 2, 3, 4, 5) and that no single slow probe resets it back to 1.
+- Confirm the respawned sidecar eventually surfaces as `'crashed'` on `GET /api/setup/models-status` once the counter exhausts. Expect the exhaustion log: `[sidecar] supervisor: <N> rapid spawn refusals (<reason>) in a row — giving up respawn. TTS is DOWN; restart the server to recover.` (Backoff schedule: `DEFAULT_BACKOFFS_MS = [2s, 5s, 15s]` with last repeating, cap `DEFAULT_MAX_CONSECUTIVE_FAILURES = 5`, total ≈52s across 5 attempts per `server/src/tts/sidecar-supervisor.ts:45-46`.)
+- **Recovery from exhaustion:** Once exhausted, `scheduleRespawnAttempt` returns without scheduling a respawn (see `server/src/tts/sidecar-supervisor.ts:265-271`). Recovery paths differ:
+  - *Before exhaustion:* If the foreign listener is stopped BEFORE the counter reaches 5, the next scheduled backoff delay will elapse and the next spawn attempt will succeed (listener is now gone). Confirm the sidecar starts and surfaces as ready within the backoff window for the current attempt count.
+  - *After exhaustion:* If the foreign listener is stopped AFTER the counter exhausts and the `giving up respawn` log appears, stopping the listener alone does **not** trigger a respawn — the counter is locked at 5+ and `scheduleRespawnAttempt` returns immediately. Recovery requires one of: (1) `POST /api/sidecar/restart` via the UI or API (resets `consecutiveFailures` to 0 and calls `spawnOnce()`), or (2) a server restart, which resets all state. Test recovery by calling `POST /api/sidecar/restart` after stopping the listener and confirm the sidecar respawns and surfaces as ready.
+
+**Scenario 2: Deadline timer for hung PID probe (manually-started sidecar, stale-replace path)**
+
+- In a fresh or parallel session (or after restarting the server), start a fresh sidecar manually — e.g. `cd server/tts-sidecar && python main.py` in a separate terminal — so the server process does not own its PID. Before running the server, set the environment variable `SIDECAR_NEVER_ADOPT=1` (in PowerShell: `$env:SIDECAR_NEVER_ADOPT = '1'`) to trigger the prod-policy path (`spawn-sidecar.ts:685-686`).
+- With a chapter actively rendering on the server with `SIDECAR_NEVER_ADOPT=1`, the health probe will detect the already-listening sidecar. Because prod policy is active and the sidecar is healthy (fresh protocol version, no leak), the server will treat it as unfit to adopt and attempt to replace it via the stale-replace path (`spawn-sidecar.ts:694`).
+- Grep the server log for the UNFIT message. Expected log: `[sidecar] UNFIT sidecar on :9000 (prod policy: spawning a fresh owned sidecar instead of adopting a pre-existing one) — replacing it with a fresh process to avoid inheriting…` On a responsive box, verify the PID lookup completes well under the 5000ms deadline. The log should show the new sidecar spawning without a deadline-timeout message.
+- If the deadline does fire (rare, indicates system contention or slow enumeration), confirm it appears in logs as: `[sidecar] probe for the PID on :9000 timed out — the supervisor will retry on backoff. Monitor logs if this persists.` Verify that the supervisor does NOT hang indefinitely; instead it proceeds to the next backoff attempt.
+- Confirm the newly-spawned sidecar becomes owned (PID recorded in `.run/tts.pid`) and surfaces as ready on `GET /api/setup/models-status`.
+- Cleanup: the manually-started sidecar was already killed by the server as part of the replace above, so its terminal should show it exited on its own — there is nothing left to stop. Restore `SIDECAR_NEVER_ADOPT` to its prior state (unset, or `'0'`) and restart the server, so the next run adopts a healthy pre-existing sidecar normally instead of replacing it.
+
+*Needs:* a live sidecar, a book mid-render, OS-level process-kill access, ability to bind a foreign listener on `:9000`, ability to start a fresh sidecar manually, and ability to set environment variables on the server. *Criteria:* the bullets above; the code-level contracts are `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` (budget exhaustion) and the deadline timer in `server/src/tts/spawn-sidecar.ts` at line 694 (`findListenerPid`'s `deadlineMs` parameter). *Cost:* ~2 minutes — Scenario 1 takes ~1 minute (one sidecar kill, one foreign listener binding, supervisor observation); Scenario 2 takes ~1 minute (one manual sidecar start, one SIDECAR_NEVER_ADOPT run, deadline observation). Can run sequentially or in separate sessions.
+### A47 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
+
+PR #2402 fixes the #1969 `voice-mismatch` false-positive: the render-integrity
+gate now rebuilds a character's persisted audition centroid reference when its
+voice is reassigned, so correct new-voice lines are no longer flagged
+`voice-mismatch`/`severity: severe` against the old speaker's stale reference
+(`resolveCharacterReference` no longer returns a persisted `audition` row
+unconditionally, and the `CharacterCentroid` in `centroids-io.ts` now records
+the voice it was built from). Only mock/unit coverage exists — what those
+cannot prove is that the rebuilt reference, not the failed flag, is what a real
+render produces. Confirm on the box: assign a character to one voice and render
+it once so `render-integrity.centroids.json` persists an `audition` row (a
+character thin enough on in-book anchors to take the audition-reference path);
+reassign it to a clearly different (cloned) voice; re-render. The new voice's
+lines must **not** be flagged `voice-mismatch`/severe — the persisted centroid
+must be **rebuilt for the new voice**, not reused against the old speaker's.
+
+*Needs:* a single 8 GB GPU with Qwen or Coqui resident, plus a cloneable voice.
+*Criteria:* the two bullets above. *Cost:* short — one render, one
+reassignment, one re-render. Records A24's final sub-check ("no
+`voice-mismatch` rows").
 
 ## Group B — local Ollama analyzer only
 
@@ -3288,12 +3334,13 @@ doesn't crash on the real runner, which was the open half of this question.
 
 **Still unverified: `gh issue view` actually authenticating via the injected
 `GH_TOKEN`.** Both real runs took the empty-register early-return path
-(`rows.length === 0` → `scripts/quarantine-health.mjs:776`, before the
-post-loop `gh issue view` calls) — `docs/testing/flaky-register.md` carries
-one row today (#1981, tracking #2226) but it's marked "Not quarantined —
-still gates," so it never reaches the quarantine-lane report. The run log
-does show `GITHUB_TOKEN Permissions: Issues: read`, so the wiring is
-plausible — but that is not proof the call actually works.
+(`plan.outcome === 'empty'` → `scripts/quarantine-health.mjs:979`, before the
+post-loop `gh issue view` calls). `docs/testing/flaky-register.md` carries
+two data rows today (#1981 and #2235), but #1981 is marked "Not quarantined —
+still gates" and only #2235 is quarantined, so only #2235 passes through
+the quarantine-lane report. The run log does show `GITHUB_TOKEN Permissions:
+Issues: read`, so the wiring is plausible — but that is not proof the call
+actually works on a non-empty `gh issue view` invocation.
 `continue-on-error: true` and exclusion from every required check still mean
 a failure here cannot block anything.
 

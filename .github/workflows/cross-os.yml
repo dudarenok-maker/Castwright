@@ -63,68 +63,11 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install ffmpeg
 
-      # choco's own exit code is not a reliable success signal: it can report
-      # success (exit 0) while having installed 0/0 packages (observed: a 504
-      # from the community Chocolatey feed), silently handing a broken
-      # environment to a later step. Verify ffmpeg actually runs afterward
-      # and retry a bounded number of times for the transient-feed case. A
-      # bounded retry alone does not survive a feed OUTAGE (minutes/hours,
-      # not seconds), so each attempt also falls back to `winget` when choco
-      # leaves ffmpeg unrunnable. `winget` specifically, not a third-party
-      # setup-ffmpeg action or a pinned static-build URL: this repo installs
-      # native tooling with native package managers everywhere else (brew on
-      # macOS, apt-get on Ubuntu) and avoids third-party actions, and
-      # scripts/preflight-ffmpeg.cjs already tells developers to
-      # `winget install Gyan.FFmpeg` -- so this reuses the repo's own
-      # documented instruction rather than introducing a new one.
+      # See .github/actions/install-ffmpeg-windows/action.yml for why this
+      # installs via choco with a winget fallback and a bounded retry.
       - name: Install ffmpeg (Windows)
         if: matrix.os == 'windows-latest'
-        run: |
-          $maxAttempts = 3
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            choco install ffmpeg -y --no-progress
-            $ffmpegOk = $false
-            try {
-              & ffmpeg -version | Out-Null
-              $ffmpegOk = ($LASTEXITCODE -eq 0)
-            } catch {
-              $ffmpegOk = $false
-            }
-
-            if (-not $ffmpegOk) {
-              Write-Host "Attempt $attempt/${maxAttempts}: choco reported success but ffmpeg is not runnable (a transient Chocolatey feed error is the likely cause -- see the choco output above). Trying the winget fallback."
-              if (Get-Command winget -ErrorAction SilentlyContinue) {
-                try {
-                  winget install --id Gyan.FFmpeg --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
-                  # winget updates the registry PATH at install time, but this
-                  # already-running process keeps the PATH it inherited at
-                  # startup (the same trap scripts/preflight-ffmpeg.cjs
-                  # documents for developer shells) -- re-read Machine + User
-                  # PATH from the registry so `ffmpeg` resolves without
-                  # needing a new process.
-                  $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
-                  & ffmpeg -version | Out-Null
-                  $ffmpegOk = ($LASTEXITCODE -eq 0)
-                } catch {
-                  Write-Host "winget fallback unavailable: $_"
-                  $ffmpegOk = $false
-                }
-              } else {
-                Write-Host "winget fallback unavailable: no winget command on this runner."
-              }
-            }
-
-            if ($ffmpegOk) {
-              Write-Host "ffmpeg verified working (attempt $attempt/$maxAttempts)."
-              exit 0
-            }
-            Write-Host "Attempt $attempt/${maxAttempts}: ffmpeg is still not runnable after choco and the winget fallback."
-            if ($attempt -lt $maxAttempts) {
-              Start-Sleep -Seconds 15
-            }
-          }
-          Write-Error "CI: ffmpeg install failed after $maxAttempts attempts (choco + winget fallback) -- ffmpeg is not runnable on this runner. This is a CI runner, not a developer workstation: investigate the Chocolatey feed / winget source / this job's log rather than following a local-install hint."
-          exit 1
+        uses: ./.github/actions/install-ffmpeg-windows
 
       # macOS only aliases 127.0.0.1 on lo0 by default (unlike Linux/Windows,
       # which treat the whole 127.0.0.0/8 range as loopback out of the box).

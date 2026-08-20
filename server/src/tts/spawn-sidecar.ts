@@ -51,7 +51,7 @@ export interface SpawnSidecarOpts {
   /* Override-points for the stale-sidecar handshake (side-8) — tests stub
      these so they never touch a real port/process. */
   healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
-  findPidFn?: (port: number) => Promise<number | null>;
+  findPidFn?: (port: number, onDeadlineExpiry?: () => void) => Promise<number | null>;
   /* D2 (#2037) — the pid of the supervisor's own OWNED child, if any, that
      just exited immediately before this spawn attempt. Log-only: used
      solely to tell "our own just-exited child's socket, still in TCP
@@ -288,8 +288,15 @@ export async function probeSidecarHealth(
   }
 }
 
+/** Bound on how long `findListenerPid` may wait for its child. If the spawned
+    probe (`powershell ... Get-NetTCPConnection`, `sh -c lsof`) never exits, an
+    unsupervised `findListenerPid` promise never settles — so on expiry we kill
+    the probe child and resolve `null` ("can't tell"), which every caller already
+    handles by leaving the process in place. */
+export const LISTENER_PID_DEADLINE_MS = 5000;
+
 /** Best-effort cross-platform "which PID is listening on this port". Returns
-    null when it can't tell (no tool, parse miss, error) — the caller then
+    null when it can't tell (no tool, parse miss, error, or deadline expiry) — the caller then
     leaves the process in place rather than killing the wrong thing. The PID
     file (`.run/tts.pid`) is NOT used here: a stale sidecar is often a process
     we did NOT spawn (orphan across a `tsx watch` reload, or a manual launch),
@@ -298,6 +305,8 @@ export function findListenerPid(
   port: number,
   platform: NodeJS.Platform = process.platform,
   spawnFn: typeof spawn = spawn,
+  deadlineMs: number = LISTENER_PID_DEADLINE_MS,
+  onDeadlineExpiry?: () => void,
 ): Promise<number | null> {
   const cmd =
     platform === 'win32'
@@ -309,7 +318,18 @@ export function findListenerPid(
             `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`,
           ],
         }
-      : { file: 'sh', args: ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null | head -n1`] };
+      : {
+          file: 'sh',
+          args: [
+            '-c',
+            // Must be a single simple command (no pipeline). `sh -c` execs it in place,
+            // so the deadline's child.kill() reaches lsof directly. A pipeline like
+            // `lsof … | head` would keep sh as the parent, so kill() signals sh and
+            // orphans the hung lsof. The split(/\s+/) parse below already takes the
+            // first PID out of multi-line output, so the pipe is redundant and unsafe.
+            `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null`,
+          ],
+        };
   return new Promise((resolve) => {
     let out = '';
     let child: ChildProcess;
@@ -318,14 +338,26 @@ export function findListenerPid(
     } catch {
       return resolve(null);
     }
+    let settled = false;
+    const settle = (value: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
     child.stdout?.on('data', (d) => {
       out += String(d);
     });
-    child.once('error', () => resolve(null));
+    child.once('error', () => settle(null));
     child.once('exit', () => {
       const pid = parseInt(out.trim().split(/\s+/)[0] ?? '', 10);
-      resolve(Number.isInteger(pid) && pid > 0 ? pid : null);
+      settle(Number.isInteger(pid) && pid > 0 ? pid : null);
     });
+    const timer = setTimeout(() => {
+      onDeadlineExpiry?.();
+      settle(null);
+      child.kill();
+    }, deadlineMs);
   });
 }
 
@@ -572,7 +604,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     spawnFn = spawn,
     probeFn = probeListening,
     healthProbeFn = (h, p) => probeSidecarHealth(h, p),
-    findPidFn = (p) => findListenerPid(p),
+    findPidFn = (p, onExpiry) => findListenerPid(p, undefined, undefined, undefined, onExpiry),
     onExit,
     onAdoptExisting,
     onSpawnRefused,
@@ -658,13 +690,22 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     warn(
       `[sidecar] UNFIT sidecar on :${port} (${reason}) — replacing it with a fresh process to avoid inheriting a stale build or a leak-saturated/recycling one.`,
     );
-    const stalePid = await findPidFn(port);
+    let deadlineExpired = false;
+    const stalePid = await findPidFn(port, () => { deadlineExpired = true; });
     if (stalePid === null) {
-      const reason = `could not identify the PID on :${port} to replace the stale sidecar`;
-      warn(
-        `[sidecar] ${reason} — leaving it in place. Restart the sidecar manually to pick up the current build.`,
-      );
-      onSpawnRefused?.(reason);
+      if (deadlineExpired) {
+        const reason = `probe for the PID on :${port} timed out`;
+        warn(
+          `[sidecar] ${reason} — the supervisor will retry on backoff. Monitor logs if this persists.`,
+        );
+        onSpawnRefused?.(reason);
+      } else {
+        const reason = `could not identify the PID on :${port} to replace the stale sidecar`;
+        warn(
+          `[sidecar] ${reason} — leaving it in place. Restart the sidecar manually to pick up the current build.`,
+        );
+        onSpawnRefused?.(reason);
+      }
       return null;
     }
     await killTree(stalePid, spawnFn);

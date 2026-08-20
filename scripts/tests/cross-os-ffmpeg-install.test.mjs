@@ -12,15 +12,22 @@
 // choco's exit code) and must fail the step loudly, with a CI-oriented
 // message, if it isn't.
 //
-// Scope: only the Windows/choco steps. The macOS/brew steps are NOT covered
+// Scope: only the Windows/choco step. The macOS/brew steps are NOT covered
 // here — investigated separately (see the PR/report this test shipped
 // with): GitHub's default (non-Windows, no explicit `shell:`) run-step shell
 // is `bash -e {0}` (actions/runner ADR 0277), and `brew install` returns a
 // genuine non-zero exit on a real install failure (already-installed is a
 // real success case, not a masked failure) — so the macOS step already fails
 // the job loudly via `-e` and does not share the fail-open defect this test
-// guards against. Same reasoning applies to both files, so both are checked
-// here for the Windows step only.
+// guards against.
+//
+// #2480 extracted the Windows step's script out of cross-os.yml and
+// release.yml (previously near-identical, with executable lines identical and comments reflowed) into the composite
+// action .github/actions/install-ffmpeg-windows/action.yml, so there is now
+// exactly one copy of the script to pin. The tests below exercise it there;
+// a separate check at the bottom of this file confirms both workflows still
+// reference the composite action, so a future edit can't quietly reintroduce
+// an inline duplicate.
 //
 // IMPORTANT LIMITATION, closed below: every assertion above this line is
 // TEXTUAL — it greps the step's source for phrases like `ffmpeg -version`,
@@ -50,7 +57,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { readNormalized } from '../lib/read-normalized.mjs';
@@ -62,12 +69,15 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
+const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
+
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
 // the next step at the same (6-space) indentation, a shallower-indented key
-// (the next job), or end of file) out of a workflow's source text. Uses
-// plain index search rather than a `^`/`$`-anchored regex with the `m` flag:
-// multiline `$` matches before EVERY newline, not just end-of-string, which
-// silently truncated the match at the step's first inner line.
+// (the next job), or end of file) out of a workflow's or composite action's
+// source text. Uses plain index search rather than a `^`/`$`-anchored regex
+// with the `m` flag: multiline `$` matches before EVERY newline, not just
+// end-of-string, which silently truncated the match at the step's first
+// inner line.
 function windowsFfmpegStepBlock(source) {
   const marker = '- name: Install ffmpeg (Windows)';
   const markerIdx = source.indexOf(marker);
@@ -171,11 +181,11 @@ const PWSH_SKIP_REASON = PWSH_EXE
       ...PWSH_DISCOVERY.attempts.map((a) => `  - ${a}`),
     ].join('\n');
 
-function runPowerShellFile(scriptPath, extraArgs = []) {
+function runPowerShellFile(scriptPath, extraArgs = [], env = process.env) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-File', scriptPath, ...extraArgs);
-  return spawnSync(PWSH_EXE, args, { encoding: 'utf8' });
+  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env });
 }
 
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser
@@ -242,12 +252,42 @@ function parsePowerShellSyntaxErrors(scriptText) {
 // and leaves a marker behind — proving the delay actually fires, without
 // the test paying the 15s wall-clock cost and without changing a single
 // character of the shipped script.
-function runStubbedFfmpegScript(scriptBody, stubPreamble) {
+// GITHUB_PATH and LOCALAPPDATA are real, live environment variables when
+// this test itself runs inside GitHub Actions (test:hooks is scoped in by
+// this diff on every OS, including ubuntu-latest, where LOCALAPPDATA is
+// never set). Without isolating them, the stubbed script under test would
+// either crash (Join-Path against a null LOCALAPPDATA) or, worse, silently
+// append a test-only path to the CI job's OWN $GITHUB_PATH file, corrupting
+// PATH for every later step of the real job the test is running inside.
+// Each invocation gets its own throwaway GITHUB_PATH file and, by default,
+// its own LOCALAPPDATA directory, so the script's real control flow can be
+// observed without touching (or depending on) the host job's actual
+// environment. `withLocalAppData: false` deliberately UNSETS it (deleted
+// from the child's env entirely, not set to '') to reproduce the shape that
+// actually broke #2478's first fix attempt: GITHUB_PATH present,
+// LOCALAPPDATA absent -- exactly ubuntu-latest's Hooks-tests leg.
+function runStubbedFfmpegScript(scriptBody, stubPreamble, { withLocalAppData = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pwsh-behave-'));
   const scriptPath = join(dir, 'scenario.ps1');
   writeFileSync(scriptPath, `${stubPreamble}\n${scriptBody}\n`, 'utf8');
+  const githubPathFile = join(dir, 'github_path.txt');
+  const localAppDataDir = withLocalAppData ? join(dir, 'LocalAppData') : null;
+  const env = { ...process.env, GITHUB_PATH: githubPathFile };
+  if (withLocalAppData) {
+    env.LOCALAPPDATA = localAppDataDir;
+  } else {
+    delete env.LOCALAPPDATA;
+  }
   try {
-    return runPowerShellFile(scriptPath);
+    const proc = runPowerShellFile(scriptPath, [], env);
+    let githubPathContents = '';
+    try {
+      githubPathContents = readFileSync(githubPathFile, 'utf8');
+    } catch {
+      // Never written -- valid when the script never reached the
+      // PATH-persist branch (e.g. the choco-works-first-try path).
+    }
+    return { ...proc, githubPathContents, localAppDataDir };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -271,12 +311,26 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
   'function Start-Sleep { param($Seconds) Write-Host "STUB:Start-Sleep:$Seconds" }',
 ].join('\n');
 
-for (const path of WORKFLOWS) {
+// The script now has exactly one source of truth: the composite action.
+// Extracted once here and reused by every test below instead of looping
+// over both workflow files as before #2480 (each of which now just
+// `uses:` the composite rather than embedding the script).
+{
+  const path = ACTION_FILE;
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install verifies ffmpeg actually runs, not just choco's exit code`, () => {
     const source = readNormalized(path);
     const block = windowsFfmpegStepBlock(source);
+
+    // The step must use PowerShell to run — the shell is a loaded responsibility
+    // that cannot be changed without breaking the script (all the $var, Try/Catch,
+    // scope qualifications are PowerShell-specific).
+    assert.match(
+      source,
+      /\n\s*shell:\s*pwsh\b/,
+      'composite action does not declare shell: pwsh for the Windows ffmpeg step -- the script requires PowerShell',
+    );
 
     // The step must still install via choco (that part of the defect —
     // "no package manager at all" — was never in question).
@@ -389,6 +443,12 @@ for (const path of WORKFLOWS) {
     const proc = runStubbedFfmpegScript(scriptBody, STUB_CHOCO_WORKS_FIRST_TRY);
     assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
     assert.match(proc.stdout, /ffmpeg verified working \(attempt 1\/3\)\./);
+    // The PATH-persist branch lives inside the winget-fallback path only --
+    // choco succeeding on the first try must never touch $GITHUB_PATH. A
+    // guard that dropped its `$ffmpegOk` (or its winget-only scoping) would
+    // still pass every other assertion in this file; this is the one that
+    // would catch it.
+    assert.equal(proc.githubPathContents, '', 'expected $GITHUB_PATH untouched on the choco-succeeds path');
   });
 
   test(`${rel}: Windows ffmpeg install behaviour -- choco fails, winget rescues it`, {
@@ -408,6 +468,73 @@ for (const path of WORKFLOWS) {
       /ffmpeg verified working \(attempt 1\/3\)\./,
       'expected the post-winget ffmpeg re-check to succeed',
     );
+    // Pins the #2478 fix itself: the step must persist the ffmpeg install
+    // directory to $GITHUB_PATH so LATER steps in the job (Verify, Build,
+    // ...) — fresh processes that never re-read the registry PATH this
+    // step patched in-process — can still find it. Isolated GITHUB_PATH /
+    // LOCALAPPDATA (see runStubbedFfmpegScript) means this exercises the
+    // real branch rather than skipping it, which is what let the original
+    // #2478 fix ship with this exact defect (Join-Path against a null
+    // LOCALAPPDATA crashes; the crash was masked locally because
+    // GITHUB_PATH is unset outside CI, so the guard never entered the
+    // branch at all).
+    assert.match(
+      proc.githubPathContents,
+      /Microsoft[\\/]WinGet[\\/]Links/,
+      `expected the ffmpeg install directory to be appended to $GITHUB_PATH; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+    assert.ok(
+      proc.githubPathContents.includes(join(proc.localAppDataDir, 'Microsoft', 'WinGet', 'Links')),
+      `expected the persisted directory to be rooted under this run's LOCALAPPDATA; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+  });
+
+  // This is the exact shape (GITHUB_PATH present, LOCALAPPDATA absent) that
+  // ubuntu-latest's Hooks-tests leg hits, and that broke the #2478 fix's
+  // first attempt (PR #2479 review pass 1) -- the pass-1 script had no
+  // dedicated try/catch around the PATH-persist logic at all, so
+  // `Join-Path $null ...` crashed straight into the winget-install
+  // try/catch, which flipped the whole install verdict to failed (attempt
+  // 2/3, not 1/3). Round 2 fixed the CRASH by giving the persist logic its
+  // own try/catch -- which the `attempt 1/3` + empty-$GITHUB_PATH
+  // assertions below pin -- but that alone still let a real box missing
+  // LOCALAPPDATA skip the persist with zero signal. This test's final
+  // assertion (the explicit `::warning::` line) is what actually pins the
+  // LOCALAPPDATA-specific guard: round-3 review proved that folding
+  // `$env:LOCALAPPDATA` back into the single outer condition (undoing the
+  // nested if/else) leaves every OTHER assertion in this test green, since
+  // the crash containment alone already accounts for them.
+  test(`${rel}: Windows ffmpeg install behaviour -- choco fails, winget rescues it, but LOCALAPPDATA is unset (ubuntu-latest's Hooks-tests leg)`, {
+    skip: PWSH_SKIP_REASON ?? false,
+  }, () => {
+    const source = readNormalized(path);
+    const scriptBody = windowsFfmpegScriptBody(windowsFfmpegStepBlock(source));
+    const proc = runStubbedFfmpegScript(scriptBody, STUB_CHOCO_FAILS_WINGET_RESCUES, { withLocalAppData: false });
+    assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
+    assert.match(
+      proc.stdout,
+      /ffmpeg verified working \(attempt 1\/3\)\./,
+      'expected the winget-rescued ffmpeg install to still be reported successful with LOCALAPPDATA absent',
+    );
+    // The PATH-persist branch must be SKIPPED, not crash and not fall
+    // through to a later attempt -- with no LOCALAPPDATA there is nowhere
+    // correct to derive a WinGet Links directory from.
+    assert.equal(
+      proc.githubPathContents,
+      '',
+      `expected $GITHUB_PATH untouched when LOCALAPPDATA is absent; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
+    // The skip must be LOUD (round-2 review, PR #2479): folding
+    // `$env:LOCALAPPDATA` back into the single outer `if` condition
+    // (instead of the nested if/else this pins) makes the exact same three
+    // assertions above pass -- ffmpeg still verifies working, PATH still
+    // stays untouched -- while silently dropping this warning, which is
+    // the only signal a real box missing LOCALAPPDATA would ever produce.
+    assert.match(
+      proc.stdout,
+      /::warning::LOCALAPPDATA is not set/,
+      'expected an explicit warning when LOCALAPPDATA is absent, not a silent skip',
+    );
   });
 
   test(`${rel}: Windows ffmpeg install behaviour -- both choco and winget fail all 3 attempts -> exit 1 with the CI message, retrying with a real delay`, {
@@ -417,6 +544,14 @@ for (const path of WORKFLOWS) {
     const scriptBody = windowsFfmpegScriptBody(windowsFfmpegStepBlock(source));
     const proc = runStubbedFfmpegScript(scriptBody, STUB_BOTH_FAIL_ALL_ATTEMPTS);
     assert.equal(proc.status, 1, `expected exit 1; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
+    // Guards against a mutated condition that drops `$ffmpegOk` from the
+    // PATH-persist gate: ffmpeg never actually installed here, so nothing
+    // should be written to $GITHUB_PATH across any of the 3 attempts.
+    assert.equal(
+      proc.githubPathContents,
+      '',
+      `expected $GITHUB_PATH untouched when ffmpeg never verified working; got:\n${JSON.stringify(proc.githubPathContents)}`,
+    );
     assert.match(
       proc.stderr,
       /CI: ffmpeg install failed after 3 attempts/,
@@ -429,5 +564,39 @@ for (const path of WORKFLOWS) {
     // just present as decoration somewhere in the block.
     const sleepCalls = (proc.stdout.match(/STUB:Start-Sleep:/g) || []).length;
     assert.equal(sleepCalls, 2, `expected exactly 2 retry delays; stdout:\n${proc.stdout}`);
+  });
+}
+
+// Guards the extraction itself: a future edit that pastes the script back
+// inline (reintroducing the #2480 duplication) must not go unnoticed. Each
+// workflow's "Install ffmpeg (Windows)" step must reference the composite
+// action rather than embed its own `run: |` block.
+for (const path of WORKFLOWS) {
+  const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
+
+  test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {
+    const source = readNormalized(path);
+    const block = windowsFfmpegStepBlock(source);
+
+    assert.match(
+      block,
+      /uses:\s*\.\/\.github\/actions\/install-ffmpeg-windows\b/,
+      'step no longer references ./.github/actions/install-ffmpeg-windows -- did the composite action get inlined again?',
+    );
+
+    assert.doesNotMatch(
+      block,
+      /choco install ffmpeg/,
+      'step embeds its own choco install call -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
+
+    // Guard against a second/different inline `choco install ffmpeg` elsewhere
+    // in the same workflow file (a future edit that pastes the script back
+    // inline in a different job/step must not go unnoticed).
+    assert.doesNotMatch(
+      source,
+      /choco install ffmpeg/,
+      'workflow file contains an inline choco install call somewhere -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
   });
 }

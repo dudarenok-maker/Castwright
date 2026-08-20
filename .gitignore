@@ -75,6 +75,12 @@ coverage/
 # .gitignore ensures an interrupted run never stages them).
 guardrail-tmp-*/
 
+# check-no-budget-poll.test.mjs: same planted-violation-inside-the-repo pattern as
+# guardrail-tmp-* above (#2482) — a leftover from an interrupted run must not
+# surface as an untracked/staged file, and must not wedge lint (see the matching
+# eslint.config.mjs ignore).
+budget-poll-tmp-*/
+
 # Verify-cache (per-step input hashes for `npm run verify`; never committed).
 .verify-cache.json
 .verify-cache.json.tmp

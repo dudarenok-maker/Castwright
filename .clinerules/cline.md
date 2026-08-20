@@ -120,6 +120,140 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 - **Git-ignored artifacts (`brand/`, `mockups/`, marketing captures) are
   produced in the primary checkout**, never in a worktree: they do not travel
   with the branch and worktree teardown destroys them.
+- **A commit can take longer than your 30-second command cap, so `git commit`
+  has to be run detached.** Not a silent trap -- the timeout is loud -- but the
+  loop it produces is not. See "Committing when a step is in scope" below.
+
+## Committing when a step is in scope
+
+**Your runtime kills a single command at 30 seconds. A pre-commit run that has
+any test step in scope takes minutes. So a foreground `git commit` cannot
+finish, and retrying it never will.** The cap is internal to Cline -- there is
+no CLI flag (`-t/--timeout` is the whole-run timeout, not the per-command one).
+
+**So commit detached ALWAYS -- do not try to work out whether this diff is one
+of the slow ones.** That prediction is the bug. Three successive revisions of
+this very paragraph tried to enumerate what puts a step in scope, and all three
+were wrong in the same direction: they under-listed, so an agent read its own
+change as exempt and took the foreground path into the 30-second kill. Detached
+costs nothing when the commit is fast -- the first poll returns immediately --
+and it is the only correct route when it is slow. There is no case where
+predicting first helps.
+
+If you do want to know, `STEPS[]` in `scripts/verify-cache.mjs` is the source
+of truth and the only one; pre-commit runs `verify:fast:scoped` over
+`test:hooks,check:budget-poll,test,test:server`, and a step runs when the staged
+diff matches its `globs`, any of its `extraFiles`, or `computeShared`. Read it
+there rather than trusting a summary -- including this one. What makes a
+summary untrustworthy here is that the surprising members are the whole point:
+`test:hooks` alone reaches `.claude/skills/**`, `.claude/agents/**`,
+`CLAUDE.md`, `CONTRIBUTING.md`, and the `RELEASE_NOTES.md` /
+`docs/release-notes-next.md` pair that CLAUDE.md's before-shipping step 5 makes
+nearly every PR touch -- so editing the very skill files this document tells you
+to edit costs 41-58 s, and "it's only docs" predicts nothing. `openapi.yaml`
+runs both `test` and `test:server` while matching no `server/` path. A root
+`package.json` or lockfile edit is `computeShared` and busts every leg at once,
+~12 minutes, while matching no step's globs at all.
+
+**Budget 10-15 minutes when a test step is in scope, and do not call it hung
+before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
+**153.3 s** in the last green `.verify-cache.json`; a contended red run of
+`test:server` took **746.6 s** (`docs/testing/flaky-register.md`). A single
+vitest run can report far less wall-clock on an idle box, so treat these as the
+range, not a constant.
+
+Launch it detached and poll. Each poll returns instantly, so the cap stops
+mattering:
+
+```powershell
+# Per-run directory. A FIXED log path is read by the next poll as the PREVIOUS
+# run's result: Start-Process returns before the child truncates the file, so a
+# stale EXIT=0 reports success for a commit that is still running.
+$run = Get-Date -Format 'yyyyMMdd-HHmmss'
+$T   = Join-Path $env:TEMP "cw-commit-$run"
+$W   = 'C:\Claude\Projects\wt-<your-worktree>'
+New-Item -ItemType Directory -Path $T -Force | Out-Null
+
+# NO BOM. PS 5.1's `Set-Content -Encoding utf8` writes one, `git commit -F` does
+# NOT strip it, and scripts/validate-commit-msg.mjs then rejects the subject --
+# AFTER you have paid the whole battery, with an error echoing a subject that
+# looks perfectly valid because the BOM is invisible.
+[IO.File]::WriteAllText("$T\msg.txt", 'fix(scope): subject line', (New-Object System.Text.UTF8Encoding $false))
+```
+
+The child script takes its paths as parameters, so nothing has to be
+interpolated into the here-string and `$LASTEXITCODE` resolves in the child:
+
+```powershell
+@'
+param([string]$Dir, [string]$Worktree)
+$ErrorActionPreference = 'Continue'
+git -C $Worktree commit -F (Join-Path $Dir 'msg.txt') *>&1 |
+  Out-File -FilePath (Join-Path $Dir 'commit.log') -Encoding utf8
+"EXIT=$LASTEXITCODE" | Out-File -FilePath (Join-Path $Dir 'commit.log') -Append -Encoding utf8
+'@ | Set-Content "$T\commit.ps1" -Encoding utf8
+```
+
+**That closing `'@` must be at column zero** -- indent it (as happens
+automatically inside a markdown list item) and PS 5.1 fails with
+`WhitespaceBeforeHereStringFooter` before running anything, so no log is ever
+created and a naive poll waits forever. Same family as the `.ps1` traps under
+"Never do these".
+
+```powershell
+# Clear the log FIRST. Start-Process returns before the child truncates it, so
+# on a RETRY inside the same $T the very first poll reads the PREVIOUS
+# attempt's sentinel and reports a verdict for a run that is still going.
+Remove-Item "$T\commit.log" -ErrorAction SilentlyContinue
+
+# Quote each path argument: -ArgumentList does NOT quote its elements.
+$p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
+  '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$T\commit.ps1`"",
+  '-Dir',"`"$T`"",'-Worktree',"`"$W`"")
+$p.Id | Set-Content "$T\commit.pid"
+```
+
+Then poll until it resolves. **Check the process as well as the sentinel** --
+those two disagreeing is how you learn the child died at parse time instead of
+waiting on it forever:
+
+```powershell
+$id    = Get-Content "$T\commit.pid"
+$alive = [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
+$done  = (Test-Path "$T\commit.log") -and (Select-String -Path "$T\commit.log" -Pattern '^EXIT=' -Quiet)
+"alive=$alive done=$done"
+if ($alive)          { 'still running -- keep polling, and IGNORE any EXIT= you can see' }
+elseif ($done)       { Get-Content "$T\commit.log" -Tail 40 }
+else                 { "child gone with no EXIT= -- check whether HEAD moved before assuming nothing happened" }
+```
+
+**While it is alive, a sentinel you can see is from an earlier attempt** -- keep
+polling rather than reading it as this run's result. Once the process is gone
+the sentinel is yours. The one thing that settles any disagreement is the repo
+itself: `git -C $W log --oneline -1`. Check that before acting on a surprising
+verdict, because a pid can be reused and a log line can be stale, while a
+commit either exists or does not.
+
+`EXIT=0` means the hook passed; confirm with `git -C $W log --oneline -1`.
+Anything else is a real failure in the log and is yours to fix.
+
+**Two ways the log misleads on the way out.** The child redirects with `*>&1`,
+so a *successful* run's tail can still be full of `NativeCommandError` and
+`CategoryInfo` -- that is PowerShell rendering git's stderr progress chatter,
+not a failure; read `EXIT=` and `git log`, not the shape of the text. And if
+the child vanished without a sentinel, **check `git -C $W log --oneline -1`
+before concluding it never ran**: it may have been killed after the commit
+landed, which is exactly what happened on #2382.
+
+**Do not end your turn while it runs.** Polling is active waiting and is
+correct; ending the run is not -- you are headless and nothing will wake you.
+If it genuinely cannot be delivered from your lane, say so once with the exact
+command and the cap.
+
+**Never `--no-verify`** (the two documented exceptions are under "Never do
+these" and neither is "the hook is slow"). This cost six identical
+claim-and-fail cycles and twelve commit attempts on #2382 before the cap was
+recognised as the whole story.
 
 ## Findings are fixed, not filed
 
