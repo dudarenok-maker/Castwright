@@ -210,4 +210,60 @@ describe('POST /api/config/env-cleanup', () => {
     const attackerFileContent = readFileSync(attackerPath, 'utf-8');
     expect(attackerFileContent).toBe('# Empty attacker file\n'); // unchanged
   });
+
+  it('exercises the default env-path resolution (no override)', async () => {
+    // This test verifies that resolveServerEnvPath() correctly falls back to
+    // the DEFAULT branch (resolve(process.cwd(), '.env')) when no override is set.
+    // All other tests set an override, leaving the default path untested.
+    //
+    // Strategy: Change to a temp directory that contains a .env file, ensure
+    // the override is null, call the route, and verify it uses the default path.
+    // Then restore the original cwd.
+
+    const originalCwd = process.cwd();
+    const testEnvDir = join(tmpDir, '.env-default-test');
+    mkdirSync(testEnvDir, { recursive: true });
+    const defaultEnvPath = join(testEnvDir, '.env');
+
+    try {
+      // Create a .env file in the test directory
+      writeFileSync(
+        defaultEnvPath,
+        [
+          '# Test .env using default path resolution',
+          'STAGE2_MIN_COVERAGE=0.6',
+          'SOME_OTHER_VAR=value',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      // Change to the test directory so that resolve(process.cwd(), '.env')
+      // points to our test .env file
+      process.chdir(testEnvDir);
+
+      // Ensure override is null (beforeEach should have already done this)
+      setServerEnvPathForTest(null);
+
+      // GET /api/config should read from the default .env location
+      const getRes = await request(app).get('/api/config');
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.envCleanupCandidates).toContain('analyzer.stage2.minCoverage');
+
+      // POST /api/config/env-cleanup should also use the default path
+      const cleanupRes = await request(app).post('/api/config/env-cleanup');
+      expect(cleanupRes.status).toBe(200);
+      expect(cleanupRes.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
+
+      // Verify the file was actually cleaned (not some override)
+      const cleanedContent = readFileSync(defaultEnvPath, 'utf-8');
+      expect(cleanedContent).toContain('# STAGE2_MIN_COVERAGE=0.6');
+      expect(cleanedContent).not.toMatch(/^STAGE2_MIN_COVERAGE=/m);
+    } finally {
+      // Always restore original cwd, even if test fails
+      process.chdir(originalCwd);
+      // Clean up the test directory and override
+      setServerEnvPathForTest(null);
+    }
+  });
 });
