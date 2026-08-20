@@ -29,9 +29,21 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
+const emitLanguageGuardMock = vi.fn();
+vi.mock('../lib/language-guard-bus', () => ({
+  emitLanguageGuard: (req: unknown) => emitLanguageGuardMock(req),
+}));
+
+const retryQueueEntryMock = vi.fn();
+vi.mock('./queue-thunks', () => ({
+  retryQueueEntry: (id: string) => retryQueueEntryMock(id),
+}));
+
 beforeEach(() => {
   streamGenerationMock.mockClear();
   cancelMock.mockClear();
+  emitLanguageGuardMock.mockReset();
+  retryQueueEntryMock.mockReset().mockReturnValue({ type: 'queue/retryQueueEntry/noop' });
 });
 
 function makeStore() {
@@ -446,5 +458,86 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(store.getState().chapters.scoringProgress['b1']).toBeUndefined();
     const events = store.getState().changeLog.events.filter((e) => e.type === 'scoring_complete');
     expect(events).toHaveLength(1);
+  });
+
+  it('opens the language guard once for a language-unset failure, even on a non-viewed book', () => {
+    emitLanguageGuardMock.mockReturnValue(true);
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+    onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    expect(emitLanguageGuardMock).toHaveBeenCalledTimes(1);
+    expect(emitLanguageGuardMock.mock.calls[0][0].selector).toEqual({ bookId: 'b1' });
+    expect(emitLanguageGuardMock.mock.calls[0][0].shape).toBe('sse');
+    expect(runner.hasPendingLanguageGuard('b1')).toBe(true);
+  });
+
+  it('does not re-emit for a second concurrent chapter of the same book', () => {
+    emitLanguageGuardMock.mockReturnValue(true);
+    const { runner } = makeRunner();
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [6], force: true }, { chapterId: 6, queueEntryId: 'q2' });
+    onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    onTickFor('b1', 6)({ type: 'chapter_failed', chapterId: 6, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    expect(emitLanguageGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls through to a toast and does not mark the book pending when emitLanguageGuard rejects', () => {
+    emitLanguageGuardMock.mockReturnValue(false);
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+    onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts.some((t) => t.dedupeKey === 'language-unset:b1:5')).toBe(true);
+    expect(runner.hasPendingLanguageGuard('b1')).toBe(false);
+  });
+
+  it('onRetry clears the pending book and retries via retryQueueEntry with the captured queueEntryId', () => {
+    let capturedOnRetry: (() => void) | undefined;
+    emitLanguageGuardMock.mockImplementation((req) => {
+      capturedOnRetry = req.onRetry;
+      return true;
+    });
+    const { runner } = makeRunner();
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+    onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    expect(runner.hasPendingLanguageGuard('b1')).toBe(true);
+    capturedOnRetry!();
+    expect(runner.hasPendingLanguageGuard('b1')).toBe(false);
+    expect(retryQueueEntryMock).toHaveBeenCalledWith('q1');
+  });
+
+  it('treats a pending guard older than 2 minutes as expired, allowing a fresh emission', () => {
+    vi.useFakeTimers();
+    try {
+      emitLanguageGuardMock.mockReturnValue(true);
+      const { runner } = makeRunner();
+      runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+      onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+      expect(runner.hasPendingLanguageGuard('b1')).toBe(true);
+      vi.advanceTimersByTime(2 * 60 * 1000 + 1);
+      expect(runner.hasPendingLanguageGuard('b1')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stream closes and no reconnect occurs once idle follows a language-unset chapter_failed', () => {
+    const { runner } = makeRunner();
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+    expect(runner.hasOpenStreamForChapter('b1', 5)).toBe(true);
+    onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    onTickFor('b1', 5)({ type: 'idle' } as GenerationTick);
+    expect(runner.hasOpenStreamForChapter('b1', 5)).toBe(false);
+  });
+
+  it('a language-unset chapter_failed is recorded and retrievable via takeChapterFailure', () => {
+    const { runner } = makeRunner();
+    runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
+    onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
+    onTickFor('b1', 5)({ type: 'idle' } as GenerationTick);
+    const failure = runner.takeChapterFailure('b1', 5);
+    expect(failure?.errorCode).toBe('language-unset');
   });
 });
