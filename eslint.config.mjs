@@ -51,6 +51,14 @@ export default tseslint.config(
       // Ad-hoc, local-only repro/bisect scripts (e.g. server/repro-attribution.mts).
       // Throwaway debugging probes — git-ignored and not held to the lint bar.
       'server/repro-*.mts',
+      // Leftover from scripts/tests/eslint-guardrail.test.mjs's planted-violation
+      // probe (mkdtempSync inside the repo root, see .gitignore:76): a directory
+      // that survives cleanup (killed process, or rmSync losing a Windows EBUSY
+      // race against the execFileSync child right above it) must not wedge every
+      // subsequent `npm run lint`/pre-push on an unrelated checkout. The probe
+      // itself still needs ESLint to SEE its planted file, so it passes
+      // `--no-ignore` to override this — see the probe's own comment.
+      'guardrail-tmp-*/',
       // Accepted-result scratch written by the token-saver skill (see the
       // matching .gitignore entry). Unreviewed model output that can land on a
       // linted extension, and the skill writes it under whatever root it is
