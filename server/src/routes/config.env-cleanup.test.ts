@@ -4,7 +4,7 @@
    without monkey-patching process.cwd. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -139,6 +139,42 @@ describe('POST /api/config/env-cleanup', () => {
 
     const after = readFileSync(envFilePath, 'utf-8');
     expect(after).toBe(originalContent); // byte-for-byte unchanged
+
+    delete process.env.OLLAMA_TEMPERATURE;
+  });
+
+  it('writes temp file in the same directory as target (not OS tmpdir), and cleans up on success', async () => {
+    /* Regression test for finding 3: verify that temp files are written
+       beside the target .env file (in the workspace directory), not in
+       os.tmpdir(). This prevents cross-filesystem rename errors (EXDEV)
+       and leaking temp directories. */
+    process.env.OLLAMA_TEMPERATURE = '0.2';
+
+    const originalContent = 'OLLAMA_TEMPERATURE=0.2\n';
+    writeFileSync(envFilePath, originalContent, 'utf-8');
+
+    // Record what's in os.tmpdir() before the call
+    const osTmpBefore = new Set(
+      readdirSync(tmpdir()).filter((name) => name.includes('env-cleanup')),
+    );
+
+    const res = await request(app)
+      .post('/api/config/env-cleanup')
+      .query({ envPath: envFilePath });
+
+    expect(res.status).toBe(200);
+    expect(res.body.cleaned).toContain('OLLAMA_TEMPERATURE');
+
+    // Check what's in os.tmpdir() after the call
+    const osTmpAfter = new Set(
+      readdirSync(tmpdir()).filter((name) => name.includes('env-cleanup')),
+    );
+
+    // Verify no new temp dirs were created in os.tmpdir()
+    // The fix writes temp file beside target (.env.tmp-*), not in tmpdir
+    for (const name of osTmpAfter) {
+      expect(osTmpBefore.has(name), `temp file leaked to os.tmpdir(): ${name}`).toBe(true);
+    }
 
     delete process.env.OLLAMA_TEMPERATURE;
   });

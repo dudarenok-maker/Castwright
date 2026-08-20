@@ -10,9 +10,9 @@
 
 import { Router } from 'express';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { unlink } from 'node:fs/promises';
+import { resolve, join, dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { allKnobDescriptors } from '../config/descriptors.js';
 import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate, envCleanupCandidateKeys } from '../config/resolver.js';
@@ -30,6 +30,10 @@ import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-s
 import { getLastKnownGpuDevices, setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 export const configRouter = Router();
+
+/* Monotonic in-process counter so two env-cleanup calls that arrive
+   in the same millisecond don't collide on temp-file names. */
+let tmpSeq = 0;
 
 /* resolveAll() -> resolveKnob() reconciles a stored 'cuda-uuid:<uuid>'
    override against getLastKnownGpuDevices()'s cache SYNCHRONOUSLY — it's
@@ -246,14 +250,24 @@ configRouter.post('/env-cleanup', async (req, res) => {
     return;
   }
 
-  // Atomic write: write cleaned text to a temp file in the same directory,
-  // then rename over the target. Same rename helper as state-io's atomic
+  // Atomic write: write cleaned text to a temp file in the same directory
+  // as the target, then rename over the target. This keeps the rename on
+  // one filesystem (no EXDEV cross-device errors) and avoids leaking temp
+  // directories to os.tmpdir(). Same rename helper as state-io's atomic
   // JSON writes — cloud-sync-safe on Windows.
   try {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'env-cleanup-'));
-    const tmpFile = join(tmpDir, '.env');
-    writeFileSync(tmpFile, result.text, 'utf-8');
-    await renameWithRetry(tmpFile, envPath);
+    const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
+    const rnd = randomBytes(4).toString('hex');
+    const tmp = `${envPath}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
+    writeFileSync(tmp, result.text, 'utf-8');
+    try {
+      await renameWithRetry(tmp, envPath);
+    } catch (renameErr) {
+      /* Cleanup the temp file on terminal failure so we don't leak
+         .tmp-<pid>-<ts>-<seq>-<rnd> droppings into the workspace. */
+      await unlink(tmp).catch(() => {});
+      throw renameErr;
+    }
   } catch (err) {
     res.status(500).json({ error: `failed to write cleaned .env: ${(err as Error).message}` });
     return;
