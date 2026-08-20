@@ -302,6 +302,16 @@ setup rather than repeatedly loading and evicting models.
 
 **74 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
+> **Correction, 2026-08-20 (rework of wave-3's own recording, `#2497`).** These
+> totals were rechecked against wave 3's actual dispositions rather than left
+> unchanged: A29 was mislabeled DISCHARGED (see its row) and is corrected here
+> to STILL OWED, so it does **not** leave the owed count — 74 is unchanged,
+> not stale. No wave-3 row's disposition otherwise moves a row into or out of
+> this count; E7's rendered half moving from the wave-3 agent-runnable set to
+> the operator's `onbox-sitting-device-browser.md` pack (see E7's row) is a
+> re-binning within the 74, not a change to the total. Same arithmetic-check
+> pattern as `onbox-sitting-plan.md`'s own 2026-08-20 correction.
+
 ---
 
 ## Group A — the GPU box
@@ -1335,7 +1345,9 @@ alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
 > "broken" from "missing" (`pkgUsable = importOk ?? pkgInstalled(...)`
 > short-circuits on a real `false`) — not user-facing today because the
 > actual Repair/Install button reads the finer `models-status.ts` endpoint
-> instead, but worth a decision on widening the coarser endpoint too.
+> instead, but worth a decision on widening the coarser endpoint too. Filed
+> as [#2533](https://github.com/dudarenok-maker/Castwright/issues/2533)
+> (see #2533).
 
 ---
 
@@ -1428,20 +1440,25 @@ required. *Criteria:* this row plus PR #2008's description of the failure
 scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
 Remove click.
 
-> **Wave-3 step 3, 2026-08-20 — DISCHARGED.** Run against the live sidecar
-> venv (read-only), isolated on port :9111 so the box's shared :9000 sidecar
-> was never touched. All seven checks run with real command+output: config
-> reach (`PUT /api/config`), Model Manager reflecting the override before
-> download, a real Hugging Face download of Whisper `small`, Model Manager
-> reflecting it post-download, Remove (deletes `small`, leaves `base`), the
-> in-app installer path (`--model small`), and the documented bare-CLI path
-> (correctly falls back to `base`). One caveat, not a gap in the criteria
-> tested: `ASR_MODEL=small` was set by hand on a standalone sidecar rather
-> than driven live through the Node supervisor's restart-sidecar
+> **Wave-3 step 3, 2026-08-20 — STILL OWED (partial discharge).** Run against
+> the live sidecar venv (read-only), isolated on port :9111 so the box's
+> shared :9000 sidecar was never touched. Every downstream reader is
+> DISCHARGED with real command+output: config reach (`PUT /api/config`),
+> Model Manager reflecting the override before download, a real Hugging Face
+> download of Whisper `small`, Model Manager reflecting it post-download,
+> Remove (deletes `small`, leaves `base`), the in-app installer path
+> (`--model small`), and the documented bare-CLI path (correctly falls back
+> to `base`). **What's still owed — not a caveat, the reason this row stays
+> open:** `ASR_MODEL=small` was set by hand on a standalone sidecar rather
+> than driven live through the Node supervisor's real restart-sidecar
 > env-injection loop (blocked by this box's single-instance :9000
-> constraint); the registry wiring itself was confirmed by reading
-> `server/src/config/registry.ts` and `spawn-sidecar.ts`, not executed
-> end-to-end through the supervisor. Full evidence:
+> constraint); the registry wiring itself was only confirmed by reading
+> `server/src/config/registry.ts` and `spawn-sidecar.ts`'s source, not
+> executed end-to-end through the supervisor. **Correction, 2026-08-20:** a
+> verify pass found this row had been mislabeled DISCHARGED on the strength
+> of that source-read alone — a read is not the same as exercising the live
+> path, and the row is corrected here to STILL OWED until the supervisor's
+> actual env-injection loop is driven for real. Full evidence:
 > `docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md`.
 
 ---
@@ -2298,7 +2315,9 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > sidecar venv (read-only). Blocks the same GPU-provider check on A40 and
 > (on re-check) A41. Full evidence, decision options for the fix (repin
 > onnxruntime-gpu vs. vendor CUDA13 wheels vs. upgrade the box):
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
+> [#2534](https://github.com/dudarenok-maker/Castwright/issues/2534)
+> (see #2534).
 
 ### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
@@ -2379,7 +2398,9 @@ five-state table and "the clobbered box takes the loud path" in
 > the design doc's five-state table means by "clobbered," or the `'deleted'`
 > branch being silent is a gap on its own regardless of the recipe — a
 > decision on both is owed to a fix agent, not resolved here. Full evidence:
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
+> [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
+> (see #2535).
 
 ### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
@@ -2712,7 +2733,9 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 > for a character gaining a surname token between analyzer runs (this run:
 > "Бранн Уир" vs. the cast's "Бранн"). Full evidence, `Result:` lines:
 > `docs/testing/cast-id-drift-onbox-acceptance.md` §7;
-> `docs/testing/onbox-wave3-results/step-5-group-b.md`.
+> `docs/testing/onbox-wave3-results/step-5-group-b.md`. Filed as
+> [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
+> (see #2536).
 
 ### B4 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
 
@@ -2739,7 +2762,9 @@ If the run instead happens on a book whose language was never declared (imported
 > `brann-weir`/`berrin-weir`) this row's own text names as the worst-case
 > outcome; see B3 above for the full evidence and root cause. Roster size
 > moved 13→16, not "still 13" as the row anticipated as the default case.
-> `docs/testing/onbox-wave3-results/step-5-group-b.md`.
+> `docs/testing/onbox-wave3-results/step-5-group-b.md`. Same defect as B3,
+> filed as [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
+> (see #2536).
 
 ---
 
@@ -3297,8 +3322,18 @@ Observe:
 > not-mocked. **Observations 1, 2, 4, 5, 6 remain owed** — they are rendered-
 > page states (spinner, card timing, green ready card, refetch-without-
 > reload, failure card) with no API-only substitute stated in the row.
-> Joins `onbox-sitting-device-browser.md` alongside E1, E2, E3, E5, E6, E9,
-> E10. `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
+> **Still owed to the operator** — observations 1, 2, 4, 5, 6 above have not
+> been run; this row is not discharged, only its server/poll half is.
+> **Correction, 2026-08-20:** this row previously stated the join to
+> `onbox-sitting-device-browser.md` as if it had already happened; it had
+> not — the pack's own row list and minute total were never updated to
+> include E7 (confirmed empty diff against the pack file across all of wave
+> 3). That gap is fixed in the same round: E7 is now folded into
+> `onbox-sitting-device-browser.md` alongside E1, E2, E3, E5, E6, E9, E10,
+> and `onbox-sitting-plan.md` §2.1/§2.2 are corrected to move E7's
+> rendered-half debt from the wave-3 agent-runnable set to that operator
+> pack — the same pattern already used for A33/A43.
+> `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
 
 ---
 
@@ -3516,6 +3551,8 @@ exists. *Criteria:* spec §On-box acceptance
 > was not this step's job — not attempted. Run sheet's own `Result:` line
 > updated: `docs/testing/attribution-collapse-visibility-onbox-acceptance.md`
 > §4. `docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md`.
+> Filed as [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
+> (see #2537).
 
 ## Group F — a real Android device
 
@@ -3648,6 +3685,24 @@ on the next real quarantine event rather than manufacturing one.
 > unchanged from STILL OWED-blocked; the live dispatch sharpens the evidence
 > from "the fix will unblock this" to "the bug is actively dropping a real
 > row today." `docs/testing/onbox-wave3-results/step-8-group-g.md`.
+>
+> **Correction, 2026-08-20 (rework of wave-3's own recording, `#2497`).** The
+> step-8 note above captured PR #2488 and issue #2465 as **OPEN** roughly 15
+> seconds before #2488 actually merged, and step 9's fold carried that stale
+> "OPEN" forward without rechecking. Live-rechecked now: PR #2488 **MERGED**
+> 2026-08-20T06:45:02Z (`gh pr view 2488`), and issue #2465 **CLOSED** the
+> same second (`gh issue view 2465`) — see [#2488](https://github.com/dudarenok-maker/Castwright/pull/2488),
+> [#2465](https://github.com/dudarenok-maker/Castwright/issues/2465). Blocking
+> precondition (b) — the `parseRegister` fix landing — has therefore cleared.
+> This does **not** discharge G1: neither debt has actually been re-observed
+> under the fixed code yet — the two real dispatches captured above both
+> predate the merge, and no scheduled or manual dispatch has run since. The
+> row's disposition changes from **STILL OWED-blocked** to **STILL
+> OWED — unblocked**: the next real dispatch (the following Monday 03:00 UTC
+> cron, or an earlier manual `workflow_dispatch`) against the still-live
+> `#2235` quarantined row is what would actually discharge debt 1 (`gh issue
+> view` under real auth) and, opportunistically, debt 2 (`intermittent`
+> classification on real data).
 
 ### G2 · The published release body now comes from the committed file, not the tag annotation ([#2137](https://github.com/dudarenok-maker/Castwright/issues/2137), PR #2168)
 

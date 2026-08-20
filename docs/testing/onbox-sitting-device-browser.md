@@ -6,26 +6,40 @@
 > Plan of record: [`docs/testing/onbox-sitting-plan.md`](onbox-sitting-plan.md)
 > §5 (pack format), §4.7 (this sitting's place in the order).
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> E1, E2, E3, E5, E6, E9, E10.
+> E1, E2, E3, E5, E6, E7, E9, E10.
 > Feature plans: [`218-pinokio-installer.md`](../features/218-pinokio-installer.md) (E1),
 > [`250-lan-https-default.md`](../features/250-lan-https-default.md) (E2),
 > [`256-lan-pair-from-friendly-hostname.md`](../features/256-lan-pair-from-friendly-hostname.md) (E3),
 > [#1795](https://github.com/dudarenok-maker/Castwright/pull/1795) (E5),
 > [`269-ffmpeg-version-floor.md`](../features/269-ffmpeg-version-floor.md) (E6),
+> [`270-openapi-setup-surface.md`](../features/270-openapi-setup-surface.md) (E7),
 > [`282-ort-pip-consistency-marker.md`](../features/282-ort-pip-consistency-marker.md) (E9),
 > [`225-lan-browser-device-auth.md`](../features/225-lan-browser-device-auth.md) (E10).
 >
-> **Running time total (recomputed):** E1 30 + E2 20 + E3 15 + E5 5 + E6 30 +
-> E9 30 + E10 20 = **150 minutes** — matches the plan of record's estimate.
+> **E7 added 2026-08-20**, correcting a wave-3 gap: the register's E7 row
+> (wave-3 step 7) claimed it had already "joined
+> `onbox-sitting-device-browser.md`," but this file's own row list and
+> minute total were never actually updated — confirmed by an empty
+> `git diff` against this file across the whole wave-3 range. E7's
+> server/poll half is already DISCHARGED (see the register row); only its
+> **rendered-half** observations (spinner, card timing, green ready card,
+> refetch-without-reload, failure card) are still owed to the operator, and
+> that is what E7's step below covers. Same "still owed to the operator"
+> pattern as A33/A43 in `onbox-sitting-cloning-identity.md`.
+>
+> **Running time total (recomputed 2026-08-20):** E1 30 + E2 20 + E3 15 +
+> E5 5 + E6 30 + E7 20 + E9 30 + E10 20 = **170 minutes** (was 150 before
+> E7's addition).
 
 ---
 
 ## 1. Purpose & scope
 
-None of these seven rows need the operator's GPU. They need Pinokio, a real
-phone/browser on the LAN, and a swappable ffmpeg build — hardware the
-two-card/VRAM sittings don't touch. This sitting has two independent halves
-that can run in either order or on separate days:
+None of these eight rows need the operator's GPU. They need Pinokio, a real
+phone/browser on the LAN, a swappable ffmpeg build, and (for E7) a box whose
+sidecar venv can be deleted — hardware the two-card/VRAM sittings don't
+touch. This sitting has three independent parts that can run in either order
+or on separate days:
 
 - **Pinokio half — E1, E9, E6.** Pinokio install/update on Windows (and, for
   E1 only, a separate macOS machine), grouped because E9 and E6 each name
@@ -36,13 +50,18 @@ that can run in either order or on separate days:
   smoke-check with no server dependency and can be slotted into either half's
   spare minutes, but is grouped here since it is browser-shaped like the rest
   of this half.
+- **E7 — rendered-half venv-bootstrap card.** Independent of both halves
+  above: needs a box with no `server/tts-sidecar/.venv`, any machine, no
+  GPU. Can run before, after, or between the two halves.
 
 **Re-resolution note:** every row below was independently re-checked against
 live `gh issue`/`gh pr` state and the current source tree while writing this
-pack (2026-08-20). All seven remain accurately STILL OWED as the staleness
-audit describes; no citation had drifted, and nothing here is discharged or
-self-contradictory. **One UI label has drifted** since the register row was
-written — see E5's step, which names the corrected control name.
+pack (2026-08-20). The original seven remain accurately STILL OWED as the
+staleness audit describes; no citation had drifted, and nothing here is
+discharged or self-contradictory. **One UI label has drifted** since the
+register row was written — see E5's step, which names the corrected control
+name. E7 was folded in later the same day (see above) — its server/poll half
+is DISCHARGED, its rendered half is not.
 
 ## 2. Preconditions
 
@@ -251,7 +270,33 @@ its state rides the same pairing.
       `group-active:text-ink/60`).
     `Result:` _(fill in — pass/fail per control)_
 
-## 5. Teardown
+## 5. Procedure — E7 rendered-half (venv-bootstrap progress card)
+
+Independent of the two halves above; needs no Pinokio and no phone/LAN
+setup. Wave-3 step 7 already discharged the server/poll wiring underneath
+this card (`POST/GET /api/setup/venv/bootstrap`) against a real 8m49s
+`bootstrap-venv.mjs` run — see the register's E7 row. What's left is the
+**rendered-page** half, register observations 1, 2, 4, 5, 6:
+
+1. On a box with **no** `server/tts-sidecar/.venv` (delete it, or a fresh
+   clone), open Setup Wizard → voice-engine step.
+   **Observe:** the "Set up the voice engine runtime" button.
+   `Result:` _(fill in)_
+2. Click it. **Observe:** within ~1.5 s the progress card appears —
+   spinner, "Setting up the voice engine runtime…", and a live `job.step`
+   line.
+   `Result:` _(fill in)_
+3. Let it finish. **Observe:** the green "Voice engine runtime ready" card,
+   and `onBootstrapped` refetches so the parent's status flips without a
+   reload.
+   `Result:` _(fill in)_
+4. A missed `detecting` frame is not a failure — do not report it as one.
+5. Failure path, if cheap to induce (e.g. no Python 3.12 on PATH):
+   **Observe:** the red "Setup failed" card with the server's message, and a
+   working "Try again".
+   `Result:` _(fill in — pass/fail, and any deviation)_
+
+## 6. Teardown
 
 - Stop the server; unset `LAN_HTTPS_PORT` and restore the default
   `LAN_HTTPS=1`.
@@ -265,4 +310,6 @@ its state rides the same pairing.
   not required for any other sitting in this plan.
 
 _(Once run, mark register rows E1, E2, E3, E5, E6, E9, E10 discharged with a
-summary of these results and remove them from the "owed" count.)_
+summary of these results and remove them from the "owed" count. E7's
+server/poll half is already DISCHARGED — running §5 above discharges its
+rendered half too, at which point the whole row comes out.)_
