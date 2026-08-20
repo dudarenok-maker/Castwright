@@ -233,6 +233,123 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(retirements).toEqual([]);
   });
 
+  it('id drift + surname token: a character that gained a trailing surname token maps to its prior roster row (#2536)', () => {
+    // #2536's exact shape: the prior roster held "Бранн"/"Беррин" (given name
+    // only); the fresh re-analysis names the same characters "Бранн Уир" /
+    // "Беррин Уир" (surname token added). `nameOf` is exact-equality, so
+    // without the tolerant comparator the fresh rows would mint `brann-wire` /
+    // `berrin-wire` as near-duplicate ids. The surname-tolerant pass must
+    // resolve both to their existing voiced rows instead.
+    const existing: C[] = [
+      {
+        id: 'brann-weir',
+        name: 'Бранн',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-brann' } },
+      },
+      {
+        id: 'berrin-weir',
+        name: 'Беррин',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-berrin' } },
+      },
+    ];
+    const fresh: C[] = [
+      { id: 'brann-wire', name: 'Бранн Уир', lines: 41 } as C,
+      { id: 'berrin-wire', name: 'Беррин Уир', lines: 44 } as C,
+    ];
+    const { characters: merged, retirements } =
+      mergeAnalysisResultWithExistingCast(existing, fresh);
+    // No near-duplicate id minted and no voiced orphan re-added — both prior
+    // rows matched onto their fresh name-tolerant rows.
+    expect(merged.map((c) => c.id)).toEqual(['brann-wire', 'berrin-wire']);
+    const brann = merged[0];
+    expect(brann.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-brann' } });
+    expect(brann.voiceState).toBe('tuned');
+    expect(brann.lines).toBe(41); // analyzer-owned fields stay from the fresh row
+    const berrin = merged[1];
+    expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
+    expect(berrin.lines).toBe(44);
+    // The superseded ids are reported so the caller can retire them.
+    expect(retirements).toEqual([
+      { from: 'brann-weir', to: 'brann-wire' },
+      { from: 'berrin-weir', to: 'berrin-wire' },
+    ]);
+  });
+
+  it('id drift + surname tolerance: names differing by MORE than one trailing token are NOT merged (#2536)', () => {
+    // The longer name is two trailing tokens past the shorter, not one — no
+    // strict one-token-superset, so the tolerant comparator must refuse and the
+    // fresh row stays on the id-only path (no weld, no retirement).
+    const existing: C[] = [
+      {
+        id: 'aeren',
+        name: 'Aeren',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-aeren' } },
+      },
+    ];
+    const fresh: C[] = [{ id: 'aeren-wind-rider', name: 'Aeren Wind Rider', lines: 9 } as C];
+    const { characters: merged, retirements } =
+      mergeAnalysisResultWithExistingCast(existing, fresh);
+    // Voiced orphan kept (fresh id never got a match); fresh row stays voiceless.
+    expect(merged.map((c) => c.id)).toEqual(['aeren-wind-rider', 'aeren']);
+    expect(merged.find((c) => c.id === 'aeren')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-aeren' },
+    });
+    expect(merged.find((c) => c.id === 'aeren-wind-rider')!.overrideTtsVoices).toBeUndefined();
+    expect(retirements).toEqual([]);
+  });
+
+  it('id drift + surname tolerance: a reordered/shuffled multi-token name is NOT merged (#2536)', () => {
+    // Same token count, different order — not a strict leading-prefix one-token
+    // superset, so it must not weld two distinct characters (id-only path).
+    const existing: C[] = [
+      {
+        id: 'udir-bran',
+        name: 'Удир Бран',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-ub' } },
+      },
+    ];
+    const fresh: C[] = [{ id: 'bran-udir', name: 'Бран Удир', lines: 5 } as C];
+    const { characters: merged, retirements } =
+      mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged.map((c) => c.id)).toEqual(['bran-udir', 'udir-bran']);
+    expect(merged.find((c) => c.id === 'udir-bran')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-ub' },
+    });
+    expect(merged.find((c) => c.id === 'bran-udir')!.overrideTtsVoices).toBeUndefined();
+    expect(retirements).toEqual([]);
+  });
+
+  it('id drift + surname tolerance: a surname-name shared by >1 fresh row still routes to the id-only path (#2536)', () => {
+    // The ambiguous-fresh rule is untouched by the widening: a normalised name
+    // shared by more than one fresh row is always left to the id-only path, so
+    // the tolerant pass must not guess which one gets the prior voiced row.
+    const existing: C[] = [
+      {
+        id: 'brann-weir',
+        name: 'Бранн',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-brann' } },
+      },
+    ];
+    const fresh: C[] = [
+      { id: 'brann-wire-a', name: 'Бранн Уир' } as C,
+      { id: 'brann-wire-b', name: 'Бранн Уир' } as C,
+    ];
+    const { characters: merged, retirements } =
+      mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged.map((c) => c.id)).toEqual(['brann-wire-a', 'brann-wire-b', 'brann-weir']);
+    expect(merged.find((c) => c.id === 'brann-weir')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-brann' },
+    });
+    expect(merged.find((c) => c.id === 'brann-wire-a')!.overrideTtsVoices).toBeUndefined();
+    expect(merged.find((c) => c.id === 'brann-wire-b')!.overrideTtsVoices).toBeUndefined();
+    expect(retirements).toEqual([]);
+  });
+
   it('id drift: a voiced prior row wins the match over a same-name unvoiced sibling — no regression (#2040 Task 12)', () => {
     // Two dropped prior rows share the name "Alden": one carries a designed
     // voice, one carries none. Widening the candidate set past

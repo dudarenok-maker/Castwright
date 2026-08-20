@@ -188,6 +188,31 @@ export function overlayInterimCastForLiveView<T extends { id: string }>(
   return mergeCore(existing, fresh, false).characters;
 }
 
+/** Surname-tolerant name comparison for the name-fallback (#2536). Two
+    normalised names match when identical (unchanged exact behaviour) OR one is
+    a strict token-superset of the other by exactly one TRAILING token — same
+    leading token(s), the longer side carrying exactly one extra trailing token.
+    That is the shape of a character gaining or losing a surname token between
+    analyzer runs ("бранн уир" vs "бранн"): `normaliseForMatch` already
+    lowercase/whitespace-collapses, so `split(' ')` yields the token sequence.
+
+    Deliberately token-count-only, never general edit-distance/similarity: a
+    similarity measure could weld two genuinely different characters whose names
+    merely resemble each other, and token-count + strict-leading-prefix keeps
+    that from happening (#2536 decision — surname-aware, not fuzzy). */
+function surnameTolerantMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  const ta = a.split(' ');
+  const tb = b.split(' ');
+  const shorter = ta.length < tb.length ? ta : tb;
+  const longer = ta.length < tb.length ? tb : ta;
+  if (longer.length !== shorter.length + 1) return false;
+  for (let i = 0; i < shorter.length; i++) {
+    if (shorter[i] !== longer[i]) return false;
+  }
+  return true;
+}
+
 /** Shared core for both entry points above. `nameFallback` gates the id-drift
     same-name match (`:281-305`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the
@@ -275,6 +300,37 @@ function mergeCore<T extends { id: string }>(
       dropMatchCandidateByName.set(key, rows[0]);
     }
   }
+
+  /* Surname-tolerant extension of the SAME selection rule (#2536). A character
+     that gained or lost a trailing surname token between runs (prior "Бранн" →
+     fresh "Бранн Уир") drops off every EXACT key above, so `nameOf` would never
+     match it and the fresh row would mint a near-duplicate id instead of
+     resolving to its existing roster row. Run the same voice/reuse selection
+     rule again over the dropped rows that surname-tolerantly match each
+     still-unresolved fresh name. This widens only HOW a candidate key is found,
+     never the selection rule once candidates are found, and never the fresh-
+     ambiguity guard (a normalised name shared by >1 fresh row stays on the
+     id-only path). An exact match is preferred: a fresh name that already
+     resolves via dropMatchCandidateByName is skipped here entirely. An
+     ambiguous tolerant key is left OUT of the map (same as the exact path), so
+     it still routes to the id-only path rather than being guessed. */
+  const tolerantCandidateByName = new Map<string, CastRecord>();
+  for (const [key, count] of freshNameCounts) {
+    if (count !== 1) continue; // shared by >1 fresh row → id-only path, unchanged
+    if (dropMatchCandidateByName.has(key)) continue; // exact match preferred
+    const matches: CastRecord[] = [];
+    for (const rows of droppedByName.values()) {
+      for (const old of rows) {
+        if (surnameTolerantMatch(key, nameOf(old))) matches.push(old);
+      }
+    }
+    const voiced = matches.filter(isVoicedOrReused);
+    if (voiced.length === 1) {
+      tolerantCandidateByName.set(key, voiced[0]);
+    } else if (voiced.length === 0 && matches.length === 1) {
+      tolerantCandidateByName.set(key, matches[0]);
+    }
+  }
   const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
 
   const overlaid = fresh.map((f) => {
@@ -296,7 +352,8 @@ function mergeCore<T extends { id: string }>(
       // legitimate id-drift case here for the fallback to rescue, and
       // :323-332 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
-        const cand = dropMatchCandidateByName.get(key);
+        const cand =
+          dropMatchCandidateByName.get(key) ?? tolerantCandidateByName.get(key);
         // A notLinkedTo edge between this specific pair is the user's
         // explicit "not the same person" decision — widening the candidate
         // set past isVoicedOrReused must not let the fallback silently
