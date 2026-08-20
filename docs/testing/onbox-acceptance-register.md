@@ -1316,6 +1316,27 @@ sticky per process). No GPU is required for the Kokoro half — the import fails
 any device work — so this can ride along with any other Group A session, or run
 alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
 
+> **Wave-3 step 3, 2026-08-20 — shrinks, not fully discharged.** Run on a
+> throwaway robocopy of the live sidecar venv. Confirmed for real, with
+> pasted evidence: the null baseline, both Kokoro broken-import and
+> Kokoro-missing states (with the correct, distinct Admin-console/Setup-
+> checker copy for each), the mirrored Qwen broken-import case, and the
+> row's own novel over-claim case (a post-import Qwen `from_pretrained`
+> failure correctly leaves `qwen_import_ok: true` and produces no false
+> Repair prompt). **What remains owed:** the mixed-fault Setup-checker
+> precedence check (Kokoro missing + Qwen broken simultaneously →
+> checker must name Qwen) and the Coqui-stays-out-of-diagnostics check —
+> neither was exercised this pass (this box's live venv has Coqui
+> genuinely installed, so there was no "Coqui absent" state to observe
+> without a further venv mutation). Full evidence:
+> `docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md`.
+> A related defect was found and routed, not fixed here: `GET
+> /api/models/inventory`'s `installState` cannot itself distinguish
+> "broken" from "missing" (`pkgUsable = importOk ?? pkgInstalled(...)`
+> short-circuits on a real `false`) — not user-facing today because the
+> actual Repair/Install button reads the finer `models-status.ts` endpoint
+> instead, but worth a decision on widening the coarser endpoint too.
+
 ---
 
 ### A28 · Stranded VRAM pool reclaimed on the admission-failure path ([#1976](https://github.com/dudarenok-maker/Castwright/issues/1976), PR [#1993](https://github.com/dudarenok-maker/Castwright/pull/1993)) · **single 8 GB card**
@@ -1406,6 +1427,22 @@ cache to seed/inspect both `base` and the configured model's snapshots. No GPU
 required. *Criteria:* this row plus PR #2008's description of the failure
 scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
 Remove click.
+
+> **Wave-3 step 3, 2026-08-20 — DISCHARGED.** Run against the live sidecar
+> venv (read-only), isolated on port :9111 so the box's shared :9000 sidecar
+> was never touched. All seven checks run with real command+output: config
+> reach (`PUT /api/config`), Model Manager reflecting the override before
+> download, a real Hugging Face download of Whisper `small`, Model Manager
+> reflecting it post-download, Remove (deletes `small`, leaves `base`), the
+> in-app installer path (`--model small`), and the documented bare-CLI path
+> (correctly falls back to `base`). One caveat, not a gap in the criteria
+> tested: `ASR_MODEL=small` was set by hand on a standalone sidecar rather
+> than driven live through the Node supervisor's restart-sidecar
+> env-injection loop (blocked by this box's single-instance :9000
+> constraint); the registry wiring itself was confirmed by reading
+> `server/src/config/registry.ts` and `spawn-sidecar.ts`, not executed
+> end-to-end through the supervisor. Full evidence:
+> `docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md`.
 
 ---
 
@@ -1628,6 +1665,16 @@ to sweep the **whole** 20-book workspace at once.
 > to list as owed — a fresh dry run confirming the #2107 fix's numbers — has
 > since been run (read-only, never `--apply`) and is folded into the #2107
 > writeup below.
+>
+> **Wave-3 step 9, 2026-08-20 — OPERATOR.** Per
+> `docs/testing/onbox-wave3-plan.md` §2 (itself re-deriving this row's own
+> §8.7/§8.8 text above): §8.7 needs a real TTS render of *Заказ Коалфолла*
+> ch2 plus human listening, and §8.8 needs a live-browser Cast-screen
+> cross-check — neither is agent-runnable. This row joins
+> `onbox-sitting-cloning-identity.md`'s row list alongside A32 (wave-3 step 4
+> re-confirmed the verdict without new evidence; nothing else about this row
+> changed). The live-view publish reflecting this move is still owed to the
+> operator.
 >
 > **What was observed.** The liveness rail refused first, against a *real*
 > `npm run dev` — which bound **LAN HTTPS 8443 only, never 8080**, so it was the
@@ -2238,6 +2285,21 @@ exercises `installForProfile`'s write branch on a first-ever install.
 scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
+> **Wave-3 step 2, 2026-08-20 — STILL OWED.** Ran a genuine from-scratch
+> `bootstrap-venv.mjs` on the nvidia profile against a throwaway venv (live
+> venv untouched, byte-verified). Marker present at the correct version
+> (`INSTALLER: castwright-ort-marker`) and `pip check` exit 0 — both
+> **DISCHARGED**. The third check — Kokoro reporting `CUDAExecutionProvider`
+> — **failed**: `get_available_providers()` lists it, but constructing an
+> inference session with it errors (`Error 126`) and silently falls back to
+> CPU. Root cause is a box-level gap, not this row's own code: this box has
+> only CUDA 12.4 system-wide while `onnxruntime-gpu` 1.27 needs CUDA 13.x/
+> cuDNN 9.x runtime libraries, reproduced identically against the live
+> sidecar venv (read-only). Blocks the same GPU-provider check on A40 and
+> (on re-check) A41. Full evidence, decision options for the fix (repin
+> onnxruntime-gpu vs. vendor CUDA13 wheels vs. upgrade the box):
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+
 ### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
@@ -2257,6 +2319,14 @@ filed against, and it has not been separately re-confirmed since the fix landed
 *Needs:* the existing NVIDIA dev box, the app running. *Criteria:* design doc
 §On-box acceptance item 2; run sheet §4 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
+
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs the full app
+> running plus a real click-through of Model Manager → Qwen → Install
+> against a throwaway copy of the sidecar venv — scoped as its own session
+> rather than rushed alongside A39/A41 in the same heartbeat. Independent of
+> scheduling, this row's final check would hit the same CUDA13/cuDNN9 gap
+> A39 found, so even a full run today could not fully discharge it without
+> that dependency gap closed first. `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 ### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
@@ -2293,6 +2363,24 @@ five-state table and "the clobbered box takes the loud path" in
 `docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, real defect found.** Manufactured
+> the state exactly per this row's own recipe on a throwaway copy
+> (`pip install --force-reinstall onnxruntime` over an existing
+> `onnxruntime-gpu`) and booted a real server against it. **No `[ort-marker]`
+> log line at all** — the server booted silently as if nothing were wrong.
+> Root cause: `detectOrtOwner` reads
+> `build_and_package_info.py`'s `package_name` first, which post-reinstall
+> genuinely reads `'onnxruntime'`, so it correctly returns `owner: 'plain'`,
+> not `'swap'` — `ensureOrtMarker` never reaches the `'clobbered'` branch
+> this row expects and instead takes the silent `'deleted'` path (not
+> logged). The named remedy command itself was independently verified and
+> works correctly when run directly. Two things are true at once and both
+> are real: either the row's own manufacture recipe doesn't reach the state
+> the design doc's five-state table means by "clobbered," or the `'deleted'`
+> branch being silent is a gap on its own regardless of the recipe — a
+> decision on both is owed to a fix agent, not resolved here. Full evidence:
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+
 ### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
@@ -2326,6 +2414,11 @@ delete-first/write-last ordering invariant in
 `docs/features/282-ort-pip-consistency-marker.md`, and the `pipInstall` anchors in
 the design doc's §Changed files; run sheet §9 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
+
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs a real installed
+> Castwright release directory (`release/` layout), a substantial task on its
+> own not fitted alongside A39/A41 this heartbeat.
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 ### A43 · Linking an orphaned `characterId` through the Cast screen actually reconnects its segments ([#2238](https://github.com/dudarenok-maker/Castwright/issues/2238), plan [278](../features/278-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped for the script half**
 
@@ -2376,6 +2469,18 @@ against one is unreliable). *Criteria:* plan
 [278](../features/278-cast-character-identity.md) §Amendment 2026-08-10; the four
 constraints listed there each have unit coverage, but only the corpus proves the
 count moves.
+
+> **Wave-3 step 4/9, 2026-08-20 — OPERATOR.** Per
+> `docs/testing/onbox-wave3-plan.md` §3: steps 2-3 above are the actual
+> criterion ("linked **through the UI**") and require opening
+> `#/books/<id>/cast` in a real browser and reading the row move from
+> "needs your decision" to "auto-reconciled" in the rendered page — no
+> API-only substitute is stated anywhere in this row. Step 5's negative case
+> has one script-testable half (the direct `POST` 400) but also requires
+> observing the link action rendered as **disabled with a visible reason**,
+> also a browser state. This row joins `onbox-sitting-cloning-identity.md`'s
+> row list alongside A32 and A33. The live-view publish reflecting this
+> move is still owed to the operator.
 
 ### A44 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
 
@@ -2530,6 +2635,17 @@ dense single-paragraph chapter that used to hard-fail with "truncated the respon
 rather than assuming GPU speed · `LiveChapterTicker` renders every in-flight chapter
 at K=4 with a monotonic per-phase bar.
 
+> **Wave-3 step 5, 2026-08-20 — STILL OWED, not run.** Blocked on two
+> verified preconditions this worktree does not have: no `GEMINI_API_KEY`
+> (step 1 needs a genuine Gemini recitation-block → Qwen fallback; the
+> worktree's own `.env` deliberately carries no secrets) and no ready-made
+> ~110k-char / dense-single-paragraph fixture (steps 2-4's fixtures are both
+> far short — 15.6k/6.2k chars — and the isolated workspace is empty).
+> Nothing attempted beyond confirming these blockers. Re-resolution note:
+> step 5 (`LiveChapterTicker` at K=4) is itself browser/visual-shaped, worth
+> flagging back as a partial exception to this row's blanket
+> "agent-runnable" framing. `docs/testing/onbox-wave3-results/step-5-group-b.md`.
+
 ### B2 · Per-model analyzer keep-alive (plan 263)
 
 **Eight** steps at `:242-299` — an earlier version of this register said seven and
@@ -2543,6 +2659,26 @@ rather than appearing to do nothing. `-1` keeps it resident indefinitely; the re
 model and no override keeps persona keep-alive at `300`, unregressed by the per-model
 resolver. **CPU-only:** a `RAM_HEAVY_MODELS` clamp overrides a configured positive
 keep-alive back to `0`.
+
+> **Wave-3 step 5, 2026-08-20 — 6 of 8 steps DISCHARGED, shrinks.** Steps
+> 1-6 run live against the real Model Manager API + `ollama ps`, with pasted
+> command+output each — the flat 30s default, PUT persisting the raw-key
+> map, the run-time pin (confirmed as a real side-effect of B3/B4's ~20-min
+> re-analysis), the keep-alive=0/30s-floor regression check, keep-alive=-1
+> resident-indefinitely, and reset restoring the default. All settings
+> restored byte-identical to baseline afterward. **What remains owed:**
+> step 7 (CPU-only `RAM_HEAVY_MODELS` clamp) — genuinely blocked, not just
+> unattempted: this box has two resident NVIDIA GPUs, so `accelerator`
+> structurally resolves to `'cuda'` and cannot be forced to `'cpu'` without
+> disabling GPU visibility (risks other lanes' work); step 8 (persona
+> keep-alive stays 300) is corroborated by a direct source read
+> (`generatePersonaViaOllama` never routes through the per-model resolver at
+> all) but was **not** observed live via `ollama ps` during an actual voice-
+> design job — recorded as corroborated-by-source, not a live discharge, per
+> the fail-closed rule. A genuine, non-defect design property was found and
+> recorded: the run-time pin (step 3) is gated on *any* analyzer run being
+> busy, not scoped to the specific model. Full evidence:
+> `docs/testing/onbox-wave3-results/step-5-group-b.md`.
 
 ### B3 · Cast/analysis `characterId` drift — Wave 2 stops new drift ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
 
@@ -2558,6 +2694,25 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 *Needs:* a real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering is required for this row's own criteria. *Criteria:* the run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7 (Wave 2). *Cost:* short — one re-analysis of an already-imported book, then a diff of two small JSON files.
 
+> **Wave-3 step 5, 2026-08-20 — STILL OWED, real defect found.** A real full
+> re-analysis via local Ollama (`qwen36-cw-iq4-32k:latest`, ~19m43s) left
+> `mairin`/`coalfall-dragon` unchanged in `cast.json` — the core criterion
+> **passed**, and more convincingly than a same-string coincidence: the
+> analyzer's raw fresh ids this run were genuinely different
+> (`мэйрин`/`коалфолл`, lowercase Cyrillic) and were correctly caught and
+> retired via `retireCharacterId`, recorded in `cast-id-history.json`'s
+> `supersededBy` map (plus a third character, `widow-casper→widow-kasper`).
+> **The row's own "roster otherwise intact, no duplicate row" sub-check
+> failed for real:** roster grew 13→16; two of the three additions
+> (`brann-wire`, `berrin-wire`) are near-duplicate rows of the pre-existing
+> `brann-weir`/`berrin-weir` — same role, same evidence quotes verbatim,
+> never linked via `retireCharacterId`. Root cause (routed to a fix agent,
+> not fixed here): `merge-analysis-cast.ts:205-206,282-284`'s name-fallback
+> match requires an exact normalized-name string match, with no tolerance
+> for a character gaining a surname token between analyzer runs (this run:
+> "Бранн Уир" vs. the cast's "Бранн"). Full evidence, `Result:` lines:
+> `docs/testing/cast-id-drift-onbox-acceptance.md` §7;
+> `docs/testing/onbox-wave3-results/step-5-group-b.md`.
 
 ### B4 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
 
@@ -2575,6 +2730,16 @@ The fix is a prompt instruction, so **the three unit tests prove the rule render
 If the run instead happens on a book whose language was never declared (imported before fs-2, or left undecided at the confirm screen), that is a **more** valuable observation, not a less valuable one: those books get an empty `languagePreamble`, so this block is their only protection.
 
 *Needs:* a real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering. *Criteria:* this row. *Cost:* none beyond B3, if run together.
+
+> **Wave-3 step 5, 2026-08-20 — STILL OWED, same run as B3.** Rode B3's
+> re-analysis of *Заказ Коалфолла* per this row's own instruction. All
+> Cyrillic names (zero Latin transliterations) and all-ASCII-kebab-case ids
+> **passed**. **"No character gained a second id" FAILED** — exactly the
+> near-duplicate pair (`brann-wire`/`berrin-wire` duplicating
+> `brann-weir`/`berrin-weir`) this row's own text names as the worst-case
+> outcome; see B3 above for the full evidence and root cause. Roster size
+> moved 13→16, not "still 13" as the row anticipated as the default case.
+> `docs/testing/onbox-wave3-results/step-5-group-b.md`.
 
 ---
 
@@ -2733,6 +2898,16 @@ re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json
 and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
 for cast + generation.
 
+> **Wave-3 step 6, 2026-08-20 — STILL OWED, not run.** Blocked on a
+> genuinely missing credential: this worktree's `server/.env` has no
+> `GEMINI_API_KEY` and no other channel (shell env, secrets store) supplied
+> one. The primary checkout's `server/.env` was deliberately **not** read,
+> opened, or copied at any point (a named secret-leak shape, #2345) — the
+> honest outcome when no channel supplies the key is to record this row as
+> still owed, not to route around the isolation. Nothing in the row's
+> remaining scope was narrowed or dropped.
+> `docs/testing/onbox-wave3-results/step-6-group-c.md`.
+
 ### C2 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
 
 **Partially discharged 2026-08-13** — see the run summary above. Two of this
@@ -2775,6 +2950,16 @@ does not change that; it is not blocked on acquiring one.
 Same setup as C2: local Ollama, `qwen36-cw-iq4-32k`, ~14 GB VRAM free, sidecar
 suppressed (`DISABLE_AUTOSTART_SIDECAR=1`), no TTS. Batches naturally with C2's
 session rather than needing its own.
+
+> **Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.** The GPU itself was
+> idle and not the blocker. Live-rechecked today (independent of the plan's
+> same-day citation): `#2288` — "findQuoteRuns lets a gap-seeded quote run
+> swallow the next dialogue turn" — is still **OPEN**, so the register's own
+> hold (naming #2288 as the thing that changes dialogue segmentation) is
+> still in effect. Starting the 12h27m-class local re-run now would measure
+> a moving target, exactly the outcome the hold exists to prevent. Nothing
+> in the row's remaining scope was narrowed.
+> `docs/testing/onbox-wave3-results/step-6-group-c.md`.
 
 ### C3 · A deterministic stage-2 failure actually clears when the span is halved ([#2304](https://github.com/dudarenok-maker/Castwright/issues/2304))
 
@@ -2828,6 +3013,12 @@ this exact book and chapter, so this row needs no session of its own. Note C2 is
 itself waiting on [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306);
 this row is not, and can be taken on any local re-analysis that reaches ch8.
 
+> **Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.** Rides C2's session
+> per this row's own text; blocked by the same live-confirmed #2288-open
+> state. The ch8 `repeat-loop`-at-offset-19 reproducer and its specific
+> log-line criteria are unchanged and were not exercised — no re-analysis
+> ran. `docs/testing/onbox-wave3-results/step-6-group-c.md`.
+
 ---
 
 ### C4 · The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book ([#2325](https://github.com/dudarenok-maker/Castwright/issues/2325), [#2342](https://github.com/dudarenok-maker/Castwright/issues/2342))
@@ -2846,6 +3037,17 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 **Where the criteria live:** the max-39.3%/min-72.2% per-chapter narrated-speech-half figures this row cites are stated directly above, in this row (**Why this cannot be closed by the unit tests**) — no source file duplicates them at that granularity, so this row is their canonical home, not a pointer away from it. [`server/src/analyzer/stage2-coverage.ts`](../../server/src/analyzer/stage2-coverage.ts) carries two DIFFERENT calibration figures of its own, not this row's numbers: the module header's 95.7%/67.9% (lines ~160-161) is the same book's WHOLE-BOOK, ALL-SENTENCE narrator share, not the per-chapter SPEECH-HALF share the 60% threshold actually gates — reading 67.9% as "under the 60% threshold" would be wrong, since the good run's per-chapter figure this row measured is 3.2-39.3%, comfortably clear; and the `markersLost` comment's 246→213/241→209 (lines ~389-390) is an unrelated dialogue-marker-recovery calibration, not a narrated-share number at all. There is no dedicated plan doc for #2325/#2342, and plan 247 (dialogue-structure attribution) mentions neither the issue nor this calibration, so it was never the right pointer. Related but distinct: the #1984 attribution-collapse *visibility* strand measures and surfaces collapse; this guard *acts* on it during analysis. They share a name and nothing else — do not discharge one against the other.
 
 **Not discharged by:** a green `npm run test:server`. The guard's tests are fixture-driven by construction; that is the point of this row.
+
+> **Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.** "Best taken in the
+> same session as C2/C3" — same live-confirmed #2288-open block. Both
+> halves of this row's criterion (fires on a real collapse; stays quiet on
+> a healthy book) remain unexercised, recorded as two separate still-owed
+> observations per this row's own requirement that a guard is only proven
+> by both. Re-resolution note, not acted on: even once #2288 clears, the
+> healthy-book half may need a second Cyrillic/dash-convention book
+> imported, since replaying the metric over this box's 82 cached analyses
+> found only one with an evaluable speech population.
+> `docs/testing/onbox-wave3-results/step-6-group-c.md`.
 
 ---
 
@@ -3083,6 +3285,21 @@ Observe:
 6. Failure path, if cheap to induce (e.g. no Python 3.12 on PATH): the red "Setup failed" card
    with the server's message, and a working "Try again".
 
+> **Wave-3 step 7, 2026-08-20 — split, server half DISCHARGED, rendered half
+> OPERATOR.** The job/poll wiring underneath the card (`POST
+> /api/setup/venv/bootstrap`, `GET /api/setup/venv/bootstrap/:id`) was run
+> for real against a genuinely absent venv (this worktree's own, never
+> deleted from a live one) — a real 8m49s `bootstrap-venv.mjs` subprocess
+> with distinct polled step values across the whole run and a genuine
+> terminal `installed` state, independently confirmed via `detect` and the
+> filesystem. This is the exact wiring the row's own text says "no
+> automated test has ever driven... from a real bootstrap job," proven
+> not-mocked. **Observations 1, 2, 4, 5, 6 remain owed** — they are rendered-
+> page states (spinner, card timing, green ready card, refetch-without-
+> reload, failure card) with no API-only substitute stated in the row.
+> Joins `onbox-sitting-device-browser.md` alongside E1, E2, E3, E5, E6, E9,
+> E10. `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
+
 ---
 
 ### E8 · ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
@@ -3103,6 +3320,16 @@ L4-loose's error actually is when the encoder really differs rather than being
 told it does.
 
 Criteria: [`docs/features/272-golden-assembly-comparison.md`](../features/272-golden-assembly-comparison.md).
+
+> **Wave-3 step 7, 2026-08-20 — STILL OWED.** Checked, not assumed: no
+> Docker, no WSL, no container runtime of any kind on this box, and the
+> only other `ffmpeg.exe` present (the WinGet package) is the same
+> `8.1.1-full_build-www.gyan.dev` binary already on PATH, not a different
+> build. `npm run test:golden-audio:assembly` was **not** run — running it
+> here would only repeat the same single-ffmpeg case the row already says
+> "proves nothing." Installing WSL/a container runtime to manufacture a
+> second build is a box-level change, out of scope without operator
+> sign-off. `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
 
 ---
 
@@ -3269,6 +3496,27 @@ scripts/measure-attribution.mjs`. *Cost:* under 5 minutes once `server/dist`
 exists. *Criteria:* spec §On-box acceptance
 (`docs/superpowers/specs/2026-08-06-attribution-collapse-visibility-design.md`).
 
+> **Wave-3 step 4, 2026-08-20 — item (2) run, criterion FAILS on real
+> data.** Both passes run for real (straight, then dash-stripped over a
+> scratch-path copy of every cache file, originals restored and verified
+> byte-identical after). 22 of 23 books: zero diffs, every measured field
+> identical. **`Ночной дозор` (the corpus's heaviest dash-convention book):
+> 14 fields diverge** (`narratorIdSpoken` 229→223, `share` moved, `splitSpeech`
+> 337→346, five chapters' per-chapter columns shifted). This is a real,
+> reproducible property gap, not harness noise — 22/23 byte-identical rules
+> out a broken diff, and the one failing book is the corpus's own worst case
+> for the property being tested. Root cause (routed to a fix agent, not
+> fixed here): `alignSentences`
+> (`server/src/analyzer/dialogue-structure/aligner.ts:317,360`) locates its
+> needle by substring-searching the **cached** sentence's normalized text in
+> the chapter body — stripping the leading dash changes the needle without
+> changing the body, shifting which offsets it locates at. Item (2) is
+> therefore **STILL OWED** (the criterion fails, not merely unrun). **Item
+> (3)** (post-D18 re-analysis) rides Group B/C's session per the plan and
+> was not this step's job — not attempted. Run sheet's own `Result:` line
+> updated: `docs/testing/attribution-collapse-visibility-onbox-acceptance.md`
+> §4. `docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md`.
+
 ## Group F — a real Android device
 
 ### F1 · Android companion app — v1 live-device acceptance (plan 188) · **an entire untested axis**
@@ -3383,6 +3631,24 @@ manufactured) — the shared precondition left for both remaining halves.
 *Cost:* opportunistic — piggy-back
 on the next real quarantine event rather than manufacturing one.
 
+> **Wave-3 step 8, 2026-08-20 — STILL OWED-blocked, both debts, on new live
+> evidence.** This row's "flaky register carries one row today (#1981)" text
+> above is now stale — corrected here rather than silently: `#2235` has been
+> a real quarantined row since 2026-08-13, so the precondition both debts
+> share has existed for a week. But `gh pr view 2488` shows PR #2488 (parses
+> the register's real test-cell format) is still **OPEN** and `gh issue view
+> 2465` (parseRegister drops every real register row) is still **OPEN**.
+> Live-checked, not theoretical: the 2026-08-17 scheduled dispatch
+> (`databaseId 31992063988`, off a commit descending from #2235's own
+> quarantine commit) reported a clean "nothing to run" no-op — `#2465`
+> silently dropping a real quarantined row **in production, today**. Because
+> the run took the empty-register path, the post-loop `gh issue view` calls
+> were never reached — debt 1 remains unreachable — and the `intermittent`
+> classification (debt 2) is blocked for the identical reason. Both verdicts
+> unchanged from STILL OWED-blocked; the live dispatch sharpens the evidence
+> from "the fix will unblock this" to "the bug is actively dropping a real
+> row today." `docs/testing/onbox-wave3-results/step-8-group-g.md`.
+
 ### G2 · The published release body now comes from the committed file, not the tag annotation ([#2137](https://github.com/dudarenok-maker/Castwright/issues/2137), PR #2168)
 
 `release.yml` validated `docs/release-notes-next.md` at the tag ref but published
@@ -3443,6 +3709,15 @@ block on the next cut is unlikely, but not proven until observed.
 *Cost:* zero extra; it is observed as part of a cut that was happening anyway.
 *Discharges when:* one real release publishes with a body sourced from the file
 and the observations above are recorded here.
+
+> **Wave-3 step 8, 2026-08-20 — STILL OWED, no opportunity yet.** PR #2168
+> (the fix under test) merged 2026-08-06. Live-checked: `v1.14.0`, the
+> latest and only candidate anywhere near the fix, was tagged 2026-07-23 —
+> **two weeks before** the fix merged, so its published body was produced by
+> the pre-fix path and cannot exercise this row. No tag has been pushed
+> since. Unchanged from opportunistic framing; no manufacture attempted
+> (box-safety: a false positive here blocks a real release).
+> `docs/testing/onbox-wave3-results/step-8-group-g.md`.
 
 ---
 
