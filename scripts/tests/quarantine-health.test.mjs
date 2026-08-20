@@ -24,6 +24,7 @@ import {
   buildParseFailureMessage,
   worstCaseRunMs,
   budgetExceeded,
+  main,
   VITEST_RUN_TIMEOUT_MS,
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
@@ -352,16 +353,16 @@ test('parseRegister extracts the full prose test name when it contains incidenta
   assert.equal(entries[0].testName, expectedName, `should extract full prose name with backticks intact, not just the backtick-quoted substring`);
 });
 
-test('parseRegister expands multiple backtick-quoted test names in prose format (Bug 2)', () => {
-  // Bug 2: a Test cell with prose prefix AND 2+ backtick-quoted names should expand them
+test('parseRegister with prose prefix treats all backtick-quoted text as part of one name (not expansion)', () => {
+  // Fix 1: a Test cell with prose prefix should NOT expand 2+ backtick-quoted spans.
+  // The WHOLE remainder (including all backticks) becomes a single test name.
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
 | #2301 — retries \`test A\`, \`test B\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
 `;
   const entries = parseRegister(markdown);
-  assert.equal(entries.length, 2, 'should parse 2 separate entries for the 2 backtick-quoted names');
-  assert.equal(entries[0].testName, 'test A', 'first entry should be the first backtick-quoted name');
-  assert.equal(entries[1].testName, 'test B', 'second entry should be the second backtick-quoted name');
+  assert.equal(entries.length, 1, 'should parse 1 entry (not expand the prose remainder)');
+  assert.equal(entries[0].testName, 'retries `test A`, `test B`', 'should preserve full prose name with backticks intact');
 });
 
 test('parseRegister keeps single incidental backtick-quoted text as part of prose name, not as separate test (Bug 2)', () => {
@@ -373,6 +374,18 @@ test('parseRegister keeps single incidental backtick-quoted text as part of pros
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1, 'should parse 1 entry (not expand the single backtick pair)');
   assert.equal(entries[0].testName, 'retries the `POST /api/x` call once', 'should preserve full prose name with single backtick pair intact');
+});
+
+test('parseRegister regression: prose description with multiple distinct backtick-quoted terms stays one entry (round-4 false positive)', () => {
+  // Round-4 false positive: the expansion logic split this real test description into 2 bogus entries.
+  // Fix 1: prose format takes precedence, the whole remainder (including all backticks) is one test name.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — fails when \`POST /api/x\` follows \`GET /api/y\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'should parse 1 entry (not split into 2 on the backtick boundaries)');
+  assert.equal(entries[0].testName, 'fails when `POST /api/x` follows `GET /api/y`', 'should preserve the full prose description with all backticks intact');
 });
 
 // --- parseRegister / splitTableRow: escaped `|` in a cell (finding 1) ------
@@ -1220,6 +1233,40 @@ test('planRegisterRun returns ok when all data rows parse successfully', () => {
   assert.equal(result.entries.length, 2, 'should parse 2 entries');
 });
 
+test('countUnparsedDataRows detects rows with fewer than 5 cells as malformed (Fix 3)', () => {
+  // A row with fewer than 5 cells is structurally invalid and must count as unparsed.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races |
+| #1982 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1982 | 2026-08-02 |
+`;
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 1, 'should count 1 unparsed row (the 4-cell malformed row)');
+});
+
+test('planRegisterRun returns parse-failure when any row has fewer than 5 cells (Fix 3)', () => {
+  // A register with one well-formed row and one malformed row (4 cells) should fire parse-failure.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races |
+| #1982 — another test | \`server/src/routes/bar.test.ts\` | timing | races | #1982 | 2026-08-02 |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'parse-failure', 'should detect malformed row with <5 cells');
+  assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
+test('planRegisterRun returns parse-failure when the only row is malformed (Fix 3)', () => {
+  // A register with ONLY a malformed row should return parse-failure, not empty.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| some opaque reference | \`server/src/routes/foo.test.ts\` | timing |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'parse-failure', 'should detect a single malformed row');
+  assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
 test('planRegisterRun returns empty when no data rows exist', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
@@ -1230,6 +1277,63 @@ _Empty — no tests are currently quarantined._
   assert.equal(result.outcome, 'empty', 'should return empty for genuinely empty register');
   assert.equal(result.unparsedCount, 0, 'should report 0 unparsed rows');
   assert.equal(result.entries.length, 0, 'should parse 0 entries');
+});
+
+test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fix 2)', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+
+  // Create a temp directory for our test files
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-main-test-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+
+  // Write an unparseable register (a row with <5 cells — Fix 3)
+  const unparseable = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — unparseable row | \`server/src/routes/foo.test.ts\` | timing |
+`;
+  writeFileSync(registerPath, unparseable, 'utf8');
+
+  // Save original env vars and exit code
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalExitCode = process.exitCode;
+
+  try {
+    // Set up the test environment
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.exitCode = 0;
+
+    // Call main() with the temp register file
+    main(registerPath);
+
+    // Verify exit code was set to 1
+    assert.equal(process.exitCode, 1, 'main() should set exit code to 1 on parse-failure');
+
+    // Verify the parse-failure message was written to GITHUB_STEP_SUMMARY
+    const written = readFileSync(summaryPath, 'utf8');
+    assert.ok(written.includes('quarantine-health:'), 'message should be in GITHUB_STEP_SUMMARY');
+    assert.ok(written.includes('1 data row(s)'), 'message should name the data row count');
+    assert.ok(written.includes('1 could not be fully parsed'), 'message should name the unparsed count');
+    assert.ok(written.includes('parser is silently dropping row(s)'), 'message should describe the bug');
+  } finally {
+    // Restore env vars and exit code
+    if (originalSummaryPath === undefined) {
+      delete process.env.GITHUB_STEP_SUMMARY;
+    } else {
+      process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    }
+    process.exitCode = originalExitCode;
+
+    // Clean up temp files
+    try {
+      rmSync(summaryPath, { force: true });
+      rmSync(registerPath, { force: true });
+      rmSync(tempDir, { force: true });
+    } catch {}
+  }
 });
 
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
