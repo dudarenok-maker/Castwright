@@ -54,14 +54,16 @@ async function ensureGpuDeviceListWarm(): Promise<void> {
   if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
 }
 
-configRouter.get('/', async (_req, res) => {
+configRouter.get('/', async (req, res) => {
   await ensureGpuDeviceListWarm();
   const descriptors = allKnobDescriptors();
 
   // Determine env cleanup candidates from the actual .env file content,
   // not from process.env (which can be shadowed by the shell/OS).
   let envCleanupCandidates: string[] = [];
-  const envPath = resolveServerEnvPath();
+  // Allow tests to inject a path without touching the real server/.env.
+  const queryPath = typeof req.query.envPath === 'string' ? req.query.envPath : undefined;
+  const envPath = queryPath ?? resolveServerEnvPath();
   if (existsSync(envPath)) {
     try {
       const fileContent = readFileSync(envPath, 'utf-8');
@@ -257,6 +259,13 @@ configRouter.post('/env-cleanup', async (req, res) => {
   );
 
   const result = cleanEnvText(original, (varName) => candidateSet.has(varName));
+
+  // If nothing to clean, return early without modifying .env or .env.bak.
+  // This prevents overwriting the backup on a no-op cleanup run.
+  if (result.cleaned.length === 0) {
+    res.json({ cleaned: [] });
+    return;
+  }
 
   // Backup: copy the pre-cleanup content to server/.env.bak (snapshot, not
   // version history — each cleanup overwrites the previous backup).

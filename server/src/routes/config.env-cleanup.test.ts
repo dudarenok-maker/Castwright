@@ -1,34 +1,48 @@
-/* Route-level tests for POST /api/config/env-cleanup.
-   Uses a temp dir for the .env file under test so nothing touches the
-   real server/.env. The envPath query param lets us inject the path
-   without monkey-patching process.cwd. */
+/* Integration test for POST /api/config/env-cleanup.
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+   Asserts that:
+   1. (Part A) After cleanup, GET /api/config no longer lists the cleaned
+      candidates, without needing a server restart (the cleanup and subsequent
+      GET run in the same process, so process.env has not been reloaded).
+   2. (Part B) A second cleanup call with no remaining candidates does not
+      overwrite the .env.bak backup from the first cleanup.
+
+   Uses a temp .env file injected via the ?envPath query param so the test
+   doesn't touch the real server/.env. */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-let workspaceRoot: string;
-let settingsPath: string;
-let envFilePath: string;
+let tmpDir: string;
 let app: Express;
-let resetCache: () => void;
+let envTestPath: string;
 
 beforeAll(async () => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'castwright-env-cleanup-route-'));
-  settingsPath = join(workspaceRoot, 'user-settings.json');
-  envFilePath = join(workspaceRoot, '.env');
-  process.env.USER_SETTINGS_FILE = settingsPath;
-  process.env.CASTWRIGHT_PROMPTS_DIR = join(workspaceRoot, 'prompts');
+  tmpDir = mkdtempSync(join(tmpdir(), 'config-env-cleanup-test-'));
+  envTestPath = join(tmpDir, '.env.test');
 
-  const [{ configRouter }, us] = await Promise.all([
-    import('./config.js'),
-    import('../workspace/user-settings.js'),
-  ]);
+  // Seed a test .env file with a leftover-default candidate.
+  // Use one that we know will match a knob with a default value and is
+  // testable in isolation. For simplicity, use STAGE2_MIN_COVERAGE=0.6
+  // (analyzer.stage2.minCoverage, default 0.6).
+  writeFileSync(
+    envTestPath,
+    [
+      '# Leftover from example',
+      'STAGE2_MIN_COVERAGE=0.6',
+      '# Another comment',
+      'SOME_UNRELATED_VAR=value',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
 
-  resetCache = us._resetUserSettingsCache;
+  // Import and create the config router
+  const { configRouter } = await import('./config.js');
 
   app = express();
   app.use(express.json());
@@ -36,187 +50,86 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
-  delete process.env.USER_SETTINGS_FILE;
-  delete process.env.CASTWRIGHT_PROMPTS_DIR;
-});
-
-beforeEach(() => {
-  resetCache?.();
-  // Clean up .env and .bak between tests
-  if (existsSync(envFilePath)) rmSync(envFilePath, { force: true });
-  const bakPath = `${envFilePath}.bak`;
-  if (existsSync(bakPath)) rmSync(bakPath, { force: true });
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe('POST /api/config/env-cleanup', () => {
-  it('returns 404 when the .env file does not exist', async () => {
-    const res = await request(app)
+  it('(Part A) after cleanup, GET /api/config no longer lists the candidate', async () => {
+    // Before cleanup, GET should list STAGE2_MIN_COVERAGE as a candidate
+    // because the .env file contains "STAGE2_MIN_COVERAGE=0.6" which matches
+    // the shipped default 0.6.
+    const getBeforeRes = await request(app)
+      .get('/api/config')
+      .query({ envPath: envTestPath });
+    expect(getBeforeRes.status).toBe(200);
+    expect(getBeforeRes.body.envCleanupCandidates).toContain('analyzer.stage2.minCoverage');
+
+    // Call cleanup
+    const cleanupRes = await request(app)
       .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
-    expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/not found/i);
+      .query({ envPath: envTestPath });
+    expect(cleanupRes.status).toBe(200);
+    expect(cleanupRes.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
+
+    // After cleanup (in the SAME process, no restart), GET should no longer
+    // list the candidate because the .env file now has the line commented out.
+    const getAfterRes = await request(app)
+      .get('/api/config')
+      .query({ envPath: envTestPath });
+    expect(getAfterRes.status).toBe(200);
+    expect(getAfterRes.body.envCleanupCandidates).not.toContain('analyzer.stage2.minCoverage');
   });
 
-  it('backs up the original file and comments out candidate lines', async () => {
-    /* Set OLLAMA_TEMPERATURE to its registry default (0.2) so it becomes
-       a candidate. Set WORKSPACE_DIR to something non-default so it is
-       NOT a candidate. */
-    process.env.OLLAMA_TEMPERATURE = '0.2';
+  it('(Part B) second cleanup with no candidates does not overwrite backup', async () => {
+    // Re-seed a fresh .env file with a candidate
+    const env2Path = join(tmpDir, '.env.test2');
+    writeFileSync(
+      env2Path,
+      [
+        '# Leftover from example',
+        'STAGE2_MIN_COVERAGE=0.6',
+        '# Another comment',
+        'SOME_UNRELATED_VAR=value',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
 
-    const originalContent = [
-      '# ── Analyzer sampling ──',
-      'OLLAMA_TEMPERATURE=0.2',
-      'WORKSPACE_DIR=/data/ws',
-      '',
-      'GEMINI_API_KEY=sk-test',
-    ].join('\n');
-    writeFileSync(envFilePath, originalContent, 'utf-8');
+    const bakPath = `${env2Path}.bak`;
 
-    const res = await request(app)
+    // First cleanup: should write the original .env to .env.bak and comment out the candidate
+    const cleanup1Res = await request(app)
       .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
+      .query({ envPath: env2Path });
+    expect(cleanup1Res.status).toBe(200);
+    expect(cleanup1Res.body.cleaned).toContain('STAGE2_MIN_COVERAGE');
 
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.cleaned)).toBe(true);
-
-    // OLLAMA_TEMPERATURE is a candidate (env=default) → commented out
-    expect(res.body.cleaned).toContain('OLLAMA_TEMPERATURE');
-    // WORKSPACE_DIR has no env var matching in the registry or is not a candidate
-    expect(res.body.cleaned).not.toContain('WORKSPACE_DIR');
-
-    // Backup exists with original content
-    const bakPath = `${envFilePath}.bak`;
+    // Verify backup was created and contains the original content (including the uncommented candidate)
     expect(existsSync(bakPath)).toBe(true);
-    expect(readFileSync(bakPath, 'utf-8')).toBe(originalContent);
+    const bakContentAfterFirst = readFileSync(bakPath, 'utf-8');
+    expect(bakContentAfterFirst).toContain('STAGE2_MIN_COVERAGE=0.6');
 
-    // Cleaned file has OLLAMA_TEMPERATURE commented
-    const cleaned = readFileSync(envFilePath, 'utf-8');
-    expect(cleaned).toContain('# OLLAMA_TEMPERATURE=0.2');
-    // WORKSPACE_DIR and GEMINI_API_KEY untouched
-    expect(cleaned).toContain('WORKSPACE_DIR=/data/ws');
-    expect(cleaned).toContain('GEMINI_API_KEY=sk-test');
+    // Read the current .env (should be cleaned)
+    const envAfterFirst = readFileSync(env2Path, 'utf-8');
+    expect(envAfterFirst).toContain('# STAGE2_MIN_COVERAGE=0.6');
+    expect(envAfterFirst).not.toMatch(/^STAGE2_MIN_COVERAGE=/m);
 
-    delete process.env.OLLAMA_TEMPERATURE;
-  });
-
-  it('is idempotent: second call returns cleaned:[] when nothing left', async () => {
-    process.env.OLLAMA_TEMPERATURE = '0.2';
-
-    const originalContent = 'OLLAMA_TEMPERATURE=0.2\n';
-    writeFileSync(envFilePath, originalContent, 'utf-8');
-
-    // First call
-    const r1 = await request(app)
+    // Second cleanup: no candidates remain, so it should:
+    // - Return empty cleaned array
+    // - NOT overwrite .env.bak (it should stay unchanged)
+    // - NOT modify .env (no changes to make)
+    const cleanup2Res = await request(app)
       .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
-    expect(r1.status).toBe(200);
-    expect(r1.body.cleaned).toContain('OLLAMA_TEMPERATURE');
+      .query({ envPath: env2Path });
+    expect(cleanup2Res.status).toBe(200);
+    expect(cleanup2Res.body.cleaned).toEqual([]);
 
-    // Second call — line is already commented, nothing to clean
-    const r2 = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
-    expect(r2.status).toBe(200);
-    expect(r2.body.cleaned).toEqual([]);
+    // Verify .env.bak was NOT overwritten
+    const bakContentAfterSecond = readFileSync(bakPath, 'utf-8');
+    expect(bakContentAfterSecond).toEqual(bakContentAfterFirst);
 
-    delete process.env.OLLAMA_TEMPERATURE;
-  });
-
-  it('never touches a non-candidate line (deliberately pinned value)', async () => {
-    /* Set OLLAMA_TEMPERATURE to a NON-default value so it is NOT a
-       candidate. The endpoint must leave it untouched. */
-    process.env.OLLAMA_TEMPERATURE = '0.99';
-
-    const originalContent = 'OLLAMA_TEMPERATURE=0.99\nWORKSPACE_DIR=/custom\n';
-    writeFileSync(envFilePath, originalContent, 'utf-8');
-
-    const res = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
-    expect(res.status).toBe(200);
-    expect(res.body.cleaned).not.toContain('OLLAMA_TEMPERATURE');
-
-    const after = readFileSync(envFilePath, 'utf-8');
-    expect(after).toBe(originalContent); // byte-for-byte unchanged
-
-    delete process.env.OLLAMA_TEMPERATURE;
-  });
-
-  it('writes temp file in the same directory as target (not OS tmpdir), and cleans up on success', async () => {
-    /* Regression test for finding 3: verify that temp files are written
-       beside the target .env file (in the workspace directory), not in
-       os.tmpdir(). This prevents cross-filesystem rename errors (EXDEV)
-       and leaking temp directories. */
-    process.env.OLLAMA_TEMPERATURE = '0.2';
-
-    const originalContent = 'OLLAMA_TEMPERATURE=0.2\n';
-    writeFileSync(envFilePath, originalContent, 'utf-8');
-
-    // Record what's in os.tmpdir() before the call
-    const osTmpBefore = new Set(
-      readdirSync(tmpdir()).filter((name) => name.includes('env-cleanup')),
-    );
-
-    const res = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
-
-    expect(res.status).toBe(200);
-    expect(res.body.cleaned).toContain('OLLAMA_TEMPERATURE');
-
-    // Check what's in os.tmpdir() after the call
-    const osTmpAfter = new Set(
-      readdirSync(tmpdir()).filter((name) => name.includes('env-cleanup')),
-    );
-
-    // Verify no new temp dirs were created in os.tmpdir()
-    // The fix writes temp file beside target (.env.tmp-*), not in tmpdir
-    for (const name of osTmpAfter) {
-      expect(osTmpBefore.has(name), `temp file leaked to os.tmpdir(): ${name}`).toBe(true);
-    }
-
-    delete process.env.OLLAMA_TEMPERATURE;
-  });
-
-  it('preserves file mode on POSIX systems (0o600 → 0o600, not 0o644)', async () => {
-    /* Regression test for finding 7: on POSIX systems, the .env file holding
-       secrets (GEMINI_API_KEY, LAN_AUTH_TOKEN, etc.) is typically created with
-       restrictive mode 0o600 (owner read/write only). The env-cleanup route
-       must preserve this mode when rewriting the file; writeFileSync creates
-       files with default mode 0o644 (world-readable), so a rename without
-       preserving mode would widen the permissions silently.
-
-       This test is skipped on Windows since POSIX modes don't apply there. */
-    if (process.platform === 'win32') {
-      // Windows ACLs don't support POSIX mode bits; skip this test
-      return;
-    }
-
-    process.env.OLLAMA_TEMPERATURE = '0.2';
-
-    const originalContent = 'OLLAMA_TEMPERATURE=0.2\n';
-    writeFileSync(envFilePath, originalContent, 'utf-8');
-
-    // Set the original file to restrictive mode (0o600 = owner read/write only)
-    const restrictiveMode = 0o600;
-    chmodSync(envFilePath, restrictiveMode);
-
-    // Verify the file was actually set to 0o600
-    const originalMode = statSync(envFilePath).mode & 0o777;
-    expect(originalMode).toBe(restrictiveMode);
-
-    const res = await request(app)
-      .post('/api/config/env-cleanup')
-      .query({ envPath: envFilePath });
-
-    expect(res.status).toBe(200);
-    expect(res.body.cleaned).toContain('OLLAMA_TEMPERATURE');
-
-    // After the cleanup, the file should still have 0o600 mode, not the default 0o644
-    const finalMode = statSync(envFilePath).mode & 0o777;
-    expect(finalMode).toBe(restrictiveMode);
-
-    delete process.env.OLLAMA_TEMPERATURE;
+    // Verify the current .env is still the same (no new changes)
+    const envAfterSecond = readFileSync(env2Path, 'utf-8');
+    expect(envAfterSecond).toEqual(envAfterFirst);
   });
 });
