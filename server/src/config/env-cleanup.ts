@@ -12,10 +12,18 @@
    reading, backup, and atomic write. */
 
 /** Regex matching a bare (uncommented) env-var assignment.
-    Group 1: the var name (upper-case letters, digits, underscores).
-    Group 2: the rest of the line (the value, including any trailing
+    Matches:
+    - Optional leading whitespace (indented lines)
+    - Optional `export ` prefix (shell-compatible syntax)
+    - Key name (upper-case letters, digits, underscores)
+    - `=` and the value
+
+    Group 1: leading whitespace (spaces/tabs).
+    Group 2: optional export prefix with trailing space (or empty string).
+    Group 3: the var name (upper-case letters, digits, underscores).
+    Group 4: the rest of the line (the value, including any trailing
     whitespace or inline comment — preserved verbatim on comment-out). */
-export const ENV_LINE_RE = /^([A-Z0-9_]+)=(.*)$/gm;
+export const ENV_LINE_RE = /^(\s*)((?:export\s+)?)([A-Z0-9_]+)=(.*)$/gm;
 
 export interface CleanEnvResult {
   /** The full file text after commenting-out. */
@@ -33,7 +41,8 @@ export function parseEnvFileLines(fileContent: string): Map<string, string> {
   const regex = new RegExp(ENV_LINE_RE.source, ENV_LINE_RE.flags);
   let match;
   while ((match = regex.exec(fileContent)) !== null) {
-    map.set(match[1], match[2]);
+    // Group 1: indent, Group 2: export prefix, Group 3: var name, Group 4: value
+    map.set(match[3], match[4]);
   }
   return map;
 }
@@ -50,10 +59,11 @@ export function cleanEnvText(
   isCandidate: (envVarName: string) => boolean,
 ): CleanEnvResult {
   const cleaned: string[] = [];
-  const out = text.replace(ENV_LINE_RE, (line, varName) => {
+  const out = text.replace(ENV_LINE_RE, (line, indent, exportPrefix, varName, value) => {
     if (isCandidate(varName)) {
       cleaned.push(varName);
-      return `# ${line}`;
+      // Preserve indentation, add comment marker, preserve export keyword
+      return `${indent}# ${exportPrefix}${varName}=${value}`;
     }
     return line;
   });

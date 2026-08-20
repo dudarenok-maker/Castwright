@@ -66,6 +66,34 @@ describe('cleanEnvText', () => {
     expect(result.text).toBe('# OLLAMA_TEMPERATURE=0.2 \n');
   });
 
+  it('recognizes and comments out indented assignment lines (space indentation)', () => {
+    const text = '  OLLAMA_TEMPERATURE=0.2\n';
+    const result = cleanEnvText(text, (v) => v === 'OLLAMA_TEMPERATURE');
+    expect(result.text).toBe('  # OLLAMA_TEMPERATURE=0.2\n');
+    expect(result.cleaned).toEqual(['OLLAMA_TEMPERATURE']);
+  });
+
+  it('recognizes and comments out indented assignment lines (tab indentation)', () => {
+    const text = '\tANALYZER_NUM_PREDICT=-1\n';
+    const result = cleanEnvText(text, (v) => v === 'ANALYZER_NUM_PREDICT');
+    expect(result.text).toBe('\t# ANALYZER_NUM_PREDICT=-1\n');
+    expect(result.cleaned).toEqual(['ANALYZER_NUM_PREDICT']);
+  });
+
+  it('recognizes and comments out export-prefixed assignment lines', () => {
+    const text = 'export OLLAMA_TEMPERATURE=0.2\n';
+    const result = cleanEnvText(text, (v) => v === 'OLLAMA_TEMPERATURE');
+    expect(result.text).toBe('# export OLLAMA_TEMPERATURE=0.2\n');
+    expect(result.cleaned).toEqual(['OLLAMA_TEMPERATURE']);
+  });
+
+  it('recognizes and comments out export-prefixed indented lines', () => {
+    const text = '  export ANALYZER_NUM_PREDICT=-1\n';
+    const result = cleanEnvText(text, (v) => v === 'ANALYZER_NUM_PREDICT');
+    expect(result.text).toBe('  # export ANALYZER_NUM_PREDICT=-1\n');
+    expect(result.cleaned).toEqual(['ANALYZER_NUM_PREDICT']);
+  });
+
   // ── Load-bearing acceptance test ──────────────────────────────────────────
 
   it('LEAVES a non-default value untouched even if the var name matches', () => {
@@ -168,6 +196,34 @@ describe('parseEnvFileLines', () => {
     const text = '# Comment 1\n# Comment 2\n\n';
     const map = parseEnvFileLines(text);
     expect(map.size).toBe(0);
+  });
+
+  it('parses indented KEY=VALUE lines (space indentation)', () => {
+    const text = '  FOO=bar\nBAZ=qux\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('FOO')).toBe('bar');
+    expect(map.get('BAZ')).toBe('qux');
+  });
+
+  it('parses indented KEY=VALUE lines (tab indentation)', () => {
+    const text = '\tFOO=bar\n\t\tBAZ=qux\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('FOO')).toBe('bar');
+    expect(map.get('BAZ')).toBe('qux');
+  });
+
+  it('parses export-prefixed KEY=VALUE lines', () => {
+    const text = 'export FOO=bar\nexport BAZ=qux\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('FOO')).toBe('bar');
+    expect(map.get('BAZ')).toBe('qux');
+  });
+
+  it('parses export-prefixed indented KEY=VALUE lines', () => {
+    const text = '  export FOO=bar\n\texport BAZ=qux\n';
+    const map = parseEnvFileLines(text);
+    expect(map.get('FOO')).toBe('bar');
+    expect(map.get('BAZ')).toBe('qux');
   });
 });
 
