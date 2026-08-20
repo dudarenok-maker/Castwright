@@ -323,3 +323,98 @@ describe('ConfirmMetadataView — input theme classes', () => {
     }
   });
 });
+
+describe('ConfirmMetadataView — Task 10 language fallback (surrendered detection)', () => {
+  /* #2246 Task 10 — when the server surrendered language detection
+     (languageFallback: true), the confirm screen must NOT pre-select a
+     language. Instead it offers "Decide later" (no pre-selection) and a
+     note explaining the situation. Confident detections must be unaffected. */
+
+  function renderFallbackCandidate() {
+    const fallbackCandidate: ImportCandidate = {
+      ...candidate,
+      series: null,
+      seriesPosition: null,
+      language: 'en',
+      languageSupported: true,
+      languageFallback: true,
+      supportedLanguages: [
+        { code: 'en', label: 'English' },
+        { code: 'fr', label: 'French' },
+      ],
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: fallbackCandidate },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+  }
+
+  it('does NOT pre-select a language when detection surrendered (languageFallback)', () => {
+    renderFallbackCandidate();
+    const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
+    /* The select's value must be empty — no language pre-selected. */
+    expect(select.value).toBe('');
+    /* The "Decide later" option must be present. */
+    expect(within(select).getByText('Decide later')).toBeInTheDocument();
+  });
+
+  it('shows the fallback note when detection surrendered', () => {
+    renderFallbackCandidate();
+    expect(screen.getByText(/couldn't tell what language/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the auto-detected chip when detection surrendered', () => {
+    renderFallbackCandidate();
+    expect(screen.queryByText(/auto-detected/i)).not.toBeInTheDocument();
+  });
+
+  it('control: confident detection still pre-selects the detected language', () => {
+    /* This is the control — confident detection must remain unchanged. */
+    const confidentCandidate: ImportCandidate = {
+      ...candidate,
+      series: null,
+      seriesPosition: null,
+      language: 'fr',
+      languageSupported: true,
+      languageFallback: false,
+      supportedLanguages: [
+        { code: 'en', label: 'English' },
+        { code: 'fr', label: 'French' },
+      ],
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: confidentCandidate },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+    const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
+    expect(select.value).toBe('fr');
+    /* No "Decide later" option should be present. */
+    expect(within(select).queryByText('Decide later')).not.toBeInTheDocument();
+    /* No fallback note should appear. */
+    expect(screen.queryByText(/couldn't tell what language/i)).not.toBeInTheDocument();
+  });
+});

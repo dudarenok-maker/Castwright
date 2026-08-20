@@ -31,11 +31,14 @@ export function ConfirmMetadataView() {
   const [title, setTitle] = useState(candidate?.title ?? '');
   /* fs-41/fs-50 — language seeded from server detection (language/languageSupported/
      supportedLanguages). Tracked-touched so the "auto-detected" chip clears once
-     the user confirms or overrides. Unsupported detection → default to English. */
+     the user confirms or overrides. Unsupported detection → default to English.
+     #2246 Task 10 — surrendered detection (languageFallback) → no pre-selection;
+     the user must pick explicitly or defer ("Decide later"). */
   const options = candidate?.supportedLanguages ?? [{ code: 'en', label: 'English' }];
   const detectedSupported = candidate?.languageSupported !== false;
+  const languageFallback = candidate?.languageFallback === true;
   const [language, setLanguage] = useState<string>(
-    () => (detectedSupported ? (candidate?.language ?? 'en') : 'en'),
+    () => (languageFallback ? '' : (detectedSupported ? (candidate?.language ?? 'en') : 'en')),
   );
   const [languageTouched, setLanguageTouched] = useState(false);
   const detectedLabel =
@@ -130,7 +133,7 @@ export function ConfirmMetadataView() {
         seriesPosition: isStandalone ? null : seriesPosNum,
         title: trimmedTitle,
         isStandalone,
-        language,
+        language: language || undefined,
         excludedSlugs: excludedSlugs.size > 0 ? [...excludedSlugs] : undefined,
       });
       dispatch(manuscriptActions.uploadComplete(res));
@@ -151,7 +154,7 @@ export function ConfirmMetadataView() {
         lastWorkedOn: 'Just now',
         coverGradient: ['#3C194F', '#0F0E0D'],
         tags: [],
-        language,
+        language: language || undefined,
       };
       dispatch(libraryActions.addBook(optimistic));
       dispatch(
@@ -282,7 +285,7 @@ export function ConfirmMetadataView() {
             />
           </Field>
 
-          <Field label="Language" required>
+          <Field label="Language" required={!languageFallback}>
             <select
               value={language}
               disabled={busy}
@@ -293,18 +296,26 @@ export function ConfirmMetadataView() {
               }}
               className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50"
             >
+              {languageFallback && (
+                <option value="">Decide later</option>
+              )}
               {options.map((o) => (
                 <option key={o.code} value={o.code}>{o.label}</option>
               ))}
             </select>
-            {!languageTouched && detectedSupported && candidate?.language && candidate.language !== 'en' && (
+            {languageFallback && (
+              <p className="mt-1.5 text-[11px] text-magenta">
+                We couldn't tell what language this is — please pick one, or leave it blank to decide later.
+              </p>
+            )}
+            {!languageFallback && !languageTouched && detectedSupported && candidate?.language && candidate.language !== 'en' && (
               <p className="mt-1.5">
                 <span className="inline-block text-[10px] uppercase tracking-widest font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
                   Auto-detected {detectedLabel} — verify
                 </span>
               </p>
             )}
-            {language !== 'en' && (
+            {language !== 'en' && language !== '' && (
               <p className="mt-1.5 text-[11px] text-ink/55">
                 {detectedLabel || 'Non-English'} books narrate with designed Qwen voices — you'll design a
                 voice for the narrator and each speaking character in the cast view.
