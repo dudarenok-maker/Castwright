@@ -204,11 +204,15 @@ export function classifyRunsOverride(envValue) {
   return null;
 }
 
-// Internal generator: yields well-formed data row cells (≥5 cells, non-empty
-// File cell) from the markdown table. Shared between parseRegister and
-// countRegisterDataRows so they can never diverge on what counts as a "data
-// row". The HTML-comment state tracking (re-review finding 1) lives here,
-// and both consumers inherit the `if (!file) continue` check (finding 5).
+// Internal generator: yields well-formed data row cells (≥5 cells) from the
+// markdown table, regardless of File cell contents. Shared between parseRegister
+// and countRegisterDataRows so they can never diverge on what counts as a "data
+// row" structurally. The HTML-comment state tracking (re-review finding 1)
+// lives here. Callers handle empty File cells themselves — parseRegister skips
+// them when building entries (can't use a row with no file), but both callers
+// count structurally-well-formed rows as "data rows" for validation purposes
+// so the loud-failure guard can detect rows with empty File cells as unparsed
+// (fixing Bug A: empty File cells must not silently vanish).
 export function* yieldDataRowCells(markdown) {
   let inComment = false;
   for (const rawLine of markdown.split(/\r?\n/)) {
@@ -244,10 +248,6 @@ export function* yieldDataRowCells(markdown) {
     const cells = splitTableRow(line);
     if (cells.length < 5) continue; // not a well-formed 6-column data row
 
-    const fileCell = cells[1];
-    const file = fileCell.replace(/`/g, '').trim();
-    if (!file) continue; // Skip rows with empty File cells (finding 5)
-
     yield cells; // Yield the full row's cells for the caller to use
   }
 }
@@ -258,22 +258,35 @@ export function* yieldDataRowCells(markdown) {
 // input: a table with no data rows (including the current, empty register)
 // simply yields []; that IS the empty-register no-op path, not a distinct
 // error case.
+//
+// A row with an empty File cell (Bug A) is structurally a data row but cannot
+// produce an entry (no file to test), so it's skipped here but counted as
+// unparsed by countUnparsedDataRows so the loud-failure guard catches it.
 export function parseRegister(markdown) {
   const entries = [];
   for (const cells of yieldDataRowCells(markdown)) {
     const [testCell, fileCell, , , issueCell] = cells;
     const file = fileCell.replace(/`/g, '').trim();
 
-    const testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-    if (testNames.length === 0) {
-      // Fallback: the register's actual Test cell format is prose — typically
-      // `#NNNN — <test name>` — not backtick-quoted spans. The backtick path
-      // above handles the multi-test expansion case (one row → one entry per
-      // backtick-quoted name); this handles the real register rows where
-      // only the File column is backtick-quoted.
-      const proseMatch = testCell.match(/#\d+\s*—\s*(.+)/);
-      if (proseMatch) testNames.push(proseMatch[1].trim());
+    // Skip rows with empty File cells — they can't become entries but must
+    // still be counted as unparsed data rows by the guard (Bug A).
+    if (!file) continue;
+
+    // Check for backtick-quoted test names first, but ONLY if the Test cell
+    // does NOT start with the prose format prefix #NNNN — (Bug C fix: check
+    // prose format FIRST to avoid incidental backticks inside prose names
+    // being extracted as the entire test name).
+    let testNames = [];
+    const proseMatch = testCell.match(/^#\d+\s*—\s*(.+)/);
+    if (proseMatch) {
+      // Prose format — extract the remainder after #NNNN — (includes any
+      // incidental backticks, which are part of the real test name).
+      testNames.push(proseMatch[1].trim());
+    } else {
+      // No prose prefix — try backtick-quoted test names (multi-test expansion).
+      testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
     }
+
     if (testNames.length === 0) continue;
 
     const issueNumbers = [...(issueCell ?? '').matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
@@ -299,24 +312,35 @@ export function countRegisterDataRows(markdown) {
   return count;
 }
 
-// Counts data rows that yield zero test names — a partial-drop detection
-// for finding 1. A row is "unparsed" if it has ≥5 cells and a non-empty File
-// cell (making it a valid "data row"), but neither backtick-quoted test names
-// nor a #NNNN — prose match yield any test name. The guard in main() uses this
-// to fire on a partial drop (one or more unparsed rows), not just a total
-// drop (all rows unparsed). Exported for unit testing.
+// Counts data rows that cannot produce a usable entry — a partial-drop
+// detection for finding 1 and Bug A. A row is "unparsed" if it either:
+//   1. Has an empty/whitespace-only File cell (Bug A), or
+//   2. Has ≥5 cells and a non-empty File cell but neither backtick-quoted
+//      test names nor a #NNNN — prose match yield any test name.
+// The guard in main() uses this to fire on a partial drop (one or more
+// unparsed rows), not just a total drop (all rows unparsed).
+// Exported for unit testing.
 export function countUnparsedDataRows(markdown) {
   let unparsedCount = 0;
   for (const cells of yieldDataRowCells(markdown)) {
     const testCell = cells[0];
+    const fileCell = cells[1];
+    const file = fileCell.replace(/`/g, '').trim();
 
-    // Try backtick-quoted test names first.
+    // Empty File cell is unparsed (Bug A).
+    if (!file) {
+      unparsedCount++;
+      continue;
+    }
+
+    // Try prose format first (Bug C: prose prefix takes priority over
+    // incidental backticks inside the name).
+    const proseMatch = testCell.match(/^#\d+\s*—\s*(.+)/);
+    if (proseMatch) continue; // This row parsed successfully.
+
+    // No prose prefix — try backtick-quoted test names.
     const testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
     if (testNames.length > 0) continue; // This row parsed successfully.
-
-    // Try the prose fallback: #NNNN — <test name>
-    const proseMatch = testCell.match(/#\d+\s*—\s*(.+)/);
-    if (proseMatch) continue; // This row parsed successfully.
 
     // If we get here, the row is well-formed but unparsed.
     unparsedCount++;
@@ -677,12 +701,13 @@ export function formatReport({ entries, runs, issueStates }) {
 }
 
 // Builds the error message for a parse-failure outcome — when data rows are
-// present but some yield zero test names. Extracted as a pure function so it
+// present but some cannot produce usable entries (either due to empty File
+// cells or unparseable Test cells). Extracted as a pure function so it
 // can be unit-tested (fixing finding 3: the message was never reaching
 // $GITHUB_STEP_SUMMARY because the parse-failure branch only called
 // console.error, not emit()). Exported for unit testing.
 export function buildParseFailureMessage(registerPath, dataRowCount, unparsedCount) {
-  return `quarantine-health: ${registerPath} contains ${dataRowCount} data row(s) but ${unparsedCount} yield zero test name(s) — the parser is silently dropping row(s). This is a bug, not a clean no-op.`;
+  return `quarantine-health: ${registerPath} contains ${dataRowCount} data row(s) but ${unparsedCount} could not be fully parsed — the parser is silently dropping row(s). This is a bug, not a clean no-op.`;
 }
 
 // The worst-case wall-clock time ONE run could take, given how many separate
@@ -862,10 +887,12 @@ function main() {
 
   // Check the register's parsing health. planRegisterRun() handles three cases:
   // 1. Empty register (no data rows) — clean no-op.
-  // 2. Parse failure (data rows present but some yield zero test names) — bug.
-  // 3. Healthy register (all data rows parse) — proceed to vitest runs.
-  // This fixes finding 1 (partial drops now fire the guard, not just total drops)
-  // and finding 2 (the guard is now a testable pure function, not inline logic).
+  // 2. Parse failure (data rows present but some cannot produce usable entries —
+  //    either due to unparseable Test cells or empty File cells) — bug.
+  // 3. Healthy register (all data rows parse successfully) — proceed to vitest runs.
+  // This fixes finding 1 (partial drops now fire the guard, not just total drops),
+  // finding 2 (the guard is now a testable pure function, not inline logic),
+  // and Bug A (empty File cells are now counted as parse failures, not silently skipped).
   const plan = planRegisterRun(markdown);
   if (plan.outcome === 'empty') {
     emit(formatReport({ entries: [], runs: 0, issueStates: new Map() }));
