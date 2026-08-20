@@ -433,24 +433,35 @@ only exercises the frontend/store seams.
   compare-and-swap and no lock — true of every manifest write in this
   codebase, not something this wave introduced. The resolver's
   `guardPostDeriveWrite` re-reads immediately before every post-derive write,
-  which closes the **seconds-wide** window a GPU derive opens; it does not
+  which closed the **seconds-wide** window a GPU derive opens; it did not
   close the **millisecond** one between that re-read and the write itself.
-  Two residuals, both surfaced by the independent review of this branch and
-  both accepted for now:
-  **(1)** a revoke landing in that millisecond window can still clobber
-  `revokedAt` — benign in effect, because the revoke route's purge runs
-  strictly *after* its own `writeEntry` and therefore lands last, so the
-  artifacts are still erased and what survives is a stale un-revoked flag
-  with nothing renderable behind it (the next render fails loud on the
+  This wave shipped with that millisecond window open and with two residuals
+  (the (1) and (2) below) surfaced by the independent review of this branch
+  and accepted for now. Both residuals are now closed **in-process**: Wave 3c
+  Task 14 (`74bff8b3`) added `updateEntry` / `withEntryLock` to
+  `voice-library.ts`, a per-uuid promise-chain mutex held across the entire
+  fresh-read → mutate → write span — not just the write — which closed the
+  millisecond window and with it both residuals below. The #1826 chain's
+  Step 1 pins them with regression tests
+  (`server/src/tts/clone-voice-resolver.revoke-race.test.ts`). What the two
+  residuals were — real, and now closed:
+  **(1)** a revoke landing in that millisecond window could clobber
+  `revokedAt` — at the time benign in effect, because the revoke route's
+  purge ran strictly *after* its own `writeEntry` and therefore landed last,
+  so the artifacts were still erased and what survived was a stale un-revoked
+  flag with nothing renderable behind it (the next render fails loud on the
   missing master; revoking again fixes the flag);
-  **(2)** the one case where an artifact can outlive a revoke — two chapter
+  **(2)** the one case where an artifact could outlive a revoke — two chapter
   workers repairing the *same* voice concurrently (simultaneous multi-book
-  renders sharing one library voice), where residual (1) fires for worker A
-  *and* worker B's derive completes after the revoke's purge: B's re-read
-  then sees the un-revoked entry, skips its re-purge, and B's `.pt` survives.
-  Requires (1) to fire first plus a dual-render precondition, so it is orders
-  of magnitude less likely than the bug the guard fixed — but it is real.
-  Proper fix (per-uuid write lock or an `updatedAt` CAS) is filed as
+  renders sharing one library voice), where residual (1) fired for worker A
+  *and* worker B's derive completed after the revoke's purge: B's re-read
+  then saw the un-revoked entry, skipped its re-purge, and B's `.pt`
+  survived. Required (1) to fire first plus a dual-render precondition, so it
+  was orders of magnitude less likely than the bug the guard fixed — but it
+  was real. The remaining gap is **cross-process** serialization (two
+  separate `node` server processes sharing one workspace), which is still out
+  of scope — the same carve-out #1826 has always carried; the per-uuid lock
+  is an in-process, single-Node-instance lock. The proper fix is
   [#1826](https://github.com/dudarenok-maker/Castwright/issues/1826).
 
 ## Out of scope

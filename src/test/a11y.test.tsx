@@ -110,6 +110,7 @@ vi.mock('../lib/api', () => ({
         },
         restartPending: false,
         cudaEnvShadow: false,
+        envCleanupCandidates: [],
       }),
     getGpuDevices: () =>
       Promise.resolve({

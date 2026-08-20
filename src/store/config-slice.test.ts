@@ -21,6 +21,7 @@ vi.mock('../lib/api', () => ({
     putPrompt: vi.fn(),
     resetPrompt: vi.fn(),
     restartSidecar: vi.fn(),
+    cleanupEnvKnobs: vi.fn(),
   },
 }));
 
@@ -94,6 +95,7 @@ const MOCK_CONFIG_RESPONSE = {
   values: MOCK_VALUES,
   restartPending: false,
   cudaEnvShadow: false,
+  envCleanupCandidates: [],
 };
 
 /* ── helpers ────────────────────────────────────────────────────────────── */

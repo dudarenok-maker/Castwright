@@ -535,10 +535,15 @@ CLAUDE.md's Before-shipping checklist step 3.
 - **(c) Already-rendered chapter audio is not erased on revoke.** A
   deliberate product decision carried unchanged from 268, restated here so
   Property 2's "erasure is total" is never read as unqualified.
-- **(d) Cross-process voice-library entry writes are still unserialized at
-  the millisecond level** (#1826, inherited from 268 — Task 14 closed the
-  seconds-wide GPU-derive window this wave's dual-slot writes also flow
-  through, not the millisecond one between a re-read and its write).
+- **(d) Cross-process voice-library entry writes are still unserialized.**
+  Two separate `node` server processes sharing one workspace can still race
+  each other — the per-uuid lock added by Wave 3c Task 14 (`updateEntry` /
+  `withEntryLock`) serialises in-process only. Cross-process is the one
+  remaining gap, and it is out of scope, the same carve-out #1826 has always
+  carried. Within a single server process the entry-write race is closed:
+  `guardPostDeriveWrite` (inherited from 268) closed the seconds-wide
+  GPU-derive window, and Task 14 closed the millisecond one between a re-read
+  and its write.
 - **(e) A Coqui clone reserves VRAM against the plain `coqui` engine
   footprint** — Task 11's settled simplification; there is no
   clone-specific admission tier, mirroring how a Qwen clone reserves against
@@ -735,8 +740,9 @@ CLAUDE.md's Before-shipping checklist step 3.
 - **Three pre-existing gaps that fold into "already tracked elsewhere"**:
   the two engine→modelKey mapper overlap (#1812) and the resolver
   progress-channel gap (#1813), both inherited unchanged from 268; the
-  entry-write serialization proper fix (#1826), inherited from 268 and
-  extended (not closed) by Task 14 this wave.
+  entry-write serialization proper fix (#1826), inherited from 268 — closed
+  in-process by Task 14 this wave, with only the intentionally out-of-scope
+  cross-process carve-out remaining.
 
 ## Ship notes
 
