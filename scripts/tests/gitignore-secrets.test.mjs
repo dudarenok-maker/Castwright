@@ -84,6 +84,14 @@ test('gitignore: server/.env.backup is ignored', () => {
   assert.equal(isGitIgnored('server/.env.backup'), true, 'server/.env.backup should be gitignored');
 });
 
+test('gitignore: server/.env.old is ignored', () => {
+  assert.equal(isGitIgnored('server/.env.old'), true, 'server/.env.old should be gitignored');
+});
+
+test('gitignore: server/.env.save is ignored', () => {
+  assert.equal(isGitIgnored('server/.env.save'), true, 'server/.env.save should be gitignored');
+});
+
 test('gitignore: .env.example is NOT ignored (is tracked)', () => {
   assert.equal(
     isGitIgnored('server/.env.example'),
