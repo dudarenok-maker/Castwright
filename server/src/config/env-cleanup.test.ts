@@ -94,6 +94,18 @@ describe('cleanEnvText', () => {
     expect(result.cleaned).toEqual(['ANALYZER_NUM_PREDICT']);
   });
 
+  it('does NOT mismatch "export" on one line with assignment on next line (regression for cross-newline matching)', () => {
+    // Regression test for N4: \s in regex should not match newlines.
+    // Input: "export" keyword alone on line 1, "FOO=bar" on line 2.
+    // The regex should NOT treat this as "export FOO=bar".
+    const text = 'export\nFOO=bar\n';
+    const result = cleanEnvText(text, (v) => v === 'FOO');
+    // FOO=bar should be recognized and commented out (the export on prev line is irrelevant)
+    expect(result.cleaned).toEqual(['FOO']);
+    // The output should have "# FOO=bar" on line 2, and line 1 unchanged
+    expect(result.text).toBe('export\n# FOO=bar\n');
+  });
+
   // ── Load-bearing acceptance test ──────────────────────────────────────────
 
   it('LEAVES a non-default value untouched even if the var name matches', () => {

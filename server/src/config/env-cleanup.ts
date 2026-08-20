@@ -1,8 +1,9 @@
 /* Pure transform that comments out leftover-default lines in a server/.env
    file. A line is a "leftover default" when its env-var name is in the
    candidate predicate AND the line's text is an uncommented KEY=VALUE
-   assignment. Lines already commented, blank, or not matching the bare
-   KEY=VALUE shape pass through byte-for-byte.
+   assignment (including indented and export-prefixed variants). Lines already
+   commented, blank, or not matching the KEY=VALUE pattern pass through
+   byte-for-byte.
 
    This is the "act" half of #2194 option-2: a deliberately-pinned value
    that differs from the registry default is never a candidate (the caller
@@ -23,7 +24,7 @@
     Group 3: the var name (upper-case letters, digits, underscores).
     Group 4: the rest of the line (the value, including any trailing
     whitespace or inline comment — preserved verbatim on comment-out). */
-export const ENV_LINE_RE = /^(\s*)((?:export\s+)?)([A-Z0-9_]+)=(.*)$/gm;
+export const ENV_LINE_RE = /^([ \t]*)((?:export[ \t]+)?)([A-Z0-9_]+)=(.*)$/gm;
 
 export interface CleanEnvResult {
   /** The full file text after commenting-out. */
