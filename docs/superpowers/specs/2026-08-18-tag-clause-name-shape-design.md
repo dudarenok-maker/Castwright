@@ -1,6 +1,8 @@
 # The tag-clause guard declines genuine turns — design
 
-Status: **active — owner decided 2026-08-18: fix defect B (the false positive), price defect A as an accepted residual. Encoding: the colon separator rule, after three others were built and falsified. Round-2 adversarial pass folded; one owner question re-opened (§ "The question this re-opens").** · Issue: [#2346](https://github.com/dudarenok-maker/Castwright/issues/2346) · Follows: [`2026-08-13-primary-pair-straddle-design.md`](2026-08-13-primary-pair-straddle-design.md) ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), PR [#2340](https://github.com/dudarenok-maker/Castwright/pull/2340)) · Strand: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) M1/M2, [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286)
+Status: **shipped for defect B (2026-08-20) — defect A explicitly still open.** · Issue: [#2346](https://github.com/dudarenok-maker/Castwright/issues/2346) · Follows: [`2026-08-13-primary-pair-straddle-design.md`](2026-08-13-primary-pair-straddle-design.md) ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), PR [#2340](https://github.com/dudarenok-maker/Castwright/pull/2340)) · Strand: [#2288](https://github.com/dudarenok-maker/Castwright/issues/2288) M1/M2, [#2286](https://github.com/dudarenok-maker/Castwright/pull/2286)
+
+Ship notes: 2026-08-20, rule commit [`301e1818`](https://github.com/dudarenok-maker/Castwright/commit/301e18182834c7cca88f275a1d928aa2d921be5f) — colon short-circuit shipped on branch `fix/server-2346-colon-tag-clause`. Defect B closed; defect A remains pinned and open.
 
 ---
 
