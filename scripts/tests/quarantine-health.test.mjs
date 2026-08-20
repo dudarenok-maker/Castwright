@@ -24,7 +24,6 @@ import {
   buildParseFailureMessage,
   worstCaseRunMs,
   budgetExceeded,
-  main,
   VITEST_RUN_TIMEOUT_MS,
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
