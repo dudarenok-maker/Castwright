@@ -9,9 +9,15 @@
    The GET response shape is stable so the frontend can reconstruct the UI from it. */
 
 import { Router } from 'express';
+import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { allKnobDescriptors } from '../config/descriptors.js';
-import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate } from '../config/resolver.js';
+import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate, envCleanupCandidateKeysFromFileContent } from '../config/resolver.js';
+import { cleanEnvText } from '../config/env-cleanup.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { PAIR_RULES } from '../config/pair-rules.js';
 import {
   writeConfigOverride,
@@ -24,6 +30,14 @@ import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-s
 import { getLastKnownGpuDevices, setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 export const configRouter = Router();
+
+/* Monotonic in-process counter so two env-cleanup calls that arrive
+   in the same millisecond don't collide on temp-file names. */
+let tmpSeq = 0;
+
+/* Test-only: override the server .env path without exposing it over HTTP.
+   Production code never sets this; only test code calls _setServerEnvPathForTest. */
+let serverEnvPathOverride: string | null = null;
 
 /* resolveAll() -> resolveKnob() reconciles a stored 'cuda-uuid:<uuid>'
    override against getLastKnownGpuDevices()'s cache SYNCHRONOUSLY — it's
@@ -47,12 +61,28 @@ async function ensureGpuDeviceListWarm(): Promise<void> {
 configRouter.get('/', async (_req, res) => {
   await ensureGpuDeviceListWarm();
   const descriptors = allKnobDescriptors();
+
+  // Determine env cleanup candidates from the actual .env file content,
+  // not from process.env (which can be shadowed by the shell/OS).
+  let envCleanupCandidates: string[] = [];
+  const envPath = resolveServerEnvPath();
+  if (existsSync(envPath)) {
+    try {
+      const fileContent = readFileSync(envPath, 'utf-8');
+      envCleanupCandidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    } catch {
+      // If we can't read the file, fall back to empty list
+      // (the POST handler will report the error when it tries)
+    }
+  }
+
   res.json({
     groups: GROUPS,
     descriptors,
     values: resolveAll(),
     restartPending: false,
     cudaEnvShadow: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.CUDA_DEVICE_ORDER),
+    envCleanupCandidates,
   });
 });
 
@@ -186,6 +216,122 @@ configRouter.post('/reset', async (req, res) => {
     for (const k of toClear) await clearConfigOverride(k);
   }
   res.json({ ok: true, values: resolveAll() });
+});
+
+// ── POST /env-cleanup ────────────────────────────────────────────────────────
+
+/** Resolve the server .env path the same way load-env.ts does: relative to
+    the server process's cwd. */
+function resolveServerEnvPath(): string {
+  if (serverEnvPathOverride !== null) {
+    return serverEnvPathOverride;
+  }
+  return resolve(process.cwd(), '.env');
+}
+
+/** Test-only: override the .env path resolver so tests can point at a temp
+    file without touching the real server/.env. Production code never calls
+    this; it only exists for test dependency injection. */
+export function _setServerEnvPathForTest(path: string | null): void {
+  serverEnvPathOverride = path;
+}
+
+configRouter.post('/env-cleanup', async (_req, res) => {
+  const envPath = resolveServerEnvPath();
+
+  if (!existsSync(envPath)) {
+    res.status(404).json({ error: `server .env not found at ${envPath}` });
+    return;
+  }
+
+  let original: string;
+  try {
+    original = readFileSync(envPath, 'utf-8');
+  } catch (err) {
+    res.status(500).json({ error: `failed to read ${envPath}: ${(err as Error).message}` });
+    return;
+  }
+
+  // Re-derive the candidate set AT WRITE TIME — never trust a cached GET response.
+  // Determine candidacy from the actual .env FILE's content, not process.env,
+  // to avoid the ambient-shadowing bug where the shell exports a variable with
+  // the default value, masking a deliberately-pinned .env value (#2194 finding 5).
+  const candidateKeys = envCleanupCandidateKeysFromFileContent(original);
+  const candidateSet = new Set(
+    candidateKeys
+      .map((key) => {
+        const knob = getKnob(key);
+        return knob?.env ?? null;
+      })
+      .filter((env): env is string => env != null),
+  );
+
+  const result = cleanEnvText(original, (varName) => candidateSet.has(varName));
+
+  // If nothing to clean, return early without modifying .env or .env.bak.
+  // This prevents overwriting the backup on a no-op cleanup run.
+  if (result.cleaned.length === 0) {
+    res.json({ cleaned: [] });
+    return;
+  }
+
+  // Read the original file's mode (e.g., 0o600 for a secrets file) BEFORE writing
+  // the backup, so we can preserve it on both the backup AND the replacement file.
+  // Preserve the original file's mode to avoid widening permissions when the temp
+  // file defaults to 0o644.
+  let originalMode: number | undefined;
+  try {
+    originalMode = statSync(envPath).mode;
+  } catch {
+    // If we can't read the original mode, we'll skip chmod below.
+    // (This shouldn't happen since existsSync already passed above.)
+  }
+
+  // Backup: copy the pre-cleanup content to server/.env.bak (snapshot, not
+  // version history — each cleanup overwrites the previous backup).
+  const bakPath = `${envPath}.bak`;
+  try {
+    // Use the mode option at creation time to avoid a window where the file
+    // is world-readable (default 0o644) before chmod can be called.
+    writeFileSync(bakPath, original, {
+      encoding: 'utf-8',
+      mode: originalMode,
+    });
+  } catch (err) {
+    res.status(500).json({ error: `failed to write backup ${bakPath}: ${(err as Error).message}` });
+    return;
+  }
+
+  // Atomic write: write cleaned text to a temp file in the same directory
+  // as the target, then rename over the target. This keeps the rename on
+  // one filesystem (no EXDEV cross-device errors) and avoids leaking temp
+  // directories to os.tmpdir(). Same rename helper as state-io's atomic
+  // JSON writes — cloud-sync-safe on Windows.
+
+  let tmp: string | undefined;
+  try {
+    const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
+    const rnd = randomBytes(4).toString('hex');
+    tmp = `${envPath}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
+    // Use the mode option at creation time to avoid a window where the file
+    // is world-readable (default 0o644) before chmod can be called.
+    writeFileSync(tmp, result.text, {
+      encoding: 'utf-8',
+      mode: originalMode,
+    });
+    await renameWithRetry(tmp, envPath);
+  } catch (err) {
+    /* If temp file exists (was created but not renamed), attempt cleanup.
+       Cleanup errors are swallowed since we're already reporting the original
+       error to the client. */
+    if (tmp !== undefined) {
+      await unlink(tmp).catch(() => {});
+    }
+    res.status(500).json({ error: `failed to write cleaned .env: ${(err as Error).message}` });
+    return;
+  }
+
+  res.json({ cleaned: result.cleaned });
 });
 
 // ── Prompt endpoints ─────────────────────────────────────────────────────────

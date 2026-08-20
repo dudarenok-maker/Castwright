@@ -63,6 +63,7 @@ function makeConfigState(values: ConfigValues = {}): ConfigState {
     error: null,
     hydrated: true,
     cudaEnvShadow: false,
+    envCleanupCandidates: [],
   };
 }
 
@@ -165,6 +166,7 @@ describe('LibraryView restructure — three-way section nav (fs-38 Wave 1 Task 1
             groups: [],
             descriptors: [],
             cudaEnvShadow: false,
+            envCleanupCandidates: [],
             restartPending: false,
             values: {
               'voices.library.enabled': {

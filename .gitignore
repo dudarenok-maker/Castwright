@@ -26,6 +26,9 @@ dist/
 .env.old
 .env.save
 .env~
+# env-cleanup's own same-directory temp file, written beside server/.env
+# before an atomic rename (server/src/routes/config.ts)
+server/.env.tmp-*
 
 # Agent-created git worktrees (superpowers:using-git-worktrees)
 /.worktrees/

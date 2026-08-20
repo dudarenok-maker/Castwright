@@ -8480,7 +8480,16 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
     values: { ...MOCK_CONFIG_VALUES },
     restartPending: false,
     cudaEnvShadow: false,
+    // Mock mode has no real server/.env, so it never has anything to clean.
+    envCleanupCandidates: [],
   };
+}
+
+/** Mock mode has nothing to clean (see mockGetConfig above), so this just
+    matches the real endpoint's shape with an empty result. */
+export async function mockCleanupEnvKnobs(): Promise<{ cleaned: string[] }> {
+  await wait(40);
+  return { cleaned: [] };
 }
 
 /* #2209 — mirrors the real PUT /api/config route's per-key pattern
@@ -8758,6 +8767,12 @@ export async function realResetConfig(body: {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await configApiErrorMessage('reset', res));
+  return res.json();
+}
+
+export async function realCleanupEnvKnobs(): Promise<{ cleaned: string[] }> {
+  const res = await fetch('/api/config/env-cleanup', { method: 'POST' });
+  if (!res.ok) throw new Error(await configApiErrorMessage('env-cleanup', res));
   return res.json();
 }
 
@@ -9990,6 +10005,7 @@ const real = {
   getConfig: realGetConfig,
   putConfig: realPutConfig,
   resetConfig: realResetConfig,
+  cleanupEnvKnobs: realCleanupEnvKnobs,
   getPrompt: realGetPrompt,
   putPrompt: realPutPrompt,
   resetPrompt: realResetPrompt,
@@ -10288,6 +10304,7 @@ const mock = {
   getConfig: mockGetConfig,
   putConfig: mockPutConfig,
   resetConfig: mockResetConfig,
+  cleanupEnvKnobs: mockCleanupEnvKnobs,
   getPrompt: mockGetPrompt,
   putPrompt: mockPutPrompt,
   resetPrompt: mockResetPrompt,

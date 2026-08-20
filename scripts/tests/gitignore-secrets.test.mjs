@@ -97,6 +97,28 @@ test('gitignore: server/.env.save is ignored', () => {
   assert.equal(isGitIgnored('server/.env.save'), true, 'server/.env.save should be gitignored');
 });
 
+test('gitignore: server/.env.tmp-* temp files are ignored (env-cleanup failure case)', () => {
+  // Test a representative temp file matching the pattern config.ts's
+  // POST /api/config/env-cleanup writes beside server/.env before an
+  // atomic rename: server/.env.tmp-${pid}-${timestamp}-${seq}-${random}
+  assert.equal(
+    isGitIgnored('server/.env.tmp-12345-1234567890000-1-abcdef12'),
+    true,
+    'server/.env.tmp-* files should be gitignored (e.g., from POST /api/config/env-cleanup crash/retry)'
+  );
+});
+
+test('gitignore: a second server/.env.tmp-* path (different pid/timestamp/random) is also covered', () => {
+  // Same pattern as the test above, exercised against a different
+  // representative filename to confirm the rule isn't accidentally
+  // over-fit to one specific string.
+  assert.equal(
+    isGitIgnored('server/.env.tmp-999-9999999999999-5-xyz'),
+    true,
+    'server/.env.tmp-* pattern should match any temp file in that location'
+  );
+});
+
 test('gitignore: server/.env.example is NOT matched by the ignore patterns', () => {
   assert.equal(
     isGitIgnored('server/.env.example'),

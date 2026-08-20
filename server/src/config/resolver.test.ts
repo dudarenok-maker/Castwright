@@ -14,6 +14,7 @@ import {
   coerceAndValidate,
   configValue,
   isEnvValueRejected,
+  envCleanupCandidateKeysFromFileContent,
 } from './resolver.js';
 import { getKnob } from './registry.js';
 import * as us from '../workspace/user-settings.js';
@@ -197,9 +198,21 @@ describe('resolver precedence', () => {
     expect(coerceAndValidate(knob, '\tcpu\n')).toEqual({ ok: true, value: 'cpu' });
   });
 
-  it('a pattern-less string knob keeps its historical no-trim behaviour', () => {
+  it('a pattern-less string knob now trims CRLF/whitespace (was: kept historical no-trim)', () => {
     const knob = getKnob('qa.asr.model')!; // free-form string, no pattern
-    expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: '  base  ' });
+    // Trailing \r from CRLF .env files is now trimmed
+    expect(coerceAndValidate(knob, 'base\r')).toEqual({ ok: true, value: 'base' });
+    expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: 'base' });
+    expect(coerceAndValidate(knob, '  base\r')).toEqual({ ok: true, value: 'base' });
+  });
+
+  it('an enum knob trims CRLF/whitespace before matching allowed options', () => {
+    const knob = getKnob('tts.accelerator')!; // enum, options: 'nvidia' | 'cpu'
+    // Enum values with trailing \r or surrounding whitespace now match correctly
+    expect(coerceAndValidate(knob, 'nvidia\r')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(knob, '  nvidia  ')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(knob, '  nvidia\r')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(knob, 'cpu\r')).toEqual({ ok: true, value: 'cpu' });
   });
 });
 
@@ -352,5 +365,70 @@ describe('resolveKnobForSidecarEnv — deliberately does NOT reconcile (#1857)',
     const st = resolveKnobForSidecarEnv(getKnob('tts.qwen.device')!);
     expect(st.effective).toBe('auto');
     expect(st.source).toBe('default');
+  });
+});
+
+describe('envCleanupCandidateKeysFromFileContent — ambient-shadowing fix (#2194 finding 5)', () => {
+  it('does not mark as candidate when file value differs from default, even if process.env matches default', () => {
+    /* Regression test for the ambient-shadowing bug: the shell exports
+       STAGE2_MIN_COVERAGE=0.6 (the default), but the .env FILE has
+       STAGE2_MIN_COVERAGE=0.7 (a deliberate pin). process.loadEnvFile()
+       does NOT overwrite an already-set process.env key, so process.env
+       reads the shell's value (0.6). The old code checked process.env
+       and wrongly classified this as a candidate for cleanup. The fixed
+       code reads the file and correctly keeps it off the candidate list. */
+
+    const origValue = process.env.STAGE2_MIN_COVERAGE;
+    try {
+      // Set process.env to the default (simulating shell export)
+      process.env.STAGE2_MIN_COVERAGE = '0.6';
+
+      // But the .env file has a non-default value
+      const fileContent = 'STAGE2_MIN_COVERAGE=0.7\n';
+
+      const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+      expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+    } finally {
+      if (origValue !== undefined) {
+        process.env.STAGE2_MIN_COVERAGE = origValue;
+      } else {
+        delete process.env.STAGE2_MIN_COVERAGE;
+      }
+    }
+  });
+
+  it('marks as candidate when file value equals default', () => {
+    const fileContent = 'STAGE2_MIN_COVERAGE=0.6\n';
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('does not mark as candidate when key is missing from file', () => {
+    const fileContent = 'SOME_OTHER_KEY=value\n';
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('does not mark as candidate when file value is invalid', () => {
+    // File has an invalid value for this numeric knob
+    const fileContent = 'STAGE2_MIN_COVERAGE=not-a-number\n';
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+  });
+
+  it('handles multiple keys in file correctly', () => {
+    /* Ensure the function distinguishes between candidates and non-candidates
+       when multiple keys are present. */
+    const fileContent =
+      'STAGE2_MIN_COVERAGE=0.6\n' +   // default — is a candidate
+      'STAGE2_MIN_COVERAGE=0.7\n' +   // later occurrence overwrites — not a candidate
+      'SEG_ASR_ENABLED=false\n';      // default boolean (default is false) — is a candidate
+
+    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+
+    // The later STAGE2_MIN_COVERAGE=0.7 overwrite means it's not default
+    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+    // SEG_ASR_ENABLED=false is the default for qa.asr.enabled
+    expect(candidates).toContain('qa.asr.enabled');
   });
 });
