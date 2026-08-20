@@ -12,15 +12,22 @@
 // choco's exit code) and must fail the step loudly, with a CI-oriented
 // message, if it isn't.
 //
-// Scope: only the Windows/choco steps. The macOS/brew steps are NOT covered
+// Scope: only the Windows/choco step. The macOS/brew steps are NOT covered
 // here — investigated separately (see the PR/report this test shipped
 // with): GitHub's default (non-Windows, no explicit `shell:`) run-step shell
 // is `bash -e {0}` (actions/runner ADR 0277), and `brew install` returns a
 // genuine non-zero exit on a real install failure (already-installed is a
 // real success case, not a masked failure) — so the macOS step already fails
 // the job loudly via `-e` and does not share the fail-open defect this test
-// guards against. Same reasoning applies to both files, so both are checked
-// here for the Windows step only.
+// guards against.
+//
+// #2480 extracted the Windows step's script out of cross-os.yml and
+// release.yml (previously byte-duplicated across both) into the composite
+// action .github/actions/install-ffmpeg-windows/action.yml, so there is now
+// exactly one copy of the script to pin. The tests below exercise it there;
+// a separate check at the bottom of this file confirms both workflows still
+// reference the composite action, so a future edit can't quietly reintroduce
+// an inline duplicate.
 //
 // IMPORTANT LIMITATION, closed below: every assertion above this line is
 // TEXTUAL — it greps the step's source for phrases like `ffmpeg -version`,
@@ -62,12 +69,15 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
+const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
+
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
 // the next step at the same (6-space) indentation, a shallower-indented key
-// (the next job), or end of file) out of a workflow's source text. Uses
-// plain index search rather than a `^`/`$`-anchored regex with the `m` flag:
-// multiline `$` matches before EVERY newline, not just end-of-string, which
-// silently truncated the match at the step's first inner line.
+// (the next job), or end of file) out of a workflow's or composite action's
+// source text. Uses plain index search rather than a `^`/`$`-anchored regex
+// with the `m` flag: multiline `$` matches before EVERY newline, not just
+// end-of-string, which silently truncated the match at the step's first
+// inner line.
 function windowsFfmpegStepBlock(source) {
   const marker = '- name: Install ffmpeg (Windows)';
   const markerIdx = source.indexOf(marker);
@@ -301,7 +311,12 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
   'function Start-Sleep { param($Seconds) Write-Host "STUB:Start-Sleep:$Seconds" }',
 ].join('\n');
 
-for (const path of WORKFLOWS) {
+// The script now has exactly one source of truth: the composite action.
+// Extracted once here and reused by every test below instead of looping
+// over both workflow files as before #2480 (each of which now just
+// `uses:` the composite rather than embedding the script).
+{
+  const path = ACTION_FILE;
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install verifies ffmpeg actually runs, not just choco's exit code`, () => {
@@ -540,5 +555,30 @@ for (const path of WORKFLOWS) {
     // just present as decoration somewhere in the block.
     const sleepCalls = (proc.stdout.match(/STUB:Start-Sleep:/g) || []).length;
     assert.equal(sleepCalls, 2, `expected exactly 2 retry delays; stdout:\n${proc.stdout}`);
+  });
+}
+
+// Guards the extraction itself: a future edit that pastes the script back
+// inline (reintroducing the #2480 duplication) must not go unnoticed. Each
+// workflow's "Install ffmpeg (Windows)" step must reference the composite
+// action rather than embed its own `run: |` block.
+for (const path of WORKFLOWS) {
+  const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
+
+  test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {
+    const source = readNormalized(path);
+    const block = windowsFfmpegStepBlock(source);
+
+    assert.match(
+      block,
+      /uses:\s*\.\/\.github\/actions\/install-ffmpeg-windows\b/,
+      'step no longer references ./.github/actions/install-ffmpeg-windows -- did the composite action get inlined again?',
+    );
+
+    assert.doesNotMatch(
+      block,
+      /choco install ffmpeg/,
+      'step embeds its own choco install call -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
   });
 }
