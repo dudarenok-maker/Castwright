@@ -13,6 +13,8 @@ import {
   checkLiveView,
   resolveBaselineText,
   CANNOT_VERIFY_BASELINE_ERROR,
+  stripHtmlComments,
+  htmlCellText,
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -2712,4 +2714,53 @@ test('the CLI (no flags) exits 0, with the OK signal, against the real committed
     /check:onbox-register: OK/,
     `a genuine pass must print something. stdout was: ${JSON.stringify(r.stdout)}`,
   );
+});
+
+// --- CodeQL #218/#219 paired tests: fixpoint sanitizers ----------------------
+// The fixpoint loop is the standard CodeQL remediation for
+// js/incomplete-multi-character-sanitization: it guarantees no residue
+// survives by repeating until the string stops changing. These tests
+// verify the fixed functions produce correct output on adversarial inputs
+// that the single-pass version was flagged for.
+
+test('stripHtmlComments: fixpoint handles nested comment residue (CodeQL #218)', () => {
+  // <!--<!--x-->--> — non-greedy match removes <!--<!--x--> in one pass,
+  // leaving -->. The fixpoint confirms no further <!-- exists and stops.
+  // The key assertion: no complete <!--...--> comment survives.
+  const result = stripHtmlComments('<!--<!--x-->-->');
+  assert.ok(!result.includes('<!--'), `no comment open should survive, got: ${result}`);
+  assert.ok(!/<!--[\s\S]*?-->/.test(result), `no complete comment should survive, got: ${result}`);
+});
+
+test('stripHtmlComments: adjacent independent comments are all removed', () => {
+  assert.equal(stripHtmlComments('a<!--x-->b<!--y-->c'), 'abc');
+});
+
+test('stripHtmlComments: empty comment is removed', () => {
+  assert.equal(stripHtmlComments('before<!---->after'), 'beforeafter');
+});
+
+test('stripHtmlComments: simple comment is removed', () => {
+  assert.equal(stripHtmlComments('before<!-- comment -->after'), 'beforeafter');
+});
+
+test('htmlCellText: fixpoint handles nested tag residue (CodeQL #219)', () => {
+  // <<a>script>alert(1) — non-greedy <[^>]*> removes <<a> in one pass,
+  // leaving script>alert(1). The fixpoint confirms no further <...> tag
+  // survives and stops. Key assertion: no <script tag remains.
+  const result = htmlCellText('<<a>script>alert(1)');
+  assert.ok(!result.includes('<script'), `no <script should survive, got: ${result}`);
+  assert.ok(!result.includes('<'), `no opening tag char should survive, got: ${result}`);
+});
+
+test('htmlCellText: multiple independent tags are all stripped', () => {
+  assert.equal(htmlCellText('<b>bold</b> and <i>italic</i>'), 'bold and italic');
+});
+
+test('htmlCellText: handles simple tags correctly', () => {
+  assert.equal(htmlCellText('<span class="x">hello</span>'), 'hello');
+});
+
+test('htmlCellText: collapses whitespace after tag stripping', () => {
+  assert.equal(htmlCellText('<b>  hello   world  </b>'), 'hello world');
 });
