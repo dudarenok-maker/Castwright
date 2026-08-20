@@ -124,6 +124,9 @@ test('parseRegister extracts the test name from the real register prose format (
 // column is prose (only the File column is backtick-quoted), so every row
 // was silently dropped and parseRegister returned []. This test fails against
 // the unfixed parser and passes after the prose-format fallback was added.
+// Also asserts that the real register parses cleanly with zero unparsed rows
+// (finding 6: the >= 2 assertion alone cannot catch a regression where a new
+// row starts failing while the old ones keep passing).
 test('parseRegister returns one entry per data row of the real flaky-register.md (regression)', () => {
   const testDir = dirname(fileURLToPath(import.meta.url));
   const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
@@ -140,9 +143,14 @@ test('parseRegister returns one entry per data row of the real flaky-register.md
   assert.ok(by1981, '#1981 row must carry tracking issue #2226');
   const by2235 = entries.find((e) => e.issueNumbers.includes(2235));
   assert.ok(by2235, '#2235 row must carry tracking issue #2235');
+  // The real register must parse cleanly with zero unparsed rows (finding 6).
+  // This assertion strengthens the >= 2 check above and would catch a new row
+  // silently starting to fail while the old ones keep passing.
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 0, 'the real register must parse cleanly with zero unparsed/malformed rows');
 });
 
-test('countRegisterDataRows counts well-formed data rows, ignoring headers, separators, prose, and comments', () => {
+test('countRegisterDataRows counts well-formed (≥5 cell) data rows, ignoring headers, separators, prose, and comments', () => {
   const markdown = `# Flaky-test register
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
@@ -1164,7 +1172,7 @@ test('buildParseFailureMessage formats the parse-failure error for the job summa
   assert.ok(message.includes(registerPath), 'message should include register path');
   assert.ok(message.includes('contains 2 data row(s)'), 'message should name the data row count');
   assert.ok(message.includes('but 1 could not be fully parsed'), 'message should name the unparsed count');
-  assert.ok(message.includes('parser is silently dropping row(s)'), 'message should describe the bug');
+  assert.ok(message.includes('either the parser') || message.includes('register itself is malformed'), 'message should cover both parser limitations and register-authoring typos');
 });
 
 // --- Bug B regression: emit() for parse-failure (finding 3 end-to-end) ----
@@ -1316,7 +1324,7 @@ test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fi
     assert.ok(written.includes('quarantine-health:'), 'message should be in GITHUB_STEP_SUMMARY');
     assert.ok(written.includes('1 data row(s)'), 'message should name the data row count');
     assert.ok(written.includes('1 could not be fully parsed'), 'message should name the unparsed count');
-    assert.ok(written.includes('parser is silently dropping row(s)'), 'message should describe the bug');
+    assert.ok(written.includes('either the parser') || written.includes('register itself is malformed'), 'message should cover both parser limitations and register-authoring typos');
   } finally {
     // Restore env vars and exit code
     if (originalSummaryPath === undefined) {

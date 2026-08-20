@@ -52,6 +52,14 @@
    actually contains it reports real results; the other reports zero matched
    tests for it, which is harmless.
 
+   CONSTRAINT: `docs/testing/flaky-register.md` MUST contain exactly one markdown
+   table (the register itself). The row-walking logic counts any `| ... |` line
+   that isn't a header/separator as a candidate data row; a second unrelated table
+   elsewhere in that file would be misread as malformed register rows and fire
+   the parse-failure guard falsely. This is not a code bug today (the register
+   currently has exactly one table), but it's a constraint on future edits to
+   that file.
+
    A vitest run whose explicit file list resolves to zero real test files
    (e.g. a stale register row pointing at a moved/renamed file, or the
    config that doesn't own a given server file) would otherwise be a hard CLI
@@ -205,14 +213,14 @@ export function classifyRunsOverride(envValue) {
 }
 
 // Internal generator: yields well-formed data row cells (≥5 cells) from the
-// markdown table, regardless of File cell contents. Shared between parseRegister
-// and countRegisterDataRows so they can never diverge on what counts as a "data
-// row" structurally. The HTML-comment state tracking (re-review finding 1)
-// lives here. Callers handle empty File cells themselves — parseRegister skips
-// them when building entries (can't use a row with no file), but both callers
-// count structurally-well-formed rows as "data rows" for validation purposes
-// so the loud-failure guard can detect rows with empty File cells as unparsed
-// (fixing Bug A: empty File cells must not silently vanish).
+// markdown table, regardless of File cell contents. Used by parseRegister to
+// produce entries, and by countRegisterDataRows to count structurally valid
+// rows. The HTML-comment state tracking (re-review finding 1) lives here.
+// Callers handle empty File cells themselves — parseRegister skips them when
+// building entries (can't use a row with no file), but countRegisterDataRows
+// counts them as "data rows" for validation purposes so the loud-failure guard
+// can detect rows with empty File cells as unparsed (fixing Bug A: empty File
+// cells must not silently vanish).
 //
 // Note: rows with <5 cells are NOT yielded here — countUnparsedDataRows must
 // handle them separately via yieldAllCandidateRows to detect malformed rows
@@ -261,6 +269,10 @@ export function* yieldDataRowCells(markdown) {
 // rows that are structurally invalid — they must count as unparsed entries so
 // the loud-failure guard catches malformed registers (Fix 3). Shares the same
 // HTML-comment state tracking and header/separator skipping as yieldDataRowCells.
+// NOTE: this counts ANY `| ... |` line as a candidate row (after skipping
+// headers/separators). docs/testing/flaky-register.md must have exactly one
+// markdown table, or a second table's rows would be misread as malformed data
+// rows and fire the parse-failure guard.
 function* yieldAllCandidateRows(markdown) {
   let inComment = false;
   for (const rawLine of markdown.split(/\r?\n/)) {
@@ -404,7 +416,7 @@ export function countUnparsedDataRows(markdown) {
 
 // Analyzes the register markdown and returns a decision object that main()
 // uses to branch on the guard logic (finding 2: extracting the guard into a
-// testable pure function). Returns { outcome, entries, unparsedCount }:
+// testable pure function). Returns { outcome, entries, dataRowCount, unparsedCount }:
 //   - outcome === 'empty': no data rows exist — clean no-op.
 //   - outcome === 'ok': data rows present, all parse successfully — proceed.
 //   - outcome === 'parse-failure': data rows present but some yield zero test
@@ -418,29 +430,33 @@ export function planRegisterRun(markdown) {
 
   // No data rows at all — genuinely empty register, clean no-op.
   if (dataRowCount === 0) {
-    return { outcome: 'empty', entries, unparsedCount: 0 };
+    return { outcome: 'empty', entries, dataRowCount, unparsedCount: 0 };
   }
 
   // Data rows exist but some/all are unparsed — parser bug, fail loud.
   if (unparsedCount > 0) {
-    return { outcome: 'parse-failure', entries, unparsedCount };
+    return { outcome: 'parse-failure', entries, dataRowCount, unparsedCount };
   }
 
   // Data rows exist and all parse successfully — proceed.
-  return { outcome: 'ok', entries, unparsedCount: 0 };
+  return { outcome: 'ok', entries, dataRowCount, unparsedCount: 0 };
 }
 
-// The `|---|---|` markdown table separator row. Pinned directly (quarantine-
-// health.test.mjs) rather than via a contrived parseRegister fixture, so the
-// guard's own contract stays asserted even though it's currently redundant
-// defense.
+// The `|---|---|` markdown table separator row. This guard is load-bearing:
+// without it, separator rows get counted as malformed data rows (< 5 cells)
+// and fire the parse-failure guard even though the register is actually fine
+// (Fix 3). Pinned directly (quarantine-health.test.mjs) rather than via a
+// contrived parseRegister fixture, so the guard's own contract stays asserted.
 export function isSeparatorRow(line) {
   return /^\|\s*-+\s*\|/.test(line);
 }
 
-// The register's header row (`| Test | File | ... |`). Same redundancy note
-// as isSeparatorRow above: the header cell's literal, un-backtick-quoted
-// "Test" text already fails the downstream backtick check on its own.
+// The register's header row (`| Test | File | ... |`). Same load-bearing note
+// as isSeparatorRow above: without it, header rows get counted as malformed
+// data rows (< 5 cells) and fire the parse-failure guard even though the
+// register is actually fine. The literal, un-backtick-quoted "Test" text alone
+// is insufficient defense because the <5-cell detection (Fix 3) runs before
+// downstream backtick checks.
 export function isHeaderRow(line) {
   return /^\|\s*Test\s*\|/i.test(line);
 }
@@ -755,13 +771,13 @@ export function formatReport({ entries, runs, issueStates }) {
 }
 
 // Builds the error message for a parse-failure outcome — when data rows are
-// present but some cannot produce usable entries (either due to empty File
-// cells or unparseable Test cells). Extracted as a pure function so it
-// can be unit-tested (fixing finding 3: the message was never reaching
-// $GITHUB_STEP_SUMMARY because the parse-failure branch only called
+// present but some cannot produce usable entries (due to malformed rows with <5
+// cells, empty File cells, or unparseable Test cells). Extracted as a pure
+// function so it can be unit-tested (fixing finding 3: the message was never
+// reaching $GITHUB_STEP_SUMMARY because the parse-failure branch only called
 // console.error, not emit()). Exported for unit testing.
 export function buildParseFailureMessage(registerPath, dataRowCount, unparsedCount) {
-  return `quarantine-health: ${registerPath} contains ${dataRowCount} data row(s) but ${unparsedCount} could not be fully parsed — the parser is silently dropping row(s). This is a bug, not a clean no-op.`;
+  return `quarantine-health: ${registerPath} contains ${dataRowCount} data row(s) but ${unparsedCount} could not be fully parsed — either the parser can't handle their format, or the register itself is malformed (check for a missing/empty column). This needs a human to look, not a clean no-op.`;
 }
 
 // Reports a parse failure: builds the message, emits it to GITHUB_STEP_SUMMARY,
@@ -965,8 +981,7 @@ export function main(registerPath = REGISTER_PATH) {
     return; // clean no-op — exit 0
   }
   if (plan.outcome === 'parse-failure') {
-    const dataRowCount = countRegisterDataRows(markdown);
-    reportParseFailure(registerPath, dataRowCount, plan.unparsedCount);
+    reportParseFailure(registerPath, plan.dataRowCount, plan.unparsedCount);
     return;
   }
 
