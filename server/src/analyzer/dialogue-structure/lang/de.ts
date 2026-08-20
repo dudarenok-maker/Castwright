@@ -30,14 +30,15 @@ export const de: LanguageConventions = {
   // outright when it straddles into a primary turn, which is exactly the
   // failure the paragraph above describes — so a table entry there does work.
   // Plain `"…"` and curly `“…”` are genuinely clean under it at every arity
-  // (any number of turns per paragraph). Swiss `«…»` is a NARROWER case:
-  // it is degraded at two or more, not unreachable, because the PRIMARY table already
-  // claims `«` as `»`'s closer (`['»','«']` above) — a `»` that closes one
-  // Swiss turn is also a valid primary opener, so a SECOND `«…»` turn in the
-  // same paragraph seeds a primary run there that swallows the attribution
-  // between them and reads both real turns as narration (#2352, pinned as a
-  // known gap in parser.test.ts). It ships anyway because the entry is a
-  // real, measured gain on every OTHER arity (one Swiss quote per paragraph —
+  // (any number of turns per paragraph). Swiss `«…»` is a NARROWER case: it
+  // is degraded at two or more, not unreachable, because the PRIMARY table
+  // already claims `«` as `»`'s closer (`['»','«']` above) — a `»` that
+  // closes one Swiss turn is also a valid primary opener, so a SECOND
+  // `«…»` turn in the same paragraph seeds a primary run there that
+  // swallows the attribution between them and reads both real turns as
+  // narration (#2352, pinned as a known gap in parser.test.ts). It ships
+  // anyway because the entry is a real, measured gain on every OTHER arity
+  // (one Swiss quote per paragraph —
   // by far the common case — plus `isSpokenLine`, which unions both tiers
   // and gets the line right even where `findQuoteRuns`' run boundary
   // doesn't) and because the collision causes no regression: where it bites,

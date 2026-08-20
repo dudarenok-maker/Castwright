@@ -519,10 +519,12 @@ describe('parser — #2315 guard `cutsATagClause` with real secondaryQuotePairs 
    parsed.
 
    The body is the REAL paragraph from Gutenberg 63460, not a reduced shape.
-   The reduction is what hides the bug: the trigger is the unrelated
-   `»Tick-Tack ... Tick-Tack«` clock earlier in the same paragraph, which sets
-   `precededByPrimaryRun` for a candidate it has nothing to do with. Shorten the
-   body and the test passes for the wrong reason.
+   A reduction CAN pin the trailing-whitespace strip on its own (see the
+   minimal case below), but not this paragraph's specific failure: the
+   trigger here is the unrelated `»Tick-Tack ... Tick-Tack«` clock earlier in
+   the same paragraph, which sets `precededByPrimaryRun` for a candidate it
+   has nothing to do with. An over-reduction that drops that primary run
+   passes for the wrong reason, which is why the full paragraph stays.
 
    This is a SEGMENTATION assertion, not an attribution one — the recovered turn
    has no speaker, and this suite is documented as blind to attribution. */
@@ -556,6 +558,10 @@ describe('parser — #2346 defect B: a colon-introduced turn is not eaten by the
     expect(spoken('„Guten Tag", sagte er. Dann sagte er:«Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
   });
 
+  it('de: a minimal reduction pins the trailing-whitespace strip on its own', () => {
+    expect(spoken('„Guten Tag", sagte er. Dann sagte er: «Hallo».', 'de')).toEqual(['Guten Tag', 'Hallo']);
+  });
+
   /* The full-width `：` arm must use a SECONDARY zh pair. `“…”` is a zh PRIMARY
      pair, so `他说：“你好”。` never reaches the guard at all and already returns
      `['你好']` on shipped code — measured. A test written on that shape cannot
@@ -573,8 +579,6 @@ describe('parser — #2346 defect B: a colon-introduced turn is not eaten by the
     expect(spoken('„Guten Tag", sagte «Ulebuhle». Und dann ging er.', 'de')).toEqual(['Guten Tag']);
   });
 });
-
-
 
 describe('parser — findQuoteRuns candidate scan (characterisation, #2288 Task 1)', () => {
   const enIdx = buildNameIndex([{ id: 'mary', name: 'Mary' }], conventionsFor('en')!);

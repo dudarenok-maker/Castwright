@@ -458,10 +458,12 @@ function cutsATagClause(line: string, cand: QuoteRun, primaryRuns: QuoteRun[], c
      it is an empirical bound, not a structural one, and it must be re-measured
      if the tables or the corpus change.
 
-     The trailing-whitespace strip is LOAD-BEARING, not tidying: the target
-     paragraph's colon is followed by a space, and the raw colon-adjacent count
-     across the whole corpus is ZERO. Remove the strip and this does nothing at
-     all, silently. */
+     The trailing-whitespace strip is LOAD-BEARING for the German paragraph
+     specifically: its colon is followed by a space. It is NOT load-bearing for
+     the Chinese one, which fires raw-adjacent (`：` is never followed by a
+     space in CJK) — the corpus carries ~266,900 raw colon-adjacent contexts,
+     not zero. Measured: remove the strip and corpus A/B still reports 1
+     changed paragraph (the zh one); only the German half is lost. */
   const lastCh = line.slice(0, cand.start).replace(/\s+$/u, '').slice(-1);
   if (lastCh === ':' || lastCh === '：') return false;
 
