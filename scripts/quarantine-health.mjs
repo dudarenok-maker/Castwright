@@ -204,21 +204,12 @@ export function classifyRunsOverride(envValue) {
   return null;
 }
 
-// Parses the register's markdown table into one entry per quarantined TEST
-// (a row can name more than one backtick-quoted test sharing a file, as the
-// wake-lock row did — each becomes its own entry). Never throws on malformed
-// input: a table with no data rows (including the current, empty register)
-// simply yields []; that IS the empty-register no-op path, not a distinct
-// error case.
-export function parseRegister(markdown) {
-  const entries = [];
-  // HTML-comment state carries ACROSS lines — the register's own retirement
-  // convention (see the graduated-row blocks in flaky-register.md) is to wrap
-  // a retired row in a multi-line `<!-- ... -->` block rather than delete it,
-  // so a naive per-line `<!--`/`-->` check (which resets every iteration)
-  // would parse a commented-out row's `| ... |` line as a live entry the
-  // moment it's on its own line inside the block — exactly the "confident,
-  // false classification" this tool exists to avoid (re-review finding 1).
+// Internal generator: yields well-formed data row cells (≥5 cells, non-empty
+// File cell) from the markdown table. Shared between parseRegister and
+// countRegisterDataRows so they can never diverge on what counts as a "data
+// row". The HTML-comment state tracking (re-review finding 1) lives here,
+// and both consumers inherit the `if (!file) continue` check (finding 5).
+export function* yieldDataRowCells(markdown) {
   let inComment = false;
   for (const rawLine of markdown.split(/\r?\n/)) {
     let visible = '';
@@ -253,9 +244,25 @@ export function parseRegister(markdown) {
     const cells = splitTableRow(line);
     if (cells.length < 5) continue; // not a well-formed 6-column data row
 
+    const fileCell = cells[1];
+    const file = fileCell.replace(/`/g, '').trim();
+    if (!file) continue; // Skip rows with empty File cells (finding 5)
+
+    yield cells; // Yield the full row's cells for the caller to use
+  }
+}
+
+// Parses the register's markdown table into one entry per quarantined TEST
+// (a row can name more than one backtick-quoted test sharing a file, as the
+// wake-lock row did — each becomes its own entry). Never throws on malformed
+// input: a table with no data rows (including the current, empty register)
+// simply yields []; that IS the empty-register no-op path, not a distinct
+// error case.
+export function parseRegister(markdown) {
+  const entries = [];
+  for (const cells of yieldDataRowCells(markdown)) {
     const [testCell, fileCell, , , issueCell] = cells;
     const file = fileCell.replace(/`/g, '').trim();
-    if (!file) continue;
 
     const testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
     if (testNames.length === 0) {
@@ -279,47 +286,70 @@ export function parseRegister(markdown) {
 }
 
 // Counts the number of well-formed data rows (| ... | with ≥ 5 cells, not a
-// separator or header) in a register markdown string. Mirrors parseRegister's
-// own row-identification logic, but without the test-name extraction — used by
-// main() to detect the "data rows present but zero entries parsed" case,
-// which is a parser bug (silent failure) rather than a genuinely empty
-// register. Exported for unit testing.
+// separator or header, and non-empty File cell) in a register markdown string.
+// Uses the same yieldDataRowCells generator as parseRegister, so they can
+// never diverge on what counts as a "data row" (fixing finding 5). Used by
+// main() to detect when data rows are present but yield unparsed entries —
+// that mismatch signals a parser bug. Exported for unit testing.
 export function countRegisterDataRows(markdown) {
   let count = 0;
-  let inComment = false;
-  for (const rawLine of markdown.split(/\r?\n/)) {
-    let visible = '';
-    let remainder = rawLine;
-    while (remainder.length > 0) {
-      if (inComment) {
-        const closeIdx = remainder.indexOf('-->');
-        if (closeIdx === -1) {
-          remainder = '';
-        } else {
-          inComment = false;
-          remainder = remainder.slice(closeIdx + 3);
-        }
-      } else {
-        const openIdx = remainder.indexOf('<!--');
-        if (openIdx === -1) {
-          visible += remainder;
-          remainder = '';
-        } else {
-          visible += remainder.slice(0, openIdx);
-          inComment = true;
-          remainder = remainder.slice(openIdx + 4);
-        }
-      }
-    }
-    const line = visible.trim();
-    if (!line.startsWith('|')) continue;
-    if (isSeparatorRow(line)) continue;
-    if (isHeaderRow(line)) continue;
-    const cells = splitTableRow(line);
-    if (cells.length < 5) continue;
+  for (const _cells of yieldDataRowCells(markdown)) {
     count++;
   }
   return count;
+}
+
+// Counts data rows that yield zero test names — a partial-drop detection
+// for finding 1. A row is "unparsed" if it has ≥5 cells and a non-empty File
+// cell (making it a valid "data row"), but neither backtick-quoted test names
+// nor a #NNNN — prose match yield any test name. The guard in main() uses this
+// to fire on a partial drop (one or more unparsed rows), not just a total
+// drop (all rows unparsed). Exported for unit testing.
+export function countUnparsedDataRows(markdown) {
+  let unparsedCount = 0;
+  for (const cells of yieldDataRowCells(markdown)) {
+    const testCell = cells[0];
+
+    // Try backtick-quoted test names first.
+    const testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    if (testNames.length > 0) continue; // This row parsed successfully.
+
+    // Try the prose fallback: #NNNN — <test name>
+    const proseMatch = testCell.match(/#\d+\s*—\s*(.+)/);
+    if (proseMatch) continue; // This row parsed successfully.
+
+    // If we get here, the row is well-formed but unparsed.
+    unparsedCount++;
+  }
+  return unparsedCount;
+}
+
+// Analyzes the register markdown and returns a decision object that main()
+// uses to branch on the guard logic (finding 2: extracting the guard into a
+// testable pure function). Returns { outcome, entries, unparsedCount }:
+//   - outcome === 'empty': no data rows exist — clean no-op.
+//   - outcome === 'ok': data rows present, all parse successfully — proceed.
+//   - outcome === 'parse-failure': data rows present but some yield zero test
+//     names — a parser bug, fail loud.
+// The outcome is testable without calling main() or touching the real register
+// file (fixing finding 2). Exported for unit testing.
+export function planRegisterRun(markdown) {
+  const entries = parseRegister(markdown);
+  const dataRowCount = countRegisterDataRows(markdown);
+  const unparsedCount = countUnparsedDataRows(markdown);
+
+  // No data rows at all — genuinely empty register, clean no-op.
+  if (dataRowCount === 0) {
+    return { outcome: 'empty', entries, unparsedCount: 0 };
+  }
+
+  // Data rows exist but some/all are unparsed — parser bug, fail loud.
+  if (unparsedCount > 0) {
+    return { outcome: 'parse-failure', entries, unparsedCount };
+  }
+
+  // Data rows exist and all parse successfully — proceed.
+  return { outcome: 'ok', entries, unparsedCount: 0 };
 }
 
 // The `|---|---|` markdown table separator row. Pinned directly (quarantine-
@@ -821,23 +851,26 @@ function main() {
     return;
   }
 
-  const rows = parseRegister(markdown);
-  if (rows.length === 0) {
-    // A register with well-formed data rows that parses to zero entries is a
-    // guard that fails open: it goes silent exactly when it has lost the
-    // ability to see. Distinguish this from a genuinely empty register (no
-    // data rows at all), which IS a clean no-op.
-    const dataRowCount = countRegisterDataRows(markdown);
-    if (dataRowCount > 0) {
-      console.error(
-        `quarantine-health: ${REGISTER_PATH} contains ${dataRowCount} data row(s) but parseRegister returned 0 entries — the parser is silently dropping rows. This is a bug, not a clean no-op.`,
-      );
-      process.exitCode = 1;
-      return;
-    }
+  // Check the register's parsing health. planRegisterRun() handles three cases:
+  // 1. Empty register (no data rows) — clean no-op.
+  // 2. Parse failure (data rows present but some yield zero test names) — bug.
+  // 3. Healthy register (all data rows parse) — proceed to vitest runs.
+  // This fixes finding 1 (partial drops now fire the guard, not just total drops)
+  // and finding 2 (the guard is now a testable pure function, not inline logic).
+  const plan = planRegisterRun(markdown);
+  if (plan.outcome === 'empty') {
     emit(formatReport({ entries: [], runs: 0, issueStates: new Map() }));
     return; // clean no-op — exit 0
   }
+  if (plan.outcome === 'parse-failure') {
+    console.error(
+      `quarantine-health: ${REGISTER_PATH} contains ${countRegisterDataRows(markdown)} data row(s) but ${plan.unparsedCount} yield zero test name(s) — the parser is silently dropping row(s). This is a bug, not a clean no-op.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const rows = plan.entries;
 
   const frontendFiles = [...new Set(rows.filter((r) => fileDomain(r.file) === 'frontend').map((r) => r.file))];
   const serverFiles = [

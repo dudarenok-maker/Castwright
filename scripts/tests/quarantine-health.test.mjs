@@ -5,6 +5,8 @@ import {
   classifyRunsOverride,
   parseRegister,
   countRegisterDataRows,
+  countUnparsedDataRows,
+  planRegisterRun,
   isSeparatorRow,
   isHeaderRow,
   splitTableRow,
@@ -165,11 +167,30 @@ _Empty — no tests are currently quarantined._
   assert.equal(countRegisterDataRows(markdown), 0);
 });
 
+test('countRegisterDataRows excludes rows with empty File cells, matching parseRegister behavior (finding 5)', () => {
+  // Finding 5: the two functions diverged on what counts as a "data row" — parseRegister skips
+  // rows with empty file cells (if (!file) continue), but countRegisterDataRows did not,
+  // so it could count a malformed row as a "data row" and trigger the guard on a row
+  // the parser would never have tried to extract a test name from.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races | #1981 | 2026-08-01 |
+| #1982 — empty file cell | | timing | races | #1982 | 2026-08-02 |
+| #1983 — whitespace-only file | \`   \` | timing | races | #1983 | 2026-08-03 |
+`;
+  // parseRegister skips the last two rows (empty file cells), so entries.length === 1
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'parseRegister skips rows with empty/whitespace File cells');
+  // countRegisterDataRows should also skip them, counting only 1 data row
+  const dataRows = countRegisterDataRows(markdown);
+  assert.equal(dataRows, 1, 'countRegisterDataRows must also skip rows with empty/whitespace File cells');
+});
+
 // The loud-failure guard: when data rows are present but parseRegister
 // returns zero entries, the runner must detect the mismatch rather than
 // reporting a clean no-op. This test drives both functions against the same
-// input to verify the guard's precondition — the runner's main() checks
-// exactly this and exits non-zero when it fires.
+// input to verify the guard's precondition — planRegisterRun() checks
+// exactly this and returns parse-failure when it fires.
 test('a register with data rows that parses to zero entries is detectable (loud-failure precondition)', () => {
   // Simulate a format the parser cannot handle: data rows with neither
   // backtick-quoted test names nor the #NNNN — prose pattern.
@@ -182,7 +203,9 @@ test('a register with data rows that parses to zero entries is detectable (loud-
   const dataRows = countRegisterDataRows(markdown);
   assert.equal(entries.length, 0, 'parser should return 0 for unrecognized format');
   assert.equal(dataRows, 2, 'countRegisterDataRows should see 2 data rows');
-  // The guard in main() checks exactly this: dataRows > 0 && entries.length === 0 → error.
+  // The guard in planRegisterRun() checks exactly this: dataRows > 0 && unparsedCount > 0 → parse-failure.
+  const plan = planRegisterRun(markdown);
+  assert.equal(plan.outcome, 'parse-failure', 'should detect the parse failure');
 });
 
 test('parseRegister ignores prose lines, the header row and the separator row', () => {
@@ -1017,6 +1040,65 @@ test('budgetExceeded is true once elapsed + one more run\'s worst case would exc
   assert.equal(budgetExceeded(5000, 5000, 10000), false); // exactly at the budget: fits
   assert.equal(budgetExceeded(5001, 5000, 10000), true);
   assert.equal(budgetExceeded(9999, 2, 10000), true);
+});
+
+// --- countUnparsedDataRows (Finding 1: detect partial drops) ---------------
+
+test('countUnparsedDataRows counts data rows that yield zero test names', () => {
+  // Two good rows (prose format), one row that cannot be parsed (neither format).
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
+| unparseable test without format | \`server/src/routes/foo.test.ts\` | timing | races | #1234 | 2026-08-02 |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-03 |
+`;
+  assert.equal(countUnparsedDataRows(markdown), 1, 'should count 1 unparsed row');
+});
+
+test('countUnparsedDataRows returns 0 when all rows parse successfully', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-02 |
+`;
+  assert.equal(countUnparsedDataRows(markdown), 0, 'should count 0 unparsed rows');
+});
+
+test('planRegisterRun returns parse-failure when any data rows yield zero test names (finding 1)', () => {
+  // Regression: partial row drop must be detected. One row uses a hyphen instead
+  // of an em dash, the other parses successfully.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 - broken hyphen (not em dash) | \`server/src/routes/foo.test.ts\` | timing | races | #1981 | 2026-08-01 |
+| #2235 — valid em dash | \`server/src/routes/bar.test.ts\` | timing | races | #2235 | 2026-08-02 |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'parse-failure', 'should detect partial drop');
+  assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
+test('planRegisterRun returns ok when all data rows parse successfully', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-02 |
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'ok', 'should return ok for valid rows');
+  assert.equal(result.unparsedCount, 0, 'should report 0 unparsed rows');
+  assert.equal(result.entries.length, 2, 'should parse 2 entries');
+});
+
+test('planRegisterRun returns empty when no data rows exist', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+_Empty — no tests are currently quarantined._
+`;
+  const result = planRegisterRun(markdown);
+  assert.equal(result.outcome, 'empty', 'should return empty for genuinely empty register');
+  assert.equal(result.unparsedCount, 0, 'should report 0 unparsed rows');
+  assert.equal(result.entries.length, 0, 'should parse 0 entries');
 });
 
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
