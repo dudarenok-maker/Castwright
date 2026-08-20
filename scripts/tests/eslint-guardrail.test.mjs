@@ -121,31 +121,26 @@ test('a stale guardrail-tmp-* leftover is ignored by ESLint, not merely absent o
   );
 });
 
-test('the guardrail-tmp-*/budget-poll-tmp-* ignores do not swallow an ordinary *.test.ts file', () => {
+test('the guardrail-tmp-*/budget-poll-tmp-* ignores do not swallow an ordinary tracked *.test.ts file', () => {
   // The two tests above prove the leftover dirs ARE ignored and the rule
   // fires when unignored via --no-ignore. Neither would catch the ignore
   // pattern becoming too broad (e.g. accidentally matching '**/*.test.ts'
   // instead of a specific directory prefix) — test 1 always passes
   // --no-ignore, which would blind it to that too, and test 2 asserts the
-  // file IS ignored, so a broader pattern only makes it greener. This test
-  // is the counterweight: an ordinary planted violation OUTSIDE both
-  // leftover-dir prefixes must still be caught with NO --no-ignore flag.
-  const dir = mkdtempSync(join(repoRoot, 'eslint-guardrail-canary-'));
-  const f = join(dir, 'planted.test.ts');
-  writeFileSync(
-    f,
-    "import { it } from 'vitest';\nit.skipIf(process.env.CI)('x', () => {});\n",
-  );
-  let result;
-  try {
-    result = runEslint([f]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-  assert.equal(result.exitCode, 1, `eslint should still lint an ordinary test file and reject the violation (got ${result.exitCode}): ${result.output}`);
-  assert.match(
+  // file IS ignored, so a broader pattern only makes it greener.
+  //
+  // This is the counterweight: it probes an already-TRACKED test file
+  // instead of planting one. An earlier version of this test planted its
+  // own file under a THIRD repo-root mkdtempSync prefix
+  // ('eslint-guardrail-canary-*') that was itself not in either ignore
+  // list — reintroducing the exact #2482 leftover-wedge class this file
+  // exists to close if that plant ever survived a killed process. Probing
+  // a tracked file instead writes nothing, so there is nothing to leak.
+  const target = join(repoRoot, 'server', 'src', 'test-utils', 'quarantine.test.ts');
+  const result = runEslint([target]);
+  assert.doesNotMatch(
     result.output,
-    new RegExp(RULE_ID),
-    `eslint's output should name the ${RULE_ID} rule for a file outside the leftover-dir ignores: ${result.output}`,
+    /ignored/i,
+    `a real tracked *.test.ts file must never be reported as ignored (got exit ${result.exitCode}): ${result.output}`,
   );
 });
