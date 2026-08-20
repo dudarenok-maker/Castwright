@@ -275,11 +275,27 @@ configRouter.post('/env-cleanup', async (_req, res) => {
     return;
   }
 
+  // Read the original file's mode (e.g., 0o600 for a secrets file) BEFORE writing
+  // the backup, so we can preserve it on both the backup AND the replacement file.
+  // Preserve the original file's mode to avoid widening permissions when the temp
+  // file defaults to 0o644.
+  let originalMode: number | undefined;
+  try {
+    originalMode = statSync(envPath).mode;
+  } catch {
+    // If we can't read the original mode, we'll skip chmod below.
+    // (This shouldn't happen since existsSync already passed above.)
+  }
+
   // Backup: copy the pre-cleanup content to server/.env.bak (snapshot, not
   // version history — each cleanup overwrites the previous backup).
   const bakPath = `${envPath}.bak`;
   try {
     writeFileSync(bakPath, original, 'utf-8');
+    // Preserve the original file's mode on the backup file too.
+    if (originalMode !== undefined) {
+      chmodSync(bakPath, originalMode);
+    }
   } catch (err) {
     res.status(500).json({ error: `failed to write backup ${bakPath}: ${(err as Error).message}` });
     return;
@@ -290,16 +306,6 @@ configRouter.post('/env-cleanup', async (_req, res) => {
   // one filesystem (no EXDEV cross-device errors) and avoids leaking temp
   // directories to os.tmpdir(). Same rename helper as state-io's atomic
   // JSON writes — cloud-sync-safe on Windows.
-  //
-  // Preserve the original file's mode (e.g., 0o600 for a secrets file) to
-  // avoid widening permissions when the temp file defaults to 0o644.
-  let originalMode: number | undefined;
-  try {
-    originalMode = statSync(envPath).mode;
-  } catch {
-    // If we can't read the original mode, we'll skip chmod below.
-    // (This shouldn't happen since existsSync already passed above.)
-  }
 
   try {
     const seq = (tmpSeq = (tmpSeq + 1) >>> 0);

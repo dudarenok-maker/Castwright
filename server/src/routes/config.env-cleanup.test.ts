@@ -325,5 +325,12 @@ describe('POST /api/config/env-cleanup', () => {
 
     const modeAfterCleanup = statSync(modeTestPath).mode & 0o777;
     expect(modeAfterCleanup).toBe(restrictiveMode);
+
+    // Also verify that .env.bak was created with the same restrictive mode,
+    // not the default world-readable mode (0o644)
+    const bakPath = `${modeTestPath}.bak`;
+    expect(existsSync(bakPath)).toBe(true);
+    const bakMode = statSync(bakPath).mode & 0o777;
+    expect(bakMode).toBe(restrictiveMode);
   });
 });
