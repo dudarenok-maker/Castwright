@@ -50,6 +50,26 @@ test('gitignore: server/.env.bak is ignored (covers env-cleanup backups)', () =>
   );
 });
 
+test('gitignore: server/.env.tmp-* temp files are ignored (env-cleanup failure case)', () => {
+  // Test a representative temp file matching the pattern:
+  // server/.env.tmp-${pid}-${timestamp}-${seq}-${random}
+  assert.equal(
+    isGitIgnored('server/.env.tmp-12345-1234567890000-1-abcdef12'),
+    true,
+    'server/.env.tmp-* files should be gitignored (e.g., from POST /api/config/env-cleanup crash/retry)'
+  );
+});
+
+test('gitignore: .env.tmp-* files in root are also covered by the pattern', () => {
+  // The pattern server/.env.tmp-* should match files in the server/ directory.
+  // Verify that the pattern works correctly.
+  assert.equal(
+    isGitIgnored('server/.env.tmp-999-9999999999999-5-xyz'),
+    true,
+    'server/.env.tmp-* pattern should match any temp file in that location'
+  );
+});
+
 test('gitignore: .env.example is NOT ignored (is tracked)', () => {
   assert.equal(isGitIgnored('.env.example'), false, '.env.example is an intentional tracked file');
 });

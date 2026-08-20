@@ -307,10 +307,11 @@ configRouter.post('/env-cleanup', async (_req, res) => {
   // directories to os.tmpdir(). Same rename helper as state-io's atomic
   // JSON writes — cloud-sync-safe on Windows.
 
+  let tmp: string | undefined;
   try {
     const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
     const rnd = randomBytes(4).toString('hex');
-    const tmp = `${envPath}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
+    tmp = `${envPath}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
     writeFileSync(tmp, result.text, 'utf-8');
     // Restore the original file's permissions to the temp file before renaming.
     if (originalMode !== undefined) {
@@ -325,6 +326,12 @@ configRouter.post('/env-cleanup', async (_req, res) => {
       throw renameErr;
     }
   } catch (err) {
+    /* If temp file exists (was created but not renamed), attempt cleanup.
+       Cleanup errors are swallowed since we're already reporting the original
+       error to the client. */
+    if (tmp !== undefined) {
+      await unlink(tmp).catch(() => {});
+    }
     res.status(500).json({ error: `failed to write cleaned .env: ${(err as Error).message}` });
     return;
   }
