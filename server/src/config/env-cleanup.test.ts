@@ -234,8 +234,8 @@ describe('env-cleanup integration: file-based candidacy (#2194 finding 5)', () =
     const isCandidate = (varName: string) => varName === 'OTHER_VAR';
     const result = cleanEnvText(fileContent, isCandidate);
 
-    expect(result.text).toContain('GEN_WORKERS=4'); // NOT commented
-    expect(result.text).toContain('# OTHER_VAR=1');  // IS commented
+    // Verify exact output: GEN_WORKERS is untouched, OTHER_VAR is commented
+    expect(result.text).toBe('GEN_WORKERS=4\n# OTHER_VAR=1\n');
     expect(result.cleaned).toEqual(['OTHER_VAR']);
   });
 });
