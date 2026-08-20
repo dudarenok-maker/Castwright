@@ -66,12 +66,12 @@ from a **static template plus one float**: *"Qwen VoiceDesign has been in
 flight for over {wait_seconds:.0f}s — refusing to evict it out from under an
 active design. Retry the synth shortly."* No traceback, no filesystem path, no
 third-party exception string. Alerts #220 (`/qwen/mint-variant`, `:10163`),
-#212 (`/synthesize`, `:10606`), #222 (`/synthesize-batch`, `:10934`).
+#221 (`/synthesize`, `:10606`), #222 (`/synthesize-batch`, `:10934`).
 
 **`VoiceLanguageUnsupportedError`** (raised at `main.py:2377`) builds its
 message entirely from the **requested voice and language plus the loaded
 model's own config language list**. The audit was already recorded in-code at
-`main.py:10569-10573` before this dismissal. Alert #221 (`:10579`).
+`main.py:10569-10573` before this dismissal. Alert #212 (`:10579`).
 
 Both echoes are **deliberate, user-facing guidance**, not incidental leakage:
 the contention message tells the caller to retry, and the language message
@@ -87,10 +87,10 @@ test's coverage.
 
 | file:line | rule | justification |
 |---|---|---|
-| `server/tts-sidecar/main.py:10163` (`/qwen/mint-variant`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; message is a static template plus a timeout float; `exc-text-safe` marker and widened test guard |
-| `server/tts-sidecar/main.py:10606` (`/synthesize`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; same curated template; `exc-text-safe` marker |
-| `server/tts-sidecar/main.py:10934` (`/synthesize-batch`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; same curated template; `exc-text-safe` marker |
-| `server/tts-sidecar/main.py:10579` (`/synthesize`) | py/stack-trace-exposure | `str(exc)` on `VoiceLanguageUnsupportedError`; message built from voice/language/model config list only; in-code audit at `:10569-10573`; `exc-text-safe` marker |
+| Alert #220, `server/tts-sidecar/main.py:10163` (`/qwen/mint-variant`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; message is a static template plus a timeout float; `exc-text-safe` marker and widened test guard |
+| Alert #221, `server/tts-sidecar/main.py:10606` (`/synthesize`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; same curated template; `exc-text-safe` marker |
+| Alert #222, `server/tts-sidecar/main.py:10934` (`/synthesize-batch`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; same curated template; `exc-text-safe` marker |
+| Alert #212, `server/tts-sidecar/main.py:10579` (`/synthesize`) | py/stack-trace-exposure | `str(exc)` on `VoiceLanguageUnsupportedError`; message built from voice/language/model config list only; in-code audit at `:10569-10573`; `exc-text-safe` marker |
 
 ## `js/path-injection` — the `/workspace` static guard (for dismissal)
 
