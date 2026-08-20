@@ -198,9 +198,21 @@ describe('resolver precedence', () => {
     expect(coerceAndValidate(knob, '\tcpu\n')).toEqual({ ok: true, value: 'cpu' });
   });
 
-  it('a pattern-less string knob keeps its historical no-trim behaviour', () => {
+  it('a pattern-less string knob now trims CRLF/whitespace (was: kept historical no-trim)', () => {
     const knob = getKnob('qa.asr.model')!; // free-form string, no pattern
-    expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: '  base  ' });
+    // Trailing \r from CRLF .env files is now trimmed
+    expect(coerceAndValidate(knob, 'base\r')).toEqual({ ok: true, value: 'base' });
+    expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: 'base' });
+    expect(coerceAndValidate(knob, '  base\r')).toEqual({ ok: true, value: 'base' });
+  });
+
+  it('an enum knob trims CRLF/whitespace before matching allowed options', () => {
+    const knob = getKnob('tts.accelerator')!; // enum, options: 'nvidia' | 'cpu'
+    // Enum values with trailing \r or surrounding whitespace now match correctly
+    expect(coerceAndValidate(knob, 'nvidia\r')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(knob, '  nvidia  ')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(knob, '  nvidia\r')).toEqual({ ok: true, value: 'nvidia' });
+    expect(coerceAndValidate(knob, 'cpu\r')).toEqual({ ok: true, value: 'cpu' });
   });
 });
 
