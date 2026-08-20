@@ -9,7 +9,7 @@
    The GET response shape is stable so the frontend can reconstruct the UI from it. */
 
 import { Router } from 'express';
-import { readFileSync, writeFileSync, existsSync, statSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -291,11 +291,12 @@ configRouter.post('/env-cleanup', async (_req, res) => {
   // version history — each cleanup overwrites the previous backup).
   const bakPath = `${envPath}.bak`;
   try {
-    writeFileSync(bakPath, original, 'utf-8');
-    // Preserve the original file's mode on the backup file too.
-    if (originalMode !== undefined) {
-      chmodSync(bakPath, originalMode);
-    }
+    // Use the mode option at creation time to avoid a window where the file
+    // is world-readable (default 0o644) before chmod can be called.
+    writeFileSync(bakPath, original, {
+      encoding: 'utf-8',
+      mode: originalMode,
+    });
   } catch (err) {
     res.status(500).json({ error: `failed to write backup ${bakPath}: ${(err as Error).message}` });
     return;
@@ -312,19 +313,13 @@ configRouter.post('/env-cleanup', async (_req, res) => {
     const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
     const rnd = randomBytes(4).toString('hex');
     tmp = `${envPath}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
-    writeFileSync(tmp, result.text, 'utf-8');
-    // Restore the original file's permissions to the temp file before renaming.
-    if (originalMode !== undefined) {
-      chmodSync(tmp, originalMode);
-    }
-    try {
-      await renameWithRetry(tmp, envPath);
-    } catch (renameErr) {
-      /* Cleanup the temp file on terminal failure so we don't leak
-         .tmp-<pid>-<ts>-<seq>-<rnd> droppings into the workspace. */
-      await unlink(tmp).catch(() => {});
-      throw renameErr;
-    }
+    // Use the mode option at creation time to avoid a window where the file
+    // is world-readable (default 0o644) before chmod can be called.
+    writeFileSync(tmp, result.text, {
+      encoding: 'utf-8',
+      mode: originalMode,
+    });
+    await renameWithRetry(tmp, envPath);
   } catch (err) {
     /* If temp file exists (was created but not renamed), attempt cleanup.
        Cleanup errors are swallowed since we're already reporting the original

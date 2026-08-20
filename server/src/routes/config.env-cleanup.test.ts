@@ -7,8 +7,9 @@
    2. (Part B) A second cleanup call with no remaining candidates does not
       overwrite the .env.bak backup from the first cleanup.
    3. (Part C) Query parameters like ?envPath are ignored (security regression test).
-   4. (Part E) When chmod fails during temp file preparation, the temp file is
-      cleaned up to avoid leaving secrets-bearing temp files on disk.
+   4. (Part D) POST also ignores query parameters (covers the POST handler specifically).
+   5. (Part E) After successful cleanup, no orphaned .tmp-* files are left in
+      the workspace directory (regression test for temp file handling).
 
    Uses _setServerEnvPathForTest() to inject a temp .env path so the test
    doesn't touch the real server/.env. */
@@ -346,7 +347,16 @@ describe('POST /api/config/env-cleanup', () => {
        2. No .tmp-* files exist in the temp directory after cleanup completes
 
        This is a defensive regression test that verifies cleanup behavior
-       and ensures secrets aren't leaked via orphaned temp files. */
+       and ensures secrets aren't leaked via orphaned temp files.
+
+       Coverage of the error path: if rename fails after the temp file is
+       written, the handler's outer catch block (lines ~328-334 in config.ts)
+       unlinks the temp file before reporting the error. That cleanup is
+       covered by the try-catch structure itself rather than a separate test,
+       since Vitest's module mocking doesn't retroactively affect already-
+       imported modules (renameWithRetry is a static import at the top of
+       config.ts). The successful path covered here is the primary regression
+       concern and is the gate test. */
     const tempTestPath = join(tmpDir, '.env.part-e-test');
     writeFileSync(
       tempTestPath,
