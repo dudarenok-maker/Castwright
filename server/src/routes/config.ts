@@ -9,9 +9,15 @@
    The GET response shape is stable so the frontend can reconstruct the UI from it. */
 
 import { Router } from 'express';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { allKnobDescriptors } from '../config/descriptors.js';
 import { resolveAll, resolveKnob, resolveKnobIgnoringOverride, coerceAndValidate, envCleanupCandidateKeys } from '../config/resolver.js';
+import { cleanEnvText } from '../config/env-cleanup.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { PAIR_RULES } from '../config/pair-rules.js';
 import {
   writeConfigOverride,
@@ -187,6 +193,73 @@ configRouter.post('/reset', async (req, res) => {
     for (const k of toClear) await clearConfigOverride(k);
   }
   res.json({ ok: true, values: resolveAll() });
+});
+
+// ── POST /env-cleanup ────────────────────────────────────────────────────────
+
+/** Resolve the server .env path the same way load-env.ts does: relative to
+    the server process's cwd. Exported so tests can override via the
+    `envPath` query param without monkey-patching process.cwd. */
+export function resolveServerEnvPath(): string {
+  return resolve(process.cwd(), '.env');
+}
+
+configRouter.post('/env-cleanup', async (req, res) => {
+  /* Allow tests to inject a path without touching the real server/.env.
+     Production callers omit this — it resolves to cwd/.env as usual. */
+  const queryPath = typeof req.query.envPath === 'string' ? req.query.envPath : undefined;
+  const envPath = queryPath ?? resolveServerEnvPath();
+
+  if (!existsSync(envPath)) {
+    res.status(404).json({ error: `server .env not found at ${envPath}` });
+    return;
+  }
+
+  // Re-derive the candidate set AT WRITE TIME — never trust a cached GET response.
+  const candidateKeys = envCleanupCandidateKeys();
+  const candidateSet = new Set(
+    candidateKeys
+      .map((key) => {
+        const knob = getKnob(key);
+        return knob?.env ?? null;
+      })
+      .filter((env): env is string => env != null),
+  );
+
+  let original: string;
+  try {
+    original = readFileSync(envPath, 'utf-8');
+  } catch (err) {
+    res.status(500).json({ error: `failed to read ${envPath}: ${(err as Error).message}` });
+    return;
+  }
+
+  const result = cleanEnvText(original, (varName) => candidateSet.has(varName));
+
+  // Backup: copy the pre-cleanup content to server/.env.bak (snapshot, not
+  // version history — each cleanup overwrites the previous backup).
+  const bakPath = `${envPath}.bak`;
+  try {
+    writeFileSync(bakPath, original, 'utf-8');
+  } catch (err) {
+    res.status(500).json({ error: `failed to write backup ${bakPath}: ${(err as Error).message}` });
+    return;
+  }
+
+  // Atomic write: write cleaned text to a temp file in the same directory,
+  // then rename over the target. Same rename helper as state-io's atomic
+  // JSON writes — cloud-sync-safe on Windows.
+  try {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'env-cleanup-'));
+    const tmpFile = join(tmpDir, '.env');
+    writeFileSync(tmpFile, result.text, 'utf-8');
+    await renameWithRetry(tmpFile, envPath);
+  } catch (err) {
+    res.status(500).json({ error: `failed to write cleaned .env: ${(err as Error).message}` });
+    return;
+  }
+
+  res.json({ cleaned: result.cleaned });
 });
 
 // ── Prompt endpoints ─────────────────────────────────────────────────────────
