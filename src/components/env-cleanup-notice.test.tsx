@@ -16,9 +16,9 @@ describe('EnvCleanupNotice', () => {
     expect(screen.getByRole('button', { name: /clean up/i })).toBeInTheDocument();
   });
 
-  it('uses the singular "setting" for a count of 1', () => {
+  it('uses the singular "setting looks" for a count of 1', () => {
     render(<EnvCleanupNotice candidateCount={1} onCleanup={vi.fn()} />);
-    expect(screen.getByText(/1 setting look/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 setting looks like/i)).toBeInTheDocument();
   });
 
   it('calls onCleanup when the button is clicked', () => {

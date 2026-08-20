@@ -19,11 +19,12 @@ export function EnvCleanupNotice({
   if (candidateCount === 0) return null;
 
   const settingWord = candidateCount === 1 ? 'setting' : 'settings';
+  const lookWord = candidateCount === 1 ? 'looks' : 'look';
 
   return (
     <div className="flex items-center gap-4 flex-wrap rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
       <p className="flex-1 text-sm text-amber-800">
-        {candidateCount} {settingWord} look like leftover defaults from an older install.
+        {candidateCount} {settingWord} {lookWord} like leftover defaults from an older install.
       </p>
       <button
         type="button"
