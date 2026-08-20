@@ -3334,12 +3334,13 @@ doesn't crash on the real runner, which was the open half of this question.
 
 **Still unverified: `gh issue view` actually authenticating via the injected
 `GH_TOKEN`.** Both real runs took the empty-register early-return path
-(`rows.length === 0` → `scripts/quarantine-health.mjs:776`, before the
-post-loop `gh issue view` calls) — `docs/testing/flaky-register.md` carries
-one row today (#1981, tracking #2226) but it's marked "Not quarantined —
-still gates," so it never reaches the quarantine-lane report. The run log
-does show `GITHUB_TOKEN Permissions: Issues: read`, so the wiring is
-plausible — but that is not proof the call actually works.
+(`plan.outcome === 'empty'` → `scripts/quarantine-health.mjs:979`, before the
+post-loop `gh issue view` calls). `docs/testing/flaky-register.md` carries
+two data rows today (#1981 and #2235), but #1981 is marked "Not quarantined —
+still gates" and only #2235 is quarantined, so only #2235 passes through
+the quarantine-lane report. The run log does show `GITHUB_TOKEN Permissions:
+Issues: read`, so the wiring is plausible — but that is not proof the call
+actually works on a non-empty `gh issue view` invocation.
 `continue-on-error: true` and exclusion from every required check still mean
 a failure here cannot block anything.
 

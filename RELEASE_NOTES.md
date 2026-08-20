@@ -1,5 +1,7 @@
 # Castwright 1.15.0
 
+- **CI's weekly quarantine check now catches when it can't read the register.** The automation that tracks which tests are known to be flaky used to parse the register's format incorrectly and silently report a false clean — now it either reads successfully or reports the failure instead, so a broken parse won't hide the problem until someone notices weeks later.
+
 - **Changing a character's voice no longer drags their old sound into every new line.** Castwright's behind-the-scenes check of how each character's voice is holding up compares their audio against a stored reference of that voice. Reassign to a different voice, and that reference used to keep describing the old one — so accurate, freshly recorded lines were flagged as mismatches and re-recorded against a speaker they were never meant to match. The reference now remembers which voice it was built from and rebuilds itself the moment you change the voice, so a character finally sounds like who you actually cast.
 
 - **✨ The headlines.** Voice cloning arrives, on both speech engines — record a short sample you have permission to use and cast it like any other voice, in whatever language your book is written in. A character keeps their identity through a re-analysis, so a chapter you have already narrated can no longer quietly hand their lines to the narrator. Castwright reclaims graphics-card memory by itself before it ever tells you there is no room. And re-recording one character can no longer put their voice on somebody else's lines. Everything below, in more detail.
