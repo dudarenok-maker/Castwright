@@ -140,6 +140,7 @@ describe('WhisperInstall', () => {
         values: { 'qa.asr.model': { key: 'qa.asr.model', effective: 'medium', source: 'override', locked: false, overridden: true } },
         restartPending: false,
         cudaEnvShadow: false,
+        envCleanupCandidates: [],
       } as ConfigResponse);
       render(<WhisperInstall />);
       await waitFor(() =>

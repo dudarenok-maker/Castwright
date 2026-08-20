@@ -12,6 +12,7 @@ import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
 import { OverrideRow, beginConfigAction, describeConfigSaveError } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
+import { EnvCleanupNotice } from '../components/env-cleanup-notice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -22,6 +23,7 @@ import {
   resetGroup,
   resetAllConfig,
   restartSidecar,
+  cleanupEnvKnobs,
   forkPrompt,
   revertPrompt,
   selectRestartPending,
@@ -229,12 +231,20 @@ function PromptRow({ descriptor }: PromptRowProps) {
 
 export function AdvancedView() {
   const dispatch = useAppDispatch();
-  const { groups, descriptors, values, status, error, hydrated, cudaEnvShadow } = useAppSelector(
-    (s) => s.config,
-  );
+  const {
+    groups,
+    descriptors,
+    values,
+    status,
+    error,
+    hydrated,
+    cudaEnvShadow,
+    envCleanupCandidates,
+  } = useAppSelector((s) => s.config);
   const restartPending = useAppSelector(selectRestartPending);
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
+  const [cleaningUpEnv, setCleaningUpEnv] = useState(false);
   const [gpuDevices, setGpuDevices] = useState<GpuDevice[]>([]);
   const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device'] | null>(
     null,
@@ -313,6 +323,26 @@ export function AdvancedView() {
     }
   };
 
+  const handleCleanupEnv = async () => {
+    setCleaningUpEnv(true);
+    try {
+      await dispatch(cleanupEnvKnobs()).unwrap();
+      // Refetch so envCleanupCandidates reflects the post-cleanup state —
+      // ideally [], which is what makes the notice never nag once resolved.
+      await dispatch(fetchConfig());
+    } catch (reason: unknown) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: `Couldn't clean up leftover settings: ${describeConfigSaveError(reason).message}`,
+          dedupeKey: 'env-cleanup-failed',
+        }),
+      );
+    } finally {
+      setCleaningUpEnv(false);
+    }
+  };
+
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
@@ -347,6 +377,13 @@ export function AdvancedView() {
             </p>
           </div>
         )}
+        <EnvCleanupNotice
+          candidateCount={envCleanupCandidates.length}
+          onCleanup={() => {
+            void handleCleanupEnv();
+          }}
+          busy={cleaningUpEnv}
+        />
         {cudaEnvShadow && (
           <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
             <p className="text-sm text-amber-800">

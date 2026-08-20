@@ -22,6 +22,7 @@ vi.mock('../lib/api', () => ({
     putPrompt: vi.fn(),
     resetPrompt: vi.fn(),
     restartSidecar: vi.fn(),
+    cleanupEnvKnobs: vi.fn(),
     getGpuDevices: vi.fn(),
     getAnalyzerDevice: vi.fn(),
   },
@@ -30,6 +31,7 @@ vi.mock('../lib/api', () => ({
 const mockGetConfig = vi.mocked(api.getConfig);
 const mockPutConfig = vi.mocked(api.putConfig);
 const mockResetConfig = vi.mocked(api.resetConfig);
+const mockCleanupEnvKnobs = vi.mocked(api.cleanupEnvKnobs);
 const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
 const mockGetAnalyzerDevice = vi.mocked(api.getAnalyzerDevice);
 
@@ -140,6 +142,7 @@ const FIXTURE_CONFIG: ConfigResponse = {
   },
   restartPending: false,
   cudaEnvShadow: false,
+  envCleanupCandidates: [],
 };
 
 /* Build a minimal store with config + ui + notifications slices. */
@@ -175,6 +178,7 @@ beforeEach(() => {
     defaultText: 'Detect every speaking character introduced or recurring in this chapter.',
   });
   vi.mocked(api.restartSidecar).mockResolvedValue({ ok: true });
+  mockCleanupEnvKnobs.mockResolvedValue({ cleaned: [] });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
   mockGetAnalyzerDevice.mockResolvedValue({ device: 'idle' });
 });
@@ -577,6 +581,69 @@ describe('AdvancedView — CUDA env-shadow banner (Plan 2 §2.5)', () => {
        convention above). */
     await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/CUDA_VISIBLE_DEVICES/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('AdvancedView — env-cleanup notice', () => {
+  it('renders nothing when envCleanupCandidates is empty', async () => {
+    renderView();
+    await screen.findAllByText('Text-to-speech');
+    expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the notice with a count when envCleanupCandidates is non-empty', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FIXTURE_CONFIG,
+      envCleanupCandidates: ['OLD_KNOB_A', 'OLD_KNOB_B'],
+    });
+
+    renderView();
+    expect(await screen.findByText(/2 settings look like leftover defaults/i)).toBeInTheDocument();
+  });
+
+  it('calls the cleanup API and drops the notice once the refetch reports it resolved', async () => {
+    mockGetConfig.mockResolvedValueOnce({
+      ...FIXTURE_CONFIG,
+      envCleanupCandidates: ['OLD_KNOB_A'],
+    });
+    mockGetConfig.mockResolvedValueOnce({
+      ...FIXTURE_CONFIG,
+      envCleanupCandidates: [],
+    });
+
+    renderView();
+    const cleanupButton = await screen.findByRole('button', { name: /clean up/i });
+    fireEvent.click(cleanupButton);
+
+    await waitFor(() => expect(api.cleanupEnvKnobs).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetConfig).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('pushes an error toast when cleanup is rejected', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FIXTURE_CONFIG,
+      envCleanupCandidates: ['OLD_KNOB_A'],
+    });
+    mockCleanupEnvKnobs.mockRejectedValueOnce(
+      new Error('Config env-cleanup failed (500): {"error":"disk write failed"}'),
+    );
+
+    const { store } = renderView();
+    const cleanupButton = await screen.findByRole('button', { name: /clean up/i });
+    fireEvent.click(cleanupButton);
+
+    await waitFor(() =>
+      expect(store.getState().notifications.toasts).toContainEqual(
+        expect.objectContaining({
+          kind: 'error',
+          message: expect.stringContaining('disk write failed'),
+        }),
+      ),
+    );
+    await waitFor(() => expect(cleanupButton).not.toBeDisabled());
   });
 });
 
