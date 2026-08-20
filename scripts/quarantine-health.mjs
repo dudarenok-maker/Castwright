@@ -676,6 +676,15 @@ export function formatReport({ entries, runs, issueStates }) {
   return lines.join('\n');
 }
 
+// Builds the error message for a parse-failure outcome — when data rows are
+// present but some yield zero test names. Extracted as a pure function so it
+// can be unit-tested (fixing finding 3: the message was never reaching
+// $GITHUB_STEP_SUMMARY because the parse-failure branch only called
+// console.error, not emit()). Exported for unit testing.
+export function buildParseFailureMessage(registerPath, dataRowCount, unparsedCount) {
+  return `quarantine-health: ${registerPath} contains ${dataRowCount} data row(s) but ${unparsedCount} yield zero test name(s) — the parser is silently dropping row(s). This is a bug, not a clean no-op.`;
+}
+
 // The worst-case wall-clock time ONE run could take, given how many separate
 // vitest invocations it makes this run (frontend + server main + server
 // slow, each independently bounded by VITEST_RUN_TIMEOUT_MS). Pure —
@@ -863,9 +872,9 @@ function main() {
     return; // clean no-op — exit 0
   }
   if (plan.outcome === 'parse-failure') {
-    console.error(
-      `quarantine-health: ${REGISTER_PATH} contains ${countRegisterDataRows(markdown)} data row(s) but ${plan.unparsedCount} yield zero test name(s) — the parser is silently dropping row(s). This is a bug, not a clean no-op.`,
-    );
+    const dataRowCount = countRegisterDataRows(markdown);
+    const message = buildParseFailureMessage(REGISTER_PATH, dataRowCount, plan.unparsedCount);
+    emit(message);
     process.exitCode = 1;
     return;
   }

@@ -21,6 +21,7 @@ import {
   formatReport,
   buildVitestArgs,
   classifyRunResult,
+  buildParseFailureMessage,
   worstCaseRunMs,
   budgetExceeded,
   VITEST_RUN_TIMEOUT_MS,
@@ -1075,6 +1076,20 @@ test('planRegisterRun returns parse-failure when any data rows yield zero test n
   const result = planRegisterRun(markdown);
   assert.equal(result.outcome, 'parse-failure', 'should detect partial drop');
   assert.equal(result.unparsedCount, 1, 'should report 1 unparsed row');
+});
+
+test('buildParseFailureMessage formats the parse-failure error for the job summary (finding 3)', () => {
+  // Fixing finding 3: the parse-failure message was never reaching
+  // $GITHUB_STEP_SUMMARY because main() only called console.error, not emit().
+  // This tests the pure message-building function so the main() branch can
+  // reliably call emit() with it.
+  const registerPath = '/c/Claude/Projects/Audiobook-Generator/docs/testing/flaky-register.md';
+  const message = buildParseFailureMessage(registerPath, 2, 1);
+  assert.ok(message.includes('quarantine-health:'), 'message should start with tool name');
+  assert.ok(message.includes(registerPath), 'message should include register path');
+  assert.ok(message.includes('contains 2 data row(s)'), 'message should name the data row count');
+  assert.ok(message.includes('but 1 yield zero test name(s)'), 'message should name the unparsed count');
+  assert.ok(message.includes('parser is silently dropping row(s)'), 'message should describe the bug');
 });
 
 test('planRegisterRun returns ok when all data rows parse successfully', () => {
