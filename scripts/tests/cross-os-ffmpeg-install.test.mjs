@@ -22,7 +22,7 @@
 // guards against.
 //
 // #2480 extracted the Windows step's script out of cross-os.yml and
-// release.yml (previously byte-duplicated across both) into the composite
+// release.yml (previously near-identical, with executable lines identical and comments reflowed) into the composite
 // action .github/actions/install-ffmpeg-windows/action.yml, so there is now
 // exactly one copy of the script to pin. The tests below exercise it there;
 // a separate check at the bottom of this file confirms both workflows still
@@ -323,6 +323,15 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     const source = readNormalized(path);
     const block = windowsFfmpegStepBlock(source);
 
+    // The step must use PowerShell to run — the shell is a loaded responsibility
+    // that cannot be changed without breaking the script (all the $var, Try/Catch,
+    // scope qualifications are PowerShell-specific).
+    assert.match(
+      source,
+      /\n\s*shell:\s*pwsh\b/,
+      'composite action does not declare shell: pwsh for the Windows ffmpeg step -- the script requires PowerShell',
+    );
+
     // The step must still install via choco (that part of the defect —
     // "no package manager at all" — was never in question).
     assert.match(block, /choco install ffmpeg/, 'step no longer installs ffmpeg via choco');
@@ -579,6 +588,15 @@ for (const path of WORKFLOWS) {
       block,
       /choco install ffmpeg/,
       'step embeds its own choco install call -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
+
+    // Guard against a second/different inline `choco install ffmpeg` elsewhere
+    // in the same workflow file (a future edit that pastes the script back
+    // inline in a different job/step must not go unnoticed).
+    assert.doesNotMatch(
+      source,
+      /choco install ffmpeg/,
+      'workflow file contains an inline choco install call somewhere -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
     );
   });
 }

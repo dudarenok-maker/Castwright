@@ -1,5 +1,5 @@
 # Composite action — the "Install ffmpeg (Windows)" step that was
-# byte-duplicated across cross-os.yml and release.yml (#2480).
+# duplicated across cross-os.yml and release.yml (#2480).
 #
 # choco's own exit code is not a reliable success signal: it can report
 # success (exit 0) while having installed 0/0 packages (observed: a 504 from
