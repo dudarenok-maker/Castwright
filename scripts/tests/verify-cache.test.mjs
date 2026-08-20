@@ -542,6 +542,11 @@ test('stepTouchedByDiff: a .env.mock diff matches test:hooks via extraFiles (dev
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+test('stepTouchedByDiff: a .gitignore diff matches test:hooks via extraFiles (gitignore-secrets.test.mjs reads it at runtime via git check-ignore)', () => {
+  const diff = ['.gitignore'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
 // #2216 review round 3 — git-scrub.test.mjs is the first hooks test whose
 // scan surface reaches outside scripts/** (it walks pinokio-scripts/** too),
 // but test:hooks' globs didn't cover that directory: a pinokio-scripts-only

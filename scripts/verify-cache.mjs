@@ -297,6 +297,15 @@ export const STEPS = [
         // step, this one included, without a dedicated entry.)
         '.env.mock',
         '.env.development',
+        // gitignore-secrets.test.mjs reads .gitignore at RUNTIME via `git
+        // check-ignore` to verify secret files are properly ignored — no
+        // module-graph edge, so without this entry a .gitignore-only diff
+        // (precisely the regression the test exists to catch — e.g. accidental
+        // removal of `.env.bak` from the ignore rules) prints test:hooks
+        // [cached] locally, and ci-scope.mjs derives cloud CI's legs from this
+        // same STEPS[] entry, so the cloud run skips it too. Same #1847
+        // runtime-read trap as fixtures/** and others above.
+        '.gitignore',
       ],
       includeLockfiles: ['root'],
     },
