@@ -352,6 +352,29 @@ test('parseRegister extracts the full prose test name when it contains incidenta
   assert.equal(entries[0].testName, expectedName, `should extract full prose name with backticks intact, not just the backtick-quoted substring`);
 });
 
+test('parseRegister expands multiple backtick-quoted test names in prose format (Bug 2)', () => {
+  // Bug 2: a Test cell with prose prefix AND 2+ backtick-quoted names should expand them
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — retries \`test A\`, \`test B\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 2, 'should parse 2 separate entries for the 2 backtick-quoted names');
+  assert.equal(entries[0].testName, 'test A', 'first entry should be the first backtick-quoted name');
+  assert.equal(entries[1].testName, 'test B', 'second entry should be the second backtick-quoted name');
+});
+
+test('parseRegister keeps single incidental backtick-quoted text as part of prose name, not as separate test (Bug 2)', () => {
+  // Bug 2: a Test cell with prose prefix and exactly 1 backtick pair should keep whole remainder as testName
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'should parse 1 entry (not expand the single backtick pair)');
+  assert.equal(entries[0].testName, 'retries the `POST /api/x` call once', 'should preserve full prose name with single backtick pair intact');
+});
+
 // --- parseRegister / splitTableRow: escaped `|` in a cell (finding 1) ------
 //
 // A Symptom cell describing a literal pipe character must not shift every
@@ -1136,42 +1159,45 @@ test('buildParseFailureMessage formats the parse-failure error for the job summa
 // The parse-failure message must actually reach $GITHUB_STEP_SUMMARY via emit(),
 // not just be logged to console. This regression test verifies the emit() path.
 
-test('buildParseFailureMessage and emit reach $GITHUB_STEP_SUMMARY end-to-end (Bug B)', async () => {
+test('buildParseFailureMessage and reportParseFailure reach $GITHUB_STEP_SUMMARY end-to-end (Bug B)', async () => {
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
+  const { reportParseFailure } = await import('../quarantine-health.mjs');
 
   // Create a temp file to simulate $GITHUB_STEP_SUMMARY
   const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-test-'));
   const summaryPath = join(tempDir, 'summary.md');
 
-  // Save the original env var
+  // Save the original env var and exit code
   const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalExitCode = process.exitCode;
 
   try {
     // Set the temp file as $GITHUB_STEP_SUMMARY
     process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.exitCode = 0; // reset for this test
 
-    // Import emit fresh (need to define it inline since it's not exported)
-    // Actually, we'll test by calling the logic that uses emit
-    const message = buildParseFailureMessage('/path/to/register.md', 3, 2);
+    // Call the real reportParseFailure function, which calls the real emit()
+    reportParseFailure('/path/to/register.md', 3, 2);
 
-    // Simulate what the main() branch does: build message and emit it
-    const { readFileSync, appendFileSync } = await import('node:fs');
-    const emit = (report) => {
-      appendFileSync(summaryPath, report + '\n');
-    };
+    // Verify the exit code was set
+    assert.equal(process.exitCode, 1, 'exit code should be set to 1');
 
-    emit(message);
-
-    // Read back the file and verify the message was written
+    // Read back the file and verify the message was written via emit()
+    const { readFileSync } = await import('node:fs');
     const written = readFileSync(summaryPath, 'utf8');
-    assert.ok(written.includes('quarantine-health:'), 'message should be in GITHUB_STEP_SUMMARY');
+    assert.ok(written.includes('quarantine-health:'), 'message should be in GITHUB_STEP_SUMMARY via emit()');
     assert.ok(written.includes('3 data row(s)'), 'message should contain data row count in GITHUB_STEP_SUMMARY');
     assert.ok(written.includes('2 could not be fully parsed'), 'message should contain unparsed count in GITHUB_STEP_SUMMARY');
   } finally {
-    // Restore the original env var
-    process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    // Restore the original env var and exit code
+    if (originalSummaryPath === undefined) {
+      delete process.env.GITHUB_STEP_SUMMARY;
+    } else {
+      process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    }
+    process.exitCode = originalExitCode;
 
     // Clean up temp file
     try {

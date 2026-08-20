@@ -272,16 +272,27 @@ export function parseRegister(markdown) {
     // still be counted as unparsed data rows by the guard (Bug A).
     if (!file) continue;
 
-    // Check for backtick-quoted test names first, but ONLY if the Test cell
-    // does NOT start with the prose format prefix #NNNN — (Bug C fix: check
-    // prose format FIRST to avoid incidental backticks inside prose names
-    // being extracted as the entire test name).
+    // Check for prose format prefix first (Bug C fix: prose prefix takes
+    // priority over incidental backticks). Then within the prose format,
+    // check if the remainder has 2+ backtick-quoted spans: if so, expand
+    // them into separate entries (Bug 2); if 0-1 spans, use the whole
+    // remainder as a single test name.
     let testNames = [];
     const proseMatch = testCell.match(/^#\d+\s*—\s*(.+)/);
     if (proseMatch) {
-      // Prose format — extract the remainder after #NNNN — (includes any
-      // incidental backticks, which are part of the real test name).
-      testNames.push(proseMatch[1].trim());
+      // Prose format — extract remainder and check for multi-test backtick expansion
+      const remainder = proseMatch[1].trim();
+      const backtickMatches = [...remainder.matchAll(/`([^`]+)`/g)];
+
+      // If 2+ backtick-quoted spans: extract them as separate entries,
+      // discarding the prose prefix and framing text.
+      // If 0-1 backtick spans: treat whole remainder as single test name
+      // (preserving a single incidental backtick pair as code-reference).
+      if (backtickMatches.length >= 2) {
+        testNames = backtickMatches.map((m) => m[1]);
+      } else {
+        testNames.push(remainder);
+      }
     } else {
       // No prose prefix — try backtick-quoted test names (multi-test expansion).
       testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
@@ -334,7 +345,10 @@ export function countUnparsedDataRows(markdown) {
     }
 
     // Try prose format first (Bug C: prose prefix takes priority over
-    // incidental backticks inside the name).
+    // incidental backticks inside the name). When prose prefix exists, the
+    // remainder is checked for multi-test backtick expansion (Bug 2): 2+ spans
+    // yield separate entries; 0-1 spans yield a single entry with the whole
+    // remainder. Either way, the row parses successfully.
     const proseMatch = testCell.match(/^#\d+\s*—\s*(.+)/);
     if (proseMatch) continue; // This row parsed successfully.
 
@@ -710,6 +724,16 @@ export function buildParseFailureMessage(registerPath, dataRowCount, unparsedCou
   return `quarantine-health: ${registerPath} contains ${dataRowCount} data row(s) but ${unparsedCount} could not be fully parsed — the parser is silently dropping row(s). This is a bug, not a clean no-op.`;
 }
 
+// Reports a parse failure: builds the message, emits it to GITHUB_STEP_SUMMARY,
+// and sets the exit code. Extracted as a separate function for testability
+// (Bug B regression: the emit() path must actually reach $GITHUB_STEP_SUMMARY).
+// Exported for unit testing.
+export function reportParseFailure(registerPath, dataRowCount, unparsedCount) {
+  const message = buildParseFailureMessage(registerPath, dataRowCount, unparsedCount);
+  emit(message);
+  process.exitCode = 1;
+}
+
 // The worst-case wall-clock time ONE run could take, given how many separate
 // vitest invocations it makes this run (frontend + server main + server
 // slow, each independently bounded by VITEST_RUN_TIMEOUT_MS). Pure —
@@ -869,7 +893,7 @@ function checkIssueState(issueNumber) {
   return state || null;
 }
 
-function emit(report) {
+export function emit(report) {
   console.log(report);
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) appendFileSync(summaryPath, report + '\n');
@@ -900,9 +924,7 @@ function main() {
   }
   if (plan.outcome === 'parse-failure') {
     const dataRowCount = countRegisterDataRows(markdown);
-    const message = buildParseFailureMessage(REGISTER_PATH, dataRowCount, plan.unparsedCount);
-    emit(message);
-    process.exitCode = 1;
+    reportParseFailure(REGISTER_PATH, dataRowCount, plan.unparsedCount);
     return;
   }
 
