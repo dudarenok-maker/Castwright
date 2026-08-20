@@ -16,27 +16,28 @@
 // nothing, exactly the failure mode the ignore entry's comment warns about.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { writeFileSync, rmSync, mkdtempSync, mkdirSync } from 'node:fs';
+import { writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 // test:hooks runs from the repo root (scripts/run-hooks-tests.mjs uses fast-glob
 // which resolves against cwd).
 const repoRoot = process.cwd();
 
-function lintPlantedFile(f) {
-  try {
-    execFileSync('npx', ['eslint', '--no-ignore', f], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-      shell: process.platform === 'win32',
-    });
-    return false;
-  } catch {
-    // eslint exits non-zero when it finds an error-level violation — that is the
-    // expected outcome for the planted violation.
-    return true;
-  }
+const RULE_ID = 'no-restricted-syntax';
+
+// Runs eslint and returns { exitCode, output }. Using spawnSync (not
+// execFileSync) so a non-zero exit doesn't throw — callers need the output
+// on EVERY outcome, not just failure, to tell "the guardrail rule fired" apart
+// from "eslint itself errored" (a bad flag, a missing binary, a config
+// problem) — both exit non-zero, and only the output distinguishes them.
+function runEslint(args) {
+  const result = spawnSync('npx', ['eslint', ...args], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+  });
+  return { exitCode: result.status, output: (result.stdout ?? '') + (result.stderr ?? '') };
 }
 
 test('guardrail rejects a planted it.skipIf(process.env.CI)', () => {
@@ -49,46 +50,61 @@ test('guardrail rejects a planted it.skipIf(process.env.CI)', () => {
     f,
     "import { it } from 'vitest';\nit.skipIf(process.env.CI)('x', () => {});\n",
   );
-  let failed;
+  let result;
   try {
-    failed = lintPlantedFile(f);
+    // --no-ignore: guardrail-tmp-*/ is ALSO in eslint.config.mjs's global
+    // `ignores` (#2482 — a leftover from THIS probe must not wedge lint on a
+    // later, unrelated checkout). Without --no-ignore this call would exit 0
+    // regardless of the rule's presence, which is exactly the false-pass this
+    // test exists to catch — so the assertion below checks for the rule ID
+    // specifically, not just a non-zero exit, which a bad flag or a broken
+    // eslint invocation would also produce.
+    result = runEslint(['--no-ignore', f]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  assert.equal(failed, true, 'eslint should exit non-zero for the planted it.skipIf(process.env.CI) violation');
+  assert.equal(result.exitCode, 1, `eslint should exit 1 for a lint violation (got ${result.exitCode}): ${result.output}`);
+  assert.match(
+    result.output,
+    new RegExp(RULE_ID),
+    `eslint's output should name the ${RULE_ID} rule, not merely exit non-zero: ${result.output}`,
+  );
 });
 
-test('a stale guardrail-tmp-* leftover does not wedge npm run lint', () => {
+test('a stale guardrail-tmp-* leftover is ignored by ESLint, not merely absent of other diagnostics', () => {
   // Simulates the #2482 failure mode: a guardrail-tmp-* dir survives cleanup
   // (killed process / rmSync race) and is still sitting in the tree the next
-  // time someone runs `npm run lint`. Invoked the same way that script does
-  // (`eslint . --max-warnings 0`, a directory walk — NOT an explicit glob
-  // naming the leftover, which ESLint 9 treats as an unmatched-pattern error
-  // regardless of ignores and would make this test assert the wrong thing)
-  // it must be silently skipped by eslint.config.mjs's global ignore.
-  const staleDir = join(repoRoot, 'guardrail-tmp-stale-2482-test');
-  rmSync(staleDir, { recursive: true, force: true });
-  mkdirSync(staleDir);
+  // time someone runs `npm run lint`. Targets the leftover directly via an
+  // explicit glob rather than `eslint . --max-warnings 0` over the whole
+  // repo — a whole-repo lint's exit code says nothing about THIS directory
+  // specifically; it would also flip on an unrelated pre-existing warning
+  // elsewhere in the tree, which is not what this test is meant to prove.
+  //
+  // ESLint 9 treats "every file an explicit glob pattern matches is ignored"
+  // as its own outcome (exit 2, "all matched files are ignored"), distinct
+  // from "the file was linted and found clean" (exit 0) — so a passing run
+  // here is a config guarantee, not silence.
+  const staleDir = mkdtempSync(join(repoRoot, 'guardrail-tmp-'));
   const staleFile = join(staleDir, 'planted.test.ts');
   writeFileSync(
     staleFile,
     "import { it } from 'vitest';\nit.skipIf(process.env.CI)('x', () => {});\n",
   );
-  let failed = false;
+  let result;
   try {
-    execFileSync('npx', ['eslint', '.', '--max-warnings', '0'], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-      shell: process.platform === 'win32',
-    });
-  } catch {
-    failed = true;
+    result = runEslint([`${staleDir.replace(/\\/g, '/')}/**/*.ts`]);
   } finally {
     rmSync(staleDir, { recursive: true, force: true });
   }
   assert.equal(
-    failed,
-    false,
-    'npm run lint should skip a stale guardrail-tmp-* leftover (global ignore) rather than flag its planted violation',
+    result.exitCode,
+    2,
+    `eslint should report every matched file as ignored (exit 2), not lint the leftover (got ${result.exitCode}): ${result.output}`,
+  );
+  assert.match(result.output, /ignored/i, `eslint's output should say the leftover was ignored: ${result.output}`);
+  assert.doesNotMatch(
+    result.output,
+    new RegExp(RULE_ID),
+    `the leftover must never actually be linted, i.e. never surface the ${RULE_ID} violation: ${result.output}`,
   );
 });

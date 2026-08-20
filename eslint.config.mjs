@@ -59,6 +59,9 @@ export default tseslint.config(
       // itself still needs ESLint to SEE its planted file, so it passes
       // `--no-ignore` to override this — see the probe's own comment.
       'guardrail-tmp-*/',
+      // check-no-budget-poll.test.mjs's own planted-violation temp dirs — same
+      // interrupted-run leftover shape as guardrail-tmp-* above (#2482).
+      'budget-poll-tmp-*/',
       // Accepted-result scratch written by the token-saver skill (see the
       // matching .gitignore entry). Unreviewed model output that can land on a
       // linted extension, and the skill writes it under whatever root it is
