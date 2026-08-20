@@ -31,12 +31,24 @@ const RULE_ID = 'no-restricted-syntax';
 // on EVERY outcome, not just failure, to tell "the guardrail rule fired" apart
 // from "eslint itself errored" (a bad flag, a missing binary, a config
 // problem) — both exit non-zero, and only the output distinguishes them.
+//
+// Windows needs shell:true to run npx.cmd at all (spawnSync cannot exec a
+// .cmd file directly — EINVAL). shell:true only concatenates argv without
+// escaping (Node DEP0190), so every argument is quoted here — cheap
+// insurance since one of them is a path built from mkdtempSync's own output
+// and could contain a space in a checkout outside this repo's convention.
+const IS_WIN = process.platform === 'win32';
+
 function runEslint(args) {
-  const result = spawnSync('npx', ['eslint', ...args], {
+  const argv = IS_WIN ? args.map((a) => `"${a}"`) : args;
+  const result = spawnSync('npx', ['eslint', ...argv], {
     cwd: repoRoot,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: IS_WIN,
   });
+  if (result.error) {
+    throw result.error;
+  }
   return { exitCode: result.status, output: (result.stdout ?? '') + (result.stderr ?? '') };
 }
 
@@ -106,5 +118,34 @@ test('a stale guardrail-tmp-* leftover is ignored by ESLint, not merely absent o
     result.output,
     new RegExp(RULE_ID),
     `the leftover must never actually be linted, i.e. never surface the ${RULE_ID} violation: ${result.output}`,
+  );
+});
+
+test('the guardrail-tmp-*/budget-poll-tmp-* ignores do not swallow an ordinary *.test.ts file', () => {
+  // The two tests above prove the leftover dirs ARE ignored and the rule
+  // fires when unignored via --no-ignore. Neither would catch the ignore
+  // pattern becoming too broad (e.g. accidentally matching '**/*.test.ts'
+  // instead of a specific directory prefix) — test 1 always passes
+  // --no-ignore, which would blind it to that too, and test 2 asserts the
+  // file IS ignored, so a broader pattern only makes it greener. This test
+  // is the counterweight: an ordinary planted violation OUTSIDE both
+  // leftover-dir prefixes must still be caught with NO --no-ignore flag.
+  const dir = mkdtempSync(join(repoRoot, 'eslint-guardrail-canary-'));
+  const f = join(dir, 'planted.test.ts');
+  writeFileSync(
+    f,
+    "import { it } from 'vitest';\nit.skipIf(process.env.CI)('x', () => {});\n",
+  );
+  let result;
+  try {
+    result = runEslint([f]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(result.exitCode, 1, `eslint should still lint an ordinary test file and reject the violation (got ${result.exitCode}): ${result.output}`);
+  assert.match(
+    result.output,
+    new RegExp(RULE_ID),
+    `eslint's output should name the ${RULE_ID} rule for a file outside the leftover-dir ignores: ${result.output}`,
   );
 });

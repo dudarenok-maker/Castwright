@@ -52,9 +52,9 @@ export default tseslint.config(
       // Throwaway debugging probes — git-ignored and not held to the lint bar.
       'server/repro-*.mts',
       // Leftover from scripts/tests/eslint-guardrail.test.mjs's planted-violation
-      // probe (mkdtempSync inside the repo root, see .gitignore:76): a directory
+      // probe (mkdtempSync inside the repo root, see .gitignore): a directory
       // that survives cleanup (killed process, or rmSync losing a Windows EBUSY
-      // race against the execFileSync child right above it) must not wedge every
+      // race against the spawnSync child right above it) must not wedge every
       // subsequent `npm run lint`/pre-push on an unrelated checkout. The probe
       // itself still needs ESLint to SEE its planted file, so it passes
       // `--no-ignore` to override this — see the probe's own comment.
