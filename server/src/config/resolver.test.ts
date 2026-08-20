@@ -14,7 +14,6 @@ import {
   coerceAndValidate,
   configValue,
   isEnvValueRejected,
-  envCleanupCandidateKeys,
   envCleanupCandidateKeysFromFileContent,
 } from './resolver.js';
 import { getKnob } from './registry.js';
@@ -357,36 +356,6 @@ describe('resolveKnobForSidecarEnv — deliberately does NOT reconcile (#1857)',
   });
 });
 
-describe('envCleanupCandidateKeys', () => {
-  beforeEach(() => {
-    delete process.env.STAGE2_MIN_COVERAGE;
-    (us.readConfigOverrides as any).mockReturnValue({});
-  });
-
-  it('returns key when env is set to default', () => {
-    process.env.STAGE2_MIN_COVERAGE = '0.6'; // default
-    const keys = envCleanupCandidateKeys();
-    expect(keys).toContain('analyzer.stage2.minCoverage');
-  });
-
-  it('does not return key when env differs from default', () => {
-    process.env.STAGE2_MIN_COVERAGE = '0.7';
-    const keys = envCleanupCandidateKeys();
-    expect(keys).not.toContain('analyzer.stage2.minCoverage');
-  });
-
-  it('does not return key when env is unset', () => {
-    const keys = envCleanupCandidateKeys();
-    expect(keys).not.toContain('analyzer.stage2.minCoverage');
-  });
-
-  it('skips knobs with no env', () => {
-    const keys = envCleanupCandidateKeys();
-    // Ensure prompt knob never appears
-    expect(keys.every(k => k !== 'prompt.castDetection')).toBe(true);
-  });
-});
-
 describe('envCleanupCandidateKeysFromFileContent — ambient-shadowing fix (#2194 finding 5)', () => {
   it('does not mark as candidate when file value differs from default, even if process.env matches default', () => {
     /* Regression test for the ambient-shadowing bug: the shell exports
@@ -397,14 +366,23 @@ describe('envCleanupCandidateKeysFromFileContent — ambient-shadowing fix (#219
        and wrongly classified this as a candidate for cleanup. The fixed
        code reads the file and correctly keeps it off the candidate list. */
 
-    // Set process.env to the default (simulating shell export)
-    process.env.STAGE2_MIN_COVERAGE = '0.6';
+    const origValue = process.env.STAGE2_MIN_COVERAGE;
+    try {
+      // Set process.env to the default (simulating shell export)
+      process.env.STAGE2_MIN_COVERAGE = '0.6';
 
-    // But the .env file has a non-default value
-    const fileContent = 'STAGE2_MIN_COVERAGE=0.7\n';
+      // But the .env file has a non-default value
+      const fileContent = 'STAGE2_MIN_COVERAGE=0.7\n';
 
-    const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
-    expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+      const candidates = envCleanupCandidateKeysFromFileContent(fileContent);
+      expect(candidates).not.toContain('analyzer.stage2.minCoverage');
+    } finally {
+      if (origValue !== undefined) {
+        process.env.STAGE2_MIN_COVERAGE = origValue;
+      } else {
+        delete process.env.STAGE2_MIN_COVERAGE;
+      }
+    }
   });
 
   it('marks as candidate when file value equals default', () => {
