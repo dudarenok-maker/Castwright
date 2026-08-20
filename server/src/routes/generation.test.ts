@@ -2153,3 +2153,67 @@ describe('triggerScoring (srv-36 hardening)', () => {
     }
   });
 });
+/* ── Task 3 (#2515) — the requireBookStateLanguage catch must emit a
+   classified, chapter-scoped failure tick (errorCode 'language-unset' + idle)
+   instead of a bare errorReason, matching the pattern Task 2 applied to the
+   other eight early bail-outs. These use the same beforeAll-capture /
+   afterEach-restore of state.json as the fs-38 Wave 3c block above so they
+   don't corrupt shared fixture state for later tests in the file. */
+describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let fsModule: typeof import('node:fs');
+  let originalState: string;
+
+  beforeAll(async () => {
+    fsModule = await import('node:fs');
+    originalState = fsModule.readFileSync(statePath(), 'utf8');
+  });
+
+  afterEach(() => {
+    fsModule.writeFileSync(statePath(), originalState);
+  });
+
+  function setBookLanguage(lang: string | null): void {
+    const state = JSON.parse(fsModule.readFileSync(statePath(), 'utf8')) as Record<string, unknown>;
+    state.language = lang;
+    fsModule.writeFileSync(statePath(), JSON.stringify(state));
+  }
+
+  it('emits errorCode + chapterId for an unset-language book, single requested chapter', async () => {
+    setBookLanguage(null);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('language-unset');
+    expect(ticks[0].chapterId).toBe(1);
+    /* This is requireBookStateLanguage's/BookLanguageUnsetError's actual
+       thrown message, verified against server/src/workspace/scan.ts's
+       current implementation — NOT the remediation copy added in Task 1,
+       which is a separate field with its own wording. */
+    expect(String(ticks[0].errorReason)).toMatch(/no language is set for this book/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('omits chapterId for the legacy multi-chapter unset-language open', async () => {
+    setBookLanguage(null);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks[0].chapterId).toBeUndefined();
+    expect(ticks[0].errorCode).toBe('language-unset');
+  });
+
+  it('a book with a language set is unaffected', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    const ticks = parseTicks(res.text);
+    expect(ticks.every((t) => t.errorCode !== 'language-unset')).toBe(true);
+  });
+});

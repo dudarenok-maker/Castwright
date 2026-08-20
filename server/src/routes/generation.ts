@@ -804,7 +804,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   try {
     bookLanguage = requireBookStateLanguage(state);
   } catch (e) {
-    send({ type: 'chapter_failed', errorReason: (e as Error).message });
+    /* Task 3 (#2515) — classify this bail-out the way Task 2's other eight
+       already are: always errorCode 'language-unset', chapterId only when a
+       single chapter was requested, then an idle tick before closing. */
+    send({
+      type: 'chapter_failed',
+      errorReason: (e as Error).message,
+      errorCode: 'language-unset',
+      ...(requestedIds && requestedIds.length === 1 ? { chapterId: requestedIds[0] } : {}),
+    });
+    send({ type: 'idle' });
     return res.end();
   }
   const nonEnglishBook = isNonEnglish(bookLanguage);
