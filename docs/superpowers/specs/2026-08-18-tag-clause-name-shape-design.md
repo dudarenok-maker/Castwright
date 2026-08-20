@@ -233,11 +233,7 @@ The pinned gap test (`parser.test.ts:1375`) **stays** — A remains real.
   ticket. Re-scoping #2346 to A alone leaves the PR with nothing to `Closes`, and
   `main`'s required `pr-issue-link` check makes that a **merge blocker**. Either
   file a `bug` issue for B and `Closes` it, or keep #2346 open and use `Refs`.
-- **Record the instruments actually used.** Measurements 1 and 3 need a
-  `parser.ts` patch (a decline logger, and an env-gated rule) that was reverted and
-  not preserved. As written, acceptance items 1 and 3 cannot be executed by a cold
-  agent. Preserve the patch and the scripts under `C:\Claude\castwright-corpus\`
-  and cite them by absolute path.
+- **Instruments preserved.** `C:\Claude\castwright-corpus\s2346\ab.mts` (per-paragraph span signature for the corpus A/B) and `C:\Claude\castwright-corpus\s2346\decline-log.patch` (the decline logger for `parser.ts`) are now preserved by absolute path. Acceptance items 1 and 3 are executable from this spec alone; see `s2346/README.md` for usage.
 - `parser.ts:409-438` — the guard's header documents a two-test rule; document the
   colon test, why it runs first, and that it disables the guard where it fires.
 - `parser.test.ts:1410` — "expected to start FAILING the moment #2346 is fixed"
@@ -267,5 +263,7 @@ where it was one cleanup from being lost. `2288-corpus-lib.mts` (loader;
 `loadGutenberg` over 7 languages = 231 books, `loadStandardEbooks` = 100, the
 **331** every figure cites — out of 491 files total across 11 languages),
 `s2286/mc-cost-real.mts` (the decline inventory), `s2315/attrib.mts` (the
-attribution family — **six languages only; add German before using it**). Its
+attribution family — **six languages only; add German before using it**),
+`s2346/` (the #2346 colon-rule A/B: `ab.mts` for span signatures,
+`decline-log.patch` for the decline logger, `README.md` for usage). Its
 `README.md` carries the rewiring notes and the known-good reference figures.
