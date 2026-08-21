@@ -2109,7 +2109,8 @@ async function realDesignQwenVoice(
     let detail = '';
     if (body) {
       try {
-        detail = (((await JSON.parse(body)) as { error?: string }).error ?? '').toString();
+        const parsed = JSON.parse(body) as { error?: unknown };
+        detail = typeof parsed.error === 'string' ? parsed.error : '';
       } catch {
         /* not json */
       }

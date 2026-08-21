@@ -219,4 +219,22 @@ describe('qwen voice-design 409 → language-guard (acceptance 6, 7, 8, 9)', () 
     await expect(api.designQwenVoice('b_q', 'c1', qwenArgs)).rejects.toThrow('already running');
     expect(requests.length).toBe(0);
   });
+
+  it('handles non-string error fields without toString() conversion (M4 regression)', async () => {
+    // When the server response has a non-string error field (e.g., an object),
+    // the error message should NOT contain "[object Object]"
+    setLanguageGuardHandler(() => false);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('{"error":{"code":"DESIGN_ERROR","message":"failed"}}', { status: 500 }),
+      ),
+    );
+
+    const promise = api.designQwenVoice('b_q', 'c1', qwenArgs);
+    await expect(promise).rejects.toThrow();
+    const err = await promise.catch((e) => e);
+    // The error message should not contain the lossy "[object Object]" string
+    expect((err as Error).message).not.toContain('[object Object]');
+  });
 });
