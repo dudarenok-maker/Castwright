@@ -171,7 +171,7 @@ up.
 
 ### A16 · fe-16 Qwen auto-load on a Russian book (plan 165) — step 7
 
-> **Criteria source:** [`../features/165-fe-15-16-language-and-revision-e2e.md`](../features/165-fe-15-16-language-and-revision-e2e.md)
+> **Criteria source:** [`../features/archive/165-fe-15-16-language-and-revision-e2e.md`](../features/archive/165-fe-15-16-language-and-revision-e2e.md)
 > `:9` (Status line) + ship notes ("live GPU acceptance is the only owed
 > item"). Re-resolved 2026-08-19: frontmatter `status: active` (`:2`), body
 > `> Status:` line (`:9`) reads `stable (shipped together; manual acceptance

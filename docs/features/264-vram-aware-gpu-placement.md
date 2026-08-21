@@ -13,7 +13,7 @@ owner: null
 > (2026-07-20); `=0` is the opt-out that restores the pre-admission serialized
 > path. The flip was made on the strength of the full automated admission
 > coverage (sidecar + Node) plus the on-box **synthesis-path** acceptance
-> (S1/S2/S4/S6 below). The manual **evict-under-contention** rows (6–8: cold
+> (S1/S2/S4 below). The manual **evict-under-contention** rows (6–8: cold
 > `/load` steer, `design_voice` evicts Ollama, GPU-ASR 503→evict→retry) were
 > **not** force-driven on-box — they rest on automated coverage for now. The
 > former multi-GPU `idle_evict` over-eviction gap is now fixed and covered
