@@ -1,5 +1,7 @@
 # Castwright 1.15.0
 
+- **The startup log now tells you when the speech engine's runtime changes.** If Castwright detects that your GPU runtime has been replaced with the standard CPU version — or vice versa — it now says so plainly in the logs at startup, instead of silently taking the swap in stride. That visibility helps you spot a misconfiguration before it affects a generation.
+
 - **CI's weekly quarantine check now catches when it can't read the register.** The automation that tracks which tests are known to be flaky used to parse the register's format incorrectly and silently report a false clean — now it either reads successfully or reports the failure instead, so a broken parse won't hide the problem until someone notices weeks later.
 
 - **Changing a character's voice no longer drags their old sound into every new line.** Castwright's behind-the-scenes check of how each character's voice is holding up compares their audio against a stored reference of that voice. Reassign to a different voice, and that reference used to keep describing the old one — so accurate, freshly recorded lines were flagged as mismatches and re-recorded against a speaker they were never meant to match. The reference now remembers which voice it was built from and rebuilds itself the moment you change the voice, so a character finally sounds like who you actually cast.
