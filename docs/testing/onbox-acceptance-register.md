@@ -314,9 +314,12 @@ setup rather than repeatedly loading and evicting models.
 
 > **Recompute, 2026-08-21 (A41 re-run, `#2569`).** A41's filed defect is fixed
 > and independently verified (see its row), but the row's own criteria still
-> include a GPU-provider re-check blocked by the pre-existing `#2534` box gap
-> (same reason A39 stays owed), so it does **not** leave the owed count — 74
-> is recomputed fresh here, not carried forward, and stays unchanged.
+> include a GPU-provider re-check; the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x
+> gap (`#2534`) has been resolved by PR #2576 (which re-pinned
+> `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`), but the row remains STILL OWED
+> only because this re-check has not yet been re-run against the fixed pin (same
+> reason A39 stays owed). This does **not** leave the owed count — 74 is
+> recomputed fresh here, not carried forward, and stays unchanged.
 
 ---
 
@@ -2505,9 +2508,11 @@ five-state table and "the clobbered box takes the loud path" in
 > independently re-confirmed:** Kokoro reporting `CUDAExecutionProvider`
 > post-repair. `get_available_providers()` still lists it (as wave-3 also
 > saw), but constructing a real inference session was not re-attempted here —
-> this is the same box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`)
-> that already kept A39 STILL OWED for the identical reason. Per that
-> precedent this row stays **STILL OWED** rather than DISCHARGED — the row's
+> the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been
+> resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to
+> `>=1.26,<1.27`), but the Kokoro GPU-provider re-check has not yet been
+> re-run against the fixed pin — the identical reason A39 stays STILL OWED. Per
+> that precedent this row stays **STILL OWED** rather than DISCHARGED — the row's
 > own criteria include the CUDA-provider re-check — but the population #2192
 > named as largest-affected is no longer left in the silent failure mode.
 > Evidence: `docs/testing/ort-marker-onbox-acceptance.md` §8.5. Run by: claude

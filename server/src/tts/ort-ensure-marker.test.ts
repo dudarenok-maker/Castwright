@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
@@ -106,6 +106,36 @@ describe('ensureOrtMarker', () => {
     // Minimum length guard: the full message is ~444 chars; a gutted stub is ~40 chars.
     // This catches attempts to reduce the message to just the structural tokens.
     expect(message.length).toBeGreaterThan(300);
+  });
+
+  it('REFUSES on a clobbered venv even when the real plain dist-info shares the GPU version (in-place-overwrite blind spot)', () => {
+    // The fixture above pins the GPU and real-plain dist-infos to DIFFERENT versions
+    // (1.27.0 / 1.28.0), so a wrongful write creates a THIRD, differently-named
+    // dist-info folder — visible to a directory-listing/existsSync check. But
+    // writeOrtMarker's real implementation does `rmSync(dir); renameSync(tmpDir, dir)` —
+    // an IN-PLACE replacement when the marker's target version matches an EXISTING
+    // folder name. If the real plain dist-info happens to share the GPU build's
+    // version, a wrongful write would silently destroy its contents while leaving
+    // the directory name (and existsSync) unchanged — invisible to a name-only check.
+    // This fixture manufactures exactly that same-version collision and asserts on
+    // FILE CONTENT, not just the folder name, to catch that specific regression.
+    const { root, sp } = venv({ owner: 'swap' });
+    // Overwrite the fixture's real plain dist-info to match the GPU version (1.27.0)
+    // instead of the venv() helper's default 1.28.0.
+    const realDir = join(sp, 'onnxruntime-1.27.0.dist-info');
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'METADATA'), 'Metadata-Version: 2.1\nName: onnxruntime\nVersion: 1.27.0\n');
+    writeFileSync(join(realDir, 'INSTALLER'), 'pip\n');
+    writeFileSync(join(realDir, 'RECORD'), 'onnxruntime/x,sha256=a,1\n');
+
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('clobbered');
+
+    // The folder still exists (a name-only check would stop here and pass even on
+    // a regression) — the real assertion is that its CONTENT is untouched.
+    expect(existsSync(realDir)).toBe(true);
+    expect(readFileSync(join(realDir, 'INSTALLER'), 'utf8')).toBe('pip\n');
+    expect(readFileSync(join(realDir, 'RECORD'), 'utf8')).toBe('onnxruntime/x,sha256=a,1\n');
   });
 
   it('deletes a lying marker when the CPU build owns the namespace', () => {
