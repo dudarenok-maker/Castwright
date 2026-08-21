@@ -57,6 +57,8 @@ Observed log line at boot:
 2026-08-21 16:51:54.012 [server] listening on http://localhost:8290
 ```
 
+*Log wording superseded by commit c556f51c; the phrase "GPU Kokoro is currently working" was later removed (the function cannot verify GPU Kokoro's actual status) and replaced with "The GPU build's files currently own the namespace" — see server/src/tts/ort-ensure-marker.test.ts:96-99 for the correction.*
+
 `ensureOrtMarker` returned `'clobbered'` and logged it — exactly the
 refuse-and-log branch this row is meant to exercise, and exactly the branch
 wave-3 found silent (filed as #2535).

@@ -378,14 +378,17 @@ file).
 
 ### 8.4 Wave-4 re-run, 2026-08-21 (Castwright#2569)
 
-Re-ran the corrected §8.1 recipe on a **fresh** throwaway venv (`python -m
+Ran the **INCORRECT recipe version** (1.27.0 plain and 1.27.0 GPU — same versions) on a **fresh** throwaway venv (`python -m
 venv`, not a copy of the sidecar's own) against branch
 `fix/sidecar-2535-ort-marker-fix`, at committed HEAD `fe77babd` but with a
 **local, uncommitted edit to `install-ort.mjs`** containing the corrected
 clobbered-state message (later committed as `bd09fcfa`), fixing the silent-defect
 #2535. The recorded log message matches the 452-character wording from that
 uncommitted edit (later bd09fcfa's wording), not the 262-character wording from
-the prior merge commit 51420399.
+the prior merge commit 51420399. **CRITICAL NOTE:** This run therefore did NOT
+fully verify the fix against the intended manufactured state where the two
+packages have different versions. The corrected recipe verification with
+1.28.0 plain and 1.27.0 GPU is in §8.5.
 
 **Manufactured state confirmed:** `detectOrtOwner === 'swap'`,
 `findPlainOrtDistInfos.length === 1`, both `onnxruntime-1.27.0.dist-info` and
@@ -397,7 +400,7 @@ the namespace). This corrupts pip's dependency resolution — a landmine for the
 next pip operation. GPU Kokoro is currently working, but the inconsistency must
 be repaired. Refusing to write a marker that would certify this bad state.
 Repair with: CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node
-server/tts-sidecar/scripts/install-ort.mjs <venv-python>` — naming the exact
+server/tts-sidecar/scripts/install-ort.mjs <venv-python>` *[log wording superseded by commit c556f51c; the phrase "GPU Kokoro is currently working" was later removed and replaced with "The GPU build's files currently own the namespace" — see server/src/tts/ort-ensure-marker.test.ts:96-99 for the correction]* — naming the exact
 remedy command, at server boot (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the
 throwaway venv, isolated port 8290). No marker written over the real
 distribution; `pip check` stayed clean (pinned versions matched here, unlike
