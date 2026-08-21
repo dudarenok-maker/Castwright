@@ -2,7 +2,7 @@
    for generating identifiers. These ensure CodeQL js/insecure-randomness
    alerts do not surface for any id/token minting in mock mode. */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mockCloneVoiceSample } from './api';
 import { makeSecureUuid, makeSecureRandom } from './secure-random';
 
