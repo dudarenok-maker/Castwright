@@ -828,6 +828,24 @@ test('stepTouchedByDiff: e2e/global-teardown.ts is in scope for test:server', ()
   assert.equal(stepTouchedByDiff(stepByName['test:server'], ['e2e/global-teardown.ts']), true);
 });
 
+// --- #2588 pass-2 review: a .gitattributes-only or requirements/*.txt-only
+// diff must be in scope for test:server, since venv-migration.test.ts reads
+// both at runtime (the CRLF LF-pin guard and its reqHash oracles) with no
+// module-graph edge to either. Before this fix, `--files=".gitattributes"`
+// and `--files="server/tts-sidecar/requirements/base.txt"` both set every
+// step's ci-scope flag to false, so the guard the diff could most directly
+// break never re-ran in CI's required check.
+test('stepTouchedByDiff: .gitattributes is in scope for test:server (#2588 pass-2 review)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['.gitattributes']), true);
+});
+
+test('stepTouchedByDiff: a server/tts-sidecar/requirements/*.txt diff is in scope for test:server (#2588 pass-2 review)', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], ['server/tts-sidecar/requirements/speaker-qa.txt']),
+    true,
+  );
+});
+
 // --- test:hooks completeness guard (ops-18, #2115; transitive walk, ops-17c
 // follow-up #2120a) -----------------------------------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every
