@@ -75,7 +75,7 @@ is not.
 
 ## `py/stack-trace-exposure` — sidecar curated exception echoes (for dismissal)
 
-Dismissed on **2026-08-18** as `false positive`. The GitHub dismissal comments
+Dismissed on **2026-08-18** (#220, #223) and **2026-08-21** (#212, #221, #222) as `false positive`. The GitHub dismissal comments
 for alerts #212, #220, #221, #222 each point back to this file.
 
 Four `{"detail": str(exc)}` sites in `server/tts-sidecar/main.py` echo the text

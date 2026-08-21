@@ -61,6 +61,8 @@ describe('normaliseIdKey', () => {
     // (b) CodeQL's static analysis was conservative/false-positive.
     // Regardless, stripEdges is superior: provably linear and more readable.
 
+    const legacy = (id: string): string =>
+      id.toLowerCase().replace(/[-_\s]+/g, '-').replace(/^-+|-+$/g, '');
     const largeInput = '-'.repeat(10000) + 'x';
 
     // New implementation is linear — completes instantly even on large input.
@@ -69,13 +71,10 @@ describe('normaliseIdKey', () => {
     const durationNew = performance.now() - startNew;
 
     expect(resultNew).toBe('x');
-    expect(durationNew).toBeLessThan(100); // Should be microseconds, not ms
+    expect(durationNew).toBeLessThan(10); // Linear algorithm should complete in microseconds/low milliseconds, not exponential
 
     // Verify the old regex produces identical output (output-identity test;
     // this is what the prior mutation actually proves).
-    const legacy = (id: string): string =>
-      id.toLowerCase().replace(/[-_\s]+/g, '-').replace(/^-+|-+$/g, '');
-
     expect(legacy(largeInput)).toBe('x');
   });
 });
