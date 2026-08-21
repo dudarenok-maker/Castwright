@@ -400,7 +400,7 @@ export function locateSentenceOffsets(
   const needles = sentences.map((s) => buildDashInvariantNeedle(normalize(s.text), dashIsDialogueMarker));
   const located = locateNeedles(needles, normBody, false);
 
-  return located.map((m, i) => {
+  return located.map((m, _i) => {
     if (m === null) return null;
 
     let rawMatchStart = rawStart[m.start];
