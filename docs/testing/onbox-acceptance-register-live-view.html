@@ -753,7 +753,7 @@
           <li>Confirm the install completes with <b>no</b> <code>WinError 5</code> / <code>Accès refusé</code> on any <code>.dll</code> under <code>onnxruntime/capi/</code>.</li>
           <li>Load Kokoro afterward and confirm it still reports <code>CUDAExecutionProvider</code>.</li>
         </ul>
-        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run.</b> Needs the full app plus a real click-through of Model Manager → Qwen → Install against a throwaway venv copy — scoped as its own session, not rushed alongside A39/A41. Would hit the same CUDA13/cuDNN9 gap A39 found regardless. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
+        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run.</b> Needs the full app plus a real click-through of Model Manager → Qwen → Install against a throwaway venv copy. Would hit the same CUDA13/cuDNN9 gap A39 found regardless. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
 
         <p class="src">The existing NVIDIA dev box, app running · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 2</p>
       </div>
@@ -782,7 +782,7 @@
           <li>Confirm the marker is deleted before the overlay install and rewritten only after the swap steps succeed; confirm <code>pip check</code> is clean afterward.</li>
           <li>If practical, force a swap-step failure and confirm the marker is deleted rather than left lying about a runtime that was never reinstalled.</li>
         </ul>
-        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run.</b> Needs a real installed release directory (<code>release/</code> layout) — a substantial task on its own, not fitted alongside A39/A41. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
+        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run.</b> Needs a real installed release directory (<code>release/</code> layout). <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
 
         <p class="src">A real installed release directory + a way to trigger its upgrade path; the existing NVIDIA dev box otherwise · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282</p>
       </div>

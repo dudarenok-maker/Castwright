@@ -2248,9 +2248,7 @@ filed against, and it has not been separately re-confirmed since the fix landed
 
 > **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs the full app
 > running plus a real click-through of Model Manager → Qwen → Install
-> against a throwaway copy of the sidecar venv — scoped as its own session
-> rather than rushed alongside A37/A39 in the same heartbeat. Independent of
-> scheduling, this row's final check would hit the same CUDA13/cuDNN9 gap
+> against a throwaway copy of the sidecar venv. This row's final check would hit the same CUDA13/cuDNN9 gap
 > A37 found, so even a full run today could not fully discharge it without
 > that dependency gap closed first. `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
@@ -2356,8 +2354,7 @@ the design doc's §Changed files; run sheet §9 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
 > **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs a real installed
-> Castwright release directory (`release/` layout), a substantial task on its
-> own not fitted alongside A37/A39 this heartbeat.
+> Castwright release directory (`release/` layout).
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 ### A41 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
