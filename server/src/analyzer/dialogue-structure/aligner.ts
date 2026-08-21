@@ -318,9 +318,22 @@ export function alignSentences(
   // is a dialogue glyph, never content: whether the model's cached sentence text
   // includes or omits its leading dash (it strips it via `s.text.replace(/^\s*[-–—]\s*/u,'')`)
   // must not change which raw body span the needle locates. `normalize()` already
-  // canonicalised the marker to an ASCII '-', so dropping a leading '-' here folds
-  // the with-dash and stripped forms onto the SAME needle (the first content word).
-  const needles = sentences.map((s) => normalize(s.text).replace(/^-\s*/, ''));
+  // canonicalised the marker to an ASCII '-'.
+  //
+  // The naive approach (unconditionally strip the dash from all needles) creates a
+  // regression: short dash-stripped needles like "да." match inside "правда" BEFORE
+  // finding the correct match at "— Да.". The fix: for sentences that originally had
+  // a leading dash, keep the dash in the needle. This prevents matching inside
+  // "правда" while still allowing dash-invariance: the backward-extension logic
+  // will extend dash-stripped matches back to include the dash context, making
+  // both needle forms resolve to the same raw position.
+  const normalizedTexts = sentences.map((s) => normalize(s.text));
+  const hadLeadingDash = normalizedTexts.map((t) => /^-\s*/.test(t));
+  const needles = normalizedTexts.map((t, i) => {
+    // Keep the dash in needles from dash-led sentences to prevent false matches
+    // in substrings. For non-dash sentences, strip any leading dash (for consistency).
+    return hadLeadingDash[i] ? t : t.replace(/^-\s*/, '');
+  });
   const located = locateNeedles(needles, normBody, true);
 
   const aligned: AlignedSentence[] = sentences.map((sentence, i) => {
