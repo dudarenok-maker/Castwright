@@ -214,7 +214,7 @@ function surnameTolerantMatch(a: string, b: string): boolean {
 }
 
 /** Shared core for both entry points above. `nameFallback` gates the id-drift
-    same-name match (`:281-305`-shaped block below) — when false, `old` is only
+    same-name match (`:233-302`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the
     carry-forward loop at the end unconditionally rescues every voiced prior
     row instead of treating any of them as already claimed. */
@@ -267,7 +267,7 @@ function mergeCore<T extends { id: string }>(
   for (const old of existing) {
     // Never a name-fallback candidate: the reserved narrator id has its own
     // identity mechanism (applyNarratorIdentity), not the generic name match.
-    // dedupePriorCastByName's isNarrator exclusion (this file, :534) is the
+    // dedupePriorCastByName's isNarrator exclusion (this file, :631) is the
     // same call for the same reason. Narrator rows were excluded here only
     // incidentally before this task's widening — applyNarratorIdentity seeds
     // voiceStyle/persona but never voiceUuid/voiceState, and isVoicedOrReused
@@ -385,7 +385,7 @@ function mergeCore<T extends { id: string }>(
       // Safe to exclude unconditionally: the narrator id is code-seeded
       // (NARRATOR_CHARACTER_IDS), never analyzer-minted, so there is no
       // legitimate id-drift case here for the fallback to rescue, and
-      // :323-332 already carries the narrator name forward on its own path.
+      // :268-282 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
         const cand =
           dropMatchCandidateByName.get(key) ?? tolerantCandidateByName.get(key);
