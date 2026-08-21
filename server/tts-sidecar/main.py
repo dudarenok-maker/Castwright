@@ -7537,7 +7537,7 @@ class SpeakerEngine:
                 # re-raise so the /embed fence marks poison + recycles. Any other
                 # cuda failure (cuDNN/driver mismatch on a "present" GPU) demotes
                 # to cpu once and reloads.
-                if _parse_device(self.device)[0] == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
+                if _parse_device(self.device)[0] == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):  # exc-text-safe: exception text used only for CUDA poison classification, never reaches response
                     log.warning("ECAPA cuda load failed (%s) — demoting to cpu.", e)
                     self.device = "cpu"
                     self._model = await asyncio.to_thread(self._load_on, _spk_run_device(self.device))
