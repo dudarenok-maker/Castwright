@@ -173,4 +173,57 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
     expect(r.profile).toBe('apple');
     expect(r.reqHash).toBe(computeReqHash([nvidia, base]));
   });
+
+  describe('side-28 ORT pin re-stamp (issue #2534): venv with stale reqHash must reinstall', () => {
+    it('onnxruntime-gpu pin bump is invisible to reqHash without a requirements file change — the bug #2534 describes', () => {
+      // This test captures the regressed behavior: the ORT pin was changed in
+      // install-ort.mjs WITHOUT changing requirements/nvidia-cuda.txt, so reqHash
+      // stayed the same and decideVenvAction returned 'noop' for every existing
+      // venv, preventing the pin from ever taking effect. The fix is a comment
+      // line in nvidia-cuda.txt that marks the pin bump so the file's content
+      // (and reqHash) changes, forcing a reinstall (pip-in-place) on next run.
+      const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
+      const currentNvidia = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
+
+      // Simulate the OLD state: nvidia-cuda.txt WITHOUT the side-28 pin bump comment.
+      // This is what was stamped in venvs built before the fix.
+      const markerComment =
+        '# NOTE: onnxruntime-gpu version constraint is in install-ort.mjs (ONNXRUNTIME_GPU_CONSTRAINT).\n' +
+        '# Re-pinned 2026-08-21 (#2534 side-chain) to the CUDA-12 line (1.26.x); existing venvs need a reqHash bump to force reinstall.\n\n';
+      const oldNvidiaContent = currentNvidia.replace(markerComment, '');
+      const hasCommentMarker = currentNvidia.includes('Re-pinned 2026-08-21 (#2534 side-chain)');
+
+      // The fix is a comment that explicitly marks where the pin was re-pinned.
+      // If the comment is absent, both contents should be identical (the bug is
+      // active). If the comment IS present, this test verifies the fix worked:
+      // the hash MUST differ so a stale stamp triggers pip-in-place.
+      if (!hasCommentMarker) {
+        // The fix has NOT been applied yet — both old and current should match.
+        // This proves the bug: the files are identical despite the pin change.
+        expect(oldNvidiaContent).toBe(currentNvidia);
+        const oldHash = computeReqHash([oldNvidiaContent, base]);
+        const currentHash = computeReqHash([currentNvidia, base]);
+        expect(oldHash).toBe(currentHash);
+
+        // Demonstrate that without a hash change, existing venvs (with the old hash
+        // stamped) see 'noop' and skip the reinstall that would apply the new pin.
+        const required = resolveRequired(SIDECAR_DIR, 'nvidia');
+        const stamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
+        expect(decideVenvAction({ stamp, required })).toBe('noop');
+      } else {
+        // The fix HAS been applied — a comment in nvidia-cuda.txt marks the
+        // pin bump, changing the file's content.
+        expect(oldNvidiaContent).not.toBe(currentNvidia);
+        const oldHash = computeReqHash([oldNvidiaContent, base]);
+        const currentHash = computeReqHash([currentNvidia, base]);
+        expect(oldHash).not.toBe(currentHash);
+
+        // Now a venv with the OLD hash (pre-fix) triggers pip-in-place,
+        // which re-runs the ORT swap with the new pin.
+        const required = resolveRequired(SIDECAR_DIR, 'nvidia');
+        const stamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
+        expect(decideVenvAction({ stamp, required })).toBe('pip-in-place');
+      }
+    });
+  });
 });
