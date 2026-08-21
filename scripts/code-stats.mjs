@@ -55,7 +55,7 @@ function die(msg) {
 }
 
 function tokeiAvailable() {
-  const r = spawnSync('tokei', ['--version'], { stdio: 'ignore' });
+  const r = spawnSync('tokei', ['--version'], { stdio: 'ignore', windowsHide: true });
   return !r.error && r.status === 0;
 }
 
@@ -206,6 +206,7 @@ function main() {
   const json = execFileSync('tokei', ['--output', 'json', repoRoot], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
   });
   const summary = summarize(JSON.parse(json));
   const date = new Date().toISOString().slice(0, 10);

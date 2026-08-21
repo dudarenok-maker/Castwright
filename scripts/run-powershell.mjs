@@ -50,7 +50,7 @@ if (!shell) {
 }
 
 const args = ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', scriptPath, ...rest];
-const result = spawnSync(shell, args, { stdio: 'inherit' });
+const result = spawnSync(shell, args, { stdio: 'inherit', windowsHide: true });
 if (result.error) {
   process.stderr.write(`run-powershell: failed to spawn ${shell}: ${result.error.message}\n`);
   process.exit(1);

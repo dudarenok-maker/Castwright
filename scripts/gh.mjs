@@ -71,6 +71,7 @@ export function gh(args, opts = {}) {
     cwd: repoRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
     ...rest,
     env: scrubGitEnv(env),
   });
@@ -87,6 +88,7 @@ export function ghSpawn(args, opts = {}) {
   return spawnSync('gh', args, {
     cwd: repoRoot,
     encoding: 'utf8',
+    windowsHide: true,
     ...rest,
     env: scrubGitEnv(env),
   });

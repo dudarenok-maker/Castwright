@@ -68,6 +68,12 @@ const EXTERNAL_FILES_FLOOR = [
   'server/tts-sidecar/scripts/install-qwen3.mjs',
   'server/tts-sidecar/scripts/install-coqui.mjs',
   'server/tts-sidecar/scripts/ensure-python312.mjs',
+  // #2567: verify-pipeline tooling that flashed a console window on every
+  // `npm run verify*`/`test:scripts` invocation — the same class of bug this
+  // guard exists to catch, just outside the floor list until now.
+  'scripts/run-powershell.mjs',
+  'scripts/verify-cache.mjs',
+  'scripts/check-import-cycles.mjs',
 ].map((rel) => join(REPO_ROOT, rel));
 
 /* install-ort.mjs (#2192) made the ONNX-runtime swap load-bearing on the boot,

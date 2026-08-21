@@ -371,7 +371,16 @@ export const STEPS = [
          server/package.json: same lockfile-vs-manifest gap as `typecheck`
          above — includeLockfiles below only special-cases the literal
          server/package-lock.json path, so a manifest-only server dependency
-         edit invalidated nothing (verified against the live module). */
+         edit invalidated nothing (verified against the live module).
+         The launch.mjs..ensure-python312.mjs block (#2567 review): every one
+         of spawn-windows-hide.test.ts's EXTERNAL_FILES_FLOOR entries is read
+         as TEXT at RUNTIME by that server/src test, not via a module-graph
+         edge — same #1847 runtime-read trap as test:hooks' fixtures/** entry
+         above, just undiscovered until the #2567 PR review widened the floor
+         and asked why the guard it was adding files to never re-ran locally
+         on a floor-file-only diff. Without these, an edit to any floor file
+         (exactly the shape that would (re)introduce a flashing console
+         window) prints test:server [cached] and the guard sits stale-green. */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
@@ -379,6 +388,18 @@ export const STEPS = [
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
         'scripts/repair-cast-id-drift.mjs',
         'server/package.json',
+        'launch.mjs',
+        'scripts/start-app-prod.mjs',
+        'scripts/restart-after-upgrade.mjs',
+        'scripts/stop-app.mjs',
+        'scripts/run-sidecar-tests.mjs',
+        'server/tts-sidecar/scripts/install-whisper.mjs',
+        'server/tts-sidecar/scripts/install-qwen3.mjs',
+        'server/tts-sidecar/scripts/install-coqui.mjs',
+        'server/tts-sidecar/scripts/ensure-python312.mjs',
+        'scripts/run-powershell.mjs',
+        'scripts/verify-cache.mjs',
+        'scripts/check-import-cycles.mjs',
       ],
       includeLockfiles: ['server'],
     },
@@ -441,7 +462,12 @@ export const STEPS = [
         // before adding this, not assumed.
         'scripts/tests/fixtures/**',
       ],
-      extraFiles: ['scripts/tests/run.ps1'],
+      // run-powershell.mjs (#2567 review): `npm run test:scripts` actually
+      // launches through this file (package.json:46), not run.ps1 directly —
+      // without it here, an edit to the launcher itself (e.g. the pwsh/
+      // powershell fallback logic) prints test:scripts [cached] and the
+      // Pester battery never re-verifies the very script that runs it.
+      extraFiles: ['scripts/tests/run.ps1', 'scripts/run-powershell.mjs'],
       includeLockfiles: ['root'],
     },
     toolFingerprint: pesterFingerprint,
@@ -1075,6 +1101,7 @@ function runStepProcess(stepName, { cwd, env }) {
       cwd,
       shell: true,
       env,
+      windowsHide: true,
       ...(capture
         ? { encoding: 'utf8', stdio: ['inherit', 'inherit', 'pipe'], maxBuffer: 64 * 1024 * 1024 }
         : { stdio: 'inherit' }),

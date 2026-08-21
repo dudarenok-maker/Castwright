@@ -18,7 +18,7 @@ import { scrubGitEnv } from '../git-env.mjs';
 
 export function runCommand(label, cmd, args, options = {}) {
   const { env, ...rest } = options;
-  const result = spawnSync(cmd, args, { encoding: 'utf8', ...rest, env: scrubGitEnv(env) });
+  const result = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, ...rest, env: scrubGitEnv(env) });
   if (result.error) {
     throw new Error(`${label}: ${cmd} ${args.join(' ')} failed to spawn: ${result.error.message}`);
   }

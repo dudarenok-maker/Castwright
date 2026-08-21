@@ -20,7 +20,7 @@ const invokedDirectly = isDirectlyInvoked(import.meta.url);
 if (invokedDirectly) {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const { file, args } = sidecarCommand(process.platform, repoRoot);
-  const child = spawn(file, args, { stdio: 'inherit' });
+  const child = spawn(file, args, { stdio: 'inherit', windowsHide: true });
   child.on('exit', (code) => process.exit(code ?? 0));
   child.on('error', (err) => {
     console.error('[tts:sidecar] failed to launch:', err.message);

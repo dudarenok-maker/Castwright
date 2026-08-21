@@ -24,7 +24,7 @@ let cpuBurners = [];
 function startCpuLoad() {
   const n = Math.max(1, cpus().length - 1);
   for (let i = 0; i < n; i++) {
-    cpuBurners.push(spawn(process.execPath, ['-e', 'while(true){Math.sqrt(Math.random())}'], { stdio: 'ignore' }));
+    cpuBurners.push(spawn(process.execPath, ['-e', 'while(true){Math.sqrt(Math.random())}'], { stdio: 'ignore', windowsHide: true }));
   }
 }
 function stopCpuLoad() { cpuBurners.forEach((c) => c.kill('SIGKILL')); cpuBurners = []; }
@@ -40,7 +40,7 @@ function startIoLoad() {
     "const{writeFileSync}=require('fs');const{join}=require('path');" +
     `const d=${JSON.stringify(ioDir)};let n=0;` +
     "setInterval(()=>{try{writeFileSync(join(d,'f'+(n%50)+'.tmp'),'x'.repeat(65536));n++;}catch{}},2);";
-  ioBurner = spawn(process.execPath, ['-e', burn], { stdio: 'ignore' });
+  ioBurner = spawn(process.execPath, ['-e', burn], { stdio: 'ignore', windowsHide: true });
 }
 function stopIoLoad() { if (ioBurner) ioBurner.kill('SIGKILL'); if (ioDir) rmSync(ioDir, { recursive: true, force: true }); }
 
@@ -54,7 +54,7 @@ const cmd = isSlow
 const results = [];
 for (let i = 0; i < runs; i++) {
   const t0 = process.hrtime.bigint();
-  const r = spawnSync('npx', cmd, { cwd, stdio: 'inherit', shell: process.platform === 'win32',
+  const r = spawnSync('npx', cmd, { cwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
     env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   results.push({ run: i + 1, ms: Math.round(ms), code: r.status });

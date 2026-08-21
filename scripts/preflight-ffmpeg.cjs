@@ -83,7 +83,7 @@ function emitWindowsHint() {
       scope === 'user'
         ? 'HKCU\\Environment'
         : 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
-    const r = spawnSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8' });
+    const r = spawnSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', windowsHide: true });
     if (r.status !== 0 || !r.stdout) return [];
     const match = r.stdout.match(/Path\s+REG[^\s]*\s+([^\r\n]+)/);
     if (!match) return [];
