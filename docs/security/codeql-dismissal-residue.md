@@ -49,3 +49,104 @@ trim ReDoS — `text-match.ts` `normaliseForMatch` and `voice-sample-cache.ts`
 |---|---|---|
 | `server/src/parsers/text.ts:140` (`FILENAME_RE`) | js/polynomial-redos | server-side filename-stem input; no parse-preserving linear rewrite (Node 20, no atomic groups); parse identity locked by characterization tests |
 | `server/src/parsers/text.ts:184` (`SERIES_FROM_TITLE_RE`) | js/polynomial-redos | server-side book-title input; same rationale |
+
+## `js/incomplete-multi-character-sanitization` — `htmlCellText` (for dismissal)
+
+Dismissed on **2026-08-21** as a provably inert fixpoint loop.
+
+The `htmlCellText` function in `scripts/check-onbox-register.mjs` runs a regex
+loop to remove HTML tags via the pattern `/<[^>]*>/g`. CodeQL flags this as
+potentially vulnerable to incomplete multi-character sanitization, implying a
+second pass could reveal new matches. However, the regex `/<[^>]*>/` is **already
+complete in a single global pass**: any surviving `<` in the input has no following
+`>`, and removing tags cannot manufacture a new `>` adjacent to a surviving `<`.
+Therefore, a second pass will never find a new match, and the fixpoint loop is
+provably redundant — though harmless.
+
+In contrast, `stripHtmlComments` (alert #218) has a genuine second-pass case: the
+pattern `<!--[\s\S]*?-->` (lazy match) can leave residue when removing a comment
+manufactures a new complete comment from the survivors (e.g., `<<!--x-->!--y-->`).
+The fixpoint loop for `stripHtmlComments` is load-bearing; the one for `htmlCellText`
+is not.
+
+| file:line | rule | justification |
+|---|---|---|
+| Alert #219, `scripts/check-onbox-register.mjs:366` (`htmlCellText`) | js/incomplete-multi-character-sanitization | regex `/<[^>]*>/g` is already complete in one pass; any surviving `<` has no matching `>`, and removing tags cannot create a new tag; the fixpoint loop is provably inert, kept for consistency with `stripHtmlComments` (#218) which DOES need fixpoint behaviour |
+
+## `py/stack-trace-exposure` — sidecar curated exception echoes (for dismissal)
+
+Dismissed on **2026-08-18** (#220, #223) and **2026-08-21** (#212, #221, #222) as `false positive`. The GitHub dismissal comments
+for alerts #212, #220, #221, #222 each point back to this file.
+
+Four `{"detail": str(exc)}` sites in `server/tts-sidecar/main.py` echo the text
+of a caught exception into a JSON response body. CodeQL flags these as
+potential stack-trace exposure, but both exception types involved build their
+messages entirely from curated, non-sensitive inputs — never from a traceback,
+a filesystem path, or a third-party exception string.
+
+**`DesignContentionTimeoutError`** (raised at `main.py:5873`) builds its message
+from a **static template plus one float**: *"Qwen VoiceDesign has been in
+flight for over {wait_seconds:.0f}s — refusing to evict it out from under an
+active design. Retry the synth shortly."* No traceback, no filesystem path, no
+third-party exception string. Alerts #220 (`/qwen/mint-variant`, `:10163`),
+#221 (`/synthesize`, `:10606`), #222 (`/synthesize-batch`, `:10934`).
+
+**`VoiceLanguageUnsupportedError`** (raised at `main.py:2377`) builds its
+message entirely from the **requested voice and language plus the loaded
+model's own config language list**. The audit was already recorded in-code at
+`main.py:10569-10573` before this dismissal. Alert #212 (`:10579`).
+
+Both echoes are **deliberate, user-facing guidance**, not incidental leakage:
+the contention message tells the caller to retry, and the language message
+replaced a `voice_not_designed` response that told users to re-clone the
+voice — a remedy that cannot work.
+
+All four sites now carry an audited `# exc-text-safe:` marker, and
+`test_no_exception_text_reaches_a_response` was widened in the same PR so the
+marker is load-bearing. The guard previously matched the literal text `str(e)`
+/ `repr(e)`, so it stepped over all four `str(exc)` sites and had never
+actually held — the widening was necessary to bring these sites under the
+test's coverage.
+
+| file:line | rule | justification |
+|---|---|---|
+| Alert #220, `server/tts-sidecar/main.py:10163` (`/qwen/mint-variant`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; message is a static template plus a timeout float; `exc-text-safe` marker and widened test guard |
+| Alert #221, `server/tts-sidecar/main.py:10606` (`/synthesize`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; same curated template; `exc-text-safe` marker |
+| Alert #222, `server/tts-sidecar/main.py:10934` (`/synthesize-batch`) | py/stack-trace-exposure | `str(exc)` on `DesignContentionTimeoutError`; same curated template; `exc-text-safe` marker |
+| Alert #212, `server/tts-sidecar/main.py:10579` (`/synthesize`) | py/stack-trace-exposure | `str(exc)` on `VoiceLanguageUnsupportedError`; message built from voice/language/model config list only; in-code audit at `:10569-10573`; `exc-text-safe` marker |
+
+## `js/path-injection` — the `/workspace` static guard (for dismissal)
+
+Dismissed on **2026-08-18** as `false positive`. The GitHub dismissal comment
+for alert #223 points back to this file.
+
+CodeQL flags `realpathSync` at `server/src/app.ts:182` as a path-injection
+sink. The flagged call sits **inside the guard itself**
+(`resolveWorkspaceStaticCandidate`), not downstream of it.
+
+The guard, hardened under **#2223**, canonicalises the candidate via
+`realpathSync`, **fails closed** by returning `null` when `realpathSync` throws
+on a path that exists (catching case/8.3/ADS aliasing), 404s on malformed
+percent-encoding, and then requires containment under `books`, `voices`, or
+`voice-library` — or an exact match on `voices.json` — via `isContainedIn`
+(`app.ts:190-219`), which demands a real path separator (`sep`) immediately
+after the root rather than a bare string-prefix match (so a sibling directory
+sharing the root as a text prefix, e.g. `voices-secret` against `voices`,
+cannot pass).
+
+Dismissed because the containment guard **is not a CodeQL-recognized
+sanitizer**, which is the same argument this repo used for alerts #150–#153
+and #171.
+
+**Note the tension explicitly:** the composed-path section above (line 23)
+carries a "re-fix, don't dismiss" gate for path-injection alerts outside its
+two listed sinks. That gate was written when re-fixing meant *adding a missing
+`assertContained` guard*. Here the guard already exists and is thorough —
+`realpathSync` canonicalisation, fail-closed on error, separator-strict
+containment, an explicit allowed-roots allowlist resolved fresh on every
+request — so there is nothing to add. That is why this one is dismissed
+rather than re-fixed, and the gate does not apply.
+
+| file:line | rule | justification |
+|---|---|---|
+| `server/src/app.ts:182` (`resolveWorkspaceStaticCandidate`) | js/path-injection | `realpathSync` sits inside the containment guard itself; guard is thorough (realpath canonicalisation, fail-closed, separator-strict `isContainedIn`, per-request allowlist) but not a CodeQL-recognized sanitizer; same argument as alerts #150–#153 and #171 |

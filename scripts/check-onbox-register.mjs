@@ -351,18 +351,26 @@ export function checkRegister(text) {
 // group section — which removes it from the published page — was invisible.
 // Blanking rather than deleting keeps the comment's own `<section>`/`<span>`
 // text from being read while leaving the surrounding structure intact.
-function stripHtmlComments(html) {
-  return html.replace(/<!--[\s\S]*?-->/g, '');
+export function stripHtmlComments(html) {
+  let out = html;
+  for (;;) {
+    const next = out.replace(/<!--[\s\S]*?-->/g, '');
+    if (next === out) return out;
+    out = next;
+  }
 }
 
 // Strips tags and collapses whitespace, so a cell's text can be compared
 // regardless of the markup inside it (the C group's setup cell wraps a
 // `<span lang="ru">`, and every glance-table letter is wrapped in an `<a>`).
-function htmlCellText(html) {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+export function htmlCellText(html) {
+  let stripped = html;
+  for (;;) {
+    const next = stripped.replace(/<[^>]*>/g, '');
+    if (next === stripped) break;
+    stripped = next;
+  }
+  return stripped.replace(/\s+/g, ' ').trim();
 }
 
 // Parses the live view's glance table into letter → count, mirroring the
