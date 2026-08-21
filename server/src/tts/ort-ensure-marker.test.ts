@@ -103,7 +103,7 @@ describe('ensureOrtMarker', () => {
     // in the second sentence). A revert of 07e94d22 would restore that clause, failing this check.
     expect(message).not.toContain('(which own the namespace)');
 
-    // Minimum length guard: the full message is ~550+ chars; a gutted stub is ~40 chars.
+    // Minimum length guard: the full message is ~444 chars; a gutted stub is ~40 chars.
     // This catches attempts to reduce the message to just the structural tokens.
     expect(message.length).toBeGreaterThan(300);
   });
