@@ -87,7 +87,7 @@ export function parseArgs(argv) {
 }
 
 function gitOrThrow(args, opts = {}) {
-  const result = spawnSync('git', args, { encoding: 'utf8', ...opts, env: scrubGitEnv(opts.env) });
+  const result = spawnSync('git', args, { encoding: 'utf8', windowsHide: true, ...opts, env: scrubGitEnv(opts.env) });
   if (result.error) throw new Error(`git ${args.join(' ')}: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);
@@ -172,6 +172,7 @@ export function renderServerEnv({ slot, branch, ports }) {
 function branchExists(branch) {
   const result = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], {
     encoding: 'utf8',
+    windowsHide: true,
     env: scrubGitEnv(),
   });
   return result.status === 0;
@@ -199,6 +200,7 @@ function runInstalls(worktreePath) {
       cwd,
       stdio: 'inherit',
       shell: process.platform === 'win32',
+      windowsHide: true,
     });
     if (result.error) {
       throw new Error(`npm ${label} install failed to spawn: ${result.error.message}`);

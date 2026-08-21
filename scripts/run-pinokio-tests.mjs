@@ -9,7 +9,7 @@ if (files.length === 0) {
   process.stdout.write('[test:pinokio] no test files yet — skipping\n');
   process.exit(0);
 }
-const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', windowsHide: true });
 if (result.error) {
   process.stderr.write(`run-pinokio-tests: failed to spawn node: ${result.error.message}\n`);
   process.exit(1);

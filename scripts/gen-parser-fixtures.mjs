@@ -599,7 +599,7 @@ function findCalibre() {
   /* `where.exe` on Windows / `which` elsewhere. spawnSync returns
      status 0 + the path on stdout when found, non-zero otherwise. */
   const cmd = platform() === 'win32' ? 'where.exe' : 'which';
-  const result = spawnSync(cmd, ['ebook-convert'], { encoding: 'utf8' });
+  const result = spawnSync(cmd, ['ebook-convert'], { encoding: 'utf8', windowsHide: true });
   if (result.status === 0 && result.stdout.trim()) {
     /* `where.exe` may return multiple paths (one per line); take the
        first. POSIX `which` returns just one. */
@@ -616,7 +616,7 @@ function generateMobiFixture(epubInput, calibrePath) {
   const result = spawnSync(
     calibrePath,
     [epubInput, out, '--mobi-file-type=old'],
-    { stdio: 'inherit' },
+    { stdio: 'inherit', windowsHide: true },
   );
   if (result.status !== 0) {
     console.warn(`[gen-parser-fixtures] ebook-convert failed for MOBI (status ${result.status})`);
@@ -628,7 +628,7 @@ function generateMobiFixture(epubInput, calibrePath) {
 function generateAzw3Fixture(epubInput, calibrePath) {
   const out = resolve(fixturesDir, 'sample.azw3');
   /* AZW3 is KF8 — ebook-convert dispatches on the output extension. */
-  const result = spawnSync(calibrePath, [epubInput, out], { stdio: 'inherit' });
+  const result = spawnSync(calibrePath, [epubInput, out], { stdio: 'inherit', windowsHide: true });
   if (result.status !== 0) {
     console.warn(`[gen-parser-fixtures] ebook-convert failed for AZW3 (status ${result.status})`);
     return null;

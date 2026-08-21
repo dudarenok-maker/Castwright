@@ -13,6 +13,8 @@ import {
   checkLiveView,
   resolveBaselineText,
   CANNOT_VERIFY_BASELINE_ERROR,
+  stripHtmlComments,
+  htmlCellText,
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -2712,4 +2714,72 @@ test('the CLI (no flags) exits 0, with the OK signal, against the real committed
     /check:onbox-register: OK/,
     `a genuine pass must print something. stdout was: ${JSON.stringify(r.stdout)}`,
   );
+});
+
+// --- CodeQL #218/#219 paired tests: fixpoint sanitizers ----------------------
+// The fixpoint loop is the standard CodeQL remediation for
+// js/incomplete-multi-character-sanitization: it guarantees no residue
+// survives by repeating until the string stops changing.
+//
+// Mutation-checked 2026-08-20 under #2529 against the old single-pass bodies
+// (reconstructed from commit b8025ed7):
+//  * stripHtmlComments — a genuine second-pass case EXISTS. Removing
+//    `<!--x-->` from `<<!--x-->!--y-->` concatenates the surviving leading `<`
+//    with `!--y-->` into a NEW complete `<!--y-->` that only a second pass can
+//    remove: single-pass leaves `<!--y-->`, the fixpoint reduces it to ''. The
+//    paired test below uses that input, so it FAILS on the old body and PASSES
+//    on the fixpoint.
+//  * htmlCellText — NO distinguishing input exists. `<[^>]*>` is already
+//    complete in a single global pass: any surviving `<` has no following `>`
+//    in the input, and removing tags can never manufacture a new `>` adjacent
+//    to a surviving `<`, so a single pass equals the fixpoint for every input.
+//    The test below is therefore kept as a plain sanitizer behaviour assertion
+//    (no `<script` / `<` may reach compared cell text), NOT as proof the
+//    fixpoint loop does extra work. The consequently-redundant htmlCellText
+//    fixpoint loop is flagged in #2529 as a dismissal-residue candidate; it is
+//    not acted on here.
+
+test('stripHtmlComments: fixpoint removes a comment whose residue re-opens a new one (CodeQL #218)', () => {
+  // `<<!--x-->!--y-->`: one pass removes `<!--x-->`, concatenating the
+  // surviving leading `<` with `!--y-->` into a NEW complete `<!--y-->` that
+  // only a second pass can remove. This input fails on the old single-pass
+  // body (`<!--y-->` survives) and passes on the fixpoint.
+  const result = stripHtmlComments('<<!--x-->!--y-->');
+  assert.equal(result, '');
+  assert.ok(!result.includes('<!--'), `no comment open should survive, got: ${result}`);
+  assert.ok(!/<!--[\s\S]*?-->/.test(result), `no complete comment should survive, got: ${result}`);
+});
+
+test('stripHtmlComments: adjacent independent comments are all removed', () => {
+  assert.equal(stripHtmlComments('a<!--x-->b<!--y-->c'), 'abc');
+});
+
+test('stripHtmlComments: empty comment is removed', () => {
+  assert.equal(stripHtmlComments('before<!---->after'), 'beforeafter');
+});
+
+test('stripHtmlComments: simple comment is removed', () => {
+  assert.equal(stripHtmlComments('before<!-- comment -->after'), 'beforeafter');
+});
+
+test('htmlCellText: no tag string or opening bracket reaches compared text (CodeQL #219)', () => {
+  // Behavioural only, per the mutation check above: for `<[^>]*>` a single
+  // global pass is already complete, so no input can discriminate single-pass
+  // from fixpoint. This asserts the sanitizer invariant (no `<script` / no `<`
+  // survives), not that the fixpoint loop adds anything.
+  const result = htmlCellText('<<a>script>alert(1)');
+  assert.ok(!result.includes('<script'), `no <script should survive, got: ${result}`);
+  assert.ok(!result.includes('<'), `no opening tag char should survive, got: ${result}`);
+});
+
+test('htmlCellText: multiple independent tags are all stripped', () => {
+  assert.equal(htmlCellText('<b>bold</b> and <i>italic</i>'), 'bold and italic');
+});
+
+test('htmlCellText: handles simple tags correctly', () => {
+  assert.equal(htmlCellText('<span class="x">hello</span>'), 'hello');
+});
+
+test('htmlCellText: collapses whitespace after tag stripping', () => {
+  assert.equal(htmlCellText('<b>  hello   world  </b>'), 'hello world');
 });

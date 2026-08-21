@@ -143,7 +143,7 @@ function warnIfGpuBusyForBless() {
   const r = spawnSync(
     'nvidia-smi',
     ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
-    { encoding: 'utf8', timeout: 5000 },
+    { encoding: 'utf8', timeout: 5000, windowsHide: true },
   );
   // A failed spawn (no GPU / nvidia-smi absent / errored) is routed through
   // the same pure function as an empty read, rather than duplicating the
@@ -176,6 +176,7 @@ export function run(label, cmd, cmdArgs, { env, shell } = {}) {
     // npm is a `.cmd` shim on Windows; Node refuses to spawn `.cmd` directly
     // (EINVAL) unless routed through a shell.
     shell: shell ?? false,
+    windowsHide: true,
   });
   const code = r.status ?? (r.error ? 1 : 0);
   if (r.error) console.error(`run-golden-audio: failed to spawn ${cmd}: ${r.error.message}`);

@@ -56,7 +56,7 @@ try {
   execFileSync(
     'ffmpeg',
     ['-v', 'error', '-y', '-i', coverIn, '-vf', `scale='min(${width},iw)':-1`, '-q:v', String(quality), coverJpg],
-    { stdio: ['ignore', 'ignore', 'inherit'] },
+    { stdio: ['ignore', 'ignore', 'inherit'], windowsHide: true },
   );
   const jpgBytes = new Uint8Array(readFileSync(coverJpg));
   const out = Buffer.from(slimEpubBuffer(new Uint8Array(buf), jpgBytes));

@@ -81,7 +81,7 @@ function usage(extra) {
 export function makeDefaultRunners() {
   return {
     git(args, opts = {}) {
-      const result = spawnSync('git', args, { encoding: 'utf8', ...opts, env: scrubGitEnv(opts.env) });
+      const result = spawnSync('git', args, { encoding: 'utf8', windowsHide: true, ...opts, env: scrubGitEnv(opts.env) });
       return {
         status: result.status,
         stdout: result.stdout ?? '',
@@ -94,6 +94,7 @@ export function makeDefaultRunners() {
       const isWindows = process.platform === 'win32';
       const result = spawnSync(isWindows ? 'npm.cmd' : 'npm', args, {
         encoding: 'utf8',
+        windowsHide: true,
         ...opts,
       });
       return {
