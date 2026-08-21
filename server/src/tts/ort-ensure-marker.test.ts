@@ -172,6 +172,9 @@ describe('ensureOrtMarker', () => {
       expectedReturn: 'clobbered',
       verify: (sp: string) => {
         expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
+        // No marker written over the real distribution, even when the caller-supplied
+        // log throws — the GPU version's marker name must not appear.
+        expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
       },
     },
     {
