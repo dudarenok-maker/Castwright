@@ -2389,18 +2389,19 @@ design doc's §The three venv states).
   that `site-packages/onnxruntime/` holds the GPU build's files
   (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 
-> **Recipe corrected, 2026-08-21 — as part of [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545) (task to address [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535), the defect). Verified in ort-marker-onbox-acceptance.md §8.4.**
+> **Recipe corrected, 2026-08-21 — as part of [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545) (task to address [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535), the defect). Verified in ort-marker-onbox-acceptance.md §8.5.**
 > The row's original recipe (`pip install --force-reinstall onnxruntime` over a
 > venv already holding `onnxruntime-gpu`) does NOT reach `'clobbered'`: it
 > overwrites `site-packages/onnxruntime/capi/build_and_package_info.py` to report
 > `package_name = 'onnxruntime'`, so `detectOrtOwner` correctly reports `'plain'`
 > and `ensureOrtMarker` takes the silent `'deleted'` branch instead. The corrected
-> plain-then-GPU ordering above was verified against the real
+> plain-then-GPU ordering (1.28.0 plain, 1.27.0 GPU) was verified against the real
 > `detectOrtOwner`/`findPlainOrtDistInfos` from
 > `server/tts-sidecar/scripts/install-ort.mjs` on a throwaway venv: it reports
-> `detectOrtOwner === 'swap'` and `findPlainOrtDistInfos.length === 1`, and
+> `detectOrtOwner === 'swap'` and `findPlainOrtDistInfos.length === 1` with
+> discriminable versions (1.28.0 vs 1.27.0 in directory names), and
 > `ensureOrtMarker` returns `'clobbered'` — exactly the refuse-and-log branch this
-> row is meant to exercise.
+> row is meant to exercise (see §8.5 for complete verification).
 - **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
   naming the condition and the exact remedy command
   (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),

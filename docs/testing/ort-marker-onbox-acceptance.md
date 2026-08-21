@@ -304,7 +304,7 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
    ```
    (Versions pinned for reproducibility — plain at 1.28.0, GPU at 1.27.0, so the
    two dist-info folder names are distinguishable by directory listing alone,
-   matching the unit test fixture; verified to reach `'clobbered'` in §8.4.)
+   matching the unit test fixture; verified to reach `'clobbered'` in §8.5.)
 2. Confirm both `onnxruntime_gpu-1.27.0.dist-info` and a **real**
    `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty RECORD) coexist with
    **different version numbers** (this is the discriminating check — name-based
@@ -364,13 +364,13 @@ repair command itself works correctly when run directly.
 run. Live venv confirmed byte-unchanged before and after (see step-2 results
 file).
 
-> **Manufacture recipe corrected, 2026-08-21 — as part of #2545 (task to address #2535, the defect). Verified in §8.4.** The §8.1
+> **Manufacture recipe corrected, 2026-08-21 — as part of #2545 (task to address #2535, the defect). Verified in §8.5.** The §8.1
 > procedure above was replaced (plain-then-GPU) after the original GPU-then-plain
 > recipe was shown to reach `'deleted'`, not `'clobbered'`, in this 2026-08-20 run.
 > The corrected recipe was verified against the real `detectOrtOwner`/
 > `findPlainOrtDistInfos` (`server/tts-sidecar/scripts/install-ort.mjs`) on a
 > throwaway venv: `detectOrtOwner === 'swap'`, one real plain dist-info present, and
-> `ensureOrtMarker` returns `'clobbered'`.
+> `ensureOrtMarker` returns `'clobbered'` (see §8.5 for the complete verification).
 
 ### 8.4 Wave-4 re-run, 2026-08-21 (Castwright#2569)
 
@@ -425,6 +425,87 @@ not this worktree — this worktree has no `.venv` of its own) was never
 touched; confirmed by its `python.exe` mtime being unchanged (2026-07-03,
 predating this session) both before and after.
 Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`.
+
+### 8.5 Verification of corrected recipe (2026-08-21, PR #2578 review correction)
+
+**CRITICAL NOTE:** §8.4 above was run with the INCORRECT recipe version
+(1.27.0/1.27.0) — the same-version bug wave-3 step-3 exposed. This section
+re-verifies the corrected recipe (1.28.0 plain, 1.27.0 GPU) to confirm the fix
+actually works against the intended manufactured state, where `detectOrtOwner
+=== 'swap'`, `findPlainOrtDistInfos.length === 1`, and the two versions are
+discriminable by directory listing alone (the critical property that allows a
+wrongly-written marker to be detected).
+
+**Corrected recipe verification:**
+
+Fresh throwaway venv with the CORRECT recipe:
+
+```powershell
+python -m venv <venv>
+<venv>\Scripts\pip install onnxruntime==1.28.0
+<venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
+```
+
+**Pre-repair manufactured state:**
+
+- `detectOrtOwner(sitePackages)` → `'swap'` (GPU build's files own the namespace)
+- `findPlainOrtDistInfos(sitePackages).length` → `1` (one real plain dist-info)
+- Directory listing: `onnxruntime-1.28.0.dist-info` (real plain, named by version)
+  and `onnxruntime_gpu-1.27.0.dist-info` (GPU build) coexist with DIFFERENT version
+  numbers — crucially different from §8.4's run which showed both at 1.27.0.
+- `pip check` clean (versions pinned to match)
+
+**ensureOrtMarker behavior:**
+
+`ensureOrtMarker(venvDir)` returns `'clobbered'` and logs:
+
+```
+[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU
+build's files (which own the namespace). This corrupts pip's dependency
+resolution — a landmine for the next pip operation. GPU Kokoro is currently
+working, but the inconsistency must be repaired. Refusing to write a marker
+that would certify this bad state. Repair with:
+  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>
+```
+
+No marker written over the real distribution (directory listing unchanged after
+the check).
+
+**Repair command output:**
+
+```
+[install-ort] pip uninstall -y onnxruntime onnxruntime-gpu
+Found existing installation: onnxruntime 1.28.0
+Uninstalling onnxruntime-1.28.0: Successfully uninstalled onnxruntime-1.28.0
+Found existing installation: onnxruntime-gpu 1.27.0
+Uninstalling onnxruntime-gpu-1.27.0: Successfully uninstalled onnxruntime-gpu-1.27.0
+[install-ort] pip install --force-reinstall --no-deps onnxruntime-gpu>=1.27,<1.28
+Successfully installed onnxruntime-gpu-1.27.0
+[install-ort] onnxruntime-gpu in place.
+```
+
+**Post-repair state:**
+
+- `detectOrtOwner(sitePackages)` → `'swap'` (still GPU build's files)
+- `findPlainOrtDistInfos(sitePackages).length` → `0` (stale real plain dist-info
+  removed, only marker remains)
+- Directory listing: `onnxruntime-1.27.0.dist-info` (marker written) and
+  `onnxruntime_gpu-1.27.0.dist-info` (GPU build)
+- `pip check` clean
+
+**Disposition:** ✓ PASS. The fix (finding-4, commit `3a8b5009`) is verified
+against the correct manufactured state where the two packages have different
+versions. The `'clobbered'` return value fires exactly as intended, the remedy
+command repairs the box correctly, and the marker is written only after the
+swap succeeds. This is the verification §8.4 CLAIMED to do but actually
+performed against the wrong recipe (1.27.0/1.27.0).
+
+**Run by:** claude (Castwright#2578, wave 5, round-2 review correction).
+**Date:** 2026-08-21.
+**Venv:** fresh throwaway venv under a scratch temp path.
+Evidence: hand-execution against `server/tts-sidecar/scripts/install-ort.mjs`
+functions with venv at `C:\Users\dudar\AppData\Local\Temp\castwright-ort-verify-20260821-183456`
+(preserved during PR review, deleted post-fix).
 
 ---
 
