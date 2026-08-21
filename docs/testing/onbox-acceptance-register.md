@@ -2366,7 +2366,7 @@ filed against, and it has not been separately re-confirmed since the fix landed
 ### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
-branch (the clobbered-box row of the design doc's five-state table) is fully
+branch (the clobbered-box row of the design doc's eight-state table) is fully
 unit-tested against synthetic fixtures (`server/src/tts/ort-ensure-marker.test.ts`)
 but has never run against a **real** clobbered venv — a box where a real plain
 `onnxruntime` dist-info survives alongside the GPU distribution's dist-info (pip
@@ -2427,7 +2427,7 @@ design doc's §The three venv states).
 
 *Needs:* the existing NVIDIA dev box, no GPU activity required, ~10 minutes
 including the repair. *Criteria:* design doc §On-box acceptance item 6, the
-five-state table and "the clobbered box takes the loud path" in
+eight-state table and "the clobbered box takes the loud path" in
 `docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
@@ -2444,7 +2444,7 @@ five-state table and "the clobbered box takes the loud path" in
 > logged). The named remedy command itself was independently verified and
 > works correctly when run directly. Two things are true at once and both
 > are real: either the row's own manufacture recipe doesn't reach the state
-> the design doc's five-state table means by "clobbered," or the `'deleted'`
+> the design doc's eight-state table means by "clobbered," or the `'deleted'`
 > branch being silent is a gap on its own regardless of the recipe — a
 > decision on both is owed to a fix agent, not resolved here. Full evidence:
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as

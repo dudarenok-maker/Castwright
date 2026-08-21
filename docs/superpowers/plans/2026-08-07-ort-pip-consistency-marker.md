@@ -1487,7 +1487,7 @@ Refs #2192"
 - [ ] **Step 1: Write the regression plan**
 
 `docs/features/282-ort-pip-consistency-marker.md`, frontmatter `status: active`. Key files, the
-five venv states table, the invariants (identity = INSTALLER + empty RECORD; delete-first
+eight venv states table, the invariants (identity = INSTALLER + empty RECORD; delete-first
 ordering; write gated on the plan), and the manual acceptance walkthrough.
 
 - [ ] **Step 2: Add the INDEX entry**
@@ -1533,7 +1533,7 @@ Refs #2192"
 
 **Spec coverage.** Every §Components item maps to a task: marker primitives → 1–2, ownership
 → 3, version + plan → 4, entry points → 5, self-heal → 6, `bootstrap-venv` → 7, `apply.ts`
-(with the seam) → 8, CLI + boot → 9, whisper → 10, guard → 11, docs → 12. The five venv states
+(with the seam) → 8, CLI + boot → 9, whisper → 10, guard → 11, docs → 12. The eight venv states
 are each an assertion in Task 6. The delete-first ordering is asserted in Tasks 7 and 8.
 
 **Placeholders.** None — every code step carries real code, every test step real assertions.

@@ -228,13 +228,13 @@ path instead of the loud `'clobbered'` path the row expects and the design
 doc promises. Two separate things are true at once and both are real:
 
 - **The manufacture recipe is not exercising the state the design doc's
-  five-state table means by "clobbered."** A genuinely different sequence
+  eight-state table means by "clobbered."** A genuinely different sequence
   (one that leaves `site-packages/onnxruntime/capi/build_and_package_info.py`
   still reporting a swap package name — e.g. GPU package files still present
   with only its `.dist-info` folder removed/renamed — rather than a full
   file-level plain reinstall) may be what actually reaches the `'swap' &&
   realPlain.length > 0` branch. Worth re-deriving against the design doc's
-  own five-state table before the next attempt.
+  own eight-state table before the next attempt.
 - **Even if the recipe is simply wrong, the `'deleted'` branch being
   completely silent is a real gap on its own merits** — a marker silently
   disappearing (regardless of why) with zero log line means an operator has
