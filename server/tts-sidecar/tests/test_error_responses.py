@@ -134,6 +134,99 @@ async def test_case():
     error_msg = "some error"
     return JSONResponse({"detail": f"{error_msg}"})
 """, False, "non-exception variable"),
+
+        # Test case 8: HTTPException with str(e) should CATCH
+        ("""
+from fastapi import HTTPException
+
+async def test_case():
+    try:
+        x = 1
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+""", True, "HTTPException with str(e)"),
+
+        # Test case 9: .format(e) method call should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except RuntimeError as err:
+        msg = "Error: {}".format(err)
+        return JSONResponse({"detail": msg})
+""", True, ".format(e) of exception"),
+
+        # Test case 10: % formatting with exception should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except OSError as e:
+        msg = "Error: %s" % e
+        return JSONResponse({"detail": msg})
+""", True, "% formatting with exception"),
+
+        # Test case 11: e.__str__() call should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except IOError as ex:
+        return JSONResponse({"error": ex.__str__()})
+""", True, "e.__str__() call"),
+
+        # Test case 12: exception in list comprehension should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except Exception as e:
+        errors = [str(x) for x in [e]]
+        return JSONResponse({"details": errors})
+""", True, "exception in list comprehension"),
+
+        # Test case 13: exception in tuple should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except Exception as e:
+        return JSONResponse({"detail": (str(e),)})
+""", True, "exception in tuple"),
+
+        # Test case 14: exception in dict comprehension should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except Exception as e:
+        errors = {i: str(e) for i in range(1)}
+        return JSONResponse(errors)
+""", True, "exception in dict comprehension"),
+
+        # Test case 15: string concatenation with exception should CATCH
+        ("""
+from fastapi.responses import JSONResponse
+
+async def test_case():
+    try:
+        x = 1
+    except Exception as e:
+        msg = "failed: " + str(e)
+        return JSONResponse({"error": msg})
+""", True, "string concatenation with exception"),
     ]
 
     for test_code, should_violate, description in test_cases:
