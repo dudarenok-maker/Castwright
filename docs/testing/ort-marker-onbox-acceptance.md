@@ -307,8 +307,9 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
    matching the unit test fixture; verified to reach `'clobbered'` in §8.5.)
 2. Confirm both `onnxruntime_gpu-1.27.0.dist-info` and a **real**
    `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty RECORD) coexist with
-   **different version numbers** (this is the discriminating check — name-based
-   detection would fail if both were named `onnxruntime-1.27.0.dist-info`), and
+   **different version numbers** (this is the discriminating check — a marker and the real plain
+   dist-info could be named `onnxruntime-1.27.0.dist-info` and would collide, making name-based
+   detection useless), and
    that `site-packages/onnxruntime/` holds the GPU build's files
    (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 3. Boot the server and watch the log.

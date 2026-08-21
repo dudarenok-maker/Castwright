@@ -2384,8 +2384,8 @@ design doc's §The three venv states).
   Confirm both a **real** `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty
   RECORD) and `onnxruntime_gpu-1.27.0.dist-info` coexist with **different version
   numbers** — this is the discriminating check that proves the code either correctly
-  refused to write a marker OR incorrectly wrote one. Both would be named identically
-  if both packages were at the same version, making name-based detection useless. Also confirm
+  refused to write a marker OR incorrectly wrote one. A marker and the real plain dist-info
+  would be named identically if they were at the same version, making name-based detection useless. Also confirm
   that `site-packages/onnxruntime/` holds the GPU build's files
   (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 
