@@ -2105,7 +2105,12 @@ async function realDesignQwenVoice(
     /* Read the body ONCE and reuse it for both the language-unset detector
        and the human message — qwen puts the marker in `code` and the message
        in `error`, so a single read must feed both. (#2246 Task 9c) */
-    const body = await res.text().catch(() => '');
+    let body: string;
+    try {
+      body = await res.text();
+    } catch {
+      body = '';
+    }
     let detail = '';
     if (body) {
       try {

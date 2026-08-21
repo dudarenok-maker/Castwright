@@ -34,10 +34,11 @@ export interface EditBookMetaPatch {
 
 /** Task 9 — one of the three server failure shapes that open this modal in
     language-guard mode. `409` is the pre-flight HTTP 409 `language_unset`
-    (chapter-splice / chapter-qa-repair / analysis / qwen voice-design); `sse` is the streaming failure envelope — `{ type:'error',
-    code:'language_unset' }` for cast-design / single-design / analysis,
-    and generation's own `{ type:'chapter_failed', errorCode:'language-unset'
-    }` (fs-19 taxonomy, not the shared error envelope — see
+    (chapter-qa-repair / analysis / qwen voice-design); `sse` is the streaming
+    failure envelope — `{ type:'error', code:'language_unset' }` for
+    cast-design / single-design / analysis, and generation's own
+    `{ type:'chapter_failed', errorCode:'language-unset' }` (fs-19 taxonomy,
+    not the shared error envelope — see
     docs/superpowers/specs/2026-08-20-generation-language-guard-design.md);
     `batch` is the script-review 200/207 per-item `itemFailureReason`. The
     modal only uses the kind for copy — the open/retry behaviour is the
@@ -75,7 +76,7 @@ const LANGUAGE_OPTIONS: Array<{ code: string; label: string }> = [
 const GUARD_COPY: Record<LanguageGuardShape, { eyebrow: string; hint: string }> = {
   '409': {
     eyebrow: 'Set a language to continue',
-    hint: 'This book has no language set, so chapters can’t be spliced or merged yet. Choose a language below.',
+    hint: 'This book has no language set, so some operations need one. Choose a language below.',
   },
   sse: {
     eyebrow: 'Set a language to continue',
@@ -472,7 +473,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry 
                      flushed). */
                   const write = onSave(patch);
                   if (guard && onRetry) {
-                    Promise.resolve(write).then(() => onRetry());
+                    Promise.resolve(write).then(() => onRetry()).catch(() => onClose());
                   }
                 }}
                 disabled={!canSave}
