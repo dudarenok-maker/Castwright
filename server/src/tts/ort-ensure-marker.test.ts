@@ -145,7 +145,9 @@ describe('ensureOrtMarker', () => {
       name: 'clobbered branch',
       setup: () => venv({ owner: 'swap', realDist: true }),
       expectedReturn: 'clobbered',
-      verify: (_sp: string) => undefined, // State already verified by the test framework
+      verify: (sp: string) => {
+        expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
+      },
     },
     {
       name: 'deletion branch for plain onnxruntime',
