@@ -189,6 +189,11 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
       const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
       const currentNvidia = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
       // Normalize line endings for robust matching across core.autocrlf settings.
+      // Both files must be normalized consistently so the test's hash computations match production's,
+      // which reads files as-is without normalization but the test needs normalized strings for
+      // find/substring operations. Normalizing both ensures the test produces identical results
+      // on LF and CRLF checkouts.
+      const normalizedBase = base.replace(/\r\n/g, '\n');
       const normalizedNvidia = currentNvidia.replace(/\r\n/g, '\n');
 
       // Read the CURRENT constraint directly from the planner, not as a hand-typed literal.
@@ -210,10 +215,11 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
       expect(versionMatch).not.toBeNull();
       const [, minVersion, maxVersion] = versionMatch!;
 
-      // ORACLE 1: At least one version number from the constraint MUST be present in nvidia-cuda.txt.
-      // This ensures that if install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT changes,
-      // the file's content must change too, triggering a reqHash bump.
-      const hasVersionMarker = normalizedNvidia.includes(minVersion) || normalizedNvidia.includes(maxVersion);
+      // ORACLE 1: BOTH the floor AND cap version numbers from the constraint MUST be present in nvidia-cuda.txt.
+      // This ensures that if install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT changes (floor, cap, or both),
+      // the file's content must change too, triggering a reqHash bump. Using || would miss a cap-only
+      // widening (e.g., >=1.26,<1.28 instead of >=1.26,<1.27), so && is required to catch all changes.
+      const hasVersionMarker = normalizedNvidia.includes(minVersion) && normalizedNvidia.includes(maxVersion);
       expect(hasVersionMarker).toBe(true);
 
       // ORACLE 2: Simulate a pre-fix venv (old state WITHOUT the marker comment).
@@ -232,8 +238,8 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
       // Verify the marker removal actually changed the content.
       expect(oldNvidiaContent).not.toEqual(normalizedNvidia);
 
-      const oldHash = computeReqHash([oldNvidiaContent, base]);
-      const currentHash = computeReqHash([normalizedNvidia, base]);
+      const oldHash = computeReqHash([oldNvidiaContent, normalizedBase]);
+      const currentHash = computeReqHash([normalizedNvidia, normalizedBase]);
 
       // ORACLE 3: The hashes MUST differ (the marker comment must affect the hash).
       expect(oldHash).not.toBe(currentHash);

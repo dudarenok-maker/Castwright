@@ -43,7 +43,7 @@ torchaudio==2.11.0
 # DeepSpeed isn't available.
 
 # NOTE: onnxruntime-gpu version constraint is in install-ort.mjs (ONNXRUNTIME_GPU_CONSTRAINT).
-# Re-pinned 2026-08-21 (#2534 side-chain) to the CUDA-12 line (1.26.x); existing venvs need a reqHash bump to force reinstall.
+# Re-pinned 2026-08-21 (#2534 side-chain) to >=1.26,<1.27 (CUDA-12 line); existing venvs need a reqHash bump to force reinstall.
 
 # Kokoro v1 — quality-tuned local TTS engine, eagerly loaded at sidecar startup.
 # Installed PLAIN (no [gpu] extra) so it deterministically lands the core
