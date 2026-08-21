@@ -222,6 +222,10 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
         if (inFlight.has(e.id)) continue;
         if (completed.has(e.id)) continue;
         if (runner.hasOpenStreamForChapter(e.bookId, e.chapterId)) continue;
+        /* A book with an open language guard must not have its remaining
+           queued chapters drained into `failed` before the user can act on
+           the modal — skip it for the discipline's TTL (Task 6, #2515). */
+        if (runner.hasPendingLanguageGuard(e.bookId)) continue;
 
         /* Claim synchronously before any await so a back-to-back snapshot
            tick can't double-claim. */
