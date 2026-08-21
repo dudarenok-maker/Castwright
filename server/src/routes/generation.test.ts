@@ -97,7 +97,7 @@ vi.mock('../diagnostics/disk.js', async (importOriginal) => {
   };
 });
 
-/* Task 2 (#2510) — the route's "no fallback engine" abort (generation.ts:928-940:
+/* Task 2 (#2515) — the route's "no fallback engine" abort (generation.ts:928-940:
    Qwen unavailable AND non-English AND !coquiEligible) needs
    `resolveEligibleEngines` to report Coqui ineligible. Every registered
    non-English book language (ru/es/fr/de/zh/ja — tts/language-registry.ts) IS
@@ -964,7 +964,7 @@ describe('POST /api/books/:bookId/generation — Qwen→Kokoro fallback is loud,
   });
 });
 
-/* Task 2 (#2510) — the fs-2 no-fallback abort (generation.ts:928-940). A
+/* Task 2 (#2515) — the fs-2 no-fallback abort (generation.ts:928-940). A
    non-English book whose language has NO Coqui fallback must abort the whole
    run (chapter_failed + idle) rather than render cross-language garbage when
    Qwen is unavailable. `coquiEligible` is forced off via

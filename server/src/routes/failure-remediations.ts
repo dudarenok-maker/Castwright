@@ -235,7 +235,7 @@ export const FAILURE_REMEDIATIONS = {
       'rather than waiting forever. It is almost always over by the time you retry.',
   },
   'language-unset': {
-    /* #2509 — a chapter was rendered without a book language, so the voice
+    /* #2515 — a chapter was rendered without a book language, so the voice
        engine had no language mapping for the cast. The chapter is skipped
        rather than guessed. */
     userMessage:
