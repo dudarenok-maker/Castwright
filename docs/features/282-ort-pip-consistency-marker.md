@@ -196,6 +196,15 @@ reader trusts the code over the spec text on these points.
    test-only: `installForProfile`'s one production caller (`runInstall`,
    `bootstrap-venv.mjs:327`) always passes a real `venvDir`, so a null only ever
    reaches this code from a test harness deliberately omitting it.
+4. **The design doc's five-state table mislabels the "Clobbered" row's "Files in the
+   namespace" column as CPU when it should be GPU.** The clobbered state is detected by
+   `ensureOrtMarker`'s condition `owner === 'swap' && realPlain.length > 0` (line 317 of
+   `install-ort.mjs`), which explicitly means the GPU build's files own the namespace
+   (`owner === 'swap'`) while a real plain dist-info is also present. The shipped code's
+   log message (lines 318–324) confirms: "The GPU build's files currently own the
+   namespace." The table row has been corrected from CPU to GPU; the surrounding prose
+   correctly describes the scenario (GPU dist-info survives, real plain dist-info present)
+   and does not repeat the error.
 
 ## Test plan
 

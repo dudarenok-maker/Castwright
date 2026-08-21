@@ -221,7 +221,7 @@ did: the already-clobbered box.
 | Healthy nvidia (**after this ships**) | present | present (**ours**) | GPU |
 | **Interrupted swap** | absent | present (**ours**) | **none** |
 | Healthy cpu/amd/apple | absent | present (**real**) | CPU |
-| **Clobbered** | **present** | **present (real)** | **CPU** |
+| **Clobbered** | **present** | **present (real)** | **GPU** |
 
 The GPU dist-info survives a clobber because pip uninstalls by *name* and never knew the
 two collided (`install-ort.mjs:92-93` exists precisely because of this). **So dist-info
