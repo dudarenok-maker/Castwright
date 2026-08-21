@@ -405,7 +405,7 @@ the namespace). This corrupts pip's dependency resolution — a landmine for the
 next pip operation. GPU Kokoro is currently working, but the inconsistency must
 be repaired. Refusing to write a marker that would certify this bad state.
 Repair with: CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node
-server/tts-sidecar/scripts/install-ort.mjs <venv-python>` *[log wording superseded by commit c556f51c; the phrase "GPU Kokoro is currently working" was later removed and replaced with "The GPU build's files currently own the namespace" — see server/src/tts/ort-ensure-marker.test.ts:96-99 for the correction]* — naming the exact
+server/tts-sidecar/scripts/install-ort.mjs <venv-python>` *[log wording superseded by commit c556f51c; the phrase "GPU Kokoro is currently working" was later removed and replaced with "The GPU build's files currently own the namespace" — see server/src/tts/ort-ensure-marker.test.ts:102-105 for the correction]* — naming the exact
 remedy command, at server boot (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the
 throwaway venv, isolated port 8290). No marker written over the real
 distribution; `pip check` stayed clean (pinned versions matched here, unlike

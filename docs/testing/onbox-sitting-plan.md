@@ -87,7 +87,7 @@ flips these back to real links. See #2463 for the incident this avoids. -->
 > E5, E6, E9, E10 (the same no-GPU, browser-shaped sitting). §2.2 and the
 > arithmetic in §6 are corrected to match.
 
-### 2.2 Wave-3 agent-runnable (19 rows)
+### 2.2 Wave-3 agent-runnable (18 rows)
 
 These need no GPU and no operator box. They are excluded from every pack above
 and are run, on a machine of the agent's choosing, by the wave-3 pass — not by a
