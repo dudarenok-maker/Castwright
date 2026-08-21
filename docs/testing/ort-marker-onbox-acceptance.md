@@ -499,10 +499,13 @@ performed against the wrong recipe (1.27.0/1.27.0).
 
 **Run by:** claude (Castwright#2578, wave 5, round-2 review correction).
 **Date:** 2026-08-21.
-**Venv:** fresh throwaway venv under a scratch temp path.
+**Venv:** fresh throwaway venv under a scratch temp path (not the sidecar's
+own — `server/tts-sidecar/.venv` was never touched).
 Evidence: hand-execution against `server/tts-sidecar/scripts/install-ort.mjs`
-functions with venv at `C:\Users\dudar\AppData\Local\Temp\castwright-ort-verify-20260821-183456`
-(preserved during PR review, deleted post-fix).
+functions, against a throwaway venv under the reviewing machine's temp
+directory. Kept resident through the PR's review rounds so later passes could
+re-run the same functions against it read-only; not deleted as of this
+writing — delete once the PR merges and no further review round needs it.
 
 ---
 
