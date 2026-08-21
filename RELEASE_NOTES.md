@@ -1,6 +1,6 @@
 # Castwright 1.15.0
 
-- **The startup log now tells you when the speech engine's runtime changes.** If Castwright detects that your GPU runtime has been replaced with the standard CPU version, it now says so plainly in the logs at startup, instead of silently taking the swap in stride. That visibility helps you spot a misconfiguration before it affects a generation.
+- **The startup log now tells you when the speech engine's runtime changes.** If Castwright detects that your GPU runtime has been replaced with the standard CPU version — or has gone missing entirely — it now says so plainly in the logs at startup, instead of silently taking the change in stride. That visibility helps you spot a misconfiguration before it affects a generation.
 
 - **CI's weekly quarantine check now catches when it can't read the register.** The automation that tracks which tests are known to be flaky used to parse the register's format incorrectly and silently report a false clean — now it either reads successfully or reports the failure instead, so a broken parse won't hide the problem until someone notices weeks later.
 
