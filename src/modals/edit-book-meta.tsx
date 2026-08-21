@@ -34,11 +34,14 @@ export interface EditBookMetaPatch {
 
 /** Task 9 — one of the three server failure shapes that open this modal in
     language-guard mode. `409` is the pre-flight HTTP 409 `language_unset`
-    (chapter-splice / chapter-qa-repair / cast-merge); `sse` is the streaming
-    `{ type:'error', code:'language_unset' }` envelope (cast-design /
-    single-design / qwen-voice / generation); `batch` is the script-review
-    200/207 per-item `itemFailureReason`. The modal only uses the kind for
-    copy — the open/retry behaviour is the same for all three. */
+    (chapter-splice / chapter-qa-repair / analysis / qwen voice-design); `sse` is the streaming failure envelope — `{ type:'error',
+    code:'language_unset' }` for cast-design / single-design / analysis,
+    and generation's own `{ type:'chapter_failed', errorCode:'language-unset'
+    }` (fs-19 taxonomy, not the shared error envelope — see
+    docs/superpowers/specs/2026-08-20-generation-language-guard-design.md);
+    `batch` is the script-review 200/207 per-item `itemFailureReason`. The
+    modal only uses the kind for copy — the open/retry behaviour is the
+    same for all three. */
 export type LanguageGuardShape = '409' | 'sse' | 'batch';
 
 interface Props {

@@ -324,7 +324,8 @@ the thirteen, so they split into three tiers:
 | Tier | Sites | Shape |
 |---|---|---|
 | **Pre-flight** — can answer before any stream opens | `chapter-splice`, `chapter-qa-repair` ×2, `cast-merge`(provisional) | `409 { error: 'language_unset' }` |
-| **Streaming** — headers already flushed | `cast-design:768`, `single-design:304`, `qwen-voice:578` (all three already `send({type:'error', code:'unsupported_language'})` then `res.end()`), `generation:796`, `analysis:3163` (gate in the POST handler pre-detach; in-loop → SSE `error` via `classifyAnalysisFailure`) | `{ type: 'error', code: 'language_unset' }` in each route's **existing** error envelope |
+| **Streaming** — headers already flushed | `cast-design:768`, `single-design:304`, `qwen-voice:578` (all three already `send({type:'error', code:'unsupported_language'})` then `res.end()`), `analysis:3163` (gate in the POST handler pre-detach; in-loop → SSE `error` via `classifyAnalysisFailure`) | `{ type: 'error', code: 'language_unset' }` in each route's **existing** error envelope |
+| **Streaming, generation's own taxonomy** | `generation:800-805` | `chapter_failed` + `errorCode: 'language-unset'` (fs-19 `FailureCode`, not the shared envelope) — see `docs/superpowers/specs/2026-08-20-generation-language-guard-design.md` |
 | **Batch** — per-item failure inside a 200/207 | `script-review:772`, `:843` | `itemFailureReason`, per CLAUDE.md's five-batch-route rule. **A whole-request 409 is wrong here.** |
 | **Fail-closed value** | `scan.ts:813` | emit `eligibleTtsEngines: []`; never throw |
 | **Pure resolver** | `series-cast-scan.ts:96` | return `null`; callers (`voice-match`, `series-reuse-link`) treat null as "veto — cannot prove same language" |
