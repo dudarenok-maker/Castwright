@@ -1049,9 +1049,10 @@ test('fileImportsFrom matches when pathSuffix contains a backslash (CodeQL #225)
 test('fileImportsFrom does not throw on pathSuffix with regex metacharacters', () => {
   // Prove no exception is thrown when the suffix contains chars that are
   // special in regex: . * + ? ^ $ { } ( ) | [ ] \
-  const src = "import { x } from './a.b*c+d.mjs';";
+  // The unescaped '[' would form an unclosed character class without proper escaping.
+  const src = "import { x } from './a[.mjs';";
   assert.doesNotThrow(() => {
-    fileImportsFrom(src, 'x', './a.b*c+d.mjs');
+    fileImportsFrom(src, 'x', './a[.mjs');
   });
 });
 
