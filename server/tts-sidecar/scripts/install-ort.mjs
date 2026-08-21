@@ -198,12 +198,12 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
 // install date. Re-pinned 2026-08-21 (#2534 side-chain) to the newest
-// CUDA-12-built line: this dev box validated 1.26.0 — it constructs a working
-// CUDAExecutionProvider InferenceSession against this box's CUDA 12.4 +
-// cuDNN 9 (cuDNN ships in the runtime venv via torch) and computes correctly,
-// whereas 1.27+ moved onnxruntime-gpu's default build to CUDA 13.x
-// (cublasLt64_13.dll) — a dependency this box's system-wide CUDA 12.4 cannot
-// satisfy, so the pin deliberately holds the runtime on the last CUDA-12 line
+// CUDA-12-built line. Validated on this dev box: 1.26.0 constructs a working
+// CUDAExecutionProvider InferenceSession against CUDA 12.4 + cuDNN 9 (cuDNN
+// ships in the runtime venv via torch) and computes correctly. onnxruntime-gpu
+// 1.27+ moved its default build to CUDA 13.x (cublasLt64_13.dll), incompatible
+// with the shipped torch/torchaudio cu128 pin. The pin deliberately holds the
+// runtime on the last CUDA-12 line to keep the stack CUDA-12-compatible
 // and nobody chooses drift on purpose. Floor-plus-cap on the MINOR line rather
 // than an exact `==` so a same-line patch release (a security fix) still flows
 // without a code change; only crossing the minor boundary needs a deliberate
