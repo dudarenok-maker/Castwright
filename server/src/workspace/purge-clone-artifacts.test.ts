@@ -747,12 +747,18 @@ describe('purgeCloneArtifacts — deleteMasterClip (revoke recording erasure)', 
     const warnCall = warnSpy.mock.calls.find((c) => String(c[0]).includes('failed to erase'));
     expect(warnCall).toBeDefined();
     const rendered = format(...(warnCall as unknown[]));
-    // The injected `%s` is ARGUMENT text now, not part of the format string —
-    // it must render verbatim. Pre-fix it was absorbed into the format and
-    // vanished (that is what eats the following error), so this alone goes red.
+    // The injected `%s` is ARGUMENT text now, not interpolated into the format
+    // string. It renders literally. Pre-fix, both the injected text and the
+    // trailing error appear in the output, but in the WRONG ORDER (error first,
+    // then injected text) due to the %s placeholder consuming the error argument
+    // and rendering it before the voiceUuid argument is processed.
+    // The `toContain()` assertion alone does NOT discriminate the fix — it passes
+    // both pre-fix (injected text appears, just in wrong order) and post-fix.
     expect(rendered).toContain(injectedUuid);
-    // And the trailing error is still rendered, AFTER the placeholder that used
-    // to swallow it — it was not consumed by the injected `%`.
+    // The ORDERING assertion is what proves the fix: post-fix, the error appears
+    // AFTER the injected text (correct order), while pre-fix it appeared BEFORE.
+    // This verifies that the voiceUuid is no longer consumed as a format
+    // specifier but is passed as a separate argument.
     expect(rendered.indexOf('EBUSY: clone artifact pinned open')).toBeGreaterThan(
       rendered.indexOf(injectedUuid),
     );
