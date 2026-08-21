@@ -48,14 +48,20 @@ export interface EngineProbe {
     Overloaded so a caller that never passes `packageFault` (models-status.ts's
     own call site — see that module's `EngineStatus.state` doc for why it stays
     disk-only/coarse) gets a return type that PROVABLY excludes 'package-broken',
-    with no cast: TypeScript's object-literal excess-property check rejects a
-    literal carrying a `packageFault` key against the first (Omit) overload, so
-    only a caller with no such key can match it. This is what lets
-    `EngineStatus.state` keep its narrower, openapi-documented 4-value type
-    (models-status.ts's `EngineStatusState`) without duplicating this function. */
+    with no cast: the first overload's parameter type intersects `Omit<EngineProbe,
+    'packageFault'>` with `{ packageFault?: never }`, so ANY value assigned to
+    that key — not just an inline object literal, but a variable or a spread
+    carrying a real `packageFault` too — is rejected by that overload. (An Omit
+    alone only trips TypeScript's excess-property check against an inline
+    literal; a probe built as a `const` first and passed by reference compiles
+    clean against a bare Omit while still carrying `packageFault` at runtime —
+    see the `@ts-expect-error` regression test in engine-health.test.ts.) This is
+    what lets `EngineStatus.state` keep its narrower, openapi-documented 4-value
+    type (models-status.ts's `EngineStatusState`) without duplicating this
+    function. */
 export function deriveEngineHealth(
   _id: EngineId,
-  p: Omit<EngineProbe, 'packageFault'>,
+  p: Omit<EngineProbe, 'packageFault'> & { packageFault?: never },
 ): { state: Exclude<EngineHealthState, 'package-broken'> };
 export function deriveEngineHealth(_id: EngineId, p: EngineProbe): { state: EngineHealthState };
 export function deriveEngineHealth(_id: EngineId, p: EngineProbe): { state: EngineHealthState } {
