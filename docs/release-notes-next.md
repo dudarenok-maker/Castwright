@@ -1,4 +1,4 @@
-﻿<!--
+<!--
 Draft release notes for the NEXT version (technical register — this IS the
 GitHub release body). bump-version.mjs feeds this file verbatim as the
 annotated-tag message → release.yml, and now uses it by DEFAULT (no

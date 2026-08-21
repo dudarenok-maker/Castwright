@@ -90,6 +90,7 @@ import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import { parseDuration } from './time';
+import { makeSecureUuid } from './secure-random';
 /* Bundled mock audio assets — two short tones so the a/b player + mini
    player + voice samples have something audible to render under
    VITE_USE_MOCKS. ~88 KB each. stub-a (440 Hz) is the "current/A" /
@@ -9307,7 +9308,7 @@ export async function mockDesignLibraryVoice(body: {
   await wait(300);
   const now = new Date().toISOString();
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-${crypto.randomUUID()}`,  
+    voiceUuid: `lib-${makeSecureUuid()}`,  
     name: body.name,
     provenance: 'designed',
     tags: [],
@@ -9367,7 +9368,7 @@ export async function mockPromoteToLibrary(body: {
   await wait(60);
   const now = new Date().toISOString();
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-${crypto.randomUUID()}`,
+    voiceUuid: `lib-${makeSecureUuid()}`,
     name: body.name,
     provenance: 'designed',
     tags: [],
@@ -9674,7 +9675,7 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
     );
   }
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-clone-${crypto.randomUUID()}`,  
+    voiceUuid: `lib-clone-${makeSecureUuid()}`,  
     name: body.name?.trim() || body.consent.personName,
     provenance: 'cloned',
     tags: [],
