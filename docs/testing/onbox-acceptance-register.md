@@ -2463,10 +2463,12 @@ five-state table and "the clobbered box takes the loud path" in
 > silent-`'deleted'` defect #2535 was filed against is gone: the loud
 > `'clobbered'` path fires exactly where wave-3 found it silent.
 > **CRITICAL NOTE:** This wave-4 run was performed with the INCORRECT recipe
-> version (1.27.0/1.27.0 — both the same version, the same bug wave-3 exposed)
-> and therefore did NOT fully verify the fix against the intended manufactured
-> state where the two packages have different versions. The corrected recipe
-> verification with 1.28.0 plain and 1.27.0 GPU is in Wave-5 below.
+> version (1.27.0/1.27.0 — both the same version). This is a separate defect
+> from the ordering issue wave-3 step 2 exposed (which used different versions:
+> 1.29.0 plain and 1.27.0 GPU). The wave-4 run therefore did NOT fully verify
+> the fix against the intended manufactured state where the two packages have
+> different versions. The corrected recipe verification with 1.28.0 plain and
+> 1.27.0 GPU is in Wave-5 below.
 > Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by:
 > claude (Castwright#2569).
 

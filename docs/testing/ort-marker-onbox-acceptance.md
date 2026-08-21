@@ -430,7 +430,8 @@ Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`.
 ### 8.5 Verification of corrected recipe (2026-08-21, PR #2578 review correction)
 
 **CRITICAL NOTE:** §8.4 above was run with the INCORRECT recipe version
-(1.27.0/1.27.0) — the same-version bug wave-3 step-3 exposed. This section
+(1.27.0/1.27.0) — both packages at the same version, a separate defect from
+the ordering issue wave-3 step 2 exposed. This section
 re-verifies the corrected recipe (1.28.0 plain, 1.27.0 GPU) to confirm the fix
 actually works against the intended manufactured state, where `detectOrtOwner
 === 'swap'`, `findPlainOrtDistInfos.length === 1`, and the two versions are
