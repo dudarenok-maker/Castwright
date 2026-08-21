@@ -27,6 +27,15 @@ src/lib/api-types.ts text eol=lf
 # CRLF and breaks line-anchored matching in schemaBlock() (#1952). Pin to LF.
 openapi.yaml text eol=lf
 
+# server/tts-sidecar/requirements/*.txt feed resolveRequired()'s reqHash
+# (server/tts-sidecar/scripts/venv-migration.mjs), which is hashed from raw file
+# bytes (no normalization) and persisted to the venv stamp, then compared across
+# checkouts/machines (a Windows dev box vs. the ubuntu-latest release build). With
+# core.autocrlf=true on Windows, these files materialise as CRLF and hash
+# differently from an LF checkout of the identical content, causing a spurious
+# 'pip-in-place' migration (#2586). Pin to LF.
+server/tts-sidecar/requirements/*.txt text eol=lf
+
 # Binary files we never want autocrlf to touch.
 *.png binary
 *.jpg binary

@@ -166,6 +166,21 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
     expect(new Set(hashes).size).toBe(3);
   });
 
+  it('requirements/*.txt files never contain CRLF on disk, so reqHash is checkout-independent (#2586)', () => {
+    // resolveRequired() hashes these files' RAW bytes (no normalization), and reqHash is
+    // persisted to the venv stamp and compared across checkouts/machines (e.g. a Windows dev
+    // box vs. the ubuntu-latest release build). A core.autocrlf=true (default Git-for-Windows)
+    // checkout materialises `* text=auto` files as CRLF, so without an explicit LF pin the same
+    // requirements content hashes differently depending on who cloned it, producing a spurious
+    // 'pip-in-place' migration for every existing venv (#2586). `.gitattributes` pins
+    // `server/tts-sidecar/requirements/*.txt` to `text eol=lf` to close that off; this asserts
+    // the pin is actually in effect on disk, independent of any single box's `core.autocrlf`.
+    for (const file of ['base.txt', 'nvidia-cuda.txt', 'cpu.txt', 'amd-rocm.txt']) {
+      const raw = readFileSync(join(SIDECAR_DIR, 'requirements', file));
+      expect(raw.includes(0x0d), `${file} contains a CR byte (CRLF line ending)`).toBe(false);
+    }
+  });
+
   it('maps apple (and any unknown) to the mac-safe nvidia overlay, but stamps the given profile', () => {
     const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
     const nvidia = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
@@ -188,11 +203,12 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
 
       const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
       const currentNvidia = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
-      // Normalize line endings for robust matching across core.autocrlf settings.
-      // Both files must be normalized consistently so the test's hash computations match production's,
-      // which reads files as-is without normalization but the test needs normalized strings for
-      // find/substring operations. Normalizing both ensures the test produces identical results
-      // on LF and CRLF checkouts.
+      // Normalize line endings for the marker-finding string ops below (indexOf/substring),
+      // which are line-ending sensitive. This is NOT what keeps the hash comparisons in this
+      // test correct across checkouts — that's guaranteed by .gitattributes pinning
+      // requirements/*.txt to LF, so production's raw-byte reqHash (via resolveRequired,
+      // read without normalization) is identical regardless of the checking-out box's
+      // core.autocrlf setting (#2586).
       const normalizedBase = base.replace(/\r\n/g, '\n');
       const normalizedNvidia = currentNvidia.replace(/\r\n/g, '\n');
 
@@ -239,23 +255,19 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
       expect(oldNvidiaContent).not.toEqual(normalizedNvidia);
 
       const oldHash = computeReqHash([oldNvidiaContent, normalizedBase]);
+      const currentHash = computeReqHash([normalizedNvidia, normalizedBase]);
 
       // ORACLE 3: The hashes MUST differ (the marker comment must affect the hash).
-      // Compare against required.reqHash (computed from production's raw file bytes)
-      // to avoid CRLF/LF normalization mismatches.
-      const required = resolveRequired(SIDECAR_DIR, 'nvidia');
-      expect(oldHash).not.toBe(required.reqHash);
+      expect(oldHash).not.toBe(currentHash);
 
       // ORACLE 4: A venv with the old hash (pre-fix) MUST trigger pip-in-place,
       // which re-runs the ORT swap with the new pin.
+      const required = resolveRequired(SIDECAR_DIR, 'nvidia');
       const staleStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
       expect(decideVenvAction({ stamp: staleStamp, required })).toBe('pip-in-place');
 
       // ORACLE 5: A venv with the CURRENT hash should see 'noop' (no action needed).
-      // Use required.reqHash directly (computed by production code from raw file bytes)
-      // rather than independently recomputing from normalized content, which risks
-      // CRLF/LF mismatches on different checkouts.
-      const freshStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: required.reqHash };
+      const freshStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: currentHash };
       expect(decideVenvAction({ stamp: freshStamp, required })).toBe('noop');
     });
   });
