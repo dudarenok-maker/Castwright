@@ -44,8 +44,14 @@ function venv({ owner, realDist }: { owner: 'swap' | 'plain' | 'none'; realDist?
 describe('ensureOrtMarker', () => {
   it('writes a marker on a healthy GPU venv bootstrapped before this change', () => {
     const { root, sp } = venv({ owner: 'swap' });
-    expect(ensureOrtMarker(root)).toBe('wrote');
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('wrote');
     expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(true);
+    // Verify the log was actually invoked with the expected marker message.
+    const message = lines.join('\n');
+    expect(message).toContain('[ort-marker]');
+    expect(message).toContain('recorded onnxruntime');
+    expect(message).toContain('onnxruntime-gpu');
   });
 
   it('is idempotent — second run is a no-op', () => {
@@ -190,6 +196,20 @@ describe('ensureOrtMarker', () => {
 
   it('returns noop when no runtime exists and no marker is present (row 6)', () => {
     const { root } = venv({ owner: 'none' });
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('noop');
+    expect(lines.length).toBe(0);
+  });
+
+  it('returns noop when CPU plain onnxruntime owns the namespace and no marker is present', () => {
+    // The healthy case on a CPU box (or any box where plain onnxruntime is the
+    // correct choice): owner === 'plain', no marker to delete. The function should
+    // return 'noop' and emit NO log line (the log callback is never invoked).
+    // This gap was identified in plan 282's five-state table — plain-with-no-marker
+    // had no test. Risk: if the safeLog call inside the delete branch were
+    // accidentally moved outside its guard, a false marker-removed message would
+    // print on every CPU boot with the entire test suite staying green.
+    const { root } = venv({ owner: 'plain' });
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('noop');
     expect(lines.length).toBe(0);
