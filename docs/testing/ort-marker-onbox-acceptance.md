@@ -380,19 +380,23 @@ file).
 
 Re-ran the corrected §8.1 recipe on a **fresh** throwaway venv (`python -m
 venv`, not a copy of the sidecar's own) against branch
-`fix/sidecar-2535-ort-marker-fix` at commit `bd09fcfa` (the commit that
-corrected the clobbered-state message, fixing the silent-defect #2535). The
-recorded log message matches bd09fcfa's 452-character wording, not the
-262-character wording from the prior merge commit 51420399.
+`fix/sidecar-2535-ort-marker-fix`, at committed HEAD `fe77babd` but with a
+**local, uncommitted edit to `install-ort.mjs`** containing the corrected
+clobbered-state message (later committed as `bd09fcfa`), fixing the silent-defect
+#2535. The recorded log message matches the 452-character wording from that
+uncommitted edit (later bd09fcfa's wording), not the 262-character wording from
+the prior merge commit 51420399.
 
 **Manufactured state confirmed:** `detectOrtOwner === 'swap'`,
 `findPlainOrtDistInfos.length === 1`, both `onnxruntime-1.27.0.dist-info` and
 `onnxruntime_gpu-1.27.0.dist-info` present.
 
 **Log line observed (clobbered):** fired correctly — `[ort-marker] A stray
-real plain onnxruntime dist-info coexists with the GPU build's files...
-Refusing to write a marker that would certify this bad state. Repair with:
-CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node
+real plain onnxruntime dist-info coexists with the GPU build's files (which own
+the namespace). This corrupts pip's dependency resolution — a landmine for the
+next pip operation. GPU Kokoro is currently working, but the inconsistency must
+be repaired. Refusing to write a marker that would certify this bad state.
+Repair with: CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node
 server/tts-sidecar/scripts/install-ort.mjs <venv-python>` — naming the exact
 remedy command, at server boot (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the
 throwaway venv, isolated port 8290). No marker written over the real

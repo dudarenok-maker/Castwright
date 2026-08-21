@@ -5,11 +5,14 @@ Acceptance re-run for register row **A41** (`docs/testing/onbox-acceptance-regis
 and its verify child [#2546](https://github.com/dudarenok-maker/Castwright/issues/2546)
 (PASSED, opened [PR #2578](https://github.com/dudarenok-maker/Castwright/pull/2578)).
 Run against branch `fix/sidecar-2535-ort-marker-fix`, worktree
-`C:/Claude/Projects/wt-2535-ort-marker-fix`, at commit `bd09fcfa` — the commit
-that corrected the clobbered-state log message wording (fixing silent-defect
-#2535). This is the commit that introduced the recorded 452-character log
-message; the prior commit `51420399` (the merge at 17:00:54) carried the old
-262-character wording, which the recorded transcript does not match.
+`C:/Claude/Projects/wt-2535-ort-marker-fix`, at committed HEAD `fe77babd`
+(16:28:46) — but with a **local, uncommitted edit to `install-ort.mjs`**
+already in place at boot time (16:51:52), containing the corrected clobbered-state
+log message wording. This uncommitted edit was later committed as `bd09fcfa`
+(17:04:35) which introduced the recorded 452-character log message; the prior
+commit `51420399` (the merge at 17:00:54) carried the old 262-character wording,
+which the recorded transcript does not match because the run exercised the edit,
+not any committed ref.
 
 ## Manufacture recipe (per the row's own corrected §8.1 procedure)
 
@@ -124,16 +127,17 @@ CUDA-execution-provider re-check, which remains blocked by the pre-existing
   checkout `C:/Claude/Projects/Audiobook-Generator` — this worktree has no
   `.venv` of its own) was never touched. Confirmed: its `python.exe` mtime
   (2026-07-03) predates this entire session and was unchanged throughout.
-- Found unrelated, already-staged (uncommitted) changes to
+- Found load-bearing, already-staged (uncommitted) changes to
   `server/tts-sidecar/scripts/install-ort.mjs` and
   `server/src/tts/ort-ensure-marker.test.ts` in this worktree at claim time
-  (a message-wording improvement to the same `'clobbered'` log line, mtime
-  predating this run) — left completely untouched throughout: temporarily
-  `git stash push` on just those two paths to allow merging `origin/main`
-  cleanly (origin/main does not touch either file, so the merge was risk-free
-  for them), then `git stash pop` + re-`git add` to restore them to their
-  original staged state, byte-for-byte. Not committed as part of this task —
-  they belong to whoever is mid-edit on them.
+  (the message-wording improvement to the `'clobbered'` log line, mtime
+  predating this run) — this is the exact edit the run exercised, explaining
+  why the recorded transcript shows the new wording. Left completely untouched
+  throughout: temporarily `git stash push` on just those two paths to allow
+  merging `origin/main` cleanly (origin/main does not touch either file, so
+  the merge was risk-free for them), then `git stash pop` + re-`git add` to
+  restore them to their original staged state, byte-for-byte. Not committed
+  as part of this task — they belong to whoever is mid-edit on them.
 - Server boot used an isolated port (`8290`, `8544`), confirmed free before
   starting and not another lane's port. Process tree fully torn down after
   each boot via parent-PID chain (never a bare `taskkill` by name).

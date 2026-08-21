@@ -2445,10 +2445,12 @@ five-state table and "the clobbered box takes the loud path" in
 > **fresh** throwaway venv (not the sidecar's own — no venv under
 > `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime was
 > confirmed unchanged before and after this run) against branch
-> `fix/sidecar-2535-ort-marker-fix` at commit `bd09fcfa` (the commit that
-> corrected the clobbered-state message, fixing silent-defect #2535). The
-> recorded log message matches bd09fcfa's 452-character wording, not the
-> 262-character wording from prior merge commit 51420399. Manufactured plain-then-GPU, confirmed `detectOrtOwner === 'swap'`
+> `fix/sidecar-2535-ort-marker-fix`, at committed HEAD `fe77babd` but with a
+> **local, uncommitted edit to `install-ort.mjs`** containing the corrected
+> clobbered-state message (later committed as `bd09fcfa`), fixing silent-defect
+> #2535. The recorded log message matches the 452-character wording from that
+> uncommitted edit (later bd09fcfa's wording), not the 262-character wording
+> from prior merge commit 51420399. Manufactured plain-then-GPU, confirmed `detectOrtOwner === 'swap'`
 > and one real plain dist-info present, then booted the real worktree server
 > (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the throwaway venv, port 8290 —
 > free and not shared with another lane). **Result: the `'clobbered'` log
