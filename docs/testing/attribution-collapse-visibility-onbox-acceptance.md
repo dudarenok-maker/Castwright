@@ -171,6 +171,21 @@ fields and 6 chapter-level fields: `narratorIdSpoken` 229→223,
 9→7, `splitSpeech` 337→346, `tagNarratorSpan` 544→536, plus per-chapter
 `attributableSpoken`/`narratorIdSpoken`/`unattributedSpeech` shifts of 1-2 in
 chapters 0, 5, 6, 7, 8. Full diff: [`onbox-wave3-results/step-4-real-workspace-scripts.md`](onbox-wave3-results/step-4-real-workspace-scripts.md).
+
+**RE-RUN 2026-08-21, against the #2537 fix (#2571), still FAILS.** Same
+recipe, run against commit `d9eb03ad` on `fix/server-2537-dash-invariant-align`
+(PR #2577, rebased onto `origin/main`) — the branch carrying the dash-invariant
+needle-search fix described below as "fix decision owed", now landed. 22 of 23
+books remain byte-identical; `Ночной дозор (Tetralogy)` still diverges, same
+fields, same direction, same magnitude: `narratorIdSpoken` 229→223, `share`
+0.1302→0.1273, `unattributedSpeech` 9→7, `splitSpeech` 337→346,
+`tagNarratorSpan` 544→536, plus per-chapter shifts in chapters 1, 6, 7, 8. The
+fix is confirmed present in both source and the `server/dist` this run
+actually exercised. Its own synthetic unit test and #2541's parent-acceptance
+checklist both passed, but neither reaches whatever in this book's real
+2,122-sentence structure still produces a divergent match — a residual gap,
+not the original defect recurring unfixed. Full diff:
+[`onbox-wave4-results/step-1-e11-item2-rerun.md`](onbox-wave4-results/step-1-e11-item2-rerun.md).
 **Mechanism:** `alignSentences` (`server/src/analyzer/dialogue-structure/aligner.ts:317,360`)
 locates each cached sentence in the chapter body by substring-searching
 `normalize(s.text)` (the needle) against the normalized body (the haystack).

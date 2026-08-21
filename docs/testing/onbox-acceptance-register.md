@@ -3562,6 +3562,28 @@ exists. *Criteria:* spec §On-box acceptance
 > the 14-field divergence observed on `Ночной дозор` is actually closed. Paired
 > assertion in Task 9 — run twice, second time over scratch-path copies of each
 > cache with every leading dash stripped, diff every field of every row.
+>
+> **2026-08-21 — On-box re-run against the landed fix (#2571), criterion
+> STILL FAILS.** Both passes re-run for real against commit `d9eb03ad`
+> (`fix/server-2537-dash-invariant-align`, rebased onto `origin/main`,
+> containing PR #2577's full fix series) — straight, then dash-stripped over
+> a scratch-path copy of every cache file, originals restored and verified
+> byte-identical after. 22 of 23 books: zero diffs, unchanged from wave 3.
+> **`Ночной дозор` still diverges: `narratorIdSpoken` 229→223, `share`
+> 0.1302→0.1273, `unattributedSpeech` 9→7, `splitSpeech` 337→346,
+> `tagNarratorSpan` 544→536, plus per-chapter shifts in chapters 1, 6, 7, 8**
+> — the same field names, same direction, same magnitude as wave 3's pre-fix
+> numbers. The fix is confirmed present and built into the `server/dist`
+> actually exercised (`aligner.ts`/`aligner.js` both carry the dash-invariant
+> needle-search code from #2537/#2540), and its own synthetic unit test and
+> the #2541 parent-acceptance checklist both passed — but neither reaches
+> whatever in this book's real 2,122-sentence, 1,940-dash-only-span structure
+> still produces a divergent match. **Item (2) is therefore still owed, not
+> discharged** — this is a residual real-data gap the fix's own test coverage
+> didn't reach, not the original defect recurring unfixed. Evidence:
+> `docs/testing/onbox-wave4-results/step-1-e11-item2-rerun.md`. Routed back
+> for a fresh fix attempt against the real corpus rather than a synthetic
+> fixture.
 
 ## Group F — a real Android device
 
