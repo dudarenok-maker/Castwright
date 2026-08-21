@@ -6507,7 +6507,7 @@ export interface ModelInventoryItem {
   sizeBytes: number | null;
   diskPath: string | null;
   loaded: boolean;
-  installState?: 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
+  installState?: 'ready' | 'package-missing' | 'package-broken' | 'weights-missing' | 'not-installed' | 'loaded';
   tier?: 'standard' | 'secondary';
   isDefaultEngine: boolean;
   isFallbackEngine: boolean;

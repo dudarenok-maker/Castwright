@@ -184,54 +184,39 @@ and installing a packaged release is a substantial task on its own, not
 something to fit alongside A39/A41 in one heartbeat. Not attempted this run
 rather than produce a shallow, unconvincing pass.
 
-## Defect to route — CUDA 13 / cuDNN 9 runtime gap blocks every CUDAExecutionProvider check
+## Defect — CUDA 13 / cuDNN 9 runtime gap blocked every CUDAExecutionProvider check (NOW FIXED)
 
-**Mechanism:** `onnxruntime-gpu` is pinned to `>=1.27,<1.28`
-(`server/tts-sidecar/scripts/install-ort.mjs:214`,
-`ONNXRUNTIME_GPU_CONSTRAINT`). `onnxruntime-gpu` 1.27.0 requires CUDA 13.x
+**Mechanism (as recorded during wave-3 step 2):** `onnxruntime-gpu` was pinned
+to `>=1.27,<1.28` (`server/tts-sidecar/scripts/install-ort.mjs:214`,
+`ONNXRUNTIME_GPU_CONSTRAINT`). `onnxruntime-gpu` 1.27.0 required CUDA 13.x
 and cuDNN 9.x runtime libraries (its own error names them:
 `onnxruntime_providers_cuda.dll` depends on `cublasLt64_13.dll`). This box
 has only CUDA 12.4 installed system-wide (`C:\Program Files\NVIDIA GPU
 Computing Toolkit\CUDA\v12.4`, providing `cublasLt64_12.dll`, not `_13`), and
-no pip-vendored CUDA 13 runtime packages appear anywhere in
-`server/tts-sidecar/requirements/`. The driver itself (610.88) does support
-CUDA 13 — this is a missing-runtime-library gap, not a driver/hardware
+no pip-vendored CUDA 13 runtime packages appeared in
+`server/tts-sidecar/requirements/`. The driver itself (610.88) did support
+CUDA 13 — this was a missing-runtime-library gap, not a driver/hardware
 limit.
 
 **Observed:** `import onnxruntime as ort; ort.get_available_providers()`
-correctly lists `CUDAExecutionProvider` (provider *libraries* are present),
+correctly listed `CUDAExecutionProvider` (provider *libraries* were present),
 but actually constructing a session with it
 (`onnxruntime.InferenceSession(..., providers=['CUDAExecutionProvider', ...])`,
 or `kokoro_onnx.Kokoro(...)` with `ONNX_PROVIDER=CUDAExecutionProvider`)
-fails with `Error 126: The specified module could not be found` and silently
-falls back to `CPUExecutionProvider`. **Reproduced identically against the
-live sidecar venv, read-only** (no modification) — this is not specific to
+failed with `Error 126: The specified module could not be found` and silently
+fell back to `CPUExecutionProvider`. **Reproduced identically against the
+live sidecar venv, read-only** (no modification) — not specific to
 the throwaway A39/A41 venvs.
 
-**Blast radius:** blocks the "Kokoro reports `CUDAExecutionProvider`" success
-criterion for A39, A40, and (indirectly, on re-check) A41 — i.e. every row in
-this step whose final check is "the app actually renders on GPU." Also
-affects anything downstream that assumes the live box's Kokoro/qwen-tts GPU
-path currently works.
+**Blast radius:** blocked the "Kokoro reports `CUDAExecutionProvider`" success
+criterion for A39, A40, and (indirectly, on re-check) A41 — every row in
+this step whose final check is "the app actually renders on GPU."
 
-**Decision owed (more than one defensible fix, naming both per the campaign
-rule):**
-1. Add the CUDA 13 / cuDNN 9 runtime as pip-installable packages to
-   `server/tts-sidecar/requirements/nvidia-cuda.txt` (the `nvidia-cublas-cu13`
-   / `nvidia-cudnn-cu9`-shaped packages onnxruntime-gpu 1.27 expects), so the
-   venv is self-contained and doesn't depend on the box's system CUDA
-   toolkit version at all — the wheel-swap architecture's whole point per
-   `install-ort.mjs`'s own comments.
-2. Re-pin `ONNXRUNTIME_GPU_CONSTRAINT` to a version of `onnxruntime-gpu`
-   built against CUDA 12.x, matching what's actually installed
-   system-wide on this box today.
-3. Upgrade the box's system CUDA toolkit to 13.x (operator action outside
-   this agent's scope; box-safety rules don't cover system package installs
-   and this box is shared with other live agent lanes).
-
-Not filing a fix myself — out of scope per the issue ("simple bugs are
-routed to a fix, not filed and deferred... do not widen your own diff to fix
-it").
+**Resolution:** PR #2576 fixed this by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT`
+to `>=1.26,<1.27` (option 2: CUDA-12 line instead of CUDA-13). The decision
+was made and committed 2026-08-21; A39, A40 rows remain STILL OWED (actual
+acceptance runs against the fixed pin have not yet been performed), but they
+are no longer blocked on an undecided constraint.
 
 ## Second defect to route — A41's manufacture recipe doesn't exercise the code path it names
 

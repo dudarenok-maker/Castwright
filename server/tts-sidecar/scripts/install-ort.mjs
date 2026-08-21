@@ -197,12 +197,21 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
-// install date — this dev box validated 1.27.0, a fresh install today lands
-// 1.28.0, and nobody chose that drift on purpose. Floor-plus-cap on the MINOR
-// line rather than an exact `==` so a same-line patch release (a security fix)
-// still flows without a code change; only crossing the minor boundary needs a
-// deliberate bump of this constant (bump the runtime and this pin together,
-// once 1.28 is desk-validated — never bump one without the other).
+// install date. Re-pinned 2026-08-21 (#2534 side-chain) to the newest
+// CUDA-12-built line. Validated on this dev box: 1.26.0 constructs a working
+// CUDAExecutionProvider InferenceSession against CUDA 12.4 + cuDNN 9 (cuDNN
+// ships in the runtime venv via torch) and computes correctly. onnxruntime-gpu
+// 1.27+ moved its default build to CUDA 13.x (cublasLt64_13.dll), incompatible
+// with the shipped torch/torchaudio cu128 pin. The pin deliberately holds the
+// runtime on the last CUDA-12 line to keep the stack CUDA-12-compatible.
+// Floor-plus-cap on the MINOR line rather than an exact `==` so a same-line
+// patch release (a security fix) still flows without a code change; only
+// crossing the minor boundary needs a deliberate bump of this constant. Bump
+// the runtime and this pin together: the constraint can only move to a
+// CUDA-13-built onnxruntime-gpu line once the shipped torch/torchaudio pins in
+// requirements/nvidia-cuda.txt move to a CUDA-13 wheel (e.g., a future cu13x
+// index). Until then, the shipped venv remains CUDA-12-by-construction regardless
+// of what CUDA toolkit is installed system-wide — never bump one without the other.
 // This is the ONLY place the constraint can live: it must NOT move into
 // requirements/*.txt, because onnxruntime-gpu can never appear there AT ALL —
 // those overlays are also read on macOS (no onnxruntime-gpu wheel exists for
@@ -211,7 +220,7 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // `onnxruntime-gpu` line never lands there and aborts `pip install` on that
 // platform. The swap in this file is reached only for the nvidia profile
 // (win/linux), so pinning it here never touches the mac path.
-const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.27,<1.28';
+const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.26,<1.27';
 
 /**
  * Apply the onnxruntime-gpu version constraint to an ortPackage name for the

@@ -1233,7 +1233,12 @@ separate run sheet (the ticket body plus the paired tests are the spec).
   `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
 - **Observe the two user-facing surfaces.** Model Manager's
   Kokoro card must offer **Repair** (not "install", and not a silent healthy row —
-  `installState: 'package-missing'` off a `true` find_spec is the tell), and the
+  `installState: 'package-broken'` off a `true` find_spec is the tell). (PR #2579
+  changed this cell's expected `installState` from `'package-missing'` to
+  `'package-broken'` — a fifth, dedicated value that now distinguishes a
+  present-but-unimportable package from a genuinely missing one; a runner
+  still checking for `'package-missing'` here would be testing against a
+  now-superseded expectation.) The
   Admin console's **Voice engine** row (`GET /api/diagnostics`, rendered at
   `src/views/admin.tsx:232` — this row is the *only* surface that shows this exact
   string; the Setup checker's copy comes from a different endpoint, checked
@@ -1346,14 +1351,16 @@ alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
 > genuinely installed, so there was no "Coqui absent" state to observe
 > without a further venv mutation). Full evidence:
 > `docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md`.
-> A related defect was found and routed, not fixed here: `GET
-> /api/models/inventory`'s `installState` cannot itself distinguish
+> A related defect was found and routed, not fixed here at the time: `GET
+> /api/models/inventory`'s `installState` could not itself distinguish
 > "broken" from "missing" (`pkgUsable = importOk ?? pkgInstalled(...)`
-> short-circuits on a real `false`) — not user-facing today because the
+> short-circuits on a real `false`) — not user-facing at the time because the
 > actual Repair/Install button reads the finer `models-status.ts` endpoint
 > instead, but worth a decision on widening the coarser endpoint too. Filed
-> as [#2533](https://github.com/dudarenok-maker/Castwright/issues/2533)
-> (see #2533).
+> as [#2533](https://github.com/dudarenok-maker/Castwright/issues/2533) and
+> resolved by PR #2579, which took option 1: `installState` gained a fifth
+> value, `'package-broken'`, so the inventory endpoint now distinguishes
+> broken from missing on its own.
 
 ---
 
@@ -2308,22 +2315,20 @@ exercises `installForProfile`'s write branch on a first-ever install.
 scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-> **Wave-3 step 2, 2026-08-20 — STILL OWED.** Ran a genuine from-scratch
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, blocker now fixed.** Ran a genuine from-scratch
 > `bootstrap-venv.mjs` on the nvidia profile against a throwaway venv (live
 > venv untouched, byte-verified). Marker present at the correct version
 > (`INSTALLER: castwright-ort-marker`) and `pip check` exit 0 — both
 > **DISCHARGED**. The third check — Kokoro reporting `CUDAExecutionProvider`
 > — **failed**: `get_available_providers()` lists it, but constructing an
 > inference session with it errors (`Error 126`) and silently falls back to
-> CPU. Root cause is a box-level gap, not this row's own code: this box has
-> only CUDA 12.4 system-wide while `onnxruntime-gpu` 1.27 needs CUDA 13.x/
-> cuDNN 9.x runtime libraries, reproduced identically against the live
-> sidecar venv (read-only). Blocks the same GPU-provider check on A40 and
-> (on re-check) A41. Full evidence, decision options for the fix (repin
-> onnxruntime-gpu vs. vendor CUDA13 wheels vs. upgrade the box):
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
-> [#2534](https://github.com/dudarenok-maker/Castwright/issues/2534)
-> (see #2534).
+> CPU. Root cause was a box-level gap: this box has only CUDA 12.4 system-wide
+> while `onnxruntime-gpu` 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries.
+> This blocking dependency is now resolved by PR #2576, which re-pinned
+> `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27` (CUDA-12 line). The row
+> remains STILL OWED because the acceptance test has not yet been re-run
+> against the fixed pin; see evidence doc
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 ### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
@@ -2345,13 +2350,15 @@ filed against, and it has not been separately re-confirmed since the fix landed
 §On-box acceptance item 2; run sheet §4 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs the full app
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run, blocker now fixed.** Needs the full app
 > running plus a real click-through of Model Manager → Qwen → Install
 > against a throwaway copy of the sidecar venv — scoped as its own session
-> rather than rushed alongside A39/A41 in the same heartbeat. Independent of
-> scheduling, this row's final check would hit the same CUDA13/cuDNN9 gap
-> A39 found, so even a full run today could not fully discharge it without
-> that dependency gap closed first. `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+> rather than rushed alongside A39/A41 in the same heartbeat. The blocker that
+> prevented full discharge (the CUDA13/cuDNN9 gap A39 found) is now resolved by
+> PR #2576, which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`
+> (CUDA-12 line). The row remains STILL OWED because neither the app-level test
+> nor the Kokoro GPU-provider check have been re-run against the fixed pin; see
+> evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 ### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
@@ -2841,6 +2848,18 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 > [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
 > (see #2536).
 
+> **Wave-4 step 7, 2026-08-21 — DISCHARGED, after #2536's fix (PR #2562)
+> merged.** Re-ran the same fixture against code including the fix
+> (Castwright#2570). `mairin`/`coalfall-dragon` still unchanged. **No new
+> near-duplicate formed, and the existing `brann-weir`/`brann-wire` +
+> `berrin-weir`/`berrin-wire` duplicate pair left by the 2026-08-20 run was
+> itself collapsed to one id apiece via `retireCharacterId`** — the fix
+> repaired the live defect, not just prevented a fresh one. Roster 16→14 (−2
+> from the consolidation, ±0 for a legitimate re-detection rename). Full
+> evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`; SHA
+> `88fe477a` (primary checkout HEAD at re-analysis time, confirmed ancestor of
+> the fix merge). **Row discharges — do not re-run.**
+
 ### B4 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
 
 `buildStage1ChapterInbox` never bound `name`/`aliases` to the book's script. `languagePreamble` already bound `tone`/`role`/`description`/`attributes` for a non-English book and still does — names were the one identifying field left free, and they drifted: *Ночной дозор*'s cast lists handed to stage-2 went from **0 of 75 Latin-named** (2026-08-06) to **42 of 71, 59%** (2026-08-13) across two runs of the same book with the same model weights and the same prompt; chapter 2 came back 15/15 Latin. A controlled 5× replay of the recorded stage-1 prompt reproduced 100% Latin 5/5 against the recorded response's 0/3.
@@ -2869,6 +2888,21 @@ If the run instead happens on a book whose language was never declared (imported
 > `docs/testing/onbox-wave3-results/step-5-group-b.md`. Same defect as B3,
 > filed as [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
 > (see #2536).
+
+> **Wave-4 step 7, 2026-08-21 — STILL OWED, new defect (not #2536), after
+> #2536's fix merged.** Re-ran the same fixture (Castwright#2570) against code
+> including PR #2562. Cyrillic-names and no-second-id criteria **passed**
+> (B3's near-duplicate pair was itself cleaned up this run — see B3 above).
+> **"Every id is ASCII kebab-case" FAILED again, for a different reason**: the
+> established id `oduvan` was retired IN FAVOUR OF a freshly-minted Cyrillic
+> id `одуван` (`cast-id-history.json`: `"oduvan": "одуван"` — backwards from
+> the direction three other retirements took in the same run). Not a
+> surname-drift case, not a `safeId`/transliteration bug (Cyrillic ids are
+> correct-by-design for genuinely new characters, plan 219) — the defect is
+> the retirement direction choice for an already-matched character. Filed as
+> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584). Full
+> evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`. **Row
+> stays owed.**
 
 ---
 
