@@ -194,7 +194,7 @@ describe('ensureOrtMarker', () => {
     expect(lines.some((line) => line.includes('skipped') && line.includes('not a directory'))).toBe(true);
   });
 
-  it('returns noop when no runtime exists and no marker is present (row 6)', () => {
+  it('returns noop when no runtime exists and no marker is present (row 8)', () => {
     const { root } = venv({ owner: 'none' });
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('noop');
