@@ -561,6 +561,46 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     // No retirements — none of the matches succeeded
     expect(retirements).toEqual([]);
   });
+
+  it('claim-once guard: exact match and tolerant match on same dropped row via different fresh keys (#2536)', () => {
+    // Second instance of the same bug class: a single dropped prior row can be
+    // BOTH the exact-match candidate for one fresh key AND the tolerant-match
+    // candidate for another fresh key. Example: prior "Brann" (voiced),
+    // fresh "Brann" (exact match via dropMatchCandidateByName) and "Brann Weir"
+    // (tolerant match via tolerantCandidateByName for the surname-tolerant path).
+    // Without the cross-map collision guard, both fresh rows would claim the
+    // same prior row — two retirements FROM the same id, first one lost.
+    // The fix: count each dropped row's id across BOTH exact and tolerant maps
+    // when building tolerantCandidateCount, so a tolerant entry gets deleted
+    // (falls through to id-only path) whenever its candidate is ALSO the
+    // exact-match candidate for some other key.
+    const existing: C[] = [
+      {
+        id: 'brann',
+        name: 'Brann',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-brann' } },
+        lines: 10,
+      },
+    ];
+    const fresh: C[] = [
+      { id: 'brann-a', name: 'Brann', lines: 12 } as C, // exact match
+      { id: 'brann-weir-b', name: 'Brann Weir', lines: 8 } as C, // tolerant match
+    ];
+    const { characters: merged, retirements } =
+      mergeAnalysisResultWithExistingCast(existing, fresh);
+    // After the fix: brann-a (exact match) inherits the voice and retires the
+    // prior row. brann-weir-b (tolerant match) is blocked by the cross-map
+    // guard because the exact candidate is also used, so it falls through to
+    // id-only path and does not inherit the voice.
+    expect(merged.map((c) => c.id)).toEqual(['brann-a', 'brann-weir-b']);
+    expect(merged.find((c) => c.id === 'brann-a')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-brann' },
+    });
+    expect(merged.find((c) => c.id === 'brann-weir-b')!.overrideTtsVoices).toBeUndefined();
+    // Exactly ONE retirement, FROM the prior row TO the exact-match fresh row
+    expect(retirements).toEqual([{ from: 'brann', to: 'brann-a' }]);
+  });
 });
 
 describe('overlayInterimCastForLiveView (srv-87, #2086)', () => {

@@ -341,7 +341,18 @@ function mergeCore<T extends { id: string }>(
   // same philosophy as the ambiguous-candidate branches above, just at row
   // granularity instead of key granularity. Drop the tolerant entries (fall
   // through to id-only path); dropMatchCandidateByName entries are never removed.
+  // A second instance of the same bug: a dropped row can be BOTH the exact-match
+  // candidate for one fresh key AND the tolerant-match candidate for another
+  // (e.g. prior "Brann" / fresh "Brann" exact + fresh "Brann Weir" tolerant).
+  // Count each dropped row's id across BOTH maps (but only exact matches that
+  // correspond to actual fresh keys), so a tolerant entry gets deleted when its
+  // candidate is also claimed by an exact-match fresh key.
   const tolerantCandidateCount = new Map<string, number>();
+  for (const [key, cand] of dropMatchCandidateByName) {
+    if (freshNameCounts.has(key)) { // Only count if a fresh row has this exact key
+      tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
+    }
+  }
   for (const cand of tolerantCandidateByName.values()) {
     tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
   }
