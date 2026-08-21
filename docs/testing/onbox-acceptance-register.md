@@ -1227,7 +1227,12 @@ separate run sheet (the ticket body plus the paired tests are the spec).
   `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
 - **Observe the two user-facing surfaces.** Model Manager's
   Kokoro card must offer **Repair** (not "install", and not a silent healthy row —
-  `installState: 'package-missing'` off a `true` find_spec is the tell), and the
+  `installState: 'package-broken'` off a `true` find_spec is the tell). (PR #2579
+  changed this cell's expected `installState` from `'package-missing'` to
+  `'package-broken'` — a fifth, dedicated value that now distinguishes a
+  present-but-unimportable package from a genuinely missing one; a runner
+  still checking for `'package-missing'` here would be testing against a
+  now-superseded expectation.) The
   Admin console's **Voice engine** row (`GET /api/diagnostics`, rendered at
   `src/views/admin.tsx:232` — this row is the *only* surface that shows this exact
   string; the Setup checker's copy comes from a different endpoint, checked
@@ -1340,14 +1345,16 @@ alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
 > genuinely installed, so there was no "Coqui absent" state to observe
 > without a further venv mutation). Full evidence:
 > `docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md`.
-> A related defect was found and routed, not fixed here: `GET
-> /api/models/inventory`'s `installState` cannot itself distinguish
+> A related defect was found and routed, not fixed here at the time: `GET
+> /api/models/inventory`'s `installState` could not itself distinguish
 > "broken" from "missing" (`pkgUsable = importOk ?? pkgInstalled(...)`
-> short-circuits on a real `false`) — not user-facing today because the
+> short-circuits on a real `false`) — not user-facing at the time because the
 > actual Repair/Install button reads the finer `models-status.ts` endpoint
 > instead, but worth a decision on widening the coarser endpoint too. Filed
-> as [#2533](https://github.com/dudarenok-maker/Castwright/issues/2533)
-> (see #2533).
+> as [#2533](https://github.com/dudarenok-maker/Castwright/issues/2533) and
+> resolved by PR #2579, which took option 1: `installState` gained a fifth
+> value, `'package-broken'`, so the inventory endpoint now distinguishes
+> broken from missing on its own.
 
 ---
 
