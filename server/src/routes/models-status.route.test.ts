@@ -226,4 +226,27 @@ describe('computeModelsStatus — kokoro/qwen import honesty (#1965)', () => {
 
     expect(s.engines.kokoro.packageBroken).toBe(false);
   });
+
+  /* #2533 — qwenPackageInstalled forwards undefined (not a coerced false) when
+     the wire omits qwen_package_installed and qwen isn't loaded (see the
+     sidecar-health.ts fix and its own regression test in
+     sidecar-health.test.ts's "qwenPackageInstalled (#2533)" describe block).
+     This proves the fix reaches all the way through this route's composition
+     into voice-engine-registry.ts's liveSpecPresent and classifyPackageFault's
+     fail-open rule: an old sidecar that has never sent this field must not
+     read as a confirmed-missing qwen package. */
+  it('qwen_package_installed omitted from the wire, qwen not loaded → stays unfaulted (fail-open, not a false "missing")', async () => {
+    probeSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      kokoroLoaded: false,
+      kokoroPackageInstalled: true,
+      qwenLoaded: false,
+      // qwenPackageInstalled deliberately omitted — the pre-#1965 sidecar shape.
+    });
+
+    const s = await computeModelsStatus('/repo');
+
+    expect(s.engines.qwen.packageFault).toBe('ok');
+    expect(s.engines.qwen.packageBroken).toBe(false);
+  });
 });

@@ -49,16 +49,24 @@ export interface EngineProbe {
     own call site — see that module's `EngineStatus.state` doc for why it stays
     disk-only/coarse) gets a return type that PROVABLY excludes 'package-broken',
     with no cast: the first overload's parameter type intersects `Omit<EngineProbe,
-    'packageFault'>` with `{ packageFault?: never }`, so ANY value assigned to
-    that key — not just an inline object literal, but a variable or a spread
-    carrying a real `packageFault` too — is rejected by that overload. (An Omit
-    alone only trips TypeScript's excess-property check against an inline
-    literal; a probe built as a `const` first and passed by reference compiles
-    clean against a bare Omit while still carrying `packageFault` at runtime —
-    see the `@ts-expect-error` regression test in engine-health.test.ts.) This is
-    what lets `EngineStatus.state` keep its narrower, openapi-documented 4-value
-    type (models-status.ts's `EngineStatusState`) without duplicating this
-    function. */
+    'packageFault'>` with `{ packageFault?: never }`, so a variable or a spread
+    whose *declared type* still carries a `packageFault` key is rejected by that
+    overload — but a value whose declared type has been narrowed to omit the key
+    (e.g. an explicit `Omit<EngineProbe, 'packageFault'>` annotation, or a generic
+    constrained to that shape) can still slip through even if the underlying value
+    carries `packageFault` at runtime; that residual gap is inherent to
+    TypeScript's structural typing and not further closeable here. No such
+    narrowing occurs anywhere in this tree today (models-status.ts:116 passes a
+    fresh literal with no `packageFault` key at all). (An Omit alone only trips
+    TypeScript's excess-property check against an inline literal; a probe built
+    as a `const` first and passed by reference compiles clean against a bare Omit
+    while still carrying `packageFault` at runtime — see the regression test
+    titled "a probe extracted into a variable must still resolve to the WIDE
+    overload" in engine-health.test.ts, which pins this at the type level via a
+    conditional-type assignment that fails `tsc` if the overload regresses, not
+    via `@ts-expect-error`.) This is what lets `EngineStatus.state` keep its
+    narrower, openapi-documented 4-value type (models-status.ts's
+    `EngineStatusState`) without duplicating this function. */
 export function deriveEngineHealth(
   _id: EngineId,
   p: Omit<EngineProbe, 'packageFault'> & { packageFault?: never },
