@@ -30,12 +30,15 @@ export function makeSecureUuid(): string {
       /* fall through to final fallback */
     }
   }
-  /* Fallback: combine timestamp + monotonic counter for uniqueness. */
+  /* Fallback: combine monotonic counter + timestamp for uniqueness.
+     Counter is placed FIRST (positions 0-7) to ensure any slice of the output
+     (e.g., .slice(0, 8) or .slice(0, 10)) captures it and remains unique
+     across rapid calls within the same millisecond. */
   fallbackCounter = (fallbackCounter + 1) % 0x100000000;
-  const timestamp = Date.now().toString(16).padStart(12, '0');
   const counter = fallbackCounter.toString(16).padStart(8, '0');
-  /* Combine and ensure we have at least 32 hex chars for a full UUID-like format */
-  const combined = (timestamp + counter + '0000000000000000').slice(0, 32);
+  const timestamp = Date.now().toString(16).padStart(12, '0');
+  /* Combine counter first, then timestamp, then padding for full UUID-like format */
+  const combined = (counter + timestamp + '0000000000000000').slice(0, 32);
   return [
     combined.slice(0, 8),
     combined.slice(8, 12),

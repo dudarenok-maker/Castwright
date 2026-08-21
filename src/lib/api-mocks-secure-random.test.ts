@@ -78,4 +78,39 @@ describe('Secure random functions produce valid mock id formats', () => {
     /* All 100 slugs should be unique */
     expect(slugs.size).toBe(100);
   });
+
+  it('sliced UUID ids (as used in actual api.ts callsites) are unique across rapid calls on fallback path', () => {
+    /* Stub crypto.randomUUID to force the fallback path with monotonic counter */
+    const originalRandomUUID = global.crypto.randomUUID;
+    const originalGetRandomValues = global.crypto.getRandomValues;
+
+    try {
+      /* Force fallback path by making randomUUID unavailable */
+      Object.defineProperty(global.crypto, 'randomUUID', { value: undefined, configurable: true });
+      Object.defineProperty(global.crypto, 'getRandomValues', { value: undefined, configurable: true });
+
+      /* Test all the actual slice patterns used in api.ts */
+      const patterns = [
+        { slice: 8, name: 'imp_' },
+        { slice: 8, name: 'mns_' },
+        { slice: 10, name: 'exp_' },
+        { slice: 8, name: 'cand-' },
+      ];
+
+      for (const pattern of patterns) {
+        const ids = new Set<string>();
+        for (let i = 0; i < 1000; i += 1) {
+          const sliced = makeSecureUuid().slice(0, pattern.slice);
+          ids.add(sliced);
+        }
+        /* All 1000 sliced IDs should be unique; if counter is not in the slice,
+           rapid calls within the same millisecond will collide */
+        expect(ids.size).toBe(1000, `Failed for slice(0, ${pattern.slice}) used in ${pattern.name} prefix`);
+      }
+    } finally {
+      /* Restore original crypto functions */
+      Object.defineProperty(global.crypto, 'randomUUID', { value: originalRandomUUID, configurable: true });
+      Object.defineProperty(global.crypto, 'getRandomValues', { value: originalGetRandomValues, configurable: true });
+    }
+  });
 });
