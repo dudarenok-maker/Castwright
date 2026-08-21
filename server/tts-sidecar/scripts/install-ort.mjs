@@ -318,7 +318,7 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       safeLog(
         '[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build\'s files ' +
           '(which own the namespace). This corrupts pip\'s dependency resolution — a landmine for the next ' +
-          'pip operation. GPU Kokoro is currently working, but the inconsistency must be repaired. ' +
+          'pip operation. The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
           'Refusing to write a marker that would certify this bad state. Repair with:\n' +
           '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
