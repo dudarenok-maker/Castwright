@@ -2744,6 +2744,18 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 > [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
 > (see #2536).
 
+> **Wave-4 step 7, 2026-08-21 — DISCHARGED, after #2536's fix (PR #2562)
+> merged.** Re-ran the same fixture against code including the fix
+> (Castwright#2570). `mairin`/`coalfall-dragon` still unchanged. **No new
+> near-duplicate formed, and the existing `brann-weir`/`brann-wire` +
+> `berrin-weir`/`berrin-wire` duplicate pair left by the 2026-08-20 run was
+> itself collapsed to one id apiece via `retireCharacterId`** — the fix
+> repaired the live defect, not just prevented a fresh one. Roster 16→14 (−2
+> from the consolidation, ±0 for a legitimate re-detection rename). Full
+> evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`; SHA
+> `88fe477a` (primary checkout HEAD at re-analysis time, confirmed ancestor of
+> the fix merge). **Row discharges — do not re-run.**
+
 ### B4 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
 
 `buildStage1ChapterInbox` never bound `name`/`aliases` to the book's script. `languagePreamble` already bound `tone`/`role`/`description`/`attributes` for a non-English book and still does — names were the one identifying field left free, and they drifted: *Ночной дозор*'s cast lists handed to stage-2 went from **0 of 75 Latin-named** (2026-08-06) to **42 of 71, 59%** (2026-08-13) across two runs of the same book with the same model weights and the same prompt; chapter 2 came back 15/15 Latin. A controlled 5× replay of the recorded stage-1 prompt reproduced 100% Latin 5/5 against the recorded response's 0/3.
@@ -2772,6 +2784,21 @@ If the run instead happens on a book whose language was never declared (imported
 > `docs/testing/onbox-wave3-results/step-5-group-b.md`. Same defect as B3,
 > filed as [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
 > (see #2536).
+
+> **Wave-4 step 7, 2026-08-21 — STILL OWED, new defect (not #2536), after
+> #2536's fix merged.** Re-ran the same fixture (Castwright#2570) against code
+> including PR #2562. Cyrillic-names and no-second-id criteria **passed**
+> (B3's near-duplicate pair was itself cleaned up this run — see B3 above).
+> **"Every id is ASCII kebab-case" FAILED again, for a different reason**: the
+> established id `oduvan` was retired IN FAVOUR OF a freshly-minted Cyrillic
+> id `одуван` (`cast-id-history.json`: `"oduvan": "одуван"` — backwards from
+> the direction three other retirements took in the same run). Not a
+> surname-drift case, not a `safeId`/transliteration bug (Cyrillic ids are
+> correct-by-design for genuinely new characters, plan 219) — the defect is
+> the retirement direction choice for an already-matched character. Filed as
+> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584). Full
+> evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`. **Row
+> stays owed.**
 
 ---
 
