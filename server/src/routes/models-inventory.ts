@@ -51,7 +51,7 @@ import {
   type EngineHealthState,
   type EngineTier,
 } from '../tts/engine-health.js';
-import { classifyPackageFault, type PackageFault } from '../tts/models-status.js';
+import { classifyPackageFault } from '../tts/models-status.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -77,13 +77,13 @@ export interface ModelInventoryItem {
   sizeBytes: number | null;
   diskPath: string | null;
   loaded: boolean;
+  /* #2533 — the 5th value, 'package-broken', distinguishes a package that is
+     genuinely MISSING from one that is present-but-BROKEN (fails to import),
+     via the same classifyPackageFault precedence rule models-status.ts uses
+     (a real returned import wins outright; missing wins over broken when
+     both axes agree the package is absent; unknown on both axes is never a
+     fault — see classifyPackageFault's own doc comment). */
   installState?: EngineHealthState;
-  /* packageFault — whether the package is genuinely MISSING vs present-but-
-     BROKEN, distinguished via the same classifyPackageFault precedence rule as
-     models-status.ts (missing wins over broken; a real returned import wins
-     outright; unknown on both axes is never a fault). installState above stays
-     the coarse disk/import composition and is NOT changed by this field. */
-  packageFault?: PackageFault;
   tier?: EngineTier;
   isDefaultEngine: boolean;
   /* Kokoro is the universal fallback engine — removing it breaks fallback for
@@ -173,6 +173,11 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sidecar.kokoroPackageInstalled,
       kokoroPackageInstalled(repoRoot),
     );
+    /* #2533 — fed the RAW sidecar signals (not pkgInstalled's disk-probe
+       composition, which would defeat classifyPackageFault's own fail-open
+       "unknown on both axes is never a fault" rule by resolving the unknown
+       to a Node disk-probe boolean before the classifier ever sees it). */
+    const packageFault = classifyPackageFault(sidecar.kokoroImportOk ?? undefined, sidecar.kokoroPackageInstalled);
     items.push({
       id: 'kokoro',
       kind: 'tts',
@@ -181,11 +186,7 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sizeBytes: weightsPresent ? kokoroSize.bytes : null,
       diskPath: kokoroWeightDir(repoRoot),
       loaded,
-      installState: deriveEngineHealth('kokoro', { packageInstalled, weightsPresent, loaded }).state,
-      packageFault: classifyPackageFault(
-        sidecar.kokoroImportOk ?? undefined,
-        pkgInstalled(sidecar.kokoroPackageInstalled, kokoroPackageInstalled(repoRoot)),
-      ),
+      installState: deriveEngineHealth('kokoro', { packageInstalled, weightsPresent, loaded, packageFault }).state,
       tier: engineTier('kokoro'),
       isDefaultEngine: resolvedTtsEngine === 'kokoro',
       isFallbackEngine: true,
@@ -195,6 +196,16 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
     });
   }
 
+  /* #2533 — the three qwen rows below (Base, VoiceDesign, Base 1.7B) all read
+     the same qwenImportOk/qwenPackageInstalled pair, so the disk probe and the
+     fault classification are hoisted once here instead of running three times
+     per request (PR #2579 review 🟡6). */
+  const qwenPackageOnDisk = qwenPackageInstalled(repoRoot);
+  const qwenPackageInstalledResolved = pkgUsable(sidecar.qwenImportOk, sidecar.qwenPackageInstalled, qwenPackageOnDisk);
+  /* Fed the RAW sidecar signals, not the disk-probe composition above — see
+     the kokoro row's comment for why. */
+  const qwenPackageFault = classifyPackageFault(sidecar.qwenImportOk ?? undefined, sidecar.qwenPackageInstalled);
+
   /* ── Qwen Base (TTS, bespoke per-character voices) ─────────────────── */
   const qwenBasePath = qwenBaseRepoDir();
   const qwenBaseSize = dirSizeBytes(qwenBasePath);
@@ -202,11 +213,6 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = qwenBasePresent;
     const loaded = sidecar.qwenLoaded === true;
-    const packageInstalled = pkgUsable(
-      sidecar.qwenImportOk,
-      sidecar.qwenPackageInstalled,
-      qwenPackageInstalled(repoRoot),
-    );
     items.push({
       id: 'qwen-base',
       kind: 'tts',
@@ -215,11 +221,12 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sizeBytes: weightsPresent ? qwenBaseSize.bytes : null,
       diskPath: qwenBasePath,
       loaded,
-      installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
-      packageFault: classifyPackageFault(
-        sidecar.qwenImportOk ?? undefined,
-        pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot)),
-      ),
+      installState: deriveEngineHealth('qwen', {
+        packageInstalled: qwenPackageInstalledResolved,
+        weightsPresent,
+        loaded,
+        packageFault: qwenPackageFault,
+      }).state,
       tier: engineTier('qwen'),
       isDefaultEngine: resolvedTtsEngine === 'qwen',
       isFallbackEngine: false,
@@ -236,11 +243,6 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = qwenDesignPresent;
     const loaded = false; /* Design model loads transiently and isn't surfaced on /health. */
-    const packageInstalled = pkgUsable(
-      sidecar.qwenImportOk,
-      sidecar.qwenPackageInstalled,
-      qwenPackageInstalled(repoRoot),
-    );
     items.push({
       id: 'qwen-design',
       kind: 'tts',
@@ -249,11 +251,12 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sizeBytes: weightsPresent ? qwenDesignSize.bytes : null,
       diskPath: qwenDesignPath,
       loaded,
-      installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
-      packageFault: classifyPackageFault(
-        sidecar.qwenImportOk ?? undefined,
-        pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot)),
-      ),
+      installState: deriveEngineHealth('qwen', {
+        packageInstalled: qwenPackageInstalledResolved,
+        weightsPresent,
+        loaded,
+        packageFault: qwenPackageFault,
+      }).state,
       tier: engineTier('qwen'),
       isDefaultEngine: false,
       isFallbackEngine: false,
@@ -270,11 +273,6 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = qwenBase17Present;
     const loaded = sidecar.qwenBase17Loaded === true;
-    const packageInstalled = pkgUsable(
-      sidecar.qwenImportOk,
-      sidecar.qwenPackageInstalled,
-      qwenPackageInstalled(repoRoot),
-    );
     items.push({
       id: 'qwen-base17',
       kind: 'tts',
@@ -283,11 +281,12 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sizeBytes: weightsPresent ? qwenBase17Size.bytes : null,
       diskPath: qwenBase17Path,
       loaded,
-      installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
-      packageFault: classifyPackageFault(
-        sidecar.qwenImportOk ?? undefined,
-        pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot)),
-      ),
+      installState: deriveEngineHealth('qwen', {
+        packageInstalled: qwenPackageInstalledResolved,
+        weightsPresent,
+        loaded,
+        packageFault: qwenPackageFault,
+      }).state,
       tier: engineTier('qwen'),
       isDefaultEngine: false,
       isFallbackEngine: false,
@@ -316,6 +315,8 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sidecar.coquiPackageInstalled,
       coquiPackageInstalled(repoRoot),
     );
+    /* #2533 — RAW sidecar signals, not the disk-probe composition above. */
+    const packageFault = classifyPackageFault(sidecar.coquiImportOk ?? undefined, sidecar.coquiPackageInstalled);
     items.push({
       id: 'coqui',
       kind: 'tts',
@@ -324,11 +325,7 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sizeBytes: weightsPresent ? coquiSize.bytes : null,
       diskPath: coquiPath,
       loaded,
-      installState: deriveEngineHealth('coqui', { packageInstalled, weightsPresent, loaded }).state,
-      packageFault: classifyPackageFault(
-        sidecar.coquiImportOk ?? undefined,
-        pkgInstalled(sidecar.coquiPackageInstalled, coquiPackageInstalled(repoRoot)),
-      ),
+      installState: deriveEngineHealth('coqui', { packageInstalled, weightsPresent, loaded, packageFault }).state,
       tier: engineTier('coqui'),
       isDefaultEngine: resolvedTtsEngine === 'coqui',
       isFallbackEngine: false,
@@ -350,6 +347,8 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sidecar.whisperPackageInstalled,
       fasterWhisperInstalled(repoRoot),
     );
+    /* #2533 — RAW sidecar signals, not the disk-probe composition above. */
+    const packageFault = classifyPackageFault(sidecar.whisperImportOk ?? undefined, sidecar.whisperPackageInstalled);
     items.push({
       id: 'whisper',
       kind: 'asr',
@@ -358,11 +357,7 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       sizeBytes: weightsPresent ? whisperSize.bytes : null,
       diskPath: whisperPath,
       loaded,
-      installState: deriveEngineHealth('whisper', { packageInstalled, weightsPresent, loaded }).state,
-      packageFault: classifyPackageFault(
-        sidecar.whisperImportOk ?? undefined,
-        pkgInstalled(sidecar.whisperPackageInstalled, fasterWhisperInstalled(repoRoot)),
-      ),
+      installState: deriveEngineHealth('whisper', { packageInstalled, weightsPresent, loaded, packageFault }).state,
       tier: engineTier('whisper'),
       isDefaultEngine: false,
       isFallbackEngine: false,

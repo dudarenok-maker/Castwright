@@ -270,17 +270,19 @@ describe('buildModelInventory', () => {
       writeFile(join(ttsHome, 'tts', XTTS_DIR, 'model.pth'), 4096);
     });
 
-    it('coqui_import_ok: false downgrades installState to package-missing even though find_spec (coquiPackageInstalled) says true', () => {
+    it('coqui_import_ok: false downgrades installState to package-broken even though find_spec (coquiPackageInstalled) says true', () => {
       /* THE DEFECT: before the fix, pkgInstalled() read coquiPackageInstalled
          (find_spec) alone, so a package that cannot actually import (#1944's
-         speechbrain lazy-proxy collision) reported installState: 'ready'. */
+         speechbrain lazy-proxy collision) reported installState: 'ready'.
+         #2533 — now asserts 'package-broken', the 5th value that distinguishes
+         this confirmed-broken case from a genuinely missing package. */
       const inv = buildModelInventory(
         baseDeps({
           sidecar: { ...reachableSidecar, coquiPackageInstalled: true, coquiImportOk: false },
         }),
       );
       const coqui = inv.items.find((i) => i.id === 'coqui')!;
-      expect(coqui.installState).toBe('package-missing');
+      expect(coqui.installState).toBe('package-broken');
     });
 
     it('coqui_import_ok: null falls back to coquiPackageInstalled — installState stays ready, unchanged from today', () => {
@@ -309,15 +311,20 @@ describe('buildModelInventory', () => {
        reading find_spec alone. All six now compose it through the same
        pkgUsable helper, so an engine whose package is present but genuinely
        unimportable (#1944) stops reporting 'ready'. Weights are installed in
-       each case so installState turns on packageInstalled alone. */
-    it('kokoro: kokoroImportOk false downgrades to package-missing despite find_spec true', () => {
+       each case so installState turns on packageInstalled alone.
+
+       #2533 — these three now assert 'package-broken', not 'package-missing':
+       a real failed import (importOk: false) alongside a CONFIRMED find_spec
+       true is precisely the case the new 5th installState value exists to
+       distinguish from a genuinely absent package. */
+    it('kokoro: kokoroImportOk false downgrades to package-broken despite find_spec true', () => {
       installKokoro();
       const inv = buildModelInventory(
         baseDeps({
           sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: true, kokoroImportOk: false },
         }),
       );
-      expect(inv.items.find((i) => i.id === 'kokoro')!.installState).toBe('package-missing');
+      expect(inv.items.find((i) => i.id === 'kokoro')!.installState).toBe('package-broken');
     });
 
     it('kokoro: kokoroImportOk null (the common value) falls back to find_spec — ready, unchanged', () => {
@@ -330,7 +337,7 @@ describe('buildModelInventory', () => {
       expect(inv.items.find((i) => i.id === 'kokoro')!.installState).toBe('ready');
     });
 
-    it('qwen: qwenImportOk false downgrades ALL THREE qwen rows despite find_spec true', () => {
+    it('qwen: qwenImportOk false downgrades ALL THREE qwen rows to package-broken despite find_spec true', () => {
       installQwenBase();
       installQwenBase17();
       installQwenDesign();
@@ -340,7 +347,7 @@ describe('buildModelInventory', () => {
         }),
       );
       for (const id of ['qwen-base', 'qwen-base17', 'qwen-design'])
-        expect(inv.items.find((i) => i.id === id)!.installState).toBe('package-missing');
+        expect(inv.items.find((i) => i.id === id)!.installState).toBe('package-broken');
     });
 
     it('qwen: qwenImportOk true outranks a find_spec false — a real import beats the probe', () => {
@@ -353,14 +360,14 @@ describe('buildModelInventory', () => {
       expect(inv.items.find((i) => i.id === 'qwen-base')!.installState).toBe('ready');
     });
 
-    it('whisper: whisperImportOk false downgrades to package-missing despite find_spec true', () => {
+    it('whisper: whisperImportOk false downgrades to package-broken despite find_spec true', () => {
       installWhisper();
       const inv = buildModelInventory(
         baseDeps({
           sidecar: { ...reachableSidecar, whisperPackageInstalled: true, whisperImportOk: false },
         }),
       );
-      expect(inv.items.find((i) => i.id === 'whisper')!.installState).toBe('package-missing');
+      expect(inv.items.find((i) => i.id === 'whisper')!.installState).toBe('package-broken');
     });
 
     it('whisper: sizes/paths the CONFIGURED qa.asr.model, not base (PR #2008 review, Major 1)', () => {
@@ -380,14 +387,15 @@ describe('buildModelInventory', () => {
     });
   });
 
-  describe('packageFault (#2533)', () => {
+  describe('installState package-missing vs package-broken (#2533)', () => {
     /* #2533 — a consumer must be able to tell "package genuinely missing" from
-       "package present but broken/unimportable". installState collapses both to
-       'package-missing' (see pkgUsable's `??`), so the new sibling field carries
-       the finer distinction via models-status's classifyPackageFault. installState
-       must stay EXACTLY as-is in every scenario. */
+       "package present but broken/unimportable" directly off installState — the
+       owner's chosen design (option 1 of the two named in the issue): a 5th
+       installState value, 'package-broken', folded into the SAME enum
+       models-status.ts's own classifyPackageFault already distinguishes, rather
+       than a separate sibling field (the PR #2579 approach this replaces). */
 
-    it('kokoro: package present but unimportable (import_ok false, package_installed true) → broken', () => {
+    it('kokoro: package present but unimportable (import_ok false, package_installed true) → package-broken', () => {
       installKokoro();
       const inv = buildModelInventory(
         baseDeps({
@@ -395,11 +403,10 @@ describe('buildModelInventory', () => {
         }),
       );
       const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
-      expect(kokoro.packageFault).toBe('broken');
-      expect(kokoro.installState).toBe('package-missing'); // unchanged — both still collapse
+      expect(kokoro.installState).toBe('package-broken');
     });
 
-    it('kokoro: package missing entirely (import_ok false, package_installed false) → missing', () => {
+    it('kokoro: package missing entirely (import_ok false, package_installed false) → package-missing', () => {
       installKokoro(); // weights present so installState turns on package-presence alone
       const inv = buildModelInventory(
         baseDeps({
@@ -407,11 +414,10 @@ describe('buildModelInventory', () => {
         }),
       );
       const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
-      expect(kokoro.packageFault).toBe('missing');
-      expect(kokoro.installState).toBe('package-missing'); // unchanged
+      expect(kokoro.installState).toBe('package-missing');
     });
 
-    it('kokoro: no recorded import + package on disk → no fault (ok)', () => {
+    it('kokoro: no recorded import + package on disk → ready, no fault', () => {
       installKokoro();
       // Simulate kokoro_onnx present in the sidecar venv so the Node probe is true.
       mkdirSync(join(repoRoot, 'server', 'tts-sidecar', '.venv', 'Lib', 'site-packages', 'kokoro_onnx'), {
@@ -423,11 +429,138 @@ describe('buildModelInventory', () => {
         }),
       );
       const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
-      expect(kokoro.packageFault).toBe('ok'); // unknown on both axes / nothing faulted → never a fault
-      expect(kokoro.installState).toBe('ready');
+      expect(kokoro.installState).toBe('ready'); // unchanged
     });
 
-    it('whisper: package present but unimportable (import_ok false, package_installed true) → broken', () => {
+    /* 🟠1 regression (PR #2579 review) — classifyPackageFault's second parameter
+       is `specPresent`, an unknown-CAPABLE axis. The defect: feeding it
+       pkgInstalled(...)'s disk-probe-composed boolean instead of the raw
+       sidecar.kokoroPackageInstalled manufactures an "agreement" (specPresent
+       === false) the sidecar itself never reported, which wrongly overrides a
+       real failed import into 'missing' instead of 'broken' — per
+       classifyPackageFault's own precedence rule, "missing" only wins when
+       specPresent is a CONFIRMED false, not merely "the Node disk probe
+       couldn't find it either" (the sidecar's own find_spec axis is unknown
+       here — kokoroPackageInstalled is left undefined below, and nothing on
+       disk makes the Node probe true, so the naive composed substitution would
+       resolve specPresent to false). A real failed import (importOk: false)
+       with the sidecar's OWN axis still unknown must classify as 'broken'. */
+    it('kokoro: real failed import + sidecar find_spec UNREPORTED (undefined), disk probe also empty → package-broken, not package-missing', () => {
+      installKokoro(); // weights present; nothing under .venv/Lib/site-packages, so the Node disk probe reads false
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: undefined, kokoroImportOk: false },
+        }),
+      );
+      const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
+      expect(kokoro.installState).toBe('package-broken');
+    });
+
+    /* Direct fail-open assertion (classifyPackageFault's own documented rule):
+       unknown on BOTH axes must never read as 'broken', even though the Node
+       disk probe (fed only to the coarse installState composition, never to
+       the fault classifier) says the package is absent. */
+    it('kokoro: unknown on both axes (sidecar down/silent) → never package-broken', () => {
+      installKokoro();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: undefined, kokoroImportOk: undefined },
+        }),
+      );
+      const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
+      expect(kokoro.installState).not.toBe('package-broken');
+      expect(kokoro.installState).toBe('package-missing'); // disk probe still drives the coarse composition
+    });
+
+    it('qwen-base: package present but unimportable → package-broken', () => {
+      installQwenBase();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenLoaded: false, qwenPackageInstalled: true, qwenImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'qwen-base')!;
+      expect(row.installState).toBe('package-broken');
+    });
+
+    it('qwen-base: package missing entirely → package-missing', () => {
+      installQwenBase();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenLoaded: false, qwenPackageInstalled: false, qwenImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'qwen-base')!;
+      expect(row.installState).toBe('package-missing');
+    });
+
+    it('qwen-base17: package present but unimportable → package-broken', () => {
+      installQwenBase17();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenBase17Loaded: false, qwenPackageInstalled: true, qwenImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'qwen-base17')!;
+      expect(row.installState).toBe('package-broken');
+    });
+
+    it('qwen-base17: package missing entirely → package-missing', () => {
+      installQwenBase17();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenBase17Loaded: false, qwenPackageInstalled: false, qwenImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'qwen-base17')!;
+      expect(row.installState).toBe('package-missing');
+    });
+
+    it('qwen-design: package present but unimportable → package-broken', () => {
+      installQwenDesign();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenPackageInstalled: true, qwenImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'qwen-design')!;
+      expect(row.installState).toBe('package-broken');
+    });
+
+    it('qwen-design: package missing entirely → package-missing', () => {
+      installQwenDesign();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenPackageInstalled: false, qwenImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'qwen-design')!;
+      expect(row.installState).toBe('package-missing');
+    });
+
+    it('coqui: package present but unimportable → package-broken', () => {
+      writeFile(join(ttsHome, 'tts', XTTS_DIR, 'model.pth'), 4096);
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, modelLoaded: false, coquiPackageInstalled: true, coquiImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'coqui')!;
+      expect(row.installState).toBe('package-broken');
+    });
+
+    it('coqui: package missing entirely → package-missing', () => {
+      writeFile(join(ttsHome, 'tts', XTTS_DIR, 'model.pth'), 4096);
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, modelLoaded: false, coquiPackageInstalled: false, coquiImportOk: false },
+        }),
+      );
+      const row = inv.items.find((i) => i.id === 'coqui')!;
+      expect(row.installState).toBe('package-missing');
+    });
+
+    it('whisper: package present but unimportable (import_ok false, package_installed true) → package-broken', () => {
       installWhisper();
       const inv = buildModelInventory(
         baseDeps({
@@ -435,11 +568,10 @@ describe('buildModelInventory', () => {
         }),
       );
       const whisper = inv.items.find((i) => i.id === 'whisper')!;
-      expect(whisper.packageFault).toBe('broken');
-      expect(whisper.installState).toBe('package-missing'); // unchanged
+      expect(whisper.installState).toBe('package-broken');
     });
 
-    it('whisper: package missing entirely (import_ok false, package_installed false) → missing', () => {
+    it('whisper: package missing entirely (import_ok false, package_installed false) → package-missing', () => {
       installWhisper();
       const inv = buildModelInventory(
         baseDeps({
@@ -447,8 +579,7 @@ describe('buildModelInventory', () => {
         }),
       );
       const whisper = inv.items.find((i) => i.id === 'whisper')!;
-      expect(whisper.packageFault).toBe('missing');
-      expect(whisper.installState).toBe('package-missing'); // unchanged
+      expect(whisper.installState).toBe('package-missing');
     });
   });
 

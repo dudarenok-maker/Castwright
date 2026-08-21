@@ -458,7 +458,17 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       qwenBase17Loaded: body.qwen_base17_loaded === true,
       qwenBase17WeightsPresent: body.qwen_base17_weights_present === true,
       qwenLoading: body.qwen_loading === true,
-      qwenPackageInstalled: qwenLoaded || body.qwen_package_installed === true,
+      /* #2533 — mirror the kokoro/coqui/whisper normalisation just below: an
+         absent wire field must forward undefined (unknown), not false, so
+         classifyPackageFault's fail-open rule ("unknown is never a fault")
+         still applies to qwen. The old `body.qwen_package_installed === true`
+         form coerced an absent key straight to false, which read as a
+         confident "package missing" for a qwen package that was actually
+         installed but simply unprobed. The `qwenLoaded ||` prefix is
+         unchanged: a loaded model still implies its package is present. */
+      qwenPackageInstalled:
+        qwenLoaded ||
+        (typeof body.qwen_package_installed === 'boolean' ? body.qwen_package_installed : undefined),
       qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,
       qwenInstallState: qwenInstallState,
       coquiPackageInstalled: typeof body.coqui_package_installed === 'boolean' ? body.coqui_package_installed : undefined,

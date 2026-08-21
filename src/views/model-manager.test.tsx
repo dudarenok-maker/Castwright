@@ -860,6 +860,39 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     expect(within(row).queryByRole('button', { name: /load model/i })).toBeNull();
   });
 
+  /* #2533 — whisper has no models-status entry (MODELS_STATUS_ENGINE_BY_ID
+     excludes it), so it's the row where installState is the ONLY signal —
+     the general-purpose consumer this 5th state exists for. Before this fix a
+     'package-broken' row (present:true, weights on disk) fell through
+     ResidencyBadge's checks to the plain "Installed" badge, silently reading
+     as fine even though the package can't import. */
+  it('package-broken row shows "Needs repair" and labels the installer "Repair", not "Installed"/"Update"', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'whisper',
+          kind: 'asr',
+          label: 'Whisper ASR (faster-whisper)',
+          present: true,
+          sizeBytes: 141_000_000,
+          diskPath: 'models/whisper',
+          loaded: false,
+          installState: 'package-broken',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-whisper');
+    expect(within(row).getByText(/needs repair/i)).toBeInTheDocument();
+    expect(within(row).queryByText(/^installed$/i)).toBeNull();
+    expect(within(row).getByTestId('model-install-toggle-whisper')).toHaveTextContent(/Repair/);
+  });
+
   /* #2010 (m1) — the everyday "package uninstalled, weights still on disk"
      cell: inventory's disk-only installState still says 'package-missing',
      but the live probe has confirmed the fault is 'missing' (never

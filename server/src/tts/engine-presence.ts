@@ -34,6 +34,16 @@ export function readinessSeverity(input: {
       return 'ok';
     case 'package-missing':
       return sidecarConfirmed ? 'block' : 'warn';
+    case 'package-broken':
+      /* #2533 — this state only arises from a CONFIRMED failed import
+         (classifyPackageFault('broken') requires a real importOk === false),
+         stronger evidence than 'package-missing' above (which can be a
+         disk-probe guess), so it's always a hard block regardless of
+         sidecarConfirmed. Unreachable via this function's current callers —
+         models-status.ts's own call site never passes packageFault into
+         deriveEngineHealth, so its EngineHealthState output stays 4-valued —
+         this case exists for exhaustiveness now that the union has 5 members. */
+      return 'block';
     case 'weights-missing':
       return 'warn';
     case 'not-installed':
