@@ -171,10 +171,21 @@ describe('ensureOrtMarker', () => {
         expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
       },
     },
+    {
+      name: 'catch block for corrupted venv (site-packages is a file)',
+      setup: () => {
+        const root = mkTmp('venv-');
+        mkdirSync(join(root, 'Lib'), { recursive: true });
+        writeFileSync(join(root, 'Lib', 'site-packages'), 'not a directory');
+        return { root, sp: '' };
+      },
+      expectedReturn: 'noop',
+      verify: (_sp: string) => undefined,
+    },
   ])('never throws even when the caller-supplied log itself throws ($name)', ({ setup, expectedReturn, verify }) => {
     // The safeLog wrapper inside ensureOrtMarker must catch and swallow throwing
-    // logs at every call site — including the clobbered, plain-deletion, and
-    // none-deletion branches. A throwing log must not defeat the "never throws"
+    // logs at every call site — including the clobbered, plain-deletion, none-deletion,
+    // and catch-block error-handler branches. A throwing log must not defeat the "never throws"
     // guarantee that ensureOrtMarker's callers (server startup) depend on.
     const { root, sp } = setup();
     const throwingLog = () => {
