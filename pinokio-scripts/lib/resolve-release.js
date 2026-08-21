@@ -81,7 +81,11 @@ async function resolveTag() {
     process.exit(2);
   }
   // fallback: highest local git tag
-  const tags = execFileSync('git', ['tag', '--list'], { encoding: 'utf8', env: scrubGitEnv() })
+  const tags = execFileSync('git', ['tag', '--list'], {
+    encoding: 'utf8',
+    env: scrubGitEnv(),
+    windowsHide: true,
+  })
     .split('\n')
     .map((t) => t.trim())
     .filter(Boolean);
@@ -95,10 +99,14 @@ async function resolveTag() {
 }
 
 async function main() {
-  execFileSync('git', ['fetch', '--tags', '--force'], { stdio: 'inherit', env: scrubGitEnv() });
+  execFileSync('git', ['fetch', '--tags', '--force'], {
+    stdio: 'inherit',
+    env: scrubGitEnv(),
+    windowsHide: true,
+  });
   const tag = await resolveTag();
   process.stderr.write(`[resolve-release] checking out ${tag}\n`);
-  execFileSync('git', ['checkout', tag], { stdio: 'inherit', env: scrubGitEnv() });
+  execFileSync('git', ['checkout', tag], { stdio: 'inherit', env: scrubGitEnv(), windowsHide: true });
   // Guard against a release that predates Pinokio support: git checkout to such a
   // tag would DELETE pinokio-scripts/ from the tree, breaking Start/Stop/Update.
   if (!existsSync('pinokio-scripts/start.js')) {

@@ -233,7 +233,7 @@ export function pickWorkflowRun(runs, { headSha, sinceMs, skewMs = 10000 }) {
 // inherits the fix" actually requires. Exported (like buildTagMessage /
 // createAnnotatedTag below) as a thin, directly-testable seam.
 export function execGit(args, options) {
-  return execFileSync('git', args, { ...options, env: scrubGitEnv(options?.env) });
+  return execFileSync('git', args, { windowsHide: true, ...options, env: scrubGitEnv(options?.env) });
 }
 
 function git(args, opts = {}) {
@@ -355,7 +355,7 @@ function refreshCodeStats() {
   }
   try {
     info('[STEP] refreshing code stats (brand/project-narrative.md) ...');
-    execFileSync('node', [codeStats, '--write'], { cwd: repoRoot, stdio: 'inherit' });
+    execFileSync('node', [codeStats, '--write'], { cwd: repoRoot, stdio: 'inherit', windowsHide: true });
   } catch {
     info(
       '[SKIP] code-stats refresh failed (tokei not installed?). Continuing — install tokei ' +

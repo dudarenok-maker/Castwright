@@ -28,7 +28,7 @@ if (invokedDirectly) {
   // npm on Windows needs shell:true (npm.cmd); powershell.exe is a real exe so
   // shell is false on Windows. On POSIX npm is a real exe too — no shell needed.
   const useShell = file === 'npm' && process.platform === 'win32';
-  const child = spawn(file, args, { stdio: 'inherit', cwd: repoRoot, shell: useShell });
+  const child = spawn(file, args, { stdio: 'inherit', cwd: repoRoot, shell: useShell, windowsHide: true });
   child.on('exit', (code) => process.exit(code ?? 0));
   child.on('error', (err) => {
     console.error('[start] failed to launch:', err.message);

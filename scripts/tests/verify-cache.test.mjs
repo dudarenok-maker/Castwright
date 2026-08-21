@@ -776,6 +776,58 @@ test('stepTouchedByDiff: a run-golden-tests stub module is in scope for test:scr
   );
 });
 
+// --- test:scripts entry-point widening (#2567 PR review, pass 1 finding 4) -
+// `npm run test:scripts` actually launches through scripts/run-powershell.mjs
+// (package.json), not scripts/tests/run.ps1 directly. Reverting that
+// extraFiles entry reddens this test.
+test('stepTouchedByDiff: scripts/run-powershell.mjs is in scope for test:scripts', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:scripts'], ['scripts/run-powershell.mjs']), true);
+});
+
+// --- test:server windowsHide-guard surface (#2567 PR review, pass 2 findings
+// 3 + 10) -------------------------------------------------------------------
+// spawn-windows-hide.test.ts (a server/src test) reads its EXTERNAL_FILES_FLOOR
+// list AND pipSpawners()'s dynamic scan (server/tts-sidecar/scripts/ + scripts/,
+// .mjs files only) as TEXT at RUNTIME — no module-graph edge to either tree.
+// Reverting the two globs added for this back to just 'server/src/**' reddens
+// these tests.
+test('stepTouchedByDiff: an arbitrary scripts/*.mjs file is in scope for test:server (EXTERNAL_FILES_FLOOR coverage)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['scripts/wt-new.mjs']), true);
+});
+
+test('stepTouchedByDiff: a pip-spawning install script is in scope for test:server (pipSpawners() coverage)', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], [
+      'server/tts-sidecar/scripts/bootstrap-venv.mjs',
+    ]),
+    true,
+  );
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], ['server/tts-sidecar/scripts/install-ort.mjs']),
+    true,
+  );
+});
+
+// --- test:server EXTERNAL_FILES_FLOOR entries outside both globs (#2567 PR
+// review, pass 2 finding 3) --------------------------------------------------
+// launch.mjs (bare root file), pinokio-scripts/lib/resolve-release.js, and
+// e2e/global-teardown.ts sit in trees this step has no other reason to watch.
+// Reverting any one of these three extraFiles entries reddens its own test.
+test('stepTouchedByDiff: launch.mjs is in scope for test:server', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['launch.mjs']), true);
+});
+
+test('stepTouchedByDiff: pinokio-scripts/lib/resolve-release.js is in scope for test:server', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], ['pinokio-scripts/lib/resolve-release.js']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: e2e/global-teardown.ts is in scope for test:server', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['e2e/global-teardown.ts']), true);
+});
+
 // --- test:hooks completeness guard (ops-18, #2115; transitive walk, ops-17c
 // follow-up #2120a) -----------------------------------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every

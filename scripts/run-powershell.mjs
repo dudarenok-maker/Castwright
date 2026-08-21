@@ -29,6 +29,7 @@ function which(cmd) {
   // on PATH. We don't need version output, only "does it resolve."
   const r = spawnSync(cmd, ['-NoProfile', '-Command', '$null'], {
     stdio: 'ignore',
+    windowsHide: true,
   });
   return r.error == null;
 }
@@ -49,7 +50,7 @@ if (!shell) {
 }
 
 const args = ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', scriptPath, ...rest];
-const result = spawnSync(shell, args, { stdio: 'inherit' });
+const result = spawnSync(shell, args, { stdio: 'inherit', windowsHide: true });
 if (result.error) {
   process.stderr.write(`run-powershell: failed to spawn ${shell}: ${result.error.message}\n`);
   process.exit(1);

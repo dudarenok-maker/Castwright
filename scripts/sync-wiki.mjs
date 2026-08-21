@@ -100,6 +100,7 @@ function cloneOrInitWikiRepo(cacheDir) {
   rmSync(cacheDir, { recursive: true, force: true });
   const clone = spawnSync('git', ['clone', WIKI_REMOTE, cacheDir], {
     encoding: 'utf8',
+    windowsHide: true,
     env: scrubGitEnv(),
   });
   if (clone.status === 0) return { fresh: false };

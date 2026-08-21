@@ -979,7 +979,7 @@ export function checkLiveView(
 // of erroring. See scripts/git-env.mjs's header for the full account.
 const GIT_TIMEOUT_MS = 15_000;
 function runGitCommand(args, cwd) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, env: scrubGitEnv() });
+  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, env: scrubGitEnv() });
 }
 
 // #2199 review round 2: fetches `origin/main` FRESH before reading it,

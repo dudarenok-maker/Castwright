@@ -35,7 +35,7 @@ function ffprobeSeconds(file) {
     const out = execFileSync(
       'ffprobe',
       ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nk=1:nw=1', file],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', windowsHide: true },
     )
     return parseFloat(out.trim())
   } catch {
@@ -48,7 +48,7 @@ function gpu() {
     const out = execFileSync(
       'nvidia-smi',
       ['--query-gpu=utilization.gpu,clocks.sm,power.draw,memory.used,memory.total', '--format=csv,noheader,nounits'],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', windowsHide: true },
     )
     const [util, clk, pwr, used, total] = out.trim().split(',').map((s) => s.trim())
     return `util ${util}% | sm ${clk}MHz | ${pwr}W | VRAM ${used}/${total}MiB`
