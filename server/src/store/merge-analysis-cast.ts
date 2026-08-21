@@ -331,6 +331,30 @@ function mergeCore<T extends { id: string }>(
       tolerantCandidateByName.set(key, matches[0]);
     }
   }
+
+  // Claim-once guard (#2536 review finding): a dropped row scanned against
+  // every unresolved fresh key can otherwise win MORE THAN ONE key — e.g. one
+  // dropped "Мэйрин" row tolerant-matching both "Мэйрин Уир" and "Мэйрин
+  // Коул" — which would push two retirements FROM the same id and silently
+  // lose the first one (retireCharacterId's supersededBy write is last-wins).
+  // A row claimed by more than one tolerant key is too risky to guess between —
+  // same philosophy as the ambiguous-candidate branches above, just at row
+  // granularity instead of key granularity. Drop the tolerant entries (fall
+  // through to id-only path); dropMatchCandidateByName entries are never removed.
+  const tolerantCandidateCount = new Map<string, number>();
+  for (const cand of tolerantCandidateByName.values()) {
+    tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
+  }
+  const keysToDelete: string[] = [];
+  for (const [key, cand] of tolerantCandidateByName) {
+    if ((tolerantCandidateCount.get(cand.id) ?? 0) > 1) {
+      keysToDelete.push(key);
+    }
+  }
+  for (const key of keysToDelete) {
+    tolerantCandidateByName.delete(key);
+  }
+
   const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
 
   const overlaid = fresh.map((f) => {
