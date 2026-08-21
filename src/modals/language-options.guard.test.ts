@@ -12,13 +12,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const MODALS_DIR = resolve(__dirname);                         // src/modals
-const SERVER_TTS_DIR = resolve(__dirname, '..', '..', '..', 'server', 'src', 'tts'); // server/src/tts
+const SERVER_TTS_DIR = resolve(__dirname, '..', '..', 'server', 'src', 'tts'); // server/src/tts
 
 const REGISTRY_PATH = resolve(SERVER_TTS_DIR, 'language-registry.ts');
 const META_PATH = resolve(MODALS_DIR, 'edit-book-meta.tsx');
