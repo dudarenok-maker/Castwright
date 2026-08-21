@@ -304,7 +304,7 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
    ```
    (Versions pinned for reproducibility — plain at 1.28.0, GPU at 1.27.0, so the
    two dist-info folder names are distinguishable by directory listing alone,
-   matching the unit test fixture; verified 2026-08-21, Castwright#2545.)
+   matching the unit test fixture; verified to reach `'clobbered'` in §8.4.)
 2. Confirm both `onnxruntime_gpu-1.27.0.dist-info` and a **real**
    `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty RECORD) coexist with
    **different version numbers** (this is the discriminating check — name-based
@@ -364,7 +364,7 @@ repair command itself works correctly when run directly.
 run. Live venv confirmed byte-unchanged before and after (see step-2 results
 file).
 
-> **Manufacture recipe corrected, 2026-08-21 — Castwright#2545.** The §8.1
+> **Manufacture recipe corrected, 2026-08-21 — as part of #2545 (task to address #2535, the defect). Verified in §8.4.** The §8.1
 > procedure above was replaced (plain-then-GPU) after the original GPU-then-plain
 > recipe was shown to reach `'deleted'`, not `'clobbered'`, in this 2026-08-20 run.
 > The corrected recipe was verified against the real `detectOrtOwner`/

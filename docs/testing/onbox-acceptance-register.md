@@ -2389,7 +2389,7 @@ design doc's §The three venv states).
   that `site-packages/onnxruntime/` holds the GPU build's files
   (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 
-> **Recipe corrected, 2026-08-21 — see [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545).**
+> **Recipe corrected, 2026-08-21 — as part of [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545) (task to address [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535), the defect). Verified in ort-marker-onbox-acceptance.md §8.4.**
 > The row's original recipe (`pip install --force-reinstall onnxruntime` over a
 > venv already holding `onnxruntime-gpu`) does NOT reach `'clobbered'`: it
 > overwrites `site-packages/onnxruntime/capi/build_and_package_info.py` to report
