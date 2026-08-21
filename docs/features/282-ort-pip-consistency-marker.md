@@ -164,11 +164,13 @@ self-heal path (see the invariant list above).
 
 ## Corrections vs. the design doc's original prose
 
-Multiple places where the shipped code behaves differently from (and, in the first three
+Multiple places where the shipped code behaves differently from (and, in the first two
 cases, more sensibly than) the spec's original description — recorded here so a future
-reader trusts the code over the spec text on these points. Entries 1–3 are deliberate
-implementation divergences from a spec that was itself sound; entry 4 below documents
-a factual correction to the design doc's own errors.
+reader trusts the code over the spec text on these points. Entries 1–2 are deliberate,
+more-sensible implementation divergences from a spec that was itself sound; entry 3 is
+a real divergence (not more sensible, just different) with a narrow, test-only exposure;
+entry 4 is a different kind of thing entirely — not an implementation divergence at all,
+but a factual correction to errors in the design doc's own prose.
 
 1. **`detectOrtOwner` has a third reachable fallback path the spec didn't name.** The
    spec describes two signals: the `build_and_package_info.py` `package_name` line, and
