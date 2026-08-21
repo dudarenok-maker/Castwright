@@ -113,11 +113,14 @@ Nothing else on disk changes.
 6. **`ensureOrtMarker` never uninstalls, downloads, or imports onnxruntime**, and never
    throws — it runs in `server/src/index.ts`'s `main()`, before `app.listen` (line 128),
    ahead of `enforceSingleSidecarOwner`'s possible `process.exit`.
-7. **A clobbered venv (real plain `onnxruntime` dist-info coexisting with `onnxruntime-gpu`
-   files in the namespace) is refused, never repaired by writing over it.** Writing a marker
-   there would stamp the GPU distribution's version onto the coexisting real dist-info, make
-   `pip check` report clean, and leave GPU Kokoro permanently dead with no path in this
-   design that ever fixes it. `ensureOrtMarker` logs the exact remedy command instead:
+7. **A clobbered venv (real plain `onnxruntime-*.dist-info` coexisting with GPU build's files
+   owning the namespace) is refused, never repaired by writing over it.** Writing a marker
+   there would corrupt pip's dependency bookkeeping (creating a stray, unaccounted-for
+   dist-info folder or overwriting the existing one's contents, depending on version pinning)
+   while the GPU build's files continue actually working. The real cost is that
+   `ensureOrtMarker`'s own book-keeping would then wrongly certify a clean state, hiding the
+   coexistence problem from any future pip operation that checks for it. `ensureOrtMarker`
+   logs the exact remedy command instead:
    `CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`.
 
 ### The five venv states `ensureOrtMarker` distinguishes
@@ -161,9 +164,11 @@ self-heal path (see the invariant list above).
 
 ## Corrections vs. the design doc's original prose
 
-Three places where the shipped code behaves differently from (and, in the first two
+Multiple places where the shipped code behaves differently from (and, in the first three
 cases, more sensibly than) the spec's original description — recorded here so a future
-reader trusts the code over the spec text on these points.
+reader trusts the code over the spec text on these points. Entries 1–3 are deliberate
+implementation divergences from a spec that was itself sound; entry 4 below documents
+a factual correction to the design doc's own errors.
 
 1. **`detectOrtOwner` has a third reachable fallback path the spec didn't name.** The
    spec describes two signals: the `build_and_package_info.py` `package_name` line, and
@@ -197,15 +202,17 @@ reader trusts the code over the spec text on these points.
    test-only: `installForProfile`'s one production caller (`runInstall`,
    `bootstrap-venv.mjs:327`) always passes a real `venvDir`, so a null only ever
    reaches this code from a test harness deliberately omitting it.
-4. **The design doc's five-state table mislabels the "Clobbered" row's "Files in the
-   namespace" column as CPU when it should be GPU.** The clobbered state is detected by
-   `ensureOrtMarker`'s condition `owner === 'swap' && realPlain.length > 0` (line 317 of
-   `install-ort.mjs`), which explicitly means the GPU build's files own the namespace
-   (`owner === 'swap'`) while a real plain dist-info is also present. The shipped code's
-   log message (lines 318–324) confirms: "The GPU build's files currently own the
-   namespace." The table row has been corrected from CPU to GPU; the surrounding prose
-   correctly describes the scenario (GPU dist-info survives, real plain dist-info present)
-   and does not repeat the error.
+4. **The design doc's original prose contained multiple backwards claims about GPU/CPU
+   file ownership in the clobbered state.** The spec incorrectly stated that writing a
+   marker over a clobbered box would "leave GPU Kokoro permanently dead." This was
+   false — in the clobbered state, GPU files own the namespace and GPU Kokoro is
+   actually working; the problem is the stray dist-info corrupting pip's bookkeeping.
+   The same error repeated in the design doc's table row and acceptance criterion 6,
+   mislabeling the clobbered box as having "CPU files in the namespace" when it should
+   be "GPU files." This correction to the design doc's own factual errors was applied
+   across three sites: the table row (line 224), the acceptance criterion prose (line
+   510), and the core consequence description (lines 252–254). The spec's surrounding
+   logic and mechanism remain sound; only the ownership direction was backwards.
 
 ## Test plan
 

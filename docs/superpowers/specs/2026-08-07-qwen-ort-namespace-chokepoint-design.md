@@ -249,14 +249,14 @@ separately or an implementer will conflate them:
   distribution" and then overwrite one.
 
 **`ensureOrtMarker` refuses to write when a real plain `onnxruntime-*.dist-info` exists.**
-That is the clobbered box, and writing a marker over it would stamp version 1.27.0 (read
-from the GPU dist) onto installed CPU 1.28.0 files, make `pip check` report clean, convince
-every future pip call the requirement is satisfied, and leave GPU Kokoro dead **with no path
-in this design that ever repairs it** — the delete branch is nvidia-excluded and the
-self-heal refuses. That converts a loud, self-repairing bug into a permanent, silent one:
-exactly the failure class this design exists to close. A clobbered box takes the loud path
-instead, and **the log must name the exact remedy**, not gesture at one — the only repair
-this design ships for that population is the hand-run CLI:
+That is the clobbered box, and writing a marker over it would corrupt pip's dependency bookkeeping
+(creating a stray, unaccounted-for dist-info folder or overwriting the existing one's contents,
+depending on version pinning) while the GPU build's files continue actually working. The real cost
+is that `ensureOrtMarker`'s own book-keeping would then wrongly certify a clean state, hiding the
+coexistence problem from any future pip operation that checks for it. This converts a loud,
+self-repairing bug into a permanent, silent one: exactly the failure class this design exists to
+close. A clobbered box takes the loud path instead, and **the log must name the exact remedy**,
+not gesture at one — the only repair this design ships for that population is the hand-run CLI:
 
 ```
 CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>
@@ -507,7 +507,7 @@ Every assertion is mutation-checked on its own line.
    reachable: a profile change returns `rebuild` → `needs-reinstall`, which exits without
    touching the venv. The live case is the AMD→ROCm-failure→CPU fallback inside a single
    `installForProfile` call, which is what the delete-at-entry ordering exists for.)
-6. **Clobbered box** — a venv with both dist-infos and CPU files in the namespace takes the
+6. **Clobbered box** — a venv with both dist-infos and GPU files in the namespace takes the
    loud path on boot: no marker written, the condition logged, the fix named. This is the
    population #2192 says is largest, and the state a wrong predicate would entomb.
 
