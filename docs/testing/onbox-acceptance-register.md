@@ -2442,11 +2442,10 @@ five-state table and "the clobbered box takes the loud path" in
 > [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
 > (see #2535).
 
-> **Wave-4 A41 re-run, 2026-08-21 — STILL OWED, but the filed defect is fixed
-> and verified.** Re-ran this row's own corrected recipe (see the 2026-08-21
-> note above) on a **fresh** throwaway venv (not the sidecar's own — no venv
-> under `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime
-> was confirmed unchanged before and after this run) against branch
+> **Wave-4 A41 re-run, 2026-08-21 — STILL OWED.** Re-ran this row's own recipe on a
+> **fresh** throwaway venv (not the sidecar's own — no venv under
+> `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime was
+> confirmed unchanged before and after this run) against branch
 > `fix/sidecar-2535-ort-marker-fix` at commit `5142039` (after merging latest
 > `origin/main`; the merge itself touched neither `install-ort.mjs` nor its
 > test). Manufactured plain-then-GPU, confirmed `detectOrtOwner === 'swap'`
@@ -2463,17 +2462,45 @@ five-state table and "the clobbered box takes the loud path" in
 > dist-infos (`findPlainOrtDistInfos.length === 0`), `pip check` clean. The
 > silent-`'deleted'` defect #2535 was filed against is gone: the loud
 > `'clobbered'` path fires exactly where wave-3 found it silent.
-> **Not independently re-confirmed:** Kokoro reporting `CUDAExecutionProvider`
+> **CRITICAL NOTE:** This wave-4 run was performed with the INCORRECT recipe
+> version (1.27.0/1.27.0 — both the same version, the same bug wave-3 exposed)
+> and therefore did NOT fully verify the fix against the intended manufactured
+> state where the two packages have different versions. The corrected recipe
+> verification with 1.28.0 plain and 1.27.0 GPU is in Wave-5 below.
+> Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by:
+> claude (Castwright#2569).
+
+> **Wave-5 A41 verification, 2026-08-21 — STILL OWED, but the filed defect is
+> fixed and verified.** Re-ran this row against the CORRECTED recipe (1.28.0
+> plain, 1.27.0 GPU) on a **fresh** throwaway venv to properly exercise the
+> fix against the intended manufactured state. **Pre-repair:** fresh venv with
+> correct versions; `detectOrtOwner === 'swap'` (GPU build's files own the
+> namespace); `findPlainOrtDistInfos.length === 1` (one real plain dist-info);
+> directory listing shows both `onnxruntime-1.28.0.dist-info` (real plain,
+> named by version) and `onnxruntime_gpu-1.27.0.dist-info` (GPU build) with
+> DIFFERENT version numbers — crucially different from wave-4's run which
+> showed both at 1.27.0. **ensureOrtMarker behavior:** returns `'clobbered'`
+> and logs the condition with remedy command. No marker written over the real
+> distribution (directory listing unchanged, `pip check` clean). **Repair:**
+> ran the named remedy command directly: uninstalled both packages, reinstalled
+> `onnxruntime-gpu==1.27.0` (`--no-deps`). Post-repair: `owner === 'swap'`;
+> `findPlainOrtDistInfos.length === 0` (stale real plain dist-info removed,
+> only marker remains); directory listing shows `onnxruntime-1.27.0.dist-info`
+> (marker written) and `onnxruntime_gpu-1.27.0.dist-info` (GPU build); `pip
+> check` clean. **Disposition:** ✓ PASS for the fix. The `'clobbered'` return
+> value fires exactly as intended against the correct manufactured state where
+> the two packages have different versions, the remedy command repairs the box
+> correctly, and the marker is written only after the swap succeeds. **Not
+> independently re-confirmed:** Kokoro reporting `CUDAExecutionProvider`
 > post-repair. `get_available_providers()` still lists it (as wave-3 also
 > saw), but constructing a real inference session was not re-attempted here —
 > this is the same box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`)
-> that already kept A39 STILL OWED for the identical reason with two of its
-> three checks passing, not a new gap introduced by this fix. Per that
+> that already kept A39 STILL OWED for the identical reason. Per that
 > precedent this row stays **STILL OWED** rather than DISCHARGED — the row's
-> own criteria include that check — but the population #2192 named as
-> largest-affected is no longer left in the silent failure mode. Evidence:
-> `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by: claude
-> (Castwright#2569).
+> own criteria include the CUDA-provider re-check — but the population #2192
+> named as largest-affected is no longer left in the silent failure mode.
+> Evidence: `docs/testing/ort-marker-onbox-acceptance.md` §8.5. Run by: claude
+> (Castwright#2578, wave-5, round-2 review correction).
 
 ### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 

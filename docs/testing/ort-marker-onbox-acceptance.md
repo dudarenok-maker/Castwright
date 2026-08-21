@@ -560,7 +560,7 @@ _(Update as each remaining criterion runs.)_
 - Criterion 6 — clobbered box (A41): **Run 2026-08-21 — STILL OWED.** The
   filed defect (#2535) is fixed and verified: the corrected recipe now
   exercises the `'clobbered'` branch correctly, the log line fires with the
-  remedy command, and the repair works (see §8.4 wave-4 results). The row
+  remedy command, and the repair works (see §8.5 verification). The row
   stays owed only for the CUDA-provider re-check, blocked by #2534.
 - Addition — in-app upgrade path (A42): owed — not run this session (needs a
   real packaged `release/` install); see wave-3 step-2 results file.

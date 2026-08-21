@@ -12,6 +12,11 @@ neither `install-ort.mjs` nor its test file).
 
 ## Manufacture recipe (per the row's own corrected §8.1 procedure)
 
+**CRITICAL NOTE:** This run uses the INCORRECT recipe version (1.27.0/1.27.0 —
+both the same version, the same bug wave-3 exposed). The corrected recipe
+verification with 1.28.0 plain and 1.27.0 GPU is documented separately
+(`docs/testing/ort-marker-onbox-acceptance.md` §8.5).
+
 Fresh throwaway venv (not a copy of the sidecar's own):
 
 ```powershell
