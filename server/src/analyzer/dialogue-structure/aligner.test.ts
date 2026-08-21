@@ -257,6 +257,54 @@ describe('locateSentenceOffsets (#1679)', () => {
     // "правда" or other accidental substrings.
   });
 });
+describe('locateSentenceOffsets with dashIsDialogueMarker = true (#2537/#2540)', () => {
+  it('with-dash and without-dash forms resolve to the identical offset near a long anchor', () => {
+    // The anchor sentence is well over ANCHOR_MIN_LEN, so it bounds the run.
+    // "— Спокойной ночи, друзья!" is the target sentence. A with-dash-cached
+    // and a without-dash-cached form of the same sentence must resolve to the
+    // identical offset when the gate is on.
+    const anchor = 'Это был очень длинный и сложный процесс, который никто не мог понять до конца.';
+    const body = `${anchor}\n— Спокойной ночи, друзья!`;
+
+    const offsetsWithDash = locateSentenceOffsets(
+      [{ text: '— Спокойной ночи, друзья!' }],
+      body, true,
+    );
+
+    const offsetsWithoutDash = locateSentenceOffsets(
+      [{ text: 'Спокойной ночи, друзья!' }],
+      body, true,
+    );
+
+    // Both should resolve to the identical offset — the dash-stripped needle
+    // extends back to include the leading dash, and the dash-included needle
+    // (stripped by buildDashInvariantNeedle) also extends back to the dash.
+    // Both land at the paragraph-leading dash position.
+    expect(offsetsWithDash[0]).toBe(offsetsWithoutDash[0]);
+    expect(offsetsWithDash[0]).toBe(body.indexOf('—'));
+  });
+
+  it('gate=false default preserves pristine pre-#2537 main behavior (no invariance)', () => {
+    // When dashIsDialogueMarker is false (default), the function must behave
+    // identically to pristine pre-#2537 main: plain needle, no extension.
+    const body = 'Начало. — Спокойной ночи, друзья!';
+
+    const offsetsWithDash = locateSentenceOffsets(
+      [{ text: '— Спокойной ночи,' }],
+      body,
+    );
+
+    const offsetsWithoutDash = locateSentenceOffsets(
+      [{ text: 'Спокойной ночи,' }],
+      body,
+    );
+
+    // Without the gate, the offsets differ: with-dash finds at the dash
+    // position, without-dash finds at the word position. No extension occurs.
+    expect(offsetsWithDash[0]).toBe(body.indexOf('—'));
+    expect(offsetsWithoutDash[0]).toBe(body.indexOf('Спокойной'));
+  });
+});
 
 /* #2187 — anchor-first, two-pass, interval-bounded alignment regression coverage.
    Root cause: the pre-fix single monotonic cursor + first-hit-then-unbounded-

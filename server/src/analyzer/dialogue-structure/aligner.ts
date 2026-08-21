@@ -375,12 +375,13 @@ export function alignSentences(
     advances any cursor, and a match can never land outside its run's
     bounding anchors, so one bad sentence can't desync the rest.
 
-    #2537/#2540 — dash-aware needle construction (identical to alignSentences):
-    keep the dash in needles from dash-led sentences (prevents false substring
-    matches), strip it for non-dash sentences. For dash-led sentences, extend
-    back to the paragraph-leading dash in the body to ensure consistent offsets
-    regardless of whether the cached text carries or omits its dash. Fuzzy
-    fallback is not used here, preserving the pre-#2187 contract.
+    #2537/#2540 — dash-invariant needle construction (gated):
+    When the gate is on, buildDashInvariantNeedle consumes the leading-dash run
+    so that a dash-stripped and dash-included form of the same sentence resolve
+    to the identical offset, and the backward-extension block enables
+    anchor-hardening past a leading-dash stack. When the gate is off, the needle
+    is plain normalized text with no backward extension, matching pristine
+    pre-#2537 main behavior.
 
     Unlike alignSentences this needs only the body (no ParagraphEvidence), so it
     runs on every chapter regardless of whether the dialogue-structure engine is
@@ -388,33 +389,27 @@ export function alignSentences(
 export function locateSentenceOffsets(
   sentences: Array<{ text: string }>,
   body: string,
+  dashIsDialogueMarker: boolean = false,
 ): Array<number | null> {
   const { text: normBody, rawStart } = buildNormalizedMap(body);
   // #2537/#2540 — dash-invariant needle search, matching alignSentences.
-  // Whether the cached sentence text includes or omits a leading paragraph dash
-  // must not change the offset we return. Same logic as alignSentences:
-  // keep the dash in needles from dash-led sentences (prevents false substring
-  // matches), strip it for non-dash sentences, and extend back to the
-  // paragraph-leading dash ONLY when the original text had the dash.
-  const normalizedTexts = sentences.map((s) => normalize(s.text));
-  const hadLeadingDash = normalizedTexts.map((t) => /^-\s*/.test(t));
-  const needles = normalizedTexts.map((t, i) => {
-    return hadLeadingDash[i] ? t : t.replace(/^-\s*/, '');
-  });
+  // When the gate is on, buildDashInvariantNeedle consumes the leading-dash run
+  // so that a dash-stripped and dash-included form of the same sentence resolve
+  // to the identical offset. When the gate is off, the needle is plain normalized
+  // text, matching pristine pre-#2537 main behavior.
+  const needles = sentences.map((s) => buildDashInvariantNeedle(normalize(s.text), dashIsDialogueMarker));
   const located = locateNeedles(needles, normBody, false);
 
   return located.map((m, i) => {
     if (m === null) return null;
 
     let rawMatchStart = rawStart[m.start];
-    // #2537/#2540 — for dash-invariance: when the original sentence text had
-    // a leading dash, try to extend back to include any paragraph-leading dash
-    // in the body. This makes "— Text" and "Text" resolve to the same offset:
-    // the former keeps the dash in the needle (finds at 0), while the latter
-    // finds the text and extends back to the dash (also 0). When the original
-    // did NOT have a dash, keep the offset at the text itself (no extension).
-    if (hadLeadingDash[i] && rawMatchStart > 0) {
-      const preceding = /([-–—])\s*$/.exec(body.slice(0, rawMatchStart));
+    // #2537/#2540 — when the gate is on, anchor backward over a stack of leading
+    // dash + optional whitespace so that a dash-stripped needle and a dash-included
+    // form resolve to the same rawMatchStart. When the gate is off, this block is
+    // skipped entirely, matching pristine pre-#2537 main behavior.
+    if (dashIsDialogueMarker && rawMatchStart > 0) {
+      const preceding = /(?:[-–—]\s*)+$/.exec(body.slice(0, rawMatchStart));
       if (preceding) {
         const beforeDash = body.slice(0, rawMatchStart - preceding[0].length);
         if (beforeDash === '' || /[\n\r]$/.test(beforeDash)) {
