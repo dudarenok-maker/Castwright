@@ -68,6 +68,8 @@ const LANGUAGE_OPTIONS: Array<{ code: string; label: string }> = [
   { code: 'es', label: 'Español' },
   { code: 'fr', label: 'Français' },
   { code: 'de', label: 'Deutsch' },
+  { code: 'zh', label: '中文' },
+  { code: 'ja', label: '日本語' },
 ];
 
 const GUARD_COPY: Record<LanguageGuardShape, { eyebrow: string; hint: string }> = {
