@@ -3553,6 +3553,15 @@ exists. *Criteria:* spec §On-box acceptance
 > §4. `docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md`.
 > Filed as [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
 > (see #2537).
+>
+> **2026-08-21 — Root-cause fix landed in PR #2577** (commits 40bee7ff..3053f5dd on
+> branch fix/server-2537-dash-invariant-align). Item (2), the dash-stripped
+> re-run invariance check, **remains owed** — the fix addresses the root cause
+> (`alignSentences` needle-search not dash-invariant) and new unit tests pass,
+> but on-box re-verification on the real workspace is still required to confirm
+> the 14-field divergence observed on `Ночной дозор` is actually closed. Paired
+> assertion in Task 9 — run twice, second time over scratch-path copies of each
+> cache with every leading dash stripped, diff every field of every row.
 
 ## Group F — a real Android device
 
