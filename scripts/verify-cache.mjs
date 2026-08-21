@@ -357,7 +357,25 @@ export const STEPS = [
   {
     name: 'test:server',
     inputs: {
-      globs: ['server/src/**'],
+      /* server/src/**: the primary surface. scripts/**\/*.{mjs,cjs,js} and
+         server/tts-sidecar/scripts/**\/*.mjs (#2567 review): spawn-windows-
+         hide.test.ts (a server/src test) reads BOTH of these trees as TEXT at
+         RUNTIME — its EXTERNAL_FILES_FLOOR list (hardcoded, so any file in
+         either tree could join it) plus pipSpawners() (which dynamically
+         scans server/tts-sidecar/scripts/ and scripts/ for pip-spawning
+         .mjs files, e.g. bootstrap-venv.mjs/install-ort.mjs/install-torch.mjs
+         — none of which are in the hardcoded floor). No module-graph edge
+         reaches either tree, so hand-listing individual files (the original
+         #2567 fix) needed a third manual sync every time the floor or
+         pipSpawners() picked up a new file — the same #1847 runtime-read trap
+         test:hooks' fixtures/** entry documents, just with a moving target on
+         top. A glob over both trees closes it structurally instead: it covers
+         the guard's whole scan surface (a superset of scripts/tests/**, which
+         is harmless — those files are already covered by test:hooks/
+         test:scripts, this just adds a redundant, safe extra invalidation)
+         without needing to track what's currently in EXTERNAL_FILES_FLOOR or
+         what pipSpawners() currently selects. */
+      globs: ['server/src/**', 'scripts/**/*.{mjs,cjs,js}', 'server/tts-sidecar/scripts/**/*.mjs'],
       /* openapi.yaml: voice-library.test.ts pins the clone-transcript cap
          against it (see the `test` step above for the same reasoning).
          ffmpeg-version-cases.json: diagnostics/ffmpeg.test.ts drives its
@@ -372,15 +390,11 @@ export const STEPS = [
          above — includeLockfiles below only special-cases the literal
          server/package-lock.json path, so a manifest-only server dependency
          edit invalidated nothing (verified against the live module).
-         The launch.mjs..ensure-python312.mjs block (#2567 review): every one
-         of spawn-windows-hide.test.ts's EXTERNAL_FILES_FLOOR entries is read
-         as TEXT at RUNTIME by that server/src test, not via a module-graph
-         edge — same #1847 runtime-read trap as test:hooks' fixtures/** entry
-         above, just undiscovered until the #2567 PR review widened the floor
-         and asked why the guard it was adding files to never re-ran locally
-         on a floor-file-only diff. Without these, an edit to any floor file
-         (exactly the shape that would (re)introduce a flashing console
-         window) prints test:server [cached] and the guard sits stale-green. */
+         launch.mjs, pinokio-scripts/lib/resolve-release.js, e2e/global-
+         teardown.ts (#2567 review): the rest of spawn-windows-hide.test.ts's
+         EXTERNAL_FILES_FLOOR that sit outside the two globs above — launch.mjs
+         is a bare root file, the other two live in trees this step has no
+         other reason to watch. */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
@@ -389,17 +403,8 @@ export const STEPS = [
         'scripts/repair-cast-id-drift.mjs',
         'server/package.json',
         'launch.mjs',
-        'scripts/start-app-prod.mjs',
-        'scripts/restart-after-upgrade.mjs',
-        'scripts/stop-app.mjs',
-        'scripts/run-sidecar-tests.mjs',
-        'server/tts-sidecar/scripts/install-whisper.mjs',
-        'server/tts-sidecar/scripts/install-qwen3.mjs',
-        'server/tts-sidecar/scripts/install-coqui.mjs',
-        'server/tts-sidecar/scripts/ensure-python312.mjs',
-        'scripts/run-powershell.mjs',
-        'scripts/verify-cache.mjs',
-        'scripts/check-import-cycles.mjs',
+        'pinokio-scripts/lib/resolve-release.js',
+        'e2e/global-teardown.ts',
       ],
       includeLockfiles: ['server'],
     },
