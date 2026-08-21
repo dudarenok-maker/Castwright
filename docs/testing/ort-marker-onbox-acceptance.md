@@ -99,6 +99,9 @@ not present anywhere on this box — the system CUDA toolkit is v12.4 only,
 and no pip-vendored CUDA 13 runtime packages are in requirements. Reproduced
 identically against the **live** sidecar venv (read-only, not modified) —
 this is an environment-wide defect, not specific to the throwaway venv.
+
+> **Superseded note (2026-08-21):** this run predates PR #2576, which resolved the blocking box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`. The criterion outcome recorded above is from 2026-08-20, before that resolution. The row is still OWED for re-run against the fixed pin.
+
 **Disposition:** STILL OWED — marker/pip-check mechanics pass, GPU provider
 check fails on a real dependency gap.
 **Run by:** claude (Castwright#2506, wave 3 step 2, fast-path claim).
@@ -355,8 +358,10 @@ and `onnxruntime-gpu` 1.27.0, reinstalled `onnxruntime-gpu==1.27.0`
 — introduced by this test's own earlier `pip install --force-reinstall
 onnxruntime` step pulling a newer numpy; not a repair defect.
 **Kokoro execution provider after repair:** not re-tested — blocked by the
-same CUDA13/cuDNN9 gap documented for A39; would report `CPUExecutionProvider`
+same CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap documented for A39; would report `CPUExecutionProvider`
 on this box regardless of marker/dist-info correctness.
+
+> **Superseded note (2026-08-21):** this run predates PR #2576, which resolved the blocking box-level CUDA/cuDNN gap by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`. The outcome recorded above is from a run before that fix. The row is still OWED for re-check of the repair command.
 **Disposition:** STILL OWED — the manufactured "clobbered" state (exactly as
 the row's own recipe describes) does not exercise the `'clobbered'` refuse-
 and-log branch at all; it exercises `'deleted'` instead, silently. The
@@ -571,7 +576,7 @@ release directory. `pip check` clean afterward; a forced failure leaves no marke
 _(Update as each remaining criterion runs.)_
 
 - Criterion 1 — fresh NVIDIA bootstrap (A39): **Run 2026-08-20 — STILL OWED.**
-  Marker/pip-check mechanics pass; GPU provider check fails (CUDA13/cuDNN9 gap).
+  Marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap). *Note: the blocking box-level CUDA gap was resolved by PR #2576 (re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); criterion re-check owed but not yet re-run.*
 - Criterion 2 — the reported bug, in-app Qwen3 install (A40): owed — not run
   this session (needs the full app + Model Manager UI); see wave-3 step-2
   results file.
