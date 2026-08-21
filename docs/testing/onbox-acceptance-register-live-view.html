@@ -796,7 +796,13 @@
       <div class="body">
         <p>Design doc criterion 6. <code>ensureOrtMarker</code>&#39;s refuse-and-log branch is fully unit-tested against synthetic fixtures but has never run against a <b>real</b> clobbered venv — a box where the GPU distribution&#39;s dist-info survives (pip uninstalls by name and never knew the two collided) while the actual files on disk are the CPU build. This is the population <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> itself names as largest.</p>
         <ul>
-          <li>Manufacture the state deliberately (destructive — do this on a copy, or plan to run the repair command after): with the sidecar stopped, <code>pip install --force-reinstall onnxruntime</code> (plain) into a venv that already has <code>onnxruntime-gpu</code>. Confirm both dist-infos exist and the namespace is CPU files.</li>
+          <li>Manufacture the state deliberately (destructive — do this on a copy, or plan to run the repair command after): with the sidecar stopped, install plain onnxruntime first and then force-reinstall the GPU build over it. Pip keys upgrade-detection on the package name, so installing a different distribution that shares the namespace does not replace the first, and the plain package's dist-info survives on disk:
+            <div style="margin: 0.5em 0; padding: 0.5em; background: #f5f5f5; border-left: 2px solid #999; font-family: monospace; font-size: 0.9em; overflow-x: auto;">
+              python -m venv &lt;venv&gt;<br>
+              &lt;venv&gt;\Scripts\pip install onnxruntime==1.27.0<br>
+              &lt;venv&gt;\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
+            </div>
+            Confirm both <code>onnxruntime_gpu-*.dist-info</code> and a real <code>onnxruntime-*.dist-info</code> (INSTALLER <code>pip</code>, non-empty RECORD) coexist, and that <code>site-packages/onnxruntime/</code> holds the GPU build's files.</li>
           <li>Boot the server. Expect <code>ensureOrtMarker</code> to return <code>'clobbered'</code>: a log line naming the condition and the exact remedy command, and <b>no</b> marker written over the real distribution.</li>
           <li>Run the named remedy command and confirm it actually repairs the box — swap re-runs, a legitimate marker is written, <code>pip check</code> clean, Kokoro reports <code>CUDAExecutionProvider</code> again.</li>
         </ul>
