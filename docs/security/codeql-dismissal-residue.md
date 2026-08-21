@@ -50,6 +50,29 @@ trim ReDoS — `text-match.ts` `normaliseForMatch` and `voice-sample-cache.ts`
 | `server/src/parsers/text.ts:140` (`FILENAME_RE`) | js/polynomial-redos | server-side filename-stem input; no parse-preserving linear rewrite (Node 20, no atomic groups); parse identity locked by characterization tests |
 | `server/src/parsers/text.ts:184` (`SERIES_FROM_TITLE_RE`) | js/polynomial-redos | server-side book-title input; same rationale |
 
+## `js/incomplete-multi-character-sanitization` — `htmlCellText` (for dismissal)
+
+Dismissed on **2026-08-21** as a provably inert fixpoint loop.
+
+The `htmlCellText` function in `scripts/check-onbox-register.mjs` runs a regex
+loop to remove HTML tags via the pattern `/<[^>]*>/g`. CodeQL flags this as
+potentially vulnerable to incomplete multi-character sanitization, implying a
+second pass could reveal new matches. However, the regex `/<[^>]*>/` is **already
+complete in a single global pass**: any surviving `<` in the input has no following
+`>`, and removing tags cannot manufacture a new `>` adjacent to a surviving `<`.
+Therefore, a second pass will never find a new match, and the fixpoint loop is
+provably redundant — though harmless.
+
+In contrast, `stripHtmlComments` (alert #218) has a genuine second-pass case: the
+pattern `<!--[\s\S]*?-->` (lazy match) can leave residue when removing a comment
+manufactures a new complete comment from the survivors (e.g., `<<!--x-->!--y-->`).
+The fixpoint loop for `stripHtmlComments` is load-bearing; the one for `htmlCellText`
+is not.
+
+| file:line | rule | justification |
+|---|---|---|
+| Alert #219, `scripts/check-onbox-register.mjs:366` (`htmlCellText`) | js/incomplete-multi-character-sanitization | regex `/<[^>]*>/g` is already complete in one pass; any surviving `<` has no matching `>`, and removing tags cannot create a new tag; the fixpoint loop is provably inert, kept for consistency with `stripHtmlComments` (#218) which DOES need fixpoint behaviour |
+
 ## `py/stack-trace-exposure` — sidecar curated exception echoes (for dismissal)
 
 Dismissed on **2026-08-18** as `false positive`. The GitHub dismissal comments
