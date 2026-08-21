@@ -345,8 +345,9 @@ function mergeCore<T extends { id: string }>(
   // candidate for one fresh key AND the tolerant-match candidate for another
   // (e.g. prior "Brann" / fresh "Brann" exact + fresh "Brann Weir" tolerant).
   // Count each dropped row's id only when it would actually be CONSUMED at the
-  // call site (lines 389-407 below). A candidate-map presence without actual
-  // consumption is a "phantom claim" that inflates counts and causes false-
+  // call site (the four gates inside the `if (nameFallback && !old) { ... }`
+  // block checking freshNameCounts, NARRATOR_CHARACTER_IDS, and isBlockedByNotLinked).
+  // A candidate-map presence without actual consumption is a "phantom claim" that inflates counts and causes false-
   // positive refusals: e.g. a dropped row's id is in a map under a key whose
   // fresh row already matches by id (gate 1 below fails), or whose fresh row
   // shares the name with >1 fresh row (gate 2), or whose pair is blocked by
@@ -364,7 +365,8 @@ function mergeCore<T extends { id: string }>(
     notLinkedToId(cand, f.id) ||
     notLinkedToId(f as unknown as Record<string, unknown>, cand.id);
   const consumable = (key: string, cand: CastRecord): boolean => {
-    // Mirror the exact four gates from the call site (lines 389-403).
+    // Mirror the exact four gates from the call site (not-already-id-matched,
+    // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
     if (freshNameCounts.get(key) !== 1) return false; // gate 2: must be exactly 1
     const f = freshByKey.get(key);
     if (!f) return false; // gate 2: must exist
