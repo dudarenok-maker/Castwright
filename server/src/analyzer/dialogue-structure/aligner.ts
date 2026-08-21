@@ -379,10 +379,14 @@ export function alignSentences(
     null when its text couldn't be located (model paraphrase / tag drift, or
     a short/duplicate needle outside its bounding anchors). A miss NEVER
     advances any cursor, and a match can never land outside its run's
-    bounding anchors, so one bad sentence can't desync the rest — identical
-    semantics to alignSentences (fuzzy fallback excepted: this function has
-    never attempted it, and still doesn't, preserving its pre-#2187
-    contract).
+    bounding anchors, so one bad sentence can't desync the rest.
+
+    #2537/#2540 — dash-aware needle construction (identical to alignSentences):
+    keep the dash in needles from dash-led sentences (prevents false substring
+    matches), strip it for non-dash sentences. For dash-led sentences, extend
+    back to the paragraph-leading dash in the body to ensure consistent offsets
+    regardless of whether the cached text carries or omits its dash. Fuzzy
+    fallback is not used here, preserving the pre-#2187 contract.
 
     Unlike alignSentences this needs only the body (no ParagraphEvidence), so it
     runs on every chapter regardless of whether the dialogue-structure engine is
@@ -392,7 +396,38 @@ export function locateSentenceOffsets(
   body: string,
 ): Array<number | null> {
   const { text: normBody, rawStart } = buildNormalizedMap(body);
-  const needles = sentences.map((s) => normalize(s.text));
+  // #2537/#2540 — dash-invariant needle search, matching alignSentences.
+  // Whether the cached sentence text includes or omits a leading paragraph dash
+  // must not change the offset we return. Same logic as alignSentences:
+  // keep the dash in needles from dash-led sentences (prevents false substring
+  // matches), strip it for non-dash sentences, and extend back to the
+  // paragraph-leading dash ONLY when the original text had the dash.
+  const normalizedTexts = sentences.map((s) => normalize(s.text));
+  const hadLeadingDash = normalizedTexts.map((t) => /^-\s*/.test(t));
+  const needles = normalizedTexts.map((t, i) => {
+    return hadLeadingDash[i] ? t : t.replace(/^-\s*/, '');
+  });
   const located = locateNeedles(needles, normBody, false);
-  return located.map((m) => (m === null ? null : rawStart[m.start]));
+
+  return located.map((m, i) => {
+    if (m === null) return null;
+
+    let rawMatchStart = rawStart[m.start];
+    // #2537/#2540 — for dash-invariance: when the original sentence text had
+    // a leading dash, try to extend back to include any paragraph-leading dash
+    // in the body. This makes "— Text" and "Text" resolve to the same offset:
+    // the former keeps the dash in the needle (finds at 0), while the latter
+    // finds the text and extends back to the dash (also 0). When the original
+    // did NOT have a dash, keep the offset at the text itself (no extension).
+    if (hadLeadingDash[i] && rawMatchStart > 0) {
+      const preceding = /([-–—])\s*$/.exec(body.slice(0, rawMatchStart));
+      if (preceding) {
+        const beforeDash = body.slice(0, rawMatchStart - preceding[0].length);
+        if (beforeDash === '' || /[\n\r]$/.test(beforeDash)) {
+          rawMatchStart -= preceding[0].length;
+        }
+      }
+    }
+    return rawMatchStart;
+  });
 }

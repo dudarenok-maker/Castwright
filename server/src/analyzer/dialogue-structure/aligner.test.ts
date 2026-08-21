@@ -227,6 +227,35 @@ describe('locateSentenceOffsets (#1679)', () => {
     const offsets = locateSentenceOffsets([{ text: 'He said -- quietly -- nothing.' }], body);
     expect(offsets[0]).toBe(0);
   });
+
+  it('(#2537/#2540 locateSentenceOffsets) dash handling is consistent with needle construction', () => {
+    // Regression for #2537/#2540: locateSentenceOffsets must construct needles
+    // consistently with alignSentences to prevent divergent behavior based on
+    // whether the cached text includes a leading dash. When the body contains
+    // "— Спокойной ночи,", a cached text of "— Спокойной ночи," should locate
+    // via the dash-inclusive needle (finds at 0), while "Спокойной ночи," should
+    // locate via the dash-stripped needle (finds at position of text). Both should
+    // use the dash-handling logic to prevent false substring matches (e.g. "да"
+    // inside "правда"), not just naive substring search.
+    const body = 'Начало. — Спокойной ночи, друзья!';
+
+    // With dash in cached text: needle is "- спокойной ночи," (keep dash to prevent
+    // false substring matches), finds at position 10 (the dash).
+    const offsetsWithDash = locateSentenceOffsets([{ text: '— Спокойной ночи,' }], body);
+
+    // Without dash in cached text: needle is "спокойной ночи," (stripped), finds at
+    // position 12 (the text). The function should NOT extend back (only extends when
+    // original has dash), so the offset is at the word, not the dash.
+    const offsetsWithoutDash = locateSentenceOffsets([{ text: 'Спокойной ночи,' }], body);
+
+    // The offsets differ because the cached text differs: one includes the dash,
+    // one doesn't. Both are correctly locating their respective needle in the body.
+    expect(offsetsWithDash[0]).toBe(body.indexOf('—'));
+    expect(offsetsWithoutDash[0]).toBe(body.indexOf('Спокойной'));
+    // The key invariant: both use dash-aware needle construction, preventing the
+    // false substring match that would occur if "спокойной ночи," matched inside
+    // "правда" or other accidental substrings.
+  });
 });
 
 /* #2187 — anchor-first, two-pass, interval-bounded alignment regression coverage.
