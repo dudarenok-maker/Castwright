@@ -175,55 +175,78 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
   });
 
   describe('side-28 ORT pin re-stamp (issue #2534): venv with stale reqHash must reinstall', () => {
-    it('onnxruntime-gpu pin bump is invisible to reqHash without a requirements file change — the bug #2534 describes', () => {
-      // This test captures the regressed behavior: the ORT pin was changed in
-      // install-ort.mjs WITHOUT changing requirements/nvidia-cuda.txt, so reqHash
-      // stayed the same and decideVenvAction returned 'noop' for every existing
-      // venv, preventing the pin from ever taking effect. The fix is a comment
-      // line in nvidia-cuda.txt that marks the pin bump so the file's content
-      // (and reqHash) changes, forcing a reinstall (pip-in-place) on next run.
+    it('onnxruntime-gpu pin bump must be coupled to reqHash via requirements text change', async () => {
+      // Regression test for #2534: the ORT pin was changed in install-ort.mjs WITHOUT
+      // changing requirements/nvidia-cuda.txt, so reqHash stayed the same and
+      // decideVenvAction returned 'noop' for every existing venv, preventing the pin
+      // from ever taking effect. This test ties the on-disk constraint to the actual
+      // planner output, so a future pin bump CANNOT be committed without touching
+      // nvidia-cuda.txt's hashed text.
+
+      // @ts-expect-error — standalone install script ships no .d.ts.
+      const { planOrtSwap } = await import('../../tts-sidecar/scripts/install-ort.mjs');
+
       const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
       const currentNvidia = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
+      // Normalize line endings for robust matching across core.autocrlf settings.
+      const normalizedNvidia = currentNvidia.replace(/\r\n/g, '\n');
 
-      // Simulate the OLD state: nvidia-cuda.txt WITHOUT the side-28 pin bump comment.
-      // This is what was stamped in venvs built before the fix.
-      const markerComment =
-        '# NOTE: onnxruntime-gpu version constraint is in install-ort.mjs (ONNXRUNTIME_GPU_CONSTRAINT).\n' +
-        '# Re-pinned 2026-08-21 (#2534 side-chain) to the CUDA-12 line (1.26.x); existing venvs need a reqHash bump to force reinstall.\n\n';
-      const oldNvidiaContent = currentNvidia.replace(markerComment, '');
-      const hasCommentMarker = currentNvidia.includes('Re-pinned 2026-08-21 (#2534 side-chain)');
+      // Read the CURRENT constraint directly from the planner, not as a hand-typed literal.
+      // This forces any future pin bump in install-ort.mjs to update nvidia-cuda.txt,
+      // because the test will fail if the constraint string isn't present in the file.
+      const plan = planOrtSwap('nvidia', 'win32');
+      expect(plan.action).toBe('swap');
+      expect(plan.ortPackage).toBe('onnxruntime-gpu');
 
-      // The fix is a comment that explicitly marks where the pin was re-pinned.
-      // If the comment is absent, both contents should be identical (the bug is
-      // active). If the comment IS present, this test verifies the fix worked:
-      // the hash MUST differ so a stale stamp triggers pip-in-place.
-      if (!hasCommentMarker) {
-        // The fix has NOT been applied yet — both old and current should match.
-        // This proves the bug: the files are identical despite the pin change.
-        expect(oldNvidiaContent).toBe(currentNvidia);
-        const oldHash = computeReqHash([oldNvidiaContent, base]);
-        const currentHash = computeReqHash([currentNvidia, base]);
-        expect(oldHash).toBe(currentHash);
+      // Extract the version constraint from the install step. The format is
+      // 'onnxruntime-gpu>=X.Y,<X.Z'. Extract just the version numbers (e.g., "1.26" and "1.27").
+      const installStep = plan.steps[1];
+      expect(installStep[0]).toBe('install');
+      const packageSpec = installStep[installStep.length - 1]; // last arg is the package spec
+      expect(packageSpec).toMatch(/^onnxruntime-gpu>=[\d.]+,<[\d.]+$/);
 
-        // Demonstrate that without a hash change, existing venvs (with the old hash
-        // stamped) see 'noop' and skip the reinstall that would apply the new pin.
-        const required = resolveRequired(SIDECAR_DIR, 'nvidia');
-        const stamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
-        expect(decideVenvAction({ stamp, required })).toBe('noop');
-      } else {
-        // The fix HAS been applied — a comment in nvidia-cuda.txt marks the
-        // pin bump, changing the file's content.
-        expect(oldNvidiaContent).not.toBe(currentNvidia);
-        const oldHash = computeReqHash([oldNvidiaContent, base]);
-        const currentHash = computeReqHash([currentNvidia, base]);
-        expect(oldHash).not.toBe(currentHash);
+      // Extract version numbers from the constraint: >=1.26,<1.27 -> extract "1.26" and "1.27"
+      const versionMatch = packageSpec.match(/>=([^,]+),<(.+)$/);
+      expect(versionMatch).not.toBeNull();
+      const [, minVersion, maxVersion] = versionMatch!;
 
-        // Now a venv with the OLD hash (pre-fix) triggers pip-in-place,
-        // which re-runs the ORT swap with the new pin.
-        const required = resolveRequired(SIDECAR_DIR, 'nvidia');
-        const stamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
-        expect(decideVenvAction({ stamp, required })).toBe('pip-in-place');
-      }
+      // ORACLE 1: At least one version number from the constraint MUST be present in nvidia-cuda.txt.
+      // This ensures that if install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT changes,
+      // the file's content must change too, triggering a reqHash bump.
+      const hasVersionMarker = normalizedNvidia.includes(minVersion) || normalizedNvidia.includes(maxVersion);
+      expect(hasVersionMarker).toBe(true);
+
+      // ORACLE 2: Simulate a pre-fix venv (old state WITHOUT the marker comment).
+      // The marker spans two lines; remove both to simulate the bug state.
+      const markerStart = normalizedNvidia.indexOf('# NOTE: onnxruntime-gpu version constraint');
+      expect(markerStart).toBeGreaterThanOrEqual(0);
+
+      // Find the end of the marker block (the blank line after the second comment).
+      const markerEnd = normalizedNvidia.indexOf('\n\n', markerStart);
+      expect(markerEnd).toBeGreaterThanOrEqual(markerStart);
+
+      const oldNvidiaContent =
+        normalizedNvidia.substring(0, markerStart) +
+        normalizedNvidia.substring(markerEnd + 2); // +2 to skip the \n\n
+
+      // Verify the marker removal actually changed the content.
+      expect(oldNvidiaContent).not.toEqual(normalizedNvidia);
+
+      const oldHash = computeReqHash([oldNvidiaContent, base]);
+      const currentHash = computeReqHash([normalizedNvidia, base]);
+
+      // ORACLE 3: The hashes MUST differ (the marker comment must affect the hash).
+      expect(oldHash).not.toBe(currentHash);
+
+      // ORACLE 4: A venv with the old hash (pre-fix) MUST trigger pip-in-place,
+      // which re-runs the ORT swap with the new pin.
+      const required = resolveRequired(SIDECAR_DIR, 'nvidia');
+      const staleStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
+      expect(decideVenvAction({ stamp: staleStamp, required })).toBe('pip-in-place');
+
+      // ORACLE 5: A venv with the CURRENT hash should see 'noop' (no action needed).
+      const freshStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: currentHash };
+      expect(decideVenvAction({ stamp: freshStamp, required })).toBe('noop');
     });
   });
 });
