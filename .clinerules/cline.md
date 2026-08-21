@@ -162,6 +162,27 @@ before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
 vitest run can report far less wall-clock on an idle box, so treat these as the
 range, not a constant.
 
+**Copy the recipe below verbatim -- do not improvise your own inline variant.**
+It already avoids shell-quoting entirely by design: the commit message is
+written to a file with `[IO.File]::WriteAllText`, and the child script takes
+`$Dir`/`$Worktree` as `-File` parameters instead of having anything
+interpolated into a command string. A freelanced one-liner that rebuilds this
+by hand -- embedding `$variables` or escaped `\"` quotes inside a wrapped
+double-quoted command -- reintroduces exactly the quoting bug this recipe
+exists to avoid. On `Castwright#2520` a local-model run did this, hit
+`String is missing terminator` / `Missing type name after '['` /
+`Exception calling "Create" with "1" argument(s)` across four self-invented
+variants, spent its whole turn reasoning line-by-line about *why* each one
+broke, and died on the output-token cap with no commit, no push, and no
+receipt -- while the two-file edit it was committing was already correct.
+
+**If a command reports a parse error, do not diagnose it.** `missing
+terminator`, `Missing type name after '['`, and `Exception calling ... with
+... argument(s)` are ALL the same signal: stop after at most one sentence and
+re-run the recipe below character-for-character, rather than reasoning about
+PowerShell string-interpolation semantics in-context -- that reasoning is
+usually wrong anyway (as it was on #2520) and it is the expensive way to fail.
+
 Launch it detached and poll. Each poll returns instantly, so the cap stops
 mattering:
 
