@@ -271,10 +271,14 @@ describe('ensureOrtMarker', () => {
       verify: (_sp: string) => undefined,
     },
   ])('never throws even when the caller-supplied log itself throws ($name)', ({ setup, expectedReturn, verify }) => {
-    // The safeLog wrapper inside ensureOrtMarker must catch and swallow throwing
-    // logs at every call site — including the clobbered, wrote, plain-deletion, none-deletion,
-    // and catch-block error-handler branches. A throwing log must not defeat the "never throws"
-    // guarantee that ensureOrtMarker's callers (server startup) depend on.
+    // The safeLog wrapper inside ensureOrtMarker must catch and swallow throwing logs to
+    // prevent a throwing log from defeating the "never throws" guarantee that ensureOrtMarker's
+    // callers (server startup) depend on. This guarantee is load-bearing ONLY at the one
+    // catch-block error-handler site (install-ort.mjs:366), which sits outside ensureOrtMarker's
+    // own outer try/catch; the other four call sites (clobbered, wrote, plain-deletion,
+    // none-deletion) sit INSIDE the outer try/catch (:320/:365), so those branches never throw
+    // regardless of whether safeLog itself throws. The return-value assertion below (:286) is
+    // what catches a safeLog regression at all five sites.
     const { root, sp } = setup();
     const throwingLog = () => {
       throw new Error('log sink is down');
