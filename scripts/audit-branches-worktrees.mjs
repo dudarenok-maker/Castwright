@@ -16,6 +16,7 @@ function info(msg) { process.stdout.write(`${msg}\n`); }
 function listWorktrees() {
   const raw = execFileSync('git', ['worktree', 'list', '--porcelain'], {
     encoding: 'utf8',
+    windowsHide: true,
     env: scrubGitEnv(),
   });
   const entries = [];
@@ -35,6 +36,7 @@ function listWorktrees() {
 function listLocalBranches() {
   const raw = execFileSync('git', ['for-each-ref', '--format=%(refname:short) %(upstream:track)', 'refs/heads/'], {
     encoding: 'utf8',
+    windowsHide: true,
     env: scrubGitEnv(),
   });
   return raw.trim().split('\n').filter(Boolean).map((line) => {
@@ -45,7 +47,7 @@ function listLocalBranches() {
 
 function isMergedToMain(branch) {
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', branch, 'main'], { env: scrubGitEnv() });
+    execFileSync('git', ['merge-base', '--is-ancestor', branch, 'main'], { windowsHide: true, env: scrubGitEnv() });
     return true;
   } catch {
     return false;

@@ -236,6 +236,27 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 - [x] §§7.4-7.6 run — 2026-08-20, real local-Ollama re-analysis against the live workspace book, evidence above.
 - [x] Defects filed: **not filed as a GitHub issue by this step** (docs-only wave-3 step, per the campaign rule this is reported for a fix agent to pick up cold rather than fixed or filed here) — full detail recorded in `docs/testing/onbox-wave3-results/step-5-group-b.md` and above. Mechanism: `server/src/store/merge-analysis-cast.ts:205-206,282-284` (exact-name-match fallback has no tolerance for a name gaining/losing a trailing surname token between analyzer runs).
 
+> **Re-run, 2026-08-21 (Castwright#2570, wave-4 step 7) — after #2536's fix
+> (PR #2562) merged.** A second full re-analysis of the same fixture, against
+> code including the fix, confirmed both effects at once: no NEW
+> near-duplicate pair formed, and the ONE existing duplicate pair left by the
+> 2026-08-20 run above (`brann-weir`/`brann-wire`, `berrin-weir`/`berrin-wire`)
+> was itself retroactively collapsed to a single surviving id apiece via
+> `retireCharacterId` — live evidence the fix works, not just that it didn't
+> regress further. `mairin`/`coalfall-dragon` remain unchanged. **B3's
+> criteria are now met; the row discharges.**
+>
+> A second, distinct defect surfaced in the same run, unrelated to #2536: the
+> established ASCII id `oduvan` was retired IN FAVOUR OF a freshly-minted
+> Cyrillic id `одуван` (`cast-id-history.json`: `"oduvan": "одуван"`) —
+> backwards from the direction the other three retirements in the same run
+> took (fresh id retired in favour of the established one). This is a B4
+> failure (ids must stay ASCII kebab-case) but not a B3 failure (no
+> duplicate — the character has exactly one id, just the wrong one). Filed as
+> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584) for a fix
+> agent. **B4 stays STILL OWED.** Full evidence:
+> `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`.
+
 Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
 
 ---

@@ -351,18 +351,26 @@ export function checkRegister(text) {
 // group section — which removes it from the published page — was invisible.
 // Blanking rather than deleting keeps the comment's own `<section>`/`<span>`
 // text from being read while leaving the surrounding structure intact.
-function stripHtmlComments(html) {
-  return html.replace(/<!--[\s\S]*?-->/g, '');
+export function stripHtmlComments(html) {
+  let out = html;
+  for (;;) {
+    const next = out.replace(/<!--[\s\S]*?-->/g, '');
+    if (next === out) return out;
+    out = next;
+  }
 }
 
 // Strips tags and collapses whitespace, so a cell's text can be compared
 // regardless of the markup inside it (the C group's setup cell wraps a
 // `<span lang="ru">`, and every glance-table letter is wrapped in an `<a>`).
-function htmlCellText(html) {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+export function htmlCellText(html) {
+  let stripped = html;
+  for (;;) {
+    const next = stripped.replace(/<[^>]*>/g, '');
+    if (next === stripped) break;
+    stripped = next;
+  }
+  return stripped.replace(/\s+/g, ' ').trim();
 }
 
 // Parses the live view's glance table into letter → count, mirroring the
@@ -979,7 +987,7 @@ export function checkLiveView(
 // of erroring. See scripts/git-env.mjs's header for the full account.
 const GIT_TIMEOUT_MS = 15_000;
 function runGitCommand(args, cwd) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, env: scrubGitEnv() });
+  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, env: scrubGitEnv() });
 }
 
 // #2199 review round 2: fetches `origin/main` FRESH before reading it,

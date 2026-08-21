@@ -29,8 +29,7 @@ import { readFile } from 'node:fs/promises';
    These are what turn the member lists below from a THIRD hardcoded literal
    into a compile-time assertion against the server's real unions. */
 import type { BlockerCause, BlockerActionKind } from './setup-readiness.js';
-import type { RuntimeProcessState } from '../tts/models-status.js';
-import type { EngineHealthState } from '../tts/engine-health.js';
+import type { RuntimeProcessState, EngineStatusState } from '../tts/models-status.js';
 import type { VoiceEngineId } from '../tts/voice-engine-registry.js';
 import type { VenvBootstrapState, VenvBootstrapJobStatus } from '../tts/venv-bootstrap.js';
 
@@ -121,9 +120,14 @@ const RUNTIME_PROCESS_STATES = {
   ready: 1, starting: 1, down: 1, crashed: 1,
 } satisfies Record<RuntimeProcessState, 1>;
 
+/* #2533 — deliberately EngineStatusState (models-status.ts's own coarse
+   4-value alias), not engine-health.ts's raw 5-value EngineHealthState: the
+   openapi-documented EngineStatus.state enum stays 4-valued (models-inventory's
+   undocumented endpoint carries the 5th, 'package-broken', on its own type —
+   see models-inventory.ts's header on why that route stays out of openapi.yaml). */
 const ENGINE_HEALTH_STATES = {
   ready: 1, 'package-missing': 1, 'weights-missing': 1, 'not-installed': 1, loaded: 1,
-} satisfies Record<EngineHealthState, 1>;
+} satisfies Record<EngineStatusState, 1>;
 
 const VOICE_ENGINE_IDS = {
   kokoro: 1, qwen: 1, coqui: 1,
@@ -156,8 +160,8 @@ const SERVER_UNIONS: Record<
     members: Object.keys(RUNTIME_PROCESS_STATES),
     read: (src: string) => propertyEnum(src, 'RuntimeStatus', 'process'),
   },
-  EngineHealthState: {
-    source: 'server/src/tts/engine-health.ts',
+  EngineStatusState: {
+    source: 'server/src/tts/models-status.ts',
     members: Object.keys(ENGINE_HEALTH_STATES),
     read: (src: string) => propertyEnum(src, 'EngineStatus', 'state'),
   },

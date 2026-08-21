@@ -82,6 +82,7 @@ if (isDirectlyInvoked(import.meta.url)) {
   // ordinary pushes are never falsely blocked.
   const isAncestor = (ancestor, descendant) => {
     const r = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      windowsHide: true,
       env: scrubGitEnv(),
     });
     if (r.status === 0) return true; // ancestor → fast-forward

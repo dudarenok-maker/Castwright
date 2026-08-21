@@ -365,6 +365,7 @@ function printUnifiedDiff(original, proposed) {
     try {
       execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', before, after], {
         stdio: 'inherit',
+        windowsHide: true,
         env: scrubGitEnv(),
       });
     } catch {

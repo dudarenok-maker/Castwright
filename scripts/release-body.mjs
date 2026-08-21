@@ -74,6 +74,7 @@ export function readTagAnnotation(repoRoot, tag) {
   return execFileSync('git', ['tag', '-l', '--format=%(contents)', tag], {
     cwd: repoRoot,
     encoding: 'utf8',
+    windowsHide: true,
     env: scrubGitEnv(),
   });
 }

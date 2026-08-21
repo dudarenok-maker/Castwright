@@ -288,7 +288,10 @@ describe('GET /api/sidecar/health', () => {
     );
     const absent = await request(makeApp()).get('/api/sidecar/health');
     expect(absent.body.qwenInstallState).toBe('not-installed');
-    expect(absent.body.qwenPackageInstalled).toBe(false);
+    /* #2533 — an absent wire field is unknown, not confirmed-false; mirrors
+       the kokoro/coqui/whisper siblings (see the qwenPackageInstalled
+       (#2533) describe block below for the regression this pins). */
+    expect(absent.body.qwenPackageInstalled).toBeUndefined();
     expect(absent.body.qwenWeightsPresent).toBe(false);
 
     fetchMock.mockResolvedValueOnce(
@@ -975,6 +978,47 @@ describe('GET /api/sidecar/health — per-engine package booleans (Task 8)', () 
     expect(res.body.coquiPackageInstalled).toBeUndefined();
     expect(res.body.kokoroPackageInstalled).toBeUndefined();
     expect(res.body.whisperPackageInstalled).toBeUndefined();
+  });
+
+  describe('qwenPackageInstalled (#2533)', () => {
+    it('an old sidecar that omits qwen_package_installed, with qwen not loaded, forwards undefined — NOT false', async () => {
+      /* #2533 — before this fix, qwenPackageInstalled was
+         `qwenLoaded || body.qwen_package_installed === true`, which coerces an
+         absent wire field straight to false instead of the kokoro/coqui/whisper
+         siblings' undefined. A confident false defeats classifyPackageFault's
+         fail-open "unknown is never a fault" rule and misreports an installed-
+         but-unprobed qwen package as genuinely missing. */
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: false }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.qwenPackageInstalled).toBeUndefined();
+    });
+
+    it('qwen_package_installed: false, qwen not loaded → forwards false', async () => {
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: false, qwen_package_installed: false }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.qwenPackageInstalled).toBe(false);
+    });
+
+    it('qwen loaded, wire field omitted → still forwards true (loaded implies package present, unchanged)', async () => {
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.qwenPackageInstalled).toBe(true);
+    });
   });
 });
 

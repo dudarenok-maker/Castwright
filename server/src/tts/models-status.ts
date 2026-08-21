@@ -17,9 +17,19 @@ export interface RuntimeStatus {
   process: RuntimeProcessState;
 }
 
+/** #2533 — this module's own `state` field stays the disk-only/coarse 4-value
+    enum documented in openapi.yaml (`EngineStatus.state`) even though
+    engine-health.ts's `EngineHealthState` union grew a 5th member
+    ('package-broken') for the models-inventory endpoint. Excluding it here,
+    rather than widening openapi.yaml, keeps this module's `state` output
+    byte-for-byte unchanged — deriveEngineHealth's overload (see its own doc
+    comment) makes this exclusion a compile-time guarantee, not just a type
+    annotation: this module's own call site below never passes `packageFault`. */
+export type EngineStatusState = Exclude<EngineHealthState, 'package-broken'>;
+
 export interface EngineStatus {
   /** Reused engine-health state: not-installed | package-missing | weights-missing | ready | loaded. */
-  state: EngineHealthState;
+  state: EngineStatusState;
   /** Live: package present on disk but fails to IMPORT in the sidecar. Sidecar-up-only;
       false when the sidecar is down (never a first-run "fine" guarantee). */
   packageBroken: boolean;

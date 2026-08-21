@@ -71,7 +71,7 @@ export function parseHalfOpenedState(printStatesOutput) {
 // Fatal: throws (rather than process.exit) on non-zero so callers' `finally`
 // blocks still run — a capture failure must not skip rotation/posture cleanup.
 const sh = (cmd, args, opts = {}) => {
-  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, ...opts });
+  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, windowsHide: true, ...opts });
   if (r.status !== 0) {
     throw new Error(`${cmd} ${args.join(' ')} failed (exit ${r.status}).`);
   }
@@ -81,7 +81,7 @@ const sh = (cmd, args, opts = {}) => {
 // one failed restore step can't mask the real failure or abort the rest of
 // the same `finally` block.
 const shSoft = (cmd, args, opts = {}) => {
-  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, ...opts });
+  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, windowsHide: true, ...opts });
   if (r.status !== 0) {
     console.warn(`⚠ ${cmd} ${args.join(' ')} failed (exit ${r.status}) (ignored).`);
   }
@@ -113,7 +113,7 @@ async function main(argv) {
 
     // 1. An emulator/device must be up. `adb devices` prints one `<serial>\tdevice`
     //    line per online device (after a header line); match that exactly.
-    const devices = spawnSync('adb', ['devices'], { encoding: 'utf8', shell: true }).stdout ?? '';
+    const devices = spawnSync('adb', ['devices'], { encoding: 'utf8', shell: true, windowsHide: true }).stdout ?? '';
     const online = devices.split('\n').some((line) => /\tdevice$/.test(line.trimEnd()));
     if (!online) {
       throw new Error('No running emulator/device (none shown as "device" by `adb devices`). Boot an AVD first — see apps/android/integration_test/marketing/README.md.');
@@ -131,7 +131,7 @@ async function main(argv) {
     // orientation (phones/Nexus 7 are natural-portrait; the Pixel Tablet is
     // natural-landscape), so read it once from `adb shell wm size` and thread
     // it into rotationValue below.
-    const wmSize = spawnSync('adb', ['shell', 'wm', 'size'], { encoding: 'utf8', shell: true }).stdout ?? '';
+    const wmSize = spawnSync('adb', ['shell', 'wm', 'size'], { encoding: 'utf8', shell: true, windowsHide: true }).stdout ?? '';
     const naturalLandscape = parseNaturalLandscape(wmSize);
 
     // 3. Run flutter drive once per pass (rotation/posture set beforehand, reset after).
@@ -144,7 +144,7 @@ async function main(argv) {
             ? Number(process.env.FOLD_HALF_OPEN_STATE)
             : null;
           if (halfOpenIdx === null) {
-            const printStates = spawnSync('adb', ['shell', 'cmd', 'device_state', 'print-states'], { encoding: 'utf8', shell: true }).stdout ?? '';
+            const printStates = spawnSync('adb', ['shell', 'cmd', 'device_state', 'print-states'], { encoding: 'utf8', shell: true, windowsHide: true }).stdout ?? '';
             halfOpenIdx = parseHalfOpenedState(printStates);
           }
           if (halfOpenIdx === null) {

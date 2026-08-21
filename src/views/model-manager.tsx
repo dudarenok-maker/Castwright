@@ -492,7 +492,12 @@ function ResidencyBadge({
       </span>
     );
   }
-  if (item.installState === 'package-missing') {
+  if (item.installState === 'package-missing' || item.installState === 'package-broken') {
+    /* #2533 — a broken row has present:true (weights ARE on disk), so without
+       this branch it would fall through to the "Installed" badge below and
+       read as fine when the package can't actually import. Same badge as
+       package-missing: both are "needs repair", just with a different root
+       cause distinguished by installLabel's Repair/Install split. */
     return (
       <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
         Needs repair
@@ -597,7 +602,10 @@ function ModelRow({
     ? item.installState === 'ready' || item.installState === 'loaded'
     : item.present;
   const hasControl = usable && (engine !== undefined || isAnalyzer);
-  const isPackageMissing = item.installState === 'package-missing';
+  /* #2533 — 'package-broken' falls back to the same 'Repair' label as
+     'package-missing'; this var name predates the 5th state (kept as-is —
+     see the ResidencyBadge branch above for the same pairing). */
+  const isPackageMissing = item.installState === 'package-missing' || item.installState === 'package-broken';
 
   /* Toggle-label word. For a models-status-backed engine row, source it from the
      SAME models-status entry the installer card reads so the label and the card

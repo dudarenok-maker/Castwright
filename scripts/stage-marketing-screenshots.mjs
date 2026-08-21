@@ -219,6 +219,7 @@ function main() {
     }
     const result = spawnSync('ffmpeg', ffmpegArgs({ src, dest, scaleWidth }), {
       stdio: 'inherit',
+      windowsHide: true,
     });
     if (result.status !== 0) {
       console.error(`[stage-marketing-screenshots] ffmpeg failed for ${src}`);

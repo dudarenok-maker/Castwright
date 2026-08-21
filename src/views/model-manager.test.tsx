@@ -12,8 +12,26 @@ import { settingsSlice } from '../store/settings-slice';
 import { upgradeSlice } from '../store/upgrade-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { ModelManagerView } from './model-manager';
-import { api, type ModelControlResult, type ModelInventoryResponse } from '../lib/api';
+import { api, type ModelControlResult, type ModelInventoryResponse, type ModelInventoryItem } from '../lib/api';
 import type { UserSettings } from '../lib/types';
+
+/* #2533 D — `ModelInventoryItem.installState` is a hand-mirrored copy of the
+   server's `EngineHealthState` (the inventory endpoint is deliberately kept
+   outside `openapi.yaml`, so codegen never covers it — see api.ts's own
+   comment on the field). This exhaustiveness check is the only mechanical pin
+   against drift: it fails `npm run typecheck` if a literal is ever added to
+   (or removed from) `installState`'s union without a matching update here.
+   Compile-time only — asserts nothing at runtime. */
+type _InstallStateExhaustive = Record<NonNullable<ModelInventoryItem['installState']>, true>;
+const _installStateExhaustive: _InstallStateExhaustive = {
+  ready: true,
+  'package-missing': true,
+  'package-broken': true,
+  'weights-missing': true,
+  'not-installed': true,
+  loaded: true,
+};
+void _installStateExhaustive;
 
 /* Hoisted so individual tests can override just the engine states (spread
    MODELS_STATUS, replace .engines) — the toggle label now derives from this same
@@ -858,6 +876,40 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     const row = await screen.findByTestId('model-row-qwen-base');
     expect(within(row).getByText(/needs repair/i)).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /load model/i })).toBeNull();
+  });
+
+  /* #2533 — whisper has no models-status entry (MODELS_STATUS_ENGINE_BY_ID
+     excludes it), so it's the row where installState is the ONLY signal —
+     the general-purpose consumer this 5th state exists for. Without this
+     change's frontend half (ResidencyBadge/ModelRow not updated to handle the
+     new server value), a 'package-broken' row (present:true, weights on disk)
+     would fall through ResidencyBadge's checks to the plain "Installed"
+     badge, silently reading as fine even though the package can't import. */
+  it('package-broken row shows "Needs repair" and labels the installer "Repair", not "Installed"/"Update"', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'whisper',
+          kind: 'asr',
+          label: 'Whisper ASR (faster-whisper)',
+          present: true,
+          sizeBytes: 141_000_000,
+          diskPath: 'models/whisper',
+          loaded: false,
+          installState: 'package-broken',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-whisper');
+    expect(within(row).getByText(/needs repair/i)).toBeInTheDocument();
+    expect(within(row).queryByText(/^installed$/i)).toBeNull();
+    expect(within(row).getByTestId('model-install-toggle-whisper')).toHaveTextContent(/Repair/);
   });
 
   /* #2010 (m1) — the everyday "package uninstalled, weights still on disk"

@@ -26,21 +26,25 @@ export function parseVendorFromProbe(platform, probeText) {
 }
 
 /**
- * Detect GPU vendor by running a platform probe via the injected `exec`. The
- * `exec` indirection keeps this testable without real hardware. Any probe
- * failure degrades to 'cpu' (never throws). darwin short-circuits to 'apple'
- * without probing.
- * @param {{platform: string, exec: (cmd: string) => string}} args
+ * Detect GPU vendor by running a platform probe via the injected `probe`
+ * function. This indirection keeps the function testable without real
+ * hardware, and — deliberately named `probe`, not `exec` — doesn't collide
+ * with the child_process console-window-flash guard's bare-call scan
+ * (server/src/spawn-windows-hide.test.ts), which would otherwise mistake
+ * this injected parameter for a real `exec(...)` spawn. Any probe failure
+ * degrades to 'cpu' (never throws). darwin short-circuits to 'apple' without
+ * probing.
+ * @param {{platform: string, probe: (cmd: string) => string}} args
  * @returns {'nvidia'|'amd'|'apple'|'cpu'}
  */
-export function detectVendor({ platform, exec }) {
+export function detectVendor({ platform, probe }) {
   if (platform === 'darwin') return 'apple';
   const cmd =
     platform === 'win32'
       ? 'powershell -NoProfile -Command "(Get-CimInstance Win32_VideoController).Name"'
       : 'lspci';
   try {
-    return parseVendorFromProbe(platform, exec(cmd));
+    return parseVendorFromProbe(platform, probe(cmd));
   } catch {
     return 'cpu';
   }
@@ -70,17 +74,17 @@ export function resolveProfile({ envOverride, wizardChoice, detected }) {
  * load-bearing rule: an existing install (Phase 1 stamped every box 'nvidia') is
  * NEVER force-migrated by a hardware re-detect on upgrade — only an explicit
  * ACCELERATOR override switches it. `stampProfile` is null on a fresh install
- * (no venv yet), so detection drives a clean box. `exec` is injectable for tests;
- * it defaults to a real subprocess GPU probe. Pure precedence over
+ * (no venv yet), so detection drives a clean box. `probe` is injectable for
+ * tests; it defaults to a real subprocess GPU probe. Pure precedence over
  * resolveProfile + detectVendor.
  * @param {{envOverride: string|null, stampProfile: string|null, platform: string,
- *          exec?: (cmd: string) => string}} a
+ *          probe?: (cmd: string) => string}} a
  * @returns {'nvidia'|'amd'|'apple'|'cpu'}
  */
-export function resolveInstallProfile({ envOverride, stampProfile, platform, exec }) {
+export function resolveInstallProfile({ envOverride, stampProfile, platform, probe }) {
   const detected = detectVendor({
     platform,
-    exec: exec ?? ((cmd) => execSync(cmd, { encoding: 'utf8' })),
+    probe: probe ?? ((cmd) => execSync(cmd, { encoding: 'utf8', windowsHide: true })),
   });
   return resolveProfile({
     envOverride: envOverride ?? null,
@@ -211,7 +215,7 @@ export function describeResolved({ envOverride, wizardChoice, detected, platform
 if (isDirectlyInvoked(import.meta.url)) {
   const detected = detectVendor({
     platform: process.platform,
-    exec: (cmd) => execSync(cmd, { encoding: 'utf8' }),
+    probe: (cmd) => execSync(cmd, { encoding: 'utf8', windowsHide: true }),
   });
   const summary = describeResolved({
     envOverride: process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? null,

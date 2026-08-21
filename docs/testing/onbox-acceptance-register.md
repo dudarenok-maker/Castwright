@@ -301,7 +301,7 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
@@ -310,7 +310,25 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+
+> **Correction, 2026-08-22 (merge with `main`, #2551 wave 4 close-out).**
+> **67 → 66.** `main` discharged and removed a row this branch had
+> independently renumbered rather than removed: PR #2585 (commit `02dcb5cf`,
+> merged 2026-08-21) recorded the Cast/analysis `characterId` drift row
+> (`main`'s B3, this branch's B2, [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040))
+> as discharged after [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)'s
+> fix (PR #2562) landed. Per the repo owner's ruling that discharged rows are
+> removed outright, not annotated (2026-08-22), that row is dropped entirely
+> rather than merged in with an outcome note — its evidence lives in
+> `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md` and the run sheet
+> `cast-id-drift-onbox-acceptance.md`, not in this file. The survivor,
+> *Stage-1 returns cast names in the manuscript's own script*
+> ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313)), renumbers
+> B3→B2; its sibling row's own remaining defect (new id-survivor, `#2584`)
+> **stays owed**, unaffected. **B** 3→2. Total re-derived by counting `###`
+> group headings in the merged body (not by arithmetic subtraction): **67 →
+> 66.** No other group changed.
 
 > **Correction, 2026-08-21 (wave 4, #2551 step 6).** Old total **74** →
 > new total **67**. Arithmetic: **A** 47→44 (−3: A22 retired, A27
@@ -1560,7 +1578,7 @@ already-analysed book.
 
 ### A31 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped**
 
-Wave 1 (A30) and Wave 2 (B2) are proven or pending against a single already-drifted
+Wave 1 (A30) and Wave 2 (the characterId-drift re-analysis, now discharged) are proven or pending against a single already-drifted
 chapter/book each. Wave 3's `scripts/repair-cast-id-drift.mjs` is the pass meant
 to sweep the **whole** 20-book workspace at once.
 
@@ -2209,22 +2227,41 @@ exercises `installForProfile`'s write branch on a first-ever install.
 scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-> **Wave-3 step 2, 2026-08-20 — STILL OWED.** Ran a genuine from-scratch
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, blocker now fixed.** Ran a genuine from-scratch
 > `bootstrap-venv.mjs` on the nvidia profile against a throwaway venv (live
 > venv untouched, byte-verified). Marker present at the correct version
 > (`INSTALLER: castwright-ort-marker`) and `pip check` exit 0 — both
 > **DISCHARGED**. The third check — Kokoro reporting `CUDAExecutionProvider`
 > — **failed**: `get_available_providers()` lists it, but constructing an
 > inference session with it errors (`Error 126`) and silently falls back to
-> CPU. Root cause is a box-level gap, not this row's own code: this box has
-> only CUDA 12.4 system-wide while `onnxruntime-gpu` 1.27 needs CUDA 13.x/
-> cuDNN 9.x runtime libraries, reproduced identically against the live
-> sidecar venv (read-only). Blocks the same GPU-provider check on A38 and
-> (on re-check) A39. Full evidence, decision options for the fix (repin
-> onnxruntime-gpu vs. vendor CUDA13 wheels vs. upgrade the box):
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
-> [#2534](https://github.com/dudarenok-maker/Castwright/issues/2534)
-> (see #2534).
+> CPU. Root cause was a box-level gap: this box has only CUDA 12.4 system-wide
+> while `onnxruntime-gpu` 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries.
+> This blocking dependency is now resolved by PR #2576, which re-pinned
+> `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27` (CUDA-12 line). The row
+> remains STILL OWED because the acceptance test has not yet been re-run
+> against the fixed pin; see evidence doc
+> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+
+> **Wave-4 step 8, 2026-08-21 — STILL OWED, re-run after #2534's fix landed.**
+> Re-ran the Kokoro GPU-provider check against `onnxruntime-gpu` 1.26.0 (the
+> version #2576's re-pin resolves to), commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`
+> (now on `main` via `4bb738d2`). `get_available_providers()` still lists
+> `CUDAExecutionProvider`, but actual `InferenceSession` construction — both
+> directly and through `kokoro_onnx.Kokoro` — still falls back to
+> `CPUExecutionProvider`. **This is not the #2534 defect recurring**: the
+> root cause is now confirmed as a *different*, more specific gap —
+> `onnxruntime-gpu` 1.26.0's own wheel metadata requires `nvidia-cudnn-cu12~=9.0`
+> only via its optional `[cudnn]` extra, which `install-ort.mjs` never
+> requests (and installs with `--no-deps` besides), so no cuDNN 9 runtime is
+> ever placed anywhere onnxruntime's CUDA provider will find it. A `cudnn64_9.dll`
+> exists on this box only bundled inside other packages' own directories
+> (`torch/lib`, `ctranslate2`), which onnxruntime does not search — confirmed
+> by adding `torch/lib` to the process DLL search path as a diagnostic, which
+> did not fix it either. Zero discharges this run — see evidence doc
+> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up
+> owed:** a new defect issue for the missing `nvidia-cudnn-cu12` dependency
+> (distinct from #2534, which is closed and did fix the CUDA-13-vs-12
+> mismatch it targeted).
 
 ### A38 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
@@ -2246,11 +2283,28 @@ filed against, and it has not been separately re-confirmed since the fix landed
 §On-box acceptance item 2; run sheet §4 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs the full app
+> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run, blocker now fixed.** Needs the full app
 > running plus a real click-through of Model Manager → Qwen → Install
-> against a throwaway copy of the sidecar venv. This row's final check would hit the same CUDA13/cuDNN9 gap
-> A37 found, so even a full run today could not fully discharge it without
-> that dependency gap closed first. `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+> against a throwaway copy of the sidecar venv — scoped as its own session
+> rather than rushed alongside A37/A39 in the same heartbeat. The blocker that
+> prevented full discharge (the CUDA13/cuDNN9 gap A37 found) is now resolved by
+> PR #2576, which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`
+> (CUDA-12 line). The row remains STILL OWED because neither the app-level test
+> nor the Kokoro GPU-provider check have been re-run against the fixed pin; see
+> evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+
+> **Wave-4 step 8, 2026-08-21 — STILL OWED, GPU-provider sub-check re-run, in-app
+> install still not attempted.** Re-ran only the shared Kokoro GPU-provider
+> sub-check (this row's final check) against the #2534-fixed pin
+> (`onnxruntime-gpu` 1.26.0, commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`,
+> now on `main` via `4bb738d2`) — same procedure and result as A37 above:
+> `get_available_providers()` reports `CUDAExecutionProvider`, actual session
+> construction still falls back to CPU, root cause confirmed as the missing
+> `nvidia-cudnn-cu12` `[cudnn]` extra, not a #2534 recurrence. Zero discharges;
+> see evidence doc `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`.
+> The in-app Qwen3 install click-through part of this row remains untouched —
+> out of scope for this re-run (see #2561) — and would hit the same cuDNN gap
+> on its own Kokoro-afterward check even once attempted.
 
 > **Wave-4 step 5c, 2026-08-21 — STILL OWED, partially run.** The core #2192
 > repro — clicking Install on Qwen3-TTS Base (0.6B) in Model Manager — ran
@@ -2498,7 +2552,7 @@ reassignment, one re-render. Records A23's final sub-check ("no
 
 ## Group B — local Ollama analyzer only
 
-A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4. B2 uses its own real book fixture instead of the generic chapter and has no CPU-only case.
+A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4. B2 rides the characterId-drift re-analysis's own real book fixture instead of the generic chapter and has no CPU-only case.
 
 ### B1 · Analysing view honesty for local analyzers (plan 216)
 
@@ -2540,70 +2594,52 @@ at K=4 with a monotonic per-phase bar.
 > criteria as currently written would not be trustworthy. Re-derivation is
 > itself owed, not attempted here.
 
-### B2 · Cast/analysis `characterId` drift — Wave 2 stops new drift ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
-
-Wave 1 (A32 above, in Group A) resolves drift that already exists, at render time. Wave 2 stops a re-analysis from **creating** new drift in the first place — the row above proves nothing about it, since Wave 1's own gate scan found the whole session left `cast.json` and `cast-id-history.json` untouched (no book was modified, no history file written). Six changes ship together: every id-retiring code path now funnels through a single `retireCharacterId` choke point, so `.audiobook/cast-id-history.json` is actually populated in production for the first time (it was always empty before Wave 2); a new early remap pass on both analyzer paths makes a fresh roster **adopt** the existing cast's id for a character it already holds under a different id, before anything is persisted; the merge's name-fallback now also matches an unvoiced character whose analyzer id drifted, not only a voiced or reused one; `cast-create.ts` mints ids with the shared `safeId` instead of a private underscore slugifier, closing RC2; and a fresh roster that reclaims an id the history covers drops that entry rather than silently rerouting it. None of it can be proven without a real analyzer minting a genuinely non-deterministic id across two runs of the same manuscript — the exact behaviour `merge-analysis-cast.ts:136-140`'s own comment names (the dragon relabelled `coalfall` → `coalfall-dragon` between two analyses of the same book) and that the design's evidence table (§1.1) reproduces letter-for-letter.
-
-**Real, already-affected fixture:** *Заказ Коалфолла* at `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`. Its `cast.json` holds `mairin` (Мэйрин), `coalfall-dragon` (Коалфолл) and `brann-weir` (Бранн) today (confirmed 2026-08-04, 13 characters total) — while a chapter rendered off an earlier analysis-cache pass already carries the letter-level variants `mayrin` (8 segments) and `coalfall` (13 segments), part of the 188-segment corpus and, per design §6, **not** recoverable by Wave 1's normalised-id tier (`mayrin` vs `mairin` differ by more than separator/case). No `.audiobook/cast-id-history.json` exists for this book yet (confirmed 2026-08-04) — Wave 2 has never run against it.
-
-- Record, before re-analysing: `cast.json`'s id for Мэйрин (`mairin`) and Коалфолл (`coalfall-dragon`), and that `cast-id-history.json` is absent.
-- Re-analyse the book (a full re-analysis, not a subset pass — the early remap ships on both paths, but only the full path is exercised by simply re-running analysis on an unedited manuscript).
-- After: `cast.json`'s ids for Мэйрин and Коалфолл are still `mairin` / `coalfall-dragon` — **unchanged**, even though the analyzer is free to mint a different string this run, exactly as it minted `mayrin` / `coalfall` on the run that produced the already-orphaned segments. That is the proof the id was *kept*, not merely re-minted and left to drift again.
-- If the analyzer's fresh id for either character genuinely differs from the cast's this run (it may not — the model is non-deterministic in both directions), `.audiobook/cast-id-history.json` now exists and its `supersededBy` map records `<fresh id>: "mairin"` (or `"coalfall-dragon"`) — proving the retirement went through `retireCharacterId` rather than being silently dropped, the exact failure mode design §4.1's table catalogues five instances of.
-- Spot-check the rest of the roster (13 characters) is otherwise intact — no duplicate row, no character silently renamed onto another's id.
-
-*Needs:* a real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering is required for this row's own criteria. *Criteria:* the run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7 (Wave 2). *Cost:* short — one re-analysis of an already-imported book, then a diff of two small JSON files.
-
-> **Wave-3 step 5, 2026-08-20 — STILL OWED, real defect found.** A real full
-> re-analysis via local Ollama (`qwen36-cw-iq4-32k:latest`, ~19m43s) left
-> `mairin`/`coalfall-dragon` unchanged in `cast.json` — the core criterion
-> **passed**, and more convincingly than a same-string coincidence: the
-> analyzer's raw fresh ids this run were genuinely different
-> (`мэйрин`/`коалфолл`, lowercase Cyrillic) and were correctly caught and
-> retired via `retireCharacterId`, recorded in `cast-id-history.json`'s
-> `supersededBy` map (plus a third character, `widow-casper→widow-kasper`).
-> **The row's own "roster otherwise intact, no duplicate row" sub-check
-> failed for real:** roster grew 13→16; two of the three additions
-> (`brann-wire`, `berrin-wire`) are near-duplicate rows of the pre-existing
-> `brann-weir`/`berrin-weir` — same role, same evidence quotes verbatim,
-> never linked via `retireCharacterId`. Root cause (routed to a fix agent,
-> not fixed here): `merge-analysis-cast.ts:205-206,282-284`'s name-fallback
-> match requires an exact normalized-name string match, with no tolerance
-> for a character gaining a surname token between analyzer runs (this run:
-> "Бранн Уир" vs. the cast's "Бранн"). Full evidence, `Result:` lines:
-> `docs/testing/cast-id-drift-onbox-acceptance.md` §7;
-> `docs/testing/onbox-wave3-results/step-5-group-b.md`. Filed as
-> [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
-> (see #2536).
-
-### B3 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
+### B2 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
 
 `buildStage1ChapterInbox` never bound `name`/`aliases` to the book's script. `languagePreamble` already bound `tone`/`role`/`description`/`attributes` for a non-English book and still does — names were the one identifying field left free, and they drifted: *Ночной дозор*'s cast lists handed to stage-2 went from **0 of 75 Latin-named** (2026-08-06) to **42 of 71, 59%** (2026-08-13) across two runs of the same book with the same model weights and the same prompt; chapter 2 came back 15/15 Latin. A controlled 5× replay of the recorded stage-1 prompt reproduced 100% Latin 5/5 against the recorded response's 0/3.
 
 The fix is a prompt instruction, so **the three unit tests prove the rule renders — not that the model obeys it.** That gap is the whole reason this row exists: the defect was non-deterministic model behaviour, and only a real analyzer on a real non-English book can show the roster comes back in Cyrillic.
 
-**Fold this into B2's run** — B2 re-analyses *Заказ Коалфолла* (ru), which is exactly the fixture this needs, so both rows discharge from one re-analysis. Observe, on that same run:
+**Fold this into the characterId-drift re-analysis** (run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7; that row's evidence retired from this register per the owner's discharged-row ruling) — it re-analyses *Заказ Коалфолла* (ru), which is exactly the fixture this needs, so both checks discharge from one re-analysis. Observe, on that same run:
 
 - Every character's `name` in the resulting `cast.json` is in **Cyrillic**, matching how the book's prose spells it — zero Latin transliterations (`Мэйрин`, not `Mairin`). The pre-fix failure looks like a roster that is *readable* but Latin.
 - Every `id` is still **ASCII kebab-case** — the carve-out. A roster that came back with a Cyrillic *id* (`борис-игнатьевич`, observed on the 2026-08-06 run) is a failure of this row even if every name is correct, because ids are the join key.
-- **No character gained a second id.** B2 already checks `mairin` / `coalfall-dragon` survive; this row adds that the roster has no *near-duplicate pair* (e.g. both `mairin` and `mayrin`, or a name-corrected character appearing twice). That is the split-identity risk the carve-back clause exists to prevent, and it is the one way this change could make things worse rather than better.
-- Note the roster size against B2's recorded 13 characters — a drop would mean the added block cost recall.
+- **No character gained a second id.** The characterId-drift re-analysis already checks `mairin` / `coalfall-dragon` survive; this row adds that the roster has no *near-duplicate pair* (e.g. both `mairin` and `mayrin`, or a name-corrected character appearing twice). That is the split-identity risk the carve-back clause exists to prevent, and it is the one way this change could make things worse rather than better.
+- Note the roster size against the recorded 13-character baseline — a drop would mean the added block cost recall.
 
 If the run instead happens on a book whose language was never declared (imported before fs-2, or left undecided at the confirm screen), that is a **more** valuable observation, not a less valuable one: those books get an empty `languagePreamble`, so this block is their only protection.
 
-*Needs:* a real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering. *Criteria:* this row. *Cost:* none beyond B2, if run together.
+*Needs:* a real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering. *Criteria:* this row. *Cost:* none beyond the characterId-drift re-analysis, if run together.
 
-> **Wave-3 step 5, 2026-08-20 — STILL OWED, same run as B2.** Rode B2's
-> re-analysis of *Заказ Коалфолла* per this row's own instruction. All
-> Cyrillic names (zero Latin transliterations) and all-ASCII-kebab-case ids
-> **passed**. **"No character gained a second id" FAILED** — exactly the
-> near-duplicate pair (`brann-wire`/`berrin-wire` duplicating
-> `brann-weir`/`berrin-weir`) this row's own text names as the worst-case
-> outcome; see B2 above for the full evidence and root cause. Roster size
-> moved 13→16, not "still 13" as the row anticipated as the default case.
-> `docs/testing/onbox-wave3-results/step-5-group-b.md`. Same defect as B2,
-> filed as [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
+> **Wave-3 step 5, 2026-08-20 — STILL OWED, same run as the characterId-drift
+> re-analysis.** Rode that re-analysis of *Заказ Коалфолла* per this row's own
+> instruction. All Cyrillic names (zero Latin transliterations) and
+> all-ASCII-kebab-case ids **passed**. **"No character gained a second id"
+> FAILED** — exactly the near-duplicate pair (`brann-wire`/`berrin-wire`
+> duplicating `brann-weir`/`berrin-weir`) this row's own text names as the
+> worst-case outcome; full evidence and root cause:
+> `docs/testing/onbox-wave3-results/step-5-group-b.md`. Roster size moved
+> 13→16, not "still 13" as the row anticipated as the default case. Same
+> defect as the characterId-drift row, filed as
+> [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
 > (see #2536).
+
+> **Wave-4 step 7, 2026-08-21 — STILL OWED, new defect (not #2536), after
+> #2536's fix merged.** Re-ran the same fixture (Castwright#2570) against code
+> including PR #2562. Cyrillic-names and no-second-id criteria **passed**
+> (the near-duplicate pair was itself cleaned up this run, via the
+> characterId-drift re-analysis's own discharge — see
+> `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`).
+> **"Every id is ASCII kebab-case" FAILED again, for a different reason**: the
+> established id `oduvan` was retired IN FAVOUR OF a freshly-minted Cyrillic
+> id `одуван` (`cast-id-history.json`: `"oduvan": "одуван"` — backwards from
+> the direction three other retirements took in the same run). Not a
+> surname-drift case, not a `safeId`/transliteration bug (Cyrillic ids are
+> correct-by-design for genuinely new characters, plan 219) — the defect is
+> the retirement direction choice for an already-matched character. Filed as
+> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584). Full
+> evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`. **Row
+> stays owed.**
 
 ---
 

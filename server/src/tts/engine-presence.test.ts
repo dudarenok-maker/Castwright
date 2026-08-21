@@ -111,6 +111,16 @@ describe('readinessSeverity', () => {
     expect(readinessSeverity({ engine: 'qwen', state: 'package-missing', sidecarConfirmed: true })).toBe('block');
   });
 
+  it('package-broken → block, regardless of sidecarConfirmed (#2533)', () => {
+    /* This state only arises from a CONFIRMED failed import — stronger
+       evidence than package-missing's disk-probe guess — so it's always a
+       hard block. Unreachable via this function's real callers today (see
+       the case's own comment in engine-presence.ts), exercised here so the
+       exhaustive switch this required stays pinned. */
+    expect(readinessSeverity({ engine: 'qwen', state: 'package-broken', sidecarConfirmed: false })).toBe('block');
+    expect(readinessSeverity({ engine: 'qwen', state: 'package-broken', sidecarConfirmed: true })).toBe('block');
+  });
+
   it('weights-missing → warn', () => {
     expect(readinessSeverity({ engine: 'kokoro', state: 'weights-missing', sidecarConfirmed: false })).toBe('warn');
   });

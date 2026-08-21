@@ -409,7 +409,7 @@ function hasLocalDeclaration(source, name) {
  *  just needs SOME quoted segment ending in `pathSuffix`. Guards the
  *  `scrubGitEnv`/`runCommand` scrub-terminal trust — see header. */
 export function fileImportsFrom(source, importedName, pathSuffix) {
-  const suffixPattern = pathSuffix.replace(/[.]/g, '\\.');
+  const suffixPattern = pathSuffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const esm = new RegExp(
     `import\\s*\\{[^}]*\\b${importedName}\\b[^}]*\\}\\s*from\\s*(['"\`])[^'"\`]*${suffixPattern}\\1`,
   );
@@ -1028,6 +1028,32 @@ test('KNOWN BLIND SPOT: fileImportsFrom accepts a decoy path that merely ends in
     'documented gap: this is a suffix match on specifier text, not a resolved canonical ' +
       'path — see the header KNOWN BLIND SPOTS',
   );
+});
+
+// --- CodeQL #225 paired test: full regex metacharacter escape ---------------
+// Proves fileImportsFrom handles a pathSuffix containing a backslash (the
+// specific omission alert #225 names) without throwing and still matches
+// the intended import.
+
+test('fileImportsFrom matches when pathSuffix contains a backslash (CodeQL #225)', () => {
+  // A Windows-style path suffix with a backslash — the old /[.]/ escape left
+  // the backslash unescaped, producing a broken or misinterpreted regex.
+  const src = "import { runCommand } from '..\\lib\\run-command.mjs';";
+  assert.equal(
+    fileImportsFrom(src, 'runCommand', '..\\lib\\run-command.mjs'),
+    true,
+    'a pathSuffix with backslashes must produce a valid regex that still matches',
+  );
+});
+
+test('fileImportsFrom does not throw on pathSuffix with regex metacharacters', () => {
+  // Prove no exception is thrown when the suffix contains chars that are
+  // special in regex: . * + ? ^ $ { } ( ) | [ ] \
+  // The unescaped '[' would form an unclosed character class without proper escaping.
+  const src = "import { x } from './a[.mjs';";
+  assert.doesNotThrow(() => {
+    fileImportsFrom(src, 'x', './a[.mjs');
+  });
 });
 
 test("KNOWN BLIND SPOT: 'git' as a third (or later) argument is not detected", () => {

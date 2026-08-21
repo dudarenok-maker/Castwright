@@ -12,7 +12,7 @@ if (files.length === 0) {
   process.stderr.write('No hook test files found at scripts/tests/*.test.mjs\n');
   process.exit(1);
 }
-const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit', windowsHide: true });
 if (result.error) {
   process.stderr.write(`run-hooks-tests: failed to spawn node: ${result.error.message}\n`);
   process.exit(1);

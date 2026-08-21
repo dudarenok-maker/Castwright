@@ -65,6 +65,7 @@ function gitChangedFiles(remoteSha, localSha) {
   } else {
     const mb = spawnSync('git', ['merge-base', localSha, 'origin/main'], {
       encoding: 'utf8',
+      windowsHide: true,
       env: scrubGitEnv(),
     });
     if (mb.status !== 0 || !mb.stdout.trim()) return null;
@@ -73,6 +74,7 @@ function gitChangedFiles(remoteSha, localSha) {
   const res = spawnSync('git', ['diff', '--name-only', revArg], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
     env: scrubGitEnv(),
   });
   if (res.status !== 0 || typeof res.stdout !== 'string') return null;

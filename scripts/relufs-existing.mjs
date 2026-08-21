@@ -160,7 +160,7 @@ function safeIsDir(p) {
 function measureMp3(mp3Path) {
   return new Promise((res, rej) => {
     const args = ['-hide_banner', '-nostats', '-i', mp3Path, '-af', 'ebur128=peak=true', '-f', 'null', '-'];
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     const chunks = [];
     child.stderr.on('data', (c) => chunks.push(c));
     child.on('error', (err) => {
