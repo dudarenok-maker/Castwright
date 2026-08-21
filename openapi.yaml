@@ -563,6 +563,17 @@ paths:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
                   - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
+        '409':
+          description: |
+            The manuscript's book has no language set. Set the book language
+            before requesting analysis.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/manuscripts/{manuscriptId}/analysis/chapters:
     post:
@@ -1501,7 +1512,7 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
-                  code: { type: string, enum: [clone_protected] }
+                  code: { type: string, enum: [clone_protected, language_unset] }
 
   /api/books/{bookId}/cast/design-single/subscribe:
     post:
@@ -1829,6 +1840,17 @@ paths:
                       cleared because their baked manifest language differs from
                       the book's, mirroring the same advisory the generation and
                       QA-repair streams already send for that clear.
+        '409':
+          description: |
+            The book has no language set. Set the book language before
+            requesting a splice.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/audio-qa-repair:
     post:
@@ -1914,6 +1936,18 @@ paths:
                       cleared because their baked manifest language differs from
                       the book's, mirroring the same advisory the generation and
                       splice streams already send for that clear.
+
+        '409':
+          description: |
+            The book has no language set. Set the book language before
+            requesting audio QA repair.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/audio:
     get:

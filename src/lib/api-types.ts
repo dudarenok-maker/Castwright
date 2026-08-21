@@ -6768,6 +6768,20 @@ export interface operations {
                     "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
+            /**
+             * @description The manuscript's book has no language set. Set the book language
+             *     before requesting analysis.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     analyseChapterSubset: {
@@ -7911,7 +7925,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "clone_protected";
+                        code?: "clone_protected" | "language_unset";
                     };
                 };
             };
@@ -8271,6 +8285,20 @@ export interface operations {
                     };
                 };
             };
+            /**
+             * @description The book has no language set. Set the book language before
+             *     requesting a splice.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     audioQaRepairChapter: {
@@ -8346,6 +8374,20 @@ export interface operations {
                          *     splice streams already send for that clear.
                          */
                         message?: string;
+                    };
+                };
+            };
+            /**
+             * @description The book has no language set. Set the book language before
+             *     requesting audio QA repair.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
                     };
                 };
             };

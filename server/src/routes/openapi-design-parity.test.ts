@@ -246,4 +246,37 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     expect(singleBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
     expect(singleBlock).toContain('stated language with no sidecar mapping');
   });
+/* #2510 S2 — the four new 409 language_unset responses */
+  it('the analysis route declares a 409 language_unset response', () => {
+    const block = yaml.match(/\/api\/manuscripts\/\{manuscriptId\}\/analysis:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'analysis route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/'409':/);
+    expect(block![0]).toContain("error: { type: string }");
+  });
+
+  it('the splice route declares a 409 language_unset response', () => {
+    const block = yaml.match(/\/api\/books\/\{bookId\}\/chapters\/\{chapterId\}\/splice:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'splice route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/'409':/);
+    expect(block![0]).toContain("error: { type: string }");
+  });
+
+  it('the audio QA repair route declares a 409 language_unset response', () => {
+    const block = yaml.match(/\/api\/books\/\{bookId\}\/chapters\/\{chapterId\}\/audio-qa-repair:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'QA-repair route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/'409':/);
+    expect(block![0]).toContain("error: { type: string }");
+  });
+
+  it('the qwen design-voice 409 code enum contains both clone_protected and language_unset', () => {
+    const block = yaml.match(/\/api\/books\/\{bookId\}\/cast\/\{characterId\}\/design-voice\/stream:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'design-voice route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/language_unset/);
+    expect(block![0]).toMatch(/clone_protected/);
+    // Match the code: property's enum specifically, not the modelKey enum
+    const codeEnum = block![0].match(/code:\s*\{[^}]*enum:\s*\[([^\]]+)\]\s*\}/);
+    expect(codeEnum, 'code enum not found on design-voice 409').not.toBeNull();
+    const codes = codeEnum![1].split(',').map((s) => s.trim()).sort();
+    expect(codes).toEqual(['clone_protected', 'language_unset']);
+  });
 });
