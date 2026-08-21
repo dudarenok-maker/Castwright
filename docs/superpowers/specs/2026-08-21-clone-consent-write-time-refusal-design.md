@@ -1,6 +1,21 @@
 ---
-status: draft
+status: superseded
 ---
+
+> **SUPERSEDED — this is mechanism #1 of a family already tried and rejected.**
+> Written without first reading #2006's own comment history, which records
+> "Four mechanisms designed, four failures" — this design is a re-derivation of
+> failure #1 ("fold into the lock / re-validate inside the write's scope"),
+> already rejected specifically for `voices.ts`'s cross-book veto, and it does
+> not address the reason the *best* of the four (a sha256 fingerprint) died:
+> `ensureCharacterVoiceUuid` writes cast.json **between** the clone-consent
+> gates' read and their guarded write, in both detached-job paths, with zero
+> concurrency required. Also scoped to 4 of the real 5 sites — `cast-link-prior.ts`
+> and the `voice-override-linked.ts`/`cast-series-patch.ts`/`cast-add-from-roster.ts`
+> trio are missing. See #2006's comment thread and
+> `docs/superpowers/specs/2026-07-31-cast-json-write-lock-design.md` §7/§12.2/§13
+> for the full prior-attempt record. Kept here, not deleted, as a record of the
+> fifth failed attempt for whoever reads this next.
 
 # Clone-consent gates: write-time refusal (closes #2006 / srv-81)
 
