@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
@@ -56,10 +56,25 @@ describe('ensureOrtMarker', () => {
 
   it('REFUSES on a clobbered venv and names the remedy', () => {
     const { root, sp } = venv({ owner: 'swap', realDist: true });
+
+    // Snapshot dist-info directories before the call: should have GPU (onnxruntime_gpu)
+    // and real plain (onnxruntime-1.28.0) dist-info directories.
+    const distInfoBefore = readdirSync(sp)
+      .filter((d) => d.endsWith('.dist-info'))
+      .sort();
+
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('clobbered');
     expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
     const message = lines.join('\n');
+
+    // Verify NO MARKER was written: the dist-info directories must be unchanged.
+    // The fixture starts with 2 dist-info entries (onnxruntime_gpu-1.27.0 and
+    // onnxruntime-1.28.0); refusing must not add any (e.g., onnxruntime-1.27.0).
+    const distInfoAfter = readdirSync(sp)
+      .filter((d) => d.endsWith('.dist-info'))
+      .sort();
+    expect(distInfoAfter).toEqual(distInfoBefore);
 
     // The message must accurately describe the state: a stray plain dist-info coexists
     // with the GPU build's files (which own the namespace), NOT the other way around.
