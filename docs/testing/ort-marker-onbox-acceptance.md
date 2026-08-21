@@ -299,12 +299,16 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
    dist-info survives on disk:
    ```powershell
    python -m venv <venv>
-   <venv>\Scripts\pip install onnxruntime==1.27.0
+   <venv>\Scripts\pip install onnxruntime==1.28.0
    <venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
    ```
-   (Versions pinned for reproducibility; verified 2026-08-21, Castwright#2545.)
-2. Confirm both `onnxruntime_gpu-<version>.dist-info` and a **real**
-   `onnxruntime-<version>.dist-info` (INSTALLER `pip`, non-empty RECORD) coexist, and
+   (Versions pinned for reproducibility — plain at 1.28.0, GPU at 1.27.0, so the
+   two dist-info folder names are distinguishable by directory listing alone,
+   matching the unit test fixture; verified 2026-08-21, Castwright#2545.)
+2. Confirm both `onnxruntime_gpu-1.27.0.dist-info` and a **real**
+   `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty RECORD) coexist with
+   **different version numbers** (this is the discriminating check — name-based
+   detection would fail if both were named `onnxruntime-1.27.0.dist-info`), and
    that `site-packages/onnxruntime/` holds the GPU build's files
    (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 3. Boot the server and watch the log.

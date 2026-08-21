@@ -2375,12 +2375,18 @@ design doc's §The three venv states).
   a replacement, and the plain package's dist-info survives on disk:
   ```powershell
   python -m venv <venv>
-  <venv>\Scripts\pip install onnxruntime==1.27.0
+  <venv>\Scripts\pip install onnxruntime==1.28.0
   <venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
   ```
-  Confirm both a **real** `onnxruntime-*.dist-info` (INSTALLER `pip`, non-empty
-  RECORD) — which now coexists with `onnxruntime_gpu-*.dist-info` — and that
-  `site-packages/onnxruntime/` holds the GPU build's files
+  (Versions pinned for reproducibility — plain at 1.28.0, GPU at 1.27.0, so the
+  two dist-info folder names are distinguishable by directory listing alone,
+  matching the unit test fixture.)
+  Confirm both a **real** `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty
+  RECORD) and `onnxruntime_gpu-1.27.0.dist-info` coexist with **different version
+  numbers** — this is the discriminating check that proves the code either correctly
+  refused to write a marker OR incorrectly wrote one. Both would be named identically
+  if both packages were at the same version, making name-based detection useless. Also confirm
+  that `site-packages/onnxruntime/` holds the GPU build's files
   (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 
 > **Recipe corrected, 2026-08-21 — see [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545).**

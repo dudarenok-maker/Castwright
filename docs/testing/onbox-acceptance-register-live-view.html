@@ -799,10 +799,11 @@
           <li>Manufacture the state deliberately (destructive — do this on a copy, or plan to run the repair command after): with the sidecar stopped, install plain onnxruntime first and then force-reinstall the GPU build over it. Pip keys upgrade-detection on the package name, so installing a different distribution that shares the namespace does not replace the first, and the plain package's dist-info survives on disk:
             <div style="margin: 0.5em 0; padding: 0.5em; background: #f5f5f5; border-left: 2px solid #999; font-family: monospace; font-size: 0.9em; overflow-x: auto;">
               python -m venv &lt;venv&gt;<br>
-              &lt;venv&gt;\Scripts\pip install onnxruntime==1.27.0<br>
+              &lt;venv&gt;\Scripts\pip install onnxruntime==1.28.0<br>
               &lt;venv&gt;\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
             </div>
-            Confirm both <code>onnxruntime_gpu-*.dist-info</code> and a real <code>onnxruntime-*.dist-info</code> (INSTALLER <code>pip</code>, non-empty RECORD) coexist, and that <code>site-packages/onnxruntime/</code> holds the GPU build's files.</li>
+            (Versions pinned: plain at 1.28.0, GPU at 1.27.0, so the two dist-info folder names are distinguishable by directory listing alone, matching the unit test fixture.)
+            Confirm both <code>onnxruntime-1.28.0.dist-info</code> (INSTALLER <code>pip</code>, non-empty RECORD) and <code>onnxruntime_gpu-1.27.0.dist-info</code> coexist with <b>different version numbers</b> — this is the discriminating check. Also confirm that <code>site-packages/onnxruntime/</code> holds the GPU build's files.</li>
           <li>Boot the server. Expect <code>ensureOrtMarker</code> to return <code>'clobbered'</code>: a log line naming the condition and the exact remedy command, and <b>no</b> marker written over the real distribution.</li>
           <li>Run the named remedy command and confirm it actually repairs the box — swap re-runs, a legitimate marker is written, <code>pip check</code> clean, Kokoro reports <code>CUDAExecutionProvider</code> again.</li>
         </ul>
