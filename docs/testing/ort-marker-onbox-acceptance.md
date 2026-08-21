@@ -459,7 +459,7 @@ python -m venv <venv>
 
 **ensureOrtMarker behavior:**
 
-`ensureOrtMarker(venvDir)` returns `'clobbered'` and logs:
+`ensureOrtMarker(venvDir, console.log)` returns `'clobbered'` and logs:
 
 ```
 [ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build's files (which own the namespace). This corrupts pip's dependency resolution — a landmine for the next pip operation. The GPU build's files currently own the namespace, but the inconsistency must be repaired. Refusing to write a marker that would certify this bad state. Repair with:
