@@ -2324,6 +2324,27 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > against the fixed pin; see evidence doc
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
+> **Wave-4 step 8, 2026-08-21 — STILL OWED, re-run after #2534's fix landed.**
+> Re-ran the Kokoro GPU-provider check against `onnxruntime-gpu` 1.26.0 (the
+> version #2576's re-pin resolves to), commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`
+> (now on `main` via `4bb738d2`). `get_available_providers()` still lists
+> `CUDAExecutionProvider`, but actual `InferenceSession` construction — both
+> directly and through `kokoro_onnx.Kokoro` — still falls back to
+> `CPUExecutionProvider`. **This is not the #2534 defect recurring**: the
+> root cause is now confirmed as a *different*, more specific gap —
+> `onnxruntime-gpu` 1.26.0's own wheel metadata requires `nvidia-cudnn-cu12~=9.0`
+> only via its optional `[cudnn]` extra, which `install-ort.mjs` never
+> requests (and installs with `--no-deps` besides), so no cuDNN 9 runtime is
+> ever placed anywhere onnxruntime's CUDA provider will find it. A `cudnn64_9.dll`
+> exists on this box only bundled inside other packages' own directories
+> (`torch/lib`, `ctranslate2`), which onnxruntime does not search — confirmed
+> by adding `torch/lib` to the process DLL search path as a diagnostic, which
+> did not fix it either. Zero discharges this run — see evidence doc
+> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up
+> owed:** a new defect issue for the missing `nvidia-cudnn-cu12` dependency
+> (distinct from #2534, which is closed and did fix the CUDA-13-vs-12
+> mismatch it targeted).
+
 ### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
@@ -2353,6 +2374,19 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > (CUDA-12 line). The row remains STILL OWED because neither the app-level test
 > nor the Kokoro GPU-provider check have been re-run against the fixed pin; see
 > evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+
+> **Wave-4 step 8, 2026-08-21 — STILL OWED, GPU-provider sub-check re-run, in-app
+> install still not attempted.** Re-ran only the shared Kokoro GPU-provider
+> sub-check (this row's final check) against the #2534-fixed pin
+> (`onnxruntime-gpu` 1.26.0, commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`,
+> now on `main` via `4bb738d2`) — same procedure and result as A39 above:
+> `get_available_providers()` reports `CUDAExecutionProvider`, actual session
+> construction still falls back to CPU, root cause confirmed as the missing
+> `nvidia-cudnn-cu12` `[cudnn]` extra, not a #2534 recurrence. Zero discharges;
+> see evidence doc `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`.
+> The in-app Qwen3 install click-through part of this row remains untouched —
+> out of scope for this re-run (see #2561) — and would hit the same cuDNN gap
+> on its own Kokoro-afterward check even once attempted.
 
 ### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
