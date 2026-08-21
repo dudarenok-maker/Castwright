@@ -97,6 +97,26 @@ vi.mock('../diagnostics/disk.js', async (importOriginal) => {
   };
 });
 
+/* Task 2 (#2510) — the route's "no fallback engine" abort (generation.ts:928-940:
+   Qwen unavailable AND non-English AND !coquiEligible) needs
+   `resolveEligibleEngines` to report Coqui ineligible. Every registered
+   non-English book language (ru/es/fr/de/zh/ja — tts/language-registry.ts) IS
+   inside Coqui's supported set today, so no real book language can reach that
+   branch. Reach it through the seam the route uses to derive `coquiEligible`
+   instead. `simulateNoCoquiFallback` stays false by default so the other tests
+   in this file see the real behaviour. */
+let simulateNoCoquiFallback = false;
+vi.mock('../tts/language.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/language.js')>();
+  return {
+    ...actual,
+    resolveEligibleEngines: (bookLanguage: string, installed: import('../tts/model-keys.js').TtsEngine[]) => {
+      if (simulateNoCoquiFallback) return installed.filter((e) => e !== 'coqui');
+      return actual.resolveEligibleEngines(bookLanguage, installed);
+    },
+  };
+});
+
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Generation Route Test';
@@ -941,6 +961,56 @@ describe('POST /api/books/:bookId/generation — Qwen→Kokoro fallback is loud,
     } finally {
       setLastKnownQwenInstallState('not-installed');
     }
+  });
+});
+
+/* Task 2 (#2510) — the fs-2 no-fallback abort (generation.ts:928-940). A
+   non-English book whose language has NO Coqui fallback must abort the whole
+   run (chapter_failed + idle) rather than render cross-language garbage when
+   Qwen is unavailable. `coquiEligible` is forced off via
+   `simulateNoCoquiFallback` (see the module mock above) because no registered
+   non-English language is outside Coqui's eligible set today. */
+describe('POST /api/books/:bookId/generation — no-fallback abort (fs-2, generation.ts:928-940)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let fsModule: typeof import('node:fs');
+  let originalState: string;
+  let originalQwenState: import('../workspace/user-settings.js').QwenInstallState;
+
+  beforeAll(async () => {
+    fsModule = await import('node:fs');
+    originalState = fsModule.readFileSync(statePath(), 'utf8');
+    const { getLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    originalQwenState = getLastKnownQwenInstallState();
+  });
+
+  afterEach(async () => {
+    fsModule.writeFileSync(statePath(), originalState);
+    const { setLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownQwenInstallState(originalQwenState);
+    simulateNoCoquiFallback = false;
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot)) fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  it('aborts with chapter_failed /requires Qwen/ then idle for a non-English no-fallback book when Qwen is unavailable', async () => {
+    const state = JSON.parse(originalState) as Record<string, unknown>;
+    state.language = 'ru';
+    fsModule.writeFileSync(statePath(), JSON.stringify(state));
+    simulateNoCoquiFallback = true;
+    const { setLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownQwenInstallState('not-installed');
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'qwen3-tts-0.6b', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    /* Exactly one read-only bail-out: chapter_failed then idle, nothing else. */
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].chapterId).toBeUndefined();
+    expect(String(ticks[0].errorReason)).toMatch(/requires Qwen/i);
+    expect(ticks[1].type).toBe('idle');
   });
 });
 
