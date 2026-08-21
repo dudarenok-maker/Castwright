@@ -124,16 +124,51 @@ describe('ensureOrtMarker', () => {
     expect(lines.length).toBe(0);
   });
 
-  it('never throws even when the caller-supplied log itself throws', () => {
-    // Clobbered-venv shape: reaches the log() call inside ensureOrtMarker's
-    // try block. A throwing log must not defeat the "never throws" guarantee
-    // that ensureOrtMarker's callers (server startup) depend on.
-    const { root, sp } = venv({ owner: 'swap', realDist: true });
+  it.each([
+    {
+      name: 'clobbered branch',
+      setup: () => venv({ owner: 'swap', realDist: true }),
+      expectedReturn: 'clobbered',
+      verify: (_sp: string) => undefined, // State already verified by the test framework
+    },
+    {
+      name: 'deletion branch for plain onnxruntime',
+      setup: () => {
+        const { root, sp } = venv({ owner: 'plain' });
+        writeOrtMarker(sp, '1.27.0');
+        return { root, sp };
+      },
+      expectedReturn: 'deleted',
+      verify: (sp: string) => {
+        expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
+      },
+    },
+    {
+      name: 'deletion branch for no runtime (interrupted swap)',
+      setup: () => {
+        const { root, sp } = venv({ owner: 'none' });
+        writeOrtMarker(sp, '1.27.0');
+        return { root, sp };
+      },
+      expectedReturn: 'deleted',
+      verify: (sp: string) => {
+        expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
+      },
+    },
+  ])('never throws even when the caller-supplied log itself throws ($name)', ({ setup, expectedReturn, verify }) => {
+    // The safeLog wrapper inside ensureOrtMarker must catch and swallow throwing
+    // logs at every call site — including the clobbered, plain-deletion, and
+    // none-deletion branches. A throwing log must not defeat the "never throws"
+    // guarantee that ensureOrtMarker's callers (server startup) depend on.
+    const { root, sp } = setup();
     const throwingLog = () => {
       throw new Error('log sink is down');
     };
-    expect(() => ensureOrtMarker(root, throwingLog)).not.toThrow();
-    expect(ensureOrtMarker(root, throwingLog)).toBe('clobbered');
-    expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
+    let result;
+    expect(() => {
+      result = ensureOrtMarker(root, throwingLog);
+    }).not.toThrow();
+    expect(result).toBe(expectedReturn);
+    verify(sp);
   });
 });
