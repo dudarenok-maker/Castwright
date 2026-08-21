@@ -95,7 +95,7 @@ auto-clear** — those are explicit dismissals (Scope D).
 | `js/loop-bound-injection` | 3 | Clamp the 2 short-hash loops; **dismiss** the manuscript-scan loop (clamping truncates content). |
 | `js/tainted-format-string` | 2 | `%s` placeholders. |
 | `js/incomplete-url-substring-sanitization` | 2 | **Dismiss** (test file; `paths-ignore` is not retroactive — see Scope D). |
-| `js/incomplete-multi-character-sanitization` | 2 | **Replace-until-stable** (not just `/g`). |
+| `js/incomplete-sanitization` | 2 | **Replace-until-stable** (not just `/g`). |
 | `js/insecure-randomness` | 1 | `crypto.getRandomValues`; fallback must not use `Math.random`. |
 | `js/incomplete-sanitization` | 1 | Replace-until-stable. |
 | `js/double-escaping` | 1 | Decode `&` **last**; regression test. |
@@ -218,7 +218,7 @@ closed vulns.
    linear rewrite preserves `FILENAME_RE` parse-identity, **dismiss** it
    (filename-stem input, server-side, not attacker-streamed) rather than ship a
    parse-changing regex.
-4. `js/incomplete-multi-character-sanitization` (`parsers/epub.ts:356`,
+4. `js/incomplete-sanitization` (`parsers/epub.ts:356`,
    `parsers/html-utils.ts:37`) + `js/incomplete-sanitization`
    (`scripts/bump-version.mjs:204`) → **replace-until-stable** (loop until no change).
 5. `js/double-escaping` (`parsers/epub.ts:487`) → in `decodeEntities`, decode `&amp;`
