@@ -207,9 +207,12 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // and nobody chooses drift on purpose. Floor-plus-cap on the MINOR line rather
 // than an exact `==` so a same-line patch release (a security fix) still flows
 // without a code change; only crossing the minor boundary needs a deliberate
-// bump of this constant (bump the runtime and this pin together, once a
-// CUDA-13-built line is desk-validated on a box that has CUDA 13 — never bump
-// one without the other).
+// bump of this constant. Bump the runtime and this pin together: the constraint
+// can only move to a CUDA-13-built onnxruntime-gpu line once the shipped
+// torch/torchaudio pins in requirements/nvidia-cuda.txt move to a CUDA-13 wheel
+// (e.g., a future cu13x index). Until then, the shipped venv remains CUDA-12-by
+// -construction regardless of what CUDA toolkit is installed system-wide — never
+// bump one without the other.
 // This is the ONLY place the constraint can live: it must NOT move into
 // requirements/*.txt, because onnxruntime-gpu can never appear there AT ALL —
 // those overlays are also read on macOS (no onnxruntime-gpu wheel exists for
