@@ -2406,9 +2406,8 @@ design doc's §The three venv states).
   naming the condition and the exact remedy command
   (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
   and **no** new `onnxruntime-<version>.dist-info` marker written over the real
-  distribution. `pip check` stays clean (since only `onnxruntime` and `onnxruntime-gpu`
-  are installed in this throwaway venv, nothing depends on onnxruntime to have broken
-  requirements) — the discriminating check is the `'clobbered'` return value and the
+  distribution. `pip check` stays clean (nothing else in this throwaway venv depends on
+  `onnxruntime` to have broken requirements) — the discriminating check is the `'clobbered'` return value and the
   log line naming the condition and remedy, confirming the box is refuse-and-logged
   rather than silently healed at the wrong version.
 - **Run the named remedy command** and confirm it actually repairs the box: the
