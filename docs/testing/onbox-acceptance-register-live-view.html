@@ -189,6 +189,16 @@
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
   </div>
 
+  <div class="callout warn">
+    <b>Correction, 2026-08-20 (rework of wave-3's own recording, #2497).</b> These totals were
+    rechecked against wave 3's actual dispositions rather than left unchanged: A29 was mislabeled
+    DISCHARGED (see its row) and is corrected here to STILL OWED, so it does <b>not</b> leave the
+    owed count — 74 is unchanged, not stale. No wave-3 row's disposition otherwise moves a row into
+    or out of this count; E7's rendered half moving from the wave-3 agent-runnable set to the
+    operator's <code>onbox-sitting-device-browser.md</code> pack (see E7's row) is a re-binning
+    within the 74, not a change to the total.
+  </div>
+
   <div class="tscroll">
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
@@ -570,6 +580,8 @@
 
         <p><b>Restore</b> both <code>__init__.py</code> files and the renamed cache directory, restart, and confirm <code>/health</code> reports <code>true</code> for each engine after a successful load.</p>
 
+        <div class="flag"><b>Wave-3 step 3, 2026-08-20 — shrinks, not fully discharged.</b> Run on a throwaway robocopy of the live sidecar venv. Confirmed for real with pasted evidence: the null baseline, both Kokoro broken-import/missing states with correct distinct copy, the mirrored Qwen broken-import case, and the row's own over-claim case (post-import Qwen failure leaves <code>qwen_import_ok: true</code>, no false Repair prompt). <b>Still owed:</b> the mixed-fault Setup-checker precedence check and the Coqui-absent check — neither exercised (this box's venv has Coqui genuinely installed). A related defect was routed, not fixed: <code>GET /api/models/inventory</code>'s <code>installState</code> can't itself distinguish broken from missing (not user-facing today, since the real Repair/Install button reads the finer <code>models-status.ts</code> endpoint). <code>docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md</code>. Filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2533">#2533</a> (see #2533).</div>
+
         <p class="src">The sidecar venv with <code>kokoro_onnx</code> and <code>qwen_tts</code> installed, the Qwen base snapshot already cached (the post-import step renames it), write access to both, and a restart between passes — the flags are sticky per process. <b>No GPU needed</b> for the Kokoro half: the import fails long before any device work, so this can ride along with any other Group A session or run alone on a CPU-only box · <a href="https://github.com/dudarenok-maker/Castwright/issues/1965">#1965</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/1986">#1986</a> · criteria in the register row itself — no separate run sheet · short</p>
       </div>
     </details>
@@ -602,6 +614,8 @@
           <li>Run the in-app installer with <code>small</code> configured: <code>install-whisper.mjs</code> must fetch <b><code>small</code></b>, proving the spawn now carries an explicit <code>--model</code> rather than falling back to its own <code>process.env.ASR_MODEL || &#39;base&#39;</code>. The install card&#39;s own copy must name <code>small</code> too, not a hard-coded <code>base</code>.</li>
           <li><b>Separately, and expected:</b> the documented CLI path (<code>node server/tts-sidecar/scripts/install-whisper.mjs</code>, no flags) fetches <b><code>base</code></b> here — it cannot read <code>user-settings.json</code>. That is a known residual, documented at the flag; record it rather than reporting it as a failure.</li>
         </ul>
+
+        <div class="flag"><b>Wave-3 step 3, 2026-08-20 — STILL OWED (partial discharge).</b> Run against the live sidecar venv (read-only), isolated on port :9111 so the box's shared :9000 sidecar was never touched. Every downstream reader is DISCHARGED with real command+output: config reach, Model Manager reflecting the override before/after download, a real Hugging Face download of <code>small</code>, Remove (deletes <code>small</code>, leaves <code>base</code>), the in-app installer (<code>--model small</code>), and the documented bare-CLI path (correctly falls back to <code>base</code>). <b>What's still owed:</b> <code>ASR_MODEL=small</code> was set by hand on a standalone sidecar rather than driven live through the Node supervisor's real restart-sidecar loop (blocked by this box's single-instance :9000 constraint) — the registry wiring itself was only confirmed by reading the source, not executed end-to-end through the supervisor. <b>Correction, 2026-08-20:</b> a verify pass found this row had been mislabeled DISCHARGED on the strength of that source-read alone; corrected here to STILL OWED until the supervisor's actual env-injection loop is driven for real. <code>docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md</code>.</div>
 
         <p class="src">The sidecar venv with <code>faster-whisper</code> installable, network access for a second model size, and write access to the HF hub cache to seed and inspect both snapshots. <b>No GPU required</b> — rides along with any Group A session or runs alone on a CPU-only box · <a href="https://github.com/dudarenok-maker/Castwright/issues/1988">#1988</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2008">#2008</a> · criteria in this row · short — one restart cycle, one install, one Remove click</p>
       </div>
@@ -679,6 +693,8 @@
           <li>Re-render <em lang="ru">Заказ Коалфолла</em> chapter 2 (the <code>mayrin</code>/<code>coalfall</code> orphaned chapter) and confirm the same shape A32 pins: the fresh <code>segments.json</code> gains <code>characterSnapshots</code> entries for <code>mayrin</code>/<code>coalfall</code> naming their own live voices, not the narrator — <b>listen</b> to confirm audibly.</li>
           <li>Cross-check the Cast screen for both books: auto-reconciled now names <code>mayrin</code>/<code>coalfall</code>/<code>lady-alina</code>; needs-your-decision still names the 93 remaining ids untouched by this run (spot-check <code>unknown-male</code> in <em>Exile</em> as the negative control).</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 4/9, 2026-08-20 — OPERATOR.</b> Per <code>docs/testing/onbox-wave3-plan.md</code> §2: the remaining §8.7 (real TTS render + human listening) and §8.8 (Cast-screen banner cross-check in a live browser) are not agent-runnable. Joins <code>onbox-sitting-cloning-identity.md</code>'s row list alongside A32. <b>The live-view publish reflecting this move is still owed to the operator.</b></div>
+
         <p class="src">No GPU or TTS engine needed for the <code>--apply</code> write itself — just the real 20-book workspace, a completed <code>server</code> build, and the ability to stop any locally-running Castwright server. Re-rendering the confirmation chapter needs the 8 GB card + Qwen resident, same as A32 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a> · criteria in the run sheet <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> §8 (Wave 3) · short — one script invocation against an already-imported, already-analysed workspace, then one chapter re-render</p>
       </div>
     </details>
@@ -755,6 +771,8 @@
           <li>Inspect <code>site-packages</code> for <code>onnxruntime-&lt;version&gt;.dist-info</code> at the installed GPU version.</li>
           <li>Run <code>pip check</code> — expect exit 0. Load Kokoro and confirm <code>CUDAExecutionProvider</code>.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, blocker now fixed.</b> Ran a genuine from-scratch bootstrap against a throwaway venv (live venv untouched, byte-verified). Marker present at correct version and <code>pip check</code> exit 0 — both <b>DISCHARGED</b>. Kokoro reporting <code>CUDAExecutionProvider</code> — <b>failed</b>: providers list includes it, but constructing a session errors (<code>Error 126</code>) and silently falls back to CPU. Root cause was box-level: this box has CUDA 12.4 system-wide while <code>onnxruntime-gpu</code> 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries. <b>This blocking dependency is now fixed by PR #2576</b>, which re-pinned <code>ONNXRUNTIME_GPU_CONSTRAINT</code> to <code>≥1.26,&lt;1.27</code> (CUDA-12 line). The row remains STILL OWED because acceptance tests have not yet been re-run against the fixed pin. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
+
         <p class="src">The existing NVIDIA dev box, willingness to rebuild the venv · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 1</p>
       </div>
     </details>
@@ -768,6 +786,8 @@
           <li>Confirm the install completes with <b>no</b> <code>WinError 5</code> / <code>Accès refusé</code> on any <code>.dll</code> under <code>onnxruntime/capi/</code>.</li>
           <li>Load Kokoro afterward and confirm it still reports <code>CUDAExecutionProvider</code>.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run, blocker now fixed.</b> Needs the full app plus a real click-through of Model Manager → Qwen → Install against a throwaway venv copy — scoped as its own session, not rushed alongside A39/A41. The blocker that prevented full discharge (the CUDA13/cuDNN9 gap A39 found) is now fixed by <b>PR #2576</b>, which re-pinned <code>ONNXRUNTIME_GPU_CONSTRAINT</code> to <code>≥1.26,&lt;1.27</code> (CUDA-12 line). The row remains STILL OWED because neither the app-level test nor the Kokoro GPU-provider check have been re-run against the fixed pin. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
+
         <p class="src">The existing NVIDIA dev box, app running · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 2</p>
       </div>
     </details>
@@ -780,6 +800,8 @@
           <li>Boot the server. Expect <code>ensureOrtMarker</code> to return <code>'clobbered'</code>: a log line naming the condition and the exact remedy command, and <b>no</b> marker written over the real distribution.</li>
           <li>Run the named remedy command and confirm it actually repairs the box — swap re-runs, a legitimate marker is written, <code>pip check</code> clean, Kokoro reports <code>CUDAExecutionProvider</code> again.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, real defect found.</b> Manufactured the state exactly per this row's recipe on a throwaway copy and booted a real server against it. <b>No <code>[ort-marker]</code> log line at all</b> — booted silently as if nothing were wrong. Root cause: <code>detectOrtOwner</code> reads <code>build_and_package_info.py</code>'s <code>package_name</code> first, which post-reinstall genuinely reads <code>'onnxruntime'</code>, so it returns <code>owner: 'plain'</code>, not <code>'swap'</code> — the code takes the silent <code>'deleted'</code> path (unlogged), never the <code>'clobbered'</code> path this row expects. The named remedy command was independently verified and works correctly when run directly. Decision owed: whether the manufacture recipe doesn't reach the true "clobbered" state, or the silent <code>'deleted'</code> branch is a gap on its own — not resolved here. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>. Filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2535">#2535</a> (see #2535).</div>
+
         <p class="src">The existing NVIDIA dev box, no GPU activity required · ~10 minutes incl. repair · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 6</p>
       </div>
     </details>
@@ -793,6 +815,8 @@
           <li>Confirm the marker is deleted before the overlay install and rewritten only after the swap steps succeed; confirm <code>pip check</code> is clean afterward.</li>
           <li>If practical, force a swap-step failure and confirm the marker is deleted rather than left lying about a runtime that was never reinstalled.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run.</b> Needs a real installed release directory (<code>release/</code> layout) — a substantial task on its own, not fitted alongside A39/A41. <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
+
         <p class="src">A real installed release directory + a way to trigger its upgrade path; the existing NVIDIA dev box otherwise · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282</p>
       </div>
     </details>
@@ -808,6 +832,8 @@
           <li>Stop the server, re-run the dry pass, confirm the reported count dropped by that id <em>and</em> <code>re-render candidates</code> dropped by its segment count.</li>
           <li><b>The negative case — the Critical this PR's review gate caught.</b> Open <em>Exile</em>, whose <code>unknown-male</code> row carries <b>21 segments across 3 chapters</b>. The link action must be <b>disabled</b> with a visible reason, and a direct <code>POST …/link-orphan-match</code> with <code>orphanedId: "unknown-male"</code> must <b>400</b>. <em>Exile</em> is the right book for this: the repair script reports its analysis cache <b>"actually names it 5 different things (timkin, brant, dwarf, rex, lord cassius)"</b>, so aliasing that id book-wide would route five speakers onto one voice — <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a>'s original damage class. <em>Unlocked</em> (<code>unknown-male</code>, 34 segments across ch63/ch67) is worth a second look, but its evidence is <em>weaker</em>, not stronger: its backup names <b>one</b> occurrence ("Lord Cassius") and its cache names <b>zero</b> characters — the cache-blind case, not the many-speaker one.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 4/9, 2026-08-20 — OPERATOR.</b> Per <code>docs/testing/onbox-wave3-plan.md</code> §3: steps 2-3 above are the actual criterion ("linked <b>through the UI</b>") and require opening the Cast screen in a real browser and reading a row's rendered move — no API-only substitute is stated in the row. The negative case's disabled-with-reason state is also a browser observation. Joins <code>onbox-sitting-cloning-identity.md</code> alongside A32 and A33. <b>The live-view publish reflecting this move is still owed to the operator.</b></div>
+
         <p class="src">No hardware — a real workspace with drifted books, server stopped for the script steps · <a href="https://github.com/dudarenok-maker/Castwright/issues/2238">#2238</a> · plan 278 §Amendment 2026-08-10</p>
       </div>
     </details>
@@ -906,6 +932,8 @@
           <li><b>CPU-only:</b> the first-chapter ETA seeds slow (~15 chars/s) rather than assuming GPU speed.</li>
           <li><code>LiveChapterTicker</code> renders every in-flight chapter at K=4 with a monotonic per-phase bar.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 5, 2026-08-20 — STILL OWED, not run.</b> Blocked on two verified preconditions this worktree lacks: no <code>GEMINI_API_KEY</code> (step 1 needs a genuine Gemini recitation-block → Qwen fallback) and no ready-made ~110k-char / dense-single-paragraph fixture. Re-resolution note: step 5 (<code>LiveChapterTicker</code>) is itself browser-shaped, a partial exception to this row's "agent-runnable" framing. <code>docs/testing/onbox-wave3-results/step-5-group-b.md</code>.</div>
+
         <p class="src"><code>plan 216:124-142</code></p>
       </div>
     </details>
@@ -919,6 +947,8 @@
           <li><b>Step 8:</b> a voice design with a custom analyzer model and no override keeps persona keep-alive at <code>300</code>, unregressed by the per-model resolver.</li>
           <li><b>CPU-only:</b> a <code>RAM_HEAVY_MODELS</code> clamp overrides a configured positive keep-alive back to <code>0</code>.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 5, 2026-08-20 — 6 of 8 DISCHARGED, shrinks.</b> Steps 1-6 run live against the real Model Manager API + <code>ollama ps</code>, with pasted output each — flat default, PUT persistence, the run-time pin (a real side-effect of B3/B4's ~20-min re-analysis), the keep-alive=0 regression check, keep-alive=-1, and reset. Settings restored byte-identical. <b>Still owed:</b> step 7 (CPU-only clamp) — genuinely blocked, this box has two resident NVIDIA GPUs so <code>accelerator</code> can't be forced to <code>'cpu'</code>; step 8 (persona keep-alive) corroborated by source read only, not a live <code>ollama ps</code> observation. A non-defect design property found: the run-time pin is gated on <em>any</em> analyzer run being busy, not scoped to the model. <code>docs/testing/onbox-wave3-results/step-5-group-b.md</code>.</div>
+
         <p class="src"><code>plan 263:242-299</code> — eight steps, not the seven an earlier version of this register listed</p>
       </div>
     </details>
@@ -935,6 +965,8 @@
           <li>If the analyzer's fresh id for either character genuinely differs from the cast's this run (it may not — the model is non-deterministic in both directions), <code>.audiobook/cast-id-history.json</code> now exists and its <code>supersededBy</code> map records <code>&lt;fresh id&gt;: "mairin"</code> (or <code>"coalfall-dragon"</code>) — proving the retirement went through <code>retireCharacterId</code> rather than being silently dropped, the exact failure mode design §4.1's table catalogues five instances of.</li>
           <li>Spot-check the rest of the roster (13 characters) is otherwise intact — no duplicate row, no character silently renamed onto another's id.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 5, 2026-08-20 — STILL OWED, real defect found.</b> A real full re-analysis via local Ollama (~19m43s) left <code>mairin</code>/<code>coalfall-dragon</code> unchanged — core criterion <b>PASSED</b>, and more convincingly than coincidence: the analyzer's raw fresh ids this run were genuinely different Cyrillic strings, correctly caught and retired via <code>retireCharacterId</code>. <b>The "roster otherwise intact, no duplicate row" sub-check FAILED for real:</b> roster grew 13→16; two additions (<code>brann-wire</code>, <code>berrin-wire</code>) are near-duplicate rows of the pre-existing <code>brann-weir</code>/<code>berrin-weir</code>, never linked via <code>retireCharacterId</code>. Root cause (routed, not fixed): <code>merge-analysis-cast.ts</code>'s name-fallback requires an exact normalized-name match, with no tolerance for a character gaining a surname token between runs. <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> §7; <code>docs/testing/onbox-wave3-results/step-5-group-b.md</code>. Filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2536">#2536</a> (see #2536).</div>
+
         <p class="src">A real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering required for this row's own criteria · <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a> · criteria in the run sheet <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> §7 (Wave 2) · short — one re-analysis of an already-imported book, then a diff of two small JSON files</p>
       </div>
     </details>
@@ -952,6 +984,8 @@
           <li>Note the roster size against B3's recorded 13 characters — a drop would mean the added block cost recall.</li>
         </ul>
         <p>If the run instead happens on a book whose language was never declared (imported before fs-2, or left undecided at the confirm screen), that is a <b>more</b> valuable observation, not a less valuable one: those books get an empty <code>languagePreamble</code>, so this block is their only protection.</p>
+        <div class="flag"><b>Wave-3 step 5, 2026-08-20 — STILL OWED, same run as B3.</b> All Cyrillic names and all-ASCII-kebab ids <b>PASSED</b>. <b>"No character gained a second id" FAILED</b> — exactly the near-duplicate pair (<code>brann-wire</code>/<code>berrin-wire</code> vs. <code>brann-weir</code>/<code>berrin-weir</code>) this row's own text names as the worst-case outcome; see B3 for the full evidence. Roster size moved 13→16, not "still 13" as anticipated. <code>docs/testing/onbox-wave3-results/step-5-group-b.md</code>. Same defect as B3, filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2536">#2536</a> (see #2536).</div>
+
         <p class="src">A real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering · <a href="https://github.com/dudarenok-maker/Castwright/issues/2313">#2313</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2317">#2317</a> · criteria in the register row itself — no separate run sheet · none beyond B3, if run together</p>
       </div>
     </details>
@@ -1096,6 +1130,8 @@
         code, is what must change. Run it against a <b>throwaway re-import</b>: the analysis cache is keyed
         by <code>manuscriptId</code> only, so re-analyzing the library entry would overwrite the qwen36
         sentences and cast the owner is keeping for generation.</p>
+        <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED, not run.</b> Blocked on a genuinely missing credential: this worktree's <code>server/.env</code> has no <code>GEMINI_API_KEY</code>, and no other channel supplied one. The primary checkout's <code>server/.env</code> was deliberately <b>not</b> read, opened, or copied (a named secret-leak shape, #2345). <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
+
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — narrowed to 1 item 2026-08-13 · was <b>C3</b> before 2026-08-06</p>
       </div>
     </details>
@@ -1140,6 +1176,8 @@
         <p>Same setup as C2: local Ollama, <code>qwen36-cw-iq4-32k</code>, ~14 GB VRAM free, sidecar
         suppressed (<code>DISABLE_AUTOSTART_SIDECAR=1</code>), no TTS. Batches naturally with C2's
         session.</p>
+        <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.</b> GPU itself was idle, not the blocker. Live-rechecked today: <a href="https://github.com/dudarenok-maker/Castwright/issues/2288">#2288</a> ("findQuoteRuns lets a gap-seeded quote run swallow the next dialogue turn") is still <b>OPEN</b> — the register's own hold is still in effect. Starting the 12h27m-class re-run now would measure a moving target. <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
+
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2253">#2253</a> ·
         <code>docs/testing/night-watch-reanalysis-onbox-acceptance.md</code> §2A.5 · plan 247's
         re-specified target 1 · added 2026-08-11</p>
@@ -1191,6 +1229,8 @@
         book and chapter, so this row needs no session of its own. C2 is itself waiting on
         <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>; this row is
         not, and can be taken on any local re-analysis that reaches ch8.</p>
+        <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.</b> Rides C2's session per this row's own text; blocked by the same live-confirmed #2288-open state. The ch8 reproducer and its log-line criteria are unchanged and unexercised. <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
+
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2304">#2304</a> ·
         added 2026-08-13</p>
       </div>
@@ -1236,6 +1276,7 @@
         discharge one against the other.</p>
         <div class="flag"><b>Not discharged by a green <code>npm run test:server</code>.</b> The
         guard's tests are fixture-driven by construction; that is the point of this row.</div>
+        <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.</b> Same live-confirmed #2288-open block. Both halves of this row's criterion remain unexercised, recorded as two separate still-owed observations. Even once #2288 clears, the healthy-book half may need a second Cyrillic/dash-convention book imported — only one of this box's 82 cached analyses had an evaluable speech population. <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2325">#2325</a> ·
         <a href="https://github.com/dudarenok-maker/Castwright/issues/2342">#2342</a> · added
         2026-08-13</p>
@@ -1353,6 +1394,8 @@
           <li>The <code>detecting</code> window is brief — <b>a missed <code>detecting</code> frame is not a failure.</b></li>
           <li>Failure path, if cheap to induce (no Python 3.12 on PATH): the red “Setup failed” card with the server's message, and a working “Try again”.</li>
         </ul>
+        <div class="flag"><b>Wave-3 step 7, 2026-08-20 — split, server half DISCHARGED, rendered half OPERATOR.</b> The job/poll wiring (<code>POST/GET /api/setup/venv/bootstrap</code>) was run for real against a genuinely absent venv — a real 8m49s <code>bootstrap-venv.mjs</code> subprocess with distinct polled step values and a genuine terminal <code>installed</code> state, confirmed via <code>detect</code> and the filesystem. <b>Observations 1, 2, 4, 5, 6 remain owed</b> — rendered-page states with no API-only substitute. <b>Still owed to the operator</b> — this row is not discharged, only its server/poll half is. <b>Correction, 2026-08-20:</b> this row previously stated the join to <code>onbox-sitting-device-browser.md</code> as if it had already happened; it had not — the pack's own row list and minute total were never updated to include E7. Fixed in the same round: E7 is now folded into <code>onbox-sitting-device-browser.md</code> alongside E1, E2, E3, E5, E6, E9, E10, and <code>onbox-sitting-plan.md</code> §2.1/§2.2 are corrected to move E7's rendered-half debt from the wave-3 agent-runnable set to that operator pack — the same pattern already used for A33/A43. <code>docs/testing/onbox-wave3-results/step-7-e7-e8.md</code>.</div>
+
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1883">#1883</a> · plan 270</p>
       </div>
     </details>
@@ -1363,6 +1406,8 @@
         <p><b>Why owed:</b> the cross-build half of the design — whether L1–L3's hard assertions survive a <em>different</em> ffmpeg build — cannot be exercised on a box with one ffmpeg, and the tier sits outside <code>verify.yml</code>, so CI never runs it.</p>
         <div class="flag"><b>The LOOSE branch is not unexecuted</b> — do not read this row as “untested code ships.” The ops-36 demonstration forced it with a synthetic banner mismatch plus 2.0 LU of drift and it rejected at <b>24.79 %</b> RMS-error against a 16 % tolerance. What no box here can prove is the part needing a <em>genuinely</em> different build: whether L1/L2/L3 hold across one, and what L4-loose's error really is when the encoder differs rather than being told it does.</div>
         <p>Any machine with ffmpeg and the repo — no GPU, no sidecar, no weights. One command, seconds. The tier is opt-in and excluded from <code>test:all</code>/<code>verify</code>, so it will not run by accident.</p>
+        <div class="flag"><b>Wave-3 step 7, 2026-08-20 — STILL OWED.</b> Checked, not assumed: no Docker, no WSL, no container runtime on this box, and the only other <code>ffmpeg.exe</code> present is the same <code>8.1.1-full_build-www.gyan.dev</code> binary already on PATH, not a different build. <code>npm run test:golden-audio:assembly</code> was <b>not</b> run — it would only repeat the single-ffmpeg case the row already says proves nothing. <code>docs/testing/onbox-wave3-results/step-7-e7-e8.md</code>.</div>
+
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1880">#1880</a> · criteria in <code>docs/features/272-golden-assembly-comparison.md</code> · short</p>
       </div>
     </details>
@@ -1405,6 +1450,7 @@
         <p><b>Item 1 DISCHARGED 2026-08-14</b> — the full run from the primary checkout at <code>df49a261</code>, read-only, no copied caches, so every book&#39;s <code>hasCacheFile</code>/<code>state</code> reflects its real analysis history. All 23 books rowed; 21 measurable, and the two <code>ok (not analysed)</code> rows are genuinely un-analysed C2/C3 throwaways rather than the worktree artifact. <b>Twenty of 23 books are identical in every column</b> to the partial run; the three that moved (<i>Everblaze</i> +1 spoken, <i>Keeper of the Lost Cities</i> +1 spoken, and <i lang="ru">Ночной дозор (Tetralogy)</i> across eight columns, <code>spoken</code> 1928→2122 and <code>orphan</code> 29→32) are the parser work merged in between — <b>measured not to be #2286</b>, which moved nothing in this corpus on either side of its merge.</p>
         <div class="flag"><p><b>D13 re-gate COMPLETE 2026-08-14 — verdict: drop the <code>drifted</code> state.</b> The gap reproduces raw (16.5–49.2% against ≤2.5%) but <b>every book above it is a development fixture</b>, and the mechanism is now measured rather than guessed: hand-edited <code>cast.json</code> renames that never went through <code>retireCharacterId</code>. <code>coalfall</code> (28 spans) and <code>oduvan</code> (22) are 50 of the top book&#39;s 62 orphan spans, and both sit in <code>cast.json.bak.prewipe-20260714</code>. The natural experiment: <i lang="ru">Заказ Коалфолла</i> <i>records</i> the identical <code>coalfall → coalfall-dragon</code> rename and carries <b>zero</b> orphan spans for it, while the English edition, where it was hand-applied, carries <b>28</b>. <b>Excluding that family the corpus maximum is 1.80%</b>, with 14 of 16 non-fixture books at exactly zero (four of them structurally zero — <code>orphanSpoken</code> is vacuously 0 whenever <code>unattributedSpeech === spokenTotal</code>, including <code>Unlocked</code> — rather than independent measurements) — so the bimodality D13&#39;s approval was made conditional on does not survive. Worse, the one real book clearing <code>MIN_ORPHAN_FOR_VERDICT</code> has <b>27 of 32 orphan spans (84.4%) in ids no user can ever link</b> (<code>driver</code>, <code>woman-in-taxi</code>, <code>vampire-boy</code>, <code>vampire-girl</code> — one span carries both <code>driver</code> and <code>woman-in-taxi</code>, which is why those ids&#39; own span counts sum to more than 32), and the bare-<code>rejected</code> exit added for exactly that case is <b>absent from every history file in the corpus</b>. Fires the spec&#39;s pre-agreed question-2 caveat; the owner confirmed the drop 2026-08-14, closed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2357">#2357</a>. <b>A positive result alongside it:</b> fourteen retirements exist across five books and not one retired id is an orphan in the book that retired it — <code>retireCharacterId</code> works, and every orphan measured came from a path that bypassed it.</p></div>
         <p><b>Still owed:</b> the dash-stripped re-run invariance check (diff every field of every row); re-analysing one book post-D18 to confirm <code>demotedNarrator</code>/<code>modelNarrator</code> actually populate outside a unit fixture. Both need analysis/GPU time this pass did not spend, which is why the row stays rather than closing.</p>
+        <div class="flag"><b>Wave-3 step 4, 2026-08-20 — item (2) run, criterion FAILS on real data.</b> Both passes run for real (straight, then dash-stripped over a scratch-path cache copy, originals restored byte-identical). 22 of 23 books: zero diffs. <b><i lang="ru">Ночной дозор</i> (the corpus's heaviest dash-convention book): 14 fields diverge</b> (<code>narratorIdSpoken</code> 229→223, <code>share</code> moved, five chapters' columns shifted) — a real, reproducible property gap, not harness noise. Root cause (routed, not fixed): <code>alignSentences</code> locates its needle by substring-searching the <em>cached</em> sentence's normalized text in the chapter body — stripping the leading dash changes the needle without changing the body. Item (2) is therefore <b>STILL OWED</b> (fails, not merely unrun). Item (3) rides Group B/C's session, not attempted. Run sheet's own <code>Result:</code> line updated: <code>docs/testing/attribution-collapse-visibility-onbox-acceptance.md</code> §4. <code>docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md</code>. Filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2537">#2537</a> (see #2537).</div>
         <p class="src">A checkout (or worktree with its cache populated from one) whose cache holds the real library&#39;s analyses, <code>cd server &amp;&amp; npm run build</code>, then <code>WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs</code> · under 5 min once <code>server/dist</code> exists · <a href="https://github.com/dudarenok-maker/Castwright/issues/1984">#1984</a> Wave 1 · <a href="../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md">plan</a> · full checklist: <code>docs/testing/attribution-collapse-visibility-onbox-acceptance.md</code></p>
       </div>
     </details>
@@ -1449,6 +1495,9 @@
         <p><b>2. Genuine <code>intermittent</code> classification is exercised only by unit tests over synthetic sequences.</b> No real cross-run nondeterminism has been forced through the classifier, and the empty register can't provide it. <b>Observe, next time a genuinely flaky test is quarantined:</b> its row lands in the <code>intermittent</code> bucket (a real mix of passed/failed across the 5 runs), not <code>always-passes</code> or <code>never-passes</code>.</p>
         <div class="flag"><b>Net: this row shrinks but does not come out.</b> The trigger-side dispatch question above is answered — the workflow runs clean on the real runner — but its residual (<code>gh issue view</code> under real auth) now shares a single precondition with debt 2 above: a real quarantined row in <code>docs/testing/flaky-register.md</code>. Neither remaining half can move until one exists.</div>
         <div class="flag"><b>Why this is here and not a plain test-gap issue.</b> <code>classifyEntry</code> is already fully unit- and mutation-tested against every synthetic sequence that matters. What's missing is a real occurrence of cross-run nondeterminism, which by construction can't be manufactured inside a unit test. One honest caveat: unlike debt 1, debt 2 does <b>not</b> strictly need the Actions runner — a local run against a real flaky register row would discharge it equally. It stays grouped here for the shared dispatch-triggered framing.</div>
+        <div class="flag"><b>Wave-3 step 8, 2026-08-20 — STILL OWED-blocked, both debts, on new live evidence.</b> This row's "one row today (#1981)" text is now stale — corrected here: <code>#2235</code> has been a real quarantined row since 2026-08-13, so the precondition both debts share has existed a week. But PR #2488 (parses the register's real test-cell format) is still <b>OPEN</b> and #2465 (parseRegister drops every real register row) is still <b>OPEN</b>. Live-checked: the 2026-08-17 scheduled dispatch (off a commit descending from #2235's own quarantine commit) reported a clean "nothing to run" no-op — #2465 silently dropping a real quarantined row <b>in production, today</b>. Both debts unchanged, sharpened from theoretical to observed. <code>docs/testing/onbox-wave3-results/step-8-group-g.md</code>.</div>
+        <div class="flag"><b>Correction, 2026-08-20 (rework of wave-3's own recording, #2497).</b> The step-8 note above captured PR #2488 and issue #2465 as OPEN roughly 15 seconds before #2488 actually merged, and step 9's fold carried that stale "OPEN" forward without rechecking. Live-rechecked now: PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2488">#2488</a> <b>MERGED</b> 2026-08-20T06:45:02Z, and issue <a href="https://github.com/dudarenok-maker/Castwright/issues/2465">#2465</a> <b>CLOSED</b> the same second. Blocking precondition (b) — the <code>parseRegister</code> fix landing — has therefore cleared. This does <b>not</b> discharge G1: neither debt has actually been re-observed under the fixed code yet — both real dispatches captured above predate the merge, and no dispatch has run since. Disposition changes from <b>STILL OWED-blocked</b> to <b>STILL OWED — unblocked</b>: the next real dispatch (the following Monday 03:00 UTC cron, or an earlier manual <code>workflow_dispatch</code>) against the still-live #2235 quarantined row is what would actually discharge debt 1 (<code>gh issue view</code> under real auth) and, opportunistically, debt 2 (<code>intermittent</code> classification on real data).</div>
+
         <p class="src">A real quarantined flaky test (naturally occurring, not manufactured) — the shared precondition left for both remaining halves · opportunistic, piggy-back on the next real quarantine event rather than manufacturing one · #1864, PR #1873</p>
       </div>
     </details>
@@ -1460,6 +1509,8 @@
         <div class="flag"><b>This row carries more risk than most: a false positive BLOCKS the release outright.</b> The divergence check is fail-closed by design, so a normalisation bug or a checkout missing the notes file does not degrade the body — it stops the cut. That's the correct posture, and exactly why the first live run needs watching rather than assuming.</div>
         <p><b>Pre-merge evidence, gathered rather than asserted</b> — the shipped <code>resolveReleaseBody()</code> replayed against the last 12 real tags: <code>v1.14.0</code>…<code>v1.9.0</code> (9 releases) → publish from FILE; <code>v1.8.0</code> → BLOCKED (placeholder annotation, 18 B, vs. a stale 3,060 B file still headed <code>v1.7.0</code>); <code>v1.7.0</code> → BLOCKED (3,060 B file vs. 6,757 B annotation); <code>v1.6.0</code> → file absent at that ref → publish from ANNOTATION. <b>Two real historical releases genuinely diverged</b> — this is not hypothetical.</p>
         <p><b>Observe, at the next real release cut:</b> the release-body step exits 0 and logs the FILE as its source; the published body matches <code>git show &lt;tag&gt;:docs/release-notes-next.md</code> exactly, not the one-line placeholder; the annotation checks visibly ran rather than being silently skipped. A failure here is a real signal — read what it names before overriding anything.</p>
+        <div class="flag"><b>Wave-3 step 8, 2026-08-20 — STILL OWED, no opportunity yet.</b> PR #2168 (the fix under test) merged 2026-08-06. Live-checked: <code>v1.14.0</code>, the latest and only candidate near the fix, was tagged 2026-07-23 — <b>two weeks before</b> the fix merged, so its published body predates the fix and cannot exercise this row. No tag pushed since. No manufacture attempted (box-safety: a false positive blocks a real release). <code>docs/testing/onbox-wave3-results/step-8-group-g.md</code>.</div>
+
         <p class="src">Nothing beyond a real vX.Y.Z tag push — the next release cut · zero extra cost, observed as part of a cut that was happening anyway · <a href="https://github.com/dudarenok-maker/Castwright/issues/2137">#2137</a>, PR #2168</p>
       </div>
     </details>

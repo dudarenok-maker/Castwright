@@ -55,7 +55,7 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // side-28: the install step now carries an explicit version constraint (see
     // install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT) so the runtime isn't whatever
     // happened to be latest on PyPI on install date.
-    expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu>=1.27,<1.28');
+    expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu>=1.26,<1.27');
     expect(pip.calls).toHaveLength(4);
   });
 

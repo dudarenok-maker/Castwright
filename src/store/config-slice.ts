@@ -17,6 +17,7 @@ export interface ConfigState {
   error: string | null;
   hydrated: boolean;
   cudaEnvShadow: boolean;
+  envCleanupCandidates: string[];
 }
 
 const initialState: ConfigState = {
@@ -27,6 +28,7 @@ const initialState: ConfigState = {
   error: null,
   hydrated: false,
   cudaEnvShadow: false,
+  envCleanupCandidates: [],
 };
 
 /* ── thunks ─────────────────────────────────────────────────────────────── */
@@ -74,6 +76,13 @@ export const restartSidecar = createAsyncThunk<{ ok: boolean; error?: string }, 
   },
 );
 
+export const cleanupEnvKnobs = createAsyncThunk<{ cleaned: string[] }, void>(
+  'config/cleanupEnvKnobs',
+  async () => {
+    return api.cleanupEnvKnobs();
+  },
+);
+
 export const forkPrompt = createAsyncThunk<PromptState, { id: string; text: string }>(
   'config/forkPrompt',
   async ({ id, text }) => {
@@ -106,6 +115,7 @@ export const configSlice = createSlice({
         s.descriptors = a.payload.descriptors;
         s.values = a.payload.values;
         s.cudaEnvShadow = a.payload.cudaEnvShadow;
+        s.envCleanupCandidates = a.payload.envCleanupCandidates;
         s.status = 'idle';
         s.error = null;
         s.hydrated = true;
@@ -178,6 +188,16 @@ export const configSlice = createSlice({
       .addCase(restartSidecar.rejected, (s, a) => {
         s.status = 'error';
         s.error = a.error.message ?? 'Failed to restart sidecar.';
+      })
+      /* cleanupEnvKnobs — status stays idle on success; the caller follows up
+         with dispatch(fetchConfig()) to refetch envCleanupCandidates, same
+         fire-and-refetch pattern as restartSidecar. */
+      .addCase(cleanupEnvKnobs.pending, (s) => {
+        s.error = null;
+      })
+      .addCase(cleanupEnvKnobs.rejected, (s, a) => {
+        s.status = 'error';
+        s.error = a.error.message ?? 'Failed to clean up leftover .env settings.';
       })
       /* forkPrompt — prompt thunks don't mutate slice state directly (prompts
          are per-knob data the UI fetches on demand); we just clear saving

@@ -2,6 +2,7 @@ import type { ConfigKnob, KnobValueState } from './types.js';
 import { allKnobs } from './registry.js';
 import { readConfigOverrides } from '../workspace/user-settings.js';
 import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { parseEnvFileLines } from './env-cleanup.js';
 
 function parseEnv(knob: ConfigKnob, raw: string): number | boolean | string | null {
   const r = coerceAndValidate(knob, raw);
@@ -142,6 +143,35 @@ export function resolveAll(): Record<string, KnobValueState> {
   return out;
 }
 
+/** Knob keys whose env-file line value equals the shipped default.
+    This determines candidacy by reading the actual .env FILE's content,
+    not process.env — fixing the ambient-shadowing bug where a shell
+    exports a variable with the default value, masking a deliberately-
+    pinned .env value (#2194 finding 5). The file value is the source of
+    truth for which lines should be cleaned up; process.env can be
+    shadowed by the shell/OS before .env is loaded.
+
+    @param fileContent  Full text of the server/.env file */
+export function envCleanupCandidateKeysFromFileContent(fileContent: string): string[] {
+  const out: string[] = [];
+  const fileValues = parseEnvFileLines(fileContent);
+
+  for (const k of allKnobs()) {
+    if (k.isPrompt || !k.env) continue;
+
+    // Get the value from the .env file itself
+    const fileValue = fileValues.get(k.env);
+    if (fileValue === undefined) continue; // Key not in file
+
+    // Parse and validate the file value
+    const r = coerceAndValidate(k, fileValue);
+    if (r.ok && r.value === k.default) {
+      out.push(k.key);
+    }
+  }
+  return out;
+}
+
 /** Effective scalar for a read-site. Throws on unknown key. */
 export function configValue<T extends number | boolean | string>(key: string): T {
   const knob = allKnobs().find((k) => k.key === key);
@@ -169,25 +199,28 @@ export function coerceAndValidate(knob: ConfigKnob, raw: unknown): CoerceResult 
       return { ok: true, value: n };
     }
     case 'enum': {
-      const s = String(raw);
+      const s = String(raw).trim();
       if (!knob.options?.includes(s)) return { ok: false, error: 'not an allowed option' };
       return { ok: true, value: s };
     }
     case 'string':
     default: {
-      /* A pattern is always matched against the TRIMMED form (an anchored
-         ^...$ regex has no whitespace tolerance of its own) — so the value
-         persisted on a match must be that same trimmed form, not the raw
-         input. Untrimmed would round-trip '  CUDA:1  ' verbatim into the
-         override store and the sidecar's spawn env (independent review of
-         PR #2205, finding F4). A pattern-less string knob (e.g.
-         qa.asr.model) keeps its historical no-trim behaviour. */
-      const raw_s = String(raw);
-      const s = knob.pattern ? raw_s.trim() : raw_s;
-      if (knob.pattern && !knob.pattern.test(s)) {
+      /* Both pattern-matched and pattern-less string knobs are trimmed for
+         consistency with boolean/number coercion (independent review of
+         PR #2205, finding F4, and PR #2517 finding M8 — a trailing \r from
+         CRLF .env files must not prevent a pattern-less enum/string value
+         from matching/validating correctly). A pattern is always matched
+         against the TRIMMED form (an anchored ^...$ regex has no whitespace
+         tolerance of its own) — so the value persisted on a match must be
+         that same trimmed form, not the raw input. Untrimmed would round-trip
+         '  CUDA:1  ' verbatim into the override store and the sidecar's
+         spawn env. Pattern-less strings receive the same treatment for
+         consistency and to handle CRLF-line-ending .env files. */
+      const raw_s = String(raw).trim();
+      if (knob.pattern && !knob.pattern.test(raw_s)) {
         return { ok: false, error: `does not match the required shape (${knob.pattern.source})` };
       }
-      return { ok: true, value: s };
+      return { ok: true, value: raw_s };
     }
   }
 }

@@ -141,6 +141,12 @@ describe('GET /api/config', () => {
     const put = await request(app).put('/api/config').send({ 'analyzer.stage2.minCoverage': 0.5 });
     expect(put.status).toBe(200);
   });
+
+  it('GET /api/config includes envCleanupCandidates array', async () => {
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.envCleanupCandidates)).toBe(true);
+  });
 });
 
 describe('PUT /api/config', () => {

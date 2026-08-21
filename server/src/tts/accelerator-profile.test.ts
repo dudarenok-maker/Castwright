@@ -32,23 +32,23 @@ describe('parseVendorFromProbe', () => {
 });
 
 describe('detectVendor', () => {
-  it('uses the injected exec output (Windows)', () => {
-    const exec = () => 'NVIDIA GeForce RTX 4070';
-    expect(detectVendor({ platform: 'win32', exec })).toBe('nvidia');
+  it('uses the injected probe output (Windows)', () => {
+    const probe = () => 'NVIDIA GeForce RTX 4070';
+    expect(detectVendor({ platform: 'win32', probe })).toBe('nvidia');
   });
-  it('returns cpu when exec throws (probe unavailable)', () => {
-    const exec = () => {
+  it('returns cpu when probe throws (probe unavailable)', () => {
+    const probe = () => {
       throw new Error('no wmi');
     };
-    expect(detectVendor({ platform: 'linux', exec })).toBe('cpu');
+    expect(detectVendor({ platform: 'linux', probe })).toBe('cpu');
   });
-  it('returns apple on darwin without invoking exec', () => {
+  it('returns apple on darwin without invoking probe', () => {
     let called = false;
-    const exec = () => {
+    const probe = () => {
       called = true;
       return '';
     };
-    expect(detectVendor({ platform: 'darwin', exec })).toBe('apple');
+    expect(detectVendor({ platform: 'darwin', probe })).toBe('apple');
     expect(called).toBe(false);
   });
 });
@@ -77,7 +77,7 @@ describe('resolveInstallProfile (venv build/upgrade precedence: env → stamp ca
 
   it('ACCELERATOR env override wins over the stamp AND detection', () => {
     expect(
-      resolveInstallProfile({ envOverride: 'amd', stampProfile: 'nvidia', platform: 'win32', exec: nvExec }),
+      resolveInstallProfile({ envOverride: 'amd', stampProfile: 'nvidia', platform: 'win32', probe: nvExec }),
     ).toBe('amd');
   });
 
@@ -85,16 +85,16 @@ describe('resolveInstallProfile (venv build/upgrade precedence: env → stamp ca
     // The classic regression: a box stamped nvidia by Phase 1 whose hardware now
     // detects amd must STAY nvidia on upgrade (else every existing install rebuilds).
     expect(
-      resolveInstallProfile({ envOverride: null, stampProfile: 'nvidia', platform: 'win32', exec: amdExec }),
+      resolveInstallProfile({ envOverride: null, stampProfile: 'nvidia', platform: 'win32', probe: amdExec }),
     ).toBe('nvidia');
   });
 
   it('fresh install (no stamp): falls through to hardware detection', () => {
     expect(
-      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', exec: amdExec }),
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', probe: amdExec }),
     ).toBe('amd');
     expect(
-      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', exec: nvExec }),
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', probe: nvExec }),
     ).toBe('nvidia');
   });
 
@@ -103,13 +103,13 @@ describe('resolveInstallProfile (venv build/upgrade precedence: env → stamp ca
       throw new Error('no wmi');
     };
     expect(
-      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'linux', exec: bustedExec }),
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'linux', probe: bustedExec }),
     ).toBe('cpu');
   });
 
   it('an invalid ACCELERATOR override is ignored (falls through to stamp/detection)', () => {
     expect(
-      resolveInstallProfile({ envOverride: 'banana', stampProfile: 'cpu', platform: 'win32', exec: nvExec }),
+      resolveInstallProfile({ envOverride: 'banana', stampProfile: 'cpu', platform: 'win32', probe: nvExec }),
     ).toBe('cpu');
   });
 });

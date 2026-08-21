@@ -77,6 +77,7 @@ function tracked(spec) {
     const out = execFileSync('git', ['ls-files', '--', spec], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
+      windowsHide: true,
       env: scrubGitEnv(),
     });
     return out.split('\n').filter(Boolean);

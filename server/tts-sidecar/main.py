@@ -7537,7 +7537,7 @@ class SpeakerEngine:
                 # re-raise so the /embed fence marks poison + recycles. Any other
                 # cuda failure (cuDNN/driver mismatch on a "present" GPU) demotes
                 # to cpu once and reloads.
-                if _parse_device(self.device)[0] == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):
+                if _parse_device(self.device)[0] == "cuda" and not _CUDA_POISON_RE.search(f"{e}"):  # exc-text-safe: exception text used only for CUDA poison classification, never reaches response
                     log.warning("ECAPA cuda load failed (%s) — demoting to cpu.", e)
                     self.device = "cpu"
                     self._model = await asyncio.to_thread(self._load_on, _spk_run_device(self.device))
@@ -9936,7 +9936,7 @@ async def qwen_design_voice(req: Request) -> Response:
                 fallback_for,
             )
     except Exception as e:
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):
             log.warning("/qwen/design-voice CUDA poison (voiceId=%s): %s", voice_id, e)
             _mark_cuda_poisoned(err_str)
@@ -10043,7 +10043,7 @@ async def qwen_clone_voice(req: Request) -> Response:
                 ref_text, audition_text, language,
             )
     except Exception as e:
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):
             log.warning("/qwen/clone-voice CUDA poison (voiceId=%s): %s", voice_id, e)
             _mark_cuda_poisoned(err_str)
@@ -10160,7 +10160,7 @@ async def qwen_mint_variant(req: Request) -> Response:
         # fell into the generic 500 below.
         log.warning("/qwen/mint-variant: design contention timeout: %s", exc)
         return JSONResponse(
-            {"detail": str(exc), "code": "design_in_flight"},
+            {"detail": str(exc), "code": "design_in_flight"},  # exc-text-safe: DesignContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
             status_code=503,
         )
     except VoiceNotDesignedError as exc:
@@ -10175,12 +10175,12 @@ async def qwen_mint_variant(req: Request) -> Response:
             {
                 "code": "base17-unavailable",
                 "reason": exc.reason,
-                "detail": f"Qwen 1.7B-Base unavailable ({exc.reason}).",
+                "detail": f"Qwen 1.7B-Base unavailable ({exc.reason}).",  # exc-text-safe: exc.reason is constrained to 'not-installed' or 'corrupt' (set in Base17UnavailableError.__init__)
             },
             status_code=503,
         )
     except Exception as e:
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):
             log.warning("/qwen/mint-variant CUDA poison (baseVoiceId=%s): %s", base_voice_id, e)
             _mark_cuda_poisoned(err_str)
@@ -10342,7 +10342,7 @@ async def xtts_clone_voice(req: Request) -> Response:
                 language=language,
             )
     except Exception as e:
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):
             log.warning("/xtts/clone-voice CUDA poison (voiceId=%s): %s", voice_id, e)
             _mark_cuda_poisoned(err_str)
@@ -10576,7 +10576,7 @@ async def synthesize(req: Request) -> Response:
             engine_id, voice, exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "voice_language_unsupported"},
+            {"detail": str(exc), "code": "voice_language_unsupported"},  # exc-text-safe: voice_language_unsupported echoes the curated VoiceLanguageUnsupportedError literal (audit at main.py:10569-10573), built from voice/config strings, never a traceback or third-party string
             status_code=409,
         )
     except VoiceNotDesignedError as exc:
@@ -10603,13 +10603,13 @@ async def synthesize(req: Request) -> Response:
             engine_id, voice, exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "design_in_flight"},
+            {"detail": str(exc), "code": "design_in_flight"},  # exc-text-safe: DesignContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
             status_code=503,
         )
     except Exception as e:
         # Internal-only — feeds CUDA-poison detection + the server-side log,
         # never a response body (the body stays generic below).
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         # Forensic log: the offending text + speaker + language make a
         # post-mortem possible. Without these, "synth failed" with no
         # context means we keep hitting the same input bug blind. Truncated
@@ -10731,7 +10731,7 @@ async def transcribe(req: Request) -> Response:
             )
     except Exception as e:
         # Internal-only — CUDA-poison detection + server-side log, never a body.
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         log.exception("transcribe failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
         # Same CUDA-poison fence as /synthesize — a device-side assert here
         # corrupts the shared context just the same.
@@ -10801,7 +10801,7 @@ async def embed(req: Request) -> Response:
             await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
             embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
     except Exception as e:
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         log.exception("embed failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
         if _CUDA_POISON_RE.search(err_str):
             _mark_cuda_poisoned(err_str)
@@ -10931,12 +10931,12 @@ async def synthesize_batch(req: Request) -> Response:
             model, len(items), exc,
         )
         return JSONResponse(
-            {"detail": str(exc), "code": "design_in_flight"},
+            {"detail": str(exc), "code": "design_in_flight"},  # exc-text-safe: DesignContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
             status_code=503,
         )
     except Exception as e:
         # Internal-only — forensic log + CUDA-poison detection, never a body.
-        err_str = f"{e}"
+        err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         # Forensic beacon: model + item count + the failing message.
         log.exception(
             "batch synth failed (engine=qwen model=%s items=%d): %s",

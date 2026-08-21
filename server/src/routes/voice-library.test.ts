@@ -1257,13 +1257,26 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await request(app).delete(`/api/voice-library/${voiceUuid}`);
-    warnSpy.mockRestore();
 
     expect(res.status).toBe(200);
     expect(res.body.deleted).toBe(false); // never claims more than happened
     expect(res.body.artifactPurgeIncomplete).toBe(true);
     expect(res.body.artifactPurgeFailedPaths).toContain(ptPath);
     expect(existsSync(ptPath)).toBe(true); // the artifact really did survive
+
+    // CodeQL #210/#224: console.warn fix — voiceUuid and failed.length are now
+    // %s/%d placeholder arguments, not interpolated into the format string.
+    // The format string must NOT contain the voiceUuid, and the voiceUuid must
+    // be passed as a SEPARATE argument. Pre-fix (interpolated into format string),
+    // reverting this assertion would require breaking the format string.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.not.stringContaining(voiceUuid),
+      voiceUuid,
+      1, // purgeResult.failed.length
+      expect.any(Array),
+    );
+
+    warnSpy.mockRestore();
 
     // The manifest — the ONLY thing the consent gates can read — is retained.
     const retained = await vl.readEntry(voiceUuid);
@@ -4601,6 +4614,7 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
     writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const res = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
 
@@ -4628,8 +4642,19 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
         `sidecar:qwen:${qwenName}-preview`,
         `sidecar:xtts:xtts-${voiceUuid}`,
       ]);
+
+      // CodeQL #210/#224: console.warn fix — voiceUuid and failed.length are now
+      // %s/%d placeholder arguments, not interpolated into the format string.
+      // The format string must NOT contain the voiceUuid.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.not.stringContaining(voiceUuid),
+        voiceUuid,
+        3, // purgeResult.failed.length (3 sidecar evict failures)
+        expect.any(Array),
+      );
     } finally {
       fetchSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 

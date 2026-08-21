@@ -26,7 +26,7 @@ describe('planOrtSwap', () => {
     // when the pin is next deliberately moved.
     expect(plan.steps).toEqual([
       ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
-      ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.27,<1.28'],
+      ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.26,<1.27'],
     ]);
   });
 

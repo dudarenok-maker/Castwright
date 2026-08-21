@@ -297,6 +297,13 @@ export const STEPS = [
         // step, this one included, without a dedicated entry.)
         '.env.mock',
         '.env.development',
+        // gitignore-secrets.test.mjs (#2531 review, finding 1) drives
+        // `git check-ignore` against .gitignore's OWN patterns at RUNTIME —
+        // no module-graph edge, so without this a .gitignore-only diff
+        // (exactly the shape that could silently drop a secret pattern)
+        // printed test:hooks [cached] locally and skipped its CI leg too.
+        // Same #1847 runtime-read trap as fixtures/** above.
+        '.gitignore',
       ],
       includeLockfiles: ['root'],
     },
@@ -350,7 +357,25 @@ export const STEPS = [
   {
     name: 'test:server',
     inputs: {
-      globs: ['server/src/**'],
+      /* server/src/**: the primary surface. scripts/**\/*.{mjs,cjs,js} and
+         server/tts-sidecar/scripts/**\/*.mjs (#2567 review): spawn-windows-
+         hide.test.ts (a server/src test) reads BOTH of these trees as TEXT at
+         RUNTIME — its EXTERNAL_FILES_FLOOR list (hardcoded, so any file in
+         either tree could join it) plus pipSpawners() (which dynamically
+         scans server/tts-sidecar/scripts/ and scripts/ for pip-spawning
+         .mjs files, e.g. bootstrap-venv.mjs/install-ort.mjs/install-torch.mjs
+         — none of which are in the hardcoded floor). No module-graph edge
+         reaches either tree, so hand-listing individual files (the original
+         #2567 fix) needed a third manual sync every time the floor or
+         pipSpawners() picked up a new file — the same #1847 runtime-read trap
+         test:hooks' fixtures/** entry documents, just with a moving target on
+         top. A glob over both trees closes it structurally instead: it covers
+         the guard's whole scan surface (a superset of scripts/tests/**, which
+         is harmless — those files are already covered by test:hooks/
+         test:scripts, this just adds a redundant, safe extra invalidation)
+         without needing to track what's currently in EXTERNAL_FILES_FLOOR or
+         what pipSpawners() currently selects. */
+      globs: ['server/src/**', 'scripts/**/*.{mjs,cjs,js}', 'server/tts-sidecar/scripts/**/*.mjs'],
       /* openapi.yaml: voice-library.test.ts pins the clone-transcript cap
          against it (see the `test` step above for the same reasoning).
          ffmpeg-version-cases.json: diagnostics/ffmpeg.test.ts drives its
@@ -364,7 +389,12 @@ export const STEPS = [
          server/package.json: same lockfile-vs-manifest gap as `typecheck`
          above — includeLockfiles below only special-cases the literal
          server/package-lock.json path, so a manifest-only server dependency
-         edit invalidated nothing (verified against the live module). */
+         edit invalidated nothing (verified against the live module).
+         launch.mjs, pinokio-scripts/lib/resolve-release.js, e2e/global-
+         teardown.ts (#2567 review): the rest of spawn-windows-hide.test.ts's
+         EXTERNAL_FILES_FLOOR that sit outside the two globs above — launch.mjs
+         is a bare root file, the other two live in trees this step has no
+         other reason to watch. */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
@@ -372,6 +402,9 @@ export const STEPS = [
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
         'scripts/repair-cast-id-drift.mjs',
         'server/package.json',
+        'launch.mjs',
+        'pinokio-scripts/lib/resolve-release.js',
+        'e2e/global-teardown.ts',
       ],
       includeLockfiles: ['server'],
     },
@@ -434,7 +467,12 @@ export const STEPS = [
         // before adding this, not assumed.
         'scripts/tests/fixtures/**',
       ],
-      extraFiles: ['scripts/tests/run.ps1'],
+      // run-powershell.mjs (#2567 review): `npm run test:scripts` actually
+      // launches through this file (package.json:46), not run.ps1 directly —
+      // without it here, an edit to the launcher itself (e.g. the pwsh/
+      // powershell fallback logic) prints test:scripts [cached] and the
+      // Pester battery never re-verifies the very script that runs it.
+      extraFiles: ['scripts/tests/run.ps1', 'scripts/run-powershell.mjs'],
       includeLockfiles: ['root'],
     },
     toolFingerprint: pesterFingerprint,
@@ -773,6 +811,7 @@ export function stagedDiffFiles(cwd) {
     cwd,
     encoding: 'utf8',
     env: gitEnv(),
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -829,6 +868,7 @@ export function branchDiffFiles(cwd) {
     cwd,
     encoding: 'utf8',
     env,
+    windowsHide: true,
   });
   if (base.error || base.status !== 0) return null;
   const baseSha = base.stdout.trim();
@@ -836,6 +876,7 @@ export function branchDiffFiles(cwd) {
     cwd,
     encoding: 'utf8',
     env,
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -933,7 +974,7 @@ function detectGpuContention() {
   const r = spawnSync(
     'nvidia-smi',
     ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
-    { encoding: 'utf8', timeout: 5000 },
+    { encoding: 'utf8', timeout: 5000, windowsHide: true },
   );
   if (r.error || r.status !== 0) return { busy: false, util: null };
   return gpuContentionFor(r.stdout);
@@ -951,7 +992,7 @@ function pesterFingerprint() {
       '-Command',
       "$m = Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1; if ($m) { $m.Version.ToString() } else { 'unavailable' }",
     ],
-    { encoding: 'utf8', timeout: 5000 },
+    { encoding: 'utf8', timeout: 5000, windowsHide: true },
   );
   if (r.error || r.status !== 0) return 'unavailable';
   return (r.stdout ?? '').trim() || 'unavailable';
@@ -981,6 +1022,7 @@ export function sidecarFingerprint(
   const r = spawnSync(py, ['-m', 'pytest', '--version'], {
     encoding: 'utf8',
     timeout: 10_000,
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return `present:${mtime}:no-pytest`;
   const ver = ((r.stdout ?? '') + (r.stderr ?? '')).trim().split(/\r?\n/)[0];
@@ -1003,6 +1045,7 @@ function gitFileList(cwd) {
     cwd,
     encoding: 'utf8',
     env: gitEnv(),
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -1063,6 +1106,7 @@ function runStepProcess(stepName, { cwd, env }) {
       cwd,
       shell: true,
       env,
+      windowsHide: true,
       ...(capture
         ? { encoding: 'utf8', stdio: ['inherit', 'inherit', 'pipe'], maxBuffer: 64 * 1024 * 1024 }
         : { stdio: 'inherit' }),

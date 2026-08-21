@@ -14,7 +14,7 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 const PORT_VARS = ['VITE_PORT', 'PORT', 'LOCAL_TTS_PORT', 'PLAYWRIGHT_PORT'];
 
 function gitOrThrow(args) {
-  const result = spawnSync('git', args, { encoding: 'utf8', env: scrubGitEnv() });
+  const result = spawnSync('git', args, { encoding: 'utf8', windowsHide: true, env: scrubGitEnv() });
   if (result.error) throw new Error(`git ${args.join(' ')}: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);

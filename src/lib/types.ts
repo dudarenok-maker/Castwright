@@ -942,6 +942,11 @@ export interface ConfigResponse {
   /** Plan 2 §2.5 — true when CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in
       the environment, silently overriding every per-engine device pin. */
   cudaEnvShadow: boolean;
+  /** Keys of `server/.env` lines that look like leftover defaults from an
+      older install. Non-empty prompts the Advanced Configuration cleanup
+      notice; POST /api/config/env-cleanup comments them out (with a backup)
+      and clears this list on the next fetch. */
+  envCleanupCandidates: string[];
 }
 
 /** One CUDA card as enumerated by the sidecar (GET /api/gpu/devices). `resident`/

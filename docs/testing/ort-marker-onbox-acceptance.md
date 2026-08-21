@@ -87,10 +87,22 @@ which never needs to fire on a venv that was correct from the first pip call.
 
 ### 3.3 Result
 
-**Marker present + version:** _(fill in)_
-**`pip check` exit code:** _(fill in)_
-**Kokoro execution provider:** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_
+**Marker present + version:** `onnxruntime-1.27.0.dist-info` present in
+site-packages, INSTALLER=`castwright-ort-marker`, RECORD 0 bytes — matches
+the version `onnxruntime-gpu` actually installed (1.27.0).
+**`pip check` exit code:** 0 (`No broken requirements found.`).
+**Kokoro execution provider:** `CPUExecutionProvider` only — **not**
+`CUDAExecutionProvider`, so this part of the criterion is **NOT met**. See
+the wave-3 step-2 results file for the root cause: `onnxruntime-gpu` 1.27.0
+requires CUDA 13 / cuDNN 9 runtime DLLs (`cublasLt64_13.dll` etc.) that are
+not present anywhere on this box — the system CUDA toolkit is v12.4 only,
+and no pip-vendored CUDA 13 runtime packages are in requirements. Reproduced
+identically against the **live** sidecar venv (read-only, not modified) —
+this is an environment-wide defect, not specific to the throwaway venv.
+**Disposition:** STILL OWED — marker/pip-check mechanics pass, GPU provider
+check fails on a real dependency gap.
+**Run by:** claude (Castwright#2506, wave 3 step 2, fast-path claim).
+**Date:** 2026-08-20.
 
 ---
 
@@ -299,12 +311,38 @@ repairs the box: `pip check` clean afterward, Kokoro reports `CUDAExecutionProvi
 
 ### 8.3 Result
 
-**Log line observed (clobbered):** _(fill in)_
-**`pip check` after boot (should still be broken):** _(fill in)_
-**Repair command output:** _(fill in)_
-**`pip check` after repair:** _(fill in)_
-**Kokoro execution provider after repair:** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_
+**Log line observed (clobbered):** **NONE.** `ensureOrtMarker` did **not**
+return `'clobbered'` for this manufactured state — it returned `'deleted'`
+silently (no log call on that branch) and removed the stale
+`castwright-ort-marker` dist-info with zero operator-visible warning. Full
+mechanism trace and why in the wave-3 step-2 results file — this is a real
+defect, reproducible from the row's own documented manufacture recipe.
+**`pip check` after boot (should still be broken):** it was NOT broken —
+`pip check` was already clean before boot (the force-reinstall step
+installed a complete, self-consistent plain `onnxruntime` 1.29.0), so there
+was nothing for boot to silently "fix"; the marker deletion is the only
+observable boot-time effect, and it happened without any log line.
+**Repair command output:** `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` uninstalled `onnxruntime` 1.29.0
+and `onnxruntime-gpu` 1.27.0, reinstalled `onnxruntime-gpu==1.27.0`
+(`--no-deps`), and wrote `onnxruntime-1.27.0.dist-info` (marker) —
+`[install-ort] onnxruntime-gpu in place.`
+**`pip check` after repair:** one pre-existing, unrelated warning
+(`numba 0.66.0 has requirement numpy<2.5,>=1.22, but you have numpy 2.5.2`)
+— introduced by this test's own earlier `pip install --force-reinstall
+onnxruntime` step pulling a newer numpy; not a repair defect.
+**Kokoro execution provider after repair:** not re-tested — blocked by the
+same CUDA13/cuDNN9 gap documented for A39; would report `CPUExecutionProvider`
+on this box regardless of marker/dist-info correctness.
+**Disposition:** STILL OWED — the manufactured "clobbered" state (exactly as
+the row's own recipe describes) does not exercise the `'clobbered'` refuse-
+and-log branch at all; it exercises `'deleted'` instead, silently. The
+repair command itself works correctly when run directly.
+**Run by:** claude (Castwright#2506, wave 3 step 2, fast-path claim).
+**Date:** 2026-08-20.
+**Venv:** a throwaway copy of the live sidecar venv at
+`server/tts-sidecar/.venv`, robocopied to a scratch path, deleted after the
+run. Live venv confirmed byte-unchanged before and after (see step-2 results
+file).
 
 ---
 
@@ -351,14 +389,23 @@ release directory. `pip check` clean afterward; a forced failure leaves no marke
 
 _(Update as each remaining criterion runs.)_
 
-- Criterion 1 — fresh NVIDIA bootstrap (A39): owed.
-- Criterion 2 — the reported bug, in-app Qwen3 install (A40): owed.
+- Criterion 1 — fresh NVIDIA bootstrap (A39): **Run 2026-08-20 — STILL OWED.**
+  Marker/pip-check mechanics pass; GPU provider check fails (CUDA13/cuDNN9 gap).
+- Criterion 2 — the reported bug, in-app Qwen3 install (A40): owed — not run
+  this session (needs the full app + Model Manager UI); see wave-3 step-2
+  results file.
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
 - Criterion 4 — Pinokio update path (E9): owed.
 - Criterion 5 — AMD box: blocked, no hardware.
-- Criterion 6 — clobbered box (A41): owed.
-- Addition — in-app upgrade path (A42): owed.
+- Criterion 6 — clobbered box (A41): **Run 2026-08-20 — STILL OWED.** The
+  row's own manufacture recipe does not exercise the `'clobbered'` branch;
+  see wave-3 step-2 results file for the defect.
+- Addition — in-app upgrade path (A42): owed — not run this session (needs a
+  real packaged `release/` install); see wave-3 step-2 results file.
 
 Once a criterion is run and its Result filled in, remove the corresponding row
 from `docs/testing/onbox-acceptance-register.md` and mirror the removal in the
-live view, per that register's own "Live view" procedure.
+live view, per that register's own "Live view" procedure. **Not done for A39/
+A41 in this run** — per Castwright#2506's own instructions, step 9 of the
+wave-3 chain is the single writer for the register/live-view; this step only
+records results.

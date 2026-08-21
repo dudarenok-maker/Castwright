@@ -53,7 +53,7 @@ qwen-tts 0.1.1 requires onnxruntime, which is not installed.
 depends on `onnxruntime` tries to repair it by installing the CPU build — which either
 crashes on the sidecar's DLL lock (`main.py:9174`'s `_run_device_probe` runs
 `import onnxruntime` on every boot, wired at `main.py:668`) or, with the sidecar stopped,
-silently replaces the GPU runtime, driving past the deliberate `>=1.27,<1.28` pin.
+silently replaces the GPU runtime, driving past the deliberate `>=1.26,<1.27` pin.
 
 ### Why per-site defence was abandoned
 
