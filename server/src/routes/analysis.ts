@@ -2301,7 +2301,7 @@ export async function attributeChapterStage2(opts: {
     const paras = parseChapterStructure(opts.chapter.body, index);
     const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
     resolveWindows(paras, rosterGenderMap(stage1.characters), firstPersonId);
-    const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
+    const alignment = alignSentences(result.sentences, paras, opts.chapter.body, conventions.dialogueOpen !== null);
     const rosterIds = new Set(stage1.characters.map((c) => c.id));
     const examined = crossExamine(alignment, {
       rosterIds,
