@@ -314,15 +314,37 @@ export function alignSentences(
 ): AlignmentResult {
   const { text: normBody, rawStart, rawEnd } = buildNormalizedMap(body);
   const allSpans = paras.flatMap((p) => p.spans);
-  const needles = sentences.map((s) => normalize(s.text));
+  // #2537/#2540 — dash-invariant needle search. A leading paragraph-dash marker
+  // is a dialogue glyph, never content: whether the model's cached sentence text
+  // includes or omits its leading dash (it strips it via `s.text.replace(/^\s*[-–—]\s*/u,'')`)
+  // must not change which raw body span the needle locates. `normalize()` already
+  // canonicalised the marker to an ASCII '-', so dropping a leading '-' here folds
+  // the with-dash and stripped forms onto the SAME needle (the first content word).
+  const needles = sentences.map((s) => normalize(s.text).replace(/^-\s*/, ''));
   const located = locateNeedles(needles, normBody, true);
 
   const aligned: AlignedSentence[] = sentences.map((sentence, i) => {
     const match = located[i];
     if (match === null) return { sentence, spans: [], lumped: false };
 
-    const rawMatchStart = rawStart[match.start];
+    let rawMatchStart = rawStart[match.start];
     const rawMatchEnd = rawEnd[match.end - 1];
+    // #2537/#2540 — anchor at the paragraph-leading dash. The needle above never
+    // carries the leading dash, so its match starts at the first content word; a
+    // dash-included form would have started at the dash itself. Extending the raw
+    // anchor back over a stack of "- + optional whitespace" that leads the line
+    // (and is not part of the word the needle matched) makes BOTH forms resolve to
+    // the SAME rawMatchStart — the offset span-overlap is decided on. Only a dash at
+    // the head of its line is folded in, never a mid-line em dash inside the prose.
+    if (rawMatchStart > 0) {
+      const preceding = /([-–—])\s*$/.exec(body.slice(0, rawMatchStart));
+      if (preceding) {
+        const beforeDash = body.slice(0, rawMatchStart - preceding[0].length);
+        if (beforeDash === '' || /[\n\r]$/.test(beforeDash)) {
+          rawMatchStart -= preceding[0].length;
+        }
+      }
+    }
     const spans = allSpans.filter((s) => s.start < rawMatchEnd && s.end > rawMatchStart);
 
     const hasSpeech = spans.some((s) => s.kind === 'speech');

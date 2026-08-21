@@ -366,3 +366,115 @@ describe('#2187 anchor-first interval-bounded alignment', () => {
     expect(result.aligned[2].spans.length).toBeGreaterThan(0); // neighbour NOT desynced
   });
 });
+describe('#2540 dash-invariance — a dash-led needle must locate the same span whether the cached text carries or omits its leading dash', () => {
+  // Realistic dash-dense RU scene. The MANUSCRIPT body has a run of 18
+  // consecutive paragraph-leading dash dialogue lines — a mix of speech-only,
+  // speech+tag and speech+tag+speech — bracketed by narration, mirroring the
+  // dash density of the corpus's worst case (Ночной дозор: 1719 of 1940 spoken
+  // spans are dash-led). The MODEL re-segmentation below,
+  // `withDash`, splits several of those lines into multiple speech segments,
+  // and on the DATAPHONE each segment that is not the first one carries a
+  // spurious leading dash (— because the model re-prefixes a continued
+  // utterance as if it were a fresh line), while the manuscript body has only
+  // ONE dash at the line's start. So in the WITH-dash arm a needle like
+  // "- чтобы испечь пирог." / "- пожалуйста," never occurs as a substring and
+  // those segments fail to locate at all (empty spans) — exactly the on-box
+  // defect (#2537): whether the cache carried or omitted a leading dash silently
+  // moved spans between attribution buckets. The dash-agnostic needle folds both
+  // arms onto the same anchor and the rawMatchStart back-extension pins both to
+  // the paragraph's leading dash.
+  const body = [
+    'Ольга вошла в тёмную прихожую и остановилась у двери.',
+    '— Ходила к соседке за мукой, чтобы испечь пирог.', // split: 2nd seg gains spurious dash
+    '— Я же просил не задерживаться.',
+    '— Пирог ждёт, — улыбнулась она тихо.',
+    '— А я и не хочу пирог.',
+    '— Ты же любишь пирог.',
+    '— Люблю, но не из чужой муки.',
+    '— Мука и мука.',
+    '— Не начинай, пожалуйста, снова.', // split into 3: segs 2,3 gain spurious dashes
+    '— Я молчу.',
+    '— Вот и молчи, — ответила она резко.',
+    '— Ты злишься на меня.',
+    '— Нет, — она покачала головой, — устала просто.',
+    '— Тогда иди спать.',
+    '— Уже иду, не волнуйся.', // split: 2nd seg gains spurious dash
+    '— Дай знать, когда доберёшься.',
+    '— Обязательно.',
+    '— Спокойной ночи, — сказал он наконец.',
+    '— Спокойной ночи.',
+    'Она повернулась и закрыла за собой дверь.',
+  ].join('\n');
+
+  // The with-dash model segmentation (18 dash-led lines + 2 narration lines,
+  // split where noted above so a continuation segment carries a leading dash).
+  const withDash = [
+    'Ольга вошла в тёмную прихожую и остановилась у двери.',
+    '— Ходила к соседке за мукой,',
+    '— чтобы испечь пирог.', // spurious dash (not in body) → with-dash arm fails to locate
+    '— Я же просил не задерживаться.',
+    '— Пирог ждёт,',
+    '— улыбнулась она тихо.',
+    '— А я и не хочу пирог.',
+    '— Ты же любишь пирог.',
+    '— Люблю, но не из чужой муки.',
+    '— Мука и мука.',
+    '— Не начинай,',
+    '— пожалуйста,', // spurious dash
+    '— снова.', // spurious dash
+    '— Я молчу.',
+    '— Вот и молчи,',
+    '— ответила она резко.',
+    '— Ты злишься на меня.',
+    '— Нет,',
+    '— она покачала головой,',
+    '— устала просто.',
+    '— Тогда иди спать.',
+    '— Уже иду,',
+    '— не волнуйся.', // spurious dash
+    '— Дай знать, когда доберёшься.',
+    '— Обязательно.',
+    '— Спокойной ночи,',
+    '— сказал он наконец.',
+    '— Спокойной ночи.',
+    'Она повернулась и закрыла за собой дверь.',
+  ];
+
+  it('reports IDENTICAL per-sentence spans whether every dash-led sentence carries or omits its leading dash', () => {
+    const ruIdx = buildNameIndex(
+      [
+        { id: 'anton', name: 'Антон' },
+        { id: 'olga', name: 'Ольга' },
+        { id: 'narrator', name: 'Наблюдатель' },
+      ],
+      conventionsFor('ru')!,
+    );
+    const paras = parseChapterStructure(body, ruIdx);
+    const stripDash = (t: string) => t.replace(/^\s*[-–—]\s*/u, '');
+
+    const keep = withDash.map((t, i) =>
+      mkSentence(i + 1, /^— /.test(t) ? (i % 2 ? 'olga' : 'anton') : 'narrator', t),
+    );
+    const stripped = withDash.map((t, i) => mkSentence(i + 1, keep[i].characterId, stripDash(t)));
+
+    const keepResult = alignSentences(keep, paras, body);
+    const strippedResult = alignSentences(stripped, paras, body);
+
+    for (let i = 0; i < withDash.length; i++) {
+      // REQUIRED property: identical aligned spans whether `text` includes or
+      // omits its leading paragraph dash — for EVERY sentence (not a count).
+      expect(keepResult.aligned[i].spans).toEqual(strippedResult.aligned[i].spans);
+    }
+
+    // The invariant must not be vacuous: a dash-included speech utterance must
+    // still actually align (the dash-agnostic needle locates it, the anchor is
+    // extended back to the paragraph dash) — non-trivial even for the split
+    // continuation segments that, dash-included, are not substrings of the body.
+    // (Short fragments like ", снова." legitimately resolve to a line's sentence
+    // span rather than a standalone speech span, so some segments carry no
+    // speech of their own — the bar below only guards against a wholesale
+    // misalignment that would make the identical-spans loop vacuous.)
+    const speechSpans = keepResult.aligned.filter((a) => a.spans.some((s) => s.kind === 'speech'));
+    expect(speechSpans.length).toBeGreaterThanOrEqual(15);
+  });
+});
