@@ -124,7 +124,7 @@ Nothing else on disk changes.
 
 | Namespace owner (`detectOrtOwner`) | Real plain dist-info present? | Our marker present? | Outcome |
 |---|---|---|---|
-| `swap` (GPU build owns it) | no | no | `wrote` |
+| `swap` (GPU build owns it) | no | no | `wrote` — logs (records the version and provider) |
 | `swap` | no | yes | `noop` (idempotent) |
 | `swap` | no | yes — but **stale** (recorded version ≠ installed version) | `noop` — **known limitation**, see note below |
 | `swap` | **yes** — the clobbered box | either | `clobbered` — refuse, log the remedy |
