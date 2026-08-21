@@ -78,6 +78,11 @@ describe('ensureOrtMarker', () => {
     expect(message).toContain('Refusing to write a marker');
     expect(message).toContain('bad state');
 
+    // Pin the specific corrected content from c556f51c: the namespace is owned by the GPU build,
+    // not "GPU Kokoro is currently working" as it was before. A revert to the old wording would
+    // fail this assertion, catching mutation M1.
+    expect(message).toContain('The GPU build\'s files currently own the namespace');
+
     // Minimum length guard: the full message is ~550+ chars; a gutted stub is ~40 chars.
     // This catches attempts to reduce the message to just the structural tokens.
     expect(message.length).toBeGreaterThan(300);
