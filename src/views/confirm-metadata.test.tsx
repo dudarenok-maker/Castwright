@@ -1,15 +1,18 @@
 /* ConfirmMetadataView — Book # input behaviour and Submit gating.
    Pairs with docs/features/archive/03-import-confirm-metadata.md. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
 import { uiSlice } from '../store/ui-slice';
 import { ConfirmMetadataView } from './confirm-metadata';
+import { api } from '../lib/api';
+import { useAppSelector } from '../store';
+import { LibraryLanguageAffordance } from '../components/library/library-language-affordance';
 import type { ImportCandidate, LibraryBook } from '../lib/types';
 
 const candidate: ImportCandidate = {
@@ -416,5 +419,102 @@ describe('ConfirmMetadataView — Task 10 language fallback (surrendered detecti
     expect(within(select).queryByText('Decide later')).not.toBeInTheDocument();
     /* No fallback note should appear. */
     expect(screen.queryByText(/couldn't tell what language/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ConfirmMetadataView — optimistic LibraryBook languageSet (N6 regression)', () => {
+  /* PR #2492 pass-2 review, finding N6: the optimistic LibraryBook built
+     after import set `language` but never `languageSet`, so
+     LibraryLanguageAffordance (which branches on `book.languageSet === true`,
+     not on `language`) rendered the dashed "Language unset" chip for a book
+     whose language the user had just explicitly picked on this very screen —
+     until the next getLibrary() refetch overwrote it with the honest value. */
+
+  /* Mirrors routes/index.tsx:376's `importCandidate ? <ConfirmMetadataView />
+     : <UploadView />` — the real app unmounts this view the instant
+     handleSubmit clears importCandidate, in the same batch as the submit's
+     other dispatches. Rendering ConfirmMetadataView bare (as the other
+     describe blocks in this file do) never exercises that unmount because
+     nothing here dispatches uploadComplete; this is the one test in the file
+     that does, so it needs the same guard the app provides. */
+  function Harness() {
+    const hasCandidate = useAppSelector((s) => s.manuscript.importCandidate != null);
+    return hasCandidate ? <ConfirmMetadataView /> : null;
+  }
+
+  function renderWithLanguageCandidate() {
+    const candidateWithLanguage: ImportCandidate = {
+      ...candidate,
+      language: 'ru',
+      languageSupported: true,
+      supportedLanguages: [
+        { code: 'en', label: 'English' },
+        { code: 'ru', label: 'Russian' },
+      ],
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidateWithLanguage },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <Harness />
+      </Provider>,
+    );
+    return store;
+  }
+
+  it('sets languageSet: true on the optimistic LibraryBook, so the "Language unset" affordance does not render', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'confirmBook').mockResolvedValue({
+      manuscriptId: 'mns_test',
+      format: 'epub',
+      title: 'The Hollow Tide',
+      wordCount: 103102,
+      byteSize: 500_000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: 'body',
+      bookId: 'della-renwick__the-hollow-tide__the-hollow-tide',
+      author: 'Della Renwick',
+      series: 'The Hollow Tide',
+      seriesPosition: 1,
+      isStandalone: false,
+      paths: { bookDir: '/x', manuscript: '/x/m.epub', dotAudiobook: '/x/.audiobook' },
+    });
+
+    const store = renderWithLanguageCandidate();
+
+    /* The select is pre-seeded from the candidate's detected 'ru' — an
+       explicit user choice, matching what the finding describes ("a
+       language the user just explicitly picked"). */
+    const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
+    expect(select.value).toBe('ru');
+
+    const bookNum = screen.getByPlaceholderText('1');
+    await user.type(bookNum, '1');
+
+    const submit = screen.getByRole('button', { name: /save book and start analysis/i });
+    await user.click(submit);
+
+    await waitFor(() => expect(store.getState().library.books).toHaveLength(1));
+    const optimisticBook = store.getState().library.books[0];
+
+    expect(optimisticBook.language).toBe('ru');
+    expect(optimisticBook.languageSet).toBe(true);
+
+    render(<LibraryLanguageAffordance book={optimisticBook} />);
+    expect(
+      screen.queryByTestId(`library-language-unset-${optimisticBook.bookId}`),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId(`library-language-badge-${optimisticBook.bookId}`),
+    ).toBeInTheDocument();
   });
 });

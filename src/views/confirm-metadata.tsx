@@ -155,6 +155,12 @@ export function ConfirmMetadataView() {
         coverGradient: ['#3C194F', '#0F0E0D'],
         tags: [],
         language: language || undefined,
+        /* N6 (PR #2492 pass-2 review) — must match the server's honest
+           `bookStateLanguageOrNull` predicate (server/src/workspace/scan.ts):
+           set only when a language was actually chosen, not merely present.
+           `language` here is already normalised the same way (`language ||
+           undefined`), so a plain truthiness check on it is equivalent. */
+        languageSet: Boolean(language),
       };
       dispatch(libraryActions.addBook(optimistic));
       dispatch(
