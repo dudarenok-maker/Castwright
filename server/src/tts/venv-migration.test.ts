@@ -239,19 +239,23 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
       expect(oldNvidiaContent).not.toEqual(normalizedNvidia);
 
       const oldHash = computeReqHash([oldNvidiaContent, normalizedBase]);
-      const currentHash = computeReqHash([normalizedNvidia, normalizedBase]);
 
       // ORACLE 3: The hashes MUST differ (the marker comment must affect the hash).
-      expect(oldHash).not.toBe(currentHash);
+      // Compare against required.reqHash (computed from production's raw file bytes)
+      // to avoid CRLF/LF normalization mismatches.
+      const required = resolveRequired(SIDECAR_DIR, 'nvidia');
+      expect(oldHash).not.toBe(required.reqHash);
 
       // ORACLE 4: A venv with the old hash (pre-fix) MUST trigger pip-in-place,
       // which re-runs the ORT swap with the new pin.
-      const required = resolveRequired(SIDECAR_DIR, 'nvidia');
       const staleStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: oldHash };
       expect(decideVenvAction({ stamp: staleStamp, required })).toBe('pip-in-place');
 
       // ORACLE 5: A venv with the CURRENT hash should see 'noop' (no action needed).
-      const freshStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: currentHash };
+      // Use required.reqHash directly (computed by production code from raw file bytes)
+      // rather than independently recomputing from normalized content, which risks
+      // CRLF/LF mismatches on different checkouts.
+      const freshStamp = { pythonTag: required.pythonTag, profile: required.profile, reqHash: required.reqHash };
       expect(decideVenvAction({ stamp: freshStamp, required })).toBe('noop');
     });
   });
