@@ -166,6 +166,14 @@ function normalize(s: string): string {
   return buildNormalizedMap(s).text;
 }
 
+// Loop-strips every leading dash-group from an already-normalized needle
+// when dashIsDialogueMarker is true. When false, returns input unchanged
+// (matching pristine pre-#2537 main behavior).
+export function buildDashInvariantNeedle(normalizedText: string, dashIsDialogueMarker: boolean): string {
+  if (!dashIsDialogueMarker) return normalizedText;
+  return normalizedText.replace(/^(-\s*)+/, '');
+}
+
 /** Search `needle` in `haystack` starting at `cursor`, bounded to a
     look-ahead window; falls back to one unbounded re-search from the SAME
     cursor (tolerates a legitimately out-of-order match farther ahead). A
@@ -311,29 +319,17 @@ export function alignSentences(
   sentences: SentenceOutput[],
   paras: ParagraphEvidence[],
   body: string,
+  dashIsDialogueMarker: boolean = false,
 ): AlignmentResult {
   const { text: normBody, rawStart, rawEnd } = buildNormalizedMap(body);
   const allSpans = paras.flatMap((p) => p.spans);
   // #2537/#2540 — dash-invariant needle search. A leading paragraph-dash marker
   // is a dialogue glyph, never content: whether the model's cached sentence text
-  // includes or omits its leading dash (it strips it via `s.text.replace(/^\s*[-–—]\s*/u,'')`)
-  // must not change which raw body span the needle locates. `normalize()` already
-  // canonicalised the marker to an ASCII '-'.
-  //
-  // The naive approach (unconditionally strip the dash from all needles) creates a
-  // regression: short dash-stripped needles like "да." match inside "правда" BEFORE
-  // finding the correct match at "— Да.". The fix: for sentences that originally had
-  // a leading dash, keep the dash in the needle. This prevents matching inside
-  // "правда" while still allowing dash-invariance: the backward-extension logic
-  // will extend dash-stripped matches back to include the dash context, making
-  // both needle forms resolve to the same raw position.
-  const normalizedTexts = sentences.map((s) => normalize(s.text));
-  const hadLeadingDash = normalizedTexts.map((t) => /^-\s*/.test(t));
-  const needles = normalizedTexts.map((t, i) => {
-    // Keep the dash in needles from dash-led sentences to prevent false matches
-    // in substrings. For non-dash sentences, strip any leading dash (for consistency).
-    return hadLeadingDash[i] ? t : t.replace(/^-\s*/, '');
-  });
+  // includes or omits its leading dash must not change which raw body span the
+  // needle locates. `buildDashInvariantNeedle` consumes the whole leading-dash
+  // run when the gate is on, and is a no-op when off (matching pristine pre-#2537
+  // `main` behavior).
+  const needles = sentences.map((s) => buildDashInvariantNeedle(normalize(s.text), dashIsDialogueMarker));
   const located = locateNeedles(needles, normBody, true);
 
   const aligned: AlignedSentence[] = sentences.map((sentence, i) => {
@@ -342,15 +338,13 @@ export function alignSentences(
 
     let rawMatchStart = rawStart[match.start];
     const rawMatchEnd = rawEnd[match.end - 1];
-    // #2537/#2540 — anchor at the paragraph-leading dash. The needle above never
-    // carries the leading dash, so its match starts at the first content word; a
-    // dash-included form would have started at the dash itself. Extending the raw
-    // anchor back over a stack of "- + optional whitespace" that leads the line
-    // (and is not part of the word the needle matched) makes BOTH forms resolve to
-    // the SAME rawMatchStart — the offset span-overlap is decided on. Only a dash at
-    // the head of its line is folded in, never a mid-line em dash inside the prose.
-    if (rawMatchStart > 0) {
-      const preceding = /([-–—])\s*$/.exec(body.slice(0, rawMatchStart));
+    // When the gate is on, anchor backward over a stack of leading dash + optional
+    // whitespace so that a dash-stripped needle and a dash-included form resolve to
+    // the same rawMatchStart. Only a dash at the head of its line is folded in,
+    // never a mid-line em dash inside the prose. When the gate is off, this block
+    // is skipped entirely, matching pristine pre-#2537 `main`.
+    if (dashIsDialogueMarker && rawMatchStart > 0) {
+      const preceding = /(?:[-–—]\s*)+$/.exec(body.slice(0, rawMatchStart));
       if (preceding) {
         const beforeDash = body.slice(0, rawMatchStart - preceding[0].length);
         if (beforeDash === '' || /[\n\r]$/.test(beforeDash)) {

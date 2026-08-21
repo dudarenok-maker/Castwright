@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { parseChapterStructure } from './parser.js';
-import { alignSentences, locateSentenceOffsets } from './aligner.js';
+import { alignSentences, locateSentenceOffsets, buildDashInvariantNeedle } from './aligner.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 
 const mkSentence = (id: number, characterId: string, text: string): SentenceOutput => ({
@@ -544,5 +544,68 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
 
     // Defensive: confirm the speech span is at the end of the body
     expect(body.slice(actualSpeechSpan.start, actualSpeechSpan.end)).toBe('Да.');
+  });
+});
+describe('buildDashInvariantNeedle', () => {
+  it('single leading dash glyph', () => {
+    expect(buildDashInvariantNeedle('- hello', true)).toBe('hello');
+  });
+
+  it('two or more leading dashes', () => {
+    expect(buildDashInvariantNeedle('-- hello', true)).toBe('hello');
+    expect(buildDashInvariantNeedle('--- hello', true)).toBe('hello');
+  });
+
+  it('glyph choice: all dash glyphs normalize to ASCII hyphen before calling this function', () => {
+    // buildDashInvariantNeedle receives already-normalized text, so only
+    // the ASCII hyphen form is tested here. Glyph-specific normalization
+    // is tested in (b) glyph drift above.
+    expect(buildDashInvariantNeedle('- hello', true)).toBe('hello');
+  });
+
+  it('spacing variants', () => {
+    expect(buildDashInvariantNeedle('-    hello', true)).toBe('hello');
+    expect(buildDashInvariantNeedle('--  hello', true)).toBe('hello');
+  });
+
+  it('empty result after stripping dash-only input', () => {
+    expect(buildDashInvariantNeedle('-', true)).toBe('');
+    expect(buildDashInvariantNeedle('-- ', true)).toBe('');
+  });
+
+  it('dashIsDialogueMarker = false returns input unchanged', () => {
+    const inputs = ['hello', '- hello', '-- hello', '— hello', '-'];
+    for (const input of inputs) {
+      expect(buildDashInvariantNeedle(input, false)).toBe(input);
+    }
+  });
+});
+
+describe('alignSentences with dashIsDialogueMarker = true', () => {
+  it('with-dash and without-dash forms resolve to the identical span near a long anchor', () => {
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const body = [
+      '— Я никогда не думал, что этот длинный и сложный процесс зайдет так далеко, — сказал Антон.',
+      '— Да.',
+      '— Ну что ж, теперь мы знаем правду.',
+    ].join('\n');
+    const paras = parseChapterStructure(body, ruIdx);
+    const speechSpans = paras.flatMap((p) => p.spans).filter((s) => s.kind === 'speech');
+    const secondSpan = speechSpans[1];
+
+    const sentencesWithDash = [
+      mkSentence(1, 'anton', 'Я никогда не думал, что этот длинный и сложный процесс зайдет так далеко,'),
+      mkSentence(2, 'anton', '— Да.'),
+    ];
+    const resultWithDash = alignSentences(sentencesWithDash, paras, body, true);
+
+    const sentencesWithoutDash = [
+      mkSentence(1, 'anton', 'Я никогда не думал, что этот длинный и сложный процесс зайдет так далеко,'),
+      mkSentence(2, 'anton', 'Да.'),
+    ];
+    const resultWithoutDash = alignSentences(sentencesWithoutDash, paras, body, true);
+
+    expect(resultWithDash.aligned[1].spans).toEqual([secondSpan]);
+    expect(resultWithoutDash.aligned[1].spans).toEqual([secondSpan]);
   });
 });
