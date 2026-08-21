@@ -90,7 +90,7 @@ import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import { parseDuration } from './time';
-import { makeSecureUuid } from './secure-random';
+import { makeSecureUuid, makeSecureRandom } from './secure-random';
 /* Bundled mock audio assets — two short tones so the a/b player + mini
    player + voice samples have something audible to render under
    VITE_USE_MOCKS. ~88 KB each. stub-a (440 Hz) is the "current/A" /
@@ -883,7 +883,7 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
     languageFallback: false,
     supportedLanguages: mockSupportedLanguages,
   };
-  return { tempId: 'imp_' + Math.random().toString(36).slice(2, 10), candidate };
+  return { tempId: 'imp_' + makeSecureUuid().slice(0, 8), candidate };
 }
 
 /* In-memory mock backing store for book state, keyed by bookId. Patterns
@@ -1428,7 +1428,7 @@ async function mockConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookRes
   const bookId = `${body.author.toLowerCase().replace(/[^a-z0-9]+/g, '-')}__${body.isStandalone ? 'standalones' : body.series.toLowerCase().replace(/[^a-z0-9]+/g, '-')}__${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   return {
     bookId,
-    manuscriptId: 'mns_' + Math.random().toString(36).slice(2, 10),
+    manuscriptId: 'mns_' + makeSecureUuid().slice(0, 8),
     title: body.title,
     author: body.author,
     series: body.isStandalone ? 'Standalones' : body.series,
@@ -1457,7 +1457,7 @@ async function mockUploadManuscript({
     (h1 && h1[1].trim()) ||
     (effectiveName ? effectiveName.replace(/\.[^.]+$/, '') : 'Untitled manuscript');
   return {
-    manuscriptId: 'mns_' + Math.random().toString(36).slice(2, 10),
+    manuscriptId: 'mns_' + makeSecureUuid().slice(0, 8),
     format: format || inferFormat(effectiveName) || 'markdown',
     title,
     wordCount: effectiveText.trim().split(/\s+/).filter(Boolean).length,
@@ -7533,7 +7533,7 @@ async function mockCreateBookExport(
   body: BookExportRequest,
 ): Promise<BookExportJob> {
   await wait(120);
-  const id = `exp_${Math.random().toString(36).slice(2, 12)}`;
+  const id = `exp_${makeSecureUuid().slice(0, 10)}`;
   const job: BookExportJob = {
     id,
     bookId,
@@ -7641,8 +7641,7 @@ async function mockCreateBookShareLink(bookId: string): Promise<BookShareLink> {
      newSlug() — matches the SLUG_RE on the share route so the regex
      pattern in e2e tests is satisfied in mock mode too. */
   const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-  let slug = '';
-  for (let i = 0; i < 12; i += 1) slug += alphabet[Math.floor(Math.random() * alphabet.length)];
+  const slug = makeSecureRandom(alphabet, 12);
   const link: BookShareLink = {
     slug,
     url: `${window.location.origin}/share/${slug}`,
@@ -9604,7 +9603,7 @@ const MOCK_WHISPER_TRANSCRIPT = 'the quick brown fox jumped';
 export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSampleCandidate> {
   await wait(300);
   return {
-    candidateId: `cand-${Math.random().toString(36).slice(2, 10)}`,
+    candidateId: `cand-${makeSecureUuid().slice(0, 8)}`,
     transcript: MOCK_WHISPER_TRANSCRIPT,
     durationSeconds: 9,
     sampleRate: 24_000,
