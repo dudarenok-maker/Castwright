@@ -166,7 +166,13 @@ describe('ensureOrtMarker', () => {
     const message = lines.join('\n');
     expect(message).toContain('[ort-marker]');
     expect(message).toContain('No onnxruntime runtime is installed');
-    expect(message).toContain('Kokoro cannot load at all');
+    // Pin the corrected causation clause: the root cause is "no onnxruntime installed",
+    // not the marker's existence/removal. "in this state" refers to the absence of onnxruntime,
+    // not to the marker. Revert to the broken "without it" wording would fail this assertion.
+    expect(message).toContain('Kokoro cannot load at all in this state');
+    // Verify the broken wording is not present: this assertion catches mutation M1 (reverting
+    // to "without it", which would make "it" ambiguously refer to either the marker or onnxruntime).
+    expect(message).not.toContain('without it');
     expect(message).toContain('CASTWRIGHT_ACCELERATOR_PROFILE');
     expect(message).toContain('install-ort.mjs');
   });
@@ -205,7 +211,7 @@ describe('ensureOrtMarker', () => {
     // The healthy case on a CPU box (or any box where plain onnxruntime is the
     // correct choice): owner === 'plain', no marker to delete. The function should
     // return 'noop' and emit NO log line (the log callback is never invoked).
-    // This gap was identified in plan 282's five-state table — plain-with-no-marker
+    // This gap was identified in plan 282's eight-state table — plain-with-no-marker
     // had no test. Risk: if the safeLog call inside the delete branch were
     // accidentally moved outside its guard, a false marker-removed message would
     // print on every CPU boot with the entire test suite staying green.
@@ -277,7 +283,7 @@ describe('ensureOrtMarker', () => {
     // catch-block error-handler site (install-ort.mjs:366), which sits outside ensureOrtMarker's
     // own outer try/catch; the other four call sites (clobbered, wrote, plain-deletion,
     // none-deletion) sit INSIDE the outer try/catch (:320/:365), so those branches never throw
-    // regardless of whether safeLog itself throws. The return-value assertion below (:286) is
+    // regardless of whether safeLog itself throws. The return-value assertion below (:296) is
     // what catches a safeLog regression at all five sites.
     const { root, sp } = setup();
     const throwingLog = () => {
