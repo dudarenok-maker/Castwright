@@ -479,9 +479,11 @@ _(Update as each remaining criterion runs.)_
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
 - Criterion 4 — Pinokio update path (E9): owed.
 - Criterion 5 — AMD box: blocked, no hardware.
-- Criterion 6 — clobbered box (A41): **Run 2026-08-20 — STILL OWED.** The
-  row's own manufacture recipe does not exercise the `'clobbered'` branch;
-  see wave-3 step-2 results file for the defect.
+- Criterion 6 — clobbered box (A41): **Run 2026-08-21 — STILL OWED.** The
+  filed defect (#2535) is fixed and verified: the corrected recipe now
+  exercises the `'clobbered'` branch correctly, the log line fires with the
+  remedy command, and the repair works (see §8.4 wave-4 results). The row
+  stays owed only for the CUDA-provider re-check, blocked by #2534.
 - Addition — in-app upgrade path (A42): owed — not run this session (needs a
   real packaged `release/` install); see wave-3 step-2 results file.
 
