@@ -106,6 +106,23 @@ const MAIN_COVERED = [
      silently dropping coverage for the vite build config. */
   { rel: 'vite.config.ts', file: 'the vite build config', base: REPO_ROOT },
   { rel: 'openapi.yaml', file: 'the API contract', base: REPO_ROOT },
+  /* #2567 review round 3: spawn-windows-hide.test.ts (this suite) reads
+     these trees as TEXT at RUNTIME to scan for a missing windowsHide —
+     no module-graph edge, so a diff confined to any of them selected zero
+     tests under `vitest run --changed` before these triggers existed. */
+  { rel: 'scripts/verify-cache.mjs', file: 'an arbitrary scripts/** file', base: REPO_ROOT },
+  {
+    rel: 'server/tts-sidecar/scripts/install-ort.mjs',
+    file: 'a server/tts-sidecar/scripts/** file (via the scripts/** trigger)',
+    base: REPO_ROOT,
+  },
+  {
+    rel: 'pinokio-scripts/lib/resolve-release.js',
+    file: 'a pinokio-scripts/** file',
+    base: REPO_ROOT,
+  },
+  { rel: 'e2e/global-teardown.ts', file: 'the e2e Playwright teardown', base: REPO_ROOT },
+  { rel: 'launch.mjs', file: 'the versioned-dir launcher', base: REPO_ROOT },
 ];
 
 const SLOW_COVERED = [
