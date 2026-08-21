@@ -504,6 +504,8 @@ Successfully installed onnxruntime-gpu-1.27.0
 [install-ort] onnxruntime-gpu in place.
 ```
 
+> *Superseded note (2026-08-21):* The constraint `>=1.27,<1.28` shown above predates PR #2576, which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27` in `server/tts-sidecar/scripts/install-ort.mjs:223`. The output above reflects the state before that fix; the repair command would use the updated constraint on the current branch.
+
 **Post-repair state:**
 
 - `detectOrtOwner(sitePackages)` → `'swap'` (still GPU build's files)
