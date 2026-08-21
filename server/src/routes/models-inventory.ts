@@ -51,6 +51,7 @@ import {
   type EngineHealthState,
   type EngineTier,
 } from '../tts/engine-health.js';
+import { classifyPackageFault, type PackageFault } from '../tts/models-status.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -77,6 +78,12 @@ export interface ModelInventoryItem {
   diskPath: string | null;
   loaded: boolean;
   installState?: EngineHealthState;
+  /* packageFault — whether the package is genuinely MISSING vs present-but-
+     BROKEN, distinguished via the same classifyPackageFault precedence rule as
+     models-status.ts (missing wins over broken; a real returned import wins
+     outright; unknown on both axes is never a fault). installState above stays
+     the coarse disk/import composition and is NOT changed by this field. */
+  packageFault?: PackageFault;
   tier?: EngineTier;
   isDefaultEngine: boolean;
   /* Kokoro is the universal fallback engine — removing it breaks fallback for
@@ -175,6 +182,10 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       diskPath: kokoroWeightDir(repoRoot),
       loaded,
       installState: deriveEngineHealth('kokoro', { packageInstalled, weightsPresent, loaded }).state,
+      packageFault: classifyPackageFault(
+        sidecar.kokoroImportOk ?? undefined,
+        pkgInstalled(sidecar.kokoroPackageInstalled, kokoroPackageInstalled(repoRoot)),
+      ),
       tier: engineTier('kokoro'),
       isDefaultEngine: resolvedTtsEngine === 'kokoro',
       isFallbackEngine: true,
@@ -205,6 +216,10 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       diskPath: qwenBasePath,
       loaded,
       installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
+      packageFault: classifyPackageFault(
+        sidecar.qwenImportOk ?? undefined,
+        pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot)),
+      ),
       tier: engineTier('qwen'),
       isDefaultEngine: resolvedTtsEngine === 'qwen',
       isFallbackEngine: false,
@@ -235,6 +250,10 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       diskPath: qwenDesignPath,
       loaded,
       installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
+      packageFault: classifyPackageFault(
+        sidecar.qwenImportOk ?? undefined,
+        pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot)),
+      ),
       tier: engineTier('qwen'),
       isDefaultEngine: false,
       isFallbackEngine: false,
@@ -265,6 +284,10 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       diskPath: qwenBase17Path,
       loaded,
       installState: deriveEngineHealth('qwen', { packageInstalled, weightsPresent, loaded }).state,
+      packageFault: classifyPackageFault(
+        sidecar.qwenImportOk ?? undefined,
+        pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot)),
+      ),
       tier: engineTier('qwen'),
       isDefaultEngine: false,
       isFallbackEngine: false,
@@ -302,6 +325,10 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       diskPath: coquiPath,
       loaded,
       installState: deriveEngineHealth('coqui', { packageInstalled, weightsPresent, loaded }).state,
+      packageFault: classifyPackageFault(
+        sidecar.coquiImportOk ?? undefined,
+        pkgInstalled(sidecar.coquiPackageInstalled, coquiPackageInstalled(repoRoot)),
+      ),
       tier: engineTier('coqui'),
       isDefaultEngine: resolvedTtsEngine === 'coqui',
       isFallbackEngine: false,
@@ -332,6 +359,10 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       diskPath: whisperPath,
       loaded,
       installState: deriveEngineHealth('whisper', { packageInstalled, weightsPresent, loaded }).state,
+      packageFault: classifyPackageFault(
+        sidecar.whisperImportOk ?? undefined,
+        pkgInstalled(sidecar.whisperPackageInstalled, fasterWhisperInstalled(repoRoot)),
+      ),
       tier: engineTier('whisper'),
       isDefaultEngine: false,
       isFallbackEngine: false,

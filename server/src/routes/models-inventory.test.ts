@@ -380,6 +380,78 @@ describe('buildModelInventory', () => {
     });
   });
 
+  describe('packageFault (#2533)', () => {
+    /* #2533 — a consumer must be able to tell "package genuinely missing" from
+       "package present but broken/unimportable". installState collapses both to
+       'package-missing' (see pkgUsable's `??`), so the new sibling field carries
+       the finer distinction via models-status's classifyPackageFault. installState
+       must stay EXACTLY as-is in every scenario. */
+
+    it('kokoro: package present but unimportable (import_ok false, package_installed true) → broken', () => {
+      installKokoro();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: true, kokoroImportOk: false },
+        }),
+      );
+      const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
+      expect(kokoro.packageFault).toBe('broken');
+      expect(kokoro.installState).toBe('package-missing'); // unchanged — both still collapse
+    });
+
+    it('kokoro: package missing entirely (import_ok false, package_installed false) → missing', () => {
+      installKokoro(); // weights present so installState turns on package-presence alone
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: false, kokoroImportOk: false },
+        }),
+      );
+      const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
+      expect(kokoro.packageFault).toBe('missing');
+      expect(kokoro.installState).toBe('package-missing'); // unchanged
+    });
+
+    it('kokoro: no recorded import + package on disk → no fault (ok)', () => {
+      installKokoro();
+      // Simulate kokoro_onnx present in the sidecar venv so the Node probe is true.
+      mkdirSync(join(repoRoot, 'server', 'tts-sidecar', '.venv', 'Lib', 'site-packages', 'kokoro_onnx'), {
+        recursive: true,
+      });
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: undefined },
+        }),
+      );
+      const kokoro = inv.items.find((i) => i.id === 'kokoro')!;
+      expect(kokoro.packageFault).toBe('ok'); // unknown on both axes / nothing faulted → never a fault
+      expect(kokoro.installState).toBe('ready');
+    });
+
+    it('whisper: package present but unimportable (import_ok false, package_installed true) → broken', () => {
+      installWhisper();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, whisperPackageInstalled: true, whisperImportOk: false },
+        }),
+      );
+      const whisper = inv.items.find((i) => i.id === 'whisper')!;
+      expect(whisper.packageFault).toBe('broken');
+      expect(whisper.installState).toBe('package-missing'); // unchanged
+    });
+
+    it('whisper: package missing entirely (import_ok false, package_installed false) → missing', () => {
+      installWhisper();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, whisperPackageInstalled: false, whisperImportOk: false },
+        }),
+      );
+      const whisper = inv.items.find((i) => i.id === 'whisper')!;
+      expect(whisper.packageFault).toBe('missing');
+      expect(whisper.installState).toBe('package-missing'); // unchanged
+    });
+  });
+
   it('every TTS + whisper row carries an integrity verdict', () => {
     const inv = buildModelInventory(baseDeps());
     for (const id of ['kokoro', 'qwen-base', 'coqui', 'whisper'])
