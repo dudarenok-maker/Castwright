@@ -87,6 +87,7 @@ describe('samples router', () => {
 describe('samples router — no-language bundle normalisation', () => {
   let ws: string;
   let app2: Express;
+  let resetSamples: () => void;
 
   beforeAll(async () => {
     ws = mkdtempSync(join(tmpdir(), 'audiobook-samples-nolang-'));
@@ -111,9 +112,10 @@ describe('samples router — no-language bundle normalisation', () => {
     writeFileSync(join(sampleDir, '.audiobook', 'state.json'), JSON.stringify(bundle, null, 2));
 
     process.env.WORKSPACE_DIR = ws;
-    process.env.AUDIOBOOK_SAMPLES_DIR = sampleRoot;
     vi.resetModules();
-    const { samplesRouter } = await import('./samples.js');
+    const { samplesRouter, setSamplesRoot, _resetSamplesRoot } = await import('./samples.js');
+    setSamplesRoot(sampleRoot);
+    resetSamples = _resetSamplesRoot;
     app2 = express();
     app2.use(express.json());
     app2.use('/api/samples', samplesRouter);
@@ -122,7 +124,7 @@ describe('samples router — no-language bundle normalisation', () => {
   afterAll(() => {
     if (ws) rmSync(ws, { recursive: true, force: true });
     delete process.env.WORKSPACE_DIR;
-    delete process.env.AUDIOBOOK_SAMPLES_DIR;
+    if (resetSamples) resetSamples();
   });
 
   it('loads a sample whose bundle has no language as language:null (key present)', async () => {

@@ -28,22 +28,27 @@ import { parseManuscript } from '../parsers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /* Testability seam: the committed sample set lives under samples/ next to the
-   module, but tests that need a controlled bundle (e.g. one whose state.json
-   omits `language`) inject their own directory. */
-const SAMPLES_ROOT = process.env.AUDIOBOOK_SAMPLES_DIR
-  ? resolve(process.env.AUDIOBOOK_SAMPLES_DIR)
-  : resolve(__dirname, '..', '..', '..', 'samples');
+   module, but tests that need a controlled bundle inject their own directory
+   via setSamplesRoot(). */
+let samplesRoot = resolve(__dirname, '..', '..', '..', 'samples');
+
+export function setSamplesRoot(root: string): void {
+  samplesRoot = root;
+}
+export function _resetSamplesRoot(): void {
+  samplesRoot = resolve(__dirname, '..', '..', '..', 'samples');
+}
 
 export const samplesRouter = Router();
 
 /* GET /api/samples — list the committed sample books. */
 samplesRouter.get('/', async (_req: Request, res: Response) => {
-  if (!existsSync(SAMPLES_ROOT)) return res.json({ samples: [] });
-  const entries = await readdir(SAMPLES_ROOT, { withFileTypes: true });
+  if (!existsSync(samplesRoot)) return res.json({ samples: [] });
+  const entries = await readdir(samplesRoot, { withFileTypes: true });
   const samples: Array<{ slug: string; title: string; author: string }> = [];
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const statePath = join(SAMPLES_ROOT, e.name, '.audiobook', 'state.json');
+    const statePath = join(samplesRoot, e.name, '.audiobook', 'state.json');
     if (!existsSync(statePath)) continue;
     const st = JSON.parse(await readFile(statePath, 'utf8'));
     samples.push({ slug: e.name, title: st.title, author: st.author });
@@ -57,8 +62,8 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const slug = req.params.slug;
     let src: string;
     try {
-      src = join(SAMPLES_ROOT, sanitizeIdSegment(safeSegment(slug)));
-      assertContained(SAMPLES_ROOT, src);
+      src = join(samplesRoot, sanitizeIdSegment(safeSegment(slug)));
+      assertContained(samplesRoot, src);
     } catch {
       return res.status(400).json({ error: 'Invalid sample slug.' });
     }
