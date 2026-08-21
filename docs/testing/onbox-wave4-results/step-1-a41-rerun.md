@@ -1,5 +1,7 @@
 # Wave 4, step 1 — A41 re-run (Castwright#2569)
 
+*Dated run record (2026-08-21). References to #2534 as a blocker in this document are from a prior state; that blocker has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`). The row remains owed pending re-run against the fixed pin.*
+
 Acceptance re-run for register row **A41** (`docs/testing/onbox-acceptance-register.md`
 §A41), gated on defect [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
 and its verify child [#2546](https://github.com/dudarenok-maker/Castwright/issues/2546)

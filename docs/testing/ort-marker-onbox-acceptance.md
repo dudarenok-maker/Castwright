@@ -430,6 +430,8 @@ correctly. The row stays **STILL OWED** only because its own criteria include
 the CUDA-provider re-check, blocked by the pre-existing `#2534` gap (same
 precedent as A39).
 
+*Dated run record (2026-08-21). The `#2534` blocker cited here has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); the row remains owed pending re-run against the fixed pin, same as A39/A40. See disposition summary (§10) for current status.*
+
 **Run by:** claude (Castwright#2569).
 **Date:** 2026-08-21.
 **Venv:** a fresh throwaway venv under a scratch temp path, deleted after the
@@ -580,7 +582,9 @@ _(Update as each remaining criterion runs.)_
   filed defect (#2535) is fixed and verified: the corrected recipe now
   exercises the `'clobbered'` branch correctly, the log line fires with the
   remedy command, and the repair works (see §8.5 verification). The row
-  stays owed only for the CUDA-provider re-check, blocked by #2534.
+  stays owed only because the CUDA-provider re-check has not yet been
+  re-run against the fixed pin (PR #2576, which re-pinned
+  `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`; same reason A39 stays owed).
 - Addition — in-app upgrade path (A42): owed — not run this session (needs a
   real packaged `release/` install); see wave-3 step-2 results file.
 
