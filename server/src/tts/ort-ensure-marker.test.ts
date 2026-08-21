@@ -73,7 +73,11 @@ describe('ensureOrtMarker', () => {
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('deleted');
     expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
-    expect(lines.join('\n')).toContain('[ort-marker]');
+    const message = lines.join('\n');
+    expect(message).toContain('[ort-marker]');
+    expect(message).toContain('plain onnxruntime');
+    expect(message).toContain('CPU build');
+    expect(message).toContain('without GPU acceleration');
   });
 
   it('deletes a lying marker after an INTERRUPTED SWAP — no runtime at all', () => {
@@ -82,7 +86,12 @@ describe('ensureOrtMarker', () => {
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('deleted');
     expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
-    expect(lines.join('\n')).toContain('[ort-marker]');
+    const message = lines.join('\n');
+    expect(message).toContain('[ort-marker]');
+    expect(message).toContain('No onnxruntime runtime is installed');
+    expect(message).toContain('GPU Kokoro cannot load');
+    expect(message).toContain('CASTWRIGHT_ACCELERATOR_PROFILE');
+    expect(message).toContain('install-ort.mjs');
   });
 
   it('never throws on a venv that does not exist', () => {

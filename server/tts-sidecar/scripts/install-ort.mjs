@@ -336,10 +336,20 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
     if (deleteOrtMarkerIfOurs(sp)) {
-      safeLog(
-        '[ort-marker] This venv is now owned by a plain onnxruntime (or nothing) rather than the GPU ' +
-          'runtime, so our recorded swap marker no longer matches its actual owner — it has been removed.',
-      );
+      if (owner === 'none') {
+        safeLog(
+          '[ort-marker] No onnxruntime runtime is installed — the swap was interrupted or incomplete. ' +
+            'The recorded swap marker has been removed. GPU Kokoro cannot load in this state. ' +
+            'Repair with:\n' +
+            '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        );
+      } else {
+        // owner === 'plain'
+        safeLog(
+          '[ort-marker] This venv now uses only plain onnxruntime (CPU build). The recorded swap marker ' +
+            'has been removed. Kokoro will run without GPU acceleration.',
+        );
+      }
       return 'deleted';
     }
     return 'noop';
