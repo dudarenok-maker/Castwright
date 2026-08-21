@@ -163,25 +163,9 @@ vitest run can report far less wall-clock on an idle box, so treat these as the
 range, not a constant.
 
 **Copy the recipe below verbatim -- do not improvise your own inline variant.**
-It already avoids shell-quoting entirely by design: the commit message is
-written to a file with `[IO.File]::WriteAllText`, and the child script takes
-`$Dir`/`$Worktree` as `-File` parameters instead of having anything
-interpolated into a command string. A freelanced one-liner that rebuilds this
-by hand -- embedding `$variables` or escaped `\"` quotes inside a wrapped
-double-quoted command -- reintroduces exactly the quoting bug this recipe
-exists to avoid. On `Castwright#2520` a local-model run did this, hit
-`String is missing terminator` / `Missing type name after '['` /
-`Exception calling "Create" with "1" argument(s)` across four self-invented
-variants, spent its whole turn reasoning line-by-line about *why* each one
-broke, and died on the output-token cap with no commit, no push, and no
-receipt -- while the two-file edit it was committing was already correct.
+It avoids shell-quoting entirely by design: the commit message is written to a file with `[IO.File]::WriteAllText`, and the child script receives `$Dir` and `$Worktree` as parameters via its `param()` block rather than having anything interpolated into a command string. A freelanced one-liner that rebuilds this by hand -- embedding `$variables` or escaped `\"` quotes inside a wrapped double-quoted command -- reintroduces exactly the quoting bug this recipe exists to avoid. On `Castwright#2520` a local-model run did this, hit `The string is missing the terminator` / `Missing type name after '['` / `Exception calling "Create" with "1" argument(s)` across four self-invented variants, spent its whole turn reasoning line-by-line about *why* each one broke, and died on the output-token cap with no commit, no push, and no receipt -- while the two-file edit it was committing was already correct. **Two things require substitution per-use:** your worktree path (replace `'C:\Claude\Projects\wt-<your-worktree>'` at line ~195) and your commit message (replace `'fix(scope): subject line'` at line ~202 with a real message following Conventional Commits). The structure and quoting style are copied verbatim; the paths and message are filled in for each use.
 
-**If a command reports a parse error, do not diagnose it.** `missing
-terminator`, `Missing type name after '['`, and `Exception calling ... with
-... argument(s)` are ALL the same signal: stop after at most one sentence and
-re-run the recipe below character-for-character, rather than reasoning about
-PowerShell string-interpolation semantics in-context -- that reasoning is
-usually wrong anyway (as it was on #2520) and it is the expensive way to fail.
+**If the detached commit command reports `The string is missing the terminator` or `Missing type name after '['`, do not diagnose the error.** Both are parse-error signals from PowerShell's string handling: stop after one sentence and retry the recipe with the same structure (substituting your actual paths and message). That reasoning-through approach is usually wrong anyway (as it was on #2520) and it is the expensive way to fail. **If the retry produces the identical error, stop retrying** and report the failure plainly per this file's "AGENT BLOCKED"/"AGENT FAILED" convention. Note: `Exception calling "Create" with "1" argument(s)` is not a parse-error signal -- it is a generic .NET method-call exception wrapper that fires on many unrelated failures like permission denied or missing path. If you see it, read the full error message to understand what actually failed rather than retrying the recipe automatically.
 
 Launch it detached and poll. Each poll returns instantly, so the cap stops
 mattering:
