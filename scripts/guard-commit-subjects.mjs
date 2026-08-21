@@ -97,6 +97,7 @@ function gitListSubjects(remoteSha, localSha) {
   const res = spawnSync('git', ['log', `--format=%H${UNIT}%s`, ...computeRevs(remoteSha, localSha)], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
     env: scrubGitEnv(),
   });
   if (res.status !== 0 || typeof res.stdout !== 'string') return [];

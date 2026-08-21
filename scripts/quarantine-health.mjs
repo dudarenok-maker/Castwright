@@ -925,6 +925,7 @@ function runVitestJson(cwd, config, files) {
     shell: true,
     maxBuffer: 64 * 1024 * 1024,
     timeout: VITEST_RUN_TIMEOUT_MS,
+    windowsHide: true,
     // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
     // it.skip into a real it — without it every quarantined test reports
     // 'skipped' here and would misclassify as never-passes for EVERY test,

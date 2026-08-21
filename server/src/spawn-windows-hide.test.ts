@@ -68,6 +68,69 @@ const EXTERNAL_FILES_FLOOR = [
   'server/tts-sidecar/scripts/install-qwen3.mjs',
   'server/tts-sidecar/scripts/install-coqui.mjs',
   'server/tts-sidecar/scripts/ensure-python312.mjs',
+  // #2567: verify-pipeline tooling that flashed a console window on every
+  // `npm run verify*`/`test:scripts` invocation — the same class of bug this
+  // guard exists to catch, just outside the floor list until now.
+  'scripts/run-powershell.mjs',
+  'scripts/verify-cache.mjs',
+  'scripts/check-import-cycles.mjs',
+  // #2567 review round 2: the rest of scripts/** (outside scripts/tests/)
+  // that had the same missing-windowsHide defect, fixed in the same round —
+  // added to the floor so a REGRESSION on any of them (someone re-adding a
+  // spawn without the flag, or a new spawn dropped into one of these files)
+  // is caught, not just the fix itself proven once.
+  'scripts/audit-branches-worktrees.mjs',
+  'scripts/backlog-sync.mjs',
+  'scripts/build-companion-apk.mjs',
+  'scripts/bump-version.mjs',
+  'scripts/capture-companion.mjs',
+  'scripts/check-onbox-register.mjs',
+  'scripts/code-stats.mjs',
+  'scripts/fix-archived-plan-pointers.mjs',
+  'scripts/flake-repro.mjs',
+  'scripts/gen-parser-fixtures.mjs',
+  'scripts/gh.mjs',
+  'scripts/guard-commit-subjects.mjs',
+  'scripts/guard-protected-push.mjs',
+  'scripts/is-docs-only-push.mjs',
+  'scripts/launch-sidecar.mjs',
+  'scripts/lib/module-graph.mjs',
+  'scripts/lib/run-command.mjs',
+  'scripts/monitor-generation.mjs',
+  'scripts/preflight-ffmpeg.cjs',
+  'scripts/quarantine-health.mjs',
+  'scripts/release-body.mjs',
+  'scripts/relufs-existing.mjs',
+  'scripts/rexing-existing.mjs',
+  'scripts/run-attribution-eval.mjs',
+  'scripts/run-golden-audio.mjs',
+  'scripts/run-hooks-tests.mjs',
+  'scripts/run-pinokio-tests.mjs',
+  'scripts/slim-epub-cover.mjs',
+  'scripts/stage-marketing-screenshots.mjs',
+  'scripts/start-app.mjs',
+  'scripts/sync-wiki.mjs',
+  'scripts/wt-list.mjs',
+  'scripts/wt-merge.mjs',
+  'scripts/wt-new.mjs',
+  // #2567 review round 2: prod-reachable (ships inside server/tts-sidecar/**,
+  // which the release-zip MANIFEST includes) and genuinely spawns — a
+  // `execSync('powershell … Win32_VideoController …')` GPU-vendor probe on
+  // every Windows install/upgrade from a console-less parent. Not caught by
+  // pipSpawners() below because it spawns no pip; the comment on that
+  // function used to (wrongly) cite this file as having "no spawn call at
+  // all" as the reason a plain glob would over-select it — see that
+  // comment's own correction just below.
+  'server/tts-sidecar/scripts/accelerator-profile.mjs',
+  // #2567 review round 2: three unguarded `git` spawns on BOTH the Pinokio
+  // install and update paths (an Electron parent, no console) — outside
+  // every existing scan (pipSpawners() is `.mjs`-only over two other dirs;
+  // this file is `.js` under pinokio-scripts/lib/).
+  'pinokio-scripts/lib/resolve-release.js',
+  // #2567 review round 2: dev-only but the same output-discarded, unguarded
+  // `powershell` shape as the PR's own "worst offender" example — a
+  // console-less Playwright teardown run would flash one per e2e batch.
+  'e2e/global-teardown.ts',
 ].map((rel) => join(REPO_ROOT, rel));
 
 /* install-ort.mjs (#2192) made the ONNX-runtime swap load-bearing on the boot,
@@ -76,8 +139,12 @@ const EXTERNAL_FILES_FLOOR = [
    just as invisible to a hardcoded list. Glob both dirs instead of hand-adding
    one more filename, and keep ONLY the files that actually invoke pip via
    `-m pip` — a plain `.mjs` glob with no content filter would also sweep in
-   files with no spawn call at all (pip-constraints.mjs, accelerator-profile.mjs)
-   and files whose spawns have nothing to do with pip (ensure-python312.mjs). */
+   files whose spawns have nothing to do with pip: pip-constraints.mjs (no
+   spawn call at all) and ensure-python312.mjs (spawns python/winget, not
+   pip). accelerator-profile.mjs used to be cited here too as a "no spawn at
+   all" example — false (#2567 review round 2: it execSyncs a powershell/lspci
+   GPU probe) — it's now covered directly via EXTERNAL_FILES_FLOOR above
+   instead of relying on this comment's inaccurate premise. */
 const PIP_SPAWN_RE = /-m['"]?\s*,?\s*['"]pip/;
 
 /* Blank line comments and block comments only — NOT string/template content.

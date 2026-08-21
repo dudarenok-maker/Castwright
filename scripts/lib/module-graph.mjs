@@ -160,6 +160,7 @@ export function classifyIgnored(absPaths, cwd) {
     cwd,
     input: posix.join('\n'),
     encoding: 'utf8',
+    windowsHide: true,
     env: scrubGitEnv(),
   });
 
