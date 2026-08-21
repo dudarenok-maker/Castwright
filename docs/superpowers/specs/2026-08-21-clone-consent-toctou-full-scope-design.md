@@ -1,6 +1,24 @@
 ---
-status: draft
+status: superseded
 ---
+
+> **SUPERSEDED — adversarial review found the `voices.ts` mechanism is
+> attempt #1 ("fold into the lock") relabeled, not a new mechanism.**
+> Skip-and-continue answers the abort half of #1's rejection but IS the
+> "demotes a workspace veto to a per-book one" half — it produces the exact
+> split #2006's own history names as the danger this design was supposed to
+> avoid, while "Out of scope" forbids the §3.2 reopening that would actually
+> fix it. Also found: Class E's `series-mint` lock sits outside the documented
+> `design→library-voice→cast` order (a new ordering hazard, and wrongly
+> attributed to §12.2, which proposes no such thing); Class B's
+> peek-then-lock-then-reverify can't live inside `withCastLocks`'s
+> response-sending callback and, as written, reintroduces an AB/BA deadlock
+> `withCastLocks` already sorts keys to prevent; two issue-documented defects
+> were omitted (one of which can silently revert Class E's own fix); and
+> `SingleDesignEvent.code` was invented — no such enum exists in
+> `openapi.yaml`. Kept as a record of the sixth failed attempt (four prior +
+> this repo's two). Next attempt works the `voices.ts` partial-application
+> question directly with the user rather than solo — see conversation.
 
 # Clone-consent TOCTOU: full-scope design (closes #2006 / srv-81)
 
