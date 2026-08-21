@@ -155,6 +155,14 @@ describe('ensureOrtMarker', () => {
       },
     },
     {
+      name: 'wrote branch (fresh marker on GPU venv)',
+      setup: () => venv({ owner: 'swap' }),
+      expectedReturn: 'wrote',
+      verify: (sp: string) => {
+        expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(true);
+      },
+    },
+    {
       name: 'deletion branch for plain onnxruntime',
       setup: () => {
         const { root, sp } = venv({ owner: 'plain' });
@@ -191,7 +199,7 @@ describe('ensureOrtMarker', () => {
     },
   ])('never throws even when the caller-supplied log itself throws ($name)', ({ setup, expectedReturn, verify }) => {
     // The safeLog wrapper inside ensureOrtMarker must catch and swallow throwing
-    // logs at every call site — including the clobbered, plain-deletion, none-deletion,
+    // logs at every call site — including the clobbered, wrote, plain-deletion, none-deletion,
     // and catch-block error-handler branches. A throwing log must not defeat the "never throws"
     // guarantee that ensureOrtMarker's callers (server startup) depend on.
     const { root, sp } = setup();
