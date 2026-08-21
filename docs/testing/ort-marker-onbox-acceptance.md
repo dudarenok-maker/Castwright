@@ -319,9 +319,15 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
 ### 8.2 Expected result
 
 `ensureOrtMarker` returns `'clobbered'`, logs the condition and the exact remedy
-command, and writes **no** marker over the real distribution — `pip check` stays
-broken (not silently "fixed" at the wrong version). Running the remedy command
-repairs the box: `pip check` clean afterward, Kokoro reports `CUDAExecutionProvider`.
+command, and writes **no** marker over the real distribution. `pip check` stays
+clean throughout (pinned versions matched here, unlike wave-3's mismatched 1.29.0
+run, so there was nothing broken for boot to silently "fix" either way) — the
+discriminating checks are (a) the `'clobbered'` return value and the `[ort-marker]`
+log line naming the condition and remedy command, and (b) that no NEW marker folder
+is written over the real plain distribution (confirm by directory listing — only
+the real plain dist-info at its own distinct version, plus the GPU swap dist-info,
+both present). Running the remedy command repairs the box: uninstalls both,
+reinstalls `onnxruntime-gpu` clean, writes a legitimate marker afterward.
 
 ### 8.3 Result
 
