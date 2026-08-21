@@ -474,9 +474,20 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
             fallbackToast();
           },
         });
-        if (accepted) {
-          languageGuardPending.set(bookId, Date.now());
-        } else {
+        /* Arm the suppression bound regardless of whether the guard actually
+           opened a modal. emitLanguageGuard returns false both when no
+           handler is mounted and when the selector resolves to no library
+           book (e.g. a library fetch failed at mount and the library slice
+           is stuck empty) — in both cases the failure is just as
+           deterministic and book-wide as the accepted case, so without an
+           entry here every subsequent chapter of the SAME book re-attempts
+           emitLanguageGuard, and the streak breaker is separately exempted
+           for language-unset (see queue-dispatcher-middleware.ts:164), so
+           nothing else bounds the drain. The TTL still expires this entry
+           on its own; the accepted path's onRetry/onDismiss just clear it
+           sooner. */
+        languageGuardPending.set(bookId, Date.now());
+        if (!accepted) {
           fallbackToast();
         }
       }

@@ -482,7 +482,12 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(emitLanguageGuardMock).toHaveBeenCalledTimes(1);
   });
 
-  it('falls through to a toast and does not mark the book pending when emitLanguageGuard rejects', () => {
+  it('falls through to a toast and STILL marks the book pending (TTL-bounded) when emitLanguageGuard rejects (N2)', () => {
+    /* emitLanguageGuard returns false both when no handler is mounted and
+       when the selector matches no library book — either way the
+       suppression entry must still be armed so a same-book drain is bounded
+       even though no modal opened (see queue-dispatcher-middleware.ts's
+       STEP 2 `continue` guard, which reads hasPendingLanguageGuard). */
     emitLanguageGuardMock.mockReturnValue(false);
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
@@ -490,7 +495,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
     const toasts = store.getState().notifications.toasts;
     expect(toasts.some((t) => t.dedupeKey === 'language-unset:b1:5')).toBe(true);
-    expect(runner.hasPendingLanguageGuard('b1')).toBe(false);
+    expect(runner.hasPendingLanguageGuard('b1')).toBe(true);
   });
 
   it('onRetry clears the pending book and retries via retryQueueEntry with the captured queueEntryId', () => {
