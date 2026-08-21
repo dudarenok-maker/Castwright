@@ -455,7 +455,10 @@ python -m venv <venv>
 - Directory listing: `onnxruntime-1.28.0.dist-info` (real plain, named by version)
   and `onnxruntime_gpu-1.27.0.dist-info` (GPU build) coexist with DIFFERENT version
   numbers — crucially different from §8.4's run which showed both at 1.27.0.
-- `pip check` clean (versions pinned to match)
+- `pip check` clean (nothing else in this throwaway venv depends on
+  `onnxruntime`, so there's nothing for either package's version to violate —
+  not because the two versions match; §8.1's recipe deliberately pins them
+  differently)
 
 **ensureOrtMarker behavior:**
 
