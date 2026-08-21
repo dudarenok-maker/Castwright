@@ -2718,7 +2718,7 @@ test('the CLI (no flags) exits 0, with the OK signal, against the real committed
 
 // --- CodeQL #218/#219 paired tests: fixpoint sanitizers ----------------------
 // The fixpoint loop is the standard CodeQL remediation for
-// js/incomplete-sanitization: it guarantees no residue
+// js/incomplete-multi-character-sanitization: it guarantees no residue
 // survives by repeating until the string stops changing.
 //
 // Mutation-checked 2026-08-20 under #2529 against the old single-pass bodies

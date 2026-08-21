@@ -50,7 +50,7 @@ trim ReDoS — `text-match.ts` `normaliseForMatch` and `voice-sample-cache.ts`
 | `server/src/parsers/text.ts:140` (`FILENAME_RE`) | js/polynomial-redos | server-side filename-stem input; no parse-preserving linear rewrite (Node 20, no atomic groups); parse identity locked by characterization tests |
 | `server/src/parsers/text.ts:184` (`SERIES_FROM_TITLE_RE`) | js/polynomial-redos | server-side book-title input; same rationale |
 
-## `js/incomplete-sanitization` — `htmlCellText` (for dismissal)
+## `js/incomplete-multi-character-sanitization` — `htmlCellText` (for dismissal)
 
 Dismissed on **2026-08-21** as a provably inert fixpoint loop.
 
@@ -71,7 +71,7 @@ is not.
 
 | file:line | rule | justification |
 |---|---|---|
-| Alert #219, `scripts/check-onbox-register.mjs:366` (`htmlCellText`) | js/incomplete-sanitization | regex `/<[^>]*>/g` is already complete in one pass; any surviving `<` has no matching `>`, and removing tags cannot create a new tag; the fixpoint loop is provably inert, kept for consistency with `stripHtmlComments` (#218) which DOES need fixpoint behaviour |
+| Alert #219, `scripts/check-onbox-register.mjs:366` (`htmlCellText`) | js/incomplete-multi-character-sanitization | regex `/<[^>]*>/g` is already complete in one pass; any surviving `<` has no matching `>`, and removing tags cannot create a new tag; the fixpoint loop is provably inert, kept for consistency with `stripHtmlComments` (#218) which DOES need fixpoint behaviour |
 
 ## `py/stack-trace-exposure` — sidecar curated exception echoes (for dismissal)
 
