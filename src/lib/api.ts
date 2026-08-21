@@ -9307,7 +9307,7 @@ export async function mockDesignLibraryVoice(body: {
   await wait(300);
   const now = new Date().toISOString();
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-${makeSecureUuid()}`,  
+    voiceUuid: `lib-${makeSecureUuid()}`,
     name: body.name,
     provenance: 'designed',
     tags: [],
@@ -9674,7 +9674,7 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
     );
   }
   const entry: VoiceLibraryEntry = {
-    voiceUuid: `lib-clone-${makeSecureUuid()}`,  
+    voiceUuid: `lib-clone-${makeSecureUuid()}`,
     name: body.name?.trim() || body.consent.personName,
     provenance: 'cloned',
     tags: [],
