@@ -49,68 +49,33 @@ describe('normaliseIdKey', () => {
     }
   });
 
-  it('fixes the ^-+|-+$ ReDoS on pathological alternation input', () => {
-    // The old regex /^-+|-+$/ is vulnerable to catastrophic backtracking on
-    // alternation, specifically when the input is a long run of separators
-    // followed by a non-separator. The regex engine tries both branches of
-    // the alternation at each position, causing exponential time.
-    // Example: input = '---...---x' (900 dashes + 'x')
-    // The engine tries ^ at position 0 (matches first branch),
-    // then at position 1, 2, ..., 899 (all fail the prefix),
-    // then backtracks through alternation trying the second branch.
-    // With ~900 positions and ~2 branches per position, this is catastrophic.
+  it('replaces the ^-+|-+$ regex with linear stripEdges', () => {
+    // CodeQL flagged the old regex /^-+|-+$/ as polynomial-redos (#226),
+    // based on the alternation pattern between two anchored quantifiers.
+    // The fix replaces it with stripEdges(), which is obviously linear O(n).
     //
-    // The new implementation uses stripEdges(), which is linear O(n).
-    // This test verifies the new implementation completes quickly even on
-    // pathological input, while the old implementation would hang.
+    // NOTE: empirically, Node.js/V8's regex engine does NOT exhibit
+    // catastrophic backtracking on this pattern with any tested input
+    // (including 100k+ dashes), suggesting either:
+    // (a) the engine has protections against this ReDoS class, or
+    // (b) CodeQL's static analysis was conservative/false-positive.
+    // Regardless, stripEdges is superior: provably linear and more readable.
 
-    const pathologicalInput = '-'.repeat(900) + 'x';
+    const largeInput = '-'.repeat(10000) + 'x';
 
-    // New implementation must complete quickly (< 1 second generously bounds
-    // what would be immediate, well under any modern machine's capabilities).
+    // New implementation is linear — completes instantly even on large input.
     const startNew = performance.now();
-    const resultNew = normaliseIdKey(pathologicalInput);
+    const resultNew = normaliseIdKey(largeInput);
     const durationNew = performance.now() - startNew;
 
     expect(resultNew).toBe('x');
-    expect(durationNew).toBeLessThan(1000); // 1 second timeout
+    expect(durationNew).toBeLessThan(100); // Should be microseconds, not ms
 
-    // Demonstrate the old regex WOULD cause catastrophic backtracking by
-    // testing it briefly with a timeout. This proves the mutation: reverting
-    // the fix by using the old regex would fail this assertion.
+    // Verify the old regex produces identical output (output-identity test;
+    // this is what the prior mutation actually proves).
     const legacy = (id: string): string =>
       id.toLowerCase().replace(/[-_\s]+/g, '-').replace(/^-+|-+$/g, '');
 
-    const startLegacy = performance.now();
-    // Create a timeout boundary: if the legacy implementation hasn't finished
-    // after 100ms on this pathological input, we know it's exponential.
-    // (Normal operation on 900 chars should be microseconds; 100ms is
-    // ~1,000,000x slower than we'd expect, a clear catastrophic signal.)
-    const timeoutMs = 100;
-    let legacyResult: string | null = null;
-    let legacyTimedOut = false;
-
-    try {
-      // We can't actually interrupt JavaScript, but we can time it:
-      legacyResult = legacy(pathologicalInput);
-      const durationLegacy = performance.now() - startLegacy;
-      if (durationLegacy > timeoutMs) {
-        legacyTimedOut = true;
-      }
-    } catch {
-      legacyTimedOut = true;
-    }
-
-    // The legacy implementation SHOULD exhibit catastrophic backtracking
-    // on this input. If it doesn't, that's unusual (possibly the engine
-    // or V8 optimized it away, or the input length isn't long enough).
-    // We still verify the result is correct if it did finish.
-    if (!legacyTimedOut && legacyResult !== null) {
-      expect(legacyResult).toBe('x'); // output is correct, if slow
-    } else if (legacyTimedOut) {
-      // This is the expected outcome: the old regex hangs, the new one completes.
-      // This proves the mutation: reverting to the old implementation fails.
-      expect(true).toBe(true); // Mutation confirmed: old is slow, new is fast
-    }
+    expect(legacy(largeInput)).toBe('x');
   });
 });
