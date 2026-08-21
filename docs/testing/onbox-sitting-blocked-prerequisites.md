@@ -6,36 +6,38 @@
 >
 > Plan of record: [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.3, §5
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> F1 (Group F), H1 and H2 (Group H), D3 (Group D)
+> H1 and H2 (Group H), D3 (Group D)
 > Audit input: [`onbox-acceptance-staleness-audit.md`](onbox-acceptance-staleness-audit.md)
 
 ---
 
+## Correction, 2026-08-21 (wave 4, #2551 step 6)
+
+**F1 (Android companion app v1 live-device acceptance, formerly Group F)
+is DISCHARGED and removed from this pack.** The repo owner confirmed live
+end-to-end use on a real device covering all three parts named in §4.4 below
+(v1 core scenario, app-9 Android Auto/CarPlay, app-10 LAN streaming),
+2026-08-21 — a live-device end-to-end run, not a test pass. Group F no
+longer exists in the register. Durable record:
+[`188-android-companion-app.md`](../features/188-android-companion-app.md)'s
+Ship notes. This pack now covers only the three CJK-manuscript rows.
+
 ## 1. Purpose & scope
 
-This sitting covers the four register rows blocked on something that must be
-**obtained**, not on time or a free GPU slot: **F1** needs a real Android
-device (and, for one item, a CarPlay/Android Auto head unit); **H1**, **H2**
-and **D3** need a real CJK manuscript this repo's corpus does not currently
-have available. Unlike every other sitting in this wave, this pack cannot be
-scheduled today — it exists so the procedure is ready the moment each
-prerequisite lands.
+This sitting covers the three register rows blocked on something that must be
+**obtained**, not on time or a free GPU slot: **H1**, **H2** and **D3** need a
+real CJK manuscript this repo's corpus does not currently have available.
+Unlike every other sitting in this wave, this pack cannot be scheduled today
+— it exists so the procedure is ready the moment each prerequisite lands.
 
 **Running time total (this sitting, once unblocked):** H1 (15 min) + H2
 (15 min) + D3 (20 min) = **50 minutes** for the three CJK-manuscript rows,
-run together once one or both manuscripts are in hand. **F1 is excluded from
-that total** — its own plan does not estimate it, and it is "an entire
-untested axis," not batchable with any other row in this register (see
-`onbox-sitting-plan.md` §7). F1 gets its own dedicated block whenever a
-device and (for app-9) a head unit are available; it does not ride the same
-sitting as H1/H2/D3, since neither shares hardware, engine residency or
-fixtures with the other.
+run together once one or both manuscripts are in hand.
 
 **Card / box:** H1 and H2 need no GPU, sidecar, or analyzer — pure functions
 over chapter text, runnable on any machine. D3 needs a working TTS engine
 (Kokoro, Coqui or Qwen — any one) to render a chapter, so a single card is
-enough; no VRAM contention concern. F1 needs the operator's GPU server
-reachable over LAN from the phone, not a dedicated card session on its own.
+enough; no VRAM contention concern.
 
 ## 2. Re-resolution — re-checked live, not taken from the audit
 
@@ -43,13 +45,6 @@ Per `onbox-sitting-plan.md` §6 (the A2 false-grep incident), every row below
 was re-resolved against its own citations rather than trusted from the
 staleness audit.
 
-- **F1** (`docs/features/188-android-companion-app.md`): line 24 still reads
-  "all built, tested, and merged... The only thing left is the batched
-  live-device acceptance pass" verbatim, confirmed live in this worktree.
-  `app-3` through `app-8`/`app-13`/`app-14` all still carry "**Live device
-  acceptance owed**" against every entry (checked `app-3`–`app-5` directly;
-  matches the audit's citation). No file under `docs/testing/` records a
-  live-device run. **Audit verdict (STILL OWED) confirmed.**
 - **H1 / H2** (`server/src/tts/prose-units.ts`, #2256):
   `gh api repos/dudarenok-maker/Castwright/issues/2256` →
   `{"state":"closed","closed_at":"2026-08-14T11:17:46Z"}` — the *bug-fix*
@@ -83,12 +78,11 @@ staleness audit.
   "primary-pair-straddle," confirmed. **Audit verdict (STILL OWED)
   confirmed.**
 
-No row is excluded on re-resolution — all four remain genuinely blocked.
+No row is excluded on re-resolution — all three remain genuinely blocked.
 
 ## 3. Preconditions
 
-Stated once for the sitting; check off only what applies to the rows you are
-actually running (H1/H2/D3 share a session, F1 is its own).
+Stated once for the sitting; H1/H2/D3 share a single session.
 
 **For H1 / H2 / D3 (CJK manuscript rows):**
 
@@ -113,20 +107,6 @@ actually running (H1/H2/D3 share a session, F1 is its own).
       directly; D3's render goes through the normal import → chapter
       generation path).
 - [ ] One shell is enough for all three rows.
-
-**For F1 (Android live-device rows):**
-
-- [ ] A real Android phone — the plan names a **Pixel 10 Pro**
-      (`docs/features/188-android-companion-app.md`).
-- [ ] The operator's GPU server reachable on the **same LAN/Wi-Fi** as the
-      phone.
-- [ ] For **app-9** only: a real **Android Auto / CarPlay head unit** (or a
-      head-unit emulator Google/Apple ship, if the plan later names one —
-      not confirmed present as of this pack).
-- [ ] At least 2 books available on the server library to exercise the
-      dual-book download/resume scenario.
-- [ ] A chapter the operator can regenerate mid-session, to exercise the
-      targeted re-sync + in-car position push-back step.
 
 ## 4. Procedure
 
@@ -198,38 +178,6 @@ qualifying paragraph). Once a qualifying zh or ja manuscript is available:
    to clear.
    **Result:** _(fill in: run? pass/fail if yes)_
 
-### 4.4 F1 — Android companion app, v1 live-device acceptance
-
-*Blocked pending device (and, for app-9, a head unit).* An entire untested
-axis — every module (`app-3` through `app-14`) is unit/widget-tested and CI-
-green, but **zero of it has been proven on a physical phone.** Once a Pixel
-10 Pro (or equivalent) and LAN access to the server are available, the full
-plan-188 live-device pass is three scenarios; write the procedure now so no
-decision is needed once the device lands, but do not attempt any of it
-without the device in hand:
-
-1. **v1 core, single end-to-end scenario** (`docs/features/
-   188-android-companion-app.md:622-630` has the full script): pair the
-   phone to the server via QR (token + CA fingerprint auto-verified, no OS
-   cert install) → browse the library by author/series/book → download 2
-   books → play offline with background, lock-screen and Bluetooth controls
-   plus a sleep timer → switch between the 2 books, confirming each resumes
-   at its own position → regenerate one chapter of book A on the server →
-   return to home Wi-Fi → confirm the app auto-syncs only that chapter and
-   pushes the in-car listening position back to the server.
-   **Result:** _(fill in: pass/fail per sub-step, per `:622-630`)_
-2. **app-9, head unit:** Android Auto / CarPlay media-browse tree
-   navigation and playback from a real head unit. Requires the head unit
-   separately from the phone.
-   **Result:** _(fill in: pass/fail)_
-3. **app-10, stream over LAN** (`docs/features/
-   188-android-companion-app.md:504-508`): an undownloaded chapter with
-   "Stream over LAN" on starts instantly, mid-chapter seek works,
-   lock-screen transport works, it survives backgrounding, and no OS
-   cert-install prompt appears; with streaming off or off-Wi-Fi, confirm a
-   "download to play" message appears rather than a stall.
-   **Result:** _(fill in: pass/fail per sub-check)_
-
 ## 5. Teardown
 
 - **H1/H2:** no engine or process was started — nothing to unload. Discard
@@ -238,10 +186,6 @@ without the device in hand:
 - **D3:** stop/close the render session; evict the TTS engine used if it
   should not stay warm for whatever sitting runs next; close the book if it
   was imported solely for this row.
-- **F1:** unpair the phone from the server, stop any active playback,
-  disconnect the head unit if one was used, and confirm the server-side
-  library returns to its pre-sitting state (no stray test-only downloads
-  left counted against library storage).
 
 _(Once each row is actually run and recorded, mark it discharged in
 `onbox-acceptance-register.md` with a summary of this result — that edit is

@@ -1,7 +1,7 @@
-# On-box sitting pack — multi-language render + ASR content-QA (D1, D2, A38, E4)
+# On-box sitting pack — multi-language render + ASR content-QA (D1, D2, A36, E4)
 
 > **Sitting pack** for wave 2 of `#2435`, step 7 of the `#2453` chain. Covers
-> register rows **D1, D2, A38, E4** — non-English ASR content-QA calibration,
+> register rows **D1, D2, A36, E4** — non-English ASR content-QA calibration,
 > zh/ja placeholder voice design, sidecar auto-scaled RAM/VRAM recycle
 > thresholds, and the engine-recommendation CPU caveat. Follows the shared
 > format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the
@@ -13,7 +13,7 @@
 > via `CUDA_VISIBLE_DEVICES=0`.
 >
 > **Running time total (recomputed 2026-08-20):** **165 minutes** — D1 ≈ 90,
-> D2 ≈ 25, A38 ≈ 35, E4 ≈ 15. Sum = 165, matching the plan of record's stated
+> D2 ≈ 25, A36 ≈ 35, E4 ≈ 15. Sum = 165, matching the plan of record's stated
 > total for this pack ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1)
 > and the audit's own per-row estimates exactly — all four rows re-resolved
 > as still owed, so nothing changed the arithmetic.
@@ -39,14 +39,14 @@ Stated once for the sitting; do not repeat per row.
       **absent** (confirmed still commented out in `server/.env.example` at
       `:659`, `:661`, `:663`) — copy `.env.example` verbatim rather than
       hand-editing an existing `.env` that may already carry explicit
-      overrides from earlier sittings. A38's whole premise is the auto path
+      overrides from earlier sittings. A36's whole premise is the auto path
       only activates when these three are unset.
 - [ ] **A way to force Qwen onto the CPU device** via the voice-engine
       device setting (Settings → Voice Engine, or the equivalent env
       override) for E4 — confirm the setting exists and is reachable before
       committing GPU time to D1/D2.
 - [ ] **A second shell** free throughout the sitting to poll `GET /health`
-      (for A38's `recycle_pending` flag) and tail the sidecar log (for the
+      (for A36's `recycle_pending` flag) and tail the sidecar log (for the
       `[sidecar]` restart/recycle lines and D1/D2's render progress).
 - [ ] SHA and a clean tree recorded below.
 
@@ -54,9 +54,9 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 ## Procedure
 
-Ordered so the one env change (A38) happens before the sidecar is started for
+Ordered so the one env change (A36) happens before the sidecar is started for
 the sitting, D1 — the long pole at ~90 min, largely unattended once running —
-goes first and stays in the background as its own render doubles as A38's
+goes first and stays in the background as its own render doubles as A36's
 RAM/VRAM driver, and the short, genuinely interactive rows (D2's pipeline
 kick-off, E4's CPU-forced check) run in D1's shadow rather than after it.
 **Where D1/D2's GPU render is in flight, do not also drive E4's CPU-forced
@@ -64,9 +64,9 @@ render on the same process** — E4 targets the CPU device explicitly and does
 not contend for VRAM, but starting it only after D1 is safely queued avoids
 two renders racing to write the same `render-integrity` state.
 
-### A38 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install ([#2179](https://github.com/dudarenok-maker/Castwright/issues/2179), PR [#2210](https://github.com/dudarenok-maker/Castwright/pull/2210))
+### A36 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install ([#2179](https://github.com/dudarenok-maker/Castwright/issues/2179), PR [#2210](https://github.com/dudarenok-maker/Castwright/pull/2210))
 
-> **Criteria source:** `onbox-acceptance-register.md` A38 (`:2169-2209`).
+> **Criteria source:** `onbox-acceptance-register.md` A36 (`:2169-2209`).
 > Re-resolved 2026-08-20: `gh issue view 2179` → closed 2026-08-07T01:52:50Z;
 > `gh pr view 2210` → merged 2026-08-07T01:52:49Z, title "fix(server): ship
 > .env.example as documentation, not assignments" — the fix landed.
@@ -124,7 +124,7 @@ two renders racing to write the same `render-integrity` state.
 5. **Kick off the batch.** Render one chapter of each fs-61 demo book — es,
    ru, then fr, de — through the shipped pipeline with the ASR content-QA
    gate enabled. Queue all four; this is the row's own "largely unattended"
-   batch and the sitting's long pole — start it, then move to A38 step 1 and
+   batch and the sitting's long pole — start it, then move to A36 step 1 and
    D2/E4 below while it runs.
    - Result (all four queued, start time):
 6. **Per-language WER inspection.** Once each language's chapter completes,
@@ -212,15 +212,17 @@ state and the cited files themselves on 2026-08-20 and remain owed:
 - **D2** — `gh issue view 1600` still OPEN. Sample-tree comparison confirmed
   zh/ja still pre-pipeline placeholders (no `.epub`, no `voices/`) against
   es's done state. STILL OWED.
-- **A38** — `gh issue view 2179` closed, `gh pr view 2210` merged, both match
+- **A36** — `gh issue view 2179` closed, `gh pr view 2210` merged, both match
   the row's account of the fix landing. `.env.example`'s three vars
   confirmed still commented out at the cited lines. No later run sheet
   records a real threshold-crossing run. STILL OWED.
 - **E4** — `engine-recommendation.ts:34,67` confirmed unchanged; plan 259
   line 183 confirmed still reads "owed" verbatim. STILL OWED.
 
-None of the four rows is AMBIGUOUS (that is A2/A16/A22's queue, not this
-pack's) — every cited plan/issue/PR agrees with its own row text.
+None of the four rows is AMBIGUOUS (that is A2/A16's queue, not this
+pack's — the former A22 this note also used to name was retired 2026-08-21,
+see `onbox-acceptance-register.md`'s wave-4 correction note) — every cited
+plan/issue/PR agrees with its own row text.
 
 ## Teardown
 
@@ -231,7 +233,7 @@ pack's) — every cited plan/issue/PR agrees with its own row text.
       operator's usual working config, note which is now active).
 - [ ] Confirm the sidecar is in a normal, non-recycling state — no
       `recycle_pending` still set on `GET /health` — before ending the
-      sitting; if A38's hard-restart path fired, confirm the respawned
+      sitting; if A36's hard-restart path fired, confirm the respawned
       sidecar is healthy.
 - [ ] Confirm the card returns to baseline (`nvidia-smi` ≈ idle) before
       ending the sitting.
