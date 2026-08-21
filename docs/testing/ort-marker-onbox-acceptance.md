@@ -362,6 +362,60 @@ file).
 > throwaway venv: `detectOrtOwner === 'swap'`, one real plain dist-info present, and
 > `ensureOrtMarker` returns `'clobbered'`.
 
+### 8.4 Wave-4 re-run, 2026-08-21 (Castwright#2569)
+
+Re-ran the corrected §8.1 recipe on a **fresh** throwaway venv (`python -m
+venv`, not a copy of the sidecar's own) against branch
+`fix/sidecar-2535-ort-marker-fix` at commit `5142039` (after merging latest
+`origin/main` — the merge touched neither `install-ort.mjs` nor its test).
+
+**Manufactured state confirmed:** `detectOrtOwner === 'swap'`,
+`findPlainOrtDistInfos.length === 1`, both `onnxruntime-1.27.0.dist-info` and
+`onnxruntime_gpu-1.27.0.dist-info` present.
+
+**Log line observed (clobbered):** fired correctly — `[ort-marker] A stray
+real plain onnxruntime dist-info coexists with the GPU build's files...
+Refusing to write a marker that would certify this bad state. Repair with:
+CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node
+server/tts-sidecar/scripts/install-ort.mjs <venv-python>` — naming the exact
+remedy command, at server boot (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the
+throwaway venv, isolated port 8290). No marker written over the real
+distribution; `pip check` stayed clean (pinned versions matched here, unlike
+wave-3's mismatched 1.29.0 run, so there was nothing broken for boot to
+silently "fix" either way).
+
+**Repair command output:** `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node
+server/tts-sidecar/scripts/install-ort.mjs <venv-python>` uninstalled both
+`onnxruntime` 1.27.0 and `onnxruntime-gpu` 1.27.0, reinstalled
+`onnxruntime-gpu==1.27.0` (`--no-deps`) — `[install-ort] onnxruntime-gpu in
+place.`
+
+**`pip check` after repair:** clean, no broken requirements.
+**Post-repair owner check:** `detectOrtOwner === 'swap'`,
+`findPlainOrtDistInfos.length === 0` — the marker now correctly reflects the
+GPU build owning the namespace with no real plain distribution left behind.
+**Kokoro execution provider after repair:** not independently re-tested;
+`get_available_providers()` still lists `CUDAExecutionProvider` but
+constructing a real inference session was not attempted — same box-level
+CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) already blocking this check
+on A39/A40, not a new gap.
+
+**Disposition:** the defect #2535 was filed against — the silent `'deleted'`
+path — is fixed and verified: the loud `'clobbered'` path now fires exactly
+where wave-3 found it silent, and the remedy command repairs the box
+correctly. The row stays **STILL OWED** only because its own criteria include
+the CUDA-provider re-check, blocked by the pre-existing `#2534` gap (same
+precedent as A39).
+
+**Run by:** claude (Castwright#2569).
+**Date:** 2026-08-21.
+**Venv:** a fresh throwaway venv under a scratch temp path, deleted after the
+run. The live sidecar venv at `server/tts-sidecar/.venv` (main repo checkout,
+not this worktree — this worktree has no `.venv` of its own) was never
+touched; confirmed by its `python.exe` mtime being unchanged (2026-07-03,
+predating this session) both before and after.
+Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`.
+
 ---
 
 ## 9. Addition — the in-app upgrade path (A42, not one of the spec's six)

@@ -59,7 +59,12 @@ describe('ensureOrtMarker', () => {
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('clobbered');
     expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
-    expect(lines.join('\n')).toContain('install-ort.mjs');
+    const message = lines.join('\n');
+    expect(message).toContain('install-ort.mjs');
+    // The message must accurately describe the state: a stray plain dist-info coexists
+    // with the GPU build's files (which own the namespace), NOT the other way around.
+    expect(message).not.toContain('installed over the GPU runtime');
+    expect(message).toContain('coexist');
   });
 
   it('deletes a lying marker when the CPU build owns the namespace', () => {

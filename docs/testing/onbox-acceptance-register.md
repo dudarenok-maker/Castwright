@@ -312,6 +312,12 @@ setup rather than repeatedly loading and evicting models.
 > re-binning within the 74, not a change to the total. Same arithmetic-check
 > pattern as `onbox-sitting-plan.md`'s own 2026-08-20 correction.
 
+> **Recompute, 2026-08-21 (A41 re-run, `#2569`).** A41's filed defect is fixed
+> and independently verified (see its row), but the row's own criteria still
+> include a GPU-provider re-check blocked by the pre-existing `#2534` box gap
+> (same reason A39 stays owed), so it does **not** leave the owed count — 74
+> is recomputed fresh here, not carried forward, and stays unchanged.
+
 ---
 
 ## Group A — the GPU box
@@ -2425,6 +2431,39 @@ five-state table and "the clobbered box takes the loud path" in
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
 > [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
 > (see #2535).
+
+> **Wave-4 A41 re-run, 2026-08-21 — STILL OWED, but the filed defect is fixed
+> and verified.** Re-ran this row's own corrected recipe (see the 2026-08-21
+> note above) on a **fresh** throwaway venv (not the sidecar's own — no venv
+> under `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime
+> was confirmed unchanged before and after this run) against branch
+> `fix/sidecar-2535-ort-marker-fix` at commit `5142039` (after merging latest
+> `origin/main`; the merge itself touched neither `install-ort.mjs` nor its
+> test). Manufactured plain-then-GPU, confirmed `detectOrtOwner === 'swap'`
+> and one real plain dist-info present, then booted the real worktree server
+> (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the throwaway venv, port 8290 —
+> free and not shared with another lane). **Result: the `'clobbered'` log
+> line fired correctly**, naming the condition and the exact remedy command,
+> and no marker was written over the real distribution (`pip check` stayed
+> clean, matching the pinned-version case rather than wave-3's mismatched
+> 1.29.0 one — nothing for boot to silently "fix" either way). Ran the named
+> remedy command directly against the throwaway venv: it uninstalled both
+> packages, reinstalled `onnxruntime-gpu==1.27.0` (`--no-deps`), and wrote a
+> legitimate marker — post-repair, `owner === 'swap'` with **zero** real plain
+> dist-infos (`findPlainOrtDistInfos.length === 0`), `pip check` clean. The
+> silent-`'deleted'` defect #2535 was filed against is gone: the loud
+> `'clobbered'` path fires exactly where wave-3 found it silent.
+> **Not independently re-confirmed:** Kokoro reporting `CUDAExecutionProvider`
+> post-repair. `get_available_providers()` still lists it (as wave-3 also
+> saw), but constructing a real inference session was not re-attempted here —
+> this is the same box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`)
+> that already kept A39 STILL OWED for the identical reason with two of its
+> three checks passing, not a new gap introduced by this fix. Per that
+> precedent this row stays **STILL OWED** rather than DISCHARGED — the row's
+> own criteria include that check — but the population #2192 named as
+> largest-affected is no longer left in the silent failure mode. Evidence:
+> `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by: claude
+> (Castwright#2569).
 
 ### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
