@@ -1041,18 +1041,6 @@ than a single committed clip.
 *Needs:* a working TTS engine + a real book. *Criteria:* plan 274 §6 row 1.
 *Cost:* short (rides along with any other real-book render session).
 
-**Outcome, 2026-08-21 (Castwright#2553, wave 4 of the on-box acceptance
-register campaign, #2435).** Former A22, **Real-corpus true-peak distribution
-(plan [274](../features/archive/274-loudness-measurement-provenance.md)),**
-is **RETIRED, not discharged.** The row existed to record the measured `tp`
-spread across a real-book render as evidence for [#1909](https://github.com/dudarenok-maker/Castwright/issues/1909)'s
-eventual `QA_CLIP_TP_DB` ceiling/mode retune (plan 274 §6 row 2) — it was
-never a pass/fail gate on its own, only supporting evidence for that other
-issue's retune decision. **#1909 closed COMPLETED on 2026-07-31 without this
-evidence being gathered.** With the issue the evidence was meant to feed
-already closed, the repo owner ruled this row retired on 2026-08-21 rather
-than carried forward as still-owed work with no consumer left to use it.
-
 ### A22 · Measurement-failure path renders as untrusted, not as a fabricated reading (plan [274](../features/archive/274-loudness-measurement-provenance.md))
 
 T2/T6 cover the fail-soft fallback and the grandfather predicate at unit level with a
