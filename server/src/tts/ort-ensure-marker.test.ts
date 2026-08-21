@@ -155,6 +155,8 @@ describe('ensureOrtMarker', () => {
     expect(message).toContain('plain onnxruntime');
     expect(message).toContain('CPU build');
     expect(message).toContain('without GPU acceleration');
+    // Pin the deletion-report clause: this is the PR's headline feature.
+    expect(message).toContain('The recorded swap marker has been removed');
   });
 
   it('deletes a lying marker after an INTERRUPTED SWAP — no runtime at all', () => {
@@ -166,6 +168,8 @@ describe('ensureOrtMarker', () => {
     const message = lines.join('\n');
     expect(message).toContain('[ort-marker]');
     expect(message).toContain('No onnxruntime runtime is installed');
+    // Pin the deletion-report clause: this is the PR's headline feature.
+    expect(message).toContain('The recorded swap marker has been removed');
     // Pin the corrected causation clause: the root cause is "no onnxruntime installed",
     // not the marker's existence/removal. "in this state" refers to the absence of onnxruntime,
     // not to the marker. Revert to the broken "without it" wording would fail this assertion.
