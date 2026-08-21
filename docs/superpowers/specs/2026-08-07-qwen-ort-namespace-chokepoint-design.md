@@ -253,9 +253,10 @@ That is the clobbered box, and writing a marker over it would corrupt pip's depe
 (creating a stray, unaccounted-for dist-info folder or overwriting the existing one's contents,
 depending on version pinning) while the GPU build's files continue actually working. The real cost
 is that `ensureOrtMarker`'s own book-keeping would then wrongly certify a clean state, hiding the
-coexistence problem from any future pip operation that checks for it. This converts a loud,
-self-repairing bug into a permanent, silent one: exactly the failure class this design exists to
-close. A clobbered box takes the loud path instead, and **the log must name the exact remedy**,
+coexistence problem from any future pip operation that checks for it. Writing a marker there would
+deepen the corruption: a currently silent, un-repaired coexistence problem becomes one that's
+permanent and completely hidden from pip's own checks — exactly the failure class this design exists
+to prevent. A clobbered box takes the loud path instead: **the log must name the exact remedy**,
 not gesture at one — the only repair this design ships for that population is the hand-run CLI:
 
 ```
@@ -578,7 +579,7 @@ written"** — three Criticals in the fixes themselves, plus five Majors. All fo
 
 | Finding | Severity | Disposition |
 |---|---|---|
-| The already-clobbered state (both dist-infos, CPU files) was never named; one reading of `ensureOrtMarker` writes a marker over the real CPU dist and entombs the bug permanently | Critical | §The three venv states added; ownership and marker-identity predicates specified separately; refuse-and-log on a clobbered box |
+| The already-clobbered state (both dist-infos, CPU files) was never named; one reading of `ensureOrtMarker` writes a marker over the real CPU dist and entombs the bug permanently | Critical | §The three venv states added; ownership and marker-identity predicates specified separately; refuse-and-log on a clobbered box *[Superseded in this PR: CPU/GPU direction corrected; the clobbered state has GPU files, not CPU files]* |
 | §Changed files said "after the swap block" while the prose two paragraphs above called that fatal | Critical | Table replaced with two named entry points and exact anchors |
 | The version glob uses `plan.ortPackage` verbatim; pip escapes to `onnxruntime_gpu-*`, so it resolves to nothing → `null` → fail-loudly → **every NVIDIA bootstrap fails** | Critical | PEP-427 escaping stated in §Version derivation, with a mutation-checked assertion |
 | Swap-failure path leaves a marker asserting a runtime that was just uninstalled | Major | Delete before re-throwing, in both consumers |

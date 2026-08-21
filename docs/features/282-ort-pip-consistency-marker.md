@@ -208,16 +208,19 @@ but a factual correction to errors in the design doc's own prose.
    file ownership in the clobbered state.** It mislabeled the clobbered box as having
    "CPU files in the namespace" when it should be "GPU files" — the clobbered state is
    `owner === 'swap'` (GPU files own the namespace) with a stray real plain dist-info
-   also present, not the reverse. This factual correction was applied across three
-   sites in the design doc itself: the table row (line 224), the acceptance criterion
-   6 prose (line 510), and the core consequence description (lines 252–254). The
-   spec's surrounding logic and mechanism remain sound; only the ownership direction
-   was backwards. A separate, independently-sourced error sat in THIS plan document's
-   own original invariant 7 above (not the design doc): it claimed writing a marker
-   over a clobbered box would "leave GPU Kokoro permanently dead," which is false for
-   the same reason — GPU Kokoro is actually working in that state; the problem is the
-   stray dist-info corrupting pip's bookkeeping. `git log -S` confirms that phrase
-   never appeared in the design doc; it originated and was corrected in this file.
+   also present, not the reverse. This factual correction was applied across multiple
+   sites in the design doc itself where the ownership direction was misstated: the
+   table row (line 224), the acceptance criterion 6 prose (line 510), and the core
+   consequence description (lines 252–258). A fourth historical record of the same error
+   appears in the Round 4 findings table (line 581), retained as a dated record and
+   annotated as superseded in this PR. The spec's surrounding logic and mechanism remain
+   sound; only the ownership direction was backwards. A separate, independently-sourced
+   error sat in THIS plan document's own original invariant 7 above (not the design doc):
+   it claimed writing a marker over a clobbered box would "leave GPU Kokoro permanently
+   dead," which is false for the same reason — GPU Kokoro is actually working in that
+   state; the problem is the stray dist-info corrupting pip's bookkeeping. `git log -S`
+   confirms that phrase never appeared in the design doc; it originated and was
+   corrected in this file.
 
 ## Test plan
 
