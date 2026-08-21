@@ -18,7 +18,18 @@ describe('makeSecureUuid — CodeQL js/insecure-randomness guard', () => {
   });
 
   it('uses crypto.randomUUID when available', () => {
-    expect(makeSecureUuid()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    const uuid = makeSecureUuid();
+    /* crypto.randomUUID returns a UUID v4 string: 8-4-4-4-12 hex digits */
+    expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it('primary path generates distinct UUIDs across many rapid calls', () => {
+    const uuids = new Set<string>();
+    for (let i = 0; i < 100; i += 1) {
+      uuids.add(makeSecureUuid());
+    }
+    /* All 100 calls should produce distinct values */
+    expect(uuids.size).toBe(100);
   });
 
   it('falls back to crypto.getRandomValues when randomUUID throws', () => {
@@ -39,26 +50,34 @@ describe('makeSecureUuid — CodeQL js/insecure-randomness guard', () => {
 
     const id = makeSecureUuid();
     expect(id).toBeTruthy();
-    expect(id.length).toBe(16); // 8 bytes * 2 hex chars
-    expect(id).toMatch(/^[0-9a-f]+$/i);
+    /* getRandomValues fallback returns UUID-like format: 8-4-4-4-12 hex */
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 
-  it('falls back to Date.now when crypto.randomUUID is unavailable', () => {
+  it('getRandomValues fallback generates distinct UUIDs across many rapid calls', () => {
     Object.defineProperty(globalThis, 'crypto', {
       value: {
-        randomUUID: undefined,
-        getRandomValues: undefined,
+        randomUUID: vi.fn(() => {
+          throw new TypeError('randomUUID unavailable');
+        }),
+        getRandomValues: (buf: Uint8Array) => {
+          for (let i = 0; i < buf.length; i++) {
+            buf[i] = Math.floor(Math.random() * 256);
+          }
+          return buf;
+        },
       },
       configurable: true,
     });
 
-    const id = makeSecureUuid();
-    expect(id).toBeTruthy();
-    // Should be a base36 timestamp, all lowercase alphanumeric
-    expect(id).toMatch(/^[0-9a-z]+$/);
+    const uuids = new Set<string>();
+    for (let i = 0; i < 100; i += 1) {
+      uuids.add(makeSecureUuid());
+    }
+    expect(uuids.size).toBe(100);
   });
 
-  it('falls back to Date.now when crypto is undefined', () => {
+  it('falls back to Date.now+counter when crypto is unavailable', () => {
     Object.defineProperty(globalThis, 'crypto', {
       value: undefined,
       configurable: true,
@@ -66,11 +85,25 @@ describe('makeSecureUuid — CodeQL js/insecure-randomness guard', () => {
 
     const id = makeSecureUuid();
     expect(id).toBeTruthy();
-    // Should be a base36 timestamp, all lowercase alphanumeric
-    expect(id).toMatch(/^[0-9a-z]+$/);
+    /* Fallback returns UUID-like format: 8-4-4-4-12 hex digits */
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 
-  it('falls back to Date.now when getRandomValues throws', () => {
+  it('final fallback generates DISTINCT values across 1000 rapid calls', () => {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: undefined,
+      configurable: true,
+    });
+
+    const uuids = new Set<string>();
+    for (let i = 0; i < 1000; i += 1) {
+      uuids.add(makeSecureUuid());
+    }
+    /* All 1000 rapid calls should produce distinct values (previously failed: got 1) */
+    expect(uuids.size).toBe(1000);
+  });
+
+  it('final fallback generates distinct UUIDs when getRandomValues throws', () => {
     Object.defineProperty(globalThis, 'crypto', {
       value: {
         randomUUID: undefined,
@@ -81,10 +114,11 @@ describe('makeSecureUuid — CodeQL js/insecure-randomness guard', () => {
       configurable: true,
     });
 
-    const id = makeSecureUuid();
-    expect(id).toBeTruthy();
-    // Should be a base36 timestamp, all lowercase alphanumeric
-    expect(id).toMatch(/^[0-9a-z]+$/);
+    const uuids = new Set<string>();
+    for (let i = 0; i < 1000; i += 1) {
+      uuids.add(makeSecureUuid());
+    }
+    expect(uuids.size).toBe(1000);
   });
 });
 
@@ -118,13 +152,22 @@ describe('makeSecureRandom — CodeQL js/insecure-randomness guard for custom al
     }
   });
 
-  it('generates different values on successive calls', () => {
+  it('generates different values on successive calls (primary path)', () => {
     const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
     const result1 = makeSecureRandom(alphabet, 12);
     const result2 = makeSecureRandom(alphabet, 12);
     /* Two random strings should differ — collision probability is negligible
        for 12-char base32. */
     expect(result1).not.toBe(result2);
+  });
+
+  it('primary path generates distinct strings across many rapid calls', () => {
+    const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    const slugs = new Set<string>();
+    for (let i = 0; i < 100; i += 1) {
+      slugs.add(makeSecureRandom(alphabet, 12));
+    }
+    expect(slugs.size).toBe(100);
   });
 
   it('handles short lengths', () => {
@@ -148,6 +191,21 @@ describe('makeSecureRandom — CodeQL js/insecure-randomness guard for custom al
     }
   });
 
+  it('fallback generates distinct strings across 1000 rapid calls', () => {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: undefined,
+      configurable: true,
+    });
+
+    const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    const slugs = new Set<string>();
+    for (let i = 0; i < 1000; i += 1) {
+      slugs.add(makeSecureRandom(alphabet, 12));
+    }
+    /* All 1000 rapid calls should produce distinct values (previously failed: got ~2) */
+    expect(slugs.size).toBe(1000);
+  });
+
   it('falls back when getRandomValues throws', () => {
     Object.defineProperty(globalThis, 'crypto', {
       value: {
@@ -164,6 +222,24 @@ describe('makeSecureRandom — CodeQL js/insecure-randomness guard for custom al
     for (const char of result) {
       expect(alphabet).toContain(char);
     }
+  });
+
+  it('fallback generates distinct strings when getRandomValues throws', () => {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: {
+        getRandomValues: vi.fn(() => {
+          throw new Error('getRandomValues failed');
+        }),
+      },
+      configurable: true,
+    });
+
+    const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    const slugs = new Set<string>();
+    for (let i = 0; i < 1000; i += 1) {
+      slugs.add(makeSecureRandom(alphabet, 12));
+    }
+    expect(slugs.size).toBe(1000);
   });
 
   it('works with binary alphabet', () => {

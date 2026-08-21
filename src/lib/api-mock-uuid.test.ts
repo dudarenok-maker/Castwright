@@ -39,7 +39,8 @@ describe('API mock functions — secure uuid generation in non-secure contexts',
     });
 
     expect(result.entry.voiceUuid).toBeTruthy();
-    expect(result.entry.voiceUuid).toMatch(/^lib-[0-9a-z]+$/i);
+    /* voiceUuid is now lib-<uuid> where uuid is in 8-4-4-4-12 hex format */
+    expect(result.entry.voiceUuid).toMatch(/^lib-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 
   it('mockPromoteToLibrary generates valid voiceUuid even when crypto is undefined', async () => {
@@ -55,7 +56,8 @@ describe('API mock functions — secure uuid generation in non-secure contexts',
     });
 
     expect(result.voiceUuid).toBeTruthy();
-    expect(result.voiceUuid).toMatch(/^lib-[0-9a-z]+$/i);
+    /* voiceUuid is now lib-<uuid> where uuid is in 8-4-4-4-12 hex format */
+    expect(result.voiceUuid).toMatch(/^lib-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 
   it('mockCloneVoice generates valid voiceUuid even when getRandomValues throws', async () => {
@@ -80,6 +82,7 @@ describe('API mock functions — secure uuid generation in non-secure contexts',
     });
 
     expect(result.voiceUuid).toBeTruthy();
-    expect(result.voiceUuid).toMatch(/^lib-clone-[0-9a-z]+$/i);
+    /* voiceUuid is now lib-clone-<uuid> where uuid is in 8-4-4-4-12 hex format */
+    expect(result.voiceUuid).toMatch(/^lib-clone-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 });
