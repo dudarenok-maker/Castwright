@@ -1039,4 +1039,50 @@ describe('dedupePriorCastByName', () => {
     expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
     expect(merged[0].voiceUuid).toBe('U9'); // bridged despite voiceState generated + id drift
   });
+
+  it('phantom-claim guard: a dropped row in a candidate map under a name never actually consumed is ignored (#2536 re-review)', () => {
+    // Regression: the claim-once guard must count CONSUMABLE claims, not raw
+    // candidate-map presence. A dropped row e1 with name "Мэйрин Уир" is added
+    // to the candidate map but is a "phantom claim": its fresh-row match f1 is
+    // already resolved by id (gate 1 fails), so the name-fallback never
+    // actually consumes this candidate. Meanwhile, a different dropped row e2
+    // with name "Мэйрин" (one token shorter, surname-tolerant match) SHOULD
+    // tolerant-match a fresh "Мэйрин Коул" (f2), but the old guard counted e2
+    // twice: once under the phantom key and once under its real key, causing
+    // it to be wrongly deleted — false-positive refusal, the fresh row stays
+    // voiceless (the #2536 symptom it was meant to fix).
+    // After the fix, the phantom count doesn't trigger a deletion, and e2's
+    // voice correctly bridges to f2.
+    const existing: C[] = [
+      {
+        id: 'e1',
+        name: 'Мэйрин Уир',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-mairin-weir' } },
+      },
+      {
+        id: 'e2',
+        name: 'Мэйрин',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-mairin' } },
+      },
+    ];
+    const fresh: C[] = [
+      { id: 'e1', name: 'Мэйрин Уир' } as C, // f1: matched by id, gates 1+2 succeed but phantom
+      { id: 'f2', name: 'Мэйрин Коул', lines: 5 } as C, // f2: should surname-tolerant-match e2
+    ];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    // Both fresh rows in output, no false 0-line duplicate.
+    expect(merged.map((c) => c.id)).toEqual(['e1', 'f2']);
+    // f1 (id-matched e1) carries e1's voice.
+    expect(merged.find((c) => c.id === 'e1')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-mairin-weir' },
+    });
+    // f2 (surname-tolerant-matched e2, not wrongly rejected) carries e2's voice.
+    expect(merged.find((c) => c.id === 'f2')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-mairin' },
+    });
+    // One retirement: e2 → f2.
+    expect(retirements).toEqual([{ from: 'e2', to: 'f2' }]);
+  });
 });

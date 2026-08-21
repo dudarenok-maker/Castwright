@@ -344,17 +344,45 @@ function mergeCore<T extends { id: string }>(
   // A second instance of the same bug: a dropped row can be BOTH the exact-match
   // candidate for one fresh key AND the tolerant-match candidate for another
   // (e.g. prior "Brann" / fresh "Brann" exact + fresh "Brann Weir" tolerant).
-  // Count each dropped row's id across BOTH maps (but only exact matches that
-  // correspond to actual fresh keys), so a tolerant entry gets deleted when its
-  // candidate is also claimed by an exact-match fresh key.
+  // Count each dropped row's id only when it would actually be CONSUMED at the
+  // call site (lines 389-407 below). A candidate-map presence without actual
+  // consumption is a "phantom claim" that inflates counts and causes false-
+  // positive refusals: e.g. a dropped row's id is in a map under a key whose
+  // fresh row already matches by id (gate 1 below fails), or whose fresh row
+  // shares the name with >1 fresh row (gate 2), or whose pair is blocked by
+  // notLinkedTo (gate 4) — none of these would ever call the name-fallback,
+  // yet the prior raw-presence count included them. Only count pairs where all
+  // four gates at the call site would succeed: (1) fresh row has no prior by-id
+  // match, (2) fresh name count is exactly 1, (3) fresh id is not narrator,
+  // (4) neither notLinkedTo gate blocks the pair.
+  const freshByKey = new Map<string, { id: string }>();
+  for (const f of fresh) {
+    const k = nameOf(f as T & Record<string, unknown>);
+    if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
+  }
+  const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
+    notLinkedToId(cand, f.id) ||
+    notLinkedToId(f as unknown as Record<string, unknown>, cand.id);
+  const consumable = (key: string, cand: CastRecord): boolean => {
+    // Mirror the exact four gates from the call site (lines 389-403).
+    if (freshNameCounts.get(key) !== 1) return false; // gate 2: must be exactly 1
+    const f = freshByKey.get(key);
+    if (!f) return false; // gate 2: must exist
+    if (byId.get(f.id)) return false; // gate 1: no prior by-id match
+    if (NARRATOR_CHARACTER_IDS.includes(f.id)) return false; // gate 3: not narrator
+    if (isBlockedByNotLinked(cand, f)) return false; // gate 4: no notLinkedTo block
+    return true;
+  };
   const tolerantCandidateCount = new Map<string, number>();
   for (const [key, cand] of dropMatchCandidateByName) {
-    if (freshNameCounts.has(key)) { // Only count if a fresh row has this exact key
+    if (consumable(key, cand)) {
       tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
     }
   }
-  for (const cand of tolerantCandidateByName.values()) {
-    tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
+  for (const [key, cand] of tolerantCandidateByName) {
+    if (consumable(key, cand)) {
+      tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
+    }
   }
   const keysToDelete: string[] = [];
   for (const [key, cand] of tolerantCandidateByName) {
