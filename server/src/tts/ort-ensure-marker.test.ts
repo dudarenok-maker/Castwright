@@ -60,11 +60,27 @@ describe('ensureOrtMarker', () => {
     expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('clobbered');
     expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
     const message = lines.join('\n');
-    expect(message).toContain('install-ort.mjs');
+
     // The message must accurately describe the state: a stray plain dist-info coexists
     // with the GPU build's files (which own the namespace), NOT the other way around.
     expect(message).not.toContain('installed over the GPU runtime');
+    expect(message).not.toContain('GPU Kokoro is disabled');
+
+    // Structural tokens present in the real message (but would survive a gutted stub).
+    expect(message).toContain('install-ort.mjs');
     expect(message).toContain('coexist');
+
+    // Substantive semantic content that would be lost in a token-satisfying stub.
+    // These catch a message gutted to just '[ort-marker] coexist install-ort.mjs'.
+    expect(message).toContain('A stray real plain onnxruntime dist-info');
+    expect(message).toContain('dependency resolution');
+    expect(message).toContain('inconsistency must be repaired');
+    expect(message).toContain('Refusing to write a marker');
+    expect(message).toContain('bad state');
+
+    // Minimum length guard: the full message is ~550+ chars; a gutted stub is ~40 chars.
+    // This catches attempts to reduce the message to just the structural tokens.
+    expect(message.length).toBeGreaterThan(300);
   });
 
   it('deletes a lying marker when the CPU build owns the namespace', () => {
