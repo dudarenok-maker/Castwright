@@ -120,8 +120,8 @@ describe('ensureOrtMarker', () => {
     // This fixture manufactures exactly that same-version collision and asserts on
     // FILE CONTENT, not just the folder name, to catch that specific regression.
     const { root, sp } = venv({ owner: 'swap' });
-    // Overwrite the fixture's real plain dist-info to match the GPU version (1.27.0)
-    // instead of the venv() helper's default 1.28.0.
+    // Manually create a real plain dist-info folder matching the GPU version (1.27.0);
+    // the venv() helper supplies no realDist here, so we add it ourselves.
     const realDir = join(sp, 'onnxruntime-1.27.0.dist-info');
     mkdirSync(realDir, { recursive: true });
     writeFileSync(join(realDir, 'METADATA'), 'Metadata-Version: 2.1\nName: onnxruntime\nVersion: 1.27.0\n');
