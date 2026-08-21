@@ -56,7 +56,7 @@ and release-notes gates.
 > - **Node 22.22 is the new floor** (was 20.19). `engines` is advisory — npm warns and installs anyway — so check `node --version` before upgrading a self-managed install. Pinokio installs now provision their own pinned Node 24, but converge one Update late (fe-56, #1859, #1878).
 > - **ffmpeg 6.0 is the new minimum**, and **Ubuntu 22.04 is retired** as a supported target (its archive ffmpeg is 4.4). Every user-facing surface warns rather than blocks; only the preflight hard-fails. Snap or a PPA satisfies the floor on 22.04 (ops-35, #1877).
 > - **An existing Coqui install must be Repaired to pick up the long-line clone fix.** `spacy` installs from `install-coqui.mjs`, not `requirements/base.txt`, so a version bump alone does not deliver it — press **Repair Coqui XTTS v2** in Account → Models (#2017).
-> - **Existing `onnxruntime-gpu` 1.28.x installs step back to 1.26.x** on first upgrade, now that the swap is pinned instead of resolving to whatever was latest on your install date (#1846, #2534).
+> - **Existing `onnxruntime-gpu` 1.28.x installs step back to 1.26.x** on first upgrade, now that the swap is pinned instead of resolving to whatever was latest on your install date (#1846, #2534). (This was superseded before release — see the note on #2534/#2576 below for the final pinned version that shipped.)
 > - **Books already rendered against a drifted character id are not repaired in place.** The resolver fixes the join at render time, so an affected chapter needs a re-render to put the right voice back; `scripts/repair-cast-id-drift.mjs` is the offline pass for the rest (#2040).
 
 ---
