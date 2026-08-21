@@ -203,16 +203,19 @@ a factual correction to the design doc's own errors.
    `bootstrap-venv.mjs:327`) always passes a real `venvDir`, so a null only ever
    reaches this code from a test harness deliberately omitting it.
 4. **The design doc's original prose contained multiple backwards claims about GPU/CPU
-   file ownership in the clobbered state.** The spec incorrectly stated that writing a
-   marker over a clobbered box would "leave GPU Kokoro permanently dead." This was
-   false — in the clobbered state, GPU files own the namespace and GPU Kokoro is
-   actually working; the problem is the stray dist-info corrupting pip's bookkeeping.
-   The same error repeated in the design doc's table row and acceptance criterion 6,
-   mislabeling the clobbered box as having "CPU files in the namespace" when it should
-   be "GPU files." This correction to the design doc's own factual errors was applied
-   across three sites: the table row (line 224), the acceptance criterion prose (line
-   510), and the core consequence description (lines 252–254). The spec's surrounding
-   logic and mechanism remain sound; only the ownership direction was backwards.
+   file ownership in the clobbered state.** It mislabeled the clobbered box as having
+   "CPU files in the namespace" when it should be "GPU files" — the clobbered state is
+   `owner === 'swap'` (GPU files own the namespace) with a stray real plain dist-info
+   also present, not the reverse. This factual correction was applied across three
+   sites in the design doc itself: the table row (line 224), the acceptance criterion
+   6 prose (line 510), and the core consequence description (lines 252–254). The
+   spec's surrounding logic and mechanism remain sound; only the ownership direction
+   was backwards. A separate, independently-sourced error sat in THIS plan document's
+   own original invariant 7 above (not the design doc): it claimed writing a marker
+   over a clobbered box would "leave GPU Kokoro permanently dead," which is false for
+   the same reason — GPU Kokoro is actually working in that state; the problem is the
+   stray dist-info corrupting pip's bookkeeping. `git log -S` confirms that phrase
+   never appeared in the design doc; it originated and was corrected in this file.
 
 ## Test plan
 

@@ -825,8 +825,7 @@ describe('ensureOrtMarker', () => {
   });
 
   it('REFUSES on a clobbered venv and names the remedy', () => {
-    const { root, sp } = venv({ owner: 'plain', realDist: true });
-    mkdirSync(join(sp, 'onnxruntime_gpu-1.27.0.dist-info'), { recursive: true });
+    const { root, sp } = venv({ owner: 'swap', realDist: true });
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m) => lines.push(m))).toBe('clobbered');
     expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
@@ -882,8 +881,10 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
 
     if (owner === 'swap' && realPlain.length > 0) {
       log(
-        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
-          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
+        '[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build\'s files. ' +
+          'This corrupts pip\'s dependency resolution — a landmine for the next pip operation. ' +
+          'The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
+          'Refusing to write a marker that would certify this bad state. Repair with:\n' +
           '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
       return 'clobbered';
