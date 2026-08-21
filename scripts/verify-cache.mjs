@@ -780,6 +780,7 @@ export function stagedDiffFiles(cwd) {
     cwd,
     encoding: 'utf8',
     env: gitEnv(),
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -836,6 +837,7 @@ export function branchDiffFiles(cwd) {
     cwd,
     encoding: 'utf8',
     env,
+    windowsHide: true,
   });
   if (base.error || base.status !== 0) return null;
   const baseSha = base.stdout.trim();
@@ -843,6 +845,7 @@ export function branchDiffFiles(cwd) {
     cwd,
     encoding: 'utf8',
     env,
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -940,7 +943,7 @@ function detectGpuContention() {
   const r = spawnSync(
     'nvidia-smi',
     ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
-    { encoding: 'utf8', timeout: 5000 },
+    { encoding: 'utf8', timeout: 5000, windowsHide: true },
   );
   if (r.error || r.status !== 0) return { busy: false, util: null };
   return gpuContentionFor(r.stdout);
@@ -958,7 +961,7 @@ function pesterFingerprint() {
       '-Command',
       "$m = Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1; if ($m) { $m.Version.ToString() } else { 'unavailable' }",
     ],
-    { encoding: 'utf8', timeout: 5000 },
+    { encoding: 'utf8', timeout: 5000, windowsHide: true },
   );
   if (r.error || r.status !== 0) return 'unavailable';
   return (r.stdout ?? '').trim() || 'unavailable';
@@ -988,6 +991,7 @@ export function sidecarFingerprint(
   const r = spawnSync(py, ['-m', 'pytest', '--version'], {
     encoding: 'utf8',
     timeout: 10_000,
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return `present:${mtime}:no-pytest`;
   const ver = ((r.stdout ?? '') + (r.stderr ?? '')).trim().split(/\r?\n/)[0];
@@ -1010,6 +1014,7 @@ function gitFileList(cwd) {
     cwd,
     encoding: 'utf8',
     env: gitEnv(),
+    windowsHide: true,
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout

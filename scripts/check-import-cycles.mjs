@@ -66,6 +66,7 @@ export function runMadge({ cwd = serverDir } = {}) {
     encoding: 'utf8',
     shell: true,
     maxBuffer: 16 * 1024 * 1024,
+    windowsHide: true,
   });
   if (result.error) {
     throw new Error(`madge failed to run: ${result.error.message}`);

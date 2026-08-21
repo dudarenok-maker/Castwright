@@ -29,6 +29,7 @@ function which(cmd) {
   // on PATH. We don't need version output, only "does it resolve."
   const r = spawnSync(cmd, ['-NoProfile', '-Command', '$null'], {
     stdio: 'ignore',
+    windowsHide: true,
   });
   return r.error == null;
 }
