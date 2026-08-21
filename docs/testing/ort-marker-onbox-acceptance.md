@@ -290,13 +290,23 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
 
 ### 8.1 Procedure
 
-1. On a disposable copy of the sidecar venv (or with intent to run the repair
-   command afterward — this is destructive), with the sidecar stopped, run
-   `pip install --force-reinstall onnxruntime` (plain, no `-gpu` suffix) into a
-   venv that already has `onnxruntime-gpu` installed.
+1. On a disposable copy of the sidecar venv or a throwaway venv (with intent to run
+   the repair command afterward — this is destructive), with the sidecar stopped,
+   manufacture the clobbered state by installing **plain** `onnxruntime` first and
+   then force-reinstalling `onnxruntime-gpu` **over** it. Pip keys upgrade-detection
+   on the package name, so installing a different distribution that shares the
+   `onnxruntime/` namespace does not replace the first, and the plain package's
+   dist-info survives on disk:
+   ```powershell
+   python -m venv <venv>
+   <venv>\Scripts\pip install onnxruntime==1.27.0
+   <venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
+   ```
+   (Versions pinned for reproducibility; verified 2026-08-21, Castwright#2545.)
 2. Confirm both `onnxruntime_gpu-<version>.dist-info` and a **real**
-   `onnxruntime-<version>.dist-info` (INSTALLER `pip`, non-empty RECORD) exist, and
-   that `site-packages/onnxruntime/` holds the CPU build's files.
+   `onnxruntime-<version>.dist-info` (INSTALLER `pip`, non-empty RECORD) coexist, and
+   that `site-packages/onnxruntime/` holds the GPU build's files
+   (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 3. Boot the server and watch the log.
 4. Run the named remedy command:
    `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`.
@@ -343,6 +353,14 @@ repair command itself works correctly when run directly.
 `server/tts-sidecar/.venv`, robocopied to a scratch path, deleted after the
 run. Live venv confirmed byte-unchanged before and after (see step-2 results
 file).
+
+> **Manufacture recipe corrected, 2026-08-21 — Castwright#2545.** The §8.1
+> procedure above was replaced (plain-then-GPU) after the original GPU-then-plain
+> recipe was shown to reach `'deleted'`, not `'clobbered'`, in this 2026-08-20 run.
+> The corrected recipe was verified against the real `detectOrtOwner`/
+> `findPlainOrtDistInfos` (`server/tts-sidecar/scripts/install-ort.mjs`) on a
+> throwaway venv: `detectOrtOwner === 'swap'`, one real plain dist-info present, and
+> `ensureOrtMarker` returns `'clobbered'`.
 
 ---
 

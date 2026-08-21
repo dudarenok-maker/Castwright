@@ -2358,13 +2358,36 @@ collided) while the actual files on disk are the CPU build. This is the populati
 #2192 itself names as the largest affected group, and the state a wrong ownership
 predicate would entomb silently (see the design doc's §The three venv states).
 
-- **Manufacture the state deliberately**, on a copy of the venv or with the intent
-  to run the repair command afterward (this is destructive to a working GPU
-  install): with the sidecar stopped, `pip install --force-reinstall onnxruntime`
-  (plain, no `-gpu` suffix) into the sidecar venv that already has
-  `onnxruntime-gpu` installed. Confirm both `onnxruntime_gpu-*.dist-info` and a
-  **real** `onnxruntime-*.dist-info` (INSTALLER `pip`, non-empty RECORD) now exist,
-  and that `site-packages/onnxruntime/` is the CPU build's files.
+- **Manufacture the state deliberately**, on a scratch/throwaway venv (or a copy of
+  the sidecar venv) with the intent to run the repair command afterward — this is
+  destructive to a working GPU install. The corrected recipe (verified 2026-08-21,
+  see the dated note below) starts from a venv that has plain `onnxruntime`
+  installed and then force-reinstalls the GPU build **over** it: pip's
+  upgrade-detection keys on the package NAME, so installing two distributions that
+  share the `onnxruntime/` import namespace under different names does not trigger
+  a replacement, and the plain package's dist-info survives on disk:
+  ```powershell
+  python -m venv <venv>
+  <venv>\Scripts\pip install onnxruntime==1.27.0
+  <venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
+  ```
+  Confirm both a **real** `onnxruntime-*.dist-info` (INSTALLER `pip`, non-empty
+  RECORD) — which now coexists with `onnxruntime_gpu-*.dist-info` — and that
+  `site-packages/onnxruntime/` holds the GPU build's files
+  (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
+
+> **Recipe corrected, 2026-08-21 — see [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545).**
+> The row's original recipe (`pip install --force-reinstall onnxruntime` over a
+> venv already holding `onnxruntime-gpu`) does NOT reach `'clobbered'`: it
+> overwrites `site-packages/onnxruntime/capi/build_and_package_info.py` to report
+> `package_name = 'onnxruntime'`, so `detectOrtOwner` correctly reports `'plain'`
+> and `ensureOrtMarker` takes the silent `'deleted'` branch instead. The corrected
+> plain-then-GPU ordering above was verified against the real
+> `detectOrtOwner`/`findPlainOrtDistInfos` from
+> `server/tts-sidecar/scripts/install-ort.mjs` on a throwaway venv: it reports
+> `detectOrtOwner === 'swap'` and `findPlainOrtDistInfos.length === 1`, and
+> `ensureOrtMarker` returns `'clobbered'` — exactly the refuse-and-log branch this
+> row is meant to exercise.
 - **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
   naming the condition and the exact remedy command
   (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
