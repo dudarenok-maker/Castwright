@@ -380,8 +380,10 @@ file).
 
 Re-ran the corrected §8.1 recipe on a **fresh** throwaway venv (`python -m
 venv`, not a copy of the sidecar's own) against branch
-`fix/sidecar-2535-ort-marker-fix` at commit `5142039` (after merging latest
-`origin/main` — the merge touched neither `install-ort.mjs` nor its test).
+`fix/sidecar-2535-ort-marker-fix` at commit `bd09fcfa` (the commit that
+corrected the clobbered-state message, fixing the silent-defect #2535). The
+recorded log message matches bd09fcfa's 452-character wording, not the
+262-character wording from the prior merge commit 51420399.
 
 **Manufactured state confirmed:** `detectOrtOwner === 'swap'`,
 `findPlainOrtDistInfos.length === 1`, both `onnxruntime-1.27.0.dist-info` and

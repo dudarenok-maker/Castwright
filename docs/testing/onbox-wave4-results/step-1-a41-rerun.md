@@ -5,10 +5,11 @@ Acceptance re-run for register row **A41** (`docs/testing/onbox-acceptance-regis
 and its verify child [#2546](https://github.com/dudarenok-maker/Castwright/issues/2546)
 (PASSED, opened [PR #2578](https://github.com/dudarenok-maker/Castwright/pull/2578)).
 Run against branch `fix/sidecar-2535-ort-marker-fix`, worktree
-`C:/Claude/Projects/wt-2535-ort-marker-fix`, at commit `5142039` — this is the
-merge commit created during this run to bring the branch's docs up to date
-with `origin/main` (51 commits behind at claim time; the merge touched
-neither `install-ort.mjs` nor its test file).
+`C:/Claude/Projects/wt-2535-ort-marker-fix`, at commit `bd09fcfa` — the commit
+that corrected the clobbered-state log message wording (fixing silent-defect
+#2535). This is the commit that introduced the recorded 452-character log
+message; the prior commit `51420399` (the merge at 17:00:54) carried the old
+262-character wording, which the recorded transcript does not match.
 
 ## Manufacture recipe (per the row's own corrected §8.1 procedure)
 
