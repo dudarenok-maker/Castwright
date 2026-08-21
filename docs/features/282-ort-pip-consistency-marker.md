@@ -129,7 +129,7 @@ Nothing else on disk changes.
 | `swap` | no | yes — but **stale** (recorded version ≠ installed version) | `noop` — **known limitation**, see note below |
 | `swap` | **yes** — the clobbered box | either | `clobbered` — refuse, log the remedy |
 | `plain` (CPU build owns it) | — | yes | `deleted` — logs (Kokoro runs without GPU acceleration) |
-| `none` (interrupted swap — no files at all) | — | yes | `deleted` — logs (GPU Kokoro cannot load; names the remedy) |
+| `none` (interrupted swap — no files at all) | — | yes | `deleted` — logs (Kokoro cannot load at all; names the remedy) |
 | `none` | — | no | `noop` |
 
 Ownership is read from files the wheel ships — `onnxruntime/capi/build_and_package_info.py`'s

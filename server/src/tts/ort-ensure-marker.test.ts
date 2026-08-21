@@ -130,7 +130,7 @@ describe('ensureOrtMarker', () => {
     const message = lines.join('\n');
     expect(message).toContain('[ort-marker]');
     expect(message).toContain('No onnxruntime runtime is installed');
-    expect(message).toContain('GPU Kokoro cannot load');
+    expect(message).toContain('Kokoro cannot load at all');
     expect(message).toContain('CASTWRIGHT_ACCELERATOR_PROFILE');
     expect(message).toContain('install-ort.mjs');
   });

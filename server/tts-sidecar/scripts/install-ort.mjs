@@ -339,7 +339,7 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       if (owner === 'none') {
         safeLog(
           '[ort-marker] No onnxruntime runtime is installed — the swap was interrupted or incomplete. ' +
-            'The recorded swap marker has been removed. GPU Kokoro cannot load in this state. ' +
+            'The recorded swap marker has been removed. Kokoro cannot load at all in this state. ' +
             'Repair with:\n' +
             '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
         );
