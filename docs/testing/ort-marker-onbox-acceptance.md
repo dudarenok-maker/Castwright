@@ -47,7 +47,7 @@ acceptance criterion.
 | 3 | Self-heal on an existing (pre-marker) box | — | **Discharged**, see §5 |
 | 4 | Pinokio update path (`update.js`, the deployment shape that reported the bug) | E9 | Owed |
 | 5 | AMD box — no marker is written; the live case is the AMD→ROCm-failure→CPU-fallback ordering | Blocked (AMD/ROCm) | Blocked — no hardware |
-| 6 | Clobbered box — both dist-infos present, CPU files in the namespace; boot takes the loud path | A41 | Owed |
+| 6 | Clobbered box — both dist-infos present, GPU build's files in the namespace; boot takes the loud path | A41 | Owed |
 | — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A42 | Owed |
 
 ## 2. Preconditions (common to all criteria)

@@ -113,11 +113,11 @@ Nothing else on disk changes.
 6. **`ensureOrtMarker` never uninstalls, downloads, or imports onnxruntime**, and never
    throws — it runs in `server/src/index.ts`'s `main()`, before `app.listen` (line 128),
    ahead of `enforceSingleSidecarOwner`'s possible `process.exit`.
-7. **A clobbered venv (real plain `onnxruntime` installed over the GPU build) is
-   refused, never repaired by writing over it.** Writing a marker there would stamp the
-   GPU distribution's version onto the installed CPU files, make `pip check` report
-   clean, and leave GPU Kokoro permanently dead with no path in this design that ever
-   fixes it. `ensureOrtMarker` logs the exact remedy command instead:
+7. **A clobbered venv (real plain `onnxruntime` dist-info coexisting with `onnxruntime-gpu`
+   files in the namespace) is refused, never repaired by writing over it.** Writing a marker
+   there would stamp the GPU distribution's version onto the coexisting real dist-info, make
+   `pip check` report clean, and leave GPU Kokoro permanently dead with no path in this
+   design that ever fixes it. `ensureOrtMarker` logs the exact remedy command instead:
    `CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`.
 
 ### The five venv states `ensureOrtMarker` distinguishes

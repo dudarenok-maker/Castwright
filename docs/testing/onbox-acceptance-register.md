@@ -2352,11 +2352,12 @@ filed against, and it has not been separately re-confirmed since the fix landed
 Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
 branch (the clobbered-box row of the design doc's five-state table) is fully
 unit-tested against synthetic fixtures (`server/src/tts/ort-ensure-marker.test.ts`)
-but has never run against a **real** clobbered venv — a box where the GPU
-distribution's dist-info survives (pip uninstalls by name and never knew the two
-collided) while the actual files on disk are the CPU build. This is the population
-#2192 itself names as the largest affected group, and the state a wrong ownership
-predicate would entomb silently (see the design doc's §The three venv states).
+but has never run against a **real** clobbered venv — a box where a real plain
+`onnxruntime` dist-info survives alongside the GPU distribution's dist-info (pip
+uninstalls by name and never knew the two collided), but the actual files on disk
+are the GPU build. This is the population #2192 itself names as the largest affected
+group, and the state a wrong ownership predicate would entomb silently (see the
+design doc's §The three venv states).
 
 - **Manufacture the state deliberately**, on a scratch/throwaway venv (or a copy of
   the sidecar venv) with the intent to run the repair command afterward — this is
