@@ -289,7 +289,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -300,7 +300,13 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**74 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**75 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+
+> **Addition, 2026-08-22 (PR #2588, closes #2586).** A48 added — the
+> `speaker-qa.txt` reqHash fix's one-time real-venv `pip-in-place` reinstall
+> (both hash producers, `venv-migration.mjs` and `zip-validate.ts`, per that
+> PR's pass-3/pass-4 review) is behaviour only a real venv can prove. 75 is
+> 74 + this one new row; nothing else in this addition moves.
 
 > **Correction, 2026-08-20 (rework of wave-3's own recording, `#2497`).** These
 > totals were rechecked against wave 3's actual dispositions rather than left
@@ -2682,6 +2688,69 @@ must be **rebuilt for the new voice**, not reused against the old speaker's.
 *Criteria:* the two bullets above. *Cost:* short — one render, one
 reassignment, one re-render. Records A24's final sub-check ("no
 `voice-mismatch` rows").
+
+### A48 · The `speaker-qa.txt` reqHash fix actually drives a one-time `pip-in-place` reinstall on a real venv ([#2586](https://github.com/dudarenok-maker/Castwright/issues/2586), PR #2588) · **no GPU needed, sidecar venv only**
+
+PR #2588 hashes `speaker-qa.txt` into `reqHash` (`resolveRequired` in
+`venv-migration.mjs`, AND — after pass-3/pass-4 review caught the first landing
+missing it — `zip-validate.ts`'s separate `validateUpgradeZip` producer, which
+the in-app zip-upload upgrade route and `apply.ts`'s `pipInstall` gate both
+read). The decision logic (`decideVenvAction`/`classifyVenvState`) is
+exhaustively unit-tested against synthetic stamps, and the two hash producers
+are now pinned equal against each other by a test that builds matching
+requirements content on disk and in a real zip (`zip-validate.test.ts`). What
+none of that proves is that a REAL venv with a stamp recorded under the old
+2-file hash actually gets `pip-in-place`'d — not `noop`, not a full rebuild —
+and that the resulting environment carries `speaker-qa.txt`'s current pins
+(`speechbrain==1.1.0`, `huggingface_hub==0.36.2` as of this PR) afterward.
+
+Two real reinstall paths write two different files, so the criteria below are
+per-path — don't conflate them. `.req-hash` (`upgrade/apply.ts:298-308`) is
+written **only** by the in-app zip-upload path; `.venv-stamp.json` is written
+**only** by `bootstrap-venv.mjs`'s own path (Pinokio's Update action). Neither
+run writes the other file, so "both files now record the new hash" is not a
+real, checkable outcome — pick one path and check the one file it owns.
+
+The zip-upload path also needs a real pre-existing `.req-hash` to compare
+against, not a fresh one: `apply.ts:134`'s gate is
+`ctx.reqHash && ctx.reqHash !== steps.readReqHash()`, so on a venv with **no**
+prior `.req-hash` file at all, any non-null `ctx.reqHash` triggers
+`pip-in-place` regardless of whether `speaker-qa.txt` is in the hash — that
+run would pass a naive "did pip-in-place happen" check even with this PR
+fully reverted, and prove nothing about the fix. Seed a real OLD 2-file hash
+first (below) so the run being tested is a genuine hash-mismatch, not a
+first-ever-write.
+
+**Path A — Pinokio Update (`.venv-stamp.json`):**
+- Take a real sidecar venv whose `.venv-stamp.json` predates this PR (`reqHash`
+  computed from `[overlay, base]` only — any pre-#2588 install qualifies).
+- Run Pinokio's Update action (`pinokio-scripts/update.js`, which runs
+  `bootstrap-venv.mjs`).
+- Confirm the run performs a `pip-in-place` install (not a full rebuild, not a
+  `noop`) — `python-tag`/`profile` are unchanged, so `decideVenvAction` should
+  classify strictly on the `reqHash` mismatch.
+- Confirm `speaker-qa.txt`'s pins (`speechbrain`, `huggingface_hub`) are
+  present at their pinned versions afterward, and that `.venv-stamp.json` now
+  records the new 3-file hash so a second Update run is a `noop`.
+
+**Path B — in-app zip-upload upgrade (`.req-hash`):**
+- Run the zip-upload upgrade once against a build that predates this PR (or
+  hand-write a `.req-hash` file containing the old `[overlay, base]` hash) so
+  a real prior value exists to mismatch against.
+- Run the zip-upload upgrade again (Account → Application updates → stage a
+  release zip → Apply, driving `upgrade/apply.ts`) against a build carrying
+  this PR's `speaker-qa.txt`-inclusive hash.
+- Confirm this second run performs a `pip-in-place` install specifically
+  because of the `reqHash` mismatch (not merely because `.req-hash` was
+  absent — that's the false-positive path above) and that `speaker-qa.txt`'s
+  pins land in the venv afterward.
+- Confirm `.req-hash` now records the new 3-file hash so a third run is a
+  `noop`.
+
+*Needs:* sidecar venv only, no GPU. *Criteria:* Path A's four bullets OR
+Path B's four bullets — one path is sufficient, they exercise the same
+`decideVenvAction`/`classifyVenvState` logic through different producers.
+*Cost:* one pip-in-place reinstall, once, on an old-stamped venv.
 
 ## Group B — local Ollama analyzer only
 

@@ -107,6 +107,8 @@ export interface ZipReadResult {
   reqOverlayText: string | null;
   /** Text of the vendor-neutral base (requirements/base.txt), null if absent. */
   reqBaseText: string | null;
+  /** Text of the speaker-QA pin file (requirements/speaker-qa.txt), null if absent. */
+  reqSpeakerQaText: string | null;
   topDir: string | null;
 }
 
@@ -120,11 +122,13 @@ function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 }
 
 /** Read a zip's entry names + the bytes of the top-level package.json and the
-    *resolved* sidecar requirements files — the nvidia-cuda overlay and its base
-    (used for the venv-reinstall hash). We hash the resolved set rather than the
-    requirements.txt shim (which is just `-r requirements/nvidia-cuda.txt`), so an
-    edit to a real pin in the overlay/base re-triggers a pip install. yauzl
-    streaming so a 30 MB bundle never lands fully in memory. */
+    *resolved* sidecar requirements files — the nvidia-cuda overlay, its base, and
+    speaker-qa.txt (used for the venv-reinstall hash; must stay in lockstep with
+    resolveRequired's file set — see the reqHash comment on validateUpgradeZip). We
+    hash the resolved set rather than the requirements.txt shim (which is just
+    `-r requirements/nvidia-cuda.txt`), so an edit to a real pin in the
+    overlay/base/speaker-qa re-triggers a pip install. yauzl streaming so a 30 MB
+    bundle never lands fully in memory. */
 export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
   return new Promise((resolve, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
@@ -133,12 +137,14 @@ export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
       let packageJsonText: string | null = null;
       let reqOverlayText: string | null = null;
       let reqBaseText: string | null = null;
+      let reqSpeakerQaText: string | null = null;
       let topDir: string | null = null;
 
-      const want = (name: string): 'pkg' | 'overlay' | 'base' | null => {
+      const want = (name: string): 'pkg' | 'overlay' | 'base' | 'speakerQa' | null => {
         if (name.endsWith('/package.json') && name.split('/').length === 2) return 'pkg';
         if (name.endsWith('/server/tts-sidecar/requirements/nvidia-cuda.txt')) return 'overlay';
         if (name.endsWith('/server/tts-sidecar/requirements/base.txt')) return 'base';
+        if (name.endsWith('/server/tts-sidecar/requirements/speaker-qa.txt')) return 'speakerQa';
         return null;
       };
 
@@ -155,7 +161,8 @@ export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
                 const text = buf.toString('utf8');
                 if (which === 'pkg') packageJsonText = text;
                 else if (which === 'overlay') reqOverlayText = text;
-                else reqBaseText = text;
+                else if (which === 'base') reqBaseText = text;
+                else reqSpeakerQaText = text;
               })
               .catch(() => {})
               .finally(() => zip.readEntry());
@@ -165,7 +172,14 @@ export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
         }
       });
       zip.on('end', () =>
-        resolve({ entryNames, packageJsonText, reqOverlayText, reqBaseText, topDir }),
+        resolve({
+          entryNames,
+          packageJsonText,
+          reqOverlayText,
+          reqBaseText,
+          reqSpeakerQaText,
+          topDir,
+        }),
       );
       zip.on('error', reject);
       zip.readEntry();
@@ -178,11 +192,27 @@ export interface ValidatedZip extends ManifestResult {
 }
 
 /** Read + validate a staged zip. Returns the manifest verdict plus the resolved
-    requirements hash (computeReqHash over the overlay THEN base text — byte-for-byte
-    the same hash resolveRequired writes into the venv stamp) so apply can decide
-    whether a pip reinstall into the shared venv is needed. null when either
-    resolved file is absent (a malformed release): matches the prior "don't gate on
-    hash" behaviour rather than firing a pip install off a partial read. */
+    requirements hash (computeReqHash over the overlay, THEN base, THEN
+    speaker-qa.txt text) so apply can decide whether a pip reinstall into the
+    shared venv is needed. null when any resolved file is absent (a malformed
+    release): matches the prior "don't gate on hash" behaviour rather than
+    firing a pip install off a partial read.
+
+    Only ever reads requirements/nvidia-cuda.txt as the overlay (readUpgradeZip's
+    `want()` has no cpu/amd-rocm branch), so this hash is byte-identical to
+    resolveRequired(sidecarDir, 'nvidia')'s — NOT to a cpu or amd-rocm profile's,
+    which hash a different overlay file and therefore differ. That asymmetry is
+    pre-existing (this fix didn't introduce or change it) — the shipped release
+    zip has always been nvidia-profile-shaped on this axis.
+
+    This is a SEPARATE producer of the same hash resolveRequired computes
+    (venv-migration.mjs) — the two must stay in lockstep over which files they hash
+    and in what order, or a requirements-file addition that only updates one of them
+    silently reopens #2534's failure mode on whichever install path uses the
+    unstaled producer (#2588 pass 3: speaker-qa.txt joined resolveRequired's hash
+    without joining this one). `zip-validate.test.ts` pins the two producers equal
+    over identical file content **for the nvidia profile only** so a future drift
+    on that profile fails loudly; it says nothing about cpu/amd-rocm. */
 export async function validateUpgradeZip(
   zipPath: string,
   runningVersion: string,
@@ -203,12 +233,14 @@ export async function validateUpgradeZip(
     runningVersion,
     allowDowngrade: opts.allowDowngrade,
   });
-  // Hash the resolved set in resolveRequired's order (overlay THEN base) so
-  // ctx.reqHash is byte-identical to the venv stamp's reqHash. If either file is
-  // missing we can't reproduce that hash, so fall back to null (= no hash gate).
+  // Hash the resolved set in resolveRequired's order (overlay, base, speaker-qa) so
+  // ctx.reqHash is byte-identical to the venv stamp's reqHash for the nvidia
+  // profile (the only overlay this zip reader captures — see the doc comment
+  // above). If any file is missing we can't reproduce that hash, so fall back
+  // to null (= no hash gate).
   const reqHash =
-    read.reqOverlayText !== null && read.reqBaseText !== null
-      ? computeReqHash([read.reqOverlayText, read.reqBaseText])
+    read.reqOverlayText !== null && read.reqBaseText !== null && read.reqSpeakerQaText !== null
+      ? computeReqHash([read.reqOverlayText, read.reqBaseText, read.reqSpeakerQaText])
       : null;
   return { ...manifest, reqHash };
 }
