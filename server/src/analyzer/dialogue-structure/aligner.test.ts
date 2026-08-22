@@ -713,6 +713,55 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     }
   });
 
+  it('(#2577 Q1) a bare needle that is itself a genuine narration match does not lose to a later dash-prefixed recurrence of the same text', () => {
+    // Pass 4 of #2577's fix (attempt 4, commit 5a60b088) resolved P1/P2/P3 but
+    // introduced this regression: the forward-walk to a dash-prefixed
+    // occurrence ran unconditionally whenever the bare first hit wasn't
+    // itself dash-adjacent, without checking whether that bare hit was
+    // already a genuinely valid match. When a sentence's exact text
+    // legitimately recurs later in the chapter under a DIFFERENT sentence's
+    // paragraph dash (narration reused verbatim as dialogue, or vice versa —
+    // not rare in real prose), the walk discarded the correct first
+    // occurrence and cross-bound onto the unrelated dash instead.
+    //
+    // Red on 5a60b088 (before the mid-word-hit guard): sentence 1 below binds
+    // to the SPEECH span at the end (the unrelated dash) instead of its own
+    // NARRATION span at the start.
+    const ruIdx = buildNameIndex(
+      [
+        { id: 'anton', name: 'Антон' },
+        { id: 'olga', name: 'Ольга' },
+      ],
+      conventionsFor('ru')!,
+    );
+    const repeated = 'Он молчал.';
+    const body = [
+      repeated, // the genuine, dash-free narration — the FIRST occurrence
+      '',
+      'Ольга долго смотрела в окно, вспоминая каждую деталь того разговора.', // long filler, no cached match — keeps this a single unbounded run
+      '',
+      `— ${repeated}`, // an unrelated LATER dialogue line that happens to reuse the exact same words
+    ].join('\n');
+    const paras = parseChapterStructure(body, ruIdx);
+    const allSpans = paras.flatMap((p) => p.spans);
+    const narrationSpan = allSpans.find((s) => s.kind === 'narration' && body.slice(s.start, s.end) === repeated)!;
+    const speechSpan = allSpans.find((s) => s.kind === 'speech')!;
+    expect(narrationSpan).toBeTruthy();
+    expect(speechSpan).toBeTruthy();
+    expect(body.slice(speechSpan.start, speechSpan.end)).toBe(repeated);
+
+    const sentences = [mkSentence(1, 'narrator', repeated)];
+    const result = alignSentences(sentences, paras, body, true); // dashIsDialogueMarker = true
+
+    // Must bind to the FIRST, genuine occurrence — not walk forward onto the
+    // unrelated dialogue line's dash just because the text happens to recur.
+    expect(result.aligned[0].spans).toEqual([narrationSpan]);
+    expect(result.aligned[0].spans[0].kind).toBe('narration');
+
+    // Same property one level down, in the sibling locator.
+    expect(locateSentenceOffsets(sentences, body, true)[0]).toBe(body.indexOf(repeated));
+  });
+
   it('(#2537) the separator guard does not depend on the separator being in the cache', () => {
     // Same body, but the model dropped the separator "sentence" — so no
     // preceding match parks the run cursor past the rule. The narration

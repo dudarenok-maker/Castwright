@@ -242,6 +242,21 @@ function dashRunStart(haystack: string, at: number, floor: number, adjacent: Das
   }
 }
 
+/** A "word" character for the purposes of `isMidWordHit` below — letters and
+    digits in any script, matching what `normalize()` leaves untouched. */
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/** True when `pos` lands INSIDE a word rather than at its start — i.e. the
+    character immediately before it is itself a word character. This is the
+    "да." inside "правда." shape: the match is a false substring hit, not an
+    independently valid occurrence of the needle.
+
+    Anything else — start of haystack, or preceded by whitespace/punctuation/
+    a dash — is a genuine word-boundary match and must be trusted as-is. */
+function isMidWordHit(haystack: string, pos: number): boolean {
+  return pos > 0 && WORD_CHAR.test(haystack[pos - 1]);
+}
+
 /** Search `needle` in `haystack` starting at `cursor`, bounded to a
     look-ahead window; falls back to one unbounded re-search from the SAME
     cursor (tolerates a legitimately out-of-order match farther ahead). A
@@ -287,9 +302,21 @@ function findNeedleSpan(
   const atFirst = dashRunStart(haystack, pos, cursor, adjacent);
   if (atFirst !== null) return { start: atFirst, end: Math.min(pos + spanLen, haystack.length) };
 
-  // The first occurrence is bare — it may be the false substring hit (`"да."`
-  // inside `"правда."`). A dash-prefixed occurrence further on is the better
-  // answer: the dash was dropped by the cache, not by the manuscript. Every
+  // The first occurrence is bare and not itself dash-adjacent. If it's ALSO a
+  // genuine word-boundary match (not the "да." inside "правда." shape), it is
+  // an independently valid occurrence of this sentence's text — trust it, and
+  // do NOT walk forward hunting for a dash-prefixed occurrence elsewhere. That
+  // walk is only safe when this hit is known-false: otherwise, if the same
+  // text legitimately recurs later in the chapter under a DIFFERENT sentence's
+  // dash, this occurrence would be discarded in favor of binding to that
+  // unrelated dash (#2577 pass 4, "Q1").
+  if (!isMidWordHit(haystack, pos)) {
+    return { start: pos, end: Math.min(pos + spanLen, haystack.length) };
+  }
+
+  // The first occurrence is a false substring hit (`"да."` inside
+  // `"правда."`). A dash-prefixed occurrence further on is the better answer:
+  // the dash was dropped by the cache, not by the manuscript. Every
   // dash-prefixed occurrence is also a plain one, so walking the remaining
   // plain hits finds them all; the walk resumes where the previous `indexOf`
   // stopped, so it costs one pass over the haystack however many hits there are.

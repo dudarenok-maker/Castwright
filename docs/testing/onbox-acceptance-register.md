@@ -3622,11 +3622,17 @@ exists. *Criteria:* spec §On-box acceptance
 > the #2541 parent-acceptance checklist both passed — but neither reaches
 > whatever in this book's real 2,122-sentence, 1,940-dash-only-span structure
 > still produces a divergent match. **Item (2) is therefore still owed, not
-> discharged** — this is a residual real-data gap the fix's own test coverage
-> didn't reach, not the original defect recurring unfixed. Evidence:
-> `docs/testing/onbox-wave4-results/step-1-e11-item2-rerun.md`. Routed back
-> for a fresh fix attempt against the real corpus rather than a synthetic
-> fixture.
+> discharged.**
+>
+> **2026-08-23 — pass-2 addendum on #2577:** the "residual real-data gap …
+> not the original defect recurring unfixed" framing above overstated what
+> this run showed. It was measured against `d9eb03ad`, which predates the
+> fix's final mechanism (attempt 4, commit `5a60b088`) — a later mechanism
+> that itself needed two more blocking-regression fixes (P1/P2) found in
+> subsequent review passes of the same PR. Whether this book's divergence is
+> closed by the fix as it now stands is unconfirmed; item (2) stays owed
+> pending a fresh on-box re-run against the current commit, not `d9eb03ad`.
+> Evidence: `docs/testing/onbox-wave4-results/step-1-e11-item2-rerun.md`.
 
 ## Group G — GitHub Actions itself
 

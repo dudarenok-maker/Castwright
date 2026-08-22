@@ -183,8 +183,15 @@ fields, same direction, same magnitude: `narratorIdSpoken` 229→223, `share`
 fix is confirmed present in both source and the `server/dist` this run
 actually exercised. Its own synthetic unit test and #2541's parent-acceptance
 checklist both passed, but neither reaches whatever in this book's real
-2,122-sentence structure still produces a divergent match — a residual gap,
-not the original defect recurring unfixed. Full diff:
+2,122-sentence structure still produces a divergent match. **Note (2026-08-23,
+pass-2 addendum on #2577): the earlier framing here — "a residual gap, not the
+original defect recurring unfixed" — overstated what this run actually showed.**
+Commit `d9eb03ad` predates the final aligner mechanism (PR #2577 attempt 4,
+`5a60b088`, which also fixed two further blocking regressions — P1/P2 — found
+in later review passes of the SAME fix). Whether this specific `Ночной дозор`
+divergence is closed by the final mechanism is unconfirmed; item (2) stays
+owed pending a fresh on-box re-run against the fix as it now stands, not
+against `d9eb03ad`. Full diff:
 [`onbox-wave4-results/step-1-e11-item2-rerun.md`](onbox-wave4-results/step-1-e11-item2-rerun.md).
 **Mechanism:** `alignSentences` (`server/src/analyzer/dialogue-structure/aligner.ts:317,360`)
 locates each cached sentence in the chapter body by substring-searching
