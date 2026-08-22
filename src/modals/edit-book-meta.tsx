@@ -13,6 +13,7 @@ import { IconClose, IconPencil } from '../lib/icons';
 import { PrimaryButton, Checkbox } from '../components/primitives';
 import { useAppSelector } from '../store';
 import type { LibraryBook } from '../lib/types';
+import type { SseSource } from '../lib/language-guard-bus';
 
 export interface EditBookMetaPatch {
   title: string;
@@ -63,7 +64,7 @@ interface Props {
   onSaveError?: (error: Error) => void;
   /** For sse guard shape only: identifies which action triggered the guard,
       so the modal can show source-appropriate copy. */
-  sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation';
+  sseSource?: SseSource;
 }
 
 /* fs-2 — human labels for the language selector options. Mirrors
@@ -80,45 +81,45 @@ const LANGUAGE_OPTIONS: Array<{ code: string; label: string }> = [
 ];
 
 const GUARD_COPY: Record<LanguageGuardShape, { eyebrow: string; hint: string }> = {
-  "409": {
-    eyebrow: "Set a language to continue",
-    hint: "This book has no language set, so some operations need one. Choose a language below.",
+  '409': {
+    eyebrow: 'Set a language to continue',
+    hint: 'This book has no language set, so some operations need one. Choose a language below.',
   },
   sse: {
-    eyebrow: "Set a language to continue",
-    hint: "Generating voices needs a book language. Choose one below and we’ll pick up where we left off.",
+    eyebrow: 'Set a language to continue',
+    hint: 'Generating voices needs a book language. Choose one below and we’ll pick up where we left off.',
   },
   batch: {
-    eyebrow: "Set a language to continue",
-    hint: "Script review needs a book language. Choose one below and we’ll re-run the review.",
+    eyebrow: 'Set a language to continue',
+    hint: 'Script review needs a book language. Choose one below and we’ll re-run the review.',
   },
 };
 
 const SSE_SOURCE_COPY: Record<string, { eyebrow: string; hint: string }> = {
   analysis: {
-    eyebrow: "Set a language to continue",
-    hint: "Analysis needs a book language. Choose one below and we’ll pick up where we left off.",
+    eyebrow: 'Set a language to continue',
+    hint: 'Analysis needs a book language. Choose one below and we’ll pick up where we left off.',
   },
-  "cast-design": {
-    eyebrow: "Set a language to continue",
-    hint: "Designing voices needs a book language. Choose one below and we’ll pick up where we left off.",
+  'cast-design': {
+    eyebrow: 'Set a language to continue',
+    hint: 'Designing voices needs a book language. Choose one below and we’ll pick up where we left off.',
   },
-  "single-design": {
-    eyebrow: "Set a language to continue",
-    hint: "Designing a voice needs a book language. Choose one below and we’ll pick up where we left off.",
+  'single-design': {
+    eyebrow: 'Set a language to continue',
+    hint: 'Designing a voice needs a book language. Choose one below and we’ll pick up where we left off.',
   },
   generation: {
-    eyebrow: "Set a language to continue",
-    hint: "Generating voices needs a book language. Choose one below and we’ll pick up where we left off.",
+    eyebrow: 'Set a language to continue',
+    hint: 'Generating voices needs a book language. Choose one below and we’ll pick up where we left off.',
   },
 };
 
 /* Helper to get the correct copy based on guard shape and (for sse) source. */
 function getGuardCopy(
   shape: LanguageGuardShape,
-  sseSource?: "analysis" | "cast-design" | "single-design" | "generation",
+  sseSource?: SseSource,
 ): { eyebrow: string; hint: string } {
-  if (shape === "sse" && sseSource && sseSource in SSE_SOURCE_COPY) {
+  if (shape === 'sse' && sseSource && sseSource in SSE_SOURCE_COPY) {
     return SSE_SOURCE_COPY[sseSource];
   }
   return GUARD_COPY[shape];
@@ -134,7 +135,16 @@ function parseTagInput(raw: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry, onSaveError, sseSource }: Props) {
+export function EditBookMetaModal({
+  open,
+  book,
+  onClose,
+  onSave,
+  guard,
+  onRetry,
+  onSaveError,
+  sseSource,
+}: Props) {
   /* Seed every field from the book the menu was opened against. State is
      keyed by `book.bookId` (via the `key` prop on the caller) so flipping
      between two cards re-mounts the form rather than carrying over stale
@@ -152,9 +162,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry,
          book's language is unset). Otherwise mirror the book: an unset book
          ('') shows Unset; a set book shows its code (falling back to the
          resolved display value 'en' for un-typed fixtures). */
-      language: guard
-        ? null
-        : (book.languageSet === true ? book.language : null) ?? null,
+      language: guard ? null : ((book.languageSet === true ? book.language : null) ?? null),
     }),
     [book, guard],
   );
@@ -254,8 +262,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry,
   const requiredOk = titleClean !== '' && authorClean !== '';
 
   const tagsChanged =
-    tags.length !== initial.tags.length ||
-    tags.some((t, i) => t !== initial.tags[i]);
+    tags.length !== initial.tags.length || tags.some((t, i) => t !== initial.tags[i]);
   /* A pending-but-uncommitted tag in the input is also "dirty" — the
      Save handler commits it before invoking onSave, so the form is
      materially different from its seed state. Without this, Save sits
@@ -286,10 +293,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry,
   /* Guard mode unlocks Save only once a language is chosen (the failure
      this modal exists to fix). Non-guard mode keeps today's rules. */
   const canSave =
-    isDirty &&
-    requiredOk &&
-    positionIsValid &&
-    (guard ? (language ?? null) !== null : true);
+    isDirty && requiredOk && positionIsValid && (guard ? (language ?? null) !== null : true);
 
   if (!open) return null;
   return (

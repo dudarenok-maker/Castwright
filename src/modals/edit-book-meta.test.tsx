@@ -11,6 +11,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { librarySlice } from '../store/library-slice';
 import { EditBookMetaModal, type EditBookMetaPatch } from './edit-book-meta';
 import type { LibraryBook } from '../lib/types';
+import type { SseSource } from '../lib/language-guard-bus';
 
 const baseBook: LibraryBook = {
   bookId: 'b1',
@@ -215,7 +216,7 @@ describe('EditBookMetaModal — tag suggestions (plan 73)', () => {
 describe('EditBookMetaModal — language guard (Task 9)', () => {
   function renderGuardModal(
     guard: 'sse' | '409' | 'batch',
-    sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation',
+    sseSource?: SseSource,
   ) {
     const store = configureStore({
       reducer: { library: librarySlice.reducer },

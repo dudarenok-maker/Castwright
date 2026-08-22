@@ -27,6 +27,11 @@
 
 import type { LanguageGuardShape } from '../modals/edit-book-meta';
 
+/** The action that triggered an sse-shaped language guard, determining which
+    copy the modal displays. One of the four server-side sources that can emit
+    a language-unset error during streaming. */
+export type SseSource = 'analysis' | 'cast-design' | 'single-design' | 'generation';
+
 /** Name the failing book. Splice / QA-repair / qwen voice-design are
     book-scoped (`bookId`); analysis is manuscript-scoped (`manuscriptId`). */
 export type LanguageGuardSelector = { bookId: string } | { manuscriptId: string };
@@ -46,7 +51,7 @@ export interface LanguageGuardRequest {
   /** For sse shape only: identifies which action triggered the guard, so
       the modal can show source-appropriate copy (e.g., "analysis" vs
       "cast-design" vs "generation"). Unused for 409/batch shapes. */
-  sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation';
+  sseSource?: SseSource;
 }
 
 /** Returns true when it accepted the request — i.e. resolved the selector to a

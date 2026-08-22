@@ -28,7 +28,7 @@ import {
   type EditBookMetaPatch,
   type LanguageGuardShape,
 } from '../modals/edit-book-meta';
-import { setLanguageGuardHandler, type LanguageGuardSelector } from '../lib/language-guard-bus';
+import { setLanguageGuardHandler, type LanguageGuardSelector, type SseSource } from '../lib/language-guard-bus';
 import type { LibraryBook } from '../lib/types';
 
 interface PendingGuard {
@@ -36,7 +36,7 @@ interface PendingGuard {
   shape: LanguageGuardShape;
   retries: Array<() => void>;
   dismisses: Array<() => void>;
-  sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation';
+  sseSource?: SseSource;
 }
 
 export interface LanguageGuardResult {
@@ -53,7 +53,7 @@ export interface LanguageGuardResult {
     shape: LanguageGuardShape,
     onRetry: () => void,
     onDismiss?: () => void,
-    sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation',
+    sseSource?: SseSource,
   ) => boolean;
   /** Render once, near the end of the layout tree. The modal mounts only
       while a guard request is pending. */
