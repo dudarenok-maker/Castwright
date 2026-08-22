@@ -199,10 +199,17 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
 // install date. Re-pinned 2026-08-21 (#2534 side-chain) to the newest
-// CUDA-12-built line. Validated on this dev box: 1.26.0 constructs a working
-// CUDAExecutionProvider InferenceSession against CUDA 12.4 + cuDNN 9 (cuDNN
-// ships in the runtime venv via torch) and computes correctly. onnxruntime-gpu
-// 1.27+ moved its default build to CUDA 13.x (cublasLt64_13.dll), incompatible
+// CUDA-12-built line. NOTE (#2600, corrected 2026-08-23): the version itself was
+// desk-validated (1.26.0/1.27.0 constructs a CUDAExecutionProvider
+// InferenceSession against CUDA 12.4 without erroring), but "computes
+// correctly" was never true end to end — cuDNN does NOT ship in the runtime
+// venv via torch; #2600's wave-4 on-box run found no cuDNN 9 DLL anywhere
+// onnxruntime's CUDA provider searches, so the session silently falls back to
+// CPU. See the NVIDIA_CUDNN_CONSTRAINT comment below for the fix this
+// motivated, and main.py's `_preload_ort_cuda_dlls` for the still-unproven
+// (no on-box confirmation as of this note) attempt to make the installed
+// cuDNN findable. onnxruntime-gpu 1.27+ moved its default build to CUDA 13.x
+// (cublasLt64_13.dll), incompatible
 // with the shipped torch/torchaudio cu128 pin. The pin deliberately holds the
 // runtime on the last CUDA-12 line to keep the stack CUDA-12-compatible.
 // Floor-plus-cap on the MINOR line rather than an exact `==` so a same-line
@@ -252,6 +259,23 @@ function constrainForInstall(ortPackage) {
 // different cuDNN major version.
 const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
 
+// cuDNN's own dependency tree pulls in nvidia-cublas-cu12 (for nvidia-cudnn-cu12,
+// unpinned) which in turn pulls in nvidia-cuda-nvrtc-cu12 (unpinned) — measured
+// 2026-08-23 at 12.9.2.10 / 12.9.86 against this venv's CUDA-12.8 torch. Left
+// alone, that is exactly the exposure ONNXRUNTIME_GPU_CONSTRAINT's own comment
+// above says is unacceptable: whatever happens to be latest on PyPI on install
+// date, decided by a THIRD PARTY's unpinned transitive deps rather than by us.
+// It is also a real collision, not a theoretical one: torch/torchaudio (cu128)
+// ship their OWN bundled `cublas64_12.dll` in torch/lib, so an unpinned
+// nvidia-cublas-cu12 install lands a second, differently-versioned build of the
+// same DLL base name in one process, and load order decides which one a given
+// import gets. Floor-plus-cap on the currently-resolved MINOR line (mirroring
+// NVIDIA_CUDNN_CONSTRAINT's own shape) so a same-line patch (security fix)
+// still flows without a code change; only a genuine minor bump needs bumping
+// these alongside NVIDIA_CUDNN_CONSTRAINT and ONNXRUNTIME_GPU_CONSTRAINT.
+const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.9';
+const NVIDIA_CUDA_NVRTC_CONSTRAINT = 'nvidia-cuda-nvrtc-cu12~=12.9';
+
 /**
  * Extra pip step(s), if any, needed alongside an ortPackage swap so the
  * installed runtime can actually USE its accelerator, not just report it as
@@ -260,12 +284,17 @@ const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
  * inherit a CUDA-only package. Deliberately NOT `--no-deps`: cuDNN's own
  * dependency tree (cublas, nvrtc) doesn't intersect the overlay's
  * numpy/protobuf/flatbuffers pins, so installing it in full here is safe in a
- * way dropping `--no-deps` on the onnxruntime-gpu step itself is not. Pure —
- * no I/O.
+ * way dropping `--no-deps` on the onnxruntime-gpu step itself is not. All three
+ * packages are named in ONE pip step (not `--no-deps`, so this is belt-and-
+ * suspenders rather than load-bearing) so pip's resolver treats the pins on
+ * the two transitive packages as top-level constraints instead of letting an
+ * unpinned transitive requirement from cuDNN win the resolution. Pure — no I/O.
  * @returns {string[][]}
  */
 export function extraRuntimeSteps(ortPackage) {
-  return ortPackage === 'onnxruntime-gpu' ? [['install', NVIDIA_CUDNN_CONSTRAINT]] : [];
+  return ortPackage === 'onnxruntime-gpu'
+    ? [['install', NVIDIA_CUDNN_CONSTRAINT, NVIDIA_CUBLAS_CONSTRAINT, NVIDIA_CUDA_NVRTC_CONSTRAINT]]
+    : [];
 }
 
 /**

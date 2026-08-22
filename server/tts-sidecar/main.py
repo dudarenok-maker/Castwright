@@ -112,6 +112,64 @@ logging.basicConfig(
 log = logging.getLogger("sidecar")
 
 
+def _preload_ort_cuda_dlls() -> str:
+    """#2600 (review finding 1, PR #2617): installing `nvidia-cudnn-cu12` (see
+    install-ort.mjs's `extraRuntimeSteps`) lands the cuDNN DLLs on disk but does
+    NOT make them findable — on Windows, `<venv>/Lib/site-packages/nvidia/cudnn/bin`
+    is never added to the process DLL search path by anything in the
+    onnxruntime-gpu wheel (`_ld_preload.py` is empty/manylinux-only,
+    `_pybind_state.py`'s Windows branch only checks `vcruntime140_1.dll`, and the
+    installed package has zero `add_dll_directory` calls). The one mechanism
+    onnxruntime ships that reaches those directories is its own opt-in
+    `onnxruntime.preload_dlls()` — its docstring names the only alternative
+    (`import torch` before `import onnxruntime`), which this file deliberately
+    does NOT do (every `import torch` here is lazy, inside an engine method).
+
+    Called once, at import time, before anything in this process constructs an
+    onnxruntime `InferenceSession` (Kokoro's CUDA session included) — calling it
+    only after a failed CUDA-EP load would be too late (Windows caches the failed
+    LoadLibrary for the process lifetime).
+
+    Guarded end to end: an onnxruntime build without the `preload_dlls` symbol
+    (older release, or a non-GPU wheel that never needed it) degrades to a
+    logged no-op rather than crashing the sidecar, and `preload_dlls()` itself
+    raising (e.g. the `[cuda]`-extra packages absent) is caught rather than
+    propagated — the CUDA execution provider silently falling back to CPU is
+    the pre-existing failure mode either way, and this function's whole job is
+    to make that outcome LOUD instead of silent, never to guarantee GPU use.
+    Returns a status string for tests; not part of any external contract.
+    """
+    try:
+        import onnxruntime  # type: ignore
+    except Exception as e:
+        log.info("[ort-preload] onnxruntime not importable yet (%s); skipping DLL preload.", e)
+        return "not-importable"
+    preload = getattr(onnxruntime, "preload_dlls", None)
+    if preload is None:
+        log.info(
+            "[ort-preload] onnxruntime %s has no preload_dlls() (older build). CUDA "
+            "cuDNN/cublas DLLs will only be found if something else in this process "
+            "(e.g. an earlier `import torch`) already added them to the DLL search "
+            "path -- the CUDA execution provider may silently fall back to CPU.",
+            getattr(onnxruntime, "__version__", "?"),
+        )
+        return "unavailable"
+    try:
+        preload()
+    except Exception as e:
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() raised (%s) -- the CUDA "
+            "execution provider may silently fall back to CPU.",
+            e,
+        )
+        return "failed"
+    log.info("[ort-preload] onnxruntime.preload_dlls() ran (cuda/cudnn/cublas/cufft DLL dirs).")
+    return "preloaded"
+
+
+_preload_ort_cuda_dlls()
+
+
 def error_response(e: Exception, log, status: int = 500):
     """Log the full traceback server-side and return a GENERIC error body.
 

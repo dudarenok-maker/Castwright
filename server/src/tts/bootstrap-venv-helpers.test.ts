@@ -56,16 +56,34 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT) so the runtime isn't whatever
     // happened to be latest on PyPI on install date.
     expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu>=1.26,<1.27');
-    // #2600: a final, separate cuDNN install — deliberately WITHOUT --no-deps
-    // (see install-ort.mjs's extraRuntimeSteps) so onnxruntime-gpu's
-    // CUDAExecutionProvider can actually construct an InferenceSession
-    // instead of silently falling back to CPU.
-    expect(joined[4]).toBe('install nvidia-cudnn-cu12~=9.0');
+    // #2600: a final, separate cuDNN(+cublas+nvrtc) install — deliberately
+    // WITHOUT --no-deps (see install-ort.mjs's extraRuntimeSteps) so
+    // onnxruntime-gpu's CUDAExecutionProvider can actually construct an
+    // InferenceSession instead of silently falling back to CPU. cublas/nvrtc
+    // are pinned alongside cuDNN (review finding M2) rather than left to
+    // resolve unpinned.
+    expect(joined[4]).toBe(
+      'install nvidia-cudnn-cu12~=9.0 nvidia-cublas-cu12~=12.9 nvidia-cuda-nvrtc-cu12~=12.9',
+    );
     expect(pip.calls).toHaveLength(5);
   });
 
   it('nvidia: a failed ORT swap is fatal (no silent CPU-only Kokoro)', () => {
     const pip = fakePip(['onnxruntime-gpu']); // the GPU install step fails
+    expect(() => installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toThrow(
+      /ONNX runtime swap failed/,
+    );
+  });
+
+  it('nvidia: a failed cuDNN step (extraRuntimeSteps, #2600) is ALSO fatal', () => {
+    // Review finding M3: the prior "a failed ORT swap is fatal" test above
+    // trips at the UNINSTALL step (joined[2]) and never reaches the cuDNN
+    // install — so a failure of THIS step specifically (by far the largest
+    // and most network-fragile of the five pip calls, #2600) was never
+    // exercised. Without this coverage a broken/network-failed cuDNN install
+    // could silently succeed the overall bootstrap and leave Kokoro on CPU
+    // with no error raised anywhere.
+    const pip = fakePip(['nvidia-cudnn-cu12']); // only the cuDNN step fails
     expect(() => installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toThrow(
       /ONNX runtime swap failed/,
     );

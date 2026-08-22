@@ -32,10 +32,18 @@ describe('planOrtSwap', () => {
     // cuDNN's own dependency tree (cublas, nvrtc) doesn't intersect the
     // overlay's numpy/protobuf/flatbuffers pins, so pulling it in full is safe
     // where dropping --no-deps on the onnxruntime-gpu step itself is not.
+    // cublas/nvrtc are named alongside cuDNN (review finding M2) so pip's
+    // resolver treats their pins as top-level constraints rather than letting
+    // cuDNN's own unpinned transitive requirement pick whatever is latest.
     expect(plan.steps).toEqual([
       ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
       ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.26,<1.27'],
-      ['install', 'nvidia-cudnn-cu12~=9.0'],
+      [
+        'install',
+        'nvidia-cudnn-cu12~=9.0',
+        'nvidia-cublas-cu12~=12.9',
+        'nvidia-cuda-nvrtc-cu12~=12.9',
+      ],
     ]);
   });
 
@@ -44,8 +52,15 @@ describe('planOrtSwap', () => {
   // TODAY exercises a non-onnxruntime-gpu SWAP (amd/apple/cpu are all
   // 'onnxruntime', i.e. skip): a future onnxruntime-directml re-enable must
   // not silently inherit a CUDA-only cuDNN package.
-  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN step', () => {
-    expect(extraRuntimeSteps('onnxruntime-gpu')).toEqual([['install', 'nvidia-cudnn-cu12~=9.0']]);
+  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN+cublas+nvrtc step', () => {
+    expect(extraRuntimeSteps('onnxruntime-gpu')).toEqual([
+      [
+        'install',
+        'nvidia-cudnn-cu12~=9.0',
+        'nvidia-cublas-cu12~=12.9',
+        'nvidia-cuda-nvrtc-cu12~=12.9',
+      ],
+    ]);
     expect(extraRuntimeSteps('onnxruntime-directml')).toEqual([]);
     expect(extraRuntimeSteps('onnxruntime')).toEqual([]);
   });
