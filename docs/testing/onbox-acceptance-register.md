@@ -372,16 +372,16 @@ setup rather than repeatedly loading and evicting models.
 > re-binning within the 74, not a change to the total. Same arithmetic-check
 > pattern as `onbox-sitting-plan.md`'s own 2026-08-20 correction.
 
-> **Recompute, 2026-08-21 (wave-4 step 8, A39/A40/A41 re-run, `#2569`).** A41's
+> **Recompute, 2026-08-21 (wave-4 step 8, A37/A38/A39 re-run, `#2569`).** A39's
 > filed defect is fixed and independently verified (see its row). The box-level
 > CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been resolved by PR #2576
 > (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`), and the
-> shared Kokoro GPU-provider sub-check for A39/A40 was re-run against the fixed
+> shared Kokoro GPU-provider sub-check for A37/A38 was re-run against the fixed
 > pin (wave-4 step 8, 2026-08-21) — but **still fails on a different, distinct
 > root cause**: `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via
-> its optional `[cudnn]` extra, which `install-ort.mjs` never requests. A41's
+> its optional `[cudnn]` extra, which `install-ort.mjs` never requests. A39's
 > row accordingly remains STILL OWED on the same basis (the shared re-check still
-> fails, same new root cause), and so does A39 (see their rows for the detailed
+> fails, same new root cause), and so does A37 (see their rows for the detailed
 > re-run findings and evidence). This does **not** leave the owed count — 74 is
 > recomputed fresh here, not carried forward, and stays unchanged.
 
@@ -2486,7 +2486,7 @@ eight-state table and "the clobbered box takes the loud path" in
 > saw), but constructing a real inference session was not re-attempted here —
 > the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been
 > resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to
-> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A39):
+> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A37):
 > re-ran against the fixed pin (ONNXRUNTIME 1.26.0 via PR #2576), still fails but
 > on a new, distinct root cause — `onnxruntime-gpu` 1.26.0 requires
 > `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by
