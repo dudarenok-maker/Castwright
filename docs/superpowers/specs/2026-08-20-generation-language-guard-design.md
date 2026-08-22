@@ -459,10 +459,7 @@ hazard.
 
 ## Ship notes
 
-**Shipped:** PR #2492, merged to `main` — language-unset error handling integrated
-across the generation stream's nine early bail-out sites with stream-closure
-guarantees, pending-guard dispatch gating, and streak-breaker exemption per owner
-decisions on #2515 (2026-08-20).
+Shipped 2026-08-22 on branch `feat/server-2246-language-recurrence`, HEAD `594d7d28`.
 
 ## Assumption-checker passes
 
