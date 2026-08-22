@@ -382,7 +382,7 @@ setup rather than repeatedly loading and evicting models.
 > its optional `[cudnn]` extra, which `install-ort.mjs` never requests. A39's
 > row accordingly remains STILL OWED on the same basis (the shared re-check still
 > fails, same new root cause), and so does A37 (see their rows for the detailed
-> re-run findings and evidence). This does **not** leave the owed count — 74 is
+> re-run findings and evidence). This does **not** leave the owed count — 67 is
 > recomputed fresh here, not carried forward, and stays unchanged.
 
 ---

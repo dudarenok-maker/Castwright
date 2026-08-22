@@ -237,6 +237,21 @@
     within the 74, not a change to the total.
   </div>
 
+  <div class="callout warn">
+    <b>Recompute, 2026-08-21 (wave-4 step 8, A37/A38/A39 re-run, <a href="https://github.com/dudarenok-maker/Castwright/issues/2569">#2569</a>).</b> A39's
+    filed defect is fixed and independently verified (see its row). The box-level
+    CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (<a href="https://github.com/dudarenok-maker/Castwright/issues/2534">#2534</a>) has been resolved by PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2576">#2576</a>
+    (which re-pinned <code>ONNXRUNTIME_GPU_CONSTRAINT</code> to <code>>=1.26,<1.27</code>), and the
+    shared Kokoro GPU-provider sub-check for A37/A38 was re-run against the fixed
+    pin (wave-4 step 8, 2026-08-21) — but <b>still fails on a different, distinct
+    root cause</b>: <code>onnxruntime-gpu</code> 1.26.0 requires <code>nvidia-cudnn-cu12~=9.0</code> via
+    its optional <code>[cudnn]</code> extra, which <code>install-ort.mjs</code> never requests. A39's
+    row accordingly remains STILL OWED on the same basis (the shared re-check still
+    fails, same new root cause), and so does A37 (see their rows for the detailed
+    re-run findings and evidence). This does <b>not</b> leave the owed count — 67 is
+    recomputed fresh here, not carried forward, and stays unchanged.
+  </div>
+
   <div class="tscroll">
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
