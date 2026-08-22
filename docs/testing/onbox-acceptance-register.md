@@ -2339,9 +2339,8 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > while `onnxruntime-gpu` 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries.
 > This blocking dependency is now resolved by PR #2576, which re-pinned
 > `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27` (CUDA-12 line). The row
-> remains STILL OWED because the acceptance test has not yet been re-run
-> against the fixed pin; see evidence doc
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+> stays STILL OWED pending the GPU-provider re-check against the fixed pin;
+> see evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 > **Wave-4 step 8, 2026-08-21 — STILL OWED, re-run after #2534's fix landed.**
 > Re-ran the Kokoro GPU-provider check against `onnxruntime-gpu` 1.26.0 (the
@@ -2553,11 +2552,14 @@ eight-state table and "the clobbered box takes the loud path" in
 > saw), but constructing a real inference session was not re-attempted here —
 > the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been
 > resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to
-> `>=1.26,<1.27`), but the Kokoro GPU-provider re-check has not yet been
-> re-run against the fixed pin — the identical reason A39 stays STILL OWED. Per
-> that precedent this row stays **STILL OWED** rather than DISCHARGED — the row's
-> own criteria include the CUDA-provider re-check — but the population #2192
-> named as largest-affected is no longer left in the silent failure mode.
+> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A39):
+> re-ran against the fixed pin (ONNXRUNTIME 1.26.0 via PR #2576), still fails but
+> on a new, distinct root cause — `onnxruntime-gpu` 1.26.0 requires
+> `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by
+> `install-ort.mjs` (not the #2534 defect recurring). Per that outcome this row
+> stays **STILL OWED** on the GPU-provider check basis — the row's own criteria
+> include the CUDA-provider re-check — but the population #2192 named as
+> largest-affected is no longer left in the silent failure mode.
 > Evidence: `docs/testing/ort-marker-onbox-acceptance.md` §8.5. Run by: claude
 > (Castwright#2578, wave-5, round-2 review correction).
 

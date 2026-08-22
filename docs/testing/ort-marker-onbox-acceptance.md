@@ -100,7 +100,7 @@ and no pip-vendored CUDA 13 runtime packages are in requirements. Reproduced
 identically against the **live** sidecar venv (read-only, not modified) —
 this is an environment-wide defect, not specific to the throwaway venv.
 
-> **Superseded note (2026-08-21):** this run predates PR #2576, which resolved the blocking box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`. The criterion outcome recorded above is from 2026-08-20, before that resolution. The row is still OWED for re-run against the fixed pin.
+> **Superseded note (2026-08-21):** this run predates PR #2576, which resolved the blocking box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`. The criterion outcome recorded above is from 2026-08-20, before that resolution. The shared GPU-provider re-check was re-run against the fixed pin (wave-4 step 8, 2026-08-21) and still fails, but on a new, distinct root cause — the missing `nvidia-cudnn-cu12` dependency (distinct from #2534). See disposition summary (§10) and onbox-acceptance-register.md for full details.
 
 **Disposition:** STILL OWED — marker/pip-check mechanics pass, GPU provider
 check fails on a real dependency gap.

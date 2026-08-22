@@ -1,6 +1,6 @@
 # Wave 4, step 1 — A41 re-run (Castwright#2569)
 
-*Dated run record (2026-08-21). References to #2534 as a blocker in this document are from a prior state; that blocker has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`). The row remains owed pending re-run against the fixed pin.*
+*Dated run record (2026-08-21). References to #2534 as a blocker in this document are from a prior state; that blocker has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`). The GPU-provider re-check was re-run against the fixed pin (wave-4 step 8, same procedure as A39) and still fails, but on a new, distinct root cause — the missing `nvidia-cudnn-cu12` dependency. The row stays STILL OWED on the GPU-provider check basis.*
 
 Acceptance re-run for register row **A41** (`docs/testing/onbox-acceptance-register.md`
 §A41), gated on defect [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
