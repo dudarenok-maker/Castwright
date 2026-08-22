@@ -1,0 +1,27 @@
+{
+  "pollLog": [
+    {
+      "time": "2026-08-21T02:53:53.168Z",
+      "status": "venv-bootstrap-job",
+      "stepText": "creating venv at C:\\Claude\\Projects\\wt-2551-onbox-wave4-retire\\server\\tts-sidecar\\.venv"
+    },
+    {
+      "time": "2026-08-21T02:54:03.228Z",
+      "status": "venv-bootstrap-job",
+      "stepText": "pre-installing torch from the nvidia index (https://download.pytorch.org/whl/cu128)"
+    },
+    {
+      "time": "2026-08-21T02:57:03.514Z",
+      "status": "venv-bootstrap-job",
+      "stepText": "installing requirements (nvidia overlay; this can take several minutes)"
+    },
+    {
+      "time": "2026-08-21T03:02:34.032Z",
+      "status": null,
+      "stepText": null
+    }
+  ],
+  "totalMs": 931057,
+  "reloadedDuringRun": true,
+  "terminalStatus": null
+}

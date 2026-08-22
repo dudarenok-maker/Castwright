@@ -12,11 +12,13 @@
 > single boot with the card connected; any step that needs a swapped enumeration
 > is a second 2-card boot, not a live replug.
 >
-> **Running time total (recomputed):** **~110 minutes** of runnable acceptance —
-> A2 step 9 ≈ 20, A3 ≈ 45, A8 ≈ 25, A18 ≈ 20 — plus **~15 minutes** for A2
-> steps 6–8, which are **blocked on the A2 AMBIGUOUS decision** (see §A2) and run
-> only if the operator resolves rows 6–8 as owed. A2 step 3 is observe-only/N-A
-> (cannot be forced on OcuLink). The plan of record estimated 110 min
+> **Running time total (recomputed 2026-08-21):** **~110 minutes** of runnable
+> acceptance — A2 step 9 ≈ 20, A3 ≈ 45, A8 ≈ 25, A18 ≈ 20. A2 step 3 is
+> observe-only/N-A (cannot be forced on OcuLink). **A2 rows 6–8 (steps
+> 6–8, formerly conditional) are removed from this pack** — the repo owner
+> ruled 2026-08-21 that they are not owed (plan 264 itself frames them as
+> "deferred by choice, not blocked"; see `onbox-acceptance-register.md`'s A2
+> row). The plan of record estimated 110 min
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1); this recomputation
 > matches.
 
@@ -60,31 +62,20 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 5. **(A8.5) 12/16 GB eGPU:** observe **no eviction** — analyzer + TTS coexist (set `GPU_SAFE_COEXIST_MB` if the detected total straddles the default 11000).
    - Result:
 
-### A2 · Capacity-aware GPU placement (plan 264) — step 9, steps 6–8 (blocked), step 3 (N-A)
+### A2 · Capacity-aware GPU placement (plan 264) — step 9, step 3 (N-A)
 
 > **Criteria source:** [`../features/264-vram-aware-gpu-placement.md`](../features/264-vram-aware-gpu-placement.md) §"Manual acceptance walkthrough (owed on-box — the 'no OOM' bar)" at `:129-179`; header `:9-22`.
 >
-> ⚠️ **AMBIGUOUS — blocked on a decision; do not resolve it here.** The plan
-> header names `S1/S2/S4/S6` as part of the exercised on-box synthesis-path
-> acceptance **and** lists rows 6–8 (which include item 6, the 2-card cold
-> `/load` steer) as "not force-driven on-box" — in the same paragraph.
-> Re-ran the cited grep: `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md`
-> → `16:> (S1/S2/S4/S6 below). The manual **evict-under-contention** rows (6–8: cold`
-> (it **matches**, not misses — the register's original "no-match" claim is
-> wrong, as wave 1 already found). Whether rows 6–8 count as already-exercised or
-> still-owed-and-deferred-by-choice is the operator's design-pass decision. Steps
-> 6–8 below are marked **blocked on that decision** — run them only if the
-> operator resolves rows 6–8 as owed.
+> **Correction, 2026-08-21.** Rows 6–8 (cold `/load` device steer,
+> `design_voice` evicts Ollama, GPU-ASR 503→evict→retry) are **not owed** —
+> the repo owner ruled they are deferred by choice, resting on automated
+> coverage, per plan 264's own closing sentence. The plan's self-
+> contradiction (`S6` listed as both force-driven and not) was fixed
+> separately (Castwright#2559). This row's remaining scope is step 9 alone.
 
 6. **(A2.9 — #1730, 2-card only) Concurrent cross-card ops keep to their card:** with both cards up, run `design_voice` + `mint_variant` (and, if `ASR_DEVICE=cuda`, a `/transcribe` + `/embed`) concurrently so they land on **different** admitted cards. Observe: each op's entire run — load **and** forward — stays on its own card; no cross-card clobber, no OOM. (`GET /capacity` confirms the reservation per device.) This is the on-box confirmation of PR #1732 (re-resolved: merged 2026-07-19T22:44:02Z) still owed before the concurrent-multi-card flag flip. *Single-8 GB-card runs never hit this path — it is a 2-card-only check.*
    - Result:
-7. **(A2.6 — blocked on decision) 2-card boot, cold `/load`:** loading Coqui/Kokoro/Qwen steers to the roomier of the two cards; `GET /capacity` shows the reservation landing on the expected device. **Run only if rows 6–8 are resolved as owed.**
-   - Result:
-8. **(A2.7 — blocked on decision) `design_voice` on a full 8 GB card:** the idle Ollama analyzer is evicted and the design proceeds; if there is still no room, the actionable busy/no-capacity toast surfaces instead of a hang. **Run only if rows 6–8 are resolved as owed.**
-   - Result:
-9. **(A2.8 — blocked on decision) GPU-configured ASR (`ASR_DEVICE=cuda`) `/transcribe` under contention:** 503s with `noCapacity`, Node evicts the idle analyzer and retries, and the transcription completes rather than silently falling back to CPU. **Run only if rows 6–8 are resolved as owed.**
-   - Result:
-10. **(A2.3 — observe-only, N-A) eGPU fault-drop:** IF the eGPU ever drops off the CUDA bus on its own mid-run ("GPU is lost"), the in-flight op fails fast, its reservation releases, a toast fires, and it re-queues onto the 8 GB card. **Cannot be safely triggered on OcuLink** (add/remove is reboot-only; yanking the cable is a hard crash). Mark **Blocked / N-A** unless it happens on its own; the recovery path is unit-covered and not required for sign-off.
+7. **(A2.3 — observe-only, N-A) eGPU fault-drop:** IF the eGPU ever drops off the CUDA bus on its own mid-run ("GPU is lost"), the in-flight op fails fast, its reservation releases, a toast fires, and it re-queues onto the 8 GB card. **Cannot be safely triggered on OcuLink** (add/remove is reboot-only; yanking the cable is a hard crash). Mark **Blocked / N-A** unless it happens on its own; the recovery path is unit-covered and not required for sign-off.
     - Result:
 
 ### A3 · srv-57 Multi-GPU Wave 2 — ten checklist items (#1230)
@@ -123,7 +114,7 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 
 None excluded. All four rows were re-resolved against live repo/issue/PR state and remain owed:
 
-- **A2** — `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md` re-run → matches line 16 (the register's original "no-match" claim is wrong; the wave-1 audit already corrected it); plan 264 frontmatter `status: active`; PR #1732 re-checked via `gh api …/pulls/1732` → merged 2026-07-19T22:44:02Z. **AMBIGUOUS** (the rows-6–8 decision) — marked in the procedure, not excluded.
+- **A2** — `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md` re-run → matches line 16 (the register's original "no-match" claim is wrong; the wave-1 audit already corrected it); plan 264 frontmatter `status: active`; PR #1732 re-checked via `gh api …/pulls/1732` → merged 2026-07-19T22:44:02Z. Rows 6–8 ruled **not owed** 2026-08-21 (see the procedure's correction note) — step 9 stays owed.
 - **A3** — `gh api …/issues/1230` re-checked → `state: open`, `closed_at: null`; unchecked `- [ ]` count re-run = 10. STILL OWED.
 - **A8** — plan 222 frontmatter `status: active`; header `:9` "on-box GPU acceptance owed"; walkthrough at `:54`; PR #840 merged 2026-06-16T11:02:20Z; PR #841 merged 2026-06-16T11:02:59Z. STILL OWED. **Finding (routed to #2435, not fixed):** PR #839 (merged 2026-06-16T07:29:25Z, "fix(server): tolerate stray model keys in analyzer schema validation") is **misattributed** in the register's `*Shipped*` line for A8 — its body is about Ollama JSON schema salvage, unrelated to GPU residency/eviction. #840/#841 are the real match. Does not change the verdict (the walkthrough-owed statement is independently confirmed from the plan header and ship notes). Editing the register is out of scope for this pack.
 - **A18** — PR #1870 re-checked → merged 2026-07-27T01:53:26Z; #1857 re-checked → closed 2026-07-27T01:53:27Z; `server/src/tts/sidecar-env.test.ts` exists. STILL OWED.

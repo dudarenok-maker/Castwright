@@ -315,3 +315,22 @@ is a convenient real analysis to drive while observing `ollama ps`).
 
 (Fill in when status flips to `stable`: shipped date, commit SHA, and move
 this file to `docs/features/archive/` in the same PR.)
+
+**Outcome, 2026-08-21 (Castwright#2553, wave 4 of the on-box acceptance
+register campaign, #2435).** Register row B2 (per-model analyzer
+keep-alive, this plan) is **DISCHARGED and retired from the register.**
+Steps 1-6 discharged live in wave 3 (2026-08-20): flat 30s default, `PUT`
+persisting the raw-key map, the run-time pin, the keep-alive=0/30s-floor
+regression check, keep-alive=-1 resident-indefinitely, and reset restoring
+the default. Step 8 (persona keep-alive stays 300, unregressed by the
+per-model resolver) was discharged live in wave 4 (2026-08-21): a genuine
+in-flight persona call showed `ollama ps` reporting `qwen3.5:4b` resident
+with a `4 minutes from now` UNTIL, distinct from the 30s analyzer default.
+**Step 7 (the CPU-only `RAM_HEAVY_MODELS` clamp) moved to the register's
+"Blocked — hardware not available" section**, as a separate entry — this
+box's two resident NVIDIA GPUs mean `accelerator` structurally resolves to
+`'cuda'`, and forcing `'cpu'` would require disabling GPU visibility,
+risking other lanes' concurrent work. With steps 1-6 and 8 discharged and
+step 7 moved to Blocked (no longer counted toward the row's owed total),
+every counted step is discharged, so the row is retired. Repo owner ruled
+2026-08-21.

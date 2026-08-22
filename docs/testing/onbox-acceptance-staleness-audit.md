@@ -693,7 +693,7 @@ number by being unable to check is worse than no instrument at all.
 ### A16 · fe-16 Qwen auto-load on a Russian book (plan 165)
 
 - **Verdict:** AMBIGUOUS
-- **Evidence:** `docs/features/165-fe-15-16-language-and-revision-e2e.md`
+- **Evidence:** `docs/features/archive/165-fe-15-16-language-and-revision-e2e.md`
   frontmatter `status: active` (`:2`) directly contradicts its own body
   `> Status: stable (shipped together; manual acceptance owed only for the
   live Qwen auto-load)` (`:9`) — confirmed by direct read, not just the
@@ -702,7 +702,7 @@ number by being unable to check is worse than no instrument at all.
   wired and unit-covered; live GPU acceptance is the only owed item." No PR
   number is filled in anywhere in the file — "(PR pending)" is still literal
   text, not a placeholder later replaced. `git log --oneline --
-  docs/features/165-fe-15-16-language-and-revision-e2e.md` shows the plan
+  docs/features/archive/165-fe-15-16-language-and-revision-e2e.md` shows the plan
   was renumbered from 163 (`6ed2fb8d`, "renumber fe-15/16 plan 163 -> 165")
   but no subsequent commit revisits acceptance state or fills the PR number.
   Automated coverage (`src/views/cast.test.tsx`, cited `:76`) asserts "Qwen

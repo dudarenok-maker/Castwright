@@ -134,10 +134,26 @@ The install completes cleanly. No `WinError 5`. GPU Kokoro unaffected afterward.
 
 ### 4.3 Result
 
-**Qwen3 install outcome:** _(fill in)_
-**`WinError 5` present/absent:** _(fill in)_
-**Kokoro execution provider after install:** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_
+**Qwen3 install outcome:** PASS — clicked Install on Qwen3-TTS Base (0.6B) in
+Model Manager, against a freshly bootstrapped worktree venv (nvidia
+profile); job resolved `"status":"installed","step":"Already installed."`
+with no error, no exception, no partial state.
+**`WinError 5` present/absent:** ABSENT — no `WinError 5` / `Accès refusé`
+on any `.dll` under `site-packages/onnxruntime/capi/`.
+**Kokoro execution provider after install:** NOT VALIDATED — UNREACHABLE,
+not FAIL. This box's TTS sidecar binds a single hardcoded `:9000` port
+shared across every worktree; another live agent lane already held it for
+the whole session, so `POST /api/sidecar/restart` (which the install flow's
+`onInstalled` callback calls to pick up the freshly-installed package)
+returned 409 Conflict. Without a restart, nothing in this worktree's own
+venv was ever loaded into a running sidecar this session, so a
+GPU-provider check would have measured the other lane's venv, not this
+one — worthless evidence. A structural box-contention limitation, distinct
+from the already-filed #2534 CUDA13/cuDNN9 gap.
+**Run by:** claude (wave-4 step 5c, Castwright#2561). **Date:** 2026-08-21.
+**Disposition:** Register row A38 (renumbered from A40 this wave) stays
+STILL OWED — partially run. Full evidence:
+`docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
 ---
 

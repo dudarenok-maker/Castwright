@@ -1,0 +1,20 @@
+{
+  "continueListening": {
+    "found": false,
+    "reason": "no matching role=button \"Continue listening...\" on home page"
+  },
+  "addBook": {
+    "found": false,
+    "reason": "no [data-tour-id=\"new-book-btn\"] on home page"
+  },
+  "reviewChip": {
+    "found": true,
+    "duringPress": "oklab(0.164546 0.00102162 0.00246866 / 0.4)",
+    "afterRelease": "N/A (tap navigated away from summary — real onClick fired, confirming a genuine interactive touch)",
+    "mechanism": "CDP Input.dispatchTouchEvent, hasTouch:true, Pixel 7"
+  },
+  "dragIcon": {
+    "found": false,
+    "reason": "no span.group-hover:text-ink/60 found on /voices — may need a voice card present"
+  }
+}

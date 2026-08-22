@@ -649,12 +649,22 @@ Expected: the auto-reconciled section names `mayrin`/`coalfall` (Заказ
 still names the untouched ids — spot-check *Exile*'s `unknown-male` as the
 negative control (a reserved-bucket source must still refuse to auto-record).
 
-Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the post-`--apply` dry run still reports *Exile*'s `unknown-male` as report-only with the reserved-fold-bucket refusal reason intact, so the negative control holds at the script level. The Cast-screen rendering of both sections has not been checked.
+Result: **RUN 2026-08-21 (wave-4 step 5e, Castwright#2563).** PASS, live in
+a real browser. *Заказ Коалфолла* Cast screen: the auto-reconciled bucket
+("2 character ids auto-reconciled — audio is current") names `mayrin`
+(Мэйрин, 8 segments) and `coalfall` (Коалфолл, 13 segments) exactly as
+expected. Negative control: *Exile*'s `unknown-male` (21 segments) stayed
+in the needs-your-decision list, unmoved. Everblaze's `lady-alina` half is
+corroborated by the real `cast-id-history.json` file read directly, not by
+a live Everblaze Cast-screen render (Everblaze was not one of the books
+copied into this pass's throwaway workspace). Full evidence:
+`docs/testing/onbox-wave4-results/step-5e-cast-screen-browser-rows.md`.
 
 ### 8.9 Outcome
 
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
-- [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
+- [x] §8.8 run — **2026-08-21** (wave-4 step 5e), PASS — see above
+- [ ] §8.7 run — still owed (needs the GPU box + a listen)
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
 - [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
 - [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)

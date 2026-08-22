@@ -1,7 +1,7 @@
-# On-box sitting pack — VRAM contention + eviction (A5, A16, A19, A20, A25, A28, A34, A35, A36)
+# On-box sitting pack — VRAM contention + eviction (A5, A16, A19, A20, A24, A26, A32, A33, A34)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A5, A16, A19, A20, A25, A28, A34, A35, A36** — the rows that
+> register rows **A5, A16, A19, A20, A24, A26, A32, A33, A34** — the rows that
 > only mean something when the single 8 GB card is genuinely full — and nothing
 > else. Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
@@ -22,14 +22,14 @@
 > fails for entirely the wrong reason.
 >
 > **Running time total (recomputed):** **~155 minutes** — A5 ≈ 20, A19 ≈ 20,
-> A20 ≈ 25, A25 ≈ 20, A28 ≈ 15, A34 ≈ 10, A35 ≈ 15 (subtotal 125), plus **A16
+> A20 ≈ 25, A24 ≈ 20, A26 ≈ 15, A32 ≈ 10, A33 ≈ 15 (subtotal 125), plus **A16
 > ≈ 15** (runs in the same session — its book/cast precondition is already
-> met by A19/A5/A20's fixture) and **A36 ≈ 15** (also rides the same session's
+> met by A19/A5/A20's fixture) and **A34 ≈ 15** (also rides the same session's
 > ASR pass, folded into no separate block). 125 + 15 + 15 = **155**, matching
 > the plan of record's stated total for this pack exactly
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1).
 >
-> **A19/A5/A20/A25 share one session by design** — same card, same
+> **A19/A5/A20/A24 share one session by design** — same card, same
 > mixed-cast non-English book, and A19 already stages the Qwen+Coqui
 > co-residency A20's first bullet needs (register `:969`, run sheet §2). Do not
 > give them separate sittings.
@@ -53,21 +53,21 @@ Stated once for the sitting; do not repeat per row.
       are actually in effect.
 - [ ] **A mixed-cast non-English book loaded** — the Russian Coalfall chapter,
       with one designed-Qwen character and one undesigned character that falls
-      back to Coqui (the fixture A19/A20/A5/A25/A16 all name). This also
+      back to Coqui (the fixture A19/A20/A5/A24/A16 all name). This also
       satisfies A16's "open a real Russian book's cast view" precondition and
       A5's "Russian book with an undesigned character" precondition.
 - [ ] **`SEG_CAPACITY_ADMISSION=1`** (the default) and **Qwen as the generation
       engine** (also the default) — neither needs an explicit flip.
 - [ ] **Engines available:** Qwen VoiceDesign installed; Coqui XTTS weights
       installed and loadable from the UI; Whisper ASR with `ASR_DEVICE=cuda`
-      and `SEG_ASR_ENABLED=1` set (A36 only).
+      and `SEG_ASR_ENABLED=1` set (A34 only).
 - [ ] **A way to make `/unload` fail** (A19): a `SIDECAR_URL` proxy that 500s
       `POST /unload` and passes everything else through, or the ability to stop
       the sidecar's unload path by hand.
 - [ ] **Two shells** open: one for server control / `gh api` / `curl`, one for
       `nvidia-smi` / `/health` polling.
-- [ ] **A second browser tab/session** (A35's overlapping requests).
-- [ ] **OS-level process-kill access** (A34) — `taskkill` against the pid in
+- [ ] **A second browser tab/session** (A33's overlapping requests).
+- [ ] **OS-level process-kill access** (A32) — `taskkill` against the pid in
       `.run/tts.pid`.
 - [ ] **Cold start** — no engine resident unless a step says otherwise. The
       quiet-box caveat from A19's 2026-08-01 correction applies: a foreign
@@ -79,14 +79,14 @@ Stated once for the sitting; do not repeat per row.
 ## Procedure
 
 Ordered so shared setup happens once and engine swaps happen as few times as
-possible. A19 → A20 (with A36 riding) → A5 → A16 run as one mixed-cast session
+possible. A19 → A20 (with A34 riding) → A5 → A16 run as one mixed-cast session
 on the same card and book, because A19 stages the Qwen+Coqui co-residency
 A20's first bullet needs, A5 and A16 already share the Russian-book fixture,
 and A16's banner/auto-load check is a near-zero-cost add to a session that
-already has the book open. A28 follows the same session's completed renders
-(its stranded pool is exactly what a finished chapter leaves behind). A25
+already has the book open. A26 follows the same session's completed renders
+(its stranded pool is exactly what a finished chapter leaves behind). A24
 re-uses the same warm card for its contended-eviction `/health` measurement.
-A34 and A35 are independent but cheap to run while the sidecar and book are
+A32 and A33 are independent but cheap to run while the sidecar and book are
 up.
 
 ### A19 · Mixed Qwen+Coqui evict fails soft (#1893) — steps 1–2
@@ -171,7 +171,7 @@ up.
 
 ### A16 · fe-16 Qwen auto-load on a Russian book (plan 165) — step 7
 
-> **Criteria source:** [`../features/165-fe-15-16-language-and-revision-e2e.md`](../features/165-fe-15-16-language-and-revision-e2e.md)
+> **Criteria source:** [`../features/archive/165-fe-15-16-language-and-revision-e2e.md`](../features/archive/165-fe-15-16-language-and-revision-e2e.md)
 > `:9` (Status line) + ship notes ("live GPU acceptance is the only owed
 > item"). Re-resolved 2026-08-19: frontmatter `status: active` (`:2`), body
 > `> Status:` line (`:9`) reads `stable (shipped together; manual acceptance
@@ -194,7 +194,7 @@ up.
    - **Separately, flag for the operator:** plan 165 frontmatter says `active`,
      body says `stable` — needs reconciliation, not resolved by this pack.
 
-### A25 · `/health` stays live through a contended eviction (#1919) — step 8
+### A24 · `/health` stays live through a contended eviction (#1919) — step 8
 
 > **Criteria source:** run sheet
 > [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md)
@@ -203,7 +203,7 @@ up.
 > 2026-07-31T00:32:59Z. STILL OWED — the run sheet itself has empty `Result:`
 > lines.
 
-8. **(A25) Run the sidecar-evict-latency run sheet's procedure §3, steps 1–6**
+8. **(A24) Run the sidecar-evict-latency run sheet's procedure §3, steps 1–6**
    (its "optional second pass," step 7, is skippable — not required to clear
    this row). Its own preconditions are already satisfied by this session's
    Preconditions above (same card, same Qwen-design-then-render sequence). Fill
@@ -211,7 +211,7 @@ up.
    fields here.
    - Result: _(filled in `sidecar-evict-latency-onbox-acceptance.md` §5, not here)_
 
-### A28 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
+### A26 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:1321-1355`
 > (PR #1993's description + the C1/M3 review findings it quotes). Re-resolved:
@@ -219,7 +219,7 @@ up.
 > render/unload-completion reclaim is a separate, not-yet-built lever); PR
 > #1993 merged 2026-07-31T09:22:51Z. STILL OWED.
 
-9. **(A28) Stranded-pool reclaim + the two C1 guards.** Using the chapter
+9. **(A26) Stranded-pool reclaim + the two C1 guards.** Using the chapter
    render just completed in A19/A20/A5 (or A16), let the engine report
    unloaded and confirm via `nvidia-smi` and `GET /api/sidecar/health`'s
    `vramReservedMbByDevice` that a reserved-but-unallocated pool is left
@@ -234,7 +234,7 @@ up.
    line appears **only once**.
    - Result:
 
-### A34 · Supervisor respawn survives a refused spawn attempt (#2037) — step 10
+### A32 · Supervisor respawn survives a refused spawn attempt (#2037) — step 10
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2014-2055`;
 > code contract `scheduleRespawnAttempt` (`server/src/tts/sidecar-supervisor.ts`)
@@ -242,7 +242,7 @@ up.
 > closed 2026-08-05T00:37:01Z. STILL OWED — real OS socket-teardown timing is
 > untestable in CI.
 
-10. **(A34) Kill the sidecar mid-render, watch respawn.** With a chapter
+10. **(A32) Kill the sidecar mid-render, watch respawn.** With a chapter
     actively rendering, kill the sidecar's OS process directly —
     `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid` (**do not**
     use `POST /api/sidecar/restart`, which actively restarts rather than
@@ -256,7 +256,7 @@ up.
     cleanly and is resumable.
     - Result:
 
-### A35 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
+### A33 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2057-2086`;
 > `unload_design`'s docstring and the `_DESIGN_CONTENTION_WAIT_S_DEFAULT`
@@ -264,7 +264,7 @@ up.
 > 2026-08-05T05:54:35Z. STILL OWED — the 150 s bound is sized off the design
 > path's documented budget, not an on-box measurement.
 
-11. **(A35) Overlapping design + render, then a forced timeout.** Start a
+11. **(A33) Overlapping design + render, then a forced timeout.** Start a
     voice design (cast review → Design a new voice) on one browser
     tab/session, and — timed to land mid-design, before the design's forward
     completes — trigger an ordinary chapter render on a *different* voice from
@@ -277,7 +277,7 @@ up.
     neighbourhood, not immediately and not never.
     - Result:
 
-### A36 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
+### A34 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2088-2127`;
 > the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB` and `_device_free_mb`'s
@@ -285,7 +285,7 @@ up.
 > 2026-08-05T05:54:36Z. STILL OWED. **Rides along with A20** — this step reuses
 > the same rendered chapter and warm sidecar; no separate sitting block.
 
-12. **(A36) Resident ASR under repeated `/transcribe`.** With
+12. **(A34) Resident ASR under repeated `/transcribe`.** With
     `ASR_DEVICE=cuda` and `SEG_ASR_ENABLED=1` set (per Preconditions), and
     using the chapter already rendered in A19/A20, trigger several
     `/transcribe` calls back-to-back (a re-record round is the natural
@@ -313,14 +313,14 @@ state on 2026-08-19 and remain owed:
 - **A20** — `gh issue view 1894` → closed 2026-07-28T05:48:34Z; `gh issue view
   1921` → closed 2026-07-28T11:27:04Z. `_COQUI_IDLE_TTL_DEFAULT = 30.0`
   confirmed still the shipped default in `tts-sidecar/main.py`. STILL OWED.
-- **A25** — `gh issue view 1919` → closed 2026-07-31T00:32:59Z. Run sheet
+- **A24** — `gh issue view 1919` → closed 2026-07-31T00:32:59Z. Run sheet
   `sidecar-evict-latency-onbox-acceptance.md` §5 confirmed all `Result:`
   fields still blank. STILL OWED.
-- **A28** — `gh issue view 1976` → **still OPEN** (this PR only `Refs`, not
+- **A26** — `gh issue view 1976` → **still OPEN** (this PR only `Refs`, not
   `Closes`, it); `gh pr view 1993` → merged 2026-07-31T09:22:51Z. STILL OWED.
-- **A34** — `gh issue view 2037` → closed 2026-08-05T00:37:01Z. STILL OWED.
-- **A35** — `gh issue view 2070` → closed 2026-08-05T05:54:35Z. STILL OWED.
-- **A36** — `gh issue view 2094` → closed 2026-08-05T05:54:36Z. STILL OWED.
+- **A32** — `gh issue view 2037` → closed 2026-08-05T00:37:01Z. STILL OWED.
+- **A33** — `gh issue view 2070` → closed 2026-08-05T05:54:35Z. STILL OWED.
+- **A34** — `gh issue view 2094` → closed 2026-08-05T05:54:36Z. STILL OWED.
 
 ## Teardown
 
@@ -333,6 +333,6 @@ state on 2026-08-19 and remain owed:
       path (A19).
 - [ ] Clear `SEG_ASR_ENABLED` / `ASR_DEVICE=cuda` if they were set only for
       this sitting and are not the box's standing default.
-- [ ] Close the second browser tab/session (A35) and the extra shells.
+- [ ] Close the second browser tab/session (A33) and the extra shells.
 - [ ] Confirm the card returns to baseline (`nvidia-smi` ≈ idle) before
       ending the sitting.
