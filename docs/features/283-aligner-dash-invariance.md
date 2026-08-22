@@ -21,18 +21,27 @@ Design spec (full rationale, revision history, real-data measurement):
 v2/v3 was dropped after real-data measurement showed it cost more correctness
 than it saved, and is filed separately, see "Out of scope" below).
 
-> **Superseded mechanism (spec v5).** PR review pass 3 rejected the design's
-> §1 (strip every leading dash-group from every needle) and §2 (extend a
-> match's raw start backward over a preceding dash run) as measured
+> **Superseded mechanism (spec v5, updated pass 5).** PR review pass 3 rejected
+> the design's §1 (strip every leading dash-group from every needle) and §2
+> (extend a match's raw start backward over a preceding dash run) as measured
 > correctness regressions. The tasks below still describe those two, and are
 > kept as history. **What actually ships:** needle text is never rewritten;
 > only the *search* changes, and only for a needle with no leading dash — it
 > prefers an occurrence preceded by that sentence's own paragraph dash (same
-> line, no line break between) and reports the dash's offset, falling back to
-> the plain search when no such occurrence exists. There is no
-> backward-extension step. See the "v5" note at the head of the spec's
-> "Design" section. The language gate (Task 3) and every parity invariant
-> below are unaffected and shipped as written.
+> line, no line break between) and reports the dash's offset, but ONLY when
+> its own bare first hit is a false substring match (mid-word — the "да."
+> inside "правда." shape); a bare hit that already lands at a genuine word
+> boundary is trusted as-is, with no forward walk (pass 4 shipped the
+> mechanism, pass 4's own review then found this omission — "Q1" — and pass 5
+> confirmed the fix). There is no backward-extension step. See the "v5" note
+> at the head of the spec's "Design" section. The language gate (Task 3) and
+> every parity invariant below are unaffected and shipped as written. **Known
+> residual, filed as [#2608](https://github.com/dudarenok-maker/Castwright/issues/2608):**
+> the word-boundary check only validates the LEFT side of a match, so a
+> fuzzy-fallback prefix anchor (which by construction usually ends mid-word)
+> can still be wrongly trusted — a pre-existing gap, not introduced by this
+> fix, needing a design decision on how the fuzzy path's truncation point
+> should be treated.
 
 Issue: [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
 Supersedes in place: `fix/server-2537-dash-invariant-align`

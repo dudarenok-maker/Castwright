@@ -727,6 +727,14 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     // Red on 5a60b088 (before the mid-word-hit guard): sentence 1 below binds
     // to the SPEECH span at the end (the unrelated dash) instead of its own
     // NARRATION span at the start.
+    //
+    // The genuine occurrence deliberately does NOT sit at haystack offset 0
+    // (pass 5 review, #2577): `isMidWordHit` short-circuits on `pos > 0`, so
+    // a bare hit at offset 0 would pass the guard for the wrong reason —
+    // never actually evaluating the word-boundary character class this test
+    // exists to pin. A leading paragraph puts the genuine hit's preceding
+    // character at a real (non-word) boundary instead, so the check is
+    // exercised for real.
     const ruIdx = buildNameIndex(
       [
         { id: 'anton', name: 'Антон' },
@@ -736,6 +744,8 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     );
     const repeated = 'Он молчал.';
     const body = [
+      'Комната давно опустела, и часы на стене отсчитывали минуты в тишине.', // leading filler — pushes the genuine hit off offset 0
+      '',
       repeated, // the genuine, dash-free narration — the FIRST occurrence
       '',
       'Ольга долго смотрела в окно, вспоминая каждую деталь того разговора.', // long filler, no cached match — keeps this a single unbounded run

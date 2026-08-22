@@ -3624,9 +3624,11 @@ exists. *Criteria:* spec §On-box acceptance
 > still produces a divergent match. **Item (2) is therefore still owed, not
 > discharged.**
 >
-> **2026-08-23 — pass-2 addendum on #2577:** the "residual real-data gap …
-> not the original defect recurring unfixed" framing above overstated what
-> this run showed. It was measured against `d9eb03ad`, which predates the
+> **2026-08-23 — pass-2 addendum on #2577:** an earlier draft of this entry
+> called this "a residual real-data gap … not the original defect recurring
+> unfixed" — that framing overstated what this run showed (removed above,
+> not restated here since it no longer applies). It was measured against
+> `d9eb03ad`, which predates the
 > fix's final mechanism (attempt 4, commit `5a60b088`) — a later mechanism
 > that itself needed two more blocking-regression fixes (P1/P2) found in
 > subsequent review passes of the same PR. Whether this book's divergence is

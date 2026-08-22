@@ -185,15 +185,23 @@ function normalize(s: string): string {
         already gets right, and which must not be given up.
 
       - A needle with NO leading dash sets `tryDashPrefix`. Its search prefers
-        an occurrence that IS preceded by a paragraph dash and then reports the
+        an occurrence that IS preceded by a paragraph dash and reports the
         match from the head of that dash run — the exact offset the
-        dash-carrying form of the same sentence produces. Only when no such
-        occurrence exists does it fall back to the plain search, which is the
-        path ordinary narration (the overwhelming majority of dash-free
-        needles) always takes.
+        dash-carrying form of the same sentence produces — but ONLY when its
+        own bare first hit is a false substring match (mid-word, the "да."
+        inside "правда." shape; see `isMidWordHit`). A bare hit that already
+        lands at a genuine word boundary is an independently valid occurrence
+        and is trusted as-is, with no forward walk: otherwise a sentence whose
+        exact text legitimately recurs later in the chapter under a
+        DIFFERENT line's dash would be discarded in favor of that unrelated
+        dash (#2577 pass 4, "Q1"). Only when the bare hit IS a false
+        substring match does it walk forward for a dash-prefixed occurrence,
+        falling back to the plain (false) hit if none exists anywhere.
 
-    So both cache forms of a dash-led line converge on the paragraph dash,
-    while a dash-free narration sentence keeps `main`'s behaviour exactly. */
+    So a dash-led line's two cache forms converge on the paragraph dash when
+    the dash-free form's own bare hit is otherwise ambiguous, while a
+    dash-free narration sentence — including one whose text happens to recur
+    under someone else's dash elsewhere — keeps `main`'s behaviour exactly. */
 export interface Needle {
   text: string;
   tryDashPrefix: boolean;
@@ -282,8 +290,9 @@ interface LocatedSpan {
 
     With `tryDashPrefix` off this is exactly `findMatch`, i.e. pristine
     pre-#2537 `main`. With it on, an occurrence preceded by that sentence's own
-    paragraph dash wins over an earlier bare one, and `start` is the head of
-    the dash run — see `Needle`. */
+    paragraph dash can win over an earlier bare one, reporting `start` as the
+    head of the dash run — but only under the conditions `Needle`'s doc
+    comment states; a bare hit that's already independently valid is kept. */
 function findNeedleSpan(
   haystack: string,
   search: string,
@@ -310,6 +319,17 @@ function findNeedleSpan(
   // text legitimately recurs later in the chapter under a DIFFERENT sentence's
   // dash, this occurrence would be discarded in favor of binding to that
   // unrelated dash (#2577 pass 4, "Q1").
+  // KNOWN RESIDUAL (#2608, found #2577 pass 5): `isMidWordHit` only checks
+  // the LEFT boundary of `pos`. It says nothing about whether `search` also
+  // ends cleanly — a `search` that is itself a strict prefix of a longer word
+  // (e.g. a fuzzy-fallback 16-char anchor, which by construction usually
+  // does NOT end at a word boundary) can pass this check while still being a
+  // false hit on its right side, and would then be wrongly trusted here
+  // instead of walking forward to the dash-prefixed occurrence. Fixing this
+  // symmetrically needs a decision on how the fuzzy path's inherently
+  // mid-word truncation point should be treated — see #2608. Not a
+  // regression: this exact gap already existed on `main`, unrelated to
+  // dash-invariance.
   if (!isMidWordHit(haystack, pos)) {
     return { start: pos, end: Math.min(pos + spanLen, haystack.length) };
   }
@@ -523,10 +543,13 @@ export function alignSentences(
 
     #2537/#2540 — dash-invariant needle construction (gated), identical to
     alignSentences: when the gate is on, a needle with no leading dash prefers an
-    occurrence that carries the paragraph dash and reports the dash's offset, so
-    the dash-stripped and dash-included forms of the same sentence resolve to the
-    identical offset. When the gate is off, the needle is plain normalized text,
-    matching pristine pre-#2537 main behavior.
+    occurrence that carries the paragraph dash and reports the dash's offset when
+    its own bare hit would otherwise be a false substring match, so the
+    dash-stripped and dash-included forms of an ambiguous sentence resolve to the
+    identical offset — see `buildNeedle`'s doc comment for the full rule, including
+    the #2577 "Q1" carve-out for a bare hit that is already independently valid.
+    When the gate is off, the needle is plain normalized text, matching pristine
+    pre-#2537 main behavior.
 
     Unlike alignSentences this needs only the body (no ParagraphEvidence), so it
     runs on every chapter regardless of whether the dialogue-structure engine is
@@ -538,8 +561,10 @@ export function locateSentenceOffsets(
 ): Array<number | null> {
   const { text: normBody, rawStart } = buildNormalizedMap(body);
   // #2537/#2540 — dash-invariant needle search, matching alignSentences. The
-  // located offset is used as-is: a dash-stripped needle's match already starts
-  // at the paragraph dash, because the search that found it required one.
+  // located offset is used as-is: when a dash-stripped needle's match starts
+  // at a paragraph dash, the search that found it required one; see
+  // `buildNeedle`'s doc comment for when that happens vs. when a bare,
+  // already-valid hit is kept instead.
   const needles = sentences.map((s) => buildNeedle(normalize(s.text), dashIsDialogueMarker));
   const located = locateNeedles(needles, normBody, false, dashAdjacencyFor(body, rawStart));
 
