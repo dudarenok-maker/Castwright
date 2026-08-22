@@ -120,7 +120,8 @@ Nothing else on disk changes.
    while the GPU build's files continue actually working. The real cost is that
    `ensureOrtMarker`'s own book-keeping would then wrongly certify a clean state, hiding the
    coexistence problem from any future pip operation that checks for it. `ensureOrtMarker`
-   logs the exact remedy command instead:
+   logs the exact remedy command instead (PowerShell on Windows, POSIX on Unix):
+   `$env:CASTWRIGHT_ACCELERATOR_PROFILE='<profile>'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` or
    `CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`.
 
 ### The eight venv states `ensureOrtMarker` distinguishes

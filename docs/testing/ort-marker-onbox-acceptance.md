@@ -317,7 +317,8 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
    (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
 3. Boot the server and watch the log.
 4. Run the named remedy command:
-   `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`.
+   - PowerShell: `$env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`
+   - POSIX: `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`
 5. Re-check `pip check` and Kokoro's reported execution provider.
 
 ### 8.2 Expected result
@@ -412,8 +413,7 @@ distribution; `pip check` stayed clean (pinned versions matched here, unlike
 wave-3's mismatched 1.29.0 run, so there was nothing broken for boot to
 silently "fix" either way).
 
-**Repair command output:** `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node
-server/tts-sidecar/scripts/install-ort.mjs <venv-python>` uninstalled both
+**Repair command output:** (PowerShell) `$env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` or (POSIX) `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` uninstalled both
 `onnxruntime` 1.27.0 and `onnxruntime-gpu` 1.27.0, reinstalled
 `onnxruntime-gpu==1.27.0` (`--no-deps`) — `[install-ort] onnxruntime-gpu in
 place.`

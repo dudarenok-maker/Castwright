@@ -329,7 +329,8 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
           'This corrupts pip\'s dependency resolution — a landmine for the next ' +
           'pip operation. The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
           'Refusing to write a marker that would certify this bad state. Repair with:\n' +
-          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+          '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+          '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
       return 'clobbered';
     }
@@ -350,7 +351,8 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
           '[ort-marker] No onnxruntime runtime is installed. ' +
             'The recorded swap marker has been removed. Kokoro cannot load at all in this state. ' +
             'Repair with:\n' +
-            '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+            '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+            '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
         );
       } else {
         // owner === 'plain'
