@@ -579,6 +579,114 @@ def test_debug_memory_endpoint_shape(monkeypatch):
             assert body["cuda"]["host_pinned_active_mb"] >= 0
 
 
+# --- #2423: per-device memory_stats() diagnostics + bare-reclaim endpoint ---
+
+
+def test_debug_memory_includes_memory_stats_per_device(monkeypatch):
+    """/debug/memory's `memory_stats` block carries reserved/allocated/
+    inactive_split/num_alloc_retries per device, keyed `cuda:{i}` — the field
+    (`inactive_split`) neither the existing `cuda` block (current-device-only,
+    no inactive_split) nor `_cuda_vram_mb_per_device` (reserved/total only)
+    can surface, per #2423's rationale."""
+    torch = pytest.importorskip("torch")
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: False)
+    stats = {
+        "reserved_bytes.all.current": 4_000_000,
+        "allocated_bytes.all.current": 3_500_000,
+        "inactive_split_bytes.all.current": 250_000,
+        "num_alloc_retries": 2,
+    }
+    monkeypatch.setattr(torch.cuda, "memory_stats", lambda i: stats)
+
+    with TestClient(main.app) as client:
+        body = client.get("/debug/memory").json()
+
+    assert body["memory_stats"] == {
+        "cuda:0": {
+            "reserved": 4_000_000,
+            "allocated": 3_500_000,
+            "inactive_split": 250_000,
+            "num_alloc_retries": 2,
+        }
+    }
+
+
+def test_cuda_memory_stats_per_device_empty_when_cuda_unavailable(monkeypatch):
+    """Fail-open contract, same as `_cuda_vram_mb_per_device`: no CUDA build
+    -> {} rather than a raise, never a 500 from the routes that call it."""
+    torch = pytest.importorskip("torch")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert main._cuda_memory_stats_per_device() == {}
+
+
+def test_cuda_memory_stats_per_device_uses_rocm_prefix_on_rocm_box(monkeypatch):
+    """Device keys are derived the same way `probe_capacity` derives them
+    (`kind = "rocm" if _cuda_is_rocm() else "cuda"`), NOT a hardcoded
+    `cuda:` prefix — an AMD/ROCm box must read `rocm:N`, not silently
+    mislabel as `cuda:N` the way `_cuda_vram_mb_per_device` does."""
+    torch = pytest.importorskip("torch")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    stats = {
+        "reserved_bytes.all.current": 1_000,
+        "allocated_bytes.all.current": 900,
+        "inactive_split_bytes.all.current": 0,
+        "num_alloc_retries": 0,
+    }
+    monkeypatch.setattr(torch.cuda, "memory_stats", lambda i: stats)
+
+    out = main._cuda_memory_stats_per_device()
+
+    assert list(out.keys()) == ["rocm:0"]
+    assert "cuda:0" not in out
+
+
+def test_debug_reclaim_brackets_one_bare_reclaim_call(monkeypatch):
+    """POST /debug/reclaim returns {before, after} having run exactly ONE
+    `_reclaim_device_cache()` between the two snapshots — no other work in
+    between (a load/unload cycle would conflate the reclaim with an
+    allocation pass, per #2423's rationale)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    snapshots = [
+        {"cuda:0": {"reserved": 4_000_000, "allocated": 100, "inactive_split": 3_900_000, "num_alloc_retries": 0}},
+        {"cuda:0": {"reserved": 200_000, "allocated": 100, "inactive_split": 100_000, "num_alloc_retries": 0}},
+    ]
+    calls: list[str] = []
+    snapshot_calls = {"n": 0}
+
+    def fake_snapshot():
+        calls.append("snapshot")
+        result = snapshots[snapshot_calls["n"]]
+        snapshot_calls["n"] += 1
+        return result
+
+    def fake_reclaim(device_key):
+        calls.append("reclaim")
+
+    monkeypatch.setattr(main, "_cuda_memory_stats_per_device", fake_snapshot)
+    monkeypatch.setattr(main, "_reclaim_device_cache", fake_reclaim)
+
+    with TestClient(main.app) as client:
+        r = client.post("/debug/reclaim")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert calls == ["snapshot", "reclaim", "snapshot"]
+    assert calls.count("reclaim") == 1
+    assert body["before"] == snapshots[0]
+    assert body["after"] == snapshots[1]
+
+
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
 
 

@@ -8044,6 +8044,51 @@ def _cuda_vram_mb_per_device() -> dict[str, dict[str, float]]:
         return {}
 
 
+def _cuda_memory_stats_per_device() -> dict[str, dict[str, int]]:
+    """{"cuda:N"|"rocm:N": {"reserved", "allocated", "inactive_split",
+    "num_alloc_retries"}} for every CUDA-API-visible device, sourced from
+    `torch.cuda.memory_stats(i)` (#2423 — instrument for #1996's design
+    question).
+
+    Neither `_cuda_vram_mb_per_device` above (only `reserved_mb`/`total_mb`)
+    nor `debug_memory`'s `cuda` block (current-device-only, no
+    `inactive_split`) can discriminate #1996's two candidate causes:
+    uncollected cache (a scheduled reclaim fixes it) vs allocator
+    fragmentation (`empty_cache()` can never return it) — `inactive_split`
+    is the field that tells them apart. Values are raw units straight from
+    `memory_stats` (bytes for the byte-valued keys, a count for
+    `num_alloc_retries`) — deliberately NOT converted to MB like the
+    neighboring `_mb` fields, since these are new keys with their own
+    semantics, not a replacement for them.
+
+    Device keys use `probe_capacity`'s `{kind}:{i}` format (`kind = "rocm"
+    if _cuda_is_rocm() else "cuda"`), NOT a hardcoded `cuda:` prefix like
+    `_cuda_vram_mb_per_device` — copying that pattern would mislabel an
+    AMD/ROCm box's devices. `torch.cuda.memory_stats` is a CUDA/ROCm-only
+    API, so non-GPU kinds (`cpu`, `mps`) are simply never emitted here.
+
+    Never raises; {} when CUDA is unavailable — same fail-open contract as
+    `_cuda_vram_mb_per_device`."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return {}
+        kind = "rocm" if _cuda_is_rocm() else "cuda"
+        out: dict[str, dict[str, int]] = {}
+        for i in range(torch.cuda.device_count()):
+            stats = torch.cuda.memory_stats(i)
+            out[f"{kind}:{i}"] = {
+                "reserved": stats.get("reserved_bytes.all.current", 0),
+                "allocated": stats.get("allocated_bytes.all.current", 0),
+                "inactive_split": stats.get("inactive_split_bytes.all.current", 0),
+                "num_alloc_retries": stats.get("num_alloc_retries", 0),
+            }
+        return out
+    except Exception:
+        return {}
+
+
 class DeviceLedger:
     """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
     (_sample_card). Read from three thread contexts (the _memory_watchdog
@@ -9556,6 +9601,10 @@ def debug_memory() -> dict[str, Any]:
     except Exception:
         pass
     out["cuda"] = cuda
+    # #2423 — per-device memory_stats() block (reserved/allocated/
+    # inactive_split/num_alloc_retries), the instrument #1996's design
+    # decision needs. Additive: the `cuda` block above is untouched.
+    out["memory_stats"] = _cuda_memory_stats_per_device()
     return out
 
 
@@ -9568,6 +9617,25 @@ async def debug_codec_timing() -> dict:
 async def debug_codec_timing_reset() -> dict:
     _codec_timing_reset()
     return {"ok": True}
+
+
+@app.post("/debug/reclaim")
+def debug_reclaim() -> dict[str, Any]:
+    """One bare `_reclaim_device_cache()` bracketed by before/after per-device
+    `memory_stats` snapshots, in a single response (#2423). #1996's design
+    decision (scheduled reclaim vs a boundary-recycle redesign) hinges on
+    whether a bare reclaim recovers the stranded pool — this is the only
+    surface that brackets `empty_cache()` with nothing else in between (a
+    load/unload cycle would conflate the reclaim with an allocation pass).
+
+    Not inert: it frees real memory (same effect as the existing 60s
+    watchdog tick). No auth wrapper, matching every other `/debug` route in
+    this family (`debug_codec_timing`/`debug_codec_timing_reset` above) —
+    guarded by being loopback-bound, per this route family's convention."""
+    before = _cuda_memory_stats_per_device()
+    _reclaim_device_cache("debug-reclaim")
+    after = _cuda_memory_stats_per_device()
+    return {"before": before, "after": after}
 
 
 @app.post("/load")
