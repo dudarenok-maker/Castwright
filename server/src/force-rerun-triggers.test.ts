@@ -123,6 +123,16 @@ const MAIN_COVERED = [
   },
   { rel: 'e2e/global-teardown.ts', file: 'the e2e Playwright teardown', base: REPO_ROOT },
   { rel: 'launch.mjs', file: 'the versioned-dir launcher', base: REPO_ROOT },
+  /* #2588 pass-2 review: venv-migration.test.ts (this suite) reads BOTH of these
+     at RUNTIME — .gitattributes to assert the requirements/*.txt LF pin rule is
+     declared, the requirements files themselves to assert the pin materialised
+     and to hash reqHash oracles against. No module-graph edge to either. */
+  { rel: '.gitattributes', file: 'the git line-ending/binary pin rules', base: REPO_ROOT },
+  {
+    rel: 'server/tts-sidecar/requirements/base.txt',
+    file: 'a server/tts-sidecar/requirements/** file',
+    base: REPO_ROOT,
+  },
 ];
 
 const SLOW_COVERED = [
