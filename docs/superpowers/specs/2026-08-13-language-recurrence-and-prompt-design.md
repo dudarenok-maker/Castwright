@@ -695,7 +695,7 @@ from a streaming job.
 
 ## Ship notes
 
-Shipped: TBD (filled at merge). Merge SHA: TBD. Closes #2246 (wave 5b).
+Shipped: 2026-08-22. Merge SHA: `fbdba1ca2046bb119674b787b342ea02aede3f5c` (PR #2492). Closes #2246 (wave 5b).
 
 **What shipped, against the design above:**
 - Task 1 — the write seam made real: the nine bypass writers (R4) migrated onto

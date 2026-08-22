@@ -459,7 +459,7 @@ hazard.
 
 ## Ship notes
 
-Shipped: TBD (filled at merge). Merge SHA: TBD. Closes #2246 (wave 5a).
+Shipped: 2026-08-22. Merge SHA: `fbdba1ca2046bb119674b787b342ea02aede3f5c` (PR #2492). Closes #2246 (wave 5a), Closes #2515.
 
 ## Assumption-checker passes
 
