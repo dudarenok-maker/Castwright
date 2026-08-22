@@ -129,9 +129,16 @@ each failed independent PR review:
 >   what `main` does, keeping the dash's selectivity;
 > - a needle with no leading dash prefers an occurrence that IS preceded by a
 >   paragraph dash and reports the dash's offset — the same offset the
->   dash-carrying form of that sentence produces. Only when no dash-prefixed
->   occurrence exists anywhere does it fall back to the plain search, which is
->   what ordinary narration always takes;
+>   dash-carrying form of that sentence produces — but ONLY when its own bare
+>   first hit is a false substring match (mid-word, e.g. `"да."` inside
+>   `"правда."`). A bare hit that already lands at a genuine word boundary is
+>   an independently valid occurrence and is trusted as-is, with no forward
+>   walk: pass 4's own review (PR #2577, "Q1") found that walking forward
+>   unconditionally discarded a sentence whose exact text legitimately
+>   recurred later in the chapter under a DIFFERENT line's dash, cross-binding
+>   it onto that unrelated dash. Only when the bare hit IS a false substring
+>   match does the search walk forward for a dash-prefixed occurrence,
+>   falling back to the plain (false) hit if none exists anywhere;
 > - a dash counts as a sentence's own only when no line break separates them,
 >   so a scene rule on the previous line is never absorbed;
 > - there is no backward-extension step at all: a dash-prefixed match already
@@ -141,6 +148,14 @@ each failed independent PR review:
 > searched as `"-"`, not rewritten to `""`. Everything §3 says about language
 > gating still holds, and gate-off parity with `main` is exact (measured: 0
 > span / `lumped` / `alignedPct` / offset differences over 9,306 evaluations).
+>
+> **Known residual, filed as [#2608](https://github.com/dudarenok-maker/Castwright/issues/2608).**
+> The word-boundary check above only validates the LEFT side of a bare hit. A
+> needle that is itself a strict prefix of a longer word can still pass as
+> "genuine" and be wrongly trusted — pass 6 review confirmed this reaches the
+> plain exact-match path too, not only the fuzzy-fallback prefix search. A
+> pre-existing gap on `main`, not introduced here; needs a design decision
+> before it can be fixed (see the issue).
 
 ### 1. Needle construction (both functions, unconditional) — REJECTED, see the v5 note above
 

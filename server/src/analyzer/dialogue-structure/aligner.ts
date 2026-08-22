@@ -319,17 +319,21 @@ function findNeedleSpan(
   // text legitimately recurs later in the chapter under a DIFFERENT sentence's
   // dash, this occurrence would be discarded in favor of binding to that
   // unrelated dash (#2577 pass 4, "Q1").
-  // KNOWN RESIDUAL (#2608, found #2577 pass 5): `isMidWordHit` only checks
-  // the LEFT boundary of `pos`. It says nothing about whether `search` also
-  // ends cleanly — a `search` that is itself a strict prefix of a longer word
-  // (e.g. a fuzzy-fallback 16-char anchor, which by construction usually
-  // does NOT end at a word boundary) can pass this check while still being a
+  // KNOWN RESIDUAL (#2608, found #2577 pass 5, scope corrected pass 6):
+  // `isMidWordHit` only checks the LEFT boundary of `pos`. It says nothing
+  // about whether `search` also ends cleanly — a `search` that is itself a
+  // strict prefix of a longer word can pass this check while still being a
   // false hit on its right side, and would then be wrongly trusted here
-  // instead of walking forward to the dash-prefixed occurrence. Fixing this
-  // symmetrically needs a decision on how the fuzzy path's inherently
-  // mid-word truncation point should be treated — see #2608. Not a
-  // regression: this exact gap already existed on `main`, unrelated to
-  // dash-invariance.
+  // instead of walking forward to the dash-prefixed occurrence. This is NOT
+  // limited to the fuzzy 16-char-prefix fallback (which by construction
+  // usually doesn't end at a word boundary) — it reaches the plain
+  // exact-match path too, with `search` at its full needle length: e.g. a
+  // needle `"Он молчал"` (well under FUZZY_MIN_NEEDLE, fuzzy unreachable)
+  // binds to `narration@0` instead of the real dash line when the body also
+  // contains `"Он молчаливо…"`. Fixing this needs a decision on how the
+  // fuzzy path's inherently mid-word truncation point should be treated
+  // alongside the exact path — see #2608. Not a regression: this exact gap
+  // already existed on `main`, unrelated to dash-invariance.
   if (!isMidWordHit(haystack, pos)) {
     return { start: pos, end: Math.min(pos + spanLen, haystack.length) };
   }
@@ -546,7 +550,7 @@ export function alignSentences(
     occurrence that carries the paragraph dash and reports the dash's offset when
     its own bare hit would otherwise be a false substring match, so the
     dash-stripped and dash-included forms of an ambiguous sentence resolve to the
-    identical offset — see `buildNeedle`'s doc comment for the full rule, including
+    identical offset — see `Needle`'s doc comment for the full rule, including
     the #2577 "Q1" carve-out for a bare hit that is already independently valid.
     When the gate is off, the needle is plain normalized text, matching pristine
     pre-#2537 main behavior.
@@ -563,7 +567,7 @@ export function locateSentenceOffsets(
   // #2537/#2540 — dash-invariant needle search, matching alignSentences. The
   // located offset is used as-is: when a dash-stripped needle's match starts
   // at a paragraph dash, the search that found it required one; see
-  // `buildNeedle`'s doc comment for when that happens vs. when a bare,
+  // `Needle`'s doc comment for when that happens vs. when a bare,
   // already-valid hit is kept instead.
   const needles = sentences.map((s) => buildNeedle(normalize(s.text), dashIsDialogueMarker));
   const located = locateNeedles(needles, normBody, false, dashAdjacencyFor(body, rawStart));

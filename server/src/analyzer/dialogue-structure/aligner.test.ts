@@ -772,6 +772,41 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     expect(locateSentenceOffsets(sentences, body, true)[0]).toBe(body.indexOf(repeated));
   });
 
+  it('(#2577 Q1, pos===0 case) the same property holds when the genuine occurrence sits at the very start of the haystack', () => {
+    // Pass 6 review of #2577: `isMidWordHit`'s `pos > 0 && WORD_CHAR.test(...)`
+    // has an untested sub-clause. Dropping the `pos > 0` guard (e.g.
+    // `return WORD_CHAR.test(haystack[pos - 1])`) leaves every OTHER test in
+    // this file green, because `haystack[-1]` is `undefined` and
+    // `WORD_CHAR.test(undefined)` coerces its argument to the string
+    // `"undefined"` — which DOES contain word characters, so the mutant
+    // returns `true` (mid-word) for every hit at offset 0, restoring Q1's
+    // cross-bind exactly for the chapter's first sentence (or the first
+    // sentence of any post-anchor run). This test pins that specific case:
+    // the genuine hit is the very first thing in the haystack.
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const repeated = 'Он молчал.';
+    const body = [
+      repeated, // the genuine, dash-free narration — sits at haystack offset 0
+      '',
+      'Ольга долго смотрела в окно, вспоминая каждую деталь того разговора.', // long filler, no cached match — keeps this a single unbounded run
+      '',
+      `— ${repeated}`, // an unrelated LATER dialogue line that happens to reuse the exact same words
+    ].join('\n');
+    const paras = parseChapterStructure(body, ruIdx);
+    const allSpans = paras.flatMap((p) => p.spans);
+    const narrationSpan = allSpans.find((s) => s.kind === 'narration' && s.start === 0)!;
+    const speechSpan = allSpans.find((s) => s.kind === 'speech')!;
+    expect(narrationSpan).toBeTruthy();
+    expect(speechSpan).toBeTruthy();
+
+    const sentences = [mkSentence(1, 'narrator', repeated)];
+    const result = alignSentences(sentences, paras, body, true);
+
+    expect(result.aligned[0].spans).toEqual([narrationSpan]);
+    expect(result.aligned[0].spans[0].kind).toBe('narration');
+    expect(locateSentenceOffsets(sentences, body, true)[0]).toBe(0);
+  });
+
   it('(#2537) the separator guard does not depend on the separator being in the cache', () => {
     // Same body, but the model dropped the separator "sentence" — so no
     // preceding match parks the run cursor past the rule. The narration
