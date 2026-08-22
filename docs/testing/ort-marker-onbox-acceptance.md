@@ -435,7 +435,7 @@ correctly. The row stays **STILL OWED** only because its own criteria include
 the CUDA-provider re-check, blocked by the pre-existing `#2534` gap (same
 precedent as A39).
 
-*Dated run record (2026-08-21). The `#2534` blocker cited here has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); the row remains owed pending re-run against the fixed pin, same as A39/A40. See disposition summary (§10) for current status.*
+*Dated run record (2026-08-21). The `#2534` blocker cited here has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); the shared GPU-provider re-check was re-run (wave-4 step 8, 2026-08-21) and still fails, but on a new, distinct root cause — the missing `nvidia-cudnn-cu12` dependency. See disposition summary (§10) and the A39/A40 rows in onbox-acceptance-register.md for details.*
 
 **Run by:** claude (Castwright#2569).
 **Date:** 2026-08-21.
@@ -577,8 +577,8 @@ release directory. `pip check` clean afterward; a forced failure leaves no marke
 
 _(Update as each remaining criterion runs.)_
 
-- Criterion 1 — fresh NVIDIA bootstrap (A39): **Run 2026-08-20 — STILL OWED.**
-  Marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap). *Note: the blocking box-level CUDA gap was resolved by PR #2576 (re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); criterion re-check owed but not yet re-run.*
+- Criterion 1 — fresh NVIDIA bootstrap (A39): **Run 2026-08-20, re-check 2026-08-21 (wave-4 step 8) — STILL OWED.**
+  Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up issue owed for this distinct dependency gap. See onbox-acceptance-register.md A39 row for full details and evidence.*
 - Criterion 2 — the reported bug, in-app Qwen3 install (A40): owed — not run
   this session (needs the full app + Model Manager UI); see wave-3 step-2
   results file.
@@ -589,9 +589,10 @@ _(Update as each remaining criterion runs.)_
   filed defect (#2535) is fixed and verified: the corrected recipe now
   exercises the `'clobbered'` branch correctly, the log line fires with the
   remedy command, and the repair works (see §8.5 verification). The row
-  stays owed only because the CUDA-provider re-check has not yet been
-  re-run against the fixed pin (PR #2576, which re-pinned
-  `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`; same reason A39 stays owed).
+  stays owed because the shared CUDA-provider re-check was re-run (wave-4 step 8,
+  same as A39/A40) and still fails on the new root cause — missing `nvidia-cudnn-cu12`
+  dependency (distinct from #2534). See onbox-acceptance-register.md A41/A39 rows
+  for full re-run details and evidence.
 - Addition — in-app upgrade path (A42): owed — not run this session (needs a
   real packaged `release/` install); see wave-3 step-2 results file.
 

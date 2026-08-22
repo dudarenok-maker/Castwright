@@ -312,13 +312,17 @@ setup rather than repeatedly loading and evicting models.
 > re-binning within the 74, not a change to the total. Same arithmetic-check
 > pattern as `onbox-sitting-plan.md`'s own 2026-08-20 correction.
 
-> **Recompute, 2026-08-21 (A41 re-run, `#2569`).** A41's filed defect is fixed
-> and independently verified (see its row), but the row's own criteria still
-> include a GPU-provider re-check; the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x
-> gap (`#2534`) has been resolved by PR #2576 (which re-pinned
-> `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`), but the row remains STILL OWED
-> only because this re-check has not yet been re-run against the fixed pin (same
-> reason A39 stays owed). This does **not** leave the owed count — 74 is
+> **Recompute, 2026-08-21 (wave-4 step 8, A39/A40/A41 re-run, `#2569`).** A41's
+> filed defect is fixed and independently verified (see its row). The box-level
+> CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been resolved by PR #2576
+> (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`), and the
+> shared Kokoro GPU-provider sub-check for A39/A40 was re-run against the fixed
+> pin (wave-4 step 8, 2026-08-21) — but **still fails on a different, distinct
+> root cause**: `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via
+> its optional `[cudnn]` extra, which `install-ort.mjs` never requests. A41's
+> row accordingly remains STILL OWED on the same basis (the shared re-check still
+> fails, same new root cause), and so does A39 (see their rows for the detailed
+> re-run findings and evidence). This does **not** leave the owed count — 74 is
 > recomputed fresh here, not carried forward, and stays unchanged.
 
 ---
