@@ -56,7 +56,12 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT) so the runtime isn't whatever
     // happened to be latest on PyPI on install date.
     expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu>=1.26,<1.27');
-    expect(pip.calls).toHaveLength(4);
+    // #2600: a final, separate cuDNN install — deliberately WITHOUT --no-deps
+    // (see install-ort.mjs's extraRuntimeSteps) so onnxruntime-gpu's
+    // CUDAExecutionProvider can actually construct an InferenceSession
+    // instead of silently falling back to CPU.
+    expect(joined[4]).toBe('install nvidia-cudnn-cu12~=9.0');
+    expect(pip.calls).toHaveLength(5);
   });
 
   it('nvidia: a failed ORT swap is fatal (no silent CPU-only Kokoro)', () => {

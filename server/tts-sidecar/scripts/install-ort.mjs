@@ -237,6 +237,37 @@ function constrainForInstall(ortPackage) {
     : ortPackage;
 }
 
+// cuDNN 12 runtime onnxruntime-gpu needs to actually RUN on the GPU EP, not
+// merely report it (#2600). onnxruntime-gpu 1.26.x declares nvidia-cudnn-cu12
+// only in its OPTIONAL `[cudnn]` extra — and the swap's install step above is
+// `--no-deps` (kept, see the comment on `steps` below), which suppresses
+// extras entirely. So nothing in the swap ever landed cuDNN: onnxruntime
+// still reports CUDAExecutionProvider as available (the python binding
+// doesn't probe cuDNN at import time), but constructing an InferenceSession
+// with it silently falls back to CPU — no error, no warning. Kokoro then
+// "works" and runs on CPU. Pinned to the major line the runtime's own [cudnn]
+// extra declares (`nvidia-cudnn-cu12~=9.0`), not the exact patch a dry run
+// happens to resolve — this MUST move together with ONNXRUNTIME_GPU_CONSTRAINT
+// if the onnxruntime-gpu line above it is ever bumped to one that needs a
+// different cuDNN major version.
+const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
+
+/**
+ * Extra pip step(s), if any, needed alongside an ortPackage swap so the
+ * installed runtime can actually USE its accelerator, not just report it as
+ * available. Gated on ortPackage itself — same gating shape as
+ * constrainForInstall — so a future onnxruntime-directml re-enable can never
+ * inherit a CUDA-only package. Deliberately NOT `--no-deps`: cuDNN's own
+ * dependency tree (cublas, nvrtc) doesn't intersect the overlay's
+ * numpy/protobuf/flatbuffers pins, so installing it in full here is safe in a
+ * way dropping `--no-deps` on the onnxruntime-gpu step itself is not. Pure —
+ * no I/O.
+ * @returns {string[][]}
+ */
+export function extraRuntimeSteps(ortPackage) {
+  return ortPackage === 'onnxruntime-gpu' ? [['install', NVIDIA_CUDNN_CONSTRAINT]] : [];
+}
+
 /**
  * Decide the ordered pip steps to put the correct ONNX runtime in place after the
  * overlay install. The overlay always lands plain `onnxruntime` (kokoro-onnx's
@@ -275,6 +306,10 @@ export function planOrtSwap(profile, platform) {
       // `--no-deps` keeps the overlay's numpy/protobuf/etc. pins untouched.
       ['uninstall', '-y', 'onnxruntime', ortPackage],
       ['install', '--force-reinstall', '--no-deps', constrainForInstall(ortPackage)],
+      // #2600: land the GPU runtime's own cuDNN dependency, which --no-deps
+      // above deliberately never installs (see extraRuntimeSteps). A no-op for
+      // any ortPackage other than onnxruntime-gpu.
+      ...extraRuntimeSteps(ortPackage),
     ],
   };
 }

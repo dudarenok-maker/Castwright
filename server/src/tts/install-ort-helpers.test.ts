@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
-import { planOrtSwap } from '../../tts-sidecar/scripts/install-ort.mjs';
+import { planOrtSwap, extraRuntimeSteps } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 describe('planOrtSwap', () => {
   // The overlay ALWAYS installs plain `onnxruntime` (kokoro-onnx's core dep). The
@@ -24,10 +24,30 @@ describe('planOrtSwap', () => {
     // just "whatever was latest on PyPI on their install date" — bump this
     // assertion's version alongside install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT
     // when the pin is next deliberately moved.
+    // #2600: onnxruntime-gpu declares nvidia-cudnn-cu12 only in its OPTIONAL
+    // [cudnn] extra, and `--no-deps` on the install step above suppresses
+    // extras entirely — so nothing here ever lands cuDNN, and a real
+    // CUDAExecutionProvider InferenceSession silently falls back to CPU. The
+    // cuDNN step below is separate and deliberately does NOT carry --no-deps:
+    // cuDNN's own dependency tree (cublas, nvrtc) doesn't intersect the
+    // overlay's numpy/protobuf/flatbuffers pins, so pulling it in full is safe
+    // where dropping --no-deps on the onnxruntime-gpu step itself is not.
     expect(plan.steps).toEqual([
       ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
       ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.26,<1.27'],
+      ['install', 'nvidia-cudnn-cu12~=9.0'],
     ]);
+  });
+
+  // extraRuntimeSteps is the exported gate itself — tested directly rather
+  // than only indirectly through planOrtSwap, since no profile installed
+  // TODAY exercises a non-onnxruntime-gpu SWAP (amd/apple/cpu are all
+  // 'onnxruntime', i.e. skip): a future onnxruntime-directml re-enable must
+  // not silently inherit a CUDA-only cuDNN package.
+  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN step', () => {
+    expect(extraRuntimeSteps('onnxruntime-gpu')).toEqual([['install', 'nvidia-cudnn-cu12~=9.0']]);
+    expect(extraRuntimeSteps('onnxruntime-directml')).toEqual([]);
+    expect(extraRuntimeSteps('onnxruntime')).toEqual([]);
   });
 
   // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model, so the AMD
