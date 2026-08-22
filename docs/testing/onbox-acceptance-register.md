@@ -289,7 +289,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -300,7 +300,13 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**74 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**75 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+
+> **Addition, 2026-08-22 (PR #2588, closes #2586).** A48 added — the
+> `speaker-qa.txt` reqHash fix's one-time real-venv `pip-in-place` reinstall
+> (both hash producers, `venv-migration.mjs` and `zip-validate.ts`, per that
+> PR's pass-3/pass-4 review) is behaviour only a real venv can prove. 75 is
+> 74 + this one new row; nothing else in this addition moves.
 
 > **Correction, 2026-08-20 (rework of wave-3's own recording, `#2497`).** These
 > totals were rechecked against wave 3's actual dispositions rather than left
@@ -2648,6 +2654,39 @@ must be **rebuilt for the new voice**, not reused against the old speaker's.
 *Criteria:* the two bullets above. *Cost:* short — one render, one
 reassignment, one re-render. Records A24's final sub-check ("no
 `voice-mismatch` rows").
+
+### A48 · The `speaker-qa.txt` reqHash fix actually drives a one-time `pip-in-place` reinstall on a real venv ([#2586](https://github.com/dudarenok-maker/Castwright/issues/2586), PR #2588) · **no GPU needed, sidecar venv only**
+
+PR #2588 hashes `speaker-qa.txt` into `reqHash` (`resolveRequired` in
+`venv-migration.mjs`, AND — after pass-3/pass-4 review caught the first landing
+missing it — `zip-validate.ts`'s separate `validateUpgradeZip` producer, which
+the in-app zip-upload upgrade route and `apply.ts`'s `pipInstall` gate both
+read). The decision logic (`decideVenvAction`/`classifyVenvState`) is
+exhaustively unit-tested against synthetic stamps, and the two hash producers
+are now pinned equal against each other by a test that builds matching
+requirements content on disk and in a real zip (`zip-validate.test.ts`). What
+none of that proves is that a REAL venv with a stamp recorded under the old
+2-file hash actually gets `pip-in-place`'d — not `noop`, not a full rebuild —
+and that the resulting environment carries `speaker-qa.txt`'s current pins
+(`speechbrain==1.1.0`, `huggingface_hub==0.36.2` as of this PR) afterward.
+
+- Take a real sidecar venv whose `.venv-stamp.json` was written before this PR
+  (i.e. `reqHash` computed from `[overlay, base]` only — any pre-#2588 install
+  qualifies).
+- Trigger either real reinstall path: Pinokio's Update action
+  (`pinokio-scripts/update.js`, which runs `bootstrap-venv.mjs`), or the in-app
+  zip-upload upgrade (Account → Application updates → stage a release zip →
+  Apply, which drives `upgrade/apply.ts`).
+- Confirm the run performs a `pip-in-place` install (not a full venv rebuild,
+  not a no-op) — `python-tag`/`profile` are unchanged, so `decideVenvAction`
+  should classify strictly on the `reqHash` mismatch.
+- Confirm `speaker-qa.txt`'s pins (`speechbrain`, `huggingface_hub`) are
+  present at their pinned versions in the venv afterward, and that
+  `.venv-stamp.json` / `.req-hash` now record the new 3-file hash so a second
+  run of the same path is a `noop`.
+
+*Needs:* sidecar venv only, no GPU. *Criteria:* the four bullets above.
+*Cost:* one pip-in-place reinstall, once, on an old-stamped venv.
 
 ## Group B — local Ollama analyzer only
 

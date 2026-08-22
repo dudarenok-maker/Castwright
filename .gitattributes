@@ -42,9 +42,12 @@ openapi.yaml text eol=lf
 # LF blob (the text=auto clean filter normalizes CRLF->LF for comparison), so
 # `git status` reads clean and a later `git pull`/`git merge`/`git checkout
 # <ref>` is a no-op for these files — they stay CRLF on disk indefinitely.
-# There is no git operation that self-heals this; only removing the files and
-# re-materializing them from the index does:
-#   git rm --cached -r -- server/tts-sidecar/requirements
+# There is no git operation that self-heals this; only removing the files from
+# DISK (not the index — `git rm --cached` unstages them, which leaves nothing
+# for the next command to restore from and errors with "pathspec ... did not
+# match any file(s) known to git", staging five deletions and fixing nothing)
+# and then re-checking them out does:
+#   rm server/tts-sidecar/requirements/*.txt
 #   git checkout -- server/tts-sidecar/requirements
 # (or, for the whole tree: delete the files and `git checkout -- .`). See
 # #2586's PR (#2588) pass-2 review comment for the reproduction, and #2596
