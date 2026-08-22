@@ -112,6 +112,10 @@ describe('ensureOrtMarker', () => {
     // Minimum length guard: the full message is ~444 chars; a gutted stub is ~40 chars.
     // This catches attempts to reduce the message to just the structural tokens.
     expect(message.length).toBeGreaterThan(300);
+
+    // Pin the PowerShell form (round 18 remedy) — the exact syntax with $env: prefix and semicolon.
+    // This catches a hollow-coverage defect where the PowerShell form was deleted and tests stayed green.
+    expect(message).toContain('(PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=');
   });
 
   it('REFUSES on a clobbered venv even when our marker is already present (row 4 "either" coverage)', () => {
@@ -228,6 +232,10 @@ describe('ensureOrtMarker', () => {
     expect(message).not.toContain('without it');
     expect(message).toContain('CASTWRIGHT_ACCELERATOR_PROFILE');
     expect(message).toContain('install-ort.mjs');
+
+    // Pin the PowerShell form (round 18 remedy) — the exact syntax with $env: prefix and semicolon.
+    // This catches a hollow-coverage defect where the PowerShell form was deleted and tests stayed green.
+    expect(message).toContain('(PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=');
   });
 
   it('never throws on a venv that does not exist', () => {
