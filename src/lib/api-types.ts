@@ -2402,7 +2402,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reject an orphaned-id reconciliation ("not the same character") —
+         * Reject an orphaned-id reconciliation ("not the same character") — #2040 Task 17
          * @description The orphaned-character-fallback banner shows an id that either
          *     auto-reconciled onto a live character (through the id-history
          *     side-table or a normalised-key match) or didn't resolve at all. This
@@ -2460,7 +2460,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Link an orphaned-id reconciliation ("this IS the same character") —
+         * Link an orphaned-id reconciliation ("this IS the same character") — #2238
          * @description The positive mirror of `reject-orphan-match`'s POST above: records
          *     "orphanedId IS the same character as characterId" by durably
          *     aliasing `orphanedId -> characterId` in `cast-id-history.json`'s

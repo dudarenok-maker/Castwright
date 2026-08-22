@@ -122,7 +122,7 @@ export function useLanguageGuard(): LanguageGuardResult {
         const fresh = await api.getLibrary().catch(() => null);
         if (fresh) dispatch(libraryActions.hydrate(fresh));
       }}
-      onSaveError={(error) => {
+      onSaveError={(_error) => {
         /* Task 9 — guard-mode save failed. Surface the error as a toast
            instead of closing the modal, so the user can retry. */
         dispatch(notificationsActions.pushToast({

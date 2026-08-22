@@ -3492,7 +3492,7 @@ paths:
 
   /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
     post:
-      summary: Reject an orphaned-id reconciliation ("not the same character") — #2040 Task 17
+      summary: "Reject an orphaned-id reconciliation (\"not the same character\") — #2040 Task 17"
       operationId: rejectOrphanMatch
       description: |
         The orphaned-character-fallback banner shows an id that either
@@ -3582,7 +3582,7 @@ paths:
 
   /api/books/{bookId}/cast/{characterId}/link-orphan-match:
     post:
-      summary: Link an orphaned-id reconciliation ("this IS the same character") — #2238
+      summary: "Link an orphaned-id reconciliation (\"this IS the same character\") — #2238"
       operationId: linkOrphanMatch
       description: |
         The positive mirror of `reject-orphan-match`'s POST above: records
