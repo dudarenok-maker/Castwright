@@ -538,7 +538,7 @@ describe('useLanguageGuard', () => {
               // Simulate guard() being called from within a dispatch context.
               // This is how it happens in real code like generation-stream-runner.ts
               // when a handler invokes guard() from within a Redux-dispatch-driven update.
-              dispatch(((d) => {
+              dispatch((() => {
                 guard({ bookId: 'b_second' }, '409', () => {}, dismissB);
                 return undefined;
               }) as any);
