@@ -372,6 +372,19 @@ setup rather than repeatedly loading and evicting models.
 > re-binning within the 74, not a change to the total. Same arithmetic-check
 > pattern as `onbox-sitting-plan.md`'s own 2026-08-20 correction.
 
+> **Recompute, 2026-08-21 (wave-4 step 8, A37/A38/A39 re-run, `#2569`).** A39's
+> filed defect is fixed and independently verified (see its row). The box-level
+> CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been resolved by PR #2576
+> (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`), and the
+> shared Kokoro GPU-provider sub-check for A37/A38 was re-run against the fixed
+> pin (wave-4 step 8, 2026-08-21) — but **still fails on a different, distinct
+> root cause**: `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via
+> its optional `[cudnn]` extra, which `install-ort.mjs` never requests. A39's
+> row accordingly remains STILL OWED on the same basis (the shared re-check still
+> fails, same new root cause), and so does A37 (see their rows for the detailed
+> re-run findings and evidence). This does **not** leave the owed count — 67 is
+> recomputed fresh here, not carried forward, and stays unchanged.
+
 ---
 
 ## Group A — the GPU box
@@ -2247,9 +2260,8 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > while `onnxruntime-gpu` 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries.
 > This blocking dependency is now resolved by PR #2576, which re-pinned
 > `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27` (CUDA-12 line). The row
-> remains STILL OWED because the acceptance test has not yet been re-run
-> against the fixed pin; see evidence doc
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
+> stays STILL OWED pending the GPU-provider re-check against the fixed pin;
+> see evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
 > **Wave-4 step 8, 2026-08-21 — STILL OWED, re-run after #2534's fix landed.**
 > Re-ran the Kokoro GPU-provider check against `onnxruntime-gpu` 1.26.0 (the
@@ -2267,10 +2279,11 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > (`torch/lib`, `ctranslate2`), which onnxruntime does not search — confirmed
 > by adding `torch/lib` to the process DLL search path as a diagnostic, which
 > did not fix it either. Zero discharges this run — see evidence doc
-> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up
-> owed:** a new defect issue for the missing `nvidia-cudnn-cu12` dependency
-> (distinct from #2534, which is closed and did fix the CUDA-13-vs-12
-> mismatch it targeted).
+> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up filed:**
+> [#2600](https://github.com/dudarenok-maker/Castwright/issues/2600) — `install-ort.mjs` never requests the cuDNN 12 runtime that
+> `onnxruntime-gpu 1.26.x` requires for CUDA execution, leaving Kokoro to
+> silently fall back to CPU (distinct from #2534, which fixed the CUDA-13-vs-12
+> mismatch itself).
 
 ### A38 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
@@ -2332,25 +2345,57 @@ filed against, and it has not been separately re-confirmed since the fix landed
 Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
 branch (the clobbered-box row of the design doc's five-state table) is fully
 unit-tested against synthetic fixtures (`server/src/tts/ort-ensure-marker.test.ts`)
-but has never run against a **real** clobbered venv — a box where the GPU
-distribution's dist-info survives (pip uninstalls by name and never knew the two
-collided) while the actual files on disk are the CPU build. This is the population
-#2192 itself names as the largest affected group, and the state a wrong ownership
-predicate would entomb silently (see the design doc's §The three venv states).
+but has never run against a **real** clobbered venv — a box where a real plain
+`onnxruntime` dist-info survives alongside the GPU distribution's dist-info (pip
+uninstalls by name and never knew the two collided), but the actual files on disk
+are the GPU build. This is the population #2192 itself names as the largest affected
+group, and the state a wrong ownership predicate would entomb silently (see the
+design doc's §The three venv states).
 
-- **Manufacture the state deliberately**, on a copy of the venv or with the intent
-  to run the repair command afterward (this is destructive to a working GPU
-  install): with the sidecar stopped, `pip install --force-reinstall onnxruntime`
-  (plain, no `-gpu` suffix) into the sidecar venv that already has
-  `onnxruntime-gpu` installed. Confirm both `onnxruntime_gpu-*.dist-info` and a
-  **real** `onnxruntime-*.dist-info` (INSTALLER `pip`, non-empty RECORD) now exist,
-  and that `site-packages/onnxruntime/` is the CPU build's files.
+- **Manufacture the state deliberately**, on a scratch/throwaway venv (or a copy of
+  the sidecar venv) with the intent to run the repair command afterward — this is
+  destructive to a working GPU install. The corrected recipe (verified 2026-08-21,
+  see the dated note below) starts from a venv that has plain `onnxruntime`
+  installed and then force-reinstalls the GPU build **over** it: pip's
+  upgrade-detection keys on the package NAME, so installing two distributions that
+  share the `onnxruntime/` import namespace under different names does not trigger
+  a replacement, and the plain package's dist-info survives on disk:
+  ```powershell
+  python -m venv <venv>
+  <venv>\Scripts\pip install onnxruntime==1.28.0
+  <venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
+  ```
+  (Versions pinned for reproducibility — plain at 1.28.0, GPU at 1.27.0, so the
+  two dist-info folder names are distinguishable by directory listing alone,
+  matching the unit test fixture.)
+  Confirm both a **real** `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty
+  RECORD) and `onnxruntime_gpu-1.27.0.dist-info` coexist with **different version
+  numbers** — this is the discriminating check that proves the code either correctly
+  refused to write a marker OR incorrectly wrote one. A marker and the real plain dist-info
+  would be named identically if they were at the same version, making name-based detection useless. Also confirm
+  that `site-packages/onnxruntime/` holds the GPU build's files
+  (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
+
+> **Recipe corrected, 2026-08-21 — as part of [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545) (task to address [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535), the defect). Verified in ort-marker-onbox-acceptance.md §8.5.**
+> The row's original recipe (`pip install --force-reinstall onnxruntime` over a
+> venv already holding `onnxruntime-gpu`) does NOT reach `'clobbered'`: it
+> overwrites `site-packages/onnxruntime/capi/build_and_package_info.py` to report
+> `package_name = 'onnxruntime'`, so `detectOrtOwner` correctly reports `'plain'`
+> and `ensureOrtMarker` takes the silent `'deleted'` branch instead. The corrected
+> plain-then-GPU ordering (1.28.0 plain, 1.27.0 GPU) was verified against the real
+> `detectOrtOwner`/`findPlainOrtDistInfos` from
+> `server/tts-sidecar/scripts/install-ort.mjs` on a throwaway venv: it reports
+> `detectOrtOwner === 'swap'` and `findPlainOrtDistInfos.length === 1` with
+> discriminable versions (1.28.0 vs 1.27.0 in directory names), and
+> `ensureOrtMarker` returns `'clobbered'` — exactly the refuse-and-log branch this
+> row is meant to exercise (see §8.5 for complete verification).
 - **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
-  naming the condition and the exact remedy command
-  (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
-  and **no** `onnxruntime-<version>.dist-info` marker written over the real
-  distribution. `pip check` should still report the pre-existing broken
-  requirements — not silently "fixed" by a marker stamped over the wrong version.
+  naming the condition and the exact remedy commands (PowerShell form: `$env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` or POSIX form: `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
+  and **no** new `onnxruntime-<version>.dist-info` marker written over the real
+  distribution. `pip check` stays clean (nothing else in this throwaway venv depends on
+  `onnxruntime` to have broken requirements) — the discriminating check is the `'clobbered'` return value and the
+  log line naming the condition and remedy, confirming the box is refuse-and-logged
+  rather than silently healed at the wrong version.
 - **Run the named remedy command** and confirm it actually repairs the box: the
   swap re-runs, `onnxruntime-gpu` is reinstalled, and a legitimate marker is
   written afterward (`pip check` clean, Kokoro reports `CUDAExecutionProvider`
@@ -2358,7 +2403,7 @@ predicate would entomb silently (see the design doc's §The three venv states).
 
 *Needs:* the existing NVIDIA dev box, no GPU activity required, ~10 minutes
 including the repair. *Criteria:* design doc §On-box acceptance item 6, the
-five-state table and "the clobbered box takes the loud path" in
+eight-state table and "the clobbered box takes the loud path" in
 `docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
@@ -2381,6 +2426,76 @@ five-state table and "the clobbered box takes the loud path" in
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
 > [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
 > (see #2535).
+
+> **Wave-4 A39 re-run, 2026-08-21 — STILL OWED.** Re-ran this row's own recipe on a
+> **fresh** throwaway venv (not the sidecar's own — no venv under
+> `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime was
+> confirmed unchanged before and after this run) against branch
+> `fix/sidecar-2535-ort-marker-fix`, at committed HEAD `fe77babd` but with a
+> **local, uncommitted edit to `install-ort.mjs`** containing the corrected
+> clobbered-state message (later committed as `bd09fcfa`), fixing silent-defect
+> #2535. The recorded log message matches the 452-character wording from that
+> uncommitted edit (later bd09fcfa's wording), not the 262-character wording
+> from prior merge commit 51420399. Manufactured plain-then-GPU, confirmed `detectOrtOwner === 'swap'`
+> and one real plain dist-info present, then booted the real worktree server
+> (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the throwaway venv, port 8290 —
+> free and not shared with another lane). **Result: the `'clobbered'` log
+> line fired correctly**, naming the condition and the exact remedy command,
+> and no marker was written over the real distribution (`pip check` stayed
+> clean, matching the pinned-version case rather than wave-3's mismatched
+> 1.29.0 one — nothing for boot to silently "fix" either way). Ran the named
+> remedy command directly against the throwaway venv: it uninstalled both
+> packages, reinstalled `onnxruntime-gpu==1.27.0` (`--no-deps`), and wrote a
+> legitimate marker — post-repair, `owner === 'swap'` with **zero** real plain
+> dist-infos (`findPlainOrtDistInfos.length === 0`), `pip check` clean. The
+> silent-`'deleted'` defect #2535 was filed against is gone: the loud
+> `'clobbered'` path fires exactly where wave-3 found it silent.
+> **CRITICAL NOTE:** This wave-4 run was performed with the INCORRECT recipe
+> version (1.27.0/1.27.0 — both the same version). This is a separate defect
+> from the ordering issue wave-3 step 2 exposed (which used different versions:
+> 1.29.0 plain and 1.27.0 GPU). The wave-4 run therefore did NOT fully verify
+> the fix against the intended manufactured state where the two packages have
+> different versions. The corrected recipe verification with 1.28.0 plain and
+> 1.27.0 GPU is in Wave-5 below.
+> Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by:
+> claude (Castwright#2569).
+
+> **Wave-5 A39 verification, 2026-08-21 — STILL OWED, but the filed defect is
+> fixed and verified.** Re-ran this row against the CORRECTED recipe (1.28.0
+> plain, 1.27.0 GPU) on a **fresh** throwaway venv to properly exercise the
+> fix against the intended manufactured state. **Pre-repair:** fresh venv with
+> correct versions; `detectOrtOwner === 'swap'` (GPU build's files own the
+> namespace); `findPlainOrtDistInfos.length === 1` (one real plain dist-info);
+> directory listing shows both `onnxruntime-1.28.0.dist-info` (real plain,
+> named by version) and `onnxruntime_gpu-1.27.0.dist-info` (GPU build) with
+> DIFFERENT version numbers — crucially different from wave-4's run which
+> showed both at 1.27.0. **ensureOrtMarker behavior:** returns `'clobbered'`
+> and logs the condition with remedy command. No marker written over the real
+> distribution (directory listing unchanged, `pip check` clean). **Repair:**
+> ran the named remedy command directly: uninstalled both packages, reinstalled
+> `onnxruntime-gpu==1.27.0` (`--no-deps`). Post-repair: `owner === 'swap'`;
+> `findPlainOrtDistInfos.length === 0` (stale real plain dist-info removed,
+> only marker remains); directory listing shows `onnxruntime-1.27.0.dist-info`
+> (marker written) and `onnxruntime_gpu-1.27.0.dist-info` (GPU build); `pip
+> check` clean. **Disposition:** ✓ PASS for the fix. The `'clobbered'` return
+> value fires exactly as intended against the correct manufactured state where
+> the two packages have different versions, the remedy command repairs the box
+> correctly, and the marker is written only after the swap succeeds. **Not
+> independently re-confirmed:** Kokoro reporting `CUDAExecutionProvider`
+> post-repair. `get_available_providers()` still lists it (as wave-3 also
+> saw), but constructing a real inference session was not re-attempted here —
+> the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been
+> resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to
+> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A37):
+> re-ran against the fixed pin (ONNXRUNTIME 1.26.0 via PR #2576), still fails but
+> on a new, distinct root cause — `onnxruntime-gpu` 1.26.0 requires
+> `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by
+> `install-ort.mjs` (not the #2534 defect recurring). Per that outcome this row
+> stays **STILL OWED** on the GPU-provider check basis — the row's own criteria
+> include the CUDA-provider re-check — but the population #2192 named as
+> largest-affected is no longer left in the silent failure mode.
+> Evidence: `docs/testing/ort-marker-onbox-acceptance.md` §8.5. Run by: claude
+> (Castwright#2578, wave-5, round-2 review correction).
 
 ### A40 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 

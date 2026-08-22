@@ -1,6 +1,6 @@
 # On-box sitting plan — the plan of record for wave 2 of #2435
 
-> **Plan of record.** This document bins **all 74 rows** of
+> **Plan of record.** This document bins **all 67 rows** of
 > [`onbox-acceptance-register.md`](onbox-acceptance-register.md) into exactly one
 > of three sets — an operator sitting pack, a wave-3 agent-runnable row, or a
 > blocked-on-acquisition row — and fixes the **shared pack format** every later
@@ -35,7 +35,7 @@ HTML, the staleness audit, or any existing run sheet.
 
 ## 2. The three sets
 
-Every one of the 74 register rows appears **exactly once** across the three sets
+Every one of the 67 register rows appears **exactly once** across the three sets
 below. The arithmetic is stated under each table and reconciled in §6.
 
 ### 2.1 Operator sittings (51 rows, 8 packs)
@@ -120,7 +120,17 @@ retirements/discharges — see the 2026-08-21 correction below).
 > discharged by the repo owner — blocked set −1, and Group F no longer
 > exists. Net: operator 52→**49**, wave-3 18→**15**, blocked 4→**3**,
 > total 74→**67**. §2.2 and §2.3 below, and §7's totals, are corrected to
-> match; the rest of this plan (§1, §3, §4, §5, §6) is otherwise unaffected.
+> match; the rest of this plan (§1, §4, §5, §6) is otherwise unaffected. **Addendum, 2026-08-22:** §3's A16 narrative received a fifth-correction note documenting how PR #2588 and PR #2585 offset each other.
+>
+> **Correction, 2026-08-22 (folding in `main`'s PR #2588 and PR #2585).**
+> Two independent changes on `main`, both now folded in here. PR #2588 added
+> a new wave-3 agent-runnable row for the `speaker-qa.txt` reqHash fix's
+> one-time real-venv reinstall — sidecar-venv-only, no GPU requirement. It
+> landed on `main` as A48 (old numbering); folded into this wave's
+> contiguous renumbering it is **A45**. Wave-3 set +1. Separately, PR #2585
+> discharged and removed the Cast/analysis `characterId` drift row (this
+> plan's old B3, `#2040`) after `#2536`'s fix landed — wave-3 set −1. Net:
+> wave-3 set stays **15**, total stays **67** — the two changes offset.
 
 ### 2.2 Wave-3 agent-runnable (15 rows)
 
@@ -128,16 +138,20 @@ These need no GPU and no operator box. They are excluded from every pack above
 and are run, on a machine of the agent's choosing, by the wave-3 pass — not by a
 pack child in this chain.
 
-A29, A39, A40, A41, A42, B1, B3, B4, C1, C2, C3, C4, E11, G1, G2. (Named by
-the number each row carried when last binned here — A27 and E8, old
+A29, A39, A40, A41, A42, A45, B1, B4, C1, C2, C3, C4, E11, G1, G2. (Named
+by the number each row carried when last binned here — A27 and E8, old
 numbering, are removed entirely, discharged/moved to Blocked this wave; see
 the 2026-08-21 correction above. The register's own current numbering
 renames several of these — e.g. old A29 is now A27 — see the register's own
-correction note for the full renumbering.)
+correction note for the full renumbering. A45 — old numbering A48, PR #2588
+— added by the 2026-08-22 correction above. B3 (characterId drift, #2040)
+was discharged by PR #2585 and is removed entirely.)
 
-**Row count:** 5 (group A: A29, A39, A40, A41, A42 — A27 discharged, removed)
-+ 3 (B: B1, B3, B4 — B2 retired, removed) + 4 (C) + 1 (E11 — E8 moved to
-Blocked, removed) + 2 (G) = **15** (was 18, before wave 4's three removals).
+
+**Row count:** 6 (group A: A29, A39, A40, A41, A42, A45 — A27 discharged,
+removed) + 2 (B: B1, B4 — B2, B3 retired/discharged, removed) + 4 (C) + 1 (E11 — E8
+moved to Blocked, removed) + 2 (G) = **15** (was 16 before B3's discharge,
+18 before wave 4's three removals).
 
 ### 2.3 Blocked-on-acquisition (3 rows, 1 pack)
 
@@ -157,9 +171,15 @@ register). (Plain code span, not a link — same not-yet-written-sibling reason 
 ### Arithmetic
 
 **49** (operator) + **15** (wave-3) + 3 (blocked) = **67**. Every register row
-appears exactly once. (Before wave 4 (this correction), this read 52 + 18 + 4
-= 74 — wave 4's retirements/discharges/reclassifications above account for
-the full delta: −3 operator, −3 wave-3, −1 blocked, net −7, 74 → 67.)
+appears exactly once. (Before wave 4 (the 2026-08-21 correction above), this
+read 52 + 18 + 4 = 74 — wave 4's retirements/discharges/reclassifications
+account for the full delta: −3 operator, −3 wave-3, −1 blocked, net −7,
+74 → 67. PR #2588 then added A45 · `speaker-qa.txt` reqHash fix, which is
+sidecar-venv-only with no GPU requirement, joining the wave-3 agent-runnable
+set: 49 + 15 + 3 → 49 + 16 + 3, **67 → 68**. However, PR #2585 discharged
+B3 (characterId drift, #2040), which reduced wave-3 from 16 back to **15**,
+restoring the total to **67**. The merge that brought both PRs in did not
+fully account for this, creating a temporary 68-row miscounting now corrected.)
 ---
 
 ## 3. A16 — re-derived binning and reasoning
@@ -199,8 +219,11 @@ recording, `#2497`), moved E7's rendered half the same direction, changing
 this to **52 operator + 18 wave-3 + 4 blocked = 74**. A **fourth**
 correction, 2026-08-21 (wave 4, `#2551` step 6), retired/discharged/
 reclassified A22, A27, A43, B2, old-E6, old-E8 and F1, changing this to
-**49 operator + 15 wave-3 + 3 blocked = 67** — see §7 for the current
-totals.
+**49 operator + 15 wave-3 + 3 blocked = 67**. A **fifth** correction,
+2026-08-22 (folding in `main`'s PR #2588 and PR #2585), added A45 to the wave-3 set
+while discharging B3 (characterId drift, #2040) — wave-3 set +1 and −1
+offsetting — keeping the total at **49 operator + 15 wave-3 + 3 blocked = 67** — see §7 for
+the current totals.
 
 > A16 is also one of the three **AMBIGUOUS** rows — its plan frontmatter says
 > `status: active` while its body says `Status: stable`. That ambiguity is about
@@ -313,9 +336,11 @@ incident** is the reason this rule exists and is named here.
     device); Group F no longer exists in the register or this plan. The
     blocked pack now carries only the three remaining blocked rows'
     **50 minutes** (H1 + H2 + D3) for when the hardware lands.
-- **Wave-3 agent-runnable:** 15 rows (was 18 — A27 discharged and old-E8
-  moved to Blocked and B2 retired 2026-08-21, see §2.1/§2.2), no GPU, run
-  off-box by the wave-3 pass — not counted in operator minutes.
+- **Wave-3 agent-runnable:** 15 rows (was 18 before wave 4 — A27 discharged
+  and old-E8 moved to Blocked and B2 retired 2026-08-21, see §2.1/§2.2; then
+  15 → 16 as A45/PR #2588 joined 2026-08-22, but 16 → 15 again when B3 was
+  discharged by PR #2585 2026-08-22), no GPU, run off-box by the
+  wave-3 pass — not counted in operator minutes.
 
 **Grand reconciliation:** 49 operator + 15 wave-3 + 3 blocked = **67 rows**, the
 register's full owed count, each exactly once.
