@@ -5,7 +5,7 @@
    the slice, edits stay local until Save dispatches the thunk that PUTs to
    the server and re-hydrates the slice. */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton, Checkbox } from '../components/primitives';
 import type { BackupSnapshot, ConfigGroup, UserSettings, UserSettingsPatch } from '../lib/types';
 import type { ThemePreference } from '../lib/use-theme';
@@ -37,6 +37,7 @@ function acctGroup(id: string, label: string, help: string): ConfigGroup {
 export function AccountView() {
   const dispatch = useAppDispatch();
   const account = useAppSelector((s) => s.account);
+  const saveConfirmTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   /* Local form state — initialised from the slice and re-synced when the
      slice rehydrates (after Save or after the boot-time fetch lands). The
@@ -83,6 +84,16 @@ export function AccountView() {
     account.backupRetention,
   ]);
 
+  /* Clean up the save-confirmation timeout if the component unmounts before
+     it fires. This prevents a "setState on unmounted component" warning. */
+  useEffect(() => {
+    return () => {
+      if (saveConfirmTimeoutRef.current !== null) {
+        clearTimeout(saveConfirmTimeoutRef.current);
+      }
+    };
+  }, []);
+
   /* Persisted override vs draft. The "Restart required" badge fires the
      instant the user changes the override away from the persisted value —
      even before Save — because the server is still running with the old
@@ -121,7 +132,12 @@ export function AccountView() {
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
       setShowSaved(true);
-      setTimeout(() => setShowSaved(false), 2400);
+      /* Clear any previous timeout to avoid stacking timers if Save is called
+         multiple times before the first timeout completes. */
+      if (saveConfirmTimeoutRef.current !== null) {
+        clearTimeout(saveConfirmTimeoutRef.current);
+      }
+      saveConfirmTimeoutRef.current = setTimeout(() => setShowSaved(false), 2400);
     }
   };
 
