@@ -16,7 +16,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { useAppDispatch } from '../store';
 import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
-import { useLanguageGuard } from './use-language-guard';
+import { useLanguageGuard, type LanguageGuardResult } from './use-language-guard';
 import { emitLanguageGuard, type LanguageGuardSelector } from '../lib/language-guard-bus';
 import { api } from '../lib/api';
 import type { LibraryBook } from '../lib/types';

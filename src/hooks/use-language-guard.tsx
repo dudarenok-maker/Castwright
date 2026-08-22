@@ -6,7 +6,7 @@
    The four 409 sites in src/lib/api.ts mark an unset book language with a 409
    body. Instead of surfacing the generic error toast for that case, the API
    layer routes the failure through this hook (via the shared
-   language-guard-bus): `guard(selector, shape, onRetry, onDismiss)` resolves
+   language-guard-bus): `guard(selector, shape, onRetry, onDismiss, sseSource)` resolves
    the book — analysis names it by `manuscriptId`, the other three by `bookId`
    — opens EditBookMetaModal in guard mode, the user chooses a language, the
    language patch is persisted, and `onRetry` re-runs the original call the
@@ -15,8 +15,9 @@
    Dismissing without saving calls `onDismiss` so value-returning callers can
    reject their awaiting promise instead of hanging on it.
 
-   Shape 1 of three — the pre-flight 409. The sse and batch shapes are the
-   next child (#2407). */
+   Three guard shapes are active: pre-flight 409 (standard POST), sse
+   (streaming generation), and batch (multi-chapter/multi-book requests). All
+   ship in this PR (#2246). */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
