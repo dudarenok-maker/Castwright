@@ -260,7 +260,8 @@ to prevent. A clobbered box takes the loud path instead: **the log must name the
 not gesture at one — the only repair this design ships for that population is the hand-run CLI:
 
 ```
-CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>
+  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE='<profile>'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>
+  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>
 ```
 
 Leaving that string unwritten would ship the entire remedy for the largest affected

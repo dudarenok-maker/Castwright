@@ -16,7 +16,8 @@
 // Pure planner (planOrtSwap) + guarded CLI, mirroring install-torch.mjs.
 //
 // Usage (the bootstrap wires this; manual form for testing):
-//   CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
+//   PowerShell: $env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node install-ort.mjs <venv-python>
+//   POSIX:      CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
 //
 // NOTE: the minimum working onnxruntime-directml version (the release carrying
 // the Kokoro ConvTranspose fix) is OWED on real AMD hardware (Wave H1). Until

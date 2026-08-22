@@ -2451,8 +2451,7 @@ design doc's §The three venv states).
 > `ensureOrtMarker` returns `'clobbered'` — exactly the refuse-and-log branch this
 > row is meant to exercise (see §8.5 for complete verification).
 - **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
-  naming the condition and the exact remedy command
-  (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
+  naming the condition and the exact remedy commands (PowerShell form: `$env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` or POSIX form: `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
   and **no** new `onnxruntime-<version>.dist-info` marker written over the real
   distribution. `pip check` stays clean (nothing else in this throwaway venv depends on
   `onnxruntime` to have broken requirements) — the discriminating check is the `'clobbered'` return value and the
