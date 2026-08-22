@@ -703,3 +703,36 @@ describe('mock PATCH transcript + retry (plan 276, Decisions 6/7)', () => {
     });
   });
 });
+
+describe('mock voice uuid minting - CSPRNG, #2416 step 4', () => {
+  it('design mints a full v4 lib- uuid, not the 8-char base36 truncation', async () => {
+    const { entry } = await mockDesignLibraryVoice({
+      name: 'Uuid Shape',
+      persona: 'A narrator.',
+    });
+    expect(entry.voiceUuid).toMatch(
+      /^lib-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it('two consecutive design create calls return distinct voiceUuids', async () => {
+    const first = await mockDesignLibraryVoice({ name: 'A', persona: 'p.' });
+    const second = await mockDesignLibraryVoice({ name: 'B', persona: 'p.' });
+    expect(first.entry.voiceUuid).toMatch(/^lib-/);
+    expect(second.entry.voiceUuid).toMatch(/^lib-/);
+    expect(first.entry.voiceUuid).not.toBe(second.entry.voiceUuid);
+  });
+
+  it('two consecutive clone create calls return distinct lib-clone- voiceUuids', async () => {
+    const consent = {
+      personName: 'Ana',
+      relationship: 'self' as const,
+      permittedUse: 'personal' as const,
+    };
+    const first = await mockCloneVoice({ candidateId: 'cand-a', consent });
+    const second = await mockCloneVoice({ candidateId: 'cand-b', consent });
+    expect(first.voiceUuid).toMatch(/^lib-clone-/);
+    expect(second.voiceUuid).toMatch(/^lib-clone-/);
+    expect(first.voiceUuid).not.toBe(second.voiceUuid);
+  });
+});

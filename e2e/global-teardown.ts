@@ -24,6 +24,7 @@ export default function globalTeardown() {
     execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
       stdio: 'ignore',
       timeout: 30_000,
+      windowsHide: true,
     });
   } catch {
     /* best-effort: never fail the run on a cleanup hiccup */

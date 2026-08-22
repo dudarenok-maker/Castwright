@@ -8,6 +8,6 @@ const flags = process.argv.slice(2);
 const res = spawnSync(
   'npx',
   ['tsx', 'server/src/analyzer/attribution-eval/run-eval-cli.ts', ...flags],
-  { stdio: 'inherit', cwd: ROOT, shell: true },
+  { stdio: 'inherit', cwd: ROOT, shell: true, windowsHide: true },
 );
 process.exit(res.status ?? 1);

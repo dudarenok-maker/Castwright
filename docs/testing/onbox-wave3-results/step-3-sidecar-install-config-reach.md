@@ -360,3 +360,5 @@ endpoint. Two defensible outcomes: (a) add the state, (b) leave
 broken-vs-missing decision must read `models-status.ts` instead. Not
 choosing this myself — it's a design call about whether a second endpoint's
 scope should widen.
+
+Resolved by PR #2579 (option (a)): `installState` gained `'package-broken'`.

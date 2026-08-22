@@ -1,6 +1,6 @@
 # On-box sitting plan — the plan of record for wave 2 of #2435
 
-> **Plan of record.** This document bins **all 74 rows** of
+> **Plan of record.** This document bins **all 67 rows** of
 > [`onbox-acceptance-register.md`](onbox-acceptance-register.md) into exactly one
 > of three sets — an operator sitting pack, a wave-3 agent-runnable row, or a
 > blocked-on-acquisition row — and fixes the **shared pack format** every later
@@ -35,7 +35,7 @@ HTML, the staleness audit, or any existing run sheet.
 
 ## 2. The three sets
 
-Every one of the 74 register rows appears **exactly once** across the three sets
+Every one of the 67 register rows appears **exactly once** across the three sets
 below. The arithmetic is stated under each table and reconciled in §6.
 
 ### 2.1 Operator sittings (51 rows, 8 packs)
@@ -44,16 +44,31 @@ These need the operator's GPU box — a live card, real engine residency, a real
 TTS sidecar, a real analyzer, or a real phone/browser on the LAN. Each is one
 sitting; A1 is several sittings inside one pack.
 
-| Pack file | Rows | Est. min |
+| Pack file | Rows (as numbered when each pack was written) | Est. min |
 |---|---|---|
 | [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A2, A3, A8, A18 | 110 |
-| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A25, A28, A34, A35, A36 | 155 |
+| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A24, A26, A32, A33, A34 | 155 |
 | `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A30 | 155 |
-| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A23, A37 | 155 |
-| `onbox-sitting-cloning-identity.md` | A24, A26, A31, A32, A33, A43, A44, A45, A46, A47 | 220 |
-| `onbox-sitting-multilanguage.md` | D1, D2, A38, E4 | 165 |
-| `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E7, E9, E10 | 170 |
+| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A35 | 145 |
+| `onbox-sitting-cloning-identity.md` | A23, A25, A29, A30, A31, A41, A42, A43, A44 | 185 |
+| `onbox-sitting-multilanguage.md` | D1, D2, A36, E4 | 165 |
+| `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E7, E8 | 140 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
+
+> **Wave-4 note (#2551 step 6), 2026-08-21.** This wave's retirements/
+> discharges renumbered the register (see its own "At a glance" correction
+> note). The COUNT changes below reflect real losses: `onbox-sitting-qa-gate.md`
+> lost the row it called A22 (real-corpus true-peak distribution, retired
+> 2026-08-21, 10 min — the register's old A23, "measurement-failure path
+> renders as untrusted," is now A22 in that pack); `onbox-sitting-
+> cloning-identity.md` lost the row it called A43 (discharged 2026-08-21,
+> ~20 min) and shrank A33 (now A31) from ~30 to ~15 min (its §8.8 half
+> discharged, only §8.7 remains); `onbox-sitting-device-browser.md` lost the
+> row it called E6 (moved to Blocked, 30 min; the old E7/E9/E10 that followed
+> it are now E6/E7/E8). **Addendum, same day (docs fold-in pass):** the
+> "Rows" column above has now been reconciled to each pack file's current,
+> post-renumbering row labels — it no longer names rows by the number they
+> carried when originally written.
 
 <!-- The seven rows above are plain code spans, not links, until their pack
 files exist — review of PR #2470 (attempting to fix this a different way)
@@ -63,8 +78,8 @@ fails every intermediate commit in this chain, not just the one that would
 add the dangling link. #2454's final commit (once all eight packs exist)
 flips these back to real links. See #2463 for the incident this avoids. -->
 
-**Row count:** 4 + 9 + 7 + 9 + 10 + 4 + 8 + 1 = **52** (was 49, then 51 — see
-2026-08-20 corrections below).
+**Row count:** 4 + 9 + 7 + 8 + 9 + 4 + 7 + 1 = **49** (was 52 before wave 4's
+retirements/discharges — see the 2026-08-21 correction below).
 
 > **Correction, 2026-08-20 (wave-3 step 9 of `#2497`).** `#2497`'s wave-3
 > plan (`docs/testing/onbox-wave3-plan.md` §§2-3) re-derived A33 and A43 —
@@ -87,42 +102,84 @@ flips these back to real links. See #2463 for the incident this avoids. -->
 > E5, E6, E9, E10 (the same no-GPU, browser-shaped sitting). §2.2 and the
 > arithmetic in §6 are corrected to match.
 
-### 2.2 Wave-3 agent-runnable (19 rows)
+> **Correction, 2026-08-21 (wave 4, #2551 step 6).** Wave 4 retired/
+> discharged/reclassified several rows, changing the register's own total
+> from 74 to **67** (see the register's own "At a glance" correction note
+> for the full per-group arithmetic). Effects on this plan's sets:
+> **A22** (real-corpus true-peak distribution, binned in
+> `onbox-sitting-qa-gate.md`) retired — operator set −1. **A27** (Kokoro/Qwen
+> install surfaces, wave-3 agent-runnable) discharged — wave-3 set −1.
+> **A43** (Cast-screen orphan link, binned in
+> `onbox-sitting-cloning-identity.md`) discharged — operator set −1.
+> **B2** (per-model analyzer keep-alive, wave-3 agent-runnable) retired
+> (its step 7 moved to Blocked) — wave-3 set −1. **E6** (old numbering —
+> ffmpeg floor, binned in `onbox-sitting-device-browser.md`) moved to
+> Blocked — operator set −1. **E8** (old numbering — golden-assembly second
+> ffmpeg build, wave-3 agent-runnable) moved to Blocked — wave-3 set −1.
+> **F1** (Android companion app, the whole blocked-on-acquisition Group F)
+> discharged by the repo owner — blocked set −1, and Group F no longer
+> exists. Net: operator 52→**49**, wave-3 18→**15**, blocked 4→**3**,
+> total 74→**67**. §2.2 and §2.3 below, and §7's totals, are corrected to
+> match; the rest of this plan (§1, §4, §5, §6) is otherwise unaffected. **Addendum, 2026-08-22:** §3's A16 narrative received a fifth-correction note documenting how PR #2588 and PR #2585 offset each other.
+>
+> **Correction, 2026-08-22 (folding in `main`'s PR #2588 and PR #2585).**
+> Two independent changes on `main`, both now folded in here. PR #2588 added
+> a new wave-3 agent-runnable row for the `speaker-qa.txt` reqHash fix's
+> one-time real-venv reinstall — sidecar-venv-only, no GPU requirement. It
+> landed on `main` as A48 (old numbering); folded into this wave's
+> contiguous renumbering it is **A45**. Wave-3 set +1. Separately, PR #2585
+> discharged and removed the Cast/analysis `characterId` drift row (this
+> plan's old B3, `#2040`) after `#2536`'s fix landed — wave-3 set −1. Net:
+> wave-3 set stays **15**, total stays **67** — the two changes offset.
+
+### 2.2 Wave-3 agent-runnable (15 rows)
 
 These need no GPU and no operator box. They are excluded from every pack above
 and are run, on a machine of the agent's choosing, by the wave-3 pass — not by a
 pack child in this chain.
 
-A27, A29, A39, A40, A41, A42, B1, B2, B3, B4, C1, C2, C3, C4, E8,
-E11, G1, G2.
+A29, A39, A40, A41, A42, A45, B1, B4, C1, C2, C3, C4, E11, G1, G2. (Named
+by the number each row carried when last binned here — A27 and E8, old
+numbering, are removed entirely, discharged/moved to Blocked this wave; see
+the 2026-08-21 correction above. The register's own current numbering
+renames several of these — e.g. old A29 is now A27 — see the register's own
+correction note for the full renumbering. A45 — old numbering A48, PR #2588
+— added by the 2026-08-22 correction above. B3 (characterId drift, #2040)
+was discharged by PR #2585 and is removed entirely.)
 
-**Row count:** 6 (group A, excluding A16, A33, A43 — moved to §2.1
-`onbox-sitting-cloning-identity.md` 2026-08-20) + 4 (B) + 4 (C) + 2
-(E8/E11 — E7 moved to §2.1 `onbox-sitting-device-browser.md` 2026-08-20)
-+ 2 (G) = **18** (was 21, then 19, before the two 2026-08-20 corrections
-above).
 
-### 2.3 Blocked-on-acquisition (4 rows, 1 pack)
+**Row count:** 6 (group A: A29, A39, A40, A41, A42, A45 — A27 discharged,
+removed) + 2 (B: B1, B4 — B2, B3 retired/discharged, removed) + 4 (C) + 1 (E11 — E8
+moved to Blocked, removed) + 2 (G) = **15** (was 16 before B3's discharge,
+18 before wave 4's three removals).
 
-These need hardware or material the operator does not yet have on the bench — a
-real Android phone (and, for one item, a CarPlay/Android Auto head unit), and
-real full-length CJK manuscripts. They get a pack so the procedure is ready the
-moment the hardware lands, but the sitting cannot be scheduled until acquisition.
+### 2.3 Blocked-on-acquisition (3 rows, 1 pack)
+
+These need hardware or material the operator does not yet have on the bench —
+real full-length CJK manuscripts. They get a pack so the procedure is ready
+the moment the hardware lands, but the sitting cannot be scheduled until
+acquisition.
 
 | Pack file | Rows | Est. min |
 |---|---|---|
-| `onbox-sitting-blocked-prerequisites.md` | F1, H1, H2, D3 | 50 (F1 unestimated) |
+| `onbox-sitting-blocked-prerequisites.md` | H1, H2, D3 | 50 |
 
-**Row count:** **4**. (Plain code span, not a link — same not-yet-written-sibling reason as §2.1's table; see the note there.)
+**Row count:** **3** (was 4 — **F1** discharged by the repo owner 2026-08-21,
+confirmed live end-to-end on a real device; Group F no longer exists in the
+register). (Plain code span, not a link — same not-yet-written-sibling reason as §2.1's table; see the note there.)
 
 ### Arithmetic
 
-**52** (operator) + **18** (wave-3) + 4 (blocked) = **74**. Every register row
-appears exactly once. (Before the 2026-08-20 corrections above, this read
-49 + 21 + 4 — A33/A43 moving from the wave-3 set to the operator set changed
-the first two terms by ∓2 each; then E7 moving the same direction changed
-them by ∓1 each, leaving the total unchanged throughout: 49+21+4 → 51+19+4
-→ 52+18+4, all **74**.)
+**49** (operator) + **15** (wave-3) + 3 (blocked) = **67**. Every register row
+appears exactly once. (Before wave 4 (the 2026-08-21 correction above), this
+read 52 + 18 + 4 = 74 — wave 4's retirements/discharges/reclassifications
+account for the full delta: −3 operator, −3 wave-3, −1 blocked, net −7,
+74 → 67. PR #2588 then added A45 · `speaker-qa.txt` reqHash fix, which is
+sidecar-venv-only with no GPU requirement, joining the wave-3 agent-runnable
+set: 49 + 15 + 3 → 49 + 16 + 3, **67 → 68**. However, PR #2585 discharged
+B3 (characterId drift, #2040), which reduced wave-3 from 16 back to **15**,
+restoring the total to **67**. The merge that brought both PRs in did not
+fully account for this, creating a temporary 68-row miscounting now corrected.)
 ---
 
 ## 3. A16 — re-derived binning and reasoning
@@ -143,7 +200,7 @@ Qwen is a GPU-resident model; "Qwen loads" means it loads into VRAM. "Analyzer
  evicted" is VRAM contention — the analyzer is reclaimed to make room for Qwen.
 That is unambiguous GPU work, identical in kind to the eviction rows in the
 VRAM-contention pack (A19 mixed Qwen+Coqui evict, A20 idle Coqui reclaimed under
-VRAM pressure, A25 `/health` through a contended eviction, A28 stranded VRAM
+VRAM pressure, A24 `/health` through a contended eviction, A26 stranded VRAM
 pool reclaimed). The audit's `no GPU` field appears to have followed the row's
 *frontend* framing ("open a cast view, see a banner") rather than what the
 owed step actually exercises on the box.
@@ -159,8 +216,14 @@ had counted them inside the operator total). A **second** correction, dated
 wave-3 to the operator set, changing this to **51 operator + 19 wave-3 + 4
 blocked = 74**. A **third** correction, same day (rework of wave-3's own
 recording, `#2497`), moved E7's rendered half the same direction, changing
-this to **52 operator + 18 wave-3 + 4 blocked = 74** — see §7 for the
-current totals.
+this to **52 operator + 18 wave-3 + 4 blocked = 74**. A **fourth**
+correction, 2026-08-21 (wave 4, `#2551` step 6), retired/discharged/
+reclassified A22, A27, A43, B2, old-E6, old-E8 and F1, changing this to
+**49 operator + 15 wave-3 + 3 blocked = 67**. A **fifth** correction,
+2026-08-22 (folding in `main`'s PR #2588 and PR #2585), added A45 to the wave-3 set
+while discharging B3 (characterId drift, #2040) — wave-3 set +1 and −1
+offsetting — keeping the total at **49 operator + 15 wave-3 + 3 blocked = 67** — see §7 for
+the current totals.
 
 > A16 is also one of the three **AMBIGUOUS** rows — its plan frontmatter says
 > `status: active` while its body says `Status: stable`. That ambiguity is about
@@ -262,21 +325,22 @@ incident** is the reason this rule exists and is named here.
 ## 7. Running totals
 
 - **Operator sittings:** 8 packs (A1's pack is several sittings inside one file).
-- **Total estimated operator minutes (runnable packs):** 110 + 155 + 155 + 155 +
-  220 + 165 + 170 = **1,130 minutes (~18.8 hours)** (was 1,060, then 1,110
-  before the 2026-08-20 corrections — A33/A43's ≈50 minutes landed in the
-  cloning-identity pack, then E7's ≈20 minutes landed in the device-browser
-  pack — see §2.1).
+- **Total estimated operator minutes (runnable packs):** 110 + 155 + 155 + 145 +
+  185 + 165 + 140 = **1,055 minutes (~17.6 hours)** (was 1,130 before wave 4 —
+  qa-gate's old-A22 (10 min), cloning-identity's old-A43 (~20 min) and A33's
+  shrink (~15 min), and device-browser's old-E6 (30 min) all dropped out —
+  see §2.1's wave-4 note).
 - **Excluded from that total:**
   - **A1** — "multi-hour" (the row's own unchanged estimate; not a single number).
-  - **F1** — not estimated in its plan; an entire untested axis (a real Android
-    device, and for one item a CarPlay/Android Auto head unit), not batchable
-    with any other group. The blocked pack carries the other three blocked rows'
+  - **F1** — discharged 2026-08-21 (repo owner, live end-to-end on a real
+    device); Group F no longer exists in the register or this plan. The
+    blocked pack now carries only the three remaining blocked rows'
     **50 minutes** (H1 + H2 + D3) for when the hardware lands.
-- **Wave-3 agent-runnable:** 18 rows (was 21, then 19 — A33/A43 moved to the
-  operator set 2026-08-20, then E7 moved the same direction the same day,
-  see §2.1/§2.2), no GPU, run off-box by the wave-3 pass — not counted in
-  operator minutes.
+- **Wave-3 agent-runnable:** 15 rows (was 18 before wave 4 — A27 discharged
+  and old-E8 moved to Blocked and B2 retired 2026-08-21, see §2.1/§2.2; then
+  15 → 16 as A45/PR #2588 joined 2026-08-22, but 16 → 15 again when B3 was
+  discharged by PR #2585 2026-08-22), no GPU, run off-box by the
+  wave-3 pass — not counted in operator minutes.
 
-**Grand reconciliation:** 52 operator + 18 wave-3 + 4 blocked = **74 rows**, the
+**Grand reconciliation:** 49 operator + 15 wave-3 + 3 blocked = **67 rows**, the
 register's full owed count, each exactly once.

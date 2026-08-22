@@ -111,6 +111,7 @@ function main() {
     cwd: ANDROID_DIR,
     stdio: 'inherit',
     shell: true,
+    windowsHide: true,
   });
   if (build.status !== 0) die(`flutter build apk failed (exit ${build.status}).`);
 
@@ -125,6 +126,7 @@ function main() {
     const r = spawnSync(`"${apksigner}" verify --print-certs "${apk}"`, {
       encoding: 'utf8',
       shell: true,
+      windowsHide: true,
     });
     const out = `${r.stdout || ''}${r.stderr || ''}`;
     const got = parseSignerSha256(out);

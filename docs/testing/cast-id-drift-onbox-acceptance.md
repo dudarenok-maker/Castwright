@@ -236,6 +236,27 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 - [x] §§7.4-7.6 run — 2026-08-20, real local-Ollama re-analysis against the live workspace book, evidence above.
 - [x] Defects filed: **not filed as a GitHub issue by this step** (docs-only wave-3 step, per the campaign rule this is reported for a fix agent to pick up cold rather than fixed or filed here) — full detail recorded in `docs/testing/onbox-wave3-results/step-5-group-b.md` and above. Mechanism: `server/src/store/merge-analysis-cast.ts:205-206,282-284` (exact-name-match fallback has no tolerance for a name gaining/losing a trailing surname token between analyzer runs).
 
+> **Re-run, 2026-08-21 (Castwright#2570, wave-4 step 7) — after #2536's fix
+> (PR #2562) merged.** A second full re-analysis of the same fixture, against
+> code including the fix, confirmed both effects at once: no NEW
+> near-duplicate pair formed, and the ONE existing duplicate pair left by the
+> 2026-08-20 run above (`brann-weir`/`brann-wire`, `berrin-weir`/`berrin-wire`)
+> was itself retroactively collapsed to a single surviving id apiece via
+> `retireCharacterId` — live evidence the fix works, not just that it didn't
+> regress further. `mairin`/`coalfall-dragon` remain unchanged. **B3's
+> criteria are now met; the row discharges.**
+>
+> A second, distinct defect surfaced in the same run, unrelated to #2536: the
+> established ASCII id `oduvan` was retired IN FAVOUR OF a freshly-minted
+> Cyrillic id `одуван` (`cast-id-history.json`: `"oduvan": "одуван"`) —
+> backwards from the direction the other three retirements in the same run
+> took (fresh id retired in favour of the established one). This is a B4
+> failure (ids must stay ASCII kebab-case) but not a B3 failure (no
+> duplicate — the character has exactly one id, just the wrong one). Filed as
+> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584) for a fix
+> agent. **B4 stays STILL OWED.** Full evidence:
+> `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`.
+
 Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
 
 ---
@@ -628,12 +649,22 @@ Expected: the auto-reconciled section names `mayrin`/`coalfall` (Заказ
 still names the untouched ids — spot-check *Exile*'s `unknown-male` as the
 negative control (a reserved-bucket source must still refuse to auto-record).
 
-Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the post-`--apply` dry run still reports *Exile*'s `unknown-male` as report-only with the reserved-fold-bucket refusal reason intact, so the negative control holds at the script level. The Cast-screen rendering of both sections has not been checked.
+Result: **RUN 2026-08-21 (wave-4 step 5e, Castwright#2563).** PASS, live in
+a real browser. *Заказ Коалфолла* Cast screen: the auto-reconciled bucket
+("2 character ids auto-reconciled — audio is current") names `mayrin`
+(Мэйрин, 8 segments) and `coalfall` (Коалфолл, 13 segments) exactly as
+expected. Negative control: *Exile*'s `unknown-male` (21 segments) stayed
+in the needs-your-decision list, unmoved. Everblaze's `lady-alina` half is
+corroborated by the real `cast-id-history.json` file read directly, not by
+a live Everblaze Cast-screen render (Everblaze was not one of the books
+copied into this pass's throwaway workspace). Full evidence:
+`docs/testing/onbox-wave4-results/step-5e-cast-screen-browser-rows.md`.
 
 ### 8.9 Outcome
 
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
-- [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
+- [x] §8.8 run — **2026-08-21** (wave-4 step 5e), PASS — see above
+- [ ] §8.7 run — still owed (needs the GPU box + a listen)
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
 - [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
 - [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)

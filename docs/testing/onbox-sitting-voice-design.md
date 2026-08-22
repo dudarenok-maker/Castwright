@@ -354,8 +354,10 @@ state and the plan-of-record files themselves on 2026-08-20 and remain owed:
   bless run, per-leaf delta measurement, or forced-Kokoro-failure run
   recorded anywhere since. STILL OWED.
 
-None of the seven rows is AMBIGUOUS (that is A2/A16/A22's queue, not this
-pack's) — every plan file's frontmatter and body `Status:` line agree with
+None of the seven rows is AMBIGUOUS (that is A2/A16's queue, not this
+pack's — the former A22 this note also used to name was retired 2026-08-21,
+see `onbox-acceptance-register.md`'s wave-4 correction note) — every plan
+file's frontmatter and body `Status:` line agree with
 each other for A4, A6, A7, A14, A15, A17 and A30, unlike A16's genuine
 frontmatter-vs-body contradiction handled in `onbox-sitting-vram-contention.md`.
 

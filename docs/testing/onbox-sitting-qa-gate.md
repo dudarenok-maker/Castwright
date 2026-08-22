@@ -6,36 +6,44 @@
 > Plan of record: [`onbox-sitting-plan.md`](onbox-sitting-plan.md) (§2.1, §5 pack
 > format), step 5 of the [#2453](https://github.com/dudarenok-maker/Castwright/issues/2453) chain.
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> A9, A10, A11, A12, A13, A21, A22, A23, A37.
+> A9, A10, A11, A12, A13, A21, A22, A35. (A22 in this pack is the row now
+> numbered A22 as of wave 4, 2026-08-21 — see the correction note below.)
 > Row plans: [`228-batch-qa-rerecords.md`](../features/228-batch-qa-rerecords.md),
 > [`176-character-splice.md`](../features/176-character-splice.md),
 > [`173-failure-taxonomy.md`](../features/173-failure-taxonomy.md),
 > [`174-audio-qa-gate.md`](../features/174-audio-qa-gate.md),
 > [`175-resource-telemetry.md`](../features/175-resource-telemetry.md),
 > [`archive/274-loudness-measurement-provenance.md`](../features/archive/274-loudness-measurement-provenance.md),
-> [`2055`](https://github.com/dudarenok-maker/Castwright/issues/2055) (A37 fix), [`2026`](https://github.com/dudarenok-maker/Castwright/issues/2026) (A37 repro source).
+> [`2055`](https://github.com/dudarenok-maker/Castwright/issues/2055) (A35 fix), [`2026`](https://github.com/dudarenok-maker/Castwright/issues/2026) (A35 repro source).
 >
-> **Running time total (recomputed):** 20 (A9) + 20 (A10) + 15 (A11) + 15 (A12) +
-> 15 (A13) + 10 (A21) + 10 (A22) + 10 (A23) + 40 (A37) = **155 minutes**,
-> matching the plan of record's §2.1 estimate for this pack.
+> **Running time total (recomputed 2026-08-21):** 20 (A9) + 20 (A10) + 15 (A11) + 15 (A12) +
+> 15 (A13) + 10 (A21) + 10 (A22) + 40 (A35) = **145 minutes** (was 155 —
+> the former A22, real-corpus true-peak distribution, was retired 2026-08-21;
+> see the correction note below).
 
 ---
+
+## Correction, 2026-08-21 (wave 4, #2551 step 6)
+
+The register's **A22** (real-corpus true-peak distribution, plan 274 §6 row 2)
+was **retired** by the repo owner: #1909 closed COMPLETED on 2026-07-31
+without the evidence this row was meant to feed, and the row's own text
+already said it was never a pass/fail gate on its own. The former Step 7
+below (which captured this row, marked AMBIGUOUS/blocked-on-a-decision) is
+**removed from this pack** — there is no decision left to make. Rows renumber
+contiguously in Group A: the old **A23** (measurement-failure path renders as
+untrusted) is now **A22**, and every reference to "A23" below has been
+updated to "A22" to match. Durable record of the retirement:
+[`archive/274-loudness-measurement-provenance.md`](../features/archive/274-loudness-measurement-provenance.md)'s
+Ship notes.
 
 ## Re-resolution note
 
 Every row below was re-resolved against live state on 2026-08-20, not taken from
 the staleness audit as given: `gh issue view`/`gh pr view` re-run for every
 issue/PR the audit cites, and each row's plan file re-read for its current
-`status:` frontmatter and Ship notes. All nine rows still match the audit's
-verdicts exactly — no row is discharged or self-contradictory. No row is
-excluded.
-
-**A22 is AMBIGUOUS** per the audit and the plan of record: whether #1909's
-"no change" closure (decided on a subjective A/B listen) retires A22's own
-`tp`-per-chapter distribution criterion, or leaves it independently owed. This
-pack does **not** resolve that — it is marked in Step 8 below as blocked on a
-decision, and its procedure is written so the operator can still capture the
-data if they choose to run it.
+`status:` frontmatter and Ship notes. All rows still match the audit's
+verdicts exactly — no row is discharged or self-contradictory.
 
 ---
 
@@ -46,15 +54,15 @@ data if they choose to run it.
       cloning/identity → this sitting, per plan §4 step 6).
 - [ ] A rendered real book with at least one chapter already through the full
       generation + QA gate pipeline (for A21's badge-agreement check) and
-      spare chapters available to re-render (for A9, A12, A23).
-- [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A37 leg, which
+      spare chapters available to re-render (for A9, A12, A22).
+- [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A35 leg, which
       additionally needs the Coqui/XTTS engine selected — see Step 9's own
       engine-swap note.
 - [ ] A second shell free for `gh`/log tailing and for triggering the
       sidecar-kill in Step 3.
 - [ ] Access to `#/admin` → "Resource trends" (A13) and to a chapter's
       Generate + Listen rows (A9, A11, A12, A21).
-- [ ] A non-English (Russian ideal) book or chapter available for A37 —
+- [ ] A non-English (Russian ideal) book or chapter available for A35 —
       required only for that step, sequence it last (Step 9).
 
 ---
@@ -146,24 +154,7 @@ any chapter where they disagree.
 
 Result: _(fill in — chapters checked, and per-chapter dBTP agreement: match/mismatch, figures)_
 
-### 7. Real-corpus true-peak distribution (A22 — AMBIGUOUS, plan 274 §6 row 2) — optional, do not resolve
-
-**Blocked on a decision:** whether #1909's 2026-07-31 closure ("current
-pipeline preferred, no code change" — decided on a subjective 4-pass A/B
-listen, not a per-chapter `tp` distribution) retires this row, or whether the
-real-corpus `tp`-vs-`QA_CLIP_TP_DB` observation A22 asks for remains
-independently owed for any future retune. This pack does not decide that.
-
-**Do (optional, if the operator chooses to capture the data anyway):** across
-the real book rendered in Steps 1–2/5, record the measured `tp` (true-peak)
-value per chapter.
-
-**Observe:** whether any chapter's `tp` approaches the `QA_CLIP_TP_DB` default
-ceiling (`-0.1` dBTP).
-
-Result: _(fill in, if run — per-chapter tp spread; "not run — left to operator decision" otherwise)_
-
-### 8. Measurement-failure path renders as untrusted (A23 — plan 274 §6 row 3) — opportunistic
+### 7. Measurement-failure path renders as untrusted (A22 — plan 274 §6 row 3) — opportunistic
 
 **Do:** Opportunistically, across the renders already produced in this
 sitting, watch for (or attempt to force, e.g. via a corrupted/short audio
@@ -179,7 +170,7 @@ outcome, but record the attempt.
 
 Result: _(fill in — failure forced or caught: yes/no; if yes, badge + report-card behaviour observed)_
 
-### 9. Catastrophic-WER override on a real Coqui language-collapse (A37 — #2055) — **engine swap, run last**
+### 8. Catastrophic-WER override on a real Coqui language-collapse (A35 — #2055) — **engine swap, run last**
 
 **Engine swap:** switch the sidecar to the Coqui/XTTS engine with ASR
 content-QA on (`SEG_ASR_ENABLED=1`, Coqui selected) — this is why this step is
@@ -214,12 +205,12 @@ Result: _(fill in — healthy-content pass false-positive count, vs. pre-#2055 b
 - Evict the Coqui/XTTS engine loaded for Step 9 if nothing later needs it
   resident.
 - Unset `SEG_ASR_ENABLED` if the next sitting does not want it on by default.
-- Clear any deliberately-degraded fixtures created for Steps 4/8 so they do
+- Clear any deliberately-degraded fixtures created for Steps 4/7 so they do
   not linger in the book's chapter list.
 - Leave the admin "Resource trends" panel as-is (read-only view, nothing to
   restore).
 
 _(Once every row above is actually run, mark the corresponding rows A9, A10,
-A11, A12, A13, A21, A23, A37 discharged in `onbox-acceptance-register.md` with
-a summary of each result — and record the A22 decision once the operator makes
-it — and remove them from the "owed" count. This pack does not do that.)_
+A11, A12, A13, A21, A22, A35 discharged in `onbox-acceptance-register.md` with
+a summary of each result, and remove them from the "owed" count. This pack
+does not do that.)_

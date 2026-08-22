@@ -13,7 +13,7 @@ owner: null
 > (2026-07-20); `=0` is the opt-out that restores the pre-admission serialized
 > path. The flip was made on the strength of the full automated admission
 > coverage (sidecar + Node) plus the on-box **synthesis-path** acceptance
-> (S1/S2/S4/S6 below). The manual **evict-under-contention** rows (6–8: cold
+> (S1/S2/S4 below). The manual **evict-under-contention** rows (6–8: cold
 > `/load` steer, `design_voice` evicts Ollama, GPU-ASR 503→evict→retry) were
 > **not** force-driven on-box — they rest on automated coverage for now. The
 > former multi-GPU `idle_evict` over-eviction gap is now fixed and covered
@@ -344,3 +344,16 @@ cold-load, Coqui load-steer) are tracked together in **#1730**.
 
 (Filled when status flips to `stable` after the on-box acceptance above passes and
 `SEG_CAPACITY_ADMISSION` is defaulted ON.)
+
+**Outcome, 2026-08-21 (Castwright#2553, wave 4 of the on-box acceptance
+register campaign, #2435).** Register row A2's rows-6-8 debt (the
+evict-under-contention walkthrough: cold-`/load` device steer, `design_voice`
+evicts Ollama, GPU-ASR 503→evict→retry) is **ruled not owed** — this plan's
+own closing sentence already frames them as "deferred by choice, not
+blocked," resting on automated coverage for now, runnable on demand. The
+repo owner confirmed this reading 2026-08-21. A2's remaining scope narrows
+to walkthrough step 9 alone (the #1730 cross-card device-steer on-box
+confirmation) — see `docs/testing/onbox-acceptance-register.md`'s A2 row.
+Separately, Castwright#2559 fixed this plan's own self-contradiction (`S6`
+had been listed as both force-driven and not, in the same paragraph) by
+removing `S6` from the force-driven list, ahead of this outcome note.

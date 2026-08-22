@@ -125,8 +125,8 @@ async function main(): Promise<void> {
      runtime back to the CPU build. Placed here, synchronously and early in
      main() — well before either listenWithAutoRebind() call below — so it can
      never land downstream of listenerCallback's enforceSingleSidecarOwner,
-     which can process.exit(). Pure fs (sitePackagesDir/dist-info reads only),
-     never throws — see install-ort.mjs's ensureOrtMarker for the guarantee. */
+     which can process.exit(). Pure fs (site-packages I/O: reads dist-info,
+     writes and deletes ORT marker), never throws — see install-ort.mjs's ensureOrtMarker for the guarantee. */
   ensureOrtMarker(resolveSidecarVenvDir(repoRoot), (m: string) => console.log(m));
 
   /* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)

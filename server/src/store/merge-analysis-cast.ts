@@ -188,8 +188,33 @@ export function overlayInterimCastForLiveView<T extends { id: string }>(
   return mergeCore(existing, fresh, false).characters;
 }
 
+/** Surname-tolerant name comparison for the name-fallback (#2536). Two
+    normalised names match when identical (unchanged exact behaviour) OR one is
+    a strict token-superset of the other by exactly one TRAILING token — same
+    leading token(s), the longer side carrying exactly one extra trailing token.
+    That is the shape of a character gaining or losing a surname token between
+    analyzer runs ("бранн уир" vs "бранн"): `normaliseForMatch` already
+    lowercase/whitespace-collapses, so `split(' ')` yields the token sequence.
+
+    Deliberately token-count-only, never general edit-distance/similarity: a
+    similarity measure could weld two genuinely different characters whose names
+    merely resemble each other, and token-count + strict-leading-prefix keeps
+    that from happening (#2536 decision — surname-aware, not fuzzy). */
+function surnameTolerantMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  const ta = a.split(' ');
+  const tb = b.split(' ');
+  const shorter = ta.length < tb.length ? ta : tb;
+  const longer = ta.length < tb.length ? tb : ta;
+  if (longer.length !== shorter.length + 1) return false;
+  for (let i = 0; i < shorter.length; i++) {
+    if (shorter[i] !== longer[i]) return false;
+  }
+  return true;
+}
+
 /** Shared core for both entry points above. `nameFallback` gates the id-drift
-    same-name match (`:281-305`-shaped block below) — when false, `old` is only
+    same-name match (`:401-437`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the
     carry-forward loop at the end unconditionally rescues every voiced prior
     row instead of treating any of them as already claimed. */
@@ -242,7 +267,7 @@ function mergeCore<T extends { id: string }>(
   for (const old of existing) {
     // Never a name-fallback candidate: the reserved narrator id has its own
     // identity mechanism (applyNarratorIdentity), not the generic name match.
-    // dedupePriorCastByName's isNarrator exclusion (this file, :534) is the
+    // dedupePriorCastByName's isNarrator exclusion (this file, :659) is the
     // same call for the same reason. Narrator rows were excluded here only
     // incidentally before this task's widening — applyNarratorIdentity seeds
     // voiceStyle/persona but never voiceUuid/voiceState, and isVoicedOrReused
@@ -275,6 +300,102 @@ function mergeCore<T extends { id: string }>(
       dropMatchCandidateByName.set(key, rows[0]);
     }
   }
+
+  /* Surname-tolerant extension of the SAME selection rule (#2536). A character
+     that gained or lost a trailing surname token between runs (prior "Бранн" →
+     fresh "Бранн Уир") drops off every EXACT key above, so `nameOf` would never
+     match it and the fresh row would mint a near-duplicate id instead of
+     resolving to its existing roster row. Run the same voice/reuse selection
+     rule again over the dropped rows that surname-tolerantly match each
+     still-unresolved fresh name. This widens only HOW a candidate key is found,
+     never the selection rule once candidates are found, and never the fresh-
+     ambiguity guard (a normalised name shared by >1 fresh row stays on the
+     id-only path). An exact match is preferred: a fresh name that already
+     resolves via dropMatchCandidateByName is skipped here entirely. An
+     ambiguous tolerant key is left OUT of the map (same as the exact path), so
+     it still routes to the id-only path rather than being guessed. */
+  const tolerantCandidateByName = new Map<string, CastRecord>();
+  for (const [key, count] of freshNameCounts) {
+    if (count !== 1) continue; // shared by >1 fresh row → id-only path, unchanged
+    if (dropMatchCandidateByName.has(key)) continue; // exact match preferred
+    const matches: CastRecord[] = [];
+    for (const rows of droppedByName.values()) {
+      for (const old of rows) {
+        if (surnameTolerantMatch(key, nameOf(old))) matches.push(old);
+      }
+    }
+    const voiced = matches.filter(isVoicedOrReused);
+    if (voiced.length === 1) {
+      tolerantCandidateByName.set(key, voiced[0]);
+    } else if (voiced.length === 0 && matches.length === 1) {
+      tolerantCandidateByName.set(key, matches[0]);
+    }
+  }
+
+  // Claim-once guard (#2536 review finding): a dropped row scanned against
+  // every unresolved fresh key can otherwise win MORE THAN ONE key — e.g. one
+  // dropped "Мэйрин" row tolerant-matching both "Мэйрин Уир" and "Мэйрин
+  // Коул" — which would push two retirements FROM the same id and silently
+  // lose the first one (retireCharacterId's supersededBy write is last-wins).
+  // A row claimed by more than one tolerant key is too risky to guess between —
+  // same philosophy as the ambiguous-candidate branches above, just at row
+  // granularity instead of key granularity. Drop the tolerant entries (fall
+  // through to id-only path); dropMatchCandidateByName entries are never removed.
+  // A second instance of the same bug: a dropped row can be BOTH the exact-match
+  // candidate for one fresh key AND the tolerant-match candidate for another
+  // (e.g. prior "Brann" / fresh "Brann" exact + fresh "Brann Weir" tolerant).
+  // Count each dropped row's id only when it would actually be CONSUMED at the
+  // call site (the four gates inside the `if (nameFallback && !old) { ... }`
+  // block checking freshNameCounts, NARRATOR_CHARACTER_IDS, and isBlockedByNotLinked).
+  // A candidate-map presence without actual consumption is a "phantom claim" that inflates counts and causes false-
+  // positive refusals: e.g. a dropped row's id is in a map under a key whose
+  // fresh row already matches by id (gate 1 below fails), or whose fresh row
+  // shares the name with >1 fresh row (gate 2), or whose pair is blocked by
+  // notLinkedTo (gate 4) — none of these would ever call the name-fallback,
+  // yet the prior raw-presence count included them. Only count pairs where all
+  // four gates at the call site would succeed: (1) fresh row has no prior by-id
+  // match, (2) fresh name count is exactly 1, (3) fresh id is not narrator,
+  // (4) neither notLinkedTo gate blocks the pair.
+  const freshByKey = new Map<string, { id: string }>();
+  for (const f of fresh) {
+    const k = nameOf(f as T & Record<string, unknown>);
+    if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
+  }
+  const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
+    notLinkedToId(cand, f.id) ||
+    notLinkedToId(f as unknown as Record<string, unknown>, cand.id);
+  const consumable = (key: string, cand: CastRecord): boolean => {
+    // Mirror the exact four gates from the call site (not-already-id-matched,
+    // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
+    if (freshNameCounts.get(key) !== 1) return false; // gate 2: must be exactly 1
+    const f = freshByKey.get(key);
+    if (!f) return false; // gate 2: must exist
+    if (byId.get(f.id)) return false; // gate 1: no prior by-id match
+    if (NARRATOR_CHARACTER_IDS.includes(f.id)) return false; // gate 3: not narrator
+    if (isBlockedByNotLinked(cand, f)) return false; // gate 4: no notLinkedTo block
+    return true;
+  };
+  const tolerantCandidateCount = new Map<string, number>();
+  for (const [key, cand] of dropMatchCandidateByName) {
+    if (consumable(key, cand)) {
+      tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
+    }
+  }
+  for (const [key, cand] of tolerantCandidateByName) {
+    if (consumable(key, cand)) {
+      tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
+    }
+  }
+  const keysToDelete: string[] = [];
+  for (const [key, cand] of tolerantCandidateByName) {
+    if ((tolerantCandidateCount.get(cand.id) ?? 0) > 1) {
+      keysToDelete.push(key);
+    }
+  }
+  for (const key of keysToDelete) {
+    tolerantCandidateByName.delete(key);
+  }
+
   const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
 
   const overlaid = fresh.map((f) => {
@@ -294,9 +415,10 @@ function mergeCore<T extends { id: string }>(
       // Safe to exclude unconditionally: the narrator id is code-seeded
       // (NARRATOR_CHARACTER_IDS), never analyzer-minted, so there is no
       // legitimate id-drift case here for the fallback to rescue, and
-      // :323-332 already carries the narrator name forward on its own path.
+      // :445-455 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
-        const cand = dropMatchCandidateByName.get(key);
+        const cand =
+          dropMatchCandidateByName.get(key) ?? tolerantCandidateByName.get(key);
         // A notLinkedTo edge between this specific pair is the user's
         // explicit "not the same person" decision — widening the candidate
         // set past isVoicedOrReused must not let the fallback silently

@@ -230,7 +230,7 @@ function remuxWithXing(mp3Path) {
       'mp3',
       tmp,
     ];
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     const chunks = [];
     child.stderr.on('data', (c) => chunks.push(c));
     child.on('error', (err) => {

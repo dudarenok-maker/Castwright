@@ -16,7 +16,8 @@
 // Pure planner (planOrtSwap) + guarded CLI, mirroring install-torch.mjs.
 //
 // Usage (the bootstrap wires this; manual form for testing):
-//   CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
+//   PowerShell: $env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node install-ort.mjs <venv-python>
+//   POSIX:      CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
 //
 // NOTE: the minimum working onnxruntime-directml version (the release carrying
 // the Kokoro ConvTranspose fix) is OWED on real AMD hardware (Wave H1). Until
@@ -197,12 +198,21 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
-// install date — this dev box validated 1.27.0, a fresh install today lands
-// 1.28.0, and nobody chose that drift on purpose. Floor-plus-cap on the MINOR
-// line rather than an exact `==` so a same-line patch release (a security fix)
-// still flows without a code change; only crossing the minor boundary needs a
-// deliberate bump of this constant (bump the runtime and this pin together,
-// once 1.28 is desk-validated — never bump one without the other).
+// install date. Re-pinned 2026-08-21 (#2534 side-chain) to the newest
+// CUDA-12-built line. Validated on this dev box: 1.26.0 constructs a working
+// CUDAExecutionProvider InferenceSession against CUDA 12.4 + cuDNN 9 (cuDNN
+// ships in the runtime venv via torch) and computes correctly. onnxruntime-gpu
+// 1.27+ moved its default build to CUDA 13.x (cublasLt64_13.dll), incompatible
+// with the shipped torch/torchaudio cu128 pin. The pin deliberately holds the
+// runtime on the last CUDA-12 line to keep the stack CUDA-12-compatible.
+// Floor-plus-cap on the MINOR line rather than an exact `==` so a same-line
+// patch release (a security fix) still flows without a code change; only
+// crossing the minor boundary needs a deliberate bump of this constant. Bump
+// the runtime and this pin together: the constraint can only move to a
+// CUDA-13-built onnxruntime-gpu line once the shipped torch/torchaudio pins in
+// requirements/nvidia-cuda.txt move to a CUDA-13 wheel (e.g., a future cu13x
+// index). Until then, the shipped venv remains CUDA-12-by-construction regardless
+// of what CUDA toolkit is installed system-wide — never bump one without the other.
 // This is the ONLY place the constraint can live: it must NOT move into
 // requirements/*.txt, because onnxruntime-gpu can never appear there AT ALL —
 // those overlays are also read on macOS (no onnxruntime-gpu wheel exists for
@@ -211,7 +221,7 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // `onnxruntime-gpu` line never lands there and aborts `pip install` on that
 // platform. The swap in this file is reached only for the nvidia profile
 // (win/linux), so pinning it here never touches the mac path.
-const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.27,<1.28';
+const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.26,<1.27';
 
 /**
  * Apply the onnxruntime-gpu version constraint to an ortPackage name for the
@@ -316,9 +326,12 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
 
     if (owner === 'swap' && realPlain.length > 0) {
       safeLog(
-        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
-          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
-          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        '[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build\'s files. ' +
+          'This corrupts pip\'s dependency resolution — a landmine for the next ' +
+          'pip operation. The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
+          'Refusing to write a marker that would certify this bad state. Repair with:\n' +
+          '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+          '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
       return 'clobbered';
     }
@@ -333,7 +346,25 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       return 'wrote';
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
-    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
+    if (deleteOrtMarkerIfOurs(sp)) {
+      if (owner === 'none') {
+        safeLog(
+          '[ort-marker] No onnxruntime runtime is installed. ' +
+            'The recorded swap marker has been removed. Kokoro cannot load at all in this state. ' +
+            'Repair with:\n' +
+            '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+            '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        );
+      } else {
+        // owner === 'plain'
+        safeLog(
+          '[ort-marker] This venv now uses only plain onnxruntime (CPU build). The recorded swap marker ' +
+            'has been removed. Kokoro will run without GPU acceleration.',
+        );
+      }
+      return 'deleted';
+    }
+    return 'noop';
   } catch (err) {
     safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';

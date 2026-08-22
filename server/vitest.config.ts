@@ -172,7 +172,21 @@ export default defineConfig({
        openapi.yaml: voice-library.test.ts pins MAX_CLONE_TRANSCRIPT_CHARS
        against it by reading the file at RUNTIME — no module-graph edge, so
        `--changed` would otherwise skip the pin on the openapi-only diff it
-       exists to catch. */
+       exists to catch.
+       scripts/** (covers server/tts-sidecar/scripts/** too — see that
+       entry's own comment), pinokio-scripts/**, e2e/global-teardown.ts,
+       launch.mjs (#2567 review round 3): the same
+       runtime-read gap as openapi.yaml, one level up. spawn-windows-hide.
+       test.ts (server/src, so IN this suite) reads every one of these trees
+       as TEXT via readFileSync to scan for a missing windowsHide — no
+       module-graph edge to any of them. `verify.yml`'s CI job runs `vitest
+       run --changed` (not this repo's own local verify-cache.mjs, which has
+       its own separate glob-based fix for the same gap — see test:server's
+       inputs in scripts/verify-cache.mjs); without these triggers a diff
+       confined to any of these trees selected ZERO tests here (measured:
+       `npx vitest related scripts/wt-new.mjs --run` → "No test files found,
+       exiting with code 0"), so CI's required check ran and reported green
+       while never re-executing the very guard the diff could have broken. */
     forceRerunTriggers: [
       '{**/package.json,**/.*/**/package.json}',
       '{**/{vitest,vite}.config.ts,**/.*/**/{vitest,vite}.config.ts}',
@@ -187,6 +201,28 @@ export default defineConfig({
          runtime-computed dynamic import that vite cannot record as a dep.) */
       '{**/vitest.config.slow.ts,**/.*/**/vitest.config.slow.ts}',
       '{**/openapi.yaml,**/.*/**/openapi.yaml}',
+      /* Covers server/tts-sidecar/scripts/** too — the pattern below already
+         matches any path with a 'scripts' segment anywhere, verified live
+         against server/tts-sidecar/scripts/install-ort.mjs at all three root
+         shapes; a separate entry for that subtree would be a dead, vacuous
+         trigger (force-rerun-triggers.test.ts's own NOT_COVERED cases exist
+         to catch exactly this kind of thing going the other way — a trigger
+         that matches nothing it claims to). NOTE: don't write the glob text
+         itself (globstar-slash) inline in a block comment — that sequence
+         closes the comment early, exactly the bug this note replaced. */
+      '{**/scripts/**,**/.*/**/scripts/**}',
+      '{**/pinokio-scripts/**,**/.*/**/pinokio-scripts/**}',
+      '{**/e2e/global-teardown.ts,**/.*/**/e2e/global-teardown.ts}',
+      '{**/launch.mjs,**/.*/**/launch.mjs}',
+      /* .gitattributes, server/tts-sidecar/requirements/** (#2588 pass-2 review):
+         venv-migration.test.ts (this suite) reads BOTH at RUNTIME — the requirements
+         files to hash reqHash oracles and assert the CRLF pin materialised (#2586),
+         .gitattributes to assert the pin RULE is actually declared. No module-graph
+         edge reaches either, so under `vitest run --changed` a diff confined to
+         either selected zero tests here before these triggers existed — the same
+         consequence spelled out above for openapi.yaml/scripts/**. */
+      '{**/.gitattributes,**/.*/**/.gitattributes}',
+      '{**/server/tts-sidecar/requirements/**,**/.*/**/server/tts-sidecar/requirements/**}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the
