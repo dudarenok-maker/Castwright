@@ -250,6 +250,11 @@ describe('validateUpgradeZip reqHash vs. resolveRequired — the two producers c
   // requirements content and asserts the two producers agree over it, so a future
   // requirements-file addition that updates only one producer fails HERE rather than
   // silently shipping.
+  //
+  // Scoped to the nvidia profile only, matching validateUpgradeZip's own scope —
+  // readUpgradeZip only ever reads nvidia-cuda.txt as the overlay (no cpu/amd-rocm
+  // branch), so this test says nothing about resolveRequired('cpu'|'amd-rocm'),
+  // which hash a different overlay file and produce a different hash by design.
   const TOP_Z = 'castwright-v1.7.0';
   const OVERLAY = '-r base.txt\nqwen-tts\nkokoro-onnx>=0.4.0,<0.5.0\n';
   const BASE = 'fastapi>=0.115,<0.116\nnumpy>=1.26,<3.0\ntransformers>=4.45,<5.0\n';

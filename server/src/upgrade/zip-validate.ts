@@ -193,11 +193,17 @@ export interface ValidatedZip extends ManifestResult {
 
 /** Read + validate a staged zip. Returns the manifest verdict plus the resolved
     requirements hash (computeReqHash over the overlay, THEN base, THEN
-    speaker-qa.txt text — byte-for-byte the same hash resolveRequired writes into
-    the venv stamp) so apply can decide whether a pip reinstall into the shared venv
-    is needed. null when any resolved file is absent (a malformed release): matches
-    the prior "don't gate on hash" behaviour rather than firing a pip install off a
-    partial read.
+    speaker-qa.txt text) so apply can decide whether a pip reinstall into the
+    shared venv is needed. null when any resolved file is absent (a malformed
+    release): matches the prior "don't gate on hash" behaviour rather than
+    firing a pip install off a partial read.
+
+    Only ever reads requirements/nvidia-cuda.txt as the overlay (readUpgradeZip's
+    `want()` has no cpu/amd-rocm branch), so this hash is byte-identical to
+    resolveRequired(sidecarDir, 'nvidia')'s — NOT to a cpu or amd-rocm profile's,
+    which hash a different overlay file and therefore differ. That asymmetry is
+    pre-existing (this fix didn't introduce or change it) — the shipped release
+    zip has always been nvidia-profile-shaped on this axis.
 
     This is a SEPARATE producer of the same hash resolveRequired computes
     (venv-migration.mjs) — the two must stay in lockstep over which files they hash
@@ -205,7 +211,8 @@ export interface ValidatedZip extends ManifestResult {
     silently reopens #2534's failure mode on whichever install path uses the
     unstaled producer (#2588 pass 3: speaker-qa.txt joined resolveRequired's hash
     without joining this one). `zip-validate.test.ts` pins the two producers equal
-    over identical file content so a future drift fails loudly. */
+    over identical file content **for the nvidia profile only** so a future drift
+    on that profile fails loudly; it says nothing about cpu/amd-rocm. */
 export async function validateUpgradeZip(
   zipPath: string,
   runningVersion: string,
@@ -227,8 +234,10 @@ export async function validateUpgradeZip(
     allowDowngrade: opts.allowDowngrade,
   });
   // Hash the resolved set in resolveRequired's order (overlay, base, speaker-qa) so
-  // ctx.reqHash is byte-identical to the venv stamp's reqHash. If any file is
-  // missing we can't reproduce that hash, so fall back to null (= no hash gate).
+  // ctx.reqHash is byte-identical to the venv stamp's reqHash for the nvidia
+  // profile (the only overlay this zip reader captures — see the doc comment
+  // above). If any file is missing we can't reproduce that hash, so fall back
+  // to null (= no hash gate).
   const reqHash =
     read.reqOverlayText !== null && read.reqBaseText !== null && read.reqSpeakerQaText !== null
       ? computeReqHash([read.reqOverlayText, read.reqBaseText, read.reqSpeakerQaText])
