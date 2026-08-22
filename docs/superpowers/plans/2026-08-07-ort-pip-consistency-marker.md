@@ -765,7 +765,7 @@ Refs #2192"
 - Consumes: Tasks 1–3.
 - Produces: `ensureOrtMarker(venvDir: string, log?: (m: string) => void): 'wrote' | 'deleted' | 'clobbered' | 'noop'`. **Never throws.**
 
-The six states from the spec, and the required outcome for each:
+The six states this plan's decision matrix distinguishes, and the required outcome for each:
 
 | Namespace owner | Real plain dist present? | Our marker present? | Outcome |
 |---|---|---|---|
