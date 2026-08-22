@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 date: 2026-08-13
 issue: 2246
 ---
@@ -692,3 +692,46 @@ confirms the mechanism reddens `BookStateJson`-typed spreads exactly as claimed.
 defect was in the *enumeration the mechanism was pointed at*, the guard's match patterns
 versus this repo's actual write idiom, and the assumption that a `409` is returnable
 from a streaming job.
+
+## Ship notes
+
+Shipped 2026-08-22 on branch `feat/server-2246-language-recurrence`, HEAD `e02d63ec`.
+
+**What shipped, against the design above:**
+- Task 1 — the write seam made real: the nine bypass writers (R4) migrated onto
+  `writeStateJsonAtomic`.
+- Task 2 — `BookStateJsonWrite` (`workspace/state-migrate.ts`): `language` required and
+  explicitly nullable on every seam write.
+- Tasks 3–5 — R1 (`routes/import.ts`, absent + `fallback: true` → `null`), R5
+  (`routes/samples.ts`), R2/R3 (`import/scan-import-folder.ts`,
+  `workspace/auto-backup.ts`) all normalise an absent language to an explicit `null`
+  instead of silently defaulting to `'en'`.
+- Task 6 — the thirteen CHANGE-list readers stop defaulting, each in its own route's
+  failure shape (pre-flight `409`, streaming `language_unset`/`unsupported_language`
+  envelope, batch `itemFailureReason`, fail-closed `eligibleTtsEngines: []`, and the
+  `series-cast-scan.ts` pure-resolver `null`); `analysis.ts`'s detached-job site (site 1)
+  gated in the POST handler before the job detaches, per its own three-point treatment.
+- Task 7 — the static guard `server/src/workspace/state-language.guard.test.ts`
+  (G1–G3), with its neutralisation proof.
+- Task 8 — `LibraryBook.languageSet`, additive per **W-1**.
+- Task 9 — `PUT /api/books/:bookId/state` accepts and validates `language`; the
+  library/settings affordance and the blocking-prompt modal.
+- Task 10 — the confirm-screen import-time signal on `languageFallback`, gated on
+  **D-1** ("Decide later" ships).
+
+**Owed acceptance (on-box):** register rows A48 (the three voice-design sites —
+`cast-design`, `qwen-voice`, `single-design` — actually refuse before a live Qwen
+sidecar connection opens on an unset book, and design normally once set) and B5 (an
+unset book hits the analysis language gate, the prompt resolves it, and a live local
+analyzer then selects the set language's own conventions table). Run sheet:
+[`docs/testing/language-recurrence-onbox-acceptance.md`](../../testing/language-recurrence-onbox-acceptance.md).
+
+**Re-confirming the inherited assumption stated at the top of this document** (that the
+seven backfilled books carry the language detection actually decided, verified by
+re-running the corpus measurement, #2246 acceptance item 1): **not verified by this
+branch.** `C:\AudiobookWorkspace` is read-only to every task here, so the corpus
+measurement could not be re-run. Nothing in this branch's own evidence (commits, tests,
+or prior task receipts) constitutes that re-run — the branch's tests exercise the
+*mechanism* (the seam, the type, the guard, the thirteen readers) against fixtures and
+mocks, not the seven live books' actual detected values. This remains an open,
+unverified assumption, carried forward rather than discharged.

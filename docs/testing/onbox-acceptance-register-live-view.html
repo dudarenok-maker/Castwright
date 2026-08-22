@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">74</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">76</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">8</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">2</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -203,8 +203,8 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>47</td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>4</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>48</td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>5</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>11</td></tr>
@@ -220,7 +220,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">47 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">48 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -908,13 +908,25 @@
       </div>
     </details>
 
+    <details class="item">
+      <summary><span class="num">A48</span><span class="iname">Voice-design language gate blocks the three design sites before a live sidecar, and doesn't false-positive when set</span><span class="risk">single 8 GB card, live Qwen sidecar</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><a href="https://github.com/dudarenok-maker/Castwright/issues/2246">#2246</a>: <code>routes/cast-design.ts:768</code>, <code>routes/qwen-voice.ts:578</code>, and <code>routes/single-design.ts:304</code> (the design's sites 6-8) each resolve a book's language and pass it into <code>sidecarLanguageName</code>, which throws for an <em>unregistered</em> language but — before this branch — silently defaulted an absent book language to <code>'en'</code>, a registry hit that disarmed that throw. <code>requireBookStateLanguage</code> now throws <code>BookLanguageUnsetError</code> before the sidecar is ever reached, and each route already sends <code>{ type: 'error', code: 'unsupported_language' }</code> then <code>res.end()</code> in its existing streaming envelope; the new code is <code>language_unset</code>. Unit/integration coverage proves the throw and the error shape against a mocked sidecar — what it cannot prove is that a real, unset book actually refuses before a live sidecar connection opens, and that a book with a language set is unaffected.</p>
+        <ul>
+          <li>Clear (or find a never-set) <code>language</code> on a real book, with the sidecar live and Qwen-capable.</li>
+          <li>Attempt voice design at <b>cast-design</b> (bulk "Design full cast"), <b>qwen-voice</b> (single character design), and <b>single-design</b> (standalone design panel) against the unset book. Each must surface <code>language_unset</code> in its own streaming envelope, and the sidecar log must show no new connection/design attempt.</li>
+          <li>Set the book's language and repeat all three — each must design normally and reach the live sidecar as usual, the control that the gate doesn't false-positive.</li>
+        </ul>
+        <p class="src">A single 8 GB GPU with a live, Qwen-capable sidecar, and a book whose <code>language</code> can be unset and reset · <a href="https://github.com/dudarenok-maker/Castwright/issues/2246">#2246</a> · criteria in <code>language-recurrence-onbox-acceptance.md</code> §Voice-design gate · short — three attempts unset, three attempts set, on one book</p>
+      </div>
+    </details>
 
 </section>
 
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">4 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">5 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 and B2 each have a
         <strong>CPU-only sub-case</strong> — the only checks that want the analyzer <em>off</em> the GPU.
@@ -987,6 +999,19 @@
         <div class="flag"><b>Wave-3 step 5, 2026-08-20 — STILL OWED, same run as B3.</b> All Cyrillic names and all-ASCII-kebab ids <b>PASSED</b>. <b>"No character gained a second id" FAILED</b> — exactly the near-duplicate pair (<code>brann-wire</code>/<code>berrin-wire</code> vs. <code>brann-weir</code>/<code>berrin-weir</code>) this row's own text names as the worst-case outcome; see B3 for the full evidence. Roster size moved 13→16, not "still 13" as anticipated. <code>docs/testing/onbox-wave3-results/step-5-group-b.md</code>. Same defect as B3, filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2536">#2536</a> (see #2536).</div>
 
         <p class="src">A real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering · <a href="https://github.com/dudarenok-maker/Castwright/issues/2313">#2313</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2317">#2317</a> · criteria in the register row itself — no separate run sheet · none beyond B3, if run together</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B5</span><span class="iname">An unset book hits the analysis language gate, the prompt resolves it, analysis selects the right conventions table</span><span class="risk">no TTS/GPU rendering</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><a href="https://github.com/dudarenok-maker/Castwright/issues/2246">#2246</a>: <code>resolveBookLanguageForManuscript</code> (<code>routes/analysis.ts:3160-3167</code>, the design's site 1) is the 25,063-line path the design gives its own three-point treatment — the gate lives in the POST handler before the analysis job detaches (a returnable <code>409</code>), the <code>located === null</code> (pre-confirm, no book on disk) branch still resolves <code>'en'</code>, and the in-loop path emits an SSE <code>error</code> with <code>code: 'language_unset'</code> via <code>classifyAnalysisFailure</code>. Unit tests cover the gate against a mocked analyzer and a mocked <code>conventionsFor</code>. What they cannot prove is the full loop on a real book: that the <code>409</code>/prompt actually surfaces and unblocks a real book, and that the analyzer then picks the SET language's own conventions table — a non-<code>'en'</code> book's dash-opened dialogue recognised as dialogue rather than falling to the narrator.</p>
+        <ul>
+          <li>Produce a book with <code>language: null</code> on disk (import with detection surrendered and "Decide later", or a bundle/restore/sample path left unset).</li>
+          <li>Start analysis through the normal UI/API path; confirm it's refused with the <code>language_unset</code> shape (<code>409</code> pre-detach), not silently analysed as English.</li>
+          <li>Resolve the language through the prompt (library "unset" badge → Book settings row, or confirm-screen re-entry), then re-start analysis against a live local analyzer.</li>
+          <li>Confirm the analyzer's conventions table matches the language just set — for a non-<code>'en'</code> language with a <code>dialogueOpen</code> marker (e.g. Russian), dash-opened dialogue lines attribute to the speaking character, not the narrator (the same distinction #2325's dialogue-collapse guard measures).</li>
+        </ul>
+        <p class="src">A real local Ollama (or Gemini) analyzer; no TTS/GPU rendering required · <a href="https://github.com/dudarenok-maker/Castwright/issues/2246">#2246</a> · criteria in <code>language-recurrence-onbox-acceptance.md</code> §Analysis language gate · short — one import left unset, one refused attempt, one prompt resolution, one real analysis run</p>
       </div>
     </details>
   </section>

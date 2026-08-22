@@ -1,7 +1,7 @@
 ---
-status: active
-shipped: null
-owner: null
+status: stable
+shipped: 2026-08-22
+owner: dudarenok-maker
 ---
 
 # 162 — Multi-language support (Russian first): the language half of fs-2
@@ -234,5 +234,17 @@ uses the committed owned translation of Chapter One,
 
 ## Ship notes
 
-(Filled when status flips to `stable`. Branch `feat/server-fs2-language-model`,
-waves W1 / W2A / W2B / W2C committed; e2e + docs in W3.)
+Shipped 2026-08-22 on branch `feat/server-2246-language-recurrence`, HEAD `e02d63ec`.
+
+**Waves shipped in this branch:**
+- Language detection and book-language attribute end-to-end (BCP-47 `language` field on `BookStateJson`, auto-detect on import, verify-on-import confirm chip).
+- Never-cross-language invariant enforced server-side (generation gate `generation.ts` with `forbidKokoroFallback` + `MissingDesignedVoiceError`).
+- Kokoro hard-lock for English-only; Qwen-forced for non-English books.
+- Russian-language support (Cyrillic detection, token estimate, language preamble for attribution model).
+- Per-sentence attribution heuristic for non-Latin scripts (`applyNonEnglishNarratorDefault`, `narrator-default.ts`).
+- `VoiceEnginePicker` Qwen-only lock for non-English books.
+- Library language filter pill (English / Русский) + cast view Qwen banner and auto-load (fe-15/16 shipped together).
+
+**Automated coverage:** server-invariant tests (`language.ts`, `generation.ts`, `analysis-language.test.ts`), frontend unit tests (`detect-language`, `confirm-metadata`, `voice-engine-picker`, `listen-header`, `library-slice`), Playwright e2e (`language-detection.spec.ts`, `revision-diff.spec.ts`, `profile-regen-preview.spec.ts`).
+
+**Owed acceptance (on-box):** live Qwen auto-load on a real Russian book's cast view; live GPU confirm that `applyNonEnglishNarratorDefault` does not misclassify genuine dialogue as narration on a real Russian manuscript.

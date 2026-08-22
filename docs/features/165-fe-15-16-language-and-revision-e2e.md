@@ -1,7 +1,7 @@
 ---
-status: active
-shipped: null
-owner: null
+status: stable
+shipped: 2026-08-22
+owner: dudarenok-maker
 ---
 
 # fe-15 + fe-16 — revision A/B player e2e + library/cast language UX
@@ -106,3 +106,9 @@ Shipped 2026-06-01 on branch `feat/frontend-fe-15-16` (PR pending). fe-15 BACKLO
 premise was stale (chapters already hydrate); the substantive work was the `cc`
 cast+chapters fixture for the preview flow. fe-16 Qwen auto-load is wired and
 unit-covered; live GPU acceptance is the only owed item.
+
+**Updated 2026-08-22 on branch `feat/server-2246-language-recurrence`** (HEAD `e02d63ec`):
+- Library language filter pill (English / Русский) integrated with the `filterBooks` composable filter.
+- Cast-view Qwen-language banner and auto-load (one-shot, ref-guarded, gated on `/api/qwen/detect` probe).
+- `cc` mock fixture verified with real `CC_CHAPTERS` + `chapterCharacters` map for preview flow.
+- `fe-16` Qwen auto-load unit coverage; live GPU acceptance remains the sole owed item.

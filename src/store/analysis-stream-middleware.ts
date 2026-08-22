@@ -181,6 +181,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            the subscribe POST) once the language is saved. A dismissed guard falls
            back to the ordinary AnalysisError halted+toast path below, so the pill
            never sits spinning on a modal the user closed. */
+        /* Defensive — this branch is unreachable as shipped: the pre-filter in
+           openHandle catches language_unset before the subscribe POST ever starts,
+           so a 200 with a detached throw that carries this code cannot occur here.
+           Kept as a defence-in-depth fallback in case the pre-filter is later
+           relaxed or bypassed. */
         if (e instanceof AnalysisError && e.code === 'language_unset') {
           const fail = (): void => {
             dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));

@@ -93,7 +93,7 @@ export async function isStandaloneBookId(targetBookId: string): Promise<boolean>
     default as before. For a book that EXISTS but never stated a language, it
     returns `null` (Task 6, #2246): two `'en'`-defaulted books must not match
     each other and silently pass the language veto the resolver exists to
-    enforce. Callers treat `null` as \"cannot prove same language → veto\". */
+    enforce. Callers treat `null` as "cannot prove same language → veto". */
 export async function resolveBookLanguageForBookId(
   targetBookId: string,
 ): Promise<string | null> {

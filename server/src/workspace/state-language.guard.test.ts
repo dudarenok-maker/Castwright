@@ -247,7 +247,7 @@ const G2_RAW_ALLOWED = new Map<string, { writes: number; marker: RegExp; why: st
     'import/scan-import-folder.ts',
     {
       writes: 1,
-      marker: /\blanguage:\s*state\.language\s*\?\?\s*null/,
+      marker: /\blanguage:\s*state\.language\s*\?\?\s*null/g,
       why: 'atomic portable-bundle importer: stages state.json via planEntry(stateJsonPath(bookDir), finalStateBuf, ...) then writeFile+rename across the whole bundle; required to restate language (language: state.language ?? null) so a language-less bundle lands as explicit null, not an untyped write.',
     },
   ],
@@ -370,7 +370,7 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
           `${rel}: allowlisted for exactly ${allowed.writes} raw state write(s), but the scan found ${raw}.`,
         );
       }
-      if (!allowed.marker.test(content)) {
+      if (countInCode(content, allowed.marker, opaque) === 0) {
         problems.push(
           `${rel}: allowlisted raw state write without its required normalisation marker (${String(allowed.marker)}) — an ` +
             `un-normalised, untyped state.json write is exactly what the seam forbids (${allowed.why}).`,
