@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { useAppDispatch } from '../store';
 import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { useLanguageGuard } from './use-language-guard';
@@ -504,5 +505,78 @@ describe('useLanguageGuard', () => {
       expect(retryBatch).toHaveBeenCalledTimes(1);
       expect(retryGeneration).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('invokes dismisses from a superseded guard when called from within a dispatch context without React purity violation (P1 regression)', () => {
+    // This test reproduces the actual failure mode: guard() called from within
+    // a dispatch/render context where React's purity requirements are stricter.
+    // The fix moves dismiss invocations outside the setState updater so side
+    // effects (Redux dispatches) don't violate React's rules.
+    const store = makeStore(null);
+    const bookA = unsetBook();
+    const bookB = { ...unsetBook(), bookId: 'b_second', manuscriptId: 'm_second' };
+    store.dispatch(librarySlice.actions.addBook(bookA));
+    store.dispatch(librarySlice.actions.addBook(bookB));
+
+    const dismissA = vi.fn();
+    const dismissB = vi.fn();
+
+    // Spy on console.error to catch React warnings about updating while rendering
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    function NestedDispatchHarness() {
+      const dispatch = useAppDispatch();
+      const { guard, modal } = useLanguageGuard();
+
+      return (
+        <>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', () => {}, dismissA)}>
+            GuardA
+          </button>
+          <button
+            onClick={() => {
+              // Simulate guard() being called from within a dispatch context.
+              // This is how it happens in real code like generation-stream-runner.ts
+              // when a handler invokes guard() from within a Redux-dispatch-driven update.
+              dispatch(((d) => {
+                guard({ bookId: 'b_second' }, '409', () => {}, dismissB);
+                return undefined;
+              }) as any);
+            }}
+          >
+            GuardBFromDispatch
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <NestedDispatchHarness />
+      </Provider>,
+    );
+
+    // Open guard for book A.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardA' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    expect(dismissA).not.toHaveBeenCalled();
+
+    // Before the user acts, call guard() from within a dispatch (simulating
+    // the real-world scenario from generation-stream-runner.ts chapter_failed handler).
+    fireEvent.click(screen.getByRole('button', { name: 'GuardBFromDispatch' }));
+
+    // The P1 fix ensures dismissA is invoked without React purity violations.
+    expect(dismissA).toHaveBeenCalledTimes(1);
+    expect(dismissB).not.toHaveBeenCalled();
+
+    // Verify no "Cannot update a component while rendering" error.
+    const criticalErrors = consoleErrorSpy.mock.calls.filter((args) => {
+      const message = String(args[0] || '');
+      return message.includes('Cannot update a component');
+    });
+    expect(criticalErrors).toHaveLength(0);
+
+    consoleErrorSpy.mockRestore();
   });
 });

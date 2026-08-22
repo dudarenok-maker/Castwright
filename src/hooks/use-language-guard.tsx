@@ -18,7 +18,7 @@
    Shape 1 of three — the pre-flight 409. The sse and batch shapes are the
    next child (#2407). */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { libraryActions } from '../store/library-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -82,11 +82,21 @@ export function useLanguageGuard(): LanguageGuardResult {
   const libraryBooks = useAppSelector((s) => s.library?.books ?? []);
 
   const [pending, setPending] = useState<PendingGuard | null>(null);
+  const pendingRef = useRef<PendingGuard | null>(null);
 
   const resolve = useCallback(
     (selector: LanguageGuardSelector) => resolveIn(libraryBooks, selector),
     [libraryBooks],
   );
+
+  /* Keep pendingRef in sync with the current pending state. This ref is used
+     in the guard() callback to determine which dismisses need to be invoked
+     when a guard is superseded. We extract dismisses BEFORE calling setPending
+     and invoke them AFTER, ensuring the side effects (Redux dispatches) happen
+     outside the setState updater, respecting React's purity requirement. */
+  useEffect(() => {
+    pendingRef.current = pending;
+  }, [pending]);
 
   /* Registered as the live bus handler so the API layer can route a
      409 language-unset straight here without a React import. When the
@@ -97,6 +107,16 @@ export function useLanguageGuard(): LanguageGuardResult {
   const guard: LanguageGuardResult['guard'] = useCallback(
     (selector, shape, onRetry, onDismiss, sseSource) => {
       if (!resolve(selector)) return false;
+
+      // P1 fix: Extract dismisses from the current pending guard BEFORE calling
+      // setState. We'll invoke them after setState returns, not inside the
+      // updater. This ensures the side effects (Redux dispatches) happen
+      // outside the setState updater function, respecting React's purity
+      // requirement for updater functions.
+      const currentPending = pendingRef.current;
+      const isDifferentSelector = currentPending && !selectorsEqual(currentPending.selector, selector);
+      const oldDismisses = isDifferentSelector ? currentPending.dismisses : [];
+
       setPending((prev) => {
         if (prev && selectorsEqual(prev.selector, selector)) {
           // Same book already pending, accumulate the retry and dismiss.
@@ -110,14 +130,8 @@ export function useLanguageGuard(): LanguageGuardResult {
             sseSource,
           };
         }
-        // Different book or no pending guard. Before replacing the pending
-        // guard, invoke all of the previous guard's dismisses so any promises
-        // parked on it can settle (e.g., via rejection). This prevents
-        // promises from hanging indefinitely when a guard is superseded.
-        if (prev) {
-          prev.dismisses.forEach((d) => d());
-        }
-        // Create new guard for the new selector.
+        // Different book or no pending guard. Create new guard for the new selector.
+        // Note: NO side effects here — the updater must be pure.
         return {
           selector,
           shape,
@@ -126,6 +140,12 @@ export function useLanguageGuard(): LanguageGuardResult {
           sseSource,
         };
       });
+
+      // Invoke the old guard's dismisses AFTER setState returns, so side effects
+      // happen outside the updater function. This allows any promises parked on
+      // the superseded guard to settle correctly (e.g., via rejection).
+      oldDismisses.forEach((d) => d());
+
       return true;
     },
     [resolve],
