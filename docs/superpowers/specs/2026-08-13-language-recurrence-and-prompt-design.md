@@ -695,7 +695,7 @@ from a streaming job.
 
 ## Ship notes
 
-Shipped 2026-08-22 on branch `feat/server-2246-language-recurrence`, HEAD `e02d63ec`.
+Shipped: TBD (filled at merge). Merge SHA: TBD. Closes #2246 (wave 5b).
 
 **What shipped, against the design above:**
 - Task 1 — the write seam made real: the nine bypass writers (R4) migrated onto

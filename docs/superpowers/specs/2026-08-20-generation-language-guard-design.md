@@ -459,7 +459,7 @@ hazard.
 
 ## Ship notes
 
-Shipped 2026-08-22 on branch `feat/server-2246-language-recurrence`, HEAD `594d7d28`.
+Shipped: TBD (filled at merge). Merge SHA: TBD. Closes #2246 (wave 5a).
 
 ## Assumption-checker passes
 

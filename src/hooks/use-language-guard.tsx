@@ -28,7 +28,11 @@ import {
   type EditBookMetaPatch,
   type LanguageGuardShape,
 } from '../modals/edit-book-meta';
-import { setLanguageGuardHandler, type LanguageGuardSelector, type SseSource } from '../lib/language-guard-bus';
+import {
+  setLanguageGuardHandler,
+  type LanguageGuardSelector,
+  type SseSource,
+} from '../lib/language-guard-bus';
 import type { LibraryBook } from '../lib/types';
 
 interface PendingGuard {
@@ -60,10 +64,7 @@ export interface LanguageGuardResult {
   modal: ReactNode;
 }
 
-function resolveIn(
-  books: LibraryBook[],
-  selector: LanguageGuardSelector,
-): LibraryBook | null {
+function resolveIn(books: LibraryBook[], selector: LanguageGuardSelector): LibraryBook | null {
   return 'bookId' in selector
     ? (books.find((b) => b.bookId === selector.bookId) ?? null)
     : (books.find((b) => b.manuscriptId === selector.manuscriptId) ?? null);
@@ -114,7 +115,8 @@ export function useLanguageGuard(): LanguageGuardResult {
       // outside the setState updater function, respecting React's purity
       // requirement for updater functions.
       const currentPending = pendingRef.current;
-      const isDifferentSelector = currentPending && !selectorsEqual(currentPending.selector, selector);
+      const isDifferentSelector =
+        currentPending && !selectorsEqual(currentPending.selector, selector);
       const oldDismisses = isDifferentSelector ? currentPending.dismisses : [];
 
       setPending((prev) => {
@@ -152,7 +154,9 @@ export function useLanguageGuard(): LanguageGuardResult {
   );
 
   useEffect(() => {
-    setLanguageGuardHandler((req) => guard(req.selector, req.shape, req.onRetry, req.onDismiss, req.sseSource));
+    setLanguageGuardHandler((req) =>
+      guard(req.selector, req.shape, req.onRetry, req.onDismiss, req.sseSource),
+    );
     return () => setLanguageGuardHandler(null);
   }, [guard]);
 
@@ -160,42 +164,45 @@ export function useLanguageGuard(): LanguageGuardResult {
 
   const book = pending ? resolve(pending.selector) : null;
 
-  const modal = book && pending ? (
-    <EditBookMetaModal
-      open
-      book={book}
-      guard={pending.shape}
-      sseSource={pending.sseSource}
-      onClose={() => {
-        const dismisses = pending.dismisses;
-        close();
-        dismisses.forEach((d) => d());
-      }}
-      onSave={async (patch: EditBookMetaPatch) => {
-        /* Guard-mode save IS the retry gate: persist the chosen language,
+  const modal =
+    book && pending ? (
+      <EditBookMetaModal
+        open
+        book={book}
+        guard={pending.shape}
+        sseSource={pending.sseSource}
+        onClose={() => {
+          const dismisses = pending.dismisses;
+          close();
+          dismisses.forEach((d) => d());
+        }}
+        onSave={async (patch: EditBookMetaPatch) => {
+          /* Guard-mode save IS the retry gate: persist the chosen language,
            refresh the library so other surfaces see the set language, and
            return the write promise — the modal calls onRetry once it settles.
            `book` (not the selector) supplies the bookId, so the manuscriptId
            pathway still persists to the book the selector resolved. */
-        await api.putBookState(book.bookId, { slice: 'state', patch });
-        const fresh = await api.getLibrary().catch(() => null);
-        if (fresh) dispatch(libraryActions.hydrate(fresh));
-      }}
-      onSaveError={(_error) => {
-        /* Task 9 — guard-mode save failed. Surface the error as a toast
+          await api.putBookState(book.bookId, { slice: 'state', patch });
+          const fresh = await api.getLibrary().catch(() => null);
+          if (fresh) dispatch(libraryActions.hydrate(fresh));
+        }}
+        onSaveError={(_error) => {
+          /* Task 9 — guard-mode save failed. Surface the error as a toast
            instead of closing the modal, so the user can retry. */
-        dispatch(notificationsActions.pushToast({
-          kind: 'error',
-          message: "Couldn't save the book's language — try again.",
-        }));
-      }}
-      onRetry={() => {
-        const retries = pending.retries;
-        close();
-        retries.forEach((r) => r());
-      }}
-    />
-  ) : null;
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: "Couldn't save the book's language — try again.",
+            }),
+          );
+        }}
+        onRetry={() => {
+          const retries = pending.retries;
+          close();
+          retries.forEach((r) => r());
+        }}
+      />
+    ) : null;
 
   return { guard, modal };
 }
