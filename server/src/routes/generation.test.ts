@@ -2320,10 +2320,9 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
        should name the first chapter even though it's excluded, preserving F9's
        guarantee that chapterId is always attached. */
     setBookLanguage(null);
-    // Exclude all chapters (assuming the test fixture has chapters 1-3)
+    // Exclude all chapters (the test fixture has chapters 1-2)
     setChapterExcluded(1, true);
     setChapterExcluded(2, true);
-    setChapterExcluded(3, true);
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
