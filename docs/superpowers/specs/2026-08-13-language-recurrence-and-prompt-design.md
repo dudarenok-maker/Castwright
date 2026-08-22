@@ -728,10 +728,20 @@ analyzer then selects the set language's own conventions table). Run sheet:
 
 **Re-confirming the inherited assumption stated at the top of this document** (that the
 seven backfilled books carry the language detection actually decided, verified by
-re-running the corpus measurement, #2246 acceptance item 1): **not verified by this
-branch.** `C:\AudiobookWorkspace` is read-only to every task here, so the corpus
-measurement could not be re-run. Nothing in this branch's own evidence (commits, tests,
-or prior task receipts) constitutes that re-run — the branch's tests exercise the
-*mechanism* (the seam, the type, the guard, the thirteen readers) against fixtures and
-mocks, not the seven live books' actual detected values. This remains an open,
-unverified assumption, carried forward rather than discharged.
+re-running the corpus measurement, #2246 acceptance item 1): **VERIFIED 2026-08-23.**
+`C:\AudiobookWorkspace` was read-only through this branch's own tasks and PR #2492's
+review passes, so the corpus measurement couldn't be re-run then; the workspace was
+writable again by the time PR #2492 merged. All eight Keeper of the Lost Cities books
+under `books/Shannon Messenger/Keeper of the Lost Cities/` (the original seven plus
+`Bonus Keefe Story`, not present in the 2026-08-11 20-book count that motivated #2246)
+now carry `language: "en"` on disk. A read-only verification pass re-ran the real
+`cacheChaptersFor`/`planBookLanguage` helpers from
+`scripts/repair-missing-book-language.mts` against each book — forcing
+`hasLanguageKey: false` so the existing value couldn't short-circuit detection —
+and compared the fresh result to what's on disk: **all eight independently re-detect
+to `'en'` via `analysis-cache` sampling, no fallback/surrender, matching the on-disk
+value exactly.** No script in the repo re-verifies an *already-set* language (the
+repair script only ever acts on a missing key), so this was a one-off, throwaway
+script, not committed — the mechanism it drove (`cacheChaptersFor`,
+`planBookLanguage`, `detectManuscriptLanguageFromChapters`) is the real, unmodified
+production code path.
