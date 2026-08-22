@@ -34,8 +34,8 @@ import type { LibraryBook } from '../lib/types';
 interface PendingGuard {
   selector: LanguageGuardSelector;
   shape: LanguageGuardShape;
-  onRetry: () => void;
-  onDismiss?: () => void;
+  retries: Array<() => void>;
+  dismisses: Array<() => void>;
   sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation';
 }
 
@@ -69,6 +69,12 @@ function resolveIn(
     : (books.find((b) => b.manuscriptId === selector.manuscriptId) ?? null);
 }
 
+function selectorsEqual(a: LanguageGuardSelector, b: LanguageGuardSelector): boolean {
+  if ('bookId' in a && 'bookId' in b) return a.bookId === b.bookId;
+  if ('manuscriptId' in a && 'manuscriptId' in b) return a.manuscriptId === b.manuscriptId;
+  return false;
+}
+
 export function useLanguageGuard(): LanguageGuardResult {
   const dispatch = useAppDispatch();
   /* Defensive read — tests routinely build configureStore() without every
@@ -85,11 +91,30 @@ export function useLanguageGuard(): LanguageGuardResult {
   /* Registered as the live bus handler so the API layer can route a
      409 language-unset straight here without a React import. When the
      selector matches no library book the request is refused (false) so the
-     caller's ordinary error path fires. */
+     caller's ordinary error path fires. When a guard is already pending for
+     the same book (e.g., a multi-chapter splice batch), accumulate the retry
+     instead of replacing it — all retries fire once the language is set. */
   const guard: LanguageGuardResult['guard'] = useCallback(
     (selector, shape, onRetry, onDismiss, sseSource) => {
       if (!resolve(selector)) return false;
-      setPending({ selector, shape, onRetry, onDismiss, sseSource });
+      setPending((prev) => {
+        if (prev && selectorsEqual(prev.selector, selector)) {
+          // Same book already pending, accumulate the retry and dismiss.
+          return {
+            ...prev,
+            retries: [...prev.retries, onRetry],
+            dismisses: onDismiss ? [...prev.dismisses, onDismiss] : prev.dismisses,
+          };
+        }
+        // Different book or no pending guard, create new.
+        return {
+          selector,
+          shape,
+          retries: [onRetry],
+          dismisses: onDismiss ? [onDismiss] : [],
+          sseSource,
+        };
+      });
       return true;
     },
     [resolve],
@@ -111,9 +136,9 @@ export function useLanguageGuard(): LanguageGuardResult {
       guard={pending.shape}
       sseSource={pending.sseSource}
       onClose={() => {
-        const dismiss = pending.onDismiss;
+        const dismisses = pending.dismisses;
         close();
-        dismiss?.();
+        dismisses.forEach((d) => d());
       }}
       onSave={async (patch: EditBookMetaPatch) => {
         /* Guard-mode save IS the retry gate: persist the chosen language,
@@ -134,9 +159,9 @@ export function useLanguageGuard(): LanguageGuardResult {
         }));
       }}
       onRetry={() => {
-        const retry = pending.onRetry;
+        const retries = pending.retries;
         close();
-        retry();
+        retries.forEach((r) => r());
       }}
     />
   ) : null;

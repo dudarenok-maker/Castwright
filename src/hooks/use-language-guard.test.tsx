@@ -271,4 +271,54 @@ describe('useLanguageGuard', () => {
     expect(mockedApi.putBookState).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
   });
+
+  it('accumulates and fires all retries when a multi-chapter batch guards multiple times (F8 regression)', async () => {
+    const store = makeStore(unsetBook());
+    const retry1 = vi.fn();
+    const retry2 = vi.fn();
+    const retry3 = vi.fn();
+
+    function MultiGuardHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', retry1)}>Retry1</button>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', retry2)}>Retry2</button>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', retry3)}>Retry3</button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <MultiGuardHarness />
+      </Provider>,
+    );
+
+    // Simulate a multi-chapter batch: 3 chapters fail with 409, each triggering guard().
+    fireEvent.click(screen.getByRole('button', { name: 'Retry1' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Second chapter fails while guard is already open.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry2' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Third chapter fails while guard is still open.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry3' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Set the language and save.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    // All three retries should fire.
+    await waitFor(() => {
+      expect(retry1).toHaveBeenCalledTimes(1);
+      expect(retry2).toHaveBeenCalledTimes(1);
+      expect(retry3).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
 });
