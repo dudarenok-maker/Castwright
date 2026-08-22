@@ -553,7 +553,7 @@ Kokoro), so **both release-notes documents move in the PR**.
 
 ## Review findings
 
-Three Premium-tier rounds. Rounds 1 and 2 attacked a per-site architecture (chokepoint,
+Five Premium-tier rounds. Rounds 1 and 2 attacked a per-site architecture (chokepoint,
 `--no-deps`, quiesce, destructive boot repair) and found nine and sixteen defects
 respectively — round 2 briefed to attack round 1's fixes, which it found had broken each
 other. That architecture was abandoned rather than patched a third time; §Approach is what

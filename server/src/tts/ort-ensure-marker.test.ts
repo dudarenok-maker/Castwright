@@ -109,7 +109,7 @@ describe('ensureOrtMarker', () => {
     // in the second sentence). A revert of 07e94d22 would restore that clause, failing this check.
     expect(message).not.toContain('(which own the namespace)');
 
-    // Minimum length guard: the full message is ~444 chars; a gutted stub is ~40 chars.
+    // Minimum length guard: the full message is ~578 chars; a gutted stub is ~40 chars.
     // This catches attempts to reduce the message to just the structural tokens.
     expect(message.length).toBeGreaterThan(300);
 
@@ -341,10 +341,10 @@ describe('ensureOrtMarker', () => {
     // The safeLog wrapper inside ensureOrtMarker must catch and swallow throwing logs to
     // prevent a throwing log from defeating the "never throws" guarantee that ensureOrtMarker's
     // callers (server startup) depend on. This guarantee is load-bearing ONLY at the one
-    // catch-block error-handler site (install-ort.mjs:366), which sits outside ensureOrtMarker's
+    // catch-block error-handler site (install-ort.mjs:369), which sits outside ensureOrtMarker's
     // own outer try/catch; the other four call sites (clobbered, wrote, plain-deletion,
-    // none-deletion) sit INSIDE the outer try/catch (:320/:365), so those branches never throw
-    // regardless of whether safeLog itself throws. The return-value assertion below (:296) is
+    // none-deletion) sit INSIDE the outer try/catch (:321/:368), so those branches never throw
+    // regardless of whether safeLog itself throws. The return-value assertion below is
     // what catches a safeLog regression at all five sites.
     const { root, sp } = setup();
     const throwingLog = () => {

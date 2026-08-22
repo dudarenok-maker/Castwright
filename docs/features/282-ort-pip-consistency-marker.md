@@ -96,22 +96,22 @@ Nothing else on disk changes.
    uninstall.`, exit 0) rather than deleting real files out from under the GPU build.
 3. **Delete runs before the first pip call in a flow; write runs last, after the swap
    steps succeed.** `bootstrap-venv.mjs`'s `installForProfile` calls
-   `applyOrtMarkerDelete` at function entry (line 162) — before the AMD torch
+   `applyOrtMarkerDelete` at function entry (line 169) — before the AMD torch
    pre-install, the AMD→CPU fallback (`cpu.txt` carries an **explicit** `onnxruntime`
    line the fallback needs to actually install), and both overlay installs — then
    `applyOrtMarkerWrite` as the last statement inside the `if (ort.action === 'swap')`
-   block (line 230). `upgrade/apply.ts`'s `pipInstall` mirrors this at lines 276 (delete,
+   block (line 237). `upgrade/apply.ts`'s `pipInstall` mirrors this at lines 276 (delete,
    before the first `run(...)`) and 295 (write, the function's last statement). A stale
    marker present at swap-failure or AMD-fallback time makes pip silently skip a real
    install it needs to make.
 4. **Delete also runs on the swap-failure path, before re-throwing** — both consumers
-   (`bootstrap-venv.mjs:226`, `apply.ts:291`) — so a failed swap never leaves a marker
+   (`bootstrap-venv.mjs:233`, `apply.ts:291`) — so a failed swap never leaves a marker
    asserting a runtime that was just uninstalled.
 5. **Write is gated on `plan.marker.action === 'write'`.** The skip variant (cpu/amd/
    apple) carries no `ortPackage`; an ungated write there is a crash, not a silent
    corruption — see "Corrections vs. the design doc's original prose" below.
 6. **`ensureOrtMarker` never uninstalls, downloads, or imports onnxruntime**, and never
-   throws — it runs in `server/src/index.ts`'s `main()`, before `app.listen` (line 128),
+   throws — it runs in `server/src/index.ts`'s `main()`, before `app.listen` (line 130),
    ahead of `enforceSingleSidecarOwner`'s possible `process.exit`.
 7. **A clobbered venv (real plain `onnxruntime-*.dist-info` coexisting with GPU build's files
    owning the namespace) is refused, never repaired by writing over it.** Writing a marker
@@ -198,12 +198,12 @@ but a factual correction to errors in the design doc's own prose.
    from the venv python the function already holds rather than from `venvDir`, so a
    null can never make the delete silently no-op." The shipped code does the
    opposite: `bootstrap-venv.mjs`'s `installForProfile` gates all three marker
-   operations on `if (venvDir) …` (`bootstrap-venv.mjs:168,232,236`), so a null
+   operations on `if (venvDir) …` (`bootstrap-venv.mjs:169,233,237`), so a null
    `venvDir` DOES silently no-op the delete-at-entry, the failure-path delete, and
    the write — exactly the behaviour the spec claims cannot happen. This is a real
    divergence, not a "more sensible" one like the two above, but its exposure is
    test-only: `installForProfile`'s one production caller (`runInstall`,
-   `bootstrap-venv.mjs:327`) always passes a real `venvDir`, so a null only ever
+   `bootstrap-venv.mjs:334`) always passes a real `venvDir`, so a null only ever
    reaches this code from a test harness deliberately omitting it.
 4. **The design doc's original prose contained multiple backwards claims about GPU/CPU
    file ownership in the clobbered state.** It mislabeled the clobbered box as having
@@ -211,9 +211,9 @@ but a factual correction to errors in the design doc's own prose.
    `owner === 'swap'` (GPU files own the namespace) with a stray real plain dist-info
    also present, not the reverse. This factual correction was applied across multiple
    sites in the design doc itself where the ownership direction was misstated: the
-   table row (line 224), the acceptance criterion 6 prose (line 510), and the core
+   table row (line 224), the acceptance criterion 6 prose (line 512), and the core
    consequence description (lines 252–258). A fourth historical record of the same error
-   appears in the Round 4 findings table (line 581), retained as a dated record and
+   appears in the Round 4 findings table (line 583), retained as a dated record and
    annotated as superseded in this PR. The spec's surrounding logic and mechanism remain
    sound; only the ownership direction was backwards. A separate, independently-sourced
    error sat in THIS plan document's own original invariant 7 above (not the design doc):
@@ -285,11 +285,11 @@ Node-side `.mjs`/TypeScript); e2e (no router/redux/layout seam).
 The design doc's §On-box acceptance names six criteria; one (self-heal on an
 existing box) was run end-to-end on real hardware during implementation and is
 **discharged**, not owed. The other five, plus one addition the spec doesn't name,
-are owed — six rows total. See `docs/testing/ort-marker-onbox-acceptance.md` for
+are owed — five owed rows, plus one Blocked entry. See `docs/testing/ort-marker-onbox-acceptance.md` for
 the full evidence and per-criterion procedures, and
 `docs/testing/onbox-acceptance-register.md` for the register rows: a fresh NVIDIA
 bootstrap (A39), the reported bug itself — in-app Qwen3 install (A40), an AMD box
-(Blocked — no hardware), a clobbered venv (A41), the Pinokio update path (E9), and
+(Blocked, not owed), a clobbered venv (A41), the Pinokio update path (E9), and
 the in-app upgrade path (A42, an addition not in the spec's own six — Task 8 wired
 it and nothing proves it on real hardware). Apple Silicon is **not** a separate
 criterion: it takes the same skip/delete branch as cpu and amd, already covered by
