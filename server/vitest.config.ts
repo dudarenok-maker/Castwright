@@ -214,6 +214,15 @@ export default defineConfig({
       '{**/pinokio-scripts/**,**/.*/**/pinokio-scripts/**}',
       '{**/e2e/global-teardown.ts,**/.*/**/e2e/global-teardown.ts}',
       '{**/launch.mjs,**/.*/**/launch.mjs}',
+      /* .gitattributes, server/tts-sidecar/requirements/** (#2588 pass-2 review):
+         venv-migration.test.ts (this suite) reads BOTH at RUNTIME — the requirements
+         files to hash reqHash oracles and assert the CRLF pin materialised (#2586),
+         .gitattributes to assert the pin RULE is actually declared. No module-graph
+         edge reaches either, so under `vitest run --changed` a diff confined to
+         either selected zero tests here before these triggers existed — the same
+         consequence spelled out above for openapi.yaml/scripts/**. */
+      '{**/.gitattributes,**/.*/**/.gitattributes}',
+      '{**/server/tts-sidecar/requirements/**,**/.*/**/server/tts-sidecar/requirements/**}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the
