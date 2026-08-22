@@ -808,10 +808,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        already are: always errorCode 'language-unset' + chapterId (so the
        frontend's language-guard detection can reach this path), then an idle
        tick before closing. F9: chapterId is always attached — either the sole
-       requested chapter or the first chapter in the book for whole-book requests. */
+       requested chapter or the first chapter in the book for whole-book requests.
+       G7: skip excluded chapters when picking the guard chapterId for whole-book
+       requests, matching the exclusion-filtering logic used elsewhere in this
+       route (e.g., targetChapters filter). If all chapters are excluded, fall
+       back to undefined (omitting chapterId from the response), which matches
+       the pre-F9 behaviour. */
     const guardChapterId = (requestedIds && requestedIds.length > 0)
       ? requestedIds[0]
-      : state.chapters[0]?.id;
+      : state.chapters.find((c) => !c.excluded)?.id;
     send({
       type: 'chapter_failed',
       errorReason: (e as Error).message,

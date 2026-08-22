@@ -2249,6 +2249,17 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
     fsModule.writeFileSync(statePath(), JSON.stringify(state));
   }
 
+  function setChapterExcluded(chapterId: number, excluded: boolean): void {
+    const state = JSON.parse(fsModule.readFileSync(statePath(), 'utf8')) as {
+      chapters?: Array<{ id: number; excluded?: boolean }>;
+    };
+    const chapter = state.chapters?.find((c) => c.id === chapterId);
+    if (chapter) {
+      chapter.excluded = excluded;
+      fsModule.writeFileSync(statePath(), JSON.stringify(state));
+    }
+  }
+
   it('emits errorCode + chapterId for an unset-language book, single requested chapter', async () => {
     setBookLanguage(null);
     const res = await request(app)
@@ -2280,6 +2291,25 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
        guard-relevant event (requires chapterId != null). */
     expect(ticks[0].chapterId).toBe(1); // first chapter in the book
     expect(ticks[0].errorCode).toBe('language-unset');
+  });
+
+  it('G7: skips excluded chapters when picking guard chapterId for unset-language whole-book request', async () => {
+    /* G7 regression test: ensure guardChapterId picks the first NON-excluded
+       chapter when the book's first chapter is excluded. Without this fix,
+       the guard could name an excluded chapter that the rest of the system
+       treats as not-really-there. */
+    setBookLanguage(null);
+    setChapterExcluded(1, true); // exclude chapter 1
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('language-unset');
+    /* G7 fix: chapterId should be 2 (the first non-excluded chapter),
+       not 1 (which is excluded). */
+    expect(ticks[0].chapterId).toBe(2);
   });
 
   it('a book with a language set is unaffected', async () => {
