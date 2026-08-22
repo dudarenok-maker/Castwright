@@ -14,6 +14,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { librarySlice } from '../store/library-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { useLanguageGuard } from './use-language-guard';
 import { emitLanguageGuard, type LanguageGuardSelector } from '../lib/language-guard-bus';
 import { api } from '../lib/api';
@@ -51,7 +52,10 @@ function unsetBook(): LibraryBook {
 
 function makeStore(book: LibraryBook | null) {
   const store = configureStore({
-    reducer: { library: librarySlice.reducer },
+    reducer: {
+      library: librarySlice.reducer,
+      notifications: notificationsSlice.reducer,
+    },
   });
   if (book) store.dispatch(librarySlice.actions.addBook(book));
   return store;
@@ -217,5 +221,54 @@ describe('useLanguageGuard', () => {
     });
     expect(accepted).toBe(true);
     expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+  });
+
+  it('surfaces a failed guard-mode save as an error toast, not a dismiss (F1 regression)', async () => {
+    const store = makeStore(unsetBook());
+    const retry = vi.fn();
+    const onDismiss = vi.fn();
+    const saveError = new Error('Network error: 500');
+    vi.mocked(api.putBookState).mockRejectedValue(saveError);
+
+    render(
+      <Provider store={store}>
+        <Harness onProceed={retry} onDismiss={onDismiss} />
+      </Provider>,
+    );
+
+    // Trigger the guard: modal opens in guard mode.
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Choose a language and click Save.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'ru' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    // Wait for the save attempt to complete.
+    await waitFor(() => expect(mockedApi.putBookState).toHaveBeenCalledTimes(1));
+
+    // The modal should still be open (not closed by onClose).
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // onDismiss should NOT have been called (this is the bug we're fixing).
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    // An error toast should have been shown.
+    const toasts = (store.getState() as any).notifications?.toasts ?? [];
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({
+      kind: 'error',
+      message: expect.stringContaining("Couldn't save the book's language"),
+    });
+
+    // The user should be able to retry by clicking Save again.
+    vi.mocked(api.putBookState).mockResolvedValue(undefined);
+    vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(mockedApi.putBookState).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
   });
 });

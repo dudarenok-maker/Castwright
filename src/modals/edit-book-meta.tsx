@@ -58,6 +58,9 @@ interface Props {
   /** Task 9 — the original action that failed because the language was unset.
       Called after the language patch is saved in guard mode. */
   onRetry?: () => void;
+  /** Task 9 — when set, called if the language save fails in guard mode,
+      allowing the caller to surface the error without closing the modal. */
+  onSaveError?: (error: Error) => void;
 }
 
 /* fs-2 — human labels for the language selector options. Mirrors
@@ -98,7 +101,7 @@ function parseTagInput(raw: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry }: Props) {
+export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry, onSaveError }: Props) {
   /* Seed every field from the book the menu was opened against. State is
      keyed by `book.bookId` (via the `key` prop on the caller) so flipping
      between two cards re-mounts the form rather than carrying over stale
@@ -470,10 +473,20 @@ export function EditBookMetaModal({ open, book, onClose, onSave, guard, onRetry 
                      language had failed. onSave returns the caller's write
                      promise, so the retry fires only once the PATCH has been
                      handed off (and its promise settles when the write is
-                     flushed). */
+                     flushed). If the save fails, call onSaveError (if provided)
+                     to surface the error without closing the modal, allowing
+                     the user to retry. */
                   const write = onSave(patch);
                   if (guard && onRetry) {
-                    Promise.resolve(write).then(() => onRetry()).catch(() => onClose());
+                    Promise.resolve(write)
+                      .then(() => onRetry())
+                      .catch((err) => {
+                        if (onSaveError) {
+                          onSaveError(err instanceof Error ? err : new Error(String(err)));
+                        } else {
+                          onClose();
+                        }
+                      });
                   }
                 }}
                 disabled={!canSave}

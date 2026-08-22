@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { libraryActions } from '../store/library-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import {
   EditBookMetaModal,
@@ -120,6 +121,14 @@ export function useLanguageGuard(): LanguageGuardResult {
         await api.putBookState(book.bookId, { slice: 'state', patch });
         const fresh = await api.getLibrary().catch(() => null);
         if (fresh) dispatch(libraryActions.hydrate(fresh));
+      }}
+      onSaveError={(error) => {
+        /* Task 9 — guard-mode save failed. Surface the error as a toast
+           instead of closing the modal, so the user can retry. */
+        dispatch(notificationsActions.pushToast({
+          kind: 'error',
+          message: "Couldn't save the book's language — try again.",
+        }));
       }}
       onRetry={() => {
         const retry = pending.onRetry;
