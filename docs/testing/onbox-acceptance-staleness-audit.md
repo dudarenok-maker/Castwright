@@ -693,7 +693,7 @@ number by being unable to check is worse than no instrument at all.
 ### A16 · fe-16 Qwen auto-load on a Russian book (plan 165)
 
 - **Verdict:** AMBIGUOUS
-- **Evidence:** `docs/features/165-fe-15-16-language-and-revision-e2e.md`
+- **Evidence:** `docs/features/archive/165-fe-15-16-language-and-revision-e2e.md`
   frontmatter `status: active` (`:2`) directly contradicts its own body
   `> Status: stable (shipped together; manual acceptance owed only for the
   live Qwen auto-load)` (`:9`) — confirmed by direct read, not just the
@@ -702,7 +702,7 @@ number by being unable to check is worse than no instrument at all.
   wired and unit-covered; live GPU acceptance is the only owed item." No PR
   number is filled in anywhere in the file — "(PR pending)" is still literal
   text, not a placeholder later replaced. `git log --oneline --
-  docs/features/165-fe-15-16-language-and-revision-e2e.md` shows the plan
+  docs/features/archive/165-fe-15-16-language-and-revision-e2e.md` shows the plan
   was renumbered from 163 (`6ed2fb8d`, "renumber fe-15/16 plan 163 -> 165")
   but no subsequent commit revisits acceptance state or fills the PR number.
   Automated coverage (`src/views/cast.test.tsx`, cited `:76`) asserts "Qwen
@@ -1125,9 +1125,9 @@ number by being unable to check is worse than no instrument at all.
 ### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 - **Verdict:** STILL OWED
-- **Evidence:** `gh issue view 2192` → `{"closedAt":"2026-08-08T02:55:52Z","state":"CLOSED"}` — the fix landed. Plan 282's frontmatter reads `status: active` (`docs/features/282-ort-pip-consistency-marker.md:2`), not `stable`, and its Ship notes section (`:310-312`) reads only "(Filled in when status flips to `stable`.)" — never filled in. Run sheet `docs/testing/ort-marker-onbox-acceptance.md` §8.3 (`:300-307`) has every `Result:` line unfilled (`Log line observed`, `pip check after boot`, `Repair command output`, `pip check after repair`, `Kokoro execution provider after repair`, `Run by`/`Date` all `_(fill in)_`) — no on-box run recorded. `server/src/tts/ort-ensure-marker.test.ts` exists and, per the row's own text (register.md:2263-2270), pins the refuse-and-log branch against synthetic fixtures only, never a real clobbered venv where the GPU dist-info survives while CPU files sit on disk.
-- **What changed since the row was written:** Nothing found.
-- **Remains owed:** Manufacture a real clobbered venv (`pip install --force-reinstall onnxruntime` over an existing `onnxruntime-gpu` install), boot the server and confirm `ensureOrtMarker` returns `'clobbered'` with the exact remedy command logged and no marker written over the real distribution, then run the remedy command and confirm the box is actually repaired (`pip check` clean, Kokoro reports `CUDAExecutionProvider`).
+- **Evidence:** `gh issue view 2192` → `{"closedAt":"2026-08-08T02:55:52Z","state":"CLOSED"}` — the fix landed. Plan 282's frontmatter reads `status: active` (`docs/features/282-ort-pip-consistency-marker.md:2`), not `stable`, and its Ship notes section (`:310-312`) reads only "(Filled in when status flips to `stable`.)" — never filled in. Run sheet `docs/testing/ort-marker-onbox-acceptance.md` §8.3 has every `Result:` line unfilled (`Log line observed`, `pip check after boot`, `Repair command output`, `pip check after repair`, `Kokoro execution provider after repair`, `Run by`/`Date` all `_(fill in)_`) — no on-box run recorded. `server/src/tts/ort-ensure-marker.test.ts` exists and, per the row's own text (register.md), pins the refuse-and-log branch against synthetic fixtures only, never a real clobbered venv where the GPU dist-info survives while CPU files sit on disk. *(This audit's own description of the clobbered state has the GPU/CPU direction backwards — see "What changed" below; left as originally written here rather than silently corrected, since this section is a point-in-time snapshot of what was known/believed when the audit ran, not a living description.)*
+- **What changed since the row was written:** PR #2578 corrected the row's own manufacture recipe (this audit's original wording above, and the design doc it was drawing on, described a GPU-then-plain install order and a CPU-owned "clobbered" state — both backwards; the code's actual `'clobbered'` return fires when the GPU build's files own the namespace and a real plain dist-info coexists) and pinned the two packages to different versions so a wrongly-written marker is directory-listing visible.
+- **Remains owed:** Manufacture a real clobbered venv per the corrected recipe (install plain `onnxruntime` first, then `--force-reinstall --no-deps` `onnxruntime-gpu` over it, at different pinned versions — see `docs/testing/ort-marker-onbox-acceptance.md` §8.1), boot the server and confirm `ensureOrtMarker` returns `'clobbered'` with the exact remedy command logged and no marker written over the real distribution, then run the remedy command and confirm the box is actually repaired (`pip check` clean, Kokoro reports `CUDAExecutionProvider`).
 - **Decision owed:** n/a
 - **Hardware still required:** sidecar venv, no GPU
 - **Est. box time:** 10

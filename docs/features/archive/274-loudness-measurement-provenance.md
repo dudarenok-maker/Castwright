@@ -993,3 +993,20 @@ same commit, covered by a paired test.
 
 On-box acceptance rows A21–A23 recorded in
 `docs/testing/onbox-acceptance-register.md` per §6 — none block this merge.
+
+**Outcome, 2026-08-21 (Castwright#2553, wave 4 of the on-box acceptance
+register campaign, #2435).** Register row A22 (§6 row 2 — "real-corpus
+true-peak distribution": across a real book render, record the measured
+`tp` spread per chapter and confirm whether §1.8's "pinned just above the
+ceiling" pattern holds on real narrated material) is **retired from the
+register.** [#1909](https://github.com/dudarenok-maker/Castwright/issues/1909)
+closed **COMPLETED** on 2026-07-31 ("current pipeline preferred, no code
+change") without the per-chapter `tp`-distribution evidence A22 was meant
+to feed — the closure was decided on a subjective 4-pass A/B listen
+instead. A22's own row text already said plainly it was "the evidence
+#1909's eventual retune needs, not a pass/fail gate on its own" — so with
+#1909 closed and no retune pending, there is nothing left for A22 to feed.
+The repo owner ruled A22 retired on 2026-08-21. This note is the durable
+record for a future reader looking for A22; the row itself has been
+deleted from the register (Group A: 47 → 44 rows this wave, alongside two
+other discharges).

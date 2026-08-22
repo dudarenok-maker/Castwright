@@ -106,8 +106,12 @@ export function overlayFileForProfile(profile) {
  * bootstrap-venv.mjs (source/dev install) and apply.ts (self-upgrade) so the two
  * paths can never disagree about what "current" means (S3). The overlay is
  * selected by `profile` (Phase 2 — the caller resolves the effective profile via
- * resolveInstallProfile); `reqHash` hashes the overlay text THEN the base text
- * (the fixed order computeReqHash documents). Defaults to 'nvidia' so a caller
+ * resolveInstallProfile); `reqHash` hashes the overlay text, THEN the base text,
+ * THEN speaker-qa.txt (the fixed order computeReqHash documents). speaker-qa.txt
+ * joined the hash in #2588 pass-2 review (pre-existing gap, same failure class as
+ * #2534): all three overlays `-r speaker-qa.txt`, so it is pip-installed but was
+ * invisible to reqHash — a version bump there left reqHash unchanged and
+ * decideVenvAction wrongly reported 'noop'. Defaults to 'nvidia' so a caller
  * that passes nothing reproduces today's behaviour exactly.
  * @param {string} sidecarDir  Absolute path to server/tts-sidecar.
  * @param {string} [profile='nvidia']  Effective install profile.
@@ -120,5 +124,6 @@ export function resolveRequired(sidecarDir, profile = 'nvidia') {
     'utf8',
   );
   const base = readFileSync(join(sidecarDir, 'requirements', 'base.txt'), 'utf8');
-  return { pythonTag, profile, reqHash: computeReqHash([overlay, base]) };
+  const speakerQa = readFileSync(join(sidecarDir, 'requirements', 'speaker-qa.txt'), 'utf8');
+  return { pythonTag, profile, reqHash: computeReqHash([overlay, base, speakerQa]) };
 }

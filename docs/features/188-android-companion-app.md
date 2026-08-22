@@ -907,3 +907,18 @@ acceptance pass** on the user's real GPU server. Parked follow-ups: `srv-33`, `a
   tagline _"Any book, fully cast."_ to the pairing + empty-home surfaces, plus a
   `lib/` source-scan guard against retired copy) shipped on
   `feat/app-companion-brand-finish`. Closes #632, #706.
+
+**Outcome, 2026-08-21 (Castwright#2553, wave 4 of the on-box acceptance
+register campaign, #2435).** The register's F1 row (Android companion app —
+v1 live-device acceptance, the "batched live-device/head-unit acceptance
+pass" named above) is **DISCHARGED and the register's whole Group F is
+removed.** Confirmed by the repo owner: live end-to-end use on a real
+device covering all three parts F1 named — the **v1 core scenario** (QR
+pair → browse → download 2 books → offline playback with background/
+lock-screen/Bluetooth controls and a sleep timer → switch books each
+resuming its own position → regenerate a chapter → auto-sync + push
+listening position back), **app-9** (Android Auto/CarPlay media-browse and
+playback from a real head unit), and **app-10** (stream an undownloaded
+chapter over LAN) — confirmed 2026-08-21. This is a live-device end-to-end
+run, not a test pass. See `docs/testing/onbox-acceptance-register.md`'s
+wave-4 correction note for the register-side accounting.

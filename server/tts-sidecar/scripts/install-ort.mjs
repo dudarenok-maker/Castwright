@@ -16,7 +16,8 @@
 // Pure planner (planOrtSwap) + guarded CLI, mirroring install-torch.mjs.
 //
 // Usage (the bootstrap wires this; manual form for testing):
-//   CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
+//   PowerShell: $env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node install-ort.mjs <venv-python>
+//   POSIX:      CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
 //
 // NOTE: the minimum working onnxruntime-directml version (the release carrying
 // the Kokoro ConvTranspose fix) is OWED on real AMD hardware (Wave H1). Until
@@ -325,9 +326,12 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
 
     if (owner === 'swap' && realPlain.length > 0) {
       safeLog(
-        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
-          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
-          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        '[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build\'s files. ' +
+          'This corrupts pip\'s dependency resolution — a landmine for the next ' +
+          'pip operation. The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
+          'Refusing to write a marker that would certify this bad state. Repair with:\n' +
+          '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+          '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
       return 'clobbered';
     }
@@ -342,7 +346,25 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       return 'wrote';
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
-    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
+    if (deleteOrtMarkerIfOurs(sp)) {
+      if (owner === 'none') {
+        safeLog(
+          '[ort-marker] No onnxruntime runtime is installed. ' +
+            'The recorded swap marker has been removed. Kokoro cannot load at all in this state. ' +
+            'Repair with:\n' +
+            '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+            '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        );
+      } else {
+        // owner === 'plain'
+        safeLog(
+          '[ort-marker] This venv now uses only plain onnxruntime (CPU build). The recorded swap marker ' +
+            'has been removed. Kokoro will run without GPU acceleration.',
+        );
+      }
+      return 'deleted';
+    }
+    return 'noop';
   } catch (err) {
     safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';

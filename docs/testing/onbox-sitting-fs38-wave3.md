@@ -37,13 +37,13 @@ live, not taken on the row's or the audit's word:
   | # | State (re-checked) | Matches row's claim? |
   |---|---|---|
   | Issue #1972 (stale-attribution bug — invalidated the 3 run-2 retractions) | `CLOSED`, closed 2026-07-31 | Yes — row already treats this as fixed |
-  | Issue #1969 (voice-mismatch stale reference, A24-adjacent) | `CLOSED`, closed 2026-08-16 | Yes, and now has a merged fix (PR #2402, merged 2026-08-16) — newer than the row's text, not a contradiction |
+  | Issue #1969 (voice-mismatch stale reference, A23-adjacent) | `CLOSED`, closed 2026-08-16 | Yes, and now has a merged fix (PR #2402, merged 2026-08-16) — newer than the row's text, not a contradiction |
   | Issue #1944 (Coqui won't load after `/embed`) | `CLOSED`, closed 2026-07-30 | Yes |
   | Issue #1967 (torchcodec/FFmpeg, blocked Section E on a stock box) | `CLOSED`, closed 2026-07-31 | Yes |
   | PR #1978 (fixes #1967) | `MERGED` 2026-07-31 | Yes |
   | Issue #2017 (spacy missing, E-04's `ImportError`) | `CLOSED`, closed 2026-08-01 | Yes |
   | PR #2039 (fixes #2017) | `MERGED` 2026-08-01 | Yes — confirms the row's own caveat that E-04's `F` "stands until the exact reproduction is re-run" is still the correct read: the **fix** is merged, the **re-run** is not done |
-  | Issue #2026 (Russian XTTS quality, register row A44 — not this row) | `OPEN` | Yes, correctly left open |
+  | Issue #2026 (Russian XTTS quality, register row A41 — not this row) | `OPEN` | Yes, correctly left open |
   | Issue #1998 (XTTS cross-language identity loss, feeds E-01's by-ear finding) | `OPEN` | Yes |
   | Issue #399 (`side-11`, the host-memory-leak *investigation* tracking issue) | `CLOSED`, closed 2026-07-06 | **Needs its own note — see below** |
 

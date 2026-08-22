@@ -1,7 +1,7 @@
 ---
 status: stable
-shipped: 2026-08-22
-owner: dudarenok-maker
+shipped: 2026-06-01
+owner: null
 ---
 
 # fe-15 + fe-16 — revision A/B player e2e + library/cast language UX
@@ -102,7 +102,7 @@ Two deferred backlog items shipped together (one PR) because they share the
 
 ## Ship notes
 
-Shipped 2026-06-01 on branch `feat/frontend-fe-15-16` (PR pending). fe-15 BACKLOG
+Shipped 2026-06-01 on branch `feat/frontend-fe-15-16` (merged `d5db66f9e929486fe12a52ae89a7432c2467cc90`, PR #391). fe-15 BACKLOG
 premise was stale (chapters already hydrate); the substantive work was the `cc`
 cast+chapters fixture for the preview flow. fe-16 Qwen auto-load is wired and
 unit-covered; live GPU acceptance is the only owed item.

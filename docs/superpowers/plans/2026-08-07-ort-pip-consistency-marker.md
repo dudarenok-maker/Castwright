@@ -765,7 +765,7 @@ Refs #2192"
 - Consumes: Tasks 1–3.
 - Produces: `ensureOrtMarker(venvDir: string, log?: (m: string) => void): 'wrote' | 'deleted' | 'clobbered' | 'noop'`. **Never throws.**
 
-The five states from the spec, and the required outcome for each:
+The six states this plan's decision matrix distinguishes, and the required outcome for each:
 
 | Namespace owner | Real plain dist present? | Our marker present? | Outcome |
 |---|---|---|---|
@@ -825,8 +825,7 @@ describe('ensureOrtMarker', () => {
   });
 
   it('REFUSES on a clobbered venv and names the remedy', () => {
-    const { root, sp } = venv({ owner: 'plain', realDist: true });
-    mkdirSync(join(sp, 'onnxruntime_gpu-1.27.0.dist-info'), { recursive: true });
+    const { root, sp } = venv({ owner: 'swap', realDist: true });
     const lines: string[] = [];
     expect(ensureOrtMarker(root, (m) => lines.push(m))).toBe('clobbered');
     expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
@@ -874,6 +873,17 @@ Expected: FAIL — `ensureOrtMarker is not exported`.
  *  Pure fs: no pip, no network, no subprocess, no `import onnxruntime`.
  *  NEVER throws — its caller runs during server startup. */
 export function ensureOrtMarker(venvDir, log = () => {}) {
+  // `log` is caller-supplied (index.ts passes console.log by default, but any
+  // caller can pass anything). Every call site below goes through this wrapper
+  // so a THROWING log can never escape ensureOrtMarker — including from inside
+  // the catch block that exists to guarantee this function never throws.
+  const safeLog = (msg) => {
+    try {
+      log(msg);
+    } catch {
+      /* never let a caller-supplied log defeat the never-throws guarantee */
+    }
+  };
   try {
     const sp = sitePackagesDir(venvDir);
     if (!sp) return 'noop';
@@ -881,10 +891,13 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
     const realPlain = findPlainOrtDistInfos(sp);
 
     if (owner === 'swap' && realPlain.length > 0) {
-      log(
-        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
-          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
-          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+      safeLog(
+        '[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build\'s files. ' +
+          'This corrupts pip\'s dependency resolution — a landmine for the next ' +
+          'pip operation. The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
+          'Refusing to write a marker that would certify this bad state. Repair with:\n' +
+          '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+          '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
       return 'clobbered';
     }
@@ -895,12 +908,31 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       const version = pkg ? readInstalledOrtVersion(sp, pkg) : null;
       if (!version) return 'noop';
       writeOrtMarker(sp, version);
-      log(`[ort-marker] recorded onnxruntime ${version} as provided by ${pkg}.`);
+      safeLog(`[ort-marker] recorded onnxruntime ${version} as provided by ${pkg}.`);
       return 'wrote';
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
-    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
-  } catch {
+    if (deleteOrtMarkerIfOurs(sp)) {
+      if (owner === 'none') {
+        safeLog(
+          '[ort-marker] No onnxruntime runtime is installed. ' +
+            'The recorded swap marker has been removed. Kokoro cannot load at all in this state. ' +
+            'Repair with:\n' +
+            '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+            '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        );
+      } else {
+        // owner === 'plain'
+        safeLog(
+          '[ort-marker] This venv now uses only plain onnxruntime (CPU build). The recorded swap marker ' +
+            'has been removed. Kokoro will run without GPU acceleration.',
+        );
+      }
+      return 'deleted';
+    }
+    return 'noop';
+  } catch (err) {
+    safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';
   }
 }
@@ -1515,7 +1547,7 @@ Refs #2192"
 
 **Spec coverage.** Every §Components item maps to a task: marker primitives → 1–2, ownership
 → 3, version + plan → 4, entry points → 5, self-heal → 6, `bootstrap-venv` → 7, `apply.ts`
-(with the seam) → 8, CLI + boot → 9, whisper → 10, guard → 11, docs → 12. The five venv states
+(with the seam) → 8, CLI + boot → 9, whisper → 10, guard → 11, docs → 12. The six venv states
 are each an assertion in Task 6. The delete-first ordering is asserted in Tasks 7 and 8.
 
 **Placeholders.** None — every code step carries real code, every test step real assertions.
