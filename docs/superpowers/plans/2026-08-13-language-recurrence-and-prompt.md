@@ -323,9 +323,9 @@ it('the message carries no filesystem path — it is client-facing', () => {
 
 ## Task 11 — Ship
 
-- [ ] `docs/release-notes-next.md` (technical, PR-refed) **and** the user-facing line in `RELEASE_NOTES.md`'s in-progress section.
-- [ ] Spec `status:` → `stable` with Ship notes (date + SHA). **Add both documents to `docs/features/INDEX.md`** — it indexes `docs/superpowers/specs` entries (25 references today), so an unlisted spec is drift.
-- [ ] **Re-confirm the inherited assumption**: that the seven backfilled values were verified by re-running the corpus measurement (#2246 acceptance item 1). This plan assumes it; nothing in it has re-checked it.
-- [ ] **On-box acceptance row.** End-to-end behaviour on a real book — an unset book hitting the gate, the prompt resolving it, analysis then selecting the right conventions table — needs a live analyzer and (for the three design sites) a live sidecar. Add the row to `docs/testing/onbox-acceptance-register.md`, the run-sheet criteria, **and update the live view** per the register's four-step procedure (edit `onbox-acceptance-register-live-view.html`, run `npm run check:onbox-register -- --against-published <saved copy>`, publish to the URL already in the register header). **Recording blocks the merge; running does not.**
-- [ ] `npm run verify:fast:branch`, then the PR with `Closes #2246`.
-- [ ] `pr-review-gate` — **not** docs-only, so the gate applies. Effort `high` (multi-scope).
+- [x] `docs/release-notes-next.md` (technical, PR-refed) **and** the user-facing line in `RELEASE_NOTES.md`'s in-progress section.
+- [x] Spec `status:` → `stable` with Ship notes (date + SHA). **Add both documents to `docs/features/INDEX.md`** — it indexes `docs/superpowers/specs` entries (25 references today), so an unlisted spec is drift.
+- [ ] **Re-confirm the inherited assumption**: that the seven backfilled values were verified by re-running the corpus measurement (#2246 acceptance item 1). **Deliberately still unchecked at ship** — `C:\AudiobookWorkspace` stayed read-only so the corpus measurement could not be re-run; recorded as an open, unverified assumption in the spec's Ship notes rather than claimed as verified (PR #2492 body, "What remains the operator's").
+- [x] **On-box acceptance row.** Recorded — register rows A46/B3, run sheet `docs/testing/language-recurrence-onbox-acceptance.md`. Live view publish still owed (network step; PR #2492 body notes it has broken silently four times before) — running the acceptance itself, not recording it, is what remains.
+- [x] `npm run verify:fast:branch`, then the PR with `Closes #2246`.
+- [x] `pr-review-gate` — ran five passes (3-5 post-merge-with-main), every finding fixed. PR #2492 merged 2026-08-22, `fbdba1ca2046bb119674b787b342ea02aede3f5c`.
