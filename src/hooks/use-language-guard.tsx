@@ -106,7 +106,14 @@ export function useLanguageGuard(): LanguageGuardResult {
             dismisses: onDismiss ? [...prev.dismisses, onDismiss] : prev.dismisses,
           };
         }
-        // Different book or no pending guard, create new.
+        // Different book or no pending guard. Before replacing the pending
+        // guard, invoke all of the previous guard's dismisses so any promises
+        // parked on it can settle (e.g., via rejection). This prevents
+        // promises from hanging indefinitely when a guard is superseded.
+        if (prev) {
+          prev.dismisses.forEach((d) => d());
+        }
+        // Create new guard for the new selector.
         return {
           selector,
           shape,

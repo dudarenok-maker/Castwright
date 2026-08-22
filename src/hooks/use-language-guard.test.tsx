@@ -321,4 +321,126 @@ describe('useLanguageGuard', () => {
     });
     expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
   });
+
+  it('invokes a superseded guard\'s dismisses instead of dropping them (G1 regression)', async () => {
+    // Two books in the library
+    const store = makeStore(null);
+    const bookA = unsetBook();
+    const bookB = { ...unsetBook(), bookId: 'b_second', manuscriptId: 'm_second' };
+    store.dispatch(librarySlice.actions.addBook(bookA));
+    store.dispatch(librarySlice.actions.addBook(bookB));
+
+    const dismissA = vi.fn();
+    const dismissB = vi.fn();
+    const retryA = vi.fn();
+    const retryB = vi.fn();
+
+    function CrossBookGuardHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button
+            onClick={() => void guard({ bookId: 'b_marlow' }, '409', retryA, dismissA)}
+          >
+            GuardA
+          </button>
+          <button
+            onClick={() => void guard({ bookId: 'b_second' }, '409', retryB, dismissB)}
+          >
+            GuardB
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <CrossBookGuardHarness />
+      </Provider>,
+    );
+
+    // Open guard for book A.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardA' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    // The modal should show book A's title.
+    expect(screen.getByText('The Coalfall Commission')).toBeInTheDocument();
+
+    // Before the user acts on book A, book B's guard arrives (e.g., from a
+    // concurrent operation or the queue draining a book-B entry). This should:
+    // 1. Invoke book A's dismisses (so any promises parked on it settle)
+    // 2. Then replace the pending guard with book B's
+    fireEvent.click(screen.getByRole('button', { name: 'GuardB' }));
+
+    // Book A's dismisses MUST have been invoked (the fix this test gates).
+    expect(dismissA).toHaveBeenCalledTimes(1);
+
+    // The modal should now show book B (title is the same in the test fixtures,
+    // but the selector is different, which is what matters).
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Book B's dismiss should NOT have been called yet (it's the current guard).
+    expect(dismissB).not.toHaveBeenCalled();
+
+    // Now dismiss book B; its dismiss should fire.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(dismissB).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('invokes dismisses when a different selector shape (bookId vs manuscriptId) supersedes (G1 shape-mismatch edge case)', async () => {
+    // Single book, but guards come in via different selector shapes
+    const store = makeStore(unsetBook());
+
+    const dismissBookId = vi.fn();
+    const dismissManuscriptId = vi.fn();
+
+    function MixedSelectorHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button
+            onClick={() => void guard({ bookId: 'b_marlow' }, '409', () => {}, dismissBookId)}
+          >
+            GuardByBookId
+          </button>
+          <button
+            onClick={() =>
+              void guard({ manuscriptId: 'm_marlow' }, '409', () => {}, dismissManuscriptId)
+            }
+          >
+            GuardByManuscriptId
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <MixedSelectorHarness />
+      </Provider>,
+    );
+
+    // Open guard using bookId selector.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardByBookId' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // A guard arrives using manuscriptId selector for the SAME book.
+    // Since selectorsEqual treats { bookId: X } and { manuscriptId: Y } as NOT equal,
+    // this will trigger the selector-mismatch path and should invoke dismissBookId.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardByManuscriptId' }));
+
+    // The dismisses from the bookId guard should have been invoked.
+    expect(dismissBookId).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // dismissManuscriptId should NOT have been called yet (it's the current guard).
+    expect(dismissManuscriptId).not.toHaveBeenCalled();
+
+    // Cancel; this should invoke dismissManuscriptId.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(dismissManuscriptId).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
 });
