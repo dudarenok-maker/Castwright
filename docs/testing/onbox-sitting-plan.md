@@ -122,12 +122,15 @@ retirements/discharges — see the 2026-08-21 correction below).
 > total 74→**67**. §2.2 and §2.3 below, and §7's totals, are corrected to
 > match; the rest of this plan (§1, §3, §4, §5, §6) is otherwise unaffected.
 >
-> **Correction, 2026-08-22 (merge with `main`, #2551 wave 4 close-out /
-> PR #2588).** PR #2588 added a new wave-3 agent-runnable row for the
-> `speaker-qa.txt` reqHash fix's one-time real-venv reinstall — sidecar-venv-
-> only, no GPU requirement. It landed on `main` as A48 (old numbering);
-> folded into this wave's contiguous renumbering it is **A45**. Wave-3 set
-> **15→16**, total **67→68**.
+> **Correction, 2026-08-22 (folding in `main`'s PR #2588 and PR #2585).**
+> Two independent changes on `main`, both now folded in here. PR #2588 added
+> a new wave-3 agent-runnable row for the `speaker-qa.txt` reqHash fix's
+> one-time real-venv reinstall — sidecar-venv-only, no GPU requirement. It
+> landed on `main` as A48 (old numbering); folded into this wave's
+> contiguous renumbering it is **A45**. Wave-3 set +1. Separately, PR #2585
+> discharged and removed the Cast/analysis `characterId` drift row (this
+> plan's old B3, `#2040`) after `#2536`'s fix landed — wave-3 set −1. Net:
+> wave-3 set stays **15**, total stays **67** — the two changes offset.
 
 ### 2.2 Wave-3 agent-runnable (15 rows)
 
