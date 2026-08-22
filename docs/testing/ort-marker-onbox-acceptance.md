@@ -598,9 +598,11 @@ _(Update as each remaining criterion runs.)_
 
 - Criterion 1 — fresh NVIDIA bootstrap (A37): **Run 2026-08-20, re-check 2026-08-21 (wave-4 step 8) — STILL OWED.**
   Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. See onbox-acceptance-register.md A37 row for full details and evidence.*
-- Criterion 2 — the reported bug, in-app Qwen3 install (A38): owed — not run
-  this session (needs the full app + Model Manager UI); see wave-3 step-2
-  results file.
+- Criterion 2 — the reported bug, in-app Qwen3 install (A38): **STILL OWED — partially run.** Clicking
+  Install on Qwen3-TTS Base (0.6B) in Model Manager completed cleanly with no
+  `WinError 5`, but follow-on Kokoro GPU-provider check unreachable on this box
+  due to port contention (distinct from #2534); see
+  `docs/testing/onbox-wave4-results/step-5c-a40.md`.
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
 - Criterion 4 — Pinokio update path (E7): owed.
 - Criterion 5 — AMD box: blocked, no hardware.
