@@ -120,7 +120,7 @@ retirements/discharges — see the 2026-08-21 correction below).
 > discharged by the repo owner — blocked set −1, and Group F no longer
 > exists. Net: operator 52→**49**, wave-3 18→**15**, blocked 4→**3**,
 > total 74→**67**. §2.2 and §2.3 below, and §7's totals, are corrected to
-> match; the rest of this plan (§1, §3, §4, §5, §6) is otherwise unaffected.
+> match; the rest of this plan (§1, §4, §5, §6) is otherwise unaffected. **Addendum, 2026-08-22:** §3's A16 narrative received a fifth-correction note documenting how PR #2588 and PR #2585 offset each other.
 >
 > **Correction, 2026-08-22 (folding in `main`'s PR #2588 and PR #2585).**
 > Two independent changes on `main`, both now folded in here. PR #2588 added
@@ -220,8 +220,9 @@ this to **52 operator + 18 wave-3 + 4 blocked = 74**. A **fourth**
 correction, 2026-08-21 (wave 4, `#2551` step 6), retired/discharged/
 reclassified A22, A27, A43, B2, old-E6, old-E8 and F1, changing this to
 **49 operator + 15 wave-3 + 3 blocked = 67**. A **fifth** correction,
-2026-08-22 (merge with `main`, PR #2588), added A45 to the wave-3 set,
-changing this to **49 operator + 16 wave-3 + 3 blocked = 68** — see §7 for
+2026-08-22 (folding in `main`'s PR #2588 and PR #2585), added A45 to the wave-3 set
+while discharging B3 (characterId drift, #2040) — wave-3 set +1 and −1
+offsetting — keeping the total at **49 operator + 15 wave-3 + 3 blocked = 67** — see §7 for
 the current totals.
 
 > A16 is also one of the three **AMBIGUOUS** rows — its plan frontmatter says
