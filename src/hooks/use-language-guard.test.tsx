@@ -443,4 +443,66 @@ describe('useLanguageGuard', () => {
     expect(dismissManuscriptId).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
   });
+
+  it('resolves shape/sseSource correctly when accumulated guards span different sources (G6 regression)', async () => {
+    // When multiple guard() calls for the SAME book arrive with different shapes/sources,
+    // the modal should show copy matching the LATEST call, not the first one.
+    const store = makeStore(unsetBook());
+    const retryBatch = vi.fn();
+    const retryGeneration = vi.fn();
+
+    function HeterogeneousGuardHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, 'batch', retryBatch)}>
+            GuardBatch
+          </button>
+          <button
+            onClick={() =>
+              void guard({ bookId: 'b_marlow' }, 'sse', retryGeneration, undefined, 'generation')
+            }
+          >
+            GuardGeneration
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <HeterogeneousGuardHarness />
+      </Provider>,
+    );
+
+    // Trigger first guard with 'batch' shape.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardBatch' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    // The modal should show the batch-specific hint initially.
+    expect(screen.getByText(/Script review needs a book language/)).toBeInTheDocument();
+
+    // Before the user acts, a second guard arrives for the same book with 'sse' shape
+    // and 'generation' source. This simulates a generation stream failing while the
+    // batch review modal is still open.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardGeneration' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // The modal's hint text should now reflect the LATEST guard's shape/source
+    // (sse + generation), NOT the first guard's (batch).
+    // Generation-specific copy: "Generating voices needs a book language..."
+    expect(screen.getByText(/Generating voices needs a book language/)).toBeInTheDocument();
+    // The batch copy should no longer be visible.
+    expect(screen.queryByText(/Script review needs a book language/)).not.toBeInTheDocument();
+
+    // Both retries should fire when the user sets the language.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(retryBatch).toHaveBeenCalledTimes(1);
+      expect(retryGeneration).toHaveBeenCalledTimes(1);
+    });
+  });
 });

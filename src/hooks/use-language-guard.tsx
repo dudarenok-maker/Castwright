@@ -100,10 +100,14 @@ export function useLanguageGuard(): LanguageGuardResult {
       setPending((prev) => {
         if (prev && selectorsEqual(prev.selector, selector)) {
           // Same book already pending, accumulate the retry and dismiss.
+          // G6 fix: when accumulated calls have different shapes/sseSource,
+          // update to the latest (most recent failure context), not the first.
           return {
             ...prev,
+            shape,
             retries: [...prev.retries, onRetry],
             dismisses: onDismiss ? [...prev.dismisses, onDismiss] : prev.dismisses,
+            sseSource,
           };
         }
         // Different book or no pending guard. Before replacing the pending
