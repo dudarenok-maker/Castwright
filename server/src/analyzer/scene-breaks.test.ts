@@ -116,3 +116,28 @@ describe('annotateSceneBreaks — separator captured as its own sentence (#1679 
     expect(s.every((x) => !x.sceneBreakBefore)).toBe(true);
   });
 });
+
+describe('annotateSceneBreaks — dashIsDialogueMarker gate (#2537/#2540)', () => {
+  it('with gate=true, a dash-led scene-opening sentence is flagged when its cached text lacks the dash', () => {
+    const body = 'Prior sentence.\n\n* * *\n\n- Second scene dialogue.\n\nLater sentence.';
+    const s = sents('Prior sentence.', 'Second scene dialogue.', 'Later sentence.');
+    annotateSceneBreaks(s, body, true);
+    expect(s[1].sceneBreakBefore).toBe(true);
+    expect(s[0].sceneBreakBefore).toBeUndefined();
+  });
+
+  it('with gate=true, a dash-led scene-opening sentence is flagged when its cached text includes the dash', () => {
+    const body = 'Prior sentence.\n\n* * *\n\n- Second scene dialogue.\n\nLater sentence.';
+    const s = sents('Prior sentence.', '- Second scene dialogue.', 'Later sentence.');
+    annotateSceneBreaks(s, body, true);
+    expect(s[1].sceneBreakBefore).toBe(true);
+    expect(s[0].sceneBreakBefore).toBeUndefined();
+  });
+
+  it('with gate=false, existing 2-arg behaviour is unchanged', () => {
+    const body = 'One.\n\n* * *\n\nTwo.';
+    const s = sents('One.', 'Two.');
+    annotateSceneBreaks(s, body, false);
+    expect(s[1].sceneBreakBefore).toBe(true);
+  });
+});
