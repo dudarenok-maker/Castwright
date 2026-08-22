@@ -116,6 +116,10 @@ describe('ensureOrtMarker', () => {
     // Pin the PowerShell form (round 18 remedy) — the exact syntax with $env: prefix and semicolon.
     // This catches a hollow-coverage defect where the PowerShell form was deleted and tests stayed green.
     expect(message).toContain("$env:CASTWRIGHT_ACCELERATOR_PROFILE='<profile>'; node");
+
+    // Pin the POSIX form (round 22 finding 4) — the exact syntax without quotes or semicolon.
+    // This catches the hollow-coverage defect where the POSIX form was deleted and tests stayed green.
+    expect(message).toContain("(POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node");
   });
 
   it('REFUSES on a clobbered venv even when our marker is already present (row 4 "either" coverage)', () => {
@@ -236,6 +240,10 @@ describe('ensureOrtMarker', () => {
     // Pin the PowerShell form (round 18 remedy) — the exact syntax with $env: prefix and semicolon.
     // This catches a hollow-coverage defect where the PowerShell form was deleted and tests stayed green.
     expect(message).toContain("$env:CASTWRIGHT_ACCELERATOR_PROFILE='<profile>'; node");
+
+    // Pin the POSIX form (round 22 finding 4) — the exact syntax without quotes or semicolon.
+    // This catches the hollow-coverage defect where the POSIX form was deleted and tests stayed green.
+    expect(message).toContain("(POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node");
   });
 
   it('never throws on a venv that does not exist', () => {
