@@ -117,12 +117,14 @@ moment the hardware lands, but the sitting cannot be scheduled until acquisition
 
 ### Arithmetic
 
-**52** (operator) + **18** (wave-3) + 4 (blocked) = **74**. Every register row
-appears exactly once. (Before the 2026-08-20 corrections above, this read
-49 + 21 + 4 — A33/A43 moving from the wave-3 set to the operator set changed
-the first two terms by ∓2 each; then E7 moving the same direction changed
-them by ∓1 each, leaving the total unchanged throughout: 49+21+4 → 51+19+4
-→ 52+18+4, all **74**.)
+**52** (operator) + **19** (wave-3) + 4 (blocked) = **75**. Every register row
+appears exactly once. (PR #2588 added A48 · `speaker-qa.txt` reqHash fix, which is
+sidecar-venv-only with no GPU requirement, so it joins the wave-3 agent-runnable
+set. Before the 2026-08-20 corrections above, the total was 49 + 21 + 4 = 74 —
+A33/A43 moving from the wave-3 set to the operator set changed the first two terms
+by ∓2 each; then E7 moving the same direction changed them by ∓1 each, leaving the
+total unchanged throughout: 49+21+4 → 51+19+4 → 52+18+4, all **74**, until A48's
+addition brought it to 52+19+4 = **75**.)
 ---
 
 ## 3. A16 — re-derived binning and reasoning

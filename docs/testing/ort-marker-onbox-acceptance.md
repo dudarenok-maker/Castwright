@@ -413,10 +413,12 @@ distribution; `pip check` stayed clean (pinned versions matched here, unlike
 wave-3's mismatched 1.29.0 run, so there was nothing broken for boot to
 silently "fix" either way).
 
-**Repair command output:** (PowerShell) `$env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` or (POSIX) `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` uninstalled both
+**Repair command output:** `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` uninstalled both
 `onnxruntime` 1.27.0 and `onnxruntime-gpu` 1.27.0, reinstalled
 `onnxruntime-gpu==1.27.0` (`--no-deps`) — `[install-ort] onnxruntime-gpu in
 place.`
+
+> *Superseded note (2026-08-22):* The POSIX form shown above reflects the state on 2026-08-21 when this run was executed. Shipped code now also emits a PowerShell form of the repair command as an alternative on Windows shells, added in a later round.
 
 **`pip check` after repair:** clean, no broken requirements.
 **Post-repair owner check:** `detectOrtOwner === 'swap'`,

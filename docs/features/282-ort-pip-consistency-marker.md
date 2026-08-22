@@ -203,7 +203,7 @@ but a factual correction to errors in the design doc's own prose.
    the write — exactly the behaviour the spec claims cannot happen. This is a real
    divergence, not a "more sensible" one like the two above, but its exposure is
    test-only: `installForProfile`'s one production caller (`runInstall`,
-   `bootstrap-venv.mjs:334`) always passes a real `venvDir`, so a null only ever
+   `bootstrap-venv.mjs:328`) always passes a real `venvDir`, so a null only ever
    reaches this code from a test harness deliberately omitting it.
 4. **The design doc's original prose contained multiple backwards claims about GPU/CPU
    file ownership in the clobbered state.** It mislabeled the clobbered box as having

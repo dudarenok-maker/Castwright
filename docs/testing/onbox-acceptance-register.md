@@ -2358,10 +2358,11 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > (`torch/lib`, `ctranslate2`), which onnxruntime does not search — confirmed
 > by adding `torch/lib` to the process DLL search path as a diagnostic, which
 > did not fix it either. Zero discharges this run — see evidence doc
-> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up
-> owed:** a new defect issue for the missing `nvidia-cudnn-cu12` dependency
-> (distinct from #2534, which is closed and did fix the CUDA-13-vs-12
-> mismatch it targeted).
+> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up filed:**
+> [#2600](https://github.com/dudarenok-maker/Castwright/issues/2600) — `install-ort.mjs` never requests the cuDNN 12 runtime that
+> `onnxruntime-gpu 1.26.x` requires for CUDA execution, leaving Kokoro to
+> silently fall back to CPU (distinct from #2534, which fixed the CUDA-13-vs-12
+> mismatch itself).
 
 ### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
