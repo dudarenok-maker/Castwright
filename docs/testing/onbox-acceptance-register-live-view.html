@@ -817,7 +817,7 @@
         <p>Design doc criterion 6. <code>ensureOrtMarker</code>&#39;s refuse-and-log branch is fully unit-tested against synthetic fixtures but has never run against a <b>real</b> clobbered venv — a box where a real plain <code>onnxruntime</code> dist-info survives alongside the GPU distribution&#39;s dist-info (pip uninstalls by name and never knew the two collided), but the actual files on disk are the GPU build. This is the population <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> itself names as largest.</p>
         <ul>
           <li>Manufacture the state deliberately (destructive — do this on a copy, or plan to run the repair command after): with the sidecar stopped, install plain onnxruntime first and then force-reinstall the GPU build over it. Pip keys upgrade-detection on the package name, so installing a different distribution that shares the namespace does not replace the first, and the plain package's dist-info survives on disk:
-            <div style="margin: 0.5em 0; padding: 0.5em; background: #f5f5f5; border-left: 2px solid #999; font-family: monospace; font-size: 0.9em; overflow-x: auto;">
+            <div style="margin: 0.5em 0; padding: 0.5em; background: var(--surface-2); border-left: 2px solid var(--rule); color: var(--ink); font-family: monospace; font-size: 0.9em; overflow-x: auto;">
               python -m venv &lt;venv&gt;<br>
               &lt;venv&gt;\Scripts\pip install onnxruntime==1.28.0<br>
               &lt;venv&gt;\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
