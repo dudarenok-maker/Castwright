@@ -163,6 +163,7 @@ export function createCastDesignMiddleware(): Middleware {
           if (emitLanguageGuard({
             selector: { bookId },
             shape: 'sse',
+            sseSource: 'cast-design',
             onRetry: () => { close(); replay?.(); },
             onDismiss: fail,
           })) return;
@@ -280,6 +281,7 @@ export function createCastDesignMiddleware(): Middleware {
           if (emitLanguageGuard({
             selector: { bookId },
             shape: 'sse',
+            sseSource: 'single-design',
             onRetry: () => { close(); replay?.(); },
             onDismiss: fail,
           })) return;

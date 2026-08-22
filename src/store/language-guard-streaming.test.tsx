@@ -76,11 +76,11 @@ function unsetBook(): LibraryBook {
   };
 }
 
-/* Verbatim copy of GUARD_COPY['sse'/'batch'].hint from src/modals/edit-book-meta.tsx
-   (not exported) — asserting the literal text catches the guard opening in the
-   wrong shape (e.g. '409' copy) even though the modal itself renders fine. */
-const SSE_HINT = 'Generating voices needs a book language. Choose one below and we’ll pick up where we left off.';
-const BATCH_HINT = 'Script review needs a book language. Choose one below and we’ll re-run the review.';
+/* Verbatim copies of hints from src/modals/edit-book-meta.tsx (not exported) —
+   asserting the literal text catches the guard opening with the wrong source
+   hint even though the modal itself renders fine. SSE hints vary by source. */
+const CAST_DESIGN_HINT = "Designing voices needs a book language. Choose one below and we’ll pick up where we left off.";
+const BATCH_HINT = "Script review needs a book language. Choose one below and we’ll re-run the review.";
 
 function Harness() {
   const { modal } = useLanguageGuard();
@@ -135,7 +135,7 @@ describe('language-guard-streaming (sse shape, #2407 Task 9d)', () => {
     // Guard modal opened, empty, in the sse shape — not the ordinary error toast.
     expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
     expect((screen.getByTestId('edit-book-language') as HTMLSelectElement).value).toBe('');
-    expect(screen.getByText(SSE_HINT)).toBeInTheDocument();
+    expect(screen.getByText(CAST_DESIGN_HINT)).toBeInTheDocument();
     expect(store.getState().notifications.toasts).toHaveLength(0);
 
     await saveLanguage();

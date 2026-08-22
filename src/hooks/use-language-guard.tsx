@@ -36,6 +36,7 @@ interface PendingGuard {
   shape: LanguageGuardShape;
   onRetry: () => void;
   onDismiss?: () => void;
+  sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation';
 }
 
 export interface LanguageGuardResult {
@@ -52,6 +53,7 @@ export interface LanguageGuardResult {
     shape: LanguageGuardShape,
     onRetry: () => void,
     onDismiss?: () => void,
+    sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation',
   ) => boolean;
   /** Render once, near the end of the layout tree. The modal mounts only
       while a guard request is pending. */
@@ -85,16 +87,16 @@ export function useLanguageGuard(): LanguageGuardResult {
      selector matches no library book the request is refused (false) so the
      caller's ordinary error path fires. */
   const guard: LanguageGuardResult['guard'] = useCallback(
-    (selector, shape, onRetry, onDismiss) => {
+    (selector, shape, onRetry, onDismiss, sseSource) => {
       if (!resolve(selector)) return false;
-      setPending({ selector, shape, onRetry, onDismiss });
+      setPending({ selector, shape, onRetry, onDismiss, sseSource });
       return true;
     },
     [resolve],
   );
 
   useEffect(() => {
-    setLanguageGuardHandler((req) => guard(req.selector, req.shape, req.onRetry, req.onDismiss));
+    setLanguageGuardHandler((req) => guard(req.selector, req.shape, req.onRetry, req.onDismiss, req.sseSource));
     return () => setLanguageGuardHandler(null);
   }, [guard]);
 
@@ -107,6 +109,7 @@ export function useLanguageGuard(): LanguageGuardResult {
       open
       book={book}
       guard={pending.shape}
+      sseSource={pending.sseSource}
       onClose={() => {
         const dismiss = pending.onDismiss;
         close();

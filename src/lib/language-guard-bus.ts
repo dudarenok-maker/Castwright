@@ -43,6 +43,10 @@ export interface LanguageGuardRequest {
       sites reject their awaiting caller with the original error here, so a
       dismissed guard never leaves the UI hanging on a parked promise. */
   onDismiss?: () => void;
+  /** For sse shape only: identifies which action triggered the guard, so
+      the modal can show source-appropriate copy (e.g., "analysis" vs
+      "cast-design" vs "generation"). Unused for 409/batch shapes. */
+  sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation';
 }
 
 /** Returns true when it accepted the request — i.e. resolved the selector to a

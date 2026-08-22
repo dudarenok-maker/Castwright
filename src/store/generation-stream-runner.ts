@@ -457,6 +457,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         const accepted = emitLanguageGuard({
           selector: { bookId },
           shape: 'sse',
+          sseSource: 'generation',
           onRetry: () => {
             languageGuardPending.delete(bookId);
             dispatch(chaptersActions.clearLastError());

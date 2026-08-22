@@ -201,6 +201,7 @@ export const analysisStreamMiddleware: Middleware = (store) => {
             emitLanguageGuard({
               selector: { manuscriptId },
               shape: 'sse',
+              sseSource: 'analysis',
               onRetry: () => { closeHandle(); openHandle(snap); },
               onDismiss: fail,
             })

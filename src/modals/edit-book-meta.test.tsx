@@ -211,3 +211,104 @@ describe('EditBookMetaModal — tag suggestions (plan 73)', () => {
     expect(screen.getByTestId('tag-chip-draft')).toBeInTheDocument();
   });
 });
+
+describe('EditBookMetaModal — language guard (Task 9)', () => {
+  function renderGuardModal(
+    guard: 'sse' | '409' | 'batch',
+    sseSource?: 'analysis' | 'cast-design' | 'single-design' | 'generation',
+  ) {
+    const store = configureStore({
+      reducer: { library: librarySlice.reducer },
+      preloadedState: {
+        library: {
+          loaded: true,
+          error: null,
+          authors: [],
+          books: [baseBook],
+          pausedSnapshots: {},
+        },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <EditBookMetaModal
+          open
+          book={baseBook}
+          guard={guard}
+          sseSource={sseSource}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+        />
+      </Provider>,
+    );
+  }
+
+  it('shows the 409 guard with generic copy', () => {
+    renderGuardModal('409');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'This book has no language set, so some operations need one.',
+    );
+  });
+
+  it('shows the batch guard with script-review-specific copy', () => {
+    renderGuardModal('batch');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'Script review needs a book language.',
+    );
+  });
+
+  it('shows sse guard with analysis-specific copy when sseSource is "analysis"', () => {
+    renderGuardModal('sse', 'analysis');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'Analysis needs a book language.',
+    );
+  });
+
+  it('shows sse guard with cast-design-specific copy when sseSource is "cast-design"', () => {
+    renderGuardModal('sse', 'cast-design');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'Designing voices needs a book language.',
+    );
+  });
+
+  it('shows sse guard with single-design-specific copy when sseSource is "single-design"', () => {
+    renderGuardModal('sse', 'single-design');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'Designing a voice needs a book language.',
+    );
+  });
+
+  it('shows sse guard with generation-specific copy when sseSource is "generation"', () => {
+    renderGuardModal('sse', 'generation');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'Generating voices needs a book language.',
+    );
+  });
+
+  it('shows sse guard with generation copy by default when sseSource is not provided', () => {
+    renderGuardModal('sse');
+    expect(screen.getByTestId('edit-book-language-guard')).toHaveTextContent(
+      'Generating voices needs a book language.',
+    );
+  });
+
+  it('prefills language select as empty in guard mode', () => {
+    renderGuardModal('409');
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    expect(select.value).toBe('');
+  });
+
+  it('disables Save until a language is chosen in guard mode', () => {
+    renderGuardModal('409');
+    const saveButton = screen.getByRole('button', { name: /Save changes/i });
+    expect(saveButton).toBeDisabled();
+  });
+
+  it('enables Save once a language is chosen in guard mode', () => {
+    renderGuardModal('409');
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'ru' } });
+    const saveButton = screen.getByRole('button', { name: /Save changes/i });
+    expect(saveButton).not.toBeDisabled();
+  });
+});
