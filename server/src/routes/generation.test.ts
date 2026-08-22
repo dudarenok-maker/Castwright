@@ -2312,6 +2312,31 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
     expect(ticks[0].chapterId).toBe(2);
   });
 
+  it('P2: falls back to first chapter id when every chapter is excluded and language is unset', async () => {
+    /* P2 regression test: when ALL chapters are excluded for an unset-language
+       whole-book request, guardChapterId must still be present (not omitted).
+       Without this fix, it would become undefined and the chapter_failed event
+       would lose its chapterId field, reintroducing the F9 bug. The fallback
+       should name the first chapter even though it's excluded, preserving F9's
+       guarantee that chapterId is always attached. */
+    setBookLanguage(null);
+    // Exclude all chapters (assuming the test fixture has chapters 1-3)
+    setChapterExcluded(1, true);
+    setChapterExcluded(2, true);
+    setChapterExcluded(3, true);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('language-unset');
+    /* P2 fix: chapterId should still be present (the first chapter's id,
+       even though it's excluded) rather than undefined. */
+    expect(ticks[0].chapterId).toBe(1);
+    expect(ticks[0].chapterId).not.toBeUndefined();
+  });
+
   it('a book with a language set is unaffected', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)

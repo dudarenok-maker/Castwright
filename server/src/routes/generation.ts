@@ -811,12 +811,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        requested chapter or the first chapter in the book for whole-book requests.
        G7: skip excluded chapters when picking the guard chapterId for whole-book
        requests, matching the exclusion-filtering logic used elsewhere in this
-       route (e.g., targetChapters filter). If all chapters are excluded, fall
-       back to undefined (omitting chapterId from the response), which matches
-       the pre-F9 behaviour. */
+       route (e.g., targetChapters filter). P2: if all chapters are excluded,
+       fall back to the first chapter's id anyway (even if excluded) to preserve
+       F9's guarantee that chapterId is never omitted. */
     const guardChapterId = (requestedIds && requestedIds.length > 0)
       ? requestedIds[0]
-      : state.chapters.find((c) => !c.excluded)?.id;
+      : (state.chapters.find((c) => !c.excluded)?.id ?? state.chapters[0]?.id);
     send({
       type: 'chapter_failed',
       errorReason: (e as Error).message,
