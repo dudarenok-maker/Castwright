@@ -20,7 +20,7 @@ import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
 import { readJson } from './state-io.js';
 import type { BookStateJson } from './scan.js';
-import { bookStateLanguage } from './scan.js';
+import { bookStateLanguageOrNull } from './scan.js';
 
 export interface ScanSeriesOptions {
   /** Optional bookId to exclude from the scan (the book about to use
@@ -89,11 +89,17 @@ export async function isStandaloneBookId(targetBookId: string): Promise<boolean>
     `'en'`). Used to veto cross-language voice reuse: a Qwen voice bakes its
     design language into the on-disk .pt, so matching a character to a
     voice from a different-language book produces garbled audio (fs-61).
-    Returns `'en'` for an unresolvable bookId — the same conservative
-    default `bookStateLanguage` applies to a book with no `language` field. */
-export async function resolveBookLanguageForBookId(targetBookId: string): Promise<string> {
+    Returns `'en'` when the bookId is unresolvable — the same conservative
+    default as before. For a book that EXISTS but never stated a language, it
+    returns `null` (Task 6, #2246): two `'en'`-defaulted books must not match
+    each other and silently pass the language veto the resolver exists to
+    enforce. Callers treat `null` as "cannot prove same language → veto". */
+export async function resolveBookLanguageForBookId(
+  targetBookId: string,
+): Promise<string | null> {
   const state = await findBookStateForBookId(targetBookId);
-  return state ? bookStateLanguage(state) : 'en';
+  if (!state) return 'en';
+  return bookStateLanguageOrNull(state);
 }
 
 /* Filter scanLibraryCharacters to a single (author, series) slice.

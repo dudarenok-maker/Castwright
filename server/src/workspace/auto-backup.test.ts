@@ -166,4 +166,37 @@ describe('restoreBackup', () => {
     await writeFile(join(bdir, '20260101-000000.json'), '{ not valid json', 'utf8');
     await expect(mod.restoreBackup(bookId, '20260101-000000.json')).rejects.toThrow(/corrupt/);
   });
+
+  it('restores a no-language snapshot as language:null with a schema stamp', async () => {
+    const { bookId, bookDir } = bookDirFor('restore-nolang');
+    await seedBook(bookId, bookDir, {}); // no `language` in the seeded state
+    const file = await mod.backupBook(
+      { bookId, bookDir },
+      { keep: 5, now: new Date(2026, 0, 2, 9, 0, 0) },
+    );
+    /* Replace the live state so the restore has something real to write over. */
+    await writeFile(
+      paths.stateJsonPath(bookDir),
+      JSON.stringify(makeState(bookId, { v: 'edited' })),
+      'utf8',
+    );
+    await mod.restoreBackup(bookId, file!);
+    const after = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
+    expect('language' in after).toBe(true);
+    expect(after.language).toBeNull();
+    expect(after.schema).toBe(1);
+  });
+
+  it('round-trips a language the snapshot carries, with a schema stamp', async () => {
+    const { bookId, bookDir } = bookDirFor('restore-lang');
+    await seedBook(bookId, bookDir, { language: 'fr' });
+    const file = await mod.backupBook(
+      { bookId, bookDir },
+      { keep: 5, now: new Date(2026, 0, 2, 9, 0, 0) },
+    );
+    await mod.restoreBackup(bookId, file!);
+    const after = JSON.parse(await readFile(paths.stateJsonPath(bookDir), 'utf8'));
+    expect(after.language).toBe('fr');
+    expect(after.schema).toBe(1);
+  });
 });

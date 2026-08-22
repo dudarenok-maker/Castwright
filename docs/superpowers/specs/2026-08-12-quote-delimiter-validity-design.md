@@ -129,7 +129,7 @@ already ships `['‘','’']`, and single-quoted material is closed by the first
 
 `en.ts` excludes the *straight* single pair `['\'','\'']` for exactly this
 reason; the rationale is recorded in
-`docs/features/162-fs2-multilanguage.md:117`. It was never applied to the
+`docs/features/archive/162-fs2-multilanguage.md:117`. It was never applied to the
 smart pair. Reachability is not in question:
 `analyzer.structure.enabled` defaults `true`
 (`server/src/config/registry.ts:1273`) and `server/src/routes/analysis.ts:2177`

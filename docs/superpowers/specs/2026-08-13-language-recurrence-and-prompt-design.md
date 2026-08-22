@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 date: 2026-08-13
 issue: 2246
 ---
@@ -17,6 +17,13 @@ when detection cannot decide).
 > *measured* number, the measurement command is stated with it — the first draft was
 > wrong about four separate counts, one of them because a `grep` was piped through
 > `head -40`.
+
+> **Re-verified against current `main` on 2026-08-14**, after `feat/server-1984-wave1`
+> merged (PR #2328). Every enumeration in Parts 1–3 was re-run with no output limit; the
+> only drift was **line numbers in `routes/analysis.ts`** (see the corrected cells below)
+> and the **G3 count (43/22 → 45/23)**. Neither changes a decision. Line numbers were
+> current for `main` at the time of this refresh; re-run the plan's greps before any task
+> binds to them.
 
 ## Already shipped — do not re-plan
 
@@ -74,7 +81,7 @@ Every site in `server/src` that mints a `BookStateJson` object literal:
 |---|---|---|
 | `routes/import.ts:302` | **true mint** (fresh literal) | **Yes — the only literal that can.** |
 | `audio/finalize-chapter-write.ts:378` | `{ ...prev, … }` | No — spread carries it |
-| `routes/analysis.ts:5661`, `:7078` | `{ ...prev, … }` | No |
+| `routes/analysis.ts:5773`, `:7255` | `{ ...prev, … }` | No |
 | `routes/book-state.ts:224, 816, 1022, 1352, 1440` | `{ ...state, … }` | No |
 | `routes/generation.ts:1438`, `:2221` | `{ ...prev, … }` | No |
 | `workspace/scan.ts:1054` | `{ ...state, chapters: next }` | No |
@@ -109,7 +116,7 @@ write state.json as `const p = stateJsonPath(dir); … writeJsonAtomic(p, stampS
 | `audio/finalize-chapter-write.ts:398` |
 | `cover/store.ts:97`, `:107` |
 | `cover/upload.ts:111`, `:129` |
-| `routes/analysis.ts:5694`, `:7106` |
+| `routes/analysis.ts:5806`, `:7283` |
 | `routes/generation.ts:1453`, `:2239` |
 
 **This is decisive, and it is why Task 1 of the plan exists.** `stampStateSchema` is
@@ -190,7 +197,7 @@ label says?**
 
 | # | Site | What the language decides |
 |---|---|---|
-| 1 | `routes/analysis.ts:3097` | Analyzer language; post-#2245 the dialogue conventions table. **The 25,063-line path.** See the special handling below — this one is not a simple swap. |
+| 1 | `routes/analysis.ts:3163` | Analyzer language; post-#2245 the dialogue conventions table. **The 25,063-line path.** See the special handling below — this one is not a simple swap. |
 | 2 | `routes/generation.ts:796` | `resolveEligibleEngines` + non-English Qwen forcing |
 | 3 | `routes/chapter-splice.ts:333` | Same engine routing at splice time |
 | 4 | `routes/chapter-qa-repair.ts:158` | ASR language hint. **Weakest of the set** — `isNonEnglish(x) ? x : undefined`, and unread unless `SEG_ASR_ENABLED`. Changes QA verdicts (hence repairs) when on. |
@@ -221,7 +228,7 @@ language is null, so all three consumers fail *closed*. Throwing here would brea
 whole library scan for one unset book.
 
 **Site 1 is not a simple swap, and treating it as one is a no-op.**
-`resolveBookLanguageForManuscript` (`routes/analysis.ts:3094-3102`) is:
+`resolveBookLanguageForManuscript` (`routes/analysis.ts:3160-3167`) is:
 
 ```ts
 try {
@@ -317,7 +324,8 @@ the thirteen, so they split into three tiers:
 | Tier | Sites | Shape |
 |---|---|---|
 | **Pre-flight** — can answer before any stream opens | `chapter-splice`, `chapter-qa-repair` ×2, `cast-merge`(provisional) | `409 { error: 'language_unset' }` |
-| **Streaming** — headers already flushed | `cast-design:768`, `single-design:304`, `qwen-voice:578` (all three already `send({type:'error', code:'unsupported_language'})` then `res.end()`), `generation:796`, `analysis:3097` (gate in the POST handler pre-detach; in-loop → SSE `error` via `classifyAnalysisFailure`) | `{ type: 'error', code: 'language_unset' }` in each route's **existing** error envelope |
+| **Streaming** — headers already flushed | `cast-design:768`, `single-design:304`, `qwen-voice:578` (all three already `send({type:'error', code:'unsupported_language'})` then `res.end()`), `analysis:3163` (gate in the POST handler pre-detach; in-loop → SSE `error` via `classifyAnalysisFailure`) | `{ type: 'error', code: 'language_unset' }` in each route's **existing** error envelope |
+| **Streaming, generation's own taxonomy** | `generation:800-805` | `chapter_failed` + `errorCode: 'language-unset'` (fs-19 `FailureCode`, not the shared envelope) — see `docs/superpowers/specs/2026-08-20-generation-language-guard-design.md` |
 | **Batch** — per-item failure inside a 200/207 | `script-review:772`, `:843` | `itemFailureReason`, per CLAUDE.md's five-batch-route rule. **A whole-request 409 is wrong here.** |
 | **Fail-closed value** | `scan.ts:813` | emit `eligibleTtsEngines: []`; never throw |
 | **Pure resolver** | `series-cast-scan.ts:96` | return `null`; callers (`voice-match`, `series-reuse-link`) treat null as "veto — cannot prove same language" |
@@ -423,7 +431,12 @@ comment or string quoting a pattern is never a site.
   `join(<any args>, 'state.json')` — the first draft's two-arg-only pattern missed
   `samples.ts`'s three-arg `join(src, '.audiobook', 'state.json')`.
 - **G3 — fail closed on absent evidence.** Floors of **35 occurrences across 19 files**.
-  Measured 2026-08-13: **43 across 22** (`grep -rn "stateJsonPath(" --include=*.ts server/src | grep -v "\.test\.ts"`).
+  Measured 2026-08-13: **43 across 22**; **re-measured against current `main` 2026-08-14
+  (post-#1984): 45 across 23** (`grep -rn "stateJsonPath(" --include=*.ts server/src | grep -v "\.test\.ts"`).
+  The two additions are the new `store/attribution-health-io.ts` read pair (:46/:104) and
+  a second `series-cast-scan.ts` occurrence (:59 was already counted; :136 is new). The
+  per-file expected-count map below is the binding constraint and must be regenerated
+  from current main at implementation time, not assumed from these floors.
   **Plus a per-file expected-count map**, so aliasing *any single* file reddens — the
   first draft's 15/12 floors were so slack that the neutralisation mutation designed to
   breach them could not (see M1 in the findings). The per-file map is what
@@ -679,3 +692,46 @@ confirms the mechanism reddens `BookStateJson`-typed spreads exactly as claimed.
 defect was in the *enumeration the mechanism was pointed at*, the guard's match patterns
 versus this repo's actual write idiom, and the assumption that a `409` is returnable
 from a streaming job.
+
+## Ship notes
+
+Shipped: TBD (filled at merge). Merge SHA: TBD. Closes #2246 (wave 5b).
+
+**What shipped, against the design above:**
+- Task 1 — the write seam made real: the nine bypass writers (R4) migrated onto
+  `writeStateJsonAtomic`.
+- Task 2 — `BookStateJsonWrite` (`workspace/state-migrate.ts`): `language` required and
+  explicitly nullable on every seam write.
+- Tasks 3–5 — R1 (`routes/import.ts`, absent + `fallback: true` → `null`), R5
+  (`routes/samples.ts`), R2/R3 (`import/scan-import-folder.ts`,
+  `workspace/auto-backup.ts`) all normalise an absent language to an explicit `null`
+  instead of silently defaulting to `'en'`.
+- Task 6 — the thirteen CHANGE-list readers stop defaulting, each in its own route's
+  failure shape (pre-flight `409`, streaming `language_unset`/`unsupported_language`
+  envelope, batch `itemFailureReason`, fail-closed `eligibleTtsEngines: []`, and the
+  `series-cast-scan.ts` pure-resolver `null`); `analysis.ts`'s detached-job site (site 1)
+  gated in the POST handler before the job detaches, per its own three-point treatment.
+- Task 7 — the static guard `server/src/workspace/state-language.guard.test.ts`
+  (G1–G3), with its neutralisation proof.
+- Task 8 — `LibraryBook.languageSet`, additive per **W-1**.
+- Task 9 — `PUT /api/books/:bookId/state` accepts and validates `language`; the
+  library/settings affordance and the blocking-prompt modal.
+- Task 10 — the confirm-screen import-time signal on `languageFallback`, gated on
+  **D-1** ("Decide later" ships).
+
+**Owed acceptance (on-box):** register rows A46 (the three voice-design sites —
+`cast-design`, `qwen-voice`, `single-design` — actually refuse before a live Qwen
+sidecar connection opens on an unset book, and design normally once set) and B3 (an
+unset book hits the analysis language gate, the prompt resolves it, and a live local
+analyzer then selects the set language's own conventions table). Run sheet:
+[`docs/testing/language-recurrence-onbox-acceptance.md`](../../testing/language-recurrence-onbox-acceptance.md).
+
+**Re-confirming the inherited assumption stated at the top of this document** (that the
+seven backfilled books carry the language detection actually decided, verified by
+re-running the corpus measurement, #2246 acceptance item 1): **not verified by this
+branch.** `C:\AudiobookWorkspace` is read-only to every task here, so the corpus
+measurement could not be re-run. Nothing in this branch's own evidence (commits, tests,
+or prior task receipts) constitutes that re-run — the branch's tests exercise the
+*mechanism* (the seam, the type, the guard, the thirteen readers) against fixtures and
+mocks, not the seven live books' actual detected values. This remains an open,
+unverified assumption, carried forward rather than discharged.

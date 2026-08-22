@@ -158,6 +158,7 @@ function writeBookOnDisk(chars: object[]) {
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
       chapters: [],
+      language: 'en',
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

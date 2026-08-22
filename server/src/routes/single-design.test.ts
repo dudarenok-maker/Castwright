@@ -5,7 +5,7 @@
    is needed. */
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -62,6 +62,7 @@ function writeBookOnDisk(dir: string, id: string) {
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
       chapters: [],
+      language: 'en',
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -311,3 +312,37 @@ describe('single-design job — progress token (task-5)', () => {
     expect(events.find((e) => e.type === 'phase' && e.phase === 'designing')).toBeFalsy();
   });
 });
+describe('single-design job — unset book language (Task 6 #2246)', () => {
+  it('emits an SSE error with code "language_unset" (not a silent English design)', async () => {
+    // Remove the `language` key the baseline fixture sets — a legacy/unset book.
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+    delete state.language;
+    writeFileSync(statePath, JSON.stringify(state));
+
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm, confident voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+    const events = collectSse(res);
+    const err = events.find((e) => e.type === 'error');
+    expect(err).toBeTruthy();
+    expect(err?.code).toBe('language_unset');
+    /* No client-facing message may carry a filesystem path. */
+    expect(String(err?.message)).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
+    /* It must not have silently designed in English. */
+    expect(events.find((e) => e.type === 'designed')).toBeFalsy();
+    expect(applyOverrideStub).not.toHaveBeenCalled();
+  });
+
+  it('the control: a book WITH a language still designs normally', async () => {
+    // Baseline fixture already sets language:'en'; just drive the happy path.
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm, confident voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+    const events = collectSse(res);
+    expect(events.find((e) => e.type === 'designed')).toBeTruthy();
+    expect(events.find((e) => e.type === 'error')).toBeFalsy();
+  });
+});
+

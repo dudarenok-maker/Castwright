@@ -38,11 +38,11 @@ import {
 } from '../workspace/queue-io.js';
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { readJson } from '../workspace/state-io.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
-  bookStateLanguage,
+  requireBookStateLanguage,
   findBookByBookId,
   type BookStateJson,
 } from '../workspace/scan.js';
@@ -733,6 +733,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       errorReason:
         'modelKey must be a supported TTS model id (e.g. coqui-xtts-v2, gemini-2.5-flash).',
     });
+    send({ type: 'idle' });
     return res.end();
   }
   const modelKey: TtsModelKey = body.modelKey;
@@ -752,12 +753,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     provider = selectTtsProvider(modelKey);
   } catch (e) {
     send({ type: 'chapter_failed', errorReason: (e as Error).message });
+    send({ type: 'idle' });
     return res.end();
   }
 
   const located = await findBookByBookId(bookId);
   if (!located) {
     send({ type: 'chapter_failed', errorReason: `No book found for id "${bookId}".` });
+    send({ type: 'idle' });
     return res.end();
   }
   const { bookDir, state } = located;
@@ -771,6 +774,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       type: 'chapter_failed',
       errorReason: 'Cast not confirmed yet — open the cast view first.',
     });
+    send({ type: 'idle' });
     return res.end();
   }
 
@@ -793,7 +797,35 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      into a Russian book. Undesigned characters are then blocked (not silently
      downgraded to Kokoro) by `forbidKokoroFallback` at the synthesiseChapter
      call below. English books are untouched (byte-identical to pre-fs-2). */
-  const bookLanguage = bookStateLanguage(state);
+  /* Task 6 (#2246) — an unset book language must not silently route as
+     English. `requireBookStateLanguage` throws for it; generation's own SSE
+     error frame (`chapter_failed`) surfaces the client-facing message. */
+  let bookLanguage: string;
+  try {
+    bookLanguage = requireBookStateLanguage(state);
+  } catch (e) {
+    /* Task 3 (#2515) — classify this bail-out the way Task 2's other eight
+       already are: always errorCode 'language-unset' + chapterId (so the
+       frontend's language-guard detection can reach this path), then an idle
+       tick before closing. F9: chapterId is always attached — either the sole
+       requested chapter or the first chapter in the book for whole-book requests.
+       G7: skip excluded chapters when picking the guard chapterId for whole-book
+       requests, matching the exclusion-filtering logic used elsewhere in this
+       route (e.g., targetChapters filter). P2: if all chapters are excluded,
+       fall back to the first chapter's id anyway (even if excluded) to preserve
+       F9's guarantee that chapterId is never omitted. */
+    const guardChapterId = (requestedIds && requestedIds.length > 0)
+      ? requestedIds[0]
+      : (state.chapters.find((c) => !c.excluded)?.id ?? state.chapters[0]?.id);
+    send({
+      type: 'chapter_failed',
+      errorReason: (e as Error).message,
+      errorCode: 'language-unset',
+      ...(guardChapterId != null ? { chapterId: guardChapterId } : {}),
+    });
+    send({ type: 'idle' });
+    return res.end();
+  }
   const nonEnglishBook = isNonEnglish(bookLanguage);
   const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
   const coquiEligible = eligibleEngines.includes('coqui');
@@ -822,6 +854,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       sidecarLang = sidecarLanguageName(bookLanguage);
     } catch (e) {
       send({ type: 'chapter_failed', errorReason: (e as Error).message });
+      send({ type: 'idle' });
       return res.end();
     }
     const clearedVoices = await clearMismatchedDesignedVoices(
@@ -913,6 +946,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       `Qwen, then regenerate.`;
     console.warn(`[generation] ${message}`);
     send({ type: 'chapter_failed', errorReason: message });
+    send({ type: 'idle' });
     return res.end();
   }
   if (qwenUnavailable && nonEnglishBook && coquiEligible) {
@@ -993,6 +1027,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       type: 'chapter_failed',
       errorReason: 'No analysed sentences cached for this book. Re-run analysis first.',
     });
+    send({ type: 'idle' });
     return res.end();
   }
 
@@ -1047,6 +1082,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             'Free up disk space on the workspace volume (delete old exports, or move the ' +
             'workspace to a larger drive), then start the run again.',
         });
+        send({ type: 'idle' });
         return res.end();
       }
     } catch (e) {
@@ -1450,7 +1486,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                 ),
                 updatedAt: new Date().toISOString(),
               };
-              await writeJsonAtomic(statePath, stampStateSchema(next));
+              await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
             }
           } catch (persistErr) {
             console.warn(
@@ -2236,7 +2272,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             ),
             updatedAt: new Date().toISOString(),
           };
-          await writeJsonAtomic(statePath, stampStateSchema(next));
+          await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
         }
       } catch (persistErr) {
         console.warn(

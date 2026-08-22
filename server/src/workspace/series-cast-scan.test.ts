@@ -37,6 +37,8 @@ beforeAll(async () => {
       characters: Array<{ id: string; name: string }>;
       series?: string;
       isStandalone?: boolean;
+      seriesPosition?: number | null;
+      language?: string;
     },
   ) => {
     const series = opts.series ?? SERIES;
@@ -50,7 +52,11 @@ beforeAll(async () => {
         title,
         author: AUTHOR,
         series,
-        seriesPosition: null,
+        seriesPosition: opts.seriesPosition ?? null,
+        /* When set, writes a `language` field; when omitted, the field is
+           ABSENT from state.json — exactly the `bookStateLanguageOrNull` →
+           null "unset" case the honest resolver (Task 6, #2246) must veto. */
+        ...(opts.language !== undefined ? { language: opts.language } : {}),
         isStandalone: opts.isStandalone === true,
         manuscriptFile: 'manuscript.epub',
         castConfirmed: opts.confirmed,
@@ -99,6 +105,40 @@ beforeAll(async () => {
     confirmed: true,
     series: 'Different Series',
     characters: [{ id: 'unrelated', name: 'Unrelated' }],
+  });
+
+  /* Isolated pair for the Task 6 (#2246) language-veto regression test, filed
+     under their own series (Della Renwick / Reg Series) so they never disturb
+     the scanSeriesCharacters counts asserted against The Hollow Tide above:
+       - Reg One   : confirmed, position 1, language 'en'  (the reuse source)
+       - Reg Two   : confirmed, position 2, language 'en'  (control consumer)
+       - Reg Unset : confirmed, position 3, NO language    (the null veto)
+       - Reg Lang Ctrl : confirmed, language 'es'          (resolver control) */
+  seed('Reg One', {
+    confirmed: true,
+    series: 'Reg Series',
+    seriesPosition: 1,
+    language: 'en',
+    characters: [{ id: 'wren', name: 'Wren' }],
+  });
+  seed('Reg Two', {
+    confirmed: true,
+    series: 'Reg Series',
+    seriesPosition: 2,
+    language: 'en',
+    characters: [],
+  });
+  seed('Reg Unset', {
+    confirmed: true,
+    series: 'Reg Series',
+    seriesPosition: 3,
+    characters: [],
+  });
+  seed('Reg Lang Ctrl', {
+    confirmed: true,
+    series: 'Reg Series',
+    language: 'es',
+    characters: [{ id: 'solo', name: 'Solo' }],
   });
 });
 
@@ -175,5 +215,96 @@ describe('scanSeriesCharactersForBookId', () => {
        in the same series. the Hollow Tide + Bonus Marlow both appear (5 characters
        total). */
     expect(records).toHaveLength(5);
+  });
+});
+
+/* Task 6 (#2246) — pure-resolver tier regression. The honest reader
+   `resolveBookLanguageForBookId` must return `null` (NOT the old 'en' default)
+   for a book whose state.json carries no usable language, and every
+   series-reuse consumer must treat that `null` as "cannot prove same language →
+   veto". Driven through the REAL resolver + the fixture above (Reg Series
+   books are the only state without a Hollow Tide collision). */
+describe('resolveBookLanguageForBookId + reuse consumer veto (#2246)', () => {
+  let link: typeof import('./series-reuse-link.js');
+
+  beforeAll(async () => {
+    link = await import('./series-reuse-link.js');
+  });
+
+  it('returns null (NOT "en") for a book whose state.json has no language', async () => {
+    /* Reg Unset is the fixture with NO `language` key. Before this change the
+       resolver defaulted to 'en'; it must now report the honest null. */
+    expect(await scan.resolveBookLanguageForBookId('della-renwick__reg-series__reg-unset')).toBeNull();
+  });
+
+  it('returns the real language when the book has one set (control)', async () => {
+    await expect(scan.resolveBookLanguageForBookId('della-renwick__reg-series__reg-one')).resolves.toBe('en');
+    await expect(scan.resolveBookLanguageForBookId('della-renwick__reg-series__reg-lang-ctrl')).resolves.toBe('es');
+  });
+
+  it('linkSeriesReuseAtAnalysis vetoes: a null-language current book links nothing', async () => {
+    /* Reg Unset has no language, so even though Reg One is a same-author +
+       same-series, earlier (position 1 < 3) series-mate, the true language
+       can't be proven on the current side → zero candidates, no link. */
+    const characters: Array<{
+      id: string;
+      name: string;
+      gender: 'female';
+      ageRange: 'teen';
+      matchedFrom?: { bookId?: string; characterId?: string; bookTitle?: string; confidence?: number };
+    }> = [{ id: 'wren-2', name: 'Wren', gender: 'female', ageRange: 'teen' }];
+    const linked = await link.linkSeriesReuseAtAnalysis(
+      'della-renwick__reg-series__reg-unset',
+      characters,
+      { castLoader: async () => null },
+    );
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+  });
+
+  it('linkSeriesReuseAtAnalysis control: two stated-`en` series-mates DO link', async () => {
+    /* Reg Two (position 2, language 'en') legitimately reuses Reg One's Wren
+       (position 1, language 'en'). The veto must NOT fire for a proven pair. */
+    const characters: Array<{
+      id: string;
+      name: string;
+      gender: 'female';
+      ageRange: 'teen';
+      matchedFrom?: { bookId?: string; characterId?: string; bookTitle?: string; confidence?: number };
+    }> = [{ id: 'wren-2', name: 'Wren', gender: 'female', ageRange: 'teen' }];
+    const linked = await link.linkSeriesReuseAtAnalysis(
+      'della-renwick__reg-series__reg-two',
+      characters,
+      { castLoader: async () => null },
+    );
+    expect(linked).toBe(1);
+    expect(characters[0].matchedFrom?.bookId).toBe('della-renwick__reg-series__reg-one');
+  });
+
+  it('pruneStaleReuseLinks vetoes: a null-language current book drops its stale links', async () => {
+    /* Reg Unset carries a reused voice whose `matchedFrom` points at Reg One.
+       Null language on the current side ⇒ "cannot prove same language" ⇒ the
+       link is pruned (not preserved as a same-language match). */
+    const characters: Array<{
+      id: string;
+      name: string;
+      voiceState: 'reused';
+      matchedFrom: { bookId: string; characterId: string; bookTitle: string; confidence: number };
+    }> = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        voiceState: 'reused',
+        matchedFrom: {
+          bookId: 'della-renwick__reg-series__reg-one',
+          characterId: 'wren',
+          bookTitle: 'Reg One',
+          confidence: 1,
+        },
+      },
+    ];
+    const dropped = await link.pruneStaleReuseLinks('della-renwick__reg-series__reg-unset', characters);
+    expect(dropped).toBe(1);
+    expect(characters[0].matchedFrom).toBeUndefined();
   });
 });

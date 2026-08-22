@@ -1,0 +1,638 @@
+/* useLanguageGuard — verifies the global language-guard host (#2246 Task 9c):
+     - guard(bookId, shape, onRetry) opens EditBookMetaModal in guard mode
+       with the language field empty; picking a language + Save persists the
+       patch then re-runs onRetry;
+     - the modal does NOT open for a book the library doesn't know;
+     - on mount the hook registers itself as the language-guard-bus handler, so
+       the four 409 sites in api.ts can route a language-unset failure here.
+
+   Pairs with src/hooks/use-reverse-local-analyzer-guard.test.tsx (same shape). */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { useAppDispatch } from '../store';
+import { librarySlice } from '../store/library-slice';
+import { notificationsSlice } from '../store/notifications-slice';
+import { useLanguageGuard, type LanguageGuardResult } from './use-language-guard';
+import { emitLanguageGuard, type LanguageGuardSelector } from '../lib/language-guard-bus';
+import { api } from '../lib/api';
+import type { LibraryBook } from '../lib/types';
+
+vi.mock('../lib/api', () => ({
+  api: {
+    putBookState: vi.fn(),
+    getLibrary: vi.fn(),
+  },
+}));
+
+const mockedApi = vi.mocked(api);
+
+function unsetBook(): LibraryBook {
+  return {
+    bookId: 'b_marlow',
+    manuscriptId: 'm_marlow',
+    title: 'The Coalfall Commission',
+    author: 'Della Renwick',
+    series: 'The Hollow Tide',
+    seriesPosition: 1,
+    isStandalone: false,
+    status: 'cast_pending',
+    chapterCount: 0,
+    completedChapters: 0,
+    characterCount: 0,
+    voiceCount: 0,
+    lastWorkedOn: '2026-08-10T00:00:00Z',
+    coverGradient: ['#fff', '#000'],
+    tags: [],
+    languageSet: false,
+  };
+}
+
+function makeStore(book: LibraryBook | null) {
+  const store = configureStore({
+    reducer: {
+      library: librarySlice.reducer,
+      notifications: notificationsSlice.reducer,
+    },
+  });
+  if (book) store.dispatch(librarySlice.actions.addBook(book));
+  return store;
+}
+
+function Harness({
+  onProceed,
+  onDismiss,
+  selector = { bookId: 'b_marlow' },
+}: {
+  onProceed: () => void;
+  onDismiss?: () => void;
+  selector?: LanguageGuardSelector;
+}) {
+  const { guard, modal } = useLanguageGuard();
+  return (
+    <>
+      <button onClick={() => void guard(selector, '409', onProceed, onDismiss)}>Trigger</button>
+      {modal}
+    </>
+  );
+}
+
+function ReturnHarness() {
+  const { guard, modal } = useLanguageGuard();
+  const [ok, setOk] = useState<boolean | null>(null);
+  return (
+    <>
+      <button onClick={() => setOk(guard({ bookId: 'b_missing' }, '409', () => {}))}>Go</button>
+      <div data-testid="ok">{ok === null ? 'none' : String(ok)}</div>
+      {modal}
+    </>
+  );
+}
+
+beforeEach(() => {
+  vi.mocked(api.putBookState).mockReset().mockResolvedValue(undefined);
+  vi.mocked(api.getLibrary)
+    .mockReset()
+    .mockResolvedValue({ authors: [] });
+});
+
+describe('useLanguageGuard', () => {
+  it('opens the guard modal empty; picking a language + Save persists it then retries (acceptance 1)', async () => {
+    const store = makeStore(unsetBook());
+    const retry = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={retry} />
+      </Provider>,
+    );
+
+    // Trigger the guard: modal opens in guard mode with the hint banner.
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    expect(screen.getByText('Set a language to continue')).toBeInTheDocument();
+
+    // Guard mode always seeds the language empty.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    expect(select.value).toBe('');
+
+    // Choose a language — Save becomes enabled.
+    fireEvent.change(select, { target: { value: 'ru' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(mockedApi.putBookState).toHaveBeenCalledWith('b_marlow', {
+      slice: 'state',
+      patch: expect.objectContaining({ language: 'ru' }),
+    });
+    expect(mockedApi.getLibrary).toHaveBeenCalled();
+  });
+
+  it('does not open a modal when the library has no matching book', () => {
+    const store = makeStore(null);
+    const retry = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={retry} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('opens the guard for a book resolved by manuscriptId (analysis pathway, acceptance 5)', () => {
+    const store = makeStore(unsetBook());
+    render(
+      <Provider store={store}>
+        <Harness onProceed={() => {}} selector={{ manuscriptId: 'm_marlow' }} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+  });
+
+  it('reports false and opens nothing when the selector matches no library book (acceptance 8)', () => {
+    const store = makeStore(unsetBook());
+    render(
+      <Provider store={store}>
+        <ReturnHarness />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(screen.getByTestId('ok').textContent).toBe('false');
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('refuses through the bus too when the selector matches no library book (acceptance 8)', () => {
+    const store = makeStore(unsetBook());
+    render(
+      <Provider store={store}>
+        <Harness onProceed={() => {}} />
+      </Provider>,
+    );
+
+    let accepted = true;
+    act(() => {
+      accepted = emitLanguageGuard({
+        selector: { manuscriptId: 'm_unknown' },
+        shape: '409',
+        onRetry: () => {},
+      });
+    });
+    expect(accepted).toBe(false);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('calls onDismiss when the guard modal is dismissed without saving (acceptance 7)', () => {
+    const store = makeStore(unsetBook());
+    const onDismiss = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={() => {}} onDismiss={onDismiss} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('registers itself as the bus handler so the api layer can route a 409 here', () => {
+    const store = makeStore(unsetBook());
+    const retry = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={retry} />
+      </Provider>,
+    );
+
+    // Simulate the api layer routing a language-unset 409 through the bus.
+    let accepted = false;
+    act(() => {
+      accepted = emitLanguageGuard({ selector: { bookId: 'b_marlow' }, shape: '409', onRetry: retry });
+    });
+    expect(accepted).toBe(true);
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+  });
+
+  it('surfaces a failed guard-mode save as an error toast, not a dismiss (F1 regression)', async () => {
+    const store = makeStore(unsetBook());
+    const retry = vi.fn();
+    const onDismiss = vi.fn();
+    const saveError = new Error('Network error: 500');
+    vi.mocked(api.putBookState).mockRejectedValue(saveError);
+
+    render(
+      <Provider store={store}>
+        <Harness onProceed={retry} onDismiss={onDismiss} />
+      </Provider>,
+    );
+
+    // Trigger the guard: modal opens in guard mode.
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Choose a language and click Save.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'ru' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    // Wait for the save attempt to complete.
+    await waitFor(() => expect(mockedApi.putBookState).toHaveBeenCalledTimes(1));
+
+    // The modal should still be open (not closed by onClose).
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // onDismiss should NOT have been called (this is the bug we're fixing).
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    // An error toast should have been shown.
+    const toasts = (store.getState() as any).notifications?.toasts ?? [];
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({
+      kind: 'error',
+      message: expect.stringContaining("Couldn't save the book's language"),
+    });
+
+    // The user should be able to retry by clicking Save again.
+    vi.mocked(api.putBookState).mockResolvedValue(undefined);
+    vi.mocked(api.getLibrary).mockResolvedValue({ authors: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(mockedApi.putBookState).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('accumulates and fires all retries when a multi-chapter batch guards multiple times (F8 regression)', async () => {
+    const store = makeStore(unsetBook());
+    const retry1 = vi.fn();
+    const retry2 = vi.fn();
+    const retry3 = vi.fn();
+
+    function MultiGuardHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', retry1)}>Retry1</button>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', retry2)}>Retry2</button>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', retry3)}>Retry3</button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <MultiGuardHarness />
+      </Provider>,
+    );
+
+    // Simulate a multi-chapter batch: 3 chapters fail with 409, each triggering guard().
+    fireEvent.click(screen.getByRole('button', { name: 'Retry1' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Second chapter fails while guard is already open.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry2' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Third chapter fails while guard is still open.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry3' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Set the language and save.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    // All three retries should fire.
+    await waitFor(() => {
+      expect(retry1).toHaveBeenCalledTimes(1);
+      expect(retry2).toHaveBeenCalledTimes(1);
+      expect(retry3).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('invokes a superseded guard\'s dismisses instead of dropping them (G1 regression)', async () => {
+    // Two books in the library
+    const store = makeStore(null);
+    const bookA = unsetBook();
+    const bookB = { ...unsetBook(), bookId: 'b_second', manuscriptId: 'm_second' };
+    store.dispatch(librarySlice.actions.addBook(bookA));
+    store.dispatch(librarySlice.actions.addBook(bookB));
+
+    const dismissA = vi.fn();
+    const dismissB = vi.fn();
+    const retryA = vi.fn();
+    const retryB = vi.fn();
+
+    function CrossBookGuardHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button
+            onClick={() => void guard({ bookId: 'b_marlow' }, '409', retryA, dismissA)}
+          >
+            GuardA
+          </button>
+          <button
+            onClick={() => void guard({ bookId: 'b_second' }, '409', retryB, dismissB)}
+          >
+            GuardB
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <CrossBookGuardHarness />
+      </Provider>,
+    );
+
+    // Open guard for book A.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardA' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    // The modal should show book A's title.
+    expect(screen.getByText('The Coalfall Commission')).toBeInTheDocument();
+
+    // Before the user acts on book A, book B's guard arrives (e.g., from a
+    // concurrent operation or the queue draining a book-B entry). This should:
+    // 1. Invoke book A's dismisses (so any promises parked on it settle)
+    // 2. Then replace the pending guard with book B's
+    fireEvent.click(screen.getByRole('button', { name: 'GuardB' }));
+
+    // Book A's dismisses MUST have been invoked (the fix this test gates).
+    expect(dismissA).toHaveBeenCalledTimes(1);
+
+    // The modal should now show book B (title is the same in the test fixtures,
+    // but the selector is different, which is what matters).
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // Book B's dismiss should NOT have been called yet (it's the current guard).
+    expect(dismissB).not.toHaveBeenCalled();
+
+    // Now dismiss book B; its dismiss should fire.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(dismissB).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('invokes dismisses when a different selector shape (bookId vs manuscriptId) supersedes (G1 shape-mismatch edge case)', async () => {
+    // Single book, but guards come in via different selector shapes
+    const store = makeStore(unsetBook());
+
+    const dismissBookId = vi.fn();
+    const dismissManuscriptId = vi.fn();
+
+    function MixedSelectorHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button
+            onClick={() => void guard({ bookId: 'b_marlow' }, '409', () => {}, dismissBookId)}
+          >
+            GuardByBookId
+          </button>
+          <button
+            onClick={() =>
+              void guard({ manuscriptId: 'm_marlow' }, '409', () => {}, dismissManuscriptId)
+            }
+          >
+            GuardByManuscriptId
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <MixedSelectorHarness />
+      </Provider>,
+    );
+
+    // Open guard using bookId selector.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardByBookId' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // A guard arrives using manuscriptId selector for the SAME book.
+    // Since selectorsEqual treats { bookId: X } and { manuscriptId: Y } as NOT equal,
+    // this will trigger the selector-mismatch path and should invoke dismissBookId.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardByManuscriptId' }));
+
+    // The dismisses from the bookId guard should have been invoked.
+    expect(dismissBookId).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // dismissManuscriptId should NOT have been called yet (it's the current guard).
+    expect(dismissManuscriptId).not.toHaveBeenCalled();
+
+    // Cancel; this should invoke dismissManuscriptId.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(dismissManuscriptId).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('edit-book-language-guard')).not.toBeInTheDocument();
+  });
+
+  it('resolves shape/sseSource correctly when accumulated guards span different sources (G6 regression)', async () => {
+    // When multiple guard() calls for the SAME book arrive with different shapes/sources,
+    // the modal should show copy matching the LATEST call, not the first one.
+    const store = makeStore(unsetBook());
+    const retryBatch = vi.fn();
+    const retryGeneration = vi.fn();
+
+    function HeterogeneousGuardHarness() {
+      const { guard, modal } = useLanguageGuard();
+      return (
+        <>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, 'batch', retryBatch)}>
+            GuardBatch
+          </button>
+          <button
+            onClick={() =>
+              void guard({ bookId: 'b_marlow' }, 'sse', retryGeneration, undefined, 'generation')
+            }
+          >
+            GuardGeneration
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <HeterogeneousGuardHarness />
+      </Provider>,
+    );
+
+    // Trigger first guard with 'batch' shape.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardBatch' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    // The modal should show the batch-specific hint initially.
+    expect(screen.getByText(/Script review needs a book language/)).toBeInTheDocument();
+
+    // Before the user acts, a second guard arrives for the same book with 'sse' shape
+    // and 'generation' source. This simulates a generation stream failing while the
+    // batch review modal is still open.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardGeneration' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+
+    // The modal's hint text should now reflect the LATEST guard's shape/source
+    // (sse + generation), NOT the first guard's (batch).
+    // Generation-specific copy: "Generating voices needs a book language..."
+    expect(screen.getByText(/Generating voices needs a book language/)).toBeInTheDocument();
+    // The batch copy should no longer be visible.
+    expect(screen.queryByText(/Script review needs a book language/)).not.toBeInTheDocument();
+
+    // Both retries should fire when the user sets the language.
+    const select = screen.getByTestId('edit-book-language') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(retryBatch).toHaveBeenCalledTimes(1);
+      expect(retryGeneration).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('invokes dismisses from a superseded guard when called from within a dispatch context without React purity violation (P1 regression)', () => {
+    // This test reproduces the actual failure mode: guard() called from within
+    // a dispatch/render context where React's purity requirements are stricter.
+    // The fix moves dismiss invocations outside the setState updater so side
+    // effects (Redux dispatches) don't violate React's rules.
+    const store = makeStore(null);
+    const bookA = unsetBook();
+    const bookB = { ...unsetBook(), bookId: 'b_second', manuscriptId: 'm_second' };
+    store.dispatch(librarySlice.actions.addBook(bookA));
+    store.dispatch(librarySlice.actions.addBook(bookB));
+
+    const dismissA = vi.fn();
+    const dismissB = vi.fn();
+
+    // Spy on console.error to catch React warnings about updating while rendering
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    function NestedDispatchHarness() {
+      const dispatch = useAppDispatch();
+      const { guard, modal } = useLanguageGuard();
+
+      return (
+        <>
+          <button onClick={() => void guard({ bookId: 'b_marlow' }, '409', () => {}, dismissA)}>
+            GuardA
+          </button>
+          <button
+            onClick={() => {
+              // Simulate guard() being called from within a dispatch context.
+              // This is how it happens in real code like generation-stream-runner.ts
+              // when a handler invokes guard() from within a Redux-dispatch-driven update.
+              dispatch((() => {
+                guard({ bookId: 'b_second' }, '409', () => {}, dismissB);
+                return undefined;
+              }) as any);
+            }}
+          >
+            GuardBFromDispatch
+          </button>
+          {modal}
+        </>
+      );
+    }
+
+    render(
+      <Provider store={store}>
+        <NestedDispatchHarness />
+      </Provider>,
+    );
+
+    // Open guard for book A.
+    fireEvent.click(screen.getByRole('button', { name: 'GuardA' }));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    expect(dismissA).not.toHaveBeenCalled();
+
+    // Before the user acts, call guard() from within a dispatch (simulating
+    // the real-world scenario from generation-stream-runner.ts chapter_failed handler).
+    fireEvent.click(screen.getByRole('button', { name: 'GuardBFromDispatch' }));
+
+    // The P1 fix ensures dismissA is invoked without React purity violations.
+    expect(dismissA).toHaveBeenCalledTimes(1);
+    expect(dismissB).not.toHaveBeenCalled();
+
+    // Verify no "Cannot update a component while rendering" error.
+    const criticalErrors = consoleErrorSpy.mock.calls.filter((args) => {
+      const message = String(args[0] || '');
+      return message.includes('Cannot update a component');
+    });
+    expect(criticalErrors).toHaveLength(0);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('invokes dismisses correctly when two guard() calls happen synchronously without intervening React commit (R1 regression - stale pendingRef)', () => {
+    // This test catches the stale-ref bug exposed by R1 in PR #2492 pass-6.
+    // The bug: guard() reads pendingRef.current to determine which dismisses to invoke,
+    // but pendingRef is only synced via a passive useEffect that runs AFTER React commits.
+    // When two guard() calls happen synchronously (in the same tick, no intervening
+    // React commit), the second call reads a STALE pendingRef.current, causing it to
+    // invoke the wrong (or zero) dismisses.
+    //
+    // This test calls guard() twice in one synchronous block (via act), which is exactly
+    // the window where the bug manifests. The test MUST be RED before the fix and GREEN
+    // after pendingRef is made authoritative at assignment time.
+    const store = makeStore(null);
+    const bookA = unsetBook();
+    const bookB = { ...unsetBook(), bookId: 'b_second', manuscriptId: 'm_second' };
+    store.dispatch(librarySlice.actions.addBook(bookA));
+    store.dispatch(librarySlice.actions.addBook(bookB));
+
+    const dismissA = vi.fn();
+    const dismissB = vi.fn();
+
+    let capturedGuard: LanguageGuardResult['guard'] | null = null;
+
+    function CaptureHarness() {
+      const result = useLanguageGuard();
+      capturedGuard = result.guard;
+      return <>{result.modal}</>;
+    }
+
+    render(
+      <Provider store={store}>
+        <CaptureHarness />
+      </Provider>,
+    );
+
+    expect(capturedGuard).not.toBeNull();
+    const guard = capturedGuard!;
+
+    // Call guard() twice synchronously in one tick (no fireEvent, no await between them).
+    // This is the exact scenario where the stale-ref bug manifests.
+    act(() => {
+      // First guard for book A
+      const result1 = guard({ bookId: 'b_marlow' }, '409', () => {}, dismissA);
+      expect(result1).toBe(true);
+
+      // Second guard for book B, immediately after (still in the same synchronous block).
+      // Since it's a different book, book A's guard is superseded and dismissA should be invoked.
+      const result2 = guard({ bookId: 'b_second' }, '409', () => {}, dismissB);
+      expect(result2).toBe(true);
+    });
+
+    // The bug: dismissA is silently skipped because guard() read a stale pendingRef.current
+    // when deciding which dismisses to invoke. The fix ensures dismissA is called.
+    expect(dismissA).toHaveBeenCalledTimes(1);
+    expect(dismissB).not.toHaveBeenCalled();
+  });
+});

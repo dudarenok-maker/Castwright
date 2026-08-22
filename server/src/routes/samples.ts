@@ -22,22 +22,33 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { parseManuscript } from '../parsers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SAMPLES_ROOT = resolve(__dirname, '..', '..', '..', 'samples');
+/* Testability seam: the committed sample set lives under samples/ next to the
+   module, but tests that need a controlled bundle inject their own directory
+   via setSamplesRoot(). */
+let samplesRoot = resolve(__dirname, '..', '..', '..', 'samples');
+
+export function setSamplesRoot(root: string): void {
+  samplesRoot = root;
+}
+export function _resetSamplesRoot(): void {
+  samplesRoot = resolve(__dirname, '..', '..', '..', 'samples');
+}
 
 export const samplesRouter = Router();
 
 /* GET /api/samples — list the committed sample books. */
 samplesRouter.get('/', async (_req: Request, res: Response) => {
-  if (!existsSync(SAMPLES_ROOT)) return res.json({ samples: [] });
-  const entries = await readdir(SAMPLES_ROOT, { withFileTypes: true });
+  if (!existsSync(samplesRoot)) return res.json({ samples: [] });
+  const entries = await readdir(samplesRoot, { withFileTypes: true });
   const samples: Array<{ slug: string; title: string; author: string }> = [];
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const statePath = join(SAMPLES_ROOT, e.name, '.audiobook', 'state.json');
+    const statePath = join(samplesRoot, e.name, '.audiobook', 'state.json');
     if (!existsSync(statePath)) continue;
     const st = JSON.parse(await readFile(statePath, 'utf8'));
     samples.push({ slug: e.name, title: st.title, author: st.author });
@@ -51,8 +62,8 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const slug = req.params.slug;
     let src: string;
     try {
-      src = join(SAMPLES_ROOT, sanitizeIdSegment(safeSegment(slug)));
-      assertContained(SAMPLES_ROOT, src);
+      src = join(samplesRoot, sanitizeIdSegment(safeSegment(slug)));
+      assertContained(samplesRoot, src);
     } catch {
       return res.status(400).json({ error: 'Invalid sample slug.' });
     }
@@ -61,7 +72,9 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     }
     ensureWorkspace();
 
-    const bundleState = JSON.parse(await readFile(join(src, '.audiobook', 'state.json'), 'utf8'));
+    const bundleState = JSON.parse(
+      await readFile(join(src, '.audiobook', 'state.json'), 'utf8'),
+    ) as BookStateJson;
     const { author, series, title, manuscriptFile } = bundleState;
     let safeManuscriptFile: string;
     try {
@@ -102,6 +115,11 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
     const now = new Date().toISOString();
     const state = {
       ...bundleState,
+      /* A bundle whose state.json omits `language` must land on disk as an
+         explicit `language: null` (key present) — never a missing key, and
+         never the 'en' guess that makes a surrender indistinguishable from a
+         decision. A bundle that does carry a language round-trips unchanged. */
+      language: bundleState.language ?? null,
       bookId,
       manuscriptId,
       createdAt: now,

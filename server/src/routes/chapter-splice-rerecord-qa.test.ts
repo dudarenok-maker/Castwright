@@ -93,6 +93,7 @@ beforeAll(async () => {
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
+      language: 'en',
       chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),

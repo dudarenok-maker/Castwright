@@ -41,6 +41,11 @@ export const MOCK_LIBRARY: LibraryResponse = {
               lastWorkedOn: '3 days ago',
               coverGradient: ['#6B6663', '#1A1A1A'],
               tags: ['favourite', 'series-1'],
+              /* Task 9e — language explicitly set so the badge renders (not
+                 the "unset" affordance) on the fixture the e2e suite uses
+                 most. */
+              language: 'en',
+              languageSet: true,
             },
             {
               bookId: 'ns',
@@ -63,6 +68,8 @@ export const MOCK_LIBRARY: LibraryResponse = {
               coverGradient: ['#3C194F', '#0F0E0D'],
               pinned: true,
               tags: ['series-1'],
+              language: 'en',
+              languageSet: true,
             },
             {
               bookId: 'cc',
@@ -83,6 +90,12 @@ export const MOCK_LIBRARY: LibraryResponse = {
               lastWorkedOn: 'Yesterday',
               coverGradient: ['#D4A04E', '#7B5A26'],
               tags: [],
+              /* Task 9e — language unset on this fixture so the e2e spec can
+                 exercise the "Language unset" affordance → guard modal → save
+                 golden path. `language` resolves to 'en' for display, but
+                 `languageSet: false` is the branch the affordance keys on. */
+              language: 'en',
+              languageSet: false,
             },
           ],
         },
@@ -109,6 +122,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               /* fe-16 — the workspace's one Russian book, so the library spans
                  >1 language and the En/Русский filter pills render under mocks. */
               language: 'ru',
+              languageSet: true,
             },
             {
               /* voices_pending — cast confirmed, generation not started. Reopens
@@ -132,6 +146,8 @@ export const MOCK_LIBRARY: LibraryResponse = {
               lastWorkedOn: 'Just now',
               coverGradient: ['#243B4A', '#0F0E0D'],
               tags: [],
+              language: 'en',
+              languageSet: true,
             },
           ],
         },

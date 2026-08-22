@@ -146,9 +146,9 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
-import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
@@ -3047,6 +3047,25 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
 
+  /* Task 6c (#2246) pre-flight gate — resolve the book's language BEFORE the
+     SSE headers open, so a *located* book that never declared a language
+     answers a real HTTP `409 { error: 'language_unset' }` instead of a
+     streamed 200 that silently analyses in English. This is the one reader
+     site whose naive swap is a no-op: `resolveBookLanguageForManuscript` now
+     throws `BookLanguageUnsetError` for that case (previously it was caught
+     and collapsed to 'en' by the whole-body catch). The two genuinely
+     pre-confirm carve-outs still resolve 'en' and sail through here:
+     - `located === null` — no book on disk yet, nothing to have been set.
+     - a scan lookup failure — never block analysis on a disk read. */
+  try {
+    await resolveBookLanguageForManuscript(manuscriptId);
+  } catch (e) {
+    if (e instanceof BookLanguageUnsetError) {
+      return res.status(409).json({ error: 'language_unset' });
+    }
+    throw e;
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -3248,16 +3267,29 @@ export interface MainAnalyzerJobOpts {
    paths, not just unit tests of the watermark) needs end-to-end
    coverage that drives this body with spy analyzers + a stub record. */
 /* fs-2 — resolve a manuscript's book language for the analyzer preamble.
-   Returns the book's BCP-47 language ('en' default), or 'en' when no book is
-   found on disk yet (analysis can run pre-confirm in some paths). Best-effort:
-   a lookup failure must never block analysis, so it swallows errors to 'en'. */
+   Returns the book's BCP-47 language, or 'en' when no book is found on disk
+   yet (analysis can run pre-confirm in some paths). Task 6c call-site parity —
+   this is the ONE reader site the earlier children carved out because the
+   naive `bookStateLanguage`→`requireBookStateLanguage` swap is a no-op behind
+   a whole-body `catch { return 'en' }`. That swallow is now gone for the
+   located-with-no-language case: a *located* book that never declared a
+   language is a fact, not English, so it throws `BookLanguageUnsetError` and
+   the caller decides how to surface it (the POST handler answers a real HTTP
+   409; the detached loop emits an SSE `language_unset` error). The two
+   fail-open carve-outs that are genuinely pre-confirm still resolve 'en':
+   - `located === null` — no book on disk yet, so there is no language to have
+     been set (deliberate carve-out, must survive).
+   - a scan *lookup* failure — a disk read must never block analysis.
+   Everything else uses the honest strict reader. */
 export async function resolveBookLanguageForManuscript(manuscriptId: string): Promise<string> {
+  let located: Awaited<ReturnType<typeof findBookByManuscriptId>>;
   try {
-    const located = await findBookByManuscriptId(manuscriptId);
-    return located ? bookStateLanguage(located.state) : 'en';
+    located = await findBookByManuscriptId(manuscriptId);
   } catch {
     return 'en';
   }
+  if (!located) return 'en';
+  return requireBookStateLanguage(located.state);
 }
 
 /* #938 — the book's byline author (cover/byline name), for the Layer A front-matter
@@ -3289,8 +3321,26 @@ export async function runMainAnalyzerJob(
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
   /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
-     Resolved once per job; threaded into every runStage* call below. */
-  const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+     Resolved once per job; threaded into every runStage* call below.
+     Task 6c: `resolveBookLanguageForManuscript` now throws BookLanguageUnsetError
+     for a *located* book that never declared a language (instead of silently
+     reading 'en'), so the detached loop must surface it rather than analyse in
+     English. This job body runs with no `res` to answer with, so it emits an
+     SSE `error` with code `language_unset` through the same
+     `endJob`/broadcast mechanism `classifyAnalysisFailure` uses for
+     lock-contention. The subscribed `BookLanguageUnsetError` message is the
+     curated, client-facing sentence — it carries no filesystem path, so the
+     SSE `error` body leaks nothing over LAN HTTPS. */
+  let bookLanguage: string;
+  try {
+    bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  } catch (e) {
+    if (e instanceof BookLanguageUnsetError) {
+      endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
+      return;
+    }
+    throw e;
+  }
   /* #938 Layer A — resolve the byline author + strip title-page/e-library
      boilerplate from each chapter body BEFORE the model sees it. In-memory only
      (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
@@ -5963,7 +6013,7 @@ export async function runMainAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, stampStateSchema(next));
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
           }
         }
       } catch (persistErr) {
@@ -6335,8 +6385,21 @@ export async function runSubsetAnalyzerJob(
   allowStage1ShrinkSubset: boolean,
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
-  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate. */
-  const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
+     Task 6c: same contract as the main job — a *located* book that never
+     declared a language throws BookLanguageUnsetError here (not a silent 'en'),
+     which this detached subset body surfaces as an SSE `error` with code
+     `language_unset` (no filesystem path in the body). */
+  let bookLanguage: string;
+  try {
+    bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  } catch (e) {
+    if (e instanceof BookLanguageUnsetError) {
+      endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
+      return;
+    }
+    throw e;
+  }
   /* #938 Layer A — resolve the byline author + strip title-page/e-library
      boilerplate from each chapter body BEFORE the model sees it. In-memory only
      (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
@@ -7508,7 +7571,7 @@ export async function runSubsetAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, stampStateSchema(next));
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
           }
         }
       } catch (persistErr) {

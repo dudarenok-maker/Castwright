@@ -66,7 +66,11 @@ function writeBookOnDisk(
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      ...(language ? { language } : {}),
+      ...(language === undefined
+        ? { language: 'en' } /* positive-path fixture books are English */
+        : language
+          ? { language }
+          : {}),
     }),
   );
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');

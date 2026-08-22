@@ -16,8 +16,9 @@
    and delegates to `runner.handleTick`, regardless of which middleware
    opened the stream. */
 
-import type { Dispatch } from '@reduxjs/toolkit';
+import type { AppDispatch } from './index';
 import { api } from '../lib/api';
+import { emitLanguageGuard } from '../lib/language-guard-bus';
 import {
   buildGenerationStartedEvent,
   buildGenerationRunCompleteEvent,
@@ -29,6 +30,7 @@ import { chaptersActions } from './chapters-slice';
 import { changeLogActions } from './change-log-slice';
 import { revisionsActions } from './revisions-slice';
 import { notificationsActions } from './notifications-slice';
+import { retryQueueEntry } from './queue-thunks';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
 import type { GenerationTick, TtsModelKey } from '../lib/types';
 
@@ -75,7 +77,7 @@ const IMMEDIATE_TOAST_ERROR_CODES = new Set(['voice-not-designed', 'cloned-voice
     store; kept narrow (only `chapters`) so the runner doesn't import the
     store's circular `RootState` and stays usable from lean test stores. */
 export interface StreamRunnerStore {
-  dispatch: Dispatch;
+  dispatch: AppDispatch;
   getState: () => { chapters: ChaptersState };
 }
 
@@ -89,6 +91,11 @@ interface OpenHandle {
   /** The single chapter this stream renders, when known. Null on the
       back-compat `*` open. */
   chapterId: number | null;
+  /** The queue entry this stream fulfils, when opened by the dispatcher.
+      Null for the legacy back-compat open. Lets the language guard's
+      onRetry call retryQueueEntry without duplicating the dispatcher's
+      own open logic. */
+  queueEntryId: string | null;
   modelKey: TtsModelKey;
   /** Chapter ids this stream is rendering (the spec's chapterIds). Lets the
       dispatcher answer "is chapter X already being generated?" so two workers
@@ -126,6 +133,11 @@ export interface StreamRunner {
   hasOpenStreamForChapter(bookId: string, chapterId: number): boolean;
   /** Is ANY stream open for this book? — kept for the halt path. */
   hasOpenStreamForBook(bookId: string): boolean;
+  /** Is a language guard currently open (or recently opened) for this
+      book? The dispatcher's STEP 2 claim loop skips a book while this is
+      true, bounding the same-tick refill an unset-language book would
+      otherwise drain into `failed` chapter by chapter. */
+  hasPendingLanguageGuard(bookId: string): boolean;
   /** Union of chapter ids across all open streams — so the dispatcher never
       claims a chapter that's already rendering. */
   openChapterIds(): number[];
@@ -194,6 +206,29 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
      that follows the park's `idle` close — see that method's doc comment
      for why this can't be read off the queue slice instead. */
   const chapterAwaitingConfirm = new Set<string>();
+  /* Per-book language-guard suppression, TTL-bounded. Maps bookId → the
+     timestamp its guard was opened. N concurrent workers of the same
+     book hitting language-unset emit the guard exactly once while an
+     entry is fresh here. The TTL (not a plain Set cleared only by
+     onRetry/onDismiss) exists because use-language-guard.tsx has a
+     single app-wide modal slot: a second emitLanguageGuard call from ANY
+     of the nine guard-emitting call sites while one is pending silently
+     overwrites it, dropping this book's callbacks with no signal. An
+     unbounded Set would then leave hasPendingLanguageGuard true forever,
+     permanently excluding the book from dispatcher STEP 2 claims
+     (see queue-dispatcher-middleware.ts). The TTL bounds that exposure. */
+  const LANGUAGE_GUARD_TTL_MS = 2 * 60 * 1000;
+  const languageGuardPending = new Map<string, number>();
+
+  const isLanguageGuardPending = (bookId: string): boolean => {
+    const addedAt = languageGuardPending.get(bookId);
+    if (addedAt == null) return false;
+    if (Date.now() - addedAt > LANGUAGE_GUARD_TTL_MS) {
+      languageGuardPending.delete(bookId);
+      return false;
+    }
+    return true;
+  };
   const dispatch = store.dispatch;
 
   const close = (key: string): void => {
@@ -299,6 +334,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       modelKey,
       chapterIds: ids,
       completedChapterIds: [],
+      queueEntryId: opts.queueEntryId ?? null,
     });
   };
 
@@ -404,6 +440,58 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           }),
         );
       }
+      /* Language-unset is deterministic and book-wide: N concurrent workers
+         of the same book can each hit it independently, so route through a
+         per-book, TTL-bounded suppression map rather than opening the guard
+         once per failing stream. */
+      if (ev.errorCode === 'language-unset' && !isLanguageGuardPending(bookId)) {
+        const fallbackToast = (): void => {
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: ev.errorReason ?? "This book's language has not been set.",
+              dedupeKey: `language-unset:${bookId}:${ev.chapterId}`,
+            }),
+          );
+        };
+        const accepted = emitLanguageGuard({
+          selector: { bookId },
+          shape: 'sse',
+          sseSource: 'generation',
+          onRetry: () => {
+            languageGuardPending.delete(bookId);
+            dispatch(chaptersActions.clearLastError());
+            if (handle.queueEntryId) {
+              /* Best-effort — the next queue snapshot reconciles. Promise.resolve
+                 keeps .catch valid whether dispatch returns the thunk's promise
+                 (real path) or a plain action object (tests mock the thunk). */
+              Promise.resolve(dispatch(retryQueueEntry(handle.queueEntryId))).catch(() => {
+                /* Best-effort — the next queue snapshot reconciles. */
+              });
+            }
+          },
+          onDismiss: () => {
+            languageGuardPending.delete(bookId);
+            fallbackToast();
+          },
+        });
+        /* Arm the suppression bound regardless of whether the guard actually
+           opened a modal. emitLanguageGuard returns false both when no
+           handler is mounted and when the selector resolves to no library
+           book (e.g. a library fetch failed at mount and the library slice
+           is stuck empty) — in both cases the failure is just as
+           deterministic and book-wide as the accepted case, so without an
+           entry here every subsequent chapter of the SAME book re-attempts
+           emitLanguageGuard, and the streak breaker is separately exempted
+           for language-unset (see queue-dispatcher-middleware.ts:164), so
+           nothing else bounds the drain. The TTL still expires this entry
+           on its own; the accepted path's onRetry/onDismiss just clear it
+           sooner. */
+        languageGuardPending.set(bookId, Date.now());
+        if (!accepted) {
+          fallbackToast();
+        }
+      }
     } else if (ev.type === 'chapter_failed' && ev.chapterId == null && sliceMatchesHandle) {
       /* Stream-level halt (setup / sidecar / cast issue — chapter id absent). */
       dispatch(
@@ -489,6 +577,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     openBookIds: () => [...new Set([...handles.values()].map((h) => h.bookId))],
     hasOpenStreamForChapter: (bookId, chapterId) => handles.has(streamKey(bookId, chapterId)),
     hasOpenStreamForBook: (bookId) => [...handles.values()].some((h) => h.bookId === bookId),
+    hasPendingLanguageGuard: (bookId) => isLanguageGuardPending(bookId),
     openChapterIds: () => [...handles.values()].flatMap((h) => h.chapterIds),
     takeChapterFailure: (bookId, chapterId) => {
       const key = streamKey(bookId, chapterId);
