@@ -8,7 +8,7 @@ owner: null
 
 > Status: draft
 > Key files: `server/src/analyzer/dialogue-structure/aligner.ts`,
-> `server/src/analyzer/dialogue-structure/scene-breaks.ts`,
+> `server/src/analyzer/scene-breaks.ts`,
 > `server/src/routes/analysis.ts`, `server/src/store/attribution-health.ts`,
 > `server/src/analyzer/dialogue-structure/evidence.ts`,
 > `server/src/analyzer/dialogue-structure/escalation.ts`
@@ -21,6 +21,19 @@ Design spec (full rationale, revision history, real-data measurement):
 v2/v3 was dropped after real-data measurement showed it cost more correctness
 than it saved, and is filed separately, see "Out of scope" below).
 
+> **Superseded mechanism (spec v5).** PR review pass 3 rejected the design's
+> §1 (strip every leading dash-group from every needle) and §2 (extend a
+> match's raw start backward over a preceding dash run) as measured
+> correctness regressions. The tasks below still describe those two, and are
+> kept as history. **What actually ships:** needle text is never rewritten;
+> only the *search* changes, and only for a needle with no leading dash — it
+> prefers an occurrence preceded by that sentence's own paragraph dash (same
+> line, no line break between) and reports the dash's offset, falling back to
+> the plain search when no such occurrence exists. There is no
+> backward-extension step. See the "v5" note at the head of the spec's
+> "Design" section. The language gate (Task 3) and every parity invariant
+> below are unaffected and shipped as written.
+
 Issue: [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
 Supersedes in place: `fix/server-2537-dash-invariant-align`
 ([PR #2577](https://github.com/dudarenok-maker/Castwright/pull/2577)) at
@@ -31,9 +44,11 @@ commit `9262412a` — rework, don't re-branch.
 - **User:** dialogue attribution (character assignment, narrator-span
   detection, split-speech/unattributed-speech flags) stops depending on an
   accident of which raw form the analyzer model happened to emit for a
-  sentence's leading dash. Concretely fixes 14 diverging fields on *Ночной
-  дозор* (E11 register item 2) and any other dash-dialogue-dense book with
-  the same latent instability.
+  sentence's leading dash. Whether this closes the 14 diverging fields on
+  *Ночной дозор* (E11 register item 2) is **not yet measured for the shipped
+  mechanism** — that is the on-box acceptance E11 still owes; the earlier
+  "concretely fixes 14 fields" wording described a mechanism that was
+  rejected and never ran against that corpus.
 - **Technical:** `alignSentences`/`locateSentenceOffsets` become provably
   invariant to dash presence/glyph/count/spacing on languages where a
   leading dash is a dialogue marker (ru/es/fr) — a property that is now unit
@@ -53,8 +68,11 @@ commit `9262412a` — rework, don't re-branch.
   both functions' needle construction and backward-extension are
   byte-identical to today's `main` behavior — this is a tested parity
   requirement, not an assumption. `fillRun`'s existing zero-length-needle →
-  `null` handling (`aligner.ts:250`) is unchanged and still the correct
-  outcome for a needle that strips to empty.
+  `null` handling is unchanged — and, since the shipped mechanism never
+  rewrites needle text, it is no longer reachable by a dash-only sentence:
+  a `"---"` scene rule normalizes to `"-"` and is searched as `"-"`. (Under
+  the rejected §1 it stripped to `""`, which silently dropped every scene
+  separator from `alignedPct`.)
 - **Migration story:** n/a — no persisted data shape changes.
 - **Reversibility:** revert the diff; no data migration to unwind. The
   `#2187` anchor/infill logic is untouched (v4 dropped the disambiguation

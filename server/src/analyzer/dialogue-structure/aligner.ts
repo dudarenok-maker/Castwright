@@ -166,12 +166,80 @@ function normalize(s: string): string {
   return buildNormalizedMap(s).text;
 }
 
-// Loop-strips every leading dash-group from an already-normalized needle
-// when dashIsDialogueMarker is true. When false, returns input unchanged
-// (matching pristine pre-#2537 main behavior).
-export function buildDashInvariantNeedle(normalizedText: string, dashIsDialogueMarker: boolean): string {
-  if (!dashIsDialogueMarker) return normalizedText;
-  return normalizedText.replace(/^(-\s*)+/, '');
+/** The search term for one cached sentence.
+
+    `text` is the sentence's already-normalized text, searched verbatim —
+    byte for byte what pre-#2537 `main` searched for, and the only form used
+    when the dash gate is off.
+
+    #2537/#2540 — dash invariance. A leading paragraph-dash is a dialogue
+    marker, never content, and the model's cache keeps it on some sentences
+    and drops it on others (upstream of this module). Which of the two
+    happened must not change where the sentence is located. The two cases are
+    deliberately NOT symmetrical:
+
+      - A needle that ALREADY carries its dash is searched AS-IS. `"- да."`
+        can only occur at a real dialogue marker, so it is highly selective.
+        Stripping the dash would search for `"да."`, which also occurs inside
+        `правда`, `когда`, `всегда`, `вода`, `беда`… — selectivity `main`
+        already gets right, and which must not be given up.
+
+      - A needle with NO leading dash sets `tryDashPrefix`. Its search prefers
+        an occurrence that IS preceded by a paragraph dash and then reports the
+        match from the head of that dash run — the exact offset the
+        dash-carrying form of the same sentence produces. Only when no such
+        occurrence exists does it fall back to the plain search, which is the
+        path ordinary narration (the overwhelming majority of dash-free
+        needles) always takes.
+
+    So both cache forms of a dash-led line converge on the paragraph dash,
+    while a dash-free narration sentence keeps `main`'s behaviour exactly. */
+export interface Needle {
+  text: string;
+  tryDashPrefix: boolean;
+}
+
+export function buildNeedle(normalizedText: string, dashIsDialogueMarker: boolean): Needle {
+  return {
+    text: normalizedText,
+    // `normalizedText` is post-`normalize()`, so every dash glyph this file
+    // folds (– — &mdash; &ndash; and a run of 2+ ASCII hyphens) is already a
+    // single '-'; testing that one character covers all five spellings.
+    tryDashPrefix: dashIsDialogueMarker && normalizedText.length > 0 && normalizedText[0] !== '-',
+  };
+}
+
+/** True when the paragraph dash at normalized index `dashIdx` belongs to the
+    sentence starting at normalized index `textIdx` — i.e. the raw body holds
+    no line break between them. Normalization collapses `\n` into the same
+    single space as an ordinary gap, so this question can only be answered
+    against the RAW body.
+
+    This is what keeps a dash that ends the PREVIOUS line out of the next
+    sentence. A dash-rule scene separator ("---", "———") normalizes to a lone
+    '-' and sits immediately before the following narration paragraph in the
+    normalized haystack; without this check that narration would anchor onto
+    the separator and overlap its span. */
+type DashAdjacency = (dashIdx: number, textIdx: number) => boolean;
+
+/** Walk back from `at` over a `(?:-\s*)+` run, returning the normalized offset
+    of the run's first dash, or null when `at` is not preceded by a dash that
+    is `adjacent` to it. Never crosses `floor` — the caller's monotonic cursor —
+    so a dash-prefixed match cannot reach behind text the run has already
+    consumed, the same bound a dash-carrying needle's own `indexOf` obeys. */
+function dashRunStart(haystack: string, at: number, floor: number, adjacent: DashAdjacency): number | null {
+  let start = at;
+  let found = false;
+  for (;;) {
+    let j = start;
+    while (j > floor && /\s/u.test(haystack[j - 1])) j--;
+    if (j > floor && haystack[j - 1] === '-' && adjacent(j - 1, at)) {
+      start = j - 1;
+      found = true;
+    } else {
+      return found ? start : null;
+    }
+  }
 }
 
 /** Search `needle` in `haystack` starting at `cursor`, bounded to a
@@ -190,6 +258,46 @@ function findMatch(haystack: string, needle: string, cursor: number): number {
 interface LocatedSpan {
   start: number;
   end: number;
+}
+
+/** Locate `search` in `haystack` at/after `cursor`. `spanLen` is the extent
+    claimed from the located text's own start — it differs from
+    `search.length` only for the fuzzy prefix fallback, which locates on a
+    16-char prefix but claims the whole sentence.
+
+    With `tryDashPrefix` off this is exactly `findMatch`, i.e. pristine
+    pre-#2537 `main`. With it on, an occurrence preceded by that sentence's own
+    paragraph dash wins over an earlier bare one, and `start` is the head of
+    the dash run — see `Needle`. */
+function findNeedleSpan(
+  haystack: string,
+  search: string,
+  spanLen: number,
+  tryDashPrefix: boolean,
+  cursor: number,
+  adjacent: DashAdjacency,
+): LocatedSpan | null {
+  const pos = findMatch(haystack, search, cursor);
+  if (!tryDashPrefix || pos === -1) {
+    // pos === -1 is decisive for the dash-prefixed search too: a dash-prefixed
+    // occurrence contains a bare one, so if the bare text isn't here, neither is it.
+    return pos === -1 ? null : { start: pos, end: Math.min(pos + spanLen, haystack.length) };
+  }
+
+  const atFirst = dashRunStart(haystack, pos, cursor, adjacent);
+  if (atFirst !== null) return { start: atFirst, end: Math.min(pos + spanLen, haystack.length) };
+
+  // The first occurrence is bare — it may be the false substring hit (`"да."`
+  // inside `"правда."`). A dash-prefixed occurrence further on is the better
+  // answer: the dash was dropped by the cache, not by the manuscript. Every
+  // dash-prefixed occurrence is also a plain one, so walking the remaining
+  // plain hits finds them all; the walk resumes where the previous `indexOf`
+  // stopped, so it costs one pass over the haystack however many hits there are.
+  for (let at = haystack.indexOf(search, pos + 1); at !== -1; at = haystack.indexOf(search, at + 1)) {
+    const runStart = dashRunStart(haystack, at, cursor, adjacent);
+    if (runStart !== null) return { start: runStart, end: Math.min(at + spanLen, haystack.length) };
+  }
+  return { start: pos, end: Math.min(pos + spanLen, haystack.length) };
 }
 
 interface AnchorHit {
@@ -219,17 +327,16 @@ interface AnchorHit {
     >= 24-char repeated sentence. That is a large practical win on dash
     dialogue and not a structural guarantee. A uniqueness check on anchor
     candidates is the fix if this ever shows up in a real corpus. */
-function findAnchors(needles: string[], haystack: string): AnchorHit[] {
+function findAnchors(needles: Needle[], haystack: string, adjacent: DashAdjacency): AnchorHit[] {
   const anchors: AnchorHit[] = [];
   let cursor = 0;
   for (let i = 0; i < needles.length; i++) {
     const needle = needles[i];
-    if (needle.length < ANCHOR_MIN_LEN) continue;
-    const pos = findMatch(haystack, needle, cursor);
-    if (pos === -1) continue;
-    const end = Math.min(pos + needle.length, haystack.length);
-    anchors.push({ index: i, start: pos, end });
-    cursor = end;
+    if (needle.text.length < ANCHOR_MIN_LEN) continue;
+    const hit = findNeedleSpan(haystack, needle.text, needle.text.length, needle.tryDashPrefix, cursor, adjacent);
+    if (hit === null) continue;
+    anchors.push({ index: i, start: hit.start, end: hit.end });
+    cursor = hit.end;
   }
   return anchors;
 }
@@ -242,36 +349,46 @@ function findAnchors(needles: string[], haystack: string): AnchorHit[] {
     fallback `alignSentences` has always used for a paraphrased long
     sentence. Writes results in place into `results`. */
 function fillRun(
-  needles: string[],
+  needles: Needle[],
   haystack: string,
   loRun: number,
   hiRun: number,
   from: number,
   to: number,
   fuzzy: boolean,
+  adjacent: DashAdjacency,
   results: Array<LocatedSpan | null>,
 ): void {
   const runHaystack = haystack.slice(from, to);
+  // `adjacent` is keyed on whole-haystack indices; this run's search works in
+  // slice-relative ones.
+  const runAdjacent: DashAdjacency = (dashIdx, textIdx) => adjacent(from + dashIdx, from + textIdx);
   let cursor = 0;
   for (let i = loRun; i < hiRun; i++) {
     const needle = needles[i];
-    if (needle.length === 0) {
+    if (needle.text.length === 0) {
       results[i] = null;
       continue;
     }
-    let pos = findMatch(runHaystack, needle, cursor);
-    if (pos === -1 && fuzzy && needle.length >= FUZZY_MIN_NEEDLE) {
+    let hit = findNeedleSpan(runHaystack, needle.text, needle.text.length, needle.tryDashPrefix, cursor, runAdjacent);
+    if (hit === null && fuzzy && needle.text.length >= FUZZY_MIN_NEEDLE) {
       // Exact failed (gemma paraphrased/dropped a word). Anchor on the prefix
       // so the sentence still attaches to its paragraph; approximate the extent.
-      pos = findMatch(runHaystack, needle.slice(0, FUZZY_ANCHOR_LEN), cursor);
+      hit = findNeedleSpan(
+        runHaystack,
+        needle.text.slice(0, FUZZY_ANCHOR_LEN),
+        needle.text.length,
+        needle.tryDashPrefix,
+        cursor,
+        runAdjacent,
+      );
     }
-    if (pos === -1) {
+    if (hit === null) {
       results[i] = null; // do NOT move the cursor — a bad sentence can't desync its run
       continue;
     }
-    const end = Math.min(pos + needle.length, runHaystack.length);
-    results[i] = { start: from + pos, end: from + end };
-    cursor = end;
+    results[i] = { start: from + hit.start, end: from + hit.end };
+    cursor = hit.end;
   }
 }
 
@@ -298,21 +415,32 @@ function fillRun(
     Measured at 240 kB × 2,800 all-miss long needles: ~1.4× the old cost
     (303 ms vs 197 ms). Real chapters are ~110 kB and nothing like all-miss,
     so this is a claim-accuracy note rather than a practical concern. */
-function locateNeedles(needles: string[], haystack: string, fuzzy: boolean): Array<LocatedSpan | null> {
+function locateNeedles(
+  needles: Needle[],
+  haystack: string,
+  fuzzy: boolean,
+  adjacent: DashAdjacency,
+): Array<LocatedSpan | null> {
   const results: Array<LocatedSpan | null> = new Array(needles.length).fill(null);
-  const anchors = findAnchors(needles, haystack);
+  const anchors = findAnchors(needles, haystack, adjacent);
 
   let from = 0;
   let loRun = 0;
   for (const anchor of anchors) {
-    fillRun(needles, haystack, loRun, anchor.index, from, anchor.start, fuzzy, results);
+    fillRun(needles, haystack, loRun, anchor.index, from, anchor.start, fuzzy, adjacent, results);
     results[anchor.index] = { start: anchor.start, end: anchor.end };
     from = anchor.end;
     loRun = anchor.index + 1;
   }
-  fillRun(needles, haystack, loRun, needles.length, from, haystack.length, fuzzy, results);
+  fillRun(needles, haystack, loRun, needles.length, from, haystack.length, fuzzy, adjacent, results);
 
   return results;
+}
+
+/** Builds the `DashAdjacency` predicate for one body from its normalized
+    offset map: "no line break between the dash and the sentence". */
+function dashAdjacencyFor(body: string, rawStart: number[]): DashAdjacency {
+  return (dashIdx, textIdx) => !/[\n\r]/.test(body.slice(rawStart[dashIdx], rawStart[textIdx]));
 }
 
 export function alignSentences(
@@ -326,32 +454,23 @@ export function alignSentences(
   // #2537/#2540 — dash-invariant needle search. A leading paragraph-dash marker
   // is a dialogue glyph, never content: whether the model's cached sentence text
   // includes or omits its leading dash must not change which raw body span the
-  // needle locates. `buildDashInvariantNeedle` consumes the whole leading-dash
-  // run when the gate is on, and is a no-op when off (matching pristine pre-#2537
-  // `main` behavior).
-  const needles = sentences.map((s) => buildDashInvariantNeedle(normalize(s.text), dashIsDialogueMarker));
-  const located = locateNeedles(needles, normBody, true);
+  // needle locates. `buildNeedle` decides, per sentence, whether the search may
+  // prefer a dash-prefixed occurrence; when the gate is off every needle is the
+  // plain normalized text, matching pristine pre-#2537 `main` behavior.
+  const needles = sentences.map((s) => buildNeedle(normalize(s.text), dashIsDialogueMarker));
+  const located = locateNeedles(needles, normBody, true, dashAdjacencyFor(body, rawStart));
 
   const aligned: AlignedSentence[] = sentences.map((sentence, i) => {
     const match = located[i];
     if (match === null) return { sentence, spans: [], lumped: false };
 
-    let rawMatchStart = rawStart[match.start];
+    // No dash fix-up here: a dash-stripped needle's match ALREADY starts at the
+    // paragraph dash, because the search that found it required one. Extending
+    // the raw offset backward after the fact is what let an unrelated dash (a
+    // "---" scene rule on the previous line) be absorbed into a plain narration
+    // sentence that never had a dash to recover.
+    const rawMatchStart = rawStart[match.start];
     const rawMatchEnd = rawEnd[match.end - 1];
-    // When the gate is on, anchor backward over a stack of leading dash + optional
-    // whitespace so that a dash-stripped needle and a dash-included form resolve to
-    // the same rawMatchStart. Only a dash at the head of its line is folded in,
-    // never a mid-line em dash inside the prose. When the gate is off, this block
-    // is skipped entirely, matching pristine pre-#2537 `main`.
-    if (dashIsDialogueMarker && rawMatchStart > 0) {
-      const preceding = /(?:[-–—]\s*)+$/.exec(body.slice(0, rawMatchStart));
-      if (preceding) {
-        const beforeDash = body.slice(0, rawMatchStart - preceding[0].length);
-        if (beforeDash === '' || /[\n\r]$/.test(beforeDash)) {
-          rawMatchStart -= preceding[0].length;
-        }
-      }
-    }
     const spans = allSpans.filter((s) => s.start < rawMatchEnd && s.end > rawMatchStart);
 
     const hasSpeech = spans.some((s) => s.kind === 'speech');
@@ -375,13 +494,12 @@ export function alignSentences(
     advances any cursor, and a match can never land outside its run's
     bounding anchors, so one bad sentence can't desync the rest.
 
-    #2537/#2540 — dash-invariant needle construction (gated):
-    When the gate is on, buildDashInvariantNeedle consumes the leading-dash run
-    so that a dash-stripped and dash-included form of the same sentence resolve
-    to the identical offset, and the backward-extension block enables
-    anchor-hardening past a leading-dash stack. When the gate is off, the needle
-    is plain normalized text with no backward extension, matching pristine
-    pre-#2537 main behavior.
+    #2537/#2540 — dash-invariant needle construction (gated), identical to
+    alignSentences: when the gate is on, a needle with no leading dash prefers an
+    occurrence that carries the paragraph dash and reports the dash's offset, so
+    the dash-stripped and dash-included forms of the same sentence resolve to the
+    identical offset. When the gate is off, the needle is plain normalized text,
+    matching pristine pre-#2537 main behavior.
 
     Unlike alignSentences this needs only the body (no ParagraphEvidence), so it
     runs on every chapter regardless of whether the dialogue-structure engine is
@@ -392,31 +510,11 @@ export function locateSentenceOffsets(
   dashIsDialogueMarker: boolean = false,
 ): Array<number | null> {
   const { text: normBody, rawStart } = buildNormalizedMap(body);
-  // #2537/#2540 — dash-invariant needle search, matching alignSentences.
-  // When the gate is on, buildDashInvariantNeedle consumes the leading-dash run
-  // so that a dash-stripped and dash-included form of the same sentence resolve
-  // to the identical offset. When the gate is off, the needle is plain normalized
-  // text, matching pristine pre-#2537 main behavior.
-  const needles = sentences.map((s) => buildDashInvariantNeedle(normalize(s.text), dashIsDialogueMarker));
-  const located = locateNeedles(needles, normBody, false);
+  // #2537/#2540 — dash-invariant needle search, matching alignSentences. The
+  // located offset is used as-is: a dash-stripped needle's match already starts
+  // at the paragraph dash, because the search that found it required one.
+  const needles = sentences.map((s) => buildNeedle(normalize(s.text), dashIsDialogueMarker));
+  const located = locateNeedles(needles, normBody, false, dashAdjacencyFor(body, rawStart));
 
-  return located.map((m, _i) => {
-    if (m === null) return null;
-
-    let rawMatchStart = rawStart[m.start];
-    // #2537/#2540 — when the gate is on, anchor backward over a stack of leading
-    // dash + optional whitespace so that a dash-stripped needle and a dash-included
-    // form resolve to the same rawMatchStart. When the gate is off, this block is
-    // skipped entirely, matching pristine pre-#2537 main behavior.
-    if (dashIsDialogueMarker && rawMatchStart > 0) {
-      const preceding = /(?:[-–—]\s*)+$/.exec(body.slice(0, rawMatchStart));
-      if (preceding) {
-        const beforeDash = body.slice(0, rawMatchStart - preceding[0].length);
-        if (beforeDash === '' || /[\n\r]$/.test(beforeDash)) {
-          rawMatchStart -= preceding[0].length;
-        }
-      }
-    }
-    return rawMatchStart;
-  });
+  return located.map((m) => (m === null ? null : rawStart[m.start]));
 }

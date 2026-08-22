@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { parseChapterStructure } from './parser.js';
-import { alignSentences, locateSentenceOffsets, buildDashInvariantNeedle } from './aligner.js';
+import { alignSentences, locateSentenceOffsets, buildNeedle } from './aligner.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 
 const mkSentence = (id: number, characterId: string, text: string): SentenceOutput => ({
@@ -239,8 +239,9 @@ describe('locateSentenceOffsets (#1679)', () => {
       [{ text: 'Спокойной ночи, друзья!' }],
       body, true,
     );
-    // Both cache forms of the same sentence now resolve to the SAME offset —
-    // the dash-extension logic recovers the raw dash position for both.
+    // Both cache forms of the same sentence resolve to the SAME offset — the
+    // dash-free form prefers the occurrence carrying the paragraph dash, and
+    // reports that dash's offset, which is where the dash-carrying form lands.
     expect(offsetsWithDash[0]).toBe(offsetsWithoutDash[0]);
     expect(offsetsWithDash[0]).toBe(body.indexOf('—'));
   });
@@ -275,10 +276,10 @@ describe('locateSentenceOffsets with dashIsDialogueMarker = true (#2537/#2540)',
       body, true,
     );
 
-    // Both should resolve to the identical offset — the dash-stripped needle
-    // extends back to include the leading dash, and the dash-included needle
-    // (stripped by buildDashInvariantNeedle) also extends back to the dash.
-    // Both land at the paragraph-leading dash position.
+    // Both resolve to the identical offset: the dash-included needle matches at
+    // the dash because the dash is part of what it searched for, and the
+    // dash-stripped needle prefers the occurrence that carries that same dash
+    // and reports the dash's offset. Both land at the paragraph-leading dash.
     expect(offsetsWithDash[0]).toBe(offsetsWithoutDash[0]);
     expect(offsetsWithDash[0]).toBe(body.indexOf('—'));
   });
@@ -415,11 +416,11 @@ describe('#2187 anchor-first interval-bounded alignment', () => {
     // Pinned to the exact post-fix value, not just `> 50`: a partial regression
     // that still cleared 50 would otherwise pass a test whose name promises
     // "materially higher".
-    // Reconfirmed #2591: buildFixture() sentences have no dash prefix in their
-    // text (e.g. 'Да.' not '— Да.'), so dashIsDialogueMarker=false (default) is
-    // the only path exercised — the pinned 83.33 value is unaffected by this
-    // chain's dash-invariance changes. The gate only fires when normalized text
-    // starts with a dash; none of these sentences do.
+    // Reconfirmed #2591: this call omits the third argument, so
+    // dashIsDialogueMarker=false (default) is the only path exercised and the
+    // pinned 83.33 value is unaffected by this chain's dash-invariance changes.
+    // With the gate off `buildNeedle` never sets `tryDashPrefix`, so needle
+    // construction and matching are byte-identical to pre-#2537 `main`.
     expect(result.alignedPct).toBeCloseTo(83.33, 1);
     expect(result.aligned[2].spans).toEqual([]); // the ambiguous sentence: unaligned, not corrupted
   });
@@ -461,9 +462,10 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
   // "- чтобы испечь пирог." / "- пожалуйста," never occurs as a substring and
   // those segments fail to locate at all (empty spans) — exactly the on-box
   // defect (#2537): whether the cache carried or omitted a leading dash silently
-  // moved spans between attribution buckets. The dash-agnostic needle folds both
-  // arms onto the same anchor and the rawMatchStart back-extension pins both to
-  // the paragraph's leading dash.
+  // moved spans between attribution buckets. The fix converges the two arms from
+  // the dash-free side: a needle with no leading dash prefers the occurrence that
+  // carries the paragraph dash and reports that dash's offset, which is exactly
+  // where the dash-carrying form of the same sentence lands.
   const body = [
     'Ольга вошла в тёмную прихожую и остановилась у двери.',
     '— Ходила к соседке за мукой, чтобы испечь пирог.', // split: 2nd seg gains spurious dash
@@ -521,14 +523,21 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     'Она повернулась и закрыла за собой дверь.',
   ];
 
-  it('dash-led dialogue aligns correctly; the dash prevents false matches in substrings', () => {
-    // #2537/#2540 — test rework. The original test asserted that with-dash and
-    // without-dash arms produce identical spans (vacuously true when both use the
-    // same dash-stripped needle). The fix changes this: keep-dash sentences search
-    // for the dash-inclusive form to prevent false matches inside words like "правда".
-    // This test validates the actual post-fix behavior:
-    // 1. Dash-led sentences that are in the body align correctly.
-    // 2. The alignment is NOT vacuous (covers substantial dialogue).
+  it('dash-led dialogue aligns correctly on the gated path, and both cache forms agree wherever the dash is real', () => {
+    // #2537/#2540 — this runs the GATED path (third argument true), i.e. the
+    // one ru/es/fr actually takes; an earlier version of this test omitted the
+    // argument and so only ever exercised `main`.
+    //
+    // Two properties, on the same 29-segment model re-segmentation:
+    // 1. dash-led sentences that are in the body align to real speech spans;
+    // 2. for every segment whose dash is REAL (present in the body), the
+    //    with-dash and dash-stripped cache forms produce identical spans.
+    //    The four segments carrying a SPURIOUS dash (a continuation the model
+    //    re-prefixed, e.g. "— чтобы испечь пирог.", which occurs nowhere in the
+    //    body) are excluded: with-dash cannot locate text that isn't there, and
+    //    no needle rule can invent it. Attempt 1 of this fix made those four
+    //    "agree" by stripping the dash off every needle — which is exactly what
+    //    lost the with-dash arm's selectivity and regressed real corpora.
     const ruIdx = buildNameIndex(
       [
         { id: 'anton', name: 'Антон' },
@@ -550,7 +559,7 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
       }))
       .map((s, i) => mkSentence(i + 1, s.characterId, s.text));
 
-    const result = alignSentences(dashSentences, paras, body);
+    const result = alignSentences(dashSentences, paras, body, true);
 
     // The test is valid (not vacuous) because:
     // 1. We assert specific dialogue spans are found (not just "some align").
@@ -562,6 +571,20 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     // Verify at least one aligned sentence is actually dash-led (not all narration).
     const alignedDashSentences = alignedWithSpeech.filter((a) => /^— /.test(a.sentence.text));
     expect(alignedDashSentences.length).toBeGreaterThan(0);
+
+    // Property 2 — the dash-stripped arm of the same cache.
+    const strippedSentences = withDash.map((t, i) =>
+      mkSentence(i + 1, /^— /.test(t) ? (i % 2 ? 'olga' : 'anton') : 'narrator', t.replace(/^— /, '')),
+    );
+    const stripped = alignSentences(strippedSentences, paras, body, true);
+    const realDash = withDash
+      .map((t, i) => (body.includes(t) ? i : -1))
+      .filter((i) => i >= 0);
+    expect(realDash.length).toBeGreaterThanOrEqual(15); // guards against the filter emptying
+    for (const i of realDash) {
+      expect(stripped.aligned[i].spans).toEqual(result.aligned[i].spans);
+      expect(stripped.aligned[i].spans.length).toBeGreaterThan(0);
+    }
   });
 
   it('regression: dash-stripped needle does not match inside unrelated text when a real anchor bounds the search', () => {
@@ -602,74 +625,155 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     expect(result.aligned[2].spans[0].kind).toBe('speech');
   });
 
-  it('KNOWN RESIDUAL (#2187, not fixed by #2537): a dash-stripped needle CAN match inside unrelated text when its run has zero anchors', () => {
-    // This is the pre-existing findAnchors limitation documented in
-    // docs/superpowers/specs/2026-08-21-aligner-dash-invariance-anchor-hardening-design.md's
-    // "Known residual" section: a run with literally no eligible anchor
-    // (every needle here is under ANCHOR_MIN_LEN, or fails to match) falls
-    // back to an effectively-unbounded search. Real-data measurement against
-    // the actual target corpus found no instance of this shape (see that
-    // doc's "Real-data measurement" section) — this fixture is a synthetic,
-    // deliberately zero-anchor adversarial case, kept as documentation of
-    // the limitation's boundary, not as a merge gate. Observed behavior,
-    // pinned exactly (not guessed): the dash-stripped "да." needle
-    // mis-binds to the "правда" narration span instead of the real "— Да."
-    // speech span.
+  it('(#2537) both cache forms of a dash-led reply resolve to the REAL speech span even with zero anchors', () => {
+    // The load-bearing regression test. Body: a narration sentence ending in
+    // "правда." (which contains "да." as a substring), then the real "— Да."
+    // reply. No needle here clears ANCHOR_MIN_LEN, so the whole chapter is one
+    // unbounded run — nothing structural narrows the search.
+    //
+    // Red on `origin/main` for the WITHOUT-dash arm: main searches for the bare
+    // "да." and binds it inside "правда." → the narration span. That is #2537's
+    // own repro. Green here because a dash-free needle prefers an occurrence
+    // that carries the paragraph dash.
+    //
+    // The WITH-dash arm is correct on `origin/main` and must STAY correct: it
+    // went red under both earlier attempts at this fix, which stripped the dash
+    // off every needle and threw away its selectivity.
     const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
     const body = ['Он не знал, где правда.', '', '— Да.'].join('\n');
     const paras = parseChapterStructure(body, ruIdx);
+    const allSpans = paras.flatMap((p) => p.spans);
+    const realSpeechSpan = allSpans.find((s) => s.kind === 'speech')!;
+    const trapNarrationSpan = allSpans.find((s) => s.kind === 'narration')!;
+    expect(body.slice(realSpeechSpan.start, realSpeechSpan.end)).toBe('Да.');
+    expect(body.slice(trapNarrationSpan.start, trapNarrationSpan.end)).toContain('правда');
 
+    for (const cachedText of ['— Да.', 'Да.']) {
+      const sentences = [
+        // A model paraphrase that never matches — a miss deliberately does not
+        // move the run cursor, so the reply still searches from offset 0.
+        mkSentence(1, 'narrator', 'Он не знал, где истина.'),
+        mkSentence(2, 'anton', cachedText),
+      ];
+      const result = alignSentences(sentences, paras, body, true);
+
+      expect(result.aligned[0].spans).toEqual([]);
+      expect(result.aligned[1].spans).toEqual([realSpeechSpan]);
+      expect(result.aligned[1].spans[0].kind).toBe('speech');
+      expect(result.aligned[1].lumped).toBe(false);
+
+      // Same property one level down, in the sibling locator.
+      expect(locateSentenceOffsets([{ text: cachedText }], body, true)[0]).toBe(body.indexOf('—'));
+    }
+  });
+
+  it('(#2537) a dash-rule scene separator is not absorbed into the sentence that follows it', () => {
+    // #1679 has the analyzer emit a scene separator as its own word-free
+    // "sentence"; `normalize('---')` folds it to a lone '-'.
+    //
+    // Two failure modes this pins, both from attempt 3 of this fix:
+    //   1. the separator needle must not be rewritten to the empty string
+    //      (fillRun reports an empty needle unaligned, so it fell off the
+    //      chapter's alignedPct entirely);
+    //   2. the narration sentence after it must not have its match extended
+    //      backward over the separator. That sentence never carried a dash, so
+    //      nothing about it justifies reaching back for one — and the extended
+    //      range overlapped the separator's speech span, flagging pure
+    //      narration as `lumped` (which drops its structure evidence and
+    //      increments `lumpedSpeech` in attribution-health).
+    const ruIdx = buildNameIndex([{ id: 'ren', name: 'Рен' }], conventionsFor('ru')!);
+    const narration = 'Горн остыл до цвета подёрнутого пеплом заката, и она выскребала золу.';
+    for (const rule of ['---', '———', '***']) {
+      const body = [
+        'Рен закрыла тяжёлую дверь кузницы и прислушалась к тишине двора.',
+        '',
+        rule,
+        '',
+        narration,
+      ].join('\n');
+      const paras = parseChapterStructure(body, ruIdx);
+      const sentences = [
+        mkSentence(1, 'ren', 'Рен закрыла тяжёлую дверь кузницы и прислушалась к тишине двора.'),
+        mkSentence(2, 'ren', rule),
+        mkSentence(3, 'ren', narration),
+      ];
+      const result = alignSentences(sentences, paras, body, true);
+
+      // The separator still locates — it is not stripped to an empty needle.
+      expect(result.aligned[1].spans.length).toBeGreaterThan(0);
+      expect(result.alignedPct).toBe(100);
+
+      // The narration sentence covers its own span and nothing before it.
+      const narrationStart = body.indexOf(narration);
+      expect(result.aligned[2].lumped).toBe(false);
+      expect(result.aligned[2].spans).toEqual([
+        expect.objectContaining({ kind: 'narration', start: narrationStart }),
+      ]);
+      expect(locateSentenceOffsets(sentences, body, true)[2]).toBe(narrationStart);
+    }
+  });
+
+  it('(#2537) the separator guard does not depend on the separator being in the cache', () => {
+    // Same body, but the model dropped the separator "sentence" — so no
+    // preceding match parks the run cursor past the rule. The narration
+    // sentence must still not reach back over it.
+    const ruIdx = buildNameIndex([{ id: 'ren', name: 'Рен' }], conventionsFor('ru')!);
+    const narration = 'Горн остыл до цвета подёрнутого пеплом заката, и она выскребала золу.';
+    const body = [
+      'Рен закрыла тяжёлую дверь кузницы и прислушалась к тишине двора.',
+      '',
+      '---',
+      '',
+      narration,
+    ].join('\n');
+    const paras = parseChapterStructure(body, ruIdx);
     const sentences = [
-      mkSentence(1, 'narrator', 'Он не знал, где истина.'),
-      mkSentence(2, 'anton', '— Да.'),
+      mkSentence(1, 'ren', 'Рен закрыла тяжёлую дверь кузницы и прислушалась к тишине двора.'),
+      mkSentence(2, 'ren', narration),
     ];
-    const result = alignSentences(sentences, paras, body, true); // dashIsDialogueMarker = true
+    const result = alignSentences(sentences, paras, body, true);
 
-    // Sentence 1 is unaligned (paraphrase doesn't match body).
-    expect(result.aligned[0].spans).toEqual([]);
-
-    // Sentence 2 — zero anchors: unbounded search mis-binds inside "правда"
-    // (the narration span), NOT the real trailing speech span.
-    const narrationSpans = paras.flatMap((p) => p.spans).filter((s) => s.kind === 'narration');
-    const speechSpans = paras.flatMap((p) => p.spans).filter((s) => s.kind === 'speech');
-    expect(narrationSpans.length).toBeGreaterThan(0);
-    expect(speechSpans.length).toBeGreaterThan(0);
-    const falseMatchSpan = narrationSpans[0]; // the "Он не знал, где правда." span
-    expect(result.aligned[1].spans).toEqual([falseMatchSpan]);
-    expect(result.aligned[1].spans[0].kind).toBe('narration');
+    expect(result.aligned[1].lumped).toBe(false);
+    expect(result.aligned[1].spans).toEqual([
+      expect.objectContaining({ kind: 'narration', start: body.indexOf(narration) }),
+    ]);
   });
 });
-describe('buildDashInvariantNeedle', () => {
-  it('single leading dash glyph', () => {
-    expect(buildDashInvariantNeedle('- hello', true)).toBe('hello');
+describe('buildNeedle', () => {
+  it('never rewrites the search text — a dash-led needle keeps its dash', () => {
+    // The dash is the needle's strongest discriminator ("- да." can only occur
+    // at a real marker; "да." occurs inside "правда"). Stripping it is what
+    // #2577 attempt 1 and attempt 3 both did, and both regressed the with-dash
+    // arm. The text is always searched verbatim.
+    for (const input of ['- hello', '-- hello', '--- hello', '-    hello', 'hello', '-']) {
+      expect(buildNeedle(input, true).text).toBe(input);
+      expect(buildNeedle(input, false).text).toBe(input);
+    }
   });
 
-  it('two or more leading dashes', () => {
-    expect(buildDashInvariantNeedle('-- hello', true)).toBe('hello');
-    expect(buildDashInvariantNeedle('--- hello', true)).toBe('hello');
+  it('a needle that already carries its dash does NOT take the dash-prefixed path', () => {
+    // buildNeedle receives already-normalized text, so every dash glyph this
+    // file folds (– — &mdash; &ndash; "--") is a single '-' by now; glyph-level
+    // normalization is covered in (b) glyph drift above.
+    for (const input of ['- hello', '-- hello', '-hello', '-']) {
+      expect(buildNeedle(input, true).tryDashPrefix).toBe(false);
+    }
   });
 
-  it('glyph choice: all dash glyphs normalize to ASCII hyphen before calling this function', () => {
-    // buildDashInvariantNeedle receives already-normalized text, so only
-    // the ASCII hyphen form is tested here. Glyph-specific normalization
-    // is tested in (b) glyph drift above.
-    expect(buildDashInvariantNeedle('- hello', true)).toBe('hello');
+  it('a needle with no leading dash takes the dash-prefixed path when the gate is on', () => {
+    expect(buildNeedle('hello', true).tryDashPrefix).toBe(true);
+    expect(buildNeedle('да.', true).tryDashPrefix).toBe(true);
   });
 
-  it('spacing variants', () => {
-    expect(buildDashInvariantNeedle('-    hello', true)).toBe('hello');
-    expect(buildDashInvariantNeedle('--  hello', true)).toBe('hello');
+  it('an empty needle never takes the dash-prefixed path', () => {
+    expect(buildNeedle('', true).tryDashPrefix).toBe(false);
   });
 
-  it('empty result after stripping dash-only input', () => {
-    expect(buildDashInvariantNeedle('-', true)).toBe('');
-    expect(buildDashInvariantNeedle('-- ', true)).toBe('');
-  });
-
-  it('dashIsDialogueMarker = false returns input unchanged', () => {
-    const inputs = ['hello', '- hello', '-- hello', '— hello', '-'];
-    for (const input of inputs) {
-      expect(buildDashInvariantNeedle(input, false)).toBe(input);
+  it('dashIsDialogueMarker = false leaves every needle on the pristine pre-#2537 path', () => {
+    for (const input of ['hello', '- hello', '-- hello', '-', '']) {
+      const needle = buildNeedle(input, false);
+      expect(needle.text).toBe(input);
+      expect(needle.tryDashPrefix).toBe(false);
     }
   });
 });

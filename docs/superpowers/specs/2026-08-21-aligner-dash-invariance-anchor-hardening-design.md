@@ -1,7 +1,8 @@
 # Aligner dash-invariance fix — design
 
-Status: approved for planning (v4 — scope reduced after real-data measurement;
-see "Revision history")
+Status: v5 — §1/§2's mechanism was implemented and rejected in PR review pass 3;
+the shipped mechanism is described in the v5 note at the head of "Design"
+(v4 scope reduction retained; see "Revision history")
 Date: 2026-08-21
 Issue: [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
 Supersedes: the implementation on `fix/server-2537-dash-invariant-align` (PR
@@ -18,7 +19,17 @@ at commit `9262412a` — see "Disposition of PR #2577" below.
   replaced an anchor-eligibility-tuning mechanism with a "reject-if-ambiguous
   / prefer-dash-context" disambiguation layer (Variants A/B), grounded in a
   measurement against the real *Ночной дозор* corpus.
-- **v3 → v4 (this revision)**, after assumption-checker round 3 (the final
+- **v4 → v5 (this revision)**, after PR review pass 3 on PR #2577: v4's
+  Design §1 (strip every leading dash-group from every needle) and §2
+  (extend a match's raw start backward over a preceding dash run) were both
+  implemented and both rejected as measured correctness regressions — §1
+  because it throws away the with-dash needle's selectivity, §2 because it
+  keys on the body rather than on the sentence and swallows a `---` scene
+  rule into the following narration. Neither is reworded here; both sections
+  are kept as history, marked REJECTED, and the shipped mechanism is stated
+  in the v5 note at the head of "Design". Everything v4 says about the
+  language gate (§3), scope and the Variant-C measurement is unchanged.
+- **v3 → v4**, after assumption-checker round 3 (the final
   automatic round under this repo's 3-round review cap) **and a fourth
   real-data measurement**: round 3 found the v3 disambiguation mechanism
   (a) was never compared against a needle-fix-only baseline, so its
@@ -89,7 +100,49 @@ each failed independent PR review:
 
 ## Design
 
-### 1. Needle construction (both functions, unconditional)
+> **v5 — §1 and §2 below were implemented, measured, and REJECTED in PR review
+> pass 3. They are kept as design history; the code does something else.** The
+> shipped mechanism is described here, and the sections that follow it are
+> accurate only for the language gate (§3) and the surrounding rationale.
+>
+> **Why §1 was rejected.** "Strip every leading dash-group from every needle"
+> destroys the with-dash arm's selectivity. `"- да."` can only occur at a real
+> dialogue marker; `"да."` occurs inside `правда`, `когда`, `всегда`, `вода`.
+> Stripping unconditionally therefore made a needle the cache had recorded
+> *correctly* start mis-binding — measured by the pass-3 reviewer at 1,134
+> regressions and 0 improvements over 4,516 evaluations on a dash-dense
+> Russian corpus, with the dash-stripped arm (the shape #2537 is actually
+> about) unchanged from `main`. Invariance was achieved purely by degradation.
+>
+> **Why §2 was rejected.** Extending a match's raw start backward over
+> "whatever dash happens to precede it" keys on the body, not on the sentence.
+> A `---` scene rule (which `normalize` folds to a lone `-`) sits immediately
+> before the next narration paragraph, so a plain narration sentence — which
+> never had a dash to recover — had its span extended back over the separator
+> and was flagged `lumped: true`. On the committed `the-coalfall-commission.ru.md`
+> fixture with a faithful cache and no drift, `alignedPct` fell 100.00 → 93.10.
+>
+> **What ships instead.** Needle text is never rewritten; the *search* is what
+> changes, and only for a needle that has no leading dash:
+>
+> - a needle that already carries its dash is searched verbatim — byte for byte
+>   what `main` does, keeping the dash's selectivity;
+> - a needle with no leading dash prefers an occurrence that IS preceded by a
+>   paragraph dash and reports the dash's offset — the same offset the
+>   dash-carrying form of that sentence produces. Only when no dash-prefixed
+>   occurrence exists anywhere does it fall back to the plain search, which is
+>   what ordinary narration always takes;
+> - a dash counts as a sentence's own only when no line break separates them,
+>   so a scene rule on the previous line is never absorbed;
+> - there is no backward-extension step at all: a dash-prefixed match already
+>   starts at the dash, because the search that found it required one.
+>
+> Empty-needle handling is therefore moot — `"---"` normalizes to `"-"` and is
+> searched as `"-"`, not rewritten to `""`. Everything §3 says about language
+> gating still holds, and gate-off parity with `main` is exact (measured: 0
+> span / `lumped` / `alignedPct` / offset differences over 9,306 evaluations).
+
+### 1. Needle construction (both functions, unconditional) — REJECTED, see the v5 note above
 
 ```ts
 const needles = sentences.map((s) => normalize(s.text).replace(/^(-\s*)+/, ''));
@@ -122,7 +175,7 @@ is `""`. `fillRun` already treats a zero-length needle as unresolved
 (`aligner.ts:250`, `results[i] = null`) — existing, correct behavior;
 Testing item 1 must exercise this case explicitly.
 
-### 2. Backward-extension over the raw dash (both functions, looped, unconditional)
+### 2. Backward-extension over the raw dash (both functions, looped, unconditional) — REJECTED, see the v5 note above
 
 Keep the existing mechanism (extend a located match's raw start back over a
 paragraph-leading dash + optional whitespace, only when it immediately
@@ -300,11 +353,21 @@ what actually ships, including the measured numbers above.
 
 `findAnchors`' own code comment documents that anchors are selected by
 length alone with no uniqueness check, so a duplicated ≥24-char sentence can
-mis-anchor and strand its run — and a run with literally no eligible anchor
-at all (the synthetic 2-sentence fixture that originally triggered the
-attempt-1 rejection) falls back to an effectively-unbounded search. This is
-a pre-existing `#2187`-class limitation, unrelated to dash handling, that
-this design does not attempt to fix — see "Out of scope."
+mis-anchor and strand its run. This is a pre-existing `#2187`-class
+limitation, unrelated to dash handling, that this design does not attempt to
+fix — see "Out of scope."
+
+**Corrected in v5:** an earlier revision of this section also listed the
+zero-anchor case — a dash-stripped `"да."` binding inside `"правда"` when its
+run has no eligible anchor at all — as part of the same residual. That was
+wrong on both counts. It is not `#2187`-class (it is dash handling, and it is
+precisely #2537's own repro), and it is **not** a residual any more: the
+shipped search prefers a dash-prefixed occurrence outright, so it resolves
+correctly with no anchor bounding the run. `aligner.test.ts`'s
+*"both cache forms of a dash-led reply resolve to the REAL speech span even
+with zero anchors"* pins that, and is red on `origin/main` for exactly this
+reason. A test asserting the mis-bind as expected behaviour was shipped by
+attempt 3 and has been replaced.
 
 ## Out of scope
 
