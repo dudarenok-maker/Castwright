@@ -2268,14 +2268,17 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
     expect(ticks[1].type).toBe('idle');
   });
 
-  it('omits chapterId for the legacy multi-chapter unset-language open', async () => {
+  it('attaches chapterId for multi-chapter unset-language open (whole-book request)', async () => {
     setBookLanguage(null);
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks[0].chapterId).toBeUndefined();
+    /* F9 fix: chapterId must be present even on whole-book requests so the
+       frontend's language-guard detection can recognize this as a
+       guard-relevant event (requires chapterId != null). */
+    expect(ticks[0].chapterId).toBe(1); // first chapter in the book
     expect(ticks[0].errorCode).toBe('language-unset');
   });
 
