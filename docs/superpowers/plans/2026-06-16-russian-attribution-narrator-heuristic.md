@@ -21,7 +21,7 @@
 - **Modify** `server/src/routes/analysis.ts` — call the helper inside `attributeChapterStage2` (one gated line + two imports).
 - **Modify** `server/src/analyzer/gemini.ts` — extend the Russian branch of `languagePreamble`.
 - **Modify** `server/src/analyzer/gemini.test.ts` (or the file that tests `languagePreamble`) — assert the new guard text appears for `ru` and not for `en`.
-- **Modify** `docs/features/162-fs2-multilanguage.md` — note the narrator-default heuristic under multilanguage attribution.
+- **Modify** `docs/features/archive/162-fs2-multilanguage.md` — note the narrator-default heuristic under multilanguage attribution.
 - **Modify** `docs/features/INDEX.md` — only if a new plan entry is needed (221 already tracked).
 
 ---
@@ -414,12 +414,12 @@ git commit -m "feat(server): Russian dash-dialogue tag guard in languagePreamble
 ### Task 5: Regression plan + docs
 
 **Files:**
-- Modify: `docs/features/162-fs2-multilanguage.md`
+- Modify: `docs/features/archive/162-fs2-multilanguage.md`
 - Modify: `docs/features/221-multilingual-attribution-gemma-and-cast-merge.md` (mark Wave A status)
 
 - [ ] **Step 1: Note the heuristic in the multilanguage plan**
 
-Add a short subsection to `docs/features/162-fs2-multilanguage.md` under attribution, documenting: non-English stage-2 applies a deterministic narrator-default (`server/src/analyzer/narrator-default.ts`) + the dash-tag preamble guard; cite `server/repro-heuristic.mts` evidence (0–1/6 → 6/6, dialogue untouched); note the known limitation (a genuine spoken line lacking a leading dash/quote would be forced to narrator — rare in Russian dash-dialogue).
+Add a short subsection to `docs/features/archive/162-fs2-multilanguage.md` under attribution, documenting: non-English stage-2 applies a deterministic narrator-default (`server/src/analyzer/narrator-default.ts`) + the dash-tag preamble guard; cite `server/repro-heuristic.mts` evidence (0–1/6 → 6/6, dialogue untouched); note the known limitation (a genuine spoken line lacking a leading dash/quote would be forced to narrator — rare in Russian dash-dialogue).
 
 - [ ] **Step 2: Update plan 221 Wave A status**
 
@@ -428,7 +428,7 @@ In `docs/features/221-multilingual-attribution-gemma-and-cast-merge.md`, mark Wa
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/features/162-fs2-multilanguage.md docs/features/221-multilingual-attribution-gemma-and-cast-merge.md
+git add docs/features/archive/162-fs2-multilanguage.md docs/features/221-multilingual-attribution-gemma-and-cast-merge.md
 git commit -m "docs(server): record narrator-default heuristic under multilanguage (plan 221 Wave A)"
 ```
 
