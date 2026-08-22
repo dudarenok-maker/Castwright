@@ -290,6 +290,47 @@ describe('ensureOrtMarker', () => {
     expect(lines.length).toBe(0);
   });
 
+  it('returns noop when CPU plain onnxruntime owns namespace with real dist-info present and no marker (row 6)', () => {
+    // Row 6: owner='plain', real plain dist-info present, no marker → 'noop'.
+    // This tests the case where realPlain.length > 0 with owner !== 'swap'.
+    // The unpinned conjunct `owner === 'swap'` in the clobbered check at install-ort.mjs:326
+    // is only exercised when owner==='swap' && realPlain.length > 0 (the clobbered state).
+    // This case verifies that when owner==='plain' (or any non-swap) with realPlain.length > 0,
+    // the code correctly returns 'noop' (or 'deleted' if a marker exists), not 'clobbered'.
+    const { root, sp } = venv({ owner: 'plain', realDist: true });
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('noop');
+    expect(lines.length).toBe(0);
+    // Verify the real plain dist-info is untouched.
+    expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
+  });
+
+  it('deletes marker when CPU plain onnxruntime owns namespace with real dist-info present (row 5)', () => {
+    // Row 5: owner='plain', our marker present, real plain dist-info also present → 'deleted'.
+    // This tests the case where realPlain.length > 0 with owner !== 'swap' and a stale marker exists.
+    // The unpinned conjunct must correctly skip the clobbered check and proceed to delete the marker.
+    const { root, sp } = venv({ owner: 'plain', realDist: true });
+    writeOrtMarker(sp, '1.27.0');
+
+    // Verify precondition: marker exists before the call.
+    expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(true);
+
+    const lines: string[] = [];
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('deleted');
+
+    // Verify the marker was deleted.
+    expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(false);
+
+    // Verify the real plain dist-info is untouched.
+    expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
+
+    // Verify log message is present and describes the correct action.
+    const message = lines.join('\n');
+    expect(message).toContain('[ort-marker]');
+    expect(message).toContain('plain onnxruntime');
+    expect(message).toContain('The recorded swap marker has been removed');
+  });
+
   it.each([
     {
       name: 'clobbered branch',
