@@ -579,4 +579,60 @@ describe('useLanguageGuard', () => {
 
     consoleErrorSpy.mockRestore();
   });
+
+  it('invokes dismisses correctly when two guard() calls happen synchronously without intervening React commit (R1 regression - stale pendingRef)', () => {
+    // This test catches the stale-ref bug exposed by R1 in PR #2492 pass-6.
+    // The bug: guard() reads pendingRef.current to determine which dismisses to invoke,
+    // but pendingRef is only synced via a passive useEffect that runs AFTER React commits.
+    // When two guard() calls happen synchronously (in the same tick, no intervening
+    // React commit), the second call reads a STALE pendingRef.current, causing it to
+    // invoke the wrong (or zero) dismisses.
+    //
+    // This test calls guard() twice in one synchronous block (via act), which is exactly
+    // the window where the bug manifests. The test MUST be RED before the fix and GREEN
+    // after pendingRef is made authoritative at assignment time.
+    const store = makeStore(null);
+    const bookA = unsetBook();
+    const bookB = { ...unsetBook(), bookId: 'b_second', manuscriptId: 'm_second' };
+    store.dispatch(librarySlice.actions.addBook(bookA));
+    store.dispatch(librarySlice.actions.addBook(bookB));
+
+    const dismissA = vi.fn();
+    const dismissB = vi.fn();
+
+    let capturedGuard: LanguageGuardResult['guard'] | null = null;
+
+    function CaptureHarness() {
+      const result = useLanguageGuard();
+      capturedGuard = result.guard;
+      return <>{result.modal}</>;
+    }
+
+    render(
+      <Provider store={store}>
+        <CaptureHarness />
+      </Provider>,
+    );
+
+    expect(capturedGuard).not.toBeNull();
+    const guard = capturedGuard!;
+
+    // Call guard() twice synchronously in one tick (no fireEvent, no await between them).
+    // This is the exact scenario where the stale-ref bug manifests.
+    act(() => {
+      // First guard for book A
+      const result1 = guard({ bookId: 'b_marlow' }, '409', () => {}, dismissA);
+      expect(result1).toBe(true);
+
+      // Second guard for book B, immediately after (still in the same synchronous block).
+      // Since it's a different book, book A's guard is superseded and dismissA should be invoked.
+      const result2 = guard({ bookId: 'b_second' }, '409', () => {}, dismissB);
+      expect(result2).toBe(true);
+    });
+
+    // The bug: dismissA is silently skipped because guard() read a stale pendingRef.current
+    // when deciding which dismisses to invoke. The fix ensures dismissA is called.
+    expect(dismissA).toHaveBeenCalledTimes(1);
+    expect(dismissB).not.toHaveBeenCalled();
+  });
 });

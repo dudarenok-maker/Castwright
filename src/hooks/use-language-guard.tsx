@@ -119,29 +119,38 @@ export function useLanguageGuard(): LanguageGuardResult {
         currentPending && !selectorsEqual(currentPending.selector, selector);
       const oldDismisses = isDifferentSelector ? currentPending.dismisses : [];
 
-      setPending((prev) => {
-        if (prev && selectorsEqual(prev.selector, selector)) {
-          // Same book already pending, accumulate the retry and dismiss.
-          // G6 fix: when accumulated calls have different shapes/sseSource,
-          // update to the latest (most recent failure context), not the first.
-          return {
-            ...prev,
-            shape,
-            retries: [...prev.retries, onRetry],
-            dismisses: onDismiss ? [...prev.dismisses, onDismiss] : prev.dismisses,
-            sseSource,
-          };
-        }
+      // R1 fix: Determine the new pending state that will be set
+      let newPending: PendingGuard;
+      if (currentPending && selectorsEqual(currentPending.selector, selector)) {
+        // Same book already pending, accumulate the retry and dismiss.
+        // G6 fix: when accumulated calls have different shapes/sseSource,
+        // update to the latest (most recent failure context), not the first.
+        newPending = {
+          ...currentPending,
+          shape,
+          retries: [...currentPending.retries, onRetry],
+          dismisses: onDismiss ? [...currentPending.dismisses, onDismiss] : currentPending.dismisses,
+          sseSource,
+        };
+      } else {
         // Different book or no pending guard. Create new guard for the new selector.
-        // Note: NO side effects here — the updater must be pure.
-        return {
+        newPending = {
           selector,
           shape,
           retries: [onRetry],
           dismisses: onDismiss ? [onDismiss] : [],
           sseSource,
         };
-      });
+      }
+
+      // R1 fix: Make pendingRef authoritative at assignment time by synchronously
+      // updating it BEFORE setState. This ensures that if two guard() calls happen
+      // synchronously (without intervening React commit), the second call reads the
+      // ref written by the first, not a stale value from before. The passive
+      // useEffect will still run and redundantly sync the ref, but it's harmless.
+      pendingRef.current = newPending;
+
+      setPending(newPending);
 
       // Invoke the old guard's dismisses AFTER setState returns, so side effects
       // happen outside the updater function. This allows any promises parked on
@@ -160,7 +169,14 @@ export function useLanguageGuard(): LanguageGuardResult {
     return () => setLanguageGuardHandler(null);
   }, [guard]);
 
-  const close = useCallback(() => setPending(null), []);
+  const close = useCallback(() => {
+    // R1 fix: Make pendingRef authoritative at assignment time by synchronously
+    // updating it before setState. This ensures that if close() is called
+    // synchronously from within a guard() call (e.g., in onClose handler invoked
+    // immediately after guard), the ref is always current.
+    pendingRef.current = null;
+    setPending(null);
+  }, []);
 
   const book = pending ? resolve(pending.selector) : null;
 
