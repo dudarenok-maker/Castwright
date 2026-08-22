@@ -719,9 +719,9 @@ Shipped 2026-08-22 on branch `feat/server-2246-language-recurrence`, HEAD `e02d6
 - Task 10 — the confirm-screen import-time signal on `languageFallback`, gated on
   **D-1** ("Decide later" ships).
 
-**Owed acceptance (on-box):** register rows A48 (the three voice-design sites —
+**Owed acceptance (on-box):** register rows A46 (the three voice-design sites —
 `cast-design`, `qwen-voice`, `single-design` — actually refuse before a live Qwen
-sidecar connection opens on an unset book, and design normally once set) and B5 (an
+sidecar connection opens on an unset book, and design normally once set) and B3 (an
 unset book hits the analysis language gate, the prompt resolves it, and a live local
 analyzer then selects the set language's own conventions table). Run sheet:
 [`docs/testing/language-recurrence-onbox-acceptance.md`](../../testing/language-recurrence-onbox-acceptance.md).

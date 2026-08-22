@@ -5,7 +5,7 @@
 >
 > Design of record: [`docs/superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md`](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-13-language-recurrence-and-prompt.md`](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)
-> Register rows: [`onbox-acceptance-register.md` A48, B5](onbox-acceptance-register.md)
+> Register rows: [`onbox-acceptance-register.md` A46, B3](onbox-acceptance-register.md)
 > Issue: [#2246](https://github.com/dudarenok-maker/Castwright/issues/2246)
 
 ---
@@ -47,7 +47,7 @@ sittings if the box is contended.
 
 SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
-## 3. §Analysis language gate — register row B5
+## 3. §Analysis language gate — register row B3
 
 1. Confirm the test book's `state.json` carries `language: null` (not
    `"en"`, not absent-and-defaulted — an explicit `null`).
@@ -81,7 +81,7 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
    Result (dialogue attributed correctly, not to narrator): __________
 
-## 4. §Voice-design gate — register row A48
+## 4. §Voice-design gate — register row A46
 
 6. Using the still-unset book from §3 step 1 (or a fresh one), and with the
    live Qwen sidecar running, attempt **Design full cast** (cast-design).
@@ -113,8 +113,8 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 ## 5. Outcome
 
-- [ ] §3 run (register row B5)
-- [ ] §4 run (register row A48)
+- [ ] §3 run (register row B3)
+- [ ] §4 run (register row A46)
 - [ ] Defects filed: ____________________________________
 
 Record what was observed, by whom, and when — here and in the register rows.
