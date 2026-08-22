@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 date: 2026-08-20
 issue: 2515
 ---
@@ -459,12 +459,10 @@ hazard.
 
 ## Ship notes
 
-Not yet shipped. Implementation is one more task on the existing
-`feat/server-2246-language-recurrence` branch, ahead of PR #2492 leaving
-draft, per the repo owner's decisions on #2515 (2026-08-20): wire it now;
-fold the stream-closure fix in across all nine early-bail-out sites rather
-than block on a separate ticket; exempt `language-unset` from the streak
-breaker; bound the resulting drain by gating dispatch on the pending guard.
+**Shipped:** PR #2492, merged to `main` — language-unset error handling integrated
+across the generation stream's nine early bail-out sites with stream-closure
+guarantees, pending-guard dispatch gating, and streak-breaker exemption per owner
+decisions on #2515 (2026-08-20).
 
 ## Assumption-checker passes
 
@@ -496,7 +494,7 @@ breaker.
 | 2 | The real re-trigger source once reconnects are gone is the dispatcher's own same-tick refill (STEP 2), not reconnects — the streak-breaker exemption removed the only bound on it, and an unset-language book would drain its full remaining queue | **ACCEPTED — owner decision: gate dispatch on the pending guard.** New `hasPendingLanguageGuard` query + STEP 2 skip condition |
 | 3 | `onRetry` calling `runner.open()` directly desyncs the dispatcher's `inFlight`/`completed` bookkeeping; the established `retryQueueEntry` idiom exists and wasn't used | **ACCEPTED.** Retry now goes through `retryQueueEntry`; `OpenHandle` only needs `queueEntryId` captured, not full `spec`/`opts` |
 | 4 | `FailureCode` addition touches 7 files not 3 (missed `failure-taxonomy.test.ts`'s literal array), with an unstated ordering dependency (`openapi.yaml` must land before `help-failures.ts` type-checks) | **ACCEPTED.** File list restated (eight total, folding every round's finds) with ordering stated |
-| 5 | The rejected-`emitLanguageGuard` fallback "the same toast" was never specified — `language-unset` isn't in `IMMEDIATE_TOAST_ERROR_CODES` and the reachable branch was gone once `chapterId` is attached, so the actual result was silence | **ACCEPTED.** `language-unset` added to that set, dispatched explicitly (not unconditionally) from the fallback paths |
+| 5 | The rejected-`emitLanguageGuard` fallback "the same toast" was never specified — `language-unset` isn't in `IMMEDIATE_TOAST_ERROR_CODES` and the reachable branch was gone once `chapterId` is attached, so the actual result was silence | **ACCEPTED.** A `fallbackToast()` closure dispatches the message "This book's language has not been set" in the `onDismiss` callback and when `emitLanguageGuard` returns `false`; `IMMEDIATE_TOAST_ERROR_CODES` remains unchanged |
 | 6 | `'setup'` category claimed "closest fit" when `'voices'` ("Voices & languages") already exists and fits better | **ACCEPTED.** Category changed to `'voices'` |
 | 7 | Change item 12 (`edit-book-meta.tsx` comment fix) declared "the same block, not half of it" then verifiably fixed roughly a third — both the `'409'` and `'sse'` lists were wrong in multiple ways (omitted analysis from both, listed a non-existent `cast-merge` site, misplaced qwen-voice) | **ACCEPTED.** Both lists corrected against a fresh grep of all eight `emitLanguageGuard` call sites |
 | 8 | Minor citation drift (`language-guard-bus.ts:68-71` vs actual `:67-70`; `edit-book-meta.tsx:34-41` vs actual `:35-41`) | **ACCEPTED.** Corrected |
