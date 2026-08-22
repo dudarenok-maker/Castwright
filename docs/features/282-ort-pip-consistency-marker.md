@@ -255,8 +255,9 @@ excerpt), mutation-checked line by line. All server-side Vitest, run via
   installed version, no-ops on a delete plan, and throws when the version can't be
   read; `applyOrtMarkerDelete` removes the marker on both delete and swap plans and
   never throws on a venv with no site-packages.
-- `server/src/tts/ort-ensure-marker.test.ts` — seven of the eight venv states from the table
-  above (row 3—the stale-marker state—is a known limitation with no test), plus idempotency and "never throws on a nonexistent venv" / "never creates a
+- `server/src/tts/ort-ensure-marker.test.ts` — all seven non-limitation rows from the eight-state table
+  above (row 3—the stale-marker state—is a known limitation with no test), including both branches of row 4's "either"
+  marker value (clobbered with marker absent, and clobbered with marker present), plus idempotency and "never throws on a nonexistent venv" / "never creates a
   site-packages tree on a half-built venv."
 - `server/src/tts/bootstrap-venv-helpers.test.ts` — the seam test asserting **ordering**
   at `installForProfile`: delete before the first overlay install, write only after a

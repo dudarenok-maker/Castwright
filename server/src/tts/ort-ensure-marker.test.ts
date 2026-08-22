@@ -114,6 +114,55 @@ describe('ensureOrtMarker', () => {
     expect(message.length).toBeGreaterThan(300);
   });
 
+  it('REFUSES on a clobbered venv even when our marker is already present (row 4 "either" coverage)', () => {
+    // Row 4 of the eight-state table has an "either" marker value: the clobbered refusal
+    // holds whether or not our marker is already present. This test covers the marker-present
+    // branch, which was untested — only the marker-absent case was exercised above.
+    // Risk: a plausible refactor that adds `&& ortMarkerVersion(sp) === null` to the
+    // clobbered check would silently return 'noop' for a pre-existing marker, evading
+    // every existing test but leaving a dangerous silent corruption of pip's bookkeeping.
+    const { root, sp } = venv({ owner: 'swap', realDist: true });
+
+    // Pre-create our marker, simulating a prior marker write on this venv.
+    writeOrtMarker(sp, '1.27.0');
+
+    // Snapshot dist-info directories before the call: GPU, real plain, and our marker.
+    const distInfoBefore = readdirSync(sp)
+      .filter((d) => d.endsWith('.dist-info'))
+      .sort();
+    expect(distInfoBefore).toContain('onnxruntime_gpu-1.27.0.dist-info');
+    expect(distInfoBefore).toContain('onnxruntime-1.28.0.dist-info');
+    expect(distInfoBefore).toContain('onnxruntime-1.27.0.dist-info'); // our marker
+
+    const lines: string[] = [];
+    // The key assertion: even with our marker present, the clobbered state must
+    // still refuse and return 'clobbered', not silently 'noop'.
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('clobbered');
+
+    // Verify the dist-info directories are unchanged: our marker must still exist
+    // (we should not have deleted or replaced it).
+    const distInfoAfter = readdirSync(sp)
+      .filter((d) => d.endsWith('.dist-info'))
+      .sort();
+    expect(distInfoAfter).toEqual(distInfoBefore);
+
+    // Verify our marker is still intact.
+    expect(existsSync(join(sp, 'onnxruntime-1.27.0.dist-info'))).toBe(true);
+    expect(readFileSync(join(sp, 'onnxruntime-1.27.0.dist-info', 'INSTALLER'), 'utf8')).toContain(
+      'castwright-ort-marker',
+    );
+
+    // Verify the real distribution is untouched.
+    expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
+    expect(readFileSync(join(sp, 'onnxruntime-1.28.0.dist-info', 'INSTALLER'), 'utf8')).toBe('pip\n');
+
+    // Verify the message is present and contains the refusal language.
+    const message = lines.join('\n');
+    expect(message).toContain('[ort-marker]');
+    expect(message).toContain('coexist');
+    expect(message).toContain('Refusing to write a marker');
+  });
+
   it('REFUSES on a clobbered venv even when the real plain dist-info shares the GPU version (in-place-overwrite blind spot)', () => {
     // The fixture above pins the GPU and real-plain dist-infos to DIFFERENT versions
     // (1.27.0 / 1.28.0), so a wrongful write creates a THIRD, differently-named
