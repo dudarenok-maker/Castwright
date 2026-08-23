@@ -579,25 +579,25 @@ redux → rendered DOM, not the server-side aggregation (which has its own
 
 ## On-box acceptance
 
-Three rows tracked (A33 partially discharged 2026-08-05 — see below) — see
+Three rows tracked (A30 partially discharged 2026-08-05 — see below) — see
 [`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)
 and the run sheet
 [`docs/testing/cast-id-drift-onbox-acceptance.md`](../testing/cast-id-drift-onbox-acceptance.md):
 
-- **A32** (Wave 1) — re-rendering an already-drifted real chapter puts the
+- **A29** (Wave 1) — re-rendering an already-drifted real chapter puts the
   character's own voice on their lines, confirmed by listening, not only by the
   JSON fields.
 - **B3** (Wave 2) — a real analyzer re-analysing an already-drifted real book
   keeps the cast's existing id (or correctly records a genuine change) instead of
   drifting it further.
-- **A33** (Wave 3) — the repair pass's `--apply` run against the real workspace.
+- **A30** (Wave 3) — the repair pass's `--apply` run against the real workspace.
   **PARTIALLY DISCHARGED 2026-08-05** — `--apply` was run for real (against
   `main` @ `f3d6ae0f`) and wrote exactly the 3 predicted aliases across 2
   books (*Заказ Коалфолла*, *Everblaze*), all 20 `cast.json` files
   byte-unchanged; the liveness rail caught a real `npm run dev` via its LAN
   HTTPS half before that. **Still owed:** confirming the fix reaches actual
   audio (re-render *Заказ Коалфолла* ch2 and listen) and the Cast-screen
-  banner cross-check — see the register row A33 and the run sheet's §8.6+
+  banner cross-check — see the register row A30 and the run sheet's §8.6+
   for the full account, including two defects the run surfaced
   ([#2107](https://github.com/dudarenok-maker/Castwright/issues/2107), the
   re-render list drops an aliased row's segments after `--apply` — **fixed,

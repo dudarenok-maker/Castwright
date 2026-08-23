@@ -229,6 +229,13 @@ comparison, see the edge list above). The merge step that closes this, run
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url` **and `favicon` set to 📋**.
 
+   **Provenance, so you can weigh it:** 📋 is the value the 2026-08-23 publish
+   set, recorded here at that moment. It is **not** a recovered original — if
+   earlier publishes used something else, that value is gone. So this is the pin
+   going forward, not an archaeological finding; treat a mismatch with your
+   memory of the tab icon as this line being newer than your memory, and change
+   the line only alongside a deliberate publish that changes the icon.
+
    The favicon is pinned here because it is otherwise **unrecoverable**. The
    publisher keeps it as artifact metadata, not in the page: it is absent from
    this repo, absent from the published HTML, and returned by neither
