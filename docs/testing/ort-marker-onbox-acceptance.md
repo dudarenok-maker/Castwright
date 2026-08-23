@@ -16,7 +16,7 @@
 > Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](../features/282-ort-pip-consistency-marker.md)
 > Design of record: [`docs/superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md`](../superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md)
 > ("### On-box acceptance" section — the six numbered criteria this sheet mirrors)
-> Register rows: [A36–A39](onbox-acceptance-register.md#group-a--the-gpu-box),
+> Register rows: [A36–A38](onbox-acceptance-register.md#group-a--the-gpu-box),
 > [E7](onbox-acceptance-register.md#group-e--not-the-gpu-box),
 > [Blocked — AMD/ROCm](onbox-acceptance-register.md#blocked--hardware-not-available)
 > Issue: [#2192](https://github.com/dudarenok-maker/Castwright/issues/2192)
@@ -47,8 +47,8 @@ acceptance criterion.
 | 3 | Self-heal on an existing (pre-marker) box | — | **Discharged**, see §5 |
 | 4 | Pinokio update path (`update.js`, the deployment shape that reported the bug) | E7 | Owed |
 | 5 | AMD box — no marker is written; the live case is the AMD→ROCm-failure→CPU-fallback ordering | Blocked (AMD/ROCm) | Blocked — no hardware |
-| 6 | Clobbered box — both dist-infos present, GPU build's files in the namespace; boot takes the loud path | A38 | Owed |
-| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A39 | Owed |
+| 6 | Clobbered box — both dist-infos present, GPU build's files in the namespace; boot takes the loud path | *(removed)* | **Discharged, 2026-08-23 — see §8.6** |
+| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A38 (renumbered from A39, fold #2625) | Owed — blocked |
 
 ## 2. Preconditions (common to all criteria)
 
@@ -119,6 +119,26 @@ check fails on a real dependency gap.
 **Run by:** claude (Castwright#2506, wave 3 step 2, fast-path claim).
 **Date:** 2026-08-20.
 
+> **2026-08-23 re-run (Castwright#2621) — STILL OWED, root cause now identified
+> and it is NOT `install-ort.mjs`.** Marker mechanics and `pip check` still
+> discharge cleanly. Confirmed the "N of M expected files found under nvidia/"
+> warning is real on this box (round 1, fix as shipped: `cufft64_11.dll` and
+> `cudart64_12.dll` failed to load from anywhere). Installing the `[cuda]`
+> extras (round 2) fixes `preload_dlls()` completely — all 11 expected files
+> resolve under `nvidia/<pkg>/bin` — but Kokoro still silently falls back to
+> CPU even with a clean preload. Root cause isolated to `kokoro-onnx==0.5.0`'s
+> own `Kokoro.__init__` auto-detect: `importlib.util.find_spec("onnxruntime-gpu")`
+> is always `None` (the pip distribution installs into the `onnxruntime`
+> import namespace, not a separately-importable module), so it always
+> constructs with `providers=["CPUExecutionProvider"]` explicitly — CUDA is
+> never offered to onnxruntime. A raw `InferenceSession` with CUDA providers
+> genuinely works on this box once `preload_dlls()` has run, confirming the
+> gap is entirely inside `kokoro-onnx`, not the sidecar's own DLL/dependency
+> wiring. Third distinct root cause, after #2534 and #2600. Not fixed here per
+> the fold brief's scope. Evidence:
+> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
+> (Castwright#2621).
+
 ---
 
 ## 4. Criterion 2 — the reported bug: in-app Qwen3 install (A37)
@@ -166,6 +186,23 @@ from the already-filed #2534 CUDA13/cuDNN9 gap.
 **Disposition:** Register row A37 (renumbered from A39 this wave) stays
 STILL OWED — partially run. Full evidence:
 `docs/testing/onbox-wave4-results/step-5c-a40.md`.
+
+> **2026-08-23 (Castwright#2621) — STILL OWED, blocked by box-wide sidecar
+> port contention again.** Started this worktree's own app; the server found
+> another process already listening on the hardcoded `:9000` sidecar port and
+> adopted it instead of spawning its own, so `SIDECAR_VENV_DIR` never took
+> effect. That pre-existing sidecar (PID 7380, actively `ESTABLISHED` with a
+> live client) was identified before assuming it was safe to use; per the
+> standing rule against disrupting another agent's live process, Install was
+> **not** clicked against it — only a read-only `GET /health` was run
+> (all three engines reported `cuda`, noted only as context). Neither the
+> Qwen3 install click-through nor the Kokoro-afterward check could be safely
+> run this session — not attempted, not failed — a third piece of evidence for
+> the same structural port-contention class as wave-4 step-5c. Worth filing
+> separately: `spawn-sidecar.ts`/`sidecar-owner.ts`'s hardcoded `9000` vs.
+> `LOCAL_TTS_PORT`'s per-worktree value. Evidence:
+> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
+> (Castwright#2621).
 
 ---
 
@@ -317,7 +354,7 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
 
 ---
 
-## 8. Criterion 6 — clobbered box (A38)
+## 8. Criterion 6 — clobbered box (formerly A38, DISCHARGED and removed 2026-08-23 — see §8.6)
 
 ### 8.1 Procedure
 
@@ -563,9 +600,45 @@ directory. Kept resident through the PR's review rounds so later passes could
 re-run the same functions against it read-only; not deleted as of this
 writing — delete once the PR merges and no further review round needs it.
 
+### 8.6 Final discharge (2026-08-23, Castwright#2620, fold #2625)
+
+**VERDICT: DISCHARGED.** Re-ran against a **full copy of the real, currently
+in-service sidecar venv** (`server/tts-sidecar/.venv`, 6.2 GB, 56,542 files) —
+a more realistic target than a throwaway venv, since that is the box
+`ensureOrtMarker` actually runs against at boot. The live venv was never
+touched: copied, the copy was clobbered and destroyed, and the original was
+byte-verified unchanged before and after (venv `python.exe` SHA-256, the
+`onnxruntime*` dist-info set, the marker's `INSTALLER` content, a SHA-256 of
+`onnxruntime/capi/build_and_package_info.py`, total file count, and total byte
+size — every field identical before/after).
+
+Manufactured the clobbered state on the copy (plain `onnxruntime==1.28.0` then
+`--force-reinstall --no-deps onnxruntime-gpu==1.27.0`); confirmed
+`detectOrtOwner === 'swap'`, `findPlainOrtDistInfos.length === 1`. Took a
+directory listing and a SHA-256 of the real plain dist-info's `METADATA`
+immediately before and immediately after calling `ensureOrtMarker` —
+`ensureOrtMarker` returned `'clobbered'`, logged the condition and the exact
+remedy command, and **provably touched nothing on disk** (identical directory
+listing and identical file hash before/after). The named remedy command was
+separately confirmed to still work: uninstalls both packages, reinstalls
+`onnxruntime-gpu` clean, writes a legitimate marker, `pip check` clean.
+
+This row's own criteria (design doc §On-box acceptance item 6, the eight-state
+table) are about `ensureOrtMarker`'s refuse behaviour, not GPU execution — no
+`InferenceSession` construction was needed and none was attempted; the row is
+tagged "no GPU needed, sidecar venv only." With the refuse-vs-repair
+distinction now proven against a real, previously-clean production-shaped
+venv and a manufactured silent-repair check finding no repair, this row is
+fully discharged and **removed from `onbox-acceptance-register.md`** (Group A
+renumbered contiguously: old A39–A44 → A38–A43) and from the live view, per
+the fold instructions.
+
+**Run by:** claude (Castwright#2620). **Date:** 2026-08-23.
+Evidence: `docs/testing/onbox-wave5-results/step-ort-b-a39.md`.
+
 ---
 
-## 9. Addition — the in-app upgrade path (A39, not one of the spec's six)
+## 9. Addition — the in-app upgrade path (A38, renumbered from A39, not one of the spec's six)
 
 **This criterion is not in the design doc's §On-box acceptance table.** It is
 owed anyway: Task 8 wired `upgrade/apply.ts`'s marker handling (with a new
@@ -596,11 +669,26 @@ release directory. `pip check` clean afterward; a forced failure leaves no marke
 
 ### 9.3 Result
 
-**Marker absent during the overlay install (observed how):** _(fill in)_
-**Marker present + correct version after a successful upgrade:** _(fill in)_
-**`pip check` after upgrade:** _(fill in)_
-**Forced-failure marker state (if run):** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_ **Release version upgraded to:** _(fill in)_
+**Not run — no real installed release directory exists on this box.** Per
+`server/src/upgrade/paths.ts`, a real release is a `vX.Y.Z` directory under a
+`releases/` parent, produced by the packaging/install path, not a git clone.
+Checked exhaustively (2026-08-23, Castwright#2619): neither the primary
+checkout nor any worktree sits under a `releases/` ancestor; no
+`*astwright*` directory under `C:\`, `Program Files`, `Program Files (x86)`,
+or `%LOCALAPPDATA%\Programs`; no running Castwright/Electron process; no
+uninstall-registry entry. Per the issue's own instruction, a fake release
+directory was not manufactured (requires a release cut, forbidden by standing
+rules; a hand-assembled directory would not exercise the real `applyUpgrade`
+path against real packaging output anyway). Matches the standing conclusion
+on record since wave-3 (§3 above, `docs/testing/onbox-wave3-results/step-2-ort-marker.md`).
+**Marker absent during the overlay install (observed how):** not reached.
+**Marker present + correct version after a successful upgrade:** not reached.
+**`pip check` after upgrade:** not reached.
+**Forced-failure marker state (if run):** not reached.
+**Run by:** claude (Castwright#2619). **Date:** 2026-08-23.
+**Release version upgraded to:** N/A — no release directory available to
+trigger an upgrade against.
+Evidence: `docs/testing/onbox-wave5-results/step-ort-c-a40.md`.
 
 ---
 
@@ -618,20 +706,20 @@ _(Update as each remaining criterion runs.)_
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
 - Criterion 4 — Pinokio update path (E7): owed.
 - Criterion 5 — AMD box: blocked, no hardware.
-- Criterion 6 — clobbered box (A38): **Run 2026-08-21 — STILL OWED.** The
-  filed defect (#2535) is fixed and verified: the corrected recipe now
-  exercises the `'clobbered'` branch correctly, the log line fires with the
-  remedy command, and the repair works (see §8.5 verification). The row
-  stays owed because the shared CUDA-provider re-check was re-run (wave-4 step 8,
-  same as A36/A37) and still fails on the new root cause — missing `nvidia-cudnn-cu12`
-  dependency (distinct from #2534). See onbox-acceptance-register.md A38/A36 rows
-  for full re-run details and evidence.
-- Addition — in-app upgrade path (A39): owed — not run this session (needs a
-  real packaged `release/` install); see wave-3 step-2 results file.
+- Criterion 6 — clobbered box (formerly A38, now removed): **DISCHARGED,
+  2026-08-23 (§8.6).** Re-verified against a full copy of the real
+  in-service sidecar venv: `ensureOrtMarker` refuses and logs exactly as
+  designed, provably touches nothing on disk, and the named remedy command
+  repairs the box. This row's own criteria do not require a GPU-provider
+  check (tagged "no GPU needed, sidecar venv only") — fully discharged and
+  removed from `onbox-acceptance-register.md` and the live view (fold #2625).
+- Addition — in-app upgrade path (A38, renumbered from A39): **STILL OWED —
+  BLOCKED, 2026-08-23 (§9.3).** No packaged `release/` install exists
+  anywhere on this box; checked exhaustively rather than assumed. Not
+  manufactured per the issue's own instruction against cutting a release.
 
-Once a criterion is run and its Result filled in, remove the corresponding row
-from `docs/testing/onbox-acceptance-register.md` and mirror the removal in the
-live view, per that register's own "Live view" procedure. **Not done for A36/
-A38 in this run** — per Castwright#2506's own instructions, step 9 of the
-wave-3 chain is the single writer for the register/live-view; this step only
-records results.
+**Register and live view updated in this session (fold #2625, 2026-08-23):**
+the clobbered-box row (formerly A38) is removed per its discharge above;
+Group A renumbered contiguously (old A39–A44 → A38–A43); A36, A37 and the new
+A38 (in-app upgrade path) carry dated notes recording today's findings and
+stay STILL OWED. `npm run check:onbox-register` is green.
