@@ -151,8 +151,8 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     ];
     const fresh: C[] = [{ id: 'coalfall-dragon', name: 'Coalfall', lines: 33 } as C];
     const { characters: merged } = mergeAnalysisResultWithExistingCast(existing, fresh);
-    // The descriptive, library-unique fresh id wins; no orphan.
-    expect(merged.map((c) => c.id)).toEqual(['coalfall-dragon']);
+    // The established ASCII id `coalfall` survives (#2584); no orphan.
+    expect(merged.map((c) => c.id)).toEqual(['coalfall']);
     const dragon = merged[0];
     expect(dragon.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-coalfall' } });
     expect(dragon.ttsEngine).toBe('qwen');
@@ -175,8 +175,12 @@ describe('mergeAnalysisResultWithExistingCast', () => {
       },
     ];
     const fresh: C[] = [{ id: 'coalfall-dragon', name: 'Coalfall', lines: 33 } as C];
-    const { retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(retirements).toEqual([{ from: 'coalfall', to: 'coalfall-dragon' }]);
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
+    // The established ASCII kebab id `coalfall` survives; the fresh id is retired
+    // TO it under the #2584 established-id survival rule (previously the fresh id
+    // won and a retirement recorded the opposite direction).
+    expect(merged.map((c) => c.id)).toEqual(['coalfall']);
+    expect(retirements).toEqual([{ from: 'coalfall-dragon', to: 'coalfall' }]);
   });
 
   it('id drift: an ambiguous name (two fresh rows) falls back to id-only + re-adds the orphan', () => {
@@ -213,9 +217,32 @@ describe('mergeAnalysisResultWithExistingCast', () => {
       existing,
       fresh,
     );
-    expect(merged.map((c) => c.id)).toEqual(['alden-new']); // no orphan re-added (unvoiced)
+    expect(merged.map((c) => c.id)).toEqual(['alden-old']);
     expect(merged[0].aliases).toEqual(['Al']); // only rides over if the name-fallback matched
-    expect(retirements).toEqual([{ from: 'alden-old', to: 'alden-new' }]);
+    expect(retirements).toEqual([{ from: 'alden-new', to: 'alden-old' }]);
+  });
+
+  it('id drift: an established ASCII id survives over a freshly-minted non-ASCII id (#2584)', () => {
+    // Real #2570/#2584 case: a re-analysis minted a Cyrillic id `одуван` for the
+    // same character whose established, previously-live id was already the stable
+    // ASCII `oduvan`. Under the established-id survival rule the ASCII id wins and
+    // the fresh id is retired TO it (previously the fresh Cyrillic id survived —
+    // the defect this ticket fixes).
+    const existing: C[] = [
+      {
+        id: 'oduvan',
+        name: 'Одуван',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-oduvan' } },
+      },
+    ];
+    const fresh: C[] = [{ id: 'одуван', name: 'Одуван', lines: 12 } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['oduvan']); // established ASCII id survives
+    expect(retirements).toEqual([{ from: 'одуван', to: 'oduvan' }]);
   });
 
   it('id drift: two unvoiced prior rows sharing a name still refuse to match, neither welded (guard, #2040 Task 12)', () => {
@@ -261,8 +288,9 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     const { characters: merged, retirements } =
       mergeAnalysisResultWithExistingCast(existing, fresh);
     // No near-duplicate id minted and no voiced orphan re-added — both prior
-    // rows matched onto their fresh name-tolerant rows.
-    expect(merged.map((c) => c.id)).toEqual(['brann-wire', 'berrin-wire']);
+    // rows matched onto their fresh name-tolerant rows. Each established ASCII
+    // id survives (#2584): the fresh `-wire` id is retired TO the prior id.
+    expect(merged.map((c) => c.id)).toEqual(['brann-weir', 'berrin-weir']);
     const brann = merged[0];
     expect(brann.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-brann' } });
     expect(brann.voiceState).toBe('tuned');
@@ -272,8 +300,8 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(berrin.lines).toBe(44);
     // The superseded ids are reported so the caller can retire them.
     expect(retirements).toEqual([
-      { from: 'brann-weir', to: 'brann-wire' },
-      { from: 'berrin-weir', to: 'berrin-wire' },
+      { from: 'brann-wire', to: 'brann-weir' },
+      { from: 'berrin-wire', to: 'berrin-weir' },
     ]);
   });
 
@@ -372,10 +400,11 @@ describe('mergeAnalysisResultWithExistingCast', () => {
       existing,
       fresh,
     );
-    expect(merged.map((c) => c.id)).toEqual(['alden-new']);
+    // The voiced established id survives (#2584); the fresh id is retired to it.
+    expect(merged.map((c) => c.id)).toEqual(['alden-voiced']);
     expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-alden' } });
     expect(merged[0].voiceState).toBe('tuned');
-    expect(retirements).toEqual([{ from: 'alden-voiced', to: 'alden-new' }]);
+    expect(retirements).toEqual([{ from: 'alden-new', to: 'alden-voiced' }]);
   });
 
   it('id drift: a notLinkedTo edge on the PRIOR row blocks the name-fallback match (#2040 Task 12 follow-up)', () => {
@@ -589,17 +618,19 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     ];
     const { characters: merged, retirements } =
       mergeAnalysisResultWithExistingCast(existing, fresh);
-    // After the fix: brann-a (exact match) inherits the voice and retires the
-    // prior row. brann-weir-b (tolerant match) is blocked by the cross-map
-    // guard because the exact candidate is also used, so it falls through to
-    // id-only path and does not inherit the voice.
-    expect(merged.map((c) => c.id)).toEqual(['brann-a', 'brann-weir-b']);
-    expect(merged.find((c) => c.id === 'brann-a')!.overrideTtsVoices).toEqual({
+    // After the fix: brann-a (exact match) inherits the voice, but because the
+    // established id `brann` is already ASCII-kebab the established id survives
+    // (#2584) and the fresh `brann-a` is retired TO it. brann-weir-b (tolerant
+    // match) is still blocked by the cross-map guard because the exact
+    // candidate is also used, so it falls through to id-only path and does not
+    // inherit the voice.
+    expect(merged.map((c) => c.id)).toEqual(['brann', 'brann-weir-b']);
+    expect(merged.find((c) => c.id === 'brann')!.overrideTtsVoices).toEqual({
       qwen: { name: 'qwen-brann' },
     });
     expect(merged.find((c) => c.id === 'brann-weir-b')!.overrideTtsVoices).toBeUndefined();
-    // Exactly ONE retirement, FROM the prior row TO the exact-match fresh row
-    expect(retirements).toEqual([{ from: 'brann', to: 'brann-a' }]);
+    // Exactly ONE retirement, FROM the exact-match fresh row TO the established row
+    expect(retirements).toEqual([{ from: 'brann-a', to: 'brann' }]);
   });
 });
 
@@ -1072,18 +1103,20 @@ describe('dedupePriorCastByName', () => {
       { id: 'f2', name: 'Мэйрин Коул', lines: 5 } as C, // f2: should surname-tolerant-match e2
     ];
     const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
-    // Both fresh rows in output, no false 0-line duplicate.
-    expect(merged.map((c) => c.id)).toEqual(['e1', 'f2']);
-    // f1 (id-matched e1) carries e1's voice.
+    // Both survivors in output, no false 0-line duplicate. e1 keeps its own id
+    // (id match); the established ASCII id `e2` survives the surname-tolerant
+    // match over the fresh `f2` (#2584).
+    expect(merged.map((c) => c.id)).toEqual(['e1', 'e2']);
+    // e1 (id-matched e1) carries e1's voice.
     expect(merged.find((c) => c.id === 'e1')!.overrideTtsVoices).toEqual({
       qwen: { name: 'qwen-mairin-weir' },
     });
-    // f2 (surname-tolerant-matched e2, not wrongly rejected) carries e2's voice.
-    expect(merged.find((c) => c.id === 'f2')!.overrideTtsVoices).toEqual({
+    // The established e2 (surname-tolerant-matched e2, not wrongly rejected) carries e2's voice.
+    expect(merged.find((c) => c.id === 'e2')!.overrideTtsVoices).toEqual({
       qwen: { name: 'qwen-mairin' },
     });
-    // One retirement: e2 → f2.
-    expect(retirements).toEqual([{ from: 'e2', to: 'f2' }]);
+    // One retirement: the fresh f2 is retired TO the established e2.
+    expect(retirements).toEqual([{ from: 'f2', to: 'e2' }]);
   });
 
   it('consumable gate 2: freshNameCounts must be exactly 1 — shared fresh names block the match (#2536)', () => {
@@ -1109,15 +1142,17 @@ describe('dedupePriorCastByName', () => {
     const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
     // The exact-name fresh rows (brann-a and brann-b) are ambiguous, so gate 2
     // blocks them from consuming the prior voiced row. Only the tolerant-match
-    // (brann-weir) with unambiguous fresh count can consume it, inheriting the voice.
-    expect(merged.map((c) => c.id)).toEqual(['brann-a', 'brann-b', 'brann-weir']);
+    // (brann-weir) with unambiguous fresh count can consume it, inheriting the
+    // voice — and because the established id `brann` is already ASCII-kebab, the
+    // established id survives (#2584) with the fresh `brann-weir` retired TO it.
+    expect(merged.map((c) => c.id)).toEqual(['brann-a', 'brann-b', 'brann']);
     expect(merged.find((c) => c.id === 'brann-a')!.overrideTtsVoices).toBeUndefined();
     expect(merged.find((c) => c.id === 'brann-b')!.overrideTtsVoices).toBeUndefined();
-    expect(merged.find((c) => c.id === 'brann-weir')!.overrideTtsVoices).toEqual({
+    expect(merged.find((c) => c.id === 'brann')!.overrideTtsVoices).toEqual({
       qwen: { name: 'qwen-brann' },
     });
-    // One retirement: brann → brann-weir (tolerant match succeeds, exact blocked by gate 2).
-    expect(retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+    // One retirement: brann-weir → brann (tolerant match succeeds, exact blocked by gate 2).
+    expect(retirements).toEqual([{ from: 'brann-weir', to: 'brann' }]);
   });
 
   it('consumable gate 3: narrator fresh rows cannot consume a dropped row via name-fallback (#2536, #2040 L1)', () => {
@@ -1144,16 +1179,18 @@ describe('dedupePriorCastByName', () => {
       { id: 'mairin-weir', name: 'Мэйрин Уир', lines: 12 } as C, // Should match dropped 'mairin' by surname tolerance
     ];
     const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
-    // mairin-weir should inherit the voice via surname-tolerant match.
-    // narrator should NOT inherit it even though it shares a name (different
-    // token count — "Мэйрин Коул" vs "Мэйрин", surname-tolerant). The gate blocks it.
-    expect(merged.map((c) => c.id)).toEqual(['narrator', 'mairin-weir']);
+    // The established id `mairin` should inherit its own voice via the
+    // surname-tolerant match — and, being already ASCII-kebab, survives over the
+    // fresh `mairin-weir` (#2584). The narrator should NOT inherit it even
+    // though it shares a name (different token count — "Мэйрин Коул" vs
+    // "Мэйрин", surname-tolerant). The gate blocks it.
+    expect(merged.map((c) => c.id)).toEqual(['narrator', 'mairin']);
     expect(merged.find((c) => c.id === 'narrator')!.overrideTtsVoices).toBeUndefined();
-    expect(merged.find((c) => c.id === 'mairin-weir')!.overrideTtsVoices).toEqual({
+    expect(merged.find((c) => c.id === 'mairin')!.overrideTtsVoices).toEqual({
       qwen: { name: 'qwen-mairin' },
     });
-    // One retirement: mairin → mairin-weir.
-    expect(retirements).toEqual([{ from: 'mairin', to: 'mairin-weir' }]);
+    // One retirement: mairin-weir → mairin.
+    expect(retirements).toEqual([{ from: 'mairin-weir', to: 'mairin' }]);
   });
 
   it('consumable gate 4: notLinkedTo edges block the match at the call site (#2536, #2040 Task 12)', () => {
@@ -1177,15 +1214,16 @@ describe('dedupePriorCastByName', () => {
     ];
     const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(existing, fresh);
     // brann-weir has the unique single-token difference and should match
-    // the voiced prior row via surname tolerance, inheriting its voice.
-    // brann-a shares the exact name but is blocked by notLinkedTo, so the
-    // prior voiced row cannot be claimed and falls through.
-    expect(merged.map((c) => c.id)).toEqual(['brann-a', 'brann-weir']);
+    // the voiced prior row via surname tolerance, inheriting its voice — but
+    // the established id `brann` is already ASCII-kebab and survives (#2584),
+    // the fresh `brann-weir` retired TO it. brann-a shares the exact name but is
+    // blocked by notLinkedTo, so it cannot claim the prior row and falls through.
+    expect(merged.map((c) => c.id)).toEqual(['brann-a', 'brann']);
     expect(merged.find((c) => c.id === 'brann-a')!.overrideTtsVoices).toBeUndefined();
-    expect(merged.find((c) => c.id === 'brann-weir')!.overrideTtsVoices).toEqual({
+    expect(merged.find((c) => c.id === 'brann')!.overrideTtsVoices).toEqual({
       qwen: { name: 'qwen-brann' },
     });
-    // One retirement: brann → brann-weir.
-    expect(retirements).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+    // One retirement: brann-weir → brann.
+    expect(retirements).toEqual([{ from: 'brann-weir', to: 'brann' }]);
   });
 });
