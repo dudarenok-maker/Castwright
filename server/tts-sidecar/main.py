@@ -3764,9 +3764,10 @@ class ReservationLedger:
 _reclaim_failure_traced = False
 
 
-def _reclaim_device_cache(device_key: str) -> None:
+def _reclaim_device_cache(device_key: str) -> bool:
     """Bare `gc.collect()` + `torch.cuda.empty_cache()`, with no target model
-    to unload first (#1976).
+    to unload first (#1976). Returns True if the reclaim ran (CUDA available +
+    no exception), False if CUDA is unavailable or an exception occurred.
 
     Every reclaim ELSEWHERE in this file — `unload()`, `unload_design()`,
     `maybe_free_idle*` (Qwen/Coqui), the `_idle_evict_steps` ladder — is a
@@ -3818,15 +3819,17 @@ def _reclaim_device_cache(device_key: str) -> None:
 
     Best-effort: any torch/CUDA failure (no CUDA build, a poisoned context) is
     swallowed here, matching every other reclaim path in this file — this is
-    a last-resort cushion, not a step whose failure should propagate."""
+    a last-resort cushion, not a step whose failure should propagate. Returns
+    False so callers can distinguish "ran" from "did not run"."""
     global _reclaim_failure_traced
     try:
         import torch  # type: ignore
 
         if not torch.cuda.is_available():
-            return
+            return False
         gc.collect()
         torch.cuda.empty_cache()
+        return True
     except Exception:
         log.warning(
             "stranded-cache reclaim failed for %s",
@@ -3834,6 +3837,7 @@ def _reclaim_device_cache(device_key: str) -> None:
             exc_info=not _reclaim_failure_traced,
         )
         _reclaim_failure_traced = True
+        return False
 
 
 # #1993 review (C1) — the per-device reclaim cooldown. A module constant, not
@@ -9628,14 +9632,16 @@ def debug_reclaim() -> dict[str, Any]:
     surface that brackets `empty_cache()` with nothing else in between (a
     load/unload cycle would conflate the reclaim with an allocation pass).
 
-    Not inert: it frees real memory (same effect as the existing 60s
-    watchdog tick). No auth wrapper, matching every other `/debug` route in
+    Not inert: it frees real memory when it runs. The watchdog performs an
+    identical reclaim operation, but only above the 8192 MB RSS threshold
+    (see main.py:7953-7960), so this route can trigger a reclaim below that
+    threshold too. No auth wrapper, matching every other `/debug` route in
     this family (`debug_codec_timing`/`debug_codec_timing_reset` above) —
-    guarded by being loopback-bound, per this route family's convention."""
+    loopback-bound by default via LOCAL_TTS_HOST configuration."""
     before = _cuda_memory_stats_per_device()
-    _reclaim_device_cache("debug-reclaim")
+    reclaimed = _reclaim_device_cache("debug-reclaim")
     after = _cuda_memory_stats_per_device()
-    return {"before": before, "after": after}
+    return {"before": before, "reclaimed": reclaimed, "after": after}
 
 
 @app.post("/load")

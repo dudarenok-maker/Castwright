@@ -650,10 +650,12 @@ def test_cuda_memory_stats_per_device_uses_rocm_prefix_on_rocm_box(monkeypatch):
 
 
 def test_debug_reclaim_brackets_one_bare_reclaim_call(monkeypatch):
-    """POST /debug/reclaim returns {before, after} having run exactly ONE
+    """POST /debug/reclaim returns {before, reclaimed, after} having run exactly ONE
     `_reclaim_device_cache()` between the two snapshots — no other work in
     between (a load/unload cycle would conflate the reclaim with an
-    allocation pass, per #2423's rationale)."""
+    allocation pass, per #2423's rationale). The `reclaimed` field surfaces
+    whether the reclaim actually ran (True) or was skipped due to CUDA
+    unavailability or error (False)."""
     monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
     monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
 
@@ -672,6 +674,7 @@ def test_debug_reclaim_brackets_one_bare_reclaim_call(monkeypatch):
 
     def fake_reclaim(device_key):
         calls.append("reclaim")
+        return True  # Success case
 
     monkeypatch.setattr(main, "_cuda_memory_stats_per_device", fake_snapshot)
     monkeypatch.setattr(main, "_reclaim_device_cache", fake_reclaim)
@@ -684,7 +687,47 @@ def test_debug_reclaim_brackets_one_bare_reclaim_call(monkeypatch):
     assert calls == ["snapshot", "reclaim", "snapshot"]
     assert calls.count("reclaim") == 1
     assert body["before"] == snapshots[0]
+    assert body["reclaimed"] is True
     assert body["after"] == snapshots[1]
+
+
+def test_debug_reclaim_surfaces_reclaimed_false_on_cuda_unavailable(monkeypatch):
+    """POST /debug/reclaim surfaces `reclaimed: False` when _reclaim_device_cache
+    returns False (CUDA unavailable or error occurred). This distinguishes
+    "ran and freed nothing" (before == after, reclaimed: True) from "never ran"
+    (before == after, reclaimed: False), so #1996's run sheet can reliably detect
+    whether the reclaim actually executed."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    snapshots = [
+        {"cuda:0": {"reserved": 4_000_000, "allocated": 100, "inactive_split": 3_900_000, "num_alloc_retries": 0}},
+        {"cuda:0": {"reserved": 4_000_000, "allocated": 100, "inactive_split": 3_900_000, "num_alloc_retries": 0}},
+    ]
+    calls: list[str] = []
+    snapshot_calls = {"n": 0}
+
+    def fake_snapshot():
+        calls.append("snapshot")
+        result = snapshots[snapshot_calls["n"]]
+        snapshot_calls["n"] += 1
+        return result
+
+    def fake_reclaim_unavailable(device_key):
+        calls.append("reclaim")
+        return False  # CUDA unavailable or error
+
+    monkeypatch.setattr(main, "_cuda_memory_stats_per_device", fake_snapshot)
+    monkeypatch.setattr(main, "_reclaim_device_cache", fake_reclaim_unavailable)
+
+    with TestClient(main.app) as client:
+        r = client.post("/debug/reclaim")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["before"] == snapshots[0]
+    assert body["reclaimed"] is False  # The key signal: reclaim did NOT run
+    assert body["after"] == snapshots[1]  # before == after, but now we know why
 
 
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---

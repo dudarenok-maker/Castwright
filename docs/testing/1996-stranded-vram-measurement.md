@@ -35,7 +35,7 @@ Run this at each capture point and paste the output into the table below.
 $ts = (Get-Date).ToString('HH:mm:ss')
 $mem = Invoke-RestMethod http://127.0.0.1:9000/debug/memory
 "$ts  rss=$($mem.process.rss_mb)MB"
-$mem.cuda.per_device | ConvertTo-Json -Depth 4
+$mem.memory_stats | ConvertTo-Json -Depth 4
 $mem.engines | ConvertTo-Json -Depth 3
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader
 ```
