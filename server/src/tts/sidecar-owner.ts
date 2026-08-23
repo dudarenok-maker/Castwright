@@ -30,13 +30,19 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+/** Last invalid LOCAL_TTS_PORT value we logged an error for. Prevents duplicate
+    error messages when resolveSidecarPort() is called repeatedly with the same
+    bad value (deduping pattern borrowed from srv-21 in user-settings.ts). */
+let lastWarnedInvalidPort: string | null = null;
+
 /** Resolve the sidecar port from LOCAL_TTS_PORT env var (default 9000).
     Used to support per-worktree port isolation (#2632).
 
     IMPORTANT: Invalid values are logged as errors and fall through to 9000.
     This is intentional but loud — a typo in LOCAL_TTS_PORT (e.g. 99999 instead
     of 9999) would silently cause cross-worktree adoption, so we warn and fail
-    open to :9000 instead of silent divergence. */
+    open to :9000 instead of silent divergence. Errors are deduplicated per
+    unique invalid value so 100 calls with "99999" log once, not 100 times. */
 export function resolveSidecarPort(): number {
   const raw = process.env.LOCAL_TTS_PORT;
   if (raw) {
@@ -44,11 +50,14 @@ export function resolveSidecarPort(): number {
     if (Number.isFinite(parsed) && parsed > 0 && parsed < 65536) {
       return Math.floor(parsed);
     }
-    // Invalid value — log error and fall back to default
-    console.error(
-      `[sidecar-owner] Invalid LOCAL_TTS_PORT="${raw}" (must be 1-65535). Falling back to default 9000. ` +
-      `Check for typos (e.g., 99999 instead of 9999) and update server/.env.`,
-    );
+    // Invalid value — log error once per unique value, then fall back to default (N3 dedup)
+    if (raw !== lastWarnedInvalidPort) {
+      lastWarnedInvalidPort = raw;
+      console.error(
+        `[sidecar-owner] Invalid LOCAL_TTS_PORT="${raw}" (must be 1-65535). Falling back to default 9000. ` +
+        `Check for typos (e.g., 99999 instead of 9999) and update server/.env.`,
+      );
+    }
   }
   return 9000;
 }
@@ -156,6 +165,7 @@ export interface ConflictCheckOpts {
   runDir: string;
   pid?: number;
   ppid?: number;
+  port?: number;
   aliveFn?: (pid: number) => boolean;
 }
 
@@ -163,11 +173,13 @@ export interface ConflictCheckOpts {
     note is our own pid; the note shares our lineage (a `tsx watch` reload — same
     ppid, new pid); or the recorded owner is dead (stale note). */
 export function findConflictingOwner(opts: ConflictCheckOpts): SidecarOwnerNote | null {
-  const { runDir, pid = process.pid, ppid = process.ppid, aliveFn = isProcessAlive } = opts;
+  const { runDir, pid = process.pid, ppid = process.ppid, port, aliveFn = isProcessAlive } = opts;
   const owner = readSidecarOwner(runDir);
   if (!owner) return null;
   if (owner.pid === pid) return null; // our own note
   if (owner.ppid > 0 && owner.ppid === ppid) return null; // same stack reloading (tsx watch)
+  // #2632: port must also match — different ports are independent sidecars, not conflicts
+  if (port !== undefined && owner.port !== port) return null;
   return aliveFn(owner.pid) ? owner : null;
 }
 
@@ -199,7 +211,7 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
     exit = (c) => process.exit(c),
     nowIso,
   } = opts;
-  const conflict = findConflictingOwner({ runDir, pid, ppid, aliveFn });
+  const conflict = findConflictingOwner({ runDir, pid, ppid, port, aliveFn });
   if (conflict) {
     log(
       `[server] FATAL: another Castwright server (pid ${conflict.pid}) already owns the TTS ` +

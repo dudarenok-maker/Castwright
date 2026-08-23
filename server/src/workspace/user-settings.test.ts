@@ -18,6 +18,7 @@ import {
   migrateLegacyUserSettings,
   _resetUserSettingsCache,
   _setUserSettingsCacheForTest,
+  _setExplicitlySetKeysForTest,
 } from './user-settings.js';
 
 let workspaceRoot: string;
@@ -30,6 +31,8 @@ beforeEach(() => {
 afterEach(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
+  delete process.env.LOCAL_TTS_PORT;
+  delete process.env.LOCAL_TTS_URL;
 });
 
 describe('userSettingsSchema — defaultThemePreference (plan 41)', () => {
@@ -879,6 +882,8 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
   it('prioritizes explicit user sidecarUrl over LOCAL_TTS_PORT', () => {
     process.env.LOCAL_TTS_PORT = '9110';
     _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://localhost:9888' });
+    // Mark sidecarUrl as explicitly set (was in the file)
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
 
     expect(getResolvedSidecarUrl()).toBe('http://localhost:9888');
   });
@@ -897,8 +902,50 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     process.env.LOCAL_TTS_URL = 'http://localhost:9999';
     // User explicitly set a different URL via the UI
     _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://192.168.1.20:9000' });
+    // Mark sidecarUrl as explicitly set (was in the file)
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
 
     // User's explicit URL wins over the env var (documented API contract)
     expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
   });
 });
+
+  it('N1: treats DEFAULT-valued LOCAL_TTS_URL as non-choice, lets port derivation win', () => {
+    // Pre-existing server/.env has DEFAULT value, which should not shadow port derivation
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://localhost:9000'; // Factory default value
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    // The DEFAULT-valued env var does not beat the port derivation
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N1: non-default LOCAL_TTS_URL still beats port derivation', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    // Non-default value — an explicit choice in .env
+    process.env.LOCAL_TTS_URL = 'http://192.168.1.20:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    // Non-default URL is a real choice and wins
+    expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
+  });
+
+  it('N2: uses sidecarUrl even when set to factory default if key is explicitly in file', () => {
+    // User explicitly set sidecarUrl=http://localhost:9000 in their settings file
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+    // Mark sidecarUrl as explicitly set (was in the file)
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    // Explicitly-set sidecarUrl wins, even though it equals the default
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9000');
+  });
+
+  it('N2: ignores sidecarUrl when not explicitly set, uses port derivation', () => {
+    // sidecarUrl field never in file — cached value is default but key not explicitly set
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+    // Don't mark sidecarUrl as explicitly set
+
+    // Not-explicitly-set sidecarUrl (factory default) loses to port derivation
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });

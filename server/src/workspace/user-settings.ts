@@ -341,6 +341,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 };
 
 let cached: UserSettings | null = null;
+/** Track which keys were explicitly in the persisted JSON file, vs. filled from defaults.
+    Used by getResolvedSidecarUrl() to distinguish "user explicitly set this to the default value"
+    from "this field was never in the file and is using the default" (#2632 N2). */
+let explicitlySetKeys: Set<string> = new Set();
 let writeChain: Promise<unknown> = Promise.resolve();
 
 /** Reads from disk; falls back to defaults when the file is missing or
@@ -356,8 +360,12 @@ export async function readUserSettings(): Promise<UserSettings> {
   const raw = await readJson<unknown>(USER_SETTINGS_PATH);
   if (!raw) {
     cached = { ...DEFAULT_USER_SETTINGS };
+    explicitlySetKeys = new Set();
     return cached;
   }
+  // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
+  explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
+
   const migrated = migrateLegacyEagerLoadFields(raw);
   if (migrated !== raw) {
     await writeJsonAtomic(USER_SETTINGS_PATH, migrated).catch((err) => {
@@ -376,6 +384,14 @@ export async function readUserSettings(): Promise<UserSettings> {
     upstream to warm the cache. */
 export function getCachedUserSettings(): UserSettings {
   return cached ?? { ...DEFAULT_USER_SETTINGS };
+}
+
+/** Check whether a key was explicitly present in the persisted settings file.
+    Used by getResolvedSidecarUrl() to distinguish "user set this to the default value"
+    from "this field was never in the file" (#2632 N2). Returns false if readUserSettings()
+    hasn't been called yet. */
+export function wasKeyExplicitlySet(key: string): boolean {
+  return explicitlySetKeys.has(key);
 }
 
 const patchSchema = userSettingsSchema.partial();
@@ -418,6 +434,10 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     }
     await writeJsonAtomic(USER_SETTINGS_PATH, merged);
     cached = merged;
+    // Track that sentKeys are now explicitly set in the file (#2632 N2)
+    for (const key of sentKeys) {
+      explicitlySetKeys.add(key);
+    }
     return merged;
   });
   writeChain = next.catch(() => undefined);
@@ -464,11 +484,17 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
     4. Derived from default 9000 fallback
 
     Strips trailing slashes for consistency with prior call-site behaviour. */
+/** Default value for LOCAL_TTS_URL in server/.env — indistinguishable from unset.
+    If LOCAL_TTS_URL equals this, treat it as a non-choice and let port derivation win (#2632 N1). */
+const DEFAULT_LOCAL_TTS_URL = 'http://localhost:9000';
+
 export function getResolvedSidecarUrl(): string {
   const c = cached;
 
-  // 1. Check cached sidecarUrl — if user explicitly customized it, use it (highest priority)
-  if (c?.sidecarUrl && c.sidecarUrl !== DEFAULT_USER_SETTINGS.sidecarUrl) {
+  // 1. Check cached sidecarUrl — if user explicitly set it, use it (highest priority).
+  //    Use wasKeyExplicitlySet() to distinguish "explicitly set (even to default value)"
+  //    from "never set, using defaults" (#2632 N2).
+  if (c?.sidecarUrl && wasKeyExplicitlySet('sidecarUrl')) {
     const raw = c.sidecarUrl;
     if (isPrivateHostUrl(raw)) {
       return raw.replace(/\/+$/, '');
@@ -483,8 +509,10 @@ export function getResolvedSidecarUrl(): string {
     }
   }
 
-  // 2. Check LOCAL_TTS_URL env var — dynamic override, beats port derivation
-  if (process.env.LOCAL_TTS_URL) {
+  // 2. Check LOCAL_TTS_URL env var — but only if it's NOT the default value (#2632 N1).
+  //    A DEFAULT-valued LOCAL_TTS_URL is indistinguishable from unset, so don't let it
+  //    shadow the per-worktree port derivation. A non-default value is an explicit choice.
+  if (process.env.LOCAL_TTS_URL && process.env.LOCAL_TTS_URL !== DEFAULT_LOCAL_TTS_URL) {
     const raw = process.env.LOCAL_TTS_URL;
     /* srv-21 guard — refuse non-private hosts to block SSRF */
     if (isPrivateHostUrl(raw)) {
@@ -852,4 +880,10 @@ export function _resetUserSettingsCache(): void {
     getResolvedAnalysisEngine), tests drive the engine through this. */
 export function _setUserSettingsCacheForTest(partial: Partial<UserSettings>): void {
   cached = { ...DEFAULT_USER_SETTINGS, ...partial };
+  explicitlySetKeys = new Set(); // Clear tracked keys for test isolation
+}
+
+/** Test helper to set which keys are tracked as explicitly set. */
+export function _setExplicitlySetKeysForTest(keys: Set<string>): void {
+  explicitlySetKeys = keys;
 }
