@@ -756,6 +756,14 @@ def test_reclaim_device_cache_exercises_real_function(monkeypatch):
     assert result is True, "Should return True when CUDA is available and empty_cache succeeds"
     assert len(empty_cache_called) == 1, "empty_cache() should have been called exactly once"
 
+    # Case 3: CUDA available, but empty_cache() raises exception → False
+    def fake_empty_cache_raises():
+        raise RuntimeError("Simulated CUDA error in empty_cache")
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", fake_empty_cache_raises)
+    result = main._reclaim_device_cache("test-device-exception")
+    assert result is False, "Should return False when an exception occurs during reclaim"
+
 
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
 

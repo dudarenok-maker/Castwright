@@ -89,7 +89,7 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
 
 ## Results
 
-| Point | When | Device | reserved MB | allocated MB | inactive_split MB | reserved − allocated | nvidia-smi used | RSS MB | Engines loaded | reclaimed |
+| Point | When | Device | reserved bytes | allocated bytes | inactive_split bytes | reserved − allocated | nvidia-smi used | RSS MB | Engines loaded | reclaimed |
 |---|---|---|---|---|---|---|---|---|---|---|
 | P0 | fresh | | | | | | | | | |
 | P1 | mid-render | | | | | | | | | |
