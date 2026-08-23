@@ -1313,7 +1313,7 @@ export async function undoRejectedPairs(
 /** #2128 — perform the one-shot back-fill stamp on a book whose history file
  *  has never been through this lane. Called by `repair-cast-id-drift.mjs
  *  --apply` for EVERY book it scans, not only ones with an alias to record:
- *  the books carrying pre-lane aliases are exactly the ones the A33 repair
+ *  the books carrying pre-lane aliases are exactly the ones the A30 repair
  *  workflow already visits, and absence of the field reads `'unknown'` until
  *  it lands.
  *
