@@ -667,6 +667,36 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     }
   });
 
+  it("(#2577 pass 7, N4) isMidWordHit inspects the character immediately before the match, not one further back", () => {
+    // Pass 7 review of #2577: the existing "да." inside "правда." trap above
+    // doesn't discriminate an off-by-one on which character `isMidWordHit`
+    // reads, because "правда" has a word character at BOTH pos-1 ('в') and
+    // pos-2 ('а') — a mutant reading `haystack[pos - 2]` instead of
+    // `haystack[pos - 1]` still (accidentally) sees a word character and
+    // still walks forward, so it passes that test too.
+    //
+    // "Мда." is the discriminating trap: needle "да." matches at pos-1='М'
+    // (a word character — genuinely mid-word, must walk forward) but
+    // pos-2 is the SPACE before "Мда." (not a word character). A mutant
+    // checking pos-2 would wrongly trust this as a genuine bare hit and
+    // never walk forward to the real dash-led reply.
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const body = ['Он сказал слово Мда.', '', '— Да.'].join('\n');
+    const paras = parseChapterStructure(body, ruIdx);
+    const allSpans = paras.flatMap((p) => p.spans);
+    const realSpeechSpan = allSpans.find((s) => s.kind === 'speech')!;
+    const trapNarrationSpan = allSpans.find((s) => s.kind === 'narration')!;
+    expect(body.slice(realSpeechSpan.start, realSpeechSpan.end)).toBe('Да.');
+    expect(body.slice(trapNarrationSpan.start, trapNarrationSpan.end)).toContain('Мда');
+
+    const sentences = [mkSentence(1, 'anton', 'Да.')];
+    const result = alignSentences(sentences, paras, body, true);
+
+    expect(result.aligned[0].spans).toEqual([realSpeechSpan]);
+    expect(result.aligned[0].spans[0].kind).toBe('speech');
+    expect(locateSentenceOffsets(sentences, body, true)[0]).toBe(body.indexOf('—'));
+  });
+
   it('(#2537) a dash-rule scene separator is not absorbed into the sentence that follows it', () => {
     // #1679 has the analyzer emit a scene separator as its own word-free
     // "sentence"; `normalize('---')` folds it to a lone '-'.
@@ -805,6 +835,26 @@ describe('#2540 dash-invariance — a dash-led needle must locate the same span 
     expect(result.aligned[0].spans).toEqual([narrationSpan]);
     expect(result.aligned[0].spans[0].kind).toBe('narration');
     expect(locateSentenceOffsets(sentences, body, true)[0]).toBe(0);
+  });
+
+  it("(#2577 pass 7, N2) dashRunStart's floor bound stops a later needle reclaiming a dash an earlier sentence already consumed", () => {
+    // Pass 7 review of #2577: `dashRunStart`'s `floor` parameter (bounded to
+    // the caller's monotonic cursor) is load-bearing but was untested —
+    // removing it (letting the backward walk run unbounded to 0 regardless
+    // of `floor`) left every other test in this file green.
+    //
+    // Body normalizes to "- Да." — a standalone dash "sentence" followed by
+    // a dash-free reply. Sentence 1 ('—') locates the dash itself at offset
+    // 0, advancing the cursor past it. Sentence 2 ('Да.', dash-free) must
+    // NOT be allowed to walk back through that already-claimed dash and
+    // relocate to the same offset 0 — the cursor floor is what stops it,
+    // landing it at its own true offset (2, right after "- ") instead.
+    const body = '— Да.';
+    const sentences = [{ text: '—' }, { text: 'Да.' }];
+
+    const offsets = locateSentenceOffsets(sentences, body, true);
+
+    expect(offsets).toEqual([0, 2]);
   });
 
   it('(#2537) the separator guard does not depend on the separator being in the cache', () => {

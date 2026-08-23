@@ -73,7 +73,7 @@ cached run. Confirmed on real data: 22 of 23 books in the local library are
 unaffected, but the 23rd — *Ночной дозор*, a dash-dialogue-dense Russian
 novel — shows 14 fields diverge when its cache is compared straight vs. with
 every leading dash stripped (`docs/testing/onbox-acceptance-register.md`,
-E11 §item 2). That comparison is an **acceptance probe**, not production
+E9 §item 2). That comparison is an **acceptance probe**, not production
 behavior — production never runs a deterministic strip; it is the tool used
 to detect that the aligner's output depends on a property (dash presence) it
 shouldn't.
@@ -176,7 +176,7 @@ otherwise unit-testable) used by both `alignSentences` and
 can assert equality on the needle array itself, not infer it from behavior
 — this is what would have caught attempt 2 immediately.
 
-**Downstream, invariance holds cleanly**: every E11-diverging field
+**Downstream, invariance holds cleanly**: every E9-diverging field
 (`narratorIdSpoken`, `unknownOriginNarrator`, `unattributedSpeech`,
 `splitSpeech`, `tagNarratorSpan`, per-chapter `attributableSpoken`) derives
 from `alignSentences`' `spans` / `sentence.characterId` via
@@ -253,7 +253,7 @@ exactly — a testable parity requirement, not just an absent code path.
 
 Three fix strategies were built and measured against the actual cached
 *Ночной дозор* stage-2 sentences (`server/handoff/cache/mns_oyK7Po6BiT.json`)
-and the real manuscript, on all four E11-flagged chapters (1, 6, 7, 8),
+and the real manuscript, on all four E9-flagged chapters (1, 6, 7, 8),
 each compared to `main`'s current baseline via a per-sentence span diff:
 
 - **Variant A** — needle fix + "reject-if-ambiguous" disambiguation.
@@ -295,7 +295,7 @@ had zero regressions too). This is why v4 ships Variant C alone.
 
 **Caveat, stated plainly**: this is one book, four chapters, ~7,900
 sentences — not a corpus-wide guarantee. It is the same real book #2537 was
-filed against and the corpus's own worst dash-density case (E11's
+filed against and the corpus's own worst dash-density case (E9's
 selection criterion), which is the strongest single-book evidence available
 locally, but the on-box re-run in Testing item 3 below is still required
 before the wider claim is trusted.
@@ -337,14 +337,14 @@ what actually ships, including the measured numbers above.
    confirming zero regressions (or investigating and justifying any that
    appear, since the design measurement used a reconstruction, not the
    final diff) — attach the re-run's counts to the PR body. **Also run the
-   actual E11 invariance check** (straight cache vs. dash-stripped-cache
+   actual E9 invariance check** (straight cache vs. dash-stripped-cache
    rerun, diffed field-by-field) on the same four chapters — this is the
    one instrument that directly tests the literal ticket property, and the
    harness used for the design measurement already has both the cache and
    the chapters loaded, so this is a cheap addition, not a separate
-   effort. Neither of these discharges E11 item (2) itself, which is a
+   effort. Neither of these discharges E9 item (2) itself, which is a
    whole-library (23-book), whole-chapter `measure-attribution.mjs`
-   double-run — update the E11 register row to record the fix landed and
+   double-run — update the E9 register row to record the fix landed and
    was spot-validated with the numbers above, but the row stays open until
    the full on-box re-run is performed.
 4. Existing `aligner.test.ts` / `scene-breaks.test.ts` suites must stay

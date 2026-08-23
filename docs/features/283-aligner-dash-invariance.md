@@ -54,8 +54,8 @@ commit `9262412a` — rework, don't re-branch.
   detection, split-speech/unattributed-speech flags) stops depending on an
   accident of which raw form the analyzer model happened to emit for a
   sentence's leading dash. Whether this closes the 14 diverging fields on
-  *Ночной дозор* (E11 register item 2) is **not yet measured for the shipped
-  mechanism** — that is the on-box acceptance E11 still owes; the earlier
+  *Ночной дозор* (E9 register item 2) is **not yet measured for the shipped
+  mechanism** — that is the on-box acceptance E9 still owes; the earlier
   "concretely fixes 14 fields" wording described a mechanism that was
   rejected and never ran against that corpus.
 - **Technical:** `alignSentences`/`locateSentenceOffsets` become provably
@@ -187,10 +187,10 @@ workspace.
   (1, 6, 7, 8), confirming zero regressions (investigate/justify any that
   appear — the design measurement used a reconstruction, not the final
   diff). Attach counts to the PR body.
-- Run the actual E11 invariance check (straight cache vs.
+- Run the actual E9 invariance check (straight cache vs.
   dash-stripped-cache rerun, diffed field-by-field) on the same four
   chapters — cheap addition using the same loaded harness. This does not by
-  itself discharge E11 item (2) (a whole-library, whole-chapter
+  itself discharge E9 item (2) (a whole-library, whole-chapter
   `measure-attribution.mjs` double-run) — update that register row to
   record the fix landed and was spot-validated, but leave it open until the
   full run.
@@ -219,7 +219,7 @@ workspace.
 
 Not applicable — no UI surface. On-box acceptance (Task 5) is the
 real-behavior verification for this plan; see
-`docs/testing/onbox-acceptance-register.md` E11 §item 2.
+`docs/testing/onbox-acceptance-register.md` E9 §item 2.
 
 ## Out of scope
 

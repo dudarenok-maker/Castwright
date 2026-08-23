@@ -1,10 +1,10 @@
-# Wave 4 step 1 — E11 item (2) re-run after #2537's fix
+# Wave 4 step 1 — E9 item (2) re-run after #2537's fix
 
 Issue: [#2571](https://github.com/dudarenok-maker/Castwright/issues/2571) · Gated on [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)'s
 verify child [#2541](https://github.com/dudarenok-maker/Castwright/issues/2541) (PASSED, PR [#2577](https://github.com/dudarenok-maker/Castwright/issues/2577))
 · Filed by wave 4 step 5 (#2554), part of the on-box register campaign (#2435).
 
-## E11 — item (2) re-run only; item (3) not this issue's job
+## E9 — item (2) re-run only; item (3) not this issue's job
 
 Re-running exactly the recipe wave 3 already ran once
 (`docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md`), against

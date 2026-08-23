@@ -4,7 +4,7 @@ status: draft
 
 # Attribution collapse visibility (#1984 Wave 1) — on-box acceptance run sheet
 
-Discharges register row **E11**. Needs a checkout (or worktree with
+Discharges register row **E9**. Needs a checkout (or worktree with
 `server/handoff/cache/` populated) whose cache holds the real library's
 analyses, plus `cd server && npm run build`. No GPU needed.
 
@@ -246,7 +246,7 @@ calibration.
 ### 5a · The shares, re-measured at `df49a261`
 
 Same formula, same corpus, run from the **primary checkout** (so this is also
-the full-checkout run E11 item 1 asks for — see §1). Twenty of the 23 books
+the full-checkout run E9 item 1 asks for — see §1). Twenty of the 23 books
 are **numerically identical in every column** to the 2026-08-13 table; the
 three that moved are named in §1. Sorted, non-zero only:
 
