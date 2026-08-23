@@ -76,9 +76,8 @@
 // Frozen paths are excluded from all three checks — see isFrozenPath's own
 // comment for why each one is frozen.
 
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dirname, join, posix as posixPath } from 'node:path';
+import { join } from 'node:path';
 import { scrubGitEnv } from './git-env.mjs';
 import { readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
