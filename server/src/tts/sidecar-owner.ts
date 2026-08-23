@@ -21,23 +21,44 @@
  * pid, same ppid. Keying conflict on a DIFFERENT ppid lets a reload recognise
  * itself and take over, while a genuinely separate stack is refused. Without
  * this, every dev save would kill the server.
+ *
+ * #2632 — port resolution: the sidecar port is now resolved from LOCAL_TTS_PORT
+ * env var (default 9000), so multiple worktrees can run sidecars concurrently
+ * on different ports. The port is read once at startup and passed through to
+ * both spawn-sidecar.ts and sidecar-owner.ts so they coordinate on the same port.
  */
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** The sidecar port the supervisor manages — `DEFAULT_PORT` in spawn-sidecar.ts.
-    Recorded in the note for diagnostics; the guard keys on pid/ppid, not port. */
-const SIDECAR_PORT = 9000;
+/** Resolve the sidecar port from LOCAL_TTS_PORT env var (default 9000).
+    Used to support per-worktree port isolation (#2632). */
+export function resolveSidecarPort(): number {
+  const raw = process.env.LOCAL_TTS_PORT;
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed < 65536) {
+      return Math.floor(parsed);
+    }
+  }
+  return 9000;
+}
+
+/** The sidecar port the supervisor manages — resolved from LOCAL_TTS_PORT env var
+    (default 9000). Recorded in the note for diagnostics; the guard keys on pid/ppid,
+    not port. */
+function SIDECAR_PORT(): number {
+  return resolveSidecarPort();
+}
 const OWNER_FILE = 'tts.owner.json';
 
 export interface SidecarOwnerNote {
-  /** PID of the server process that owns (supervises) the :9000 sidecar. */
+  /** PID of the server process that owns (supervises) the sidecar. */
   pid: number;
   /** Parent PID — the lineage key that survives a `tsx watch` reload. -1 when a
       legacy/partial note omitted it (then only the pid match suppresses a
       self-conflict). */
   ppid: number;
-  /** The sidecar port this owner manages (informational; always 9000 today). */
+  /** The sidecar port this owner manages (from LOCAL_TTS_PORT env var, default 9000). */
   port: number;
   /** ISO timestamp ownership was claimed (informational/diagnostic). */
   startedAt: string;
@@ -62,7 +83,7 @@ export function readSidecarOwner(runDir: string): SidecarOwnerNote | null {
     return {
       pid: p.pid,
       ppid: typeof p.ppid === 'number' ? p.ppid : -1,
-      port: typeof p.port === 'number' ? p.port : SIDECAR_PORT,
+      port: typeof p.port === 'number' ? p.port : SIDECAR_PORT(),
       startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
     };
   } catch {
@@ -92,14 +113,14 @@ export interface ClaimOpts {
   nowIso?: () => string;
 }
 
-/** Write the owner note, claiming :9000 ownership for this server. Creates
-    `runDir` if needed. */
+/** Write the owner note, claiming sidecar ownership for this server. Creates
+    `runDir` if needed. Port defaults to the resolved sidecar port. */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
     pid = process.pid,
     ppid = process.ppid,
-    port = SIDECAR_PORT,
+    port = SIDECAR_PORT(),
     nowIso = () => new Date().toISOString(),
   } = opts;
   mkdirSync(runDir, { recursive: true });
@@ -151,7 +172,7 @@ export interface EnforceOwnerOpts {
   nowIso?: () => string;
 }
 
-/** Enforce single-ownership of the :9000 sidecar. If another LIVE, FOREIGN
+/** Enforce single-ownership of the sidecar. If another LIVE, FOREIGN
     server already owns it, log an actionable FATAL line and exit(1) (mirroring
     `listenWithAutoRebind`'s EADDRINUSE behaviour) — returning false WITHOUT
     clobbering the incumbent's note. Otherwise claim ownership for this server
@@ -162,7 +183,7 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
     runDir,
     pid = process.pid,
     ppid = process.ppid,
-    port = SIDECAR_PORT,
+    port = SIDECAR_PORT(),
     aliveFn,
     log = (m) => console.error(m),
     exit = (c) => process.exit(c),

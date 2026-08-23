@@ -57,10 +57,13 @@ describe('spawnSidecar', () => {
     log = vi.fn<NonNullable<SpawnArgs['log']>>();
     warn = vi.fn<NonNullable<SpawnArgs['warn']>>();
     repoRoot = mkdtempSync(join(tmpdir(), 'wt-sidecar-'));
+    // Clean up LOCAL_TTS_PORT before each test
+    delete process.env.LOCAL_TTS_PORT;
   });
 
   afterEach(() => {
     rmSync(repoRoot, { recursive: true, force: true });
+    delete process.env.LOCAL_TTS_PORT;
   });
 
   it('returns null and does not spawn when autoStart is false', async () => {
@@ -1298,6 +1301,46 @@ describe('spawnSidecar', () => {
       expect(onAdoptExisting).toHaveBeenCalledTimes(1);
       expect(onSpawnRefused).not.toHaveBeenCalled();
     });
+  });
+
+  it('resolves sidecar port from LOCAL_TTS_PORT env var for per-worktree isolation (#2632)', async () => {
+    /* When LOCAL_TTS_PORT is set (e.g. by wt-new.mjs to 9010 for slot 1),
+       spawnSidecar should probe and adopt/spawn on that port, not the hardcoded
+       9000. This enables concurrent sidecars on different worktrees. */
+    const prevPort = process.env.LOCAL_TTS_PORT;
+    process.env.LOCAL_TTS_PORT = '9010';
+    try {
+      probeFn.mockResolvedValueOnce(false); // Port 9010 is free
+      let capturedHost: string | undefined;
+      let capturedPort: number | undefined;
+      const spawnFnWithCapture = vi.fn(() => {
+        // Capture the probe call's host/port by wrapping probeListening
+        return makeFakeChild();
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFnWithCapture as unknown as typeof import('node:child_process').spawn,
+        probeFn: async (host: string, port: number) => {
+          capturedHost = host;
+          capturedPort = port;
+          return false; // port is free
+        },
+        log,
+        warn,
+      });
+
+      // Verify that the probe was called on port 9010, not 9000
+      expect(capturedPort).toBe(9010);
+      expect(capturedHost).toBe('127.0.0.1');
+      expect(handle).not.toBeNull();
+      expect(spawnFnWithCapture).toHaveBeenCalled();
+    } finally {
+      if (prevPort === undefined) delete process.env.LOCAL_TTS_PORT;
+      else process.env.LOCAL_TTS_PORT = prevPort;
+    }
   });
 });
 

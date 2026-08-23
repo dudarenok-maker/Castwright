@@ -13,6 +13,7 @@ import {
   getResolvedGenerationWorkers,
   getResolvedAnalysisEngine,
   getResolvedAllowCloudFallback,
+  getResolvedSidecarUrl,
   resolveUserSettingsPath,
   migrateLegacyUserSettings,
   _resetUserSettingsCache,
@@ -838,5 +839,57 @@ describe('analyzerKeepAliveByModel', () => {
       await mod.writeUserSettings({ analyzerKeepAliveByModel: {}, analyzerPhase0Model: null });
       mod._resetUserSettingsCache();
     }
+  });
+});
+
+describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
+  beforeEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.LOCAL_TTS_URL;
+    delete process.env.LOCAL_TTS_PORT;
+  });
+
+  afterEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.LOCAL_TTS_URL;
+    delete process.env.LOCAL_TTS_PORT;
+  });
+
+  it('returns the default localhost:9000 when nothing is set', () => {
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9000');
+  });
+
+  it('resolves sidecar port from LOCAL_TTS_PORT when no explicit URL is configured (#2632)', () => {
+    // Simulates a worktree with LOCAL_TTS_PORT=9110 but no explicit sidecarUrl user setting
+    process.env.LOCAL_TTS_PORT = '9110';
+    // Cache has default sidecarUrl because user never customized it
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('prioritizes LOCAL_TTS_URL env var over LOCAL_TTS_PORT', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://localhost:9999';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9999');
+  });
+
+  it('prioritizes explicit user sidecarUrl over LOCAL_TTS_PORT', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://localhost:9888' });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9888');
+  });
+
+  it('still enforces srv-21 SSRF guard but derives from LOCAL_TTS_PORT on reject', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    // Invalid: non-loopback URL in LOCAL_TTS_URL is rejected by srv-21
+    process.env.LOCAL_TTS_URL = 'http://evil.example.com:9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    // Rejects the evil URL, then derives from LOCAL_TTS_PORT (#2632)
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
   });
 });

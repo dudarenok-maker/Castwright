@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
+import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
   resolveUserSettingsPath,
   USER_SETTINGS_PATH,
@@ -455,32 +456,54 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
   return out;
 }
 
-/** Synchronous resolver: returns sidecarUrl from the in-memory user-settings
-    cache, falling back to the LOCAL_TTS_URL env var, then
-    DEFAULT_USER_SETTINGS.sidecarUrl. Strips trailing slashes for
-    consistency with prior call-site behaviour. The final fallback comes
-    from the same defaults document that seeds a fresh user-settings.json
-    — one source of truth, no duplicated URL literals. */
+/** Synchronous resolver: returns sidecarUrl with per-worktree port support (#2632).
+    Precedence:
+    1. LOCAL_TTS_URL env var (most dynamic override)
+    2. Cached sidecarUrl if user explicitly set it (not the factory default)
+    3. Derived from LOCAL_TTS_PORT env var (per-worktree isolation)
+    4. DEFAULT_USER_SETTINGS.sidecarUrl fallback (localhost:9000)
+
+    Strips trailing slashes for consistency with prior call-site behaviour. */
 export function getResolvedSidecarUrl(): string {
   const c = cached;
-  const raw = c?.sidecarUrl ?? process.env.LOCAL_TTS_URL ?? DEFAULT_USER_SETTINGS.sidecarUrl;
-  /* srv-21 — the sidecar is always local; refuse to fetch from a non-private
-     host. A misconfigured/hostile sidecarUrl (set via the UI/API) would
-     otherwise turn every server→sidecar fetch into an SSRF. Fall back to the
-     factory default rather than throwing so a bad value can't wedge the server.
-     The frontend blocks saving such a value too (src/lib/sidecar-url.ts). */
-  if (!isPrivateHostUrl(raw)) {
+
+  // 1. Check LOCAL_TTS_URL env var first — most dynamic, takes priority
+  if (process.env.LOCAL_TTS_URL) {
+    const raw = process.env.LOCAL_TTS_URL;
+    /* srv-21 guard — refuse non-private hosts to block SSRF */
+    if (!isPrivateHostUrl(raw)) {
+      if (raw !== lastWarnedSidecarUrl) {
+        lastWarnedSidecarUrl = raw;
+        console.warn(
+          `[srv-21] Ignoring non-local sidecar URL from LOCAL_TTS_URL ${JSON.stringify(raw)} — ` +
+            `falling back to derived URL. The sidecar must run on a loopback/private host.`,
+        );
+      }
+    } else {
+      return raw.replace(/\/+$/, '');
+    }
+  }
+
+  // 2. Check cached sidecarUrl — if user explicitly customized it, use it
+  if (c?.sidecarUrl && c.sidecarUrl !== DEFAULT_USER_SETTINGS.sidecarUrl) {
+    const raw = c.sidecarUrl;
+    if (isPrivateHostUrl(raw)) {
+      return raw.replace(/\/+$/, '');
+    }
+    /* Non-private user URL fails srv-21 guard */
     if (raw !== lastWarnedSidecarUrl) {
       lastWarnedSidecarUrl = raw;
       console.warn(
-        `[srv-21] Ignoring non-local sidecar URL ${JSON.stringify(raw)} — ` +
-          `falling back to ${DEFAULT_USER_SETTINGS.sidecarUrl}. The sidecar must run on a ` +
-          `loopback/private host.`,
+        `[srv-21] Ignoring non-local sidecar URL from user settings ${JSON.stringify(raw)} — ` +
+          `falling back to derived URL. The sidecar must run on a loopback/private host.`,
       );
     }
-    return DEFAULT_USER_SETTINGS.sidecarUrl.replace(/\/+$/, '');
   }
-  return raw.replace(/\/+$/, '');
+
+  // 3. Derive from LOCAL_TTS_PORT (per-worktree port isolation, #2632)
+  const port = resolveSidecarPort();
+  const derived = `http://localhost:${port}`;
+  return derived;
 }
 let lastWarnedSidecarUrl: string | null = null;
 

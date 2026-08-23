@@ -11,19 +11,70 @@ import {
   isProcessAlive,
   readSidecarOwner,
   releaseSidecarOwnership,
+  resolveSidecarPort,
   sidecarOwnerPath,
 } from './sidecar-owner.js';
 
 let runDir: string;
 beforeEach(() => {
   runDir = mkdtempSync(join(tmpdir(), 'sidecar-owner-'));
+  // Clean up LOCAL_TTS_PORT before each test
+  delete process.env.LOCAL_TTS_PORT;
 });
 afterEach(() => {
   rmSync(runDir, { recursive: true, force: true });
+  delete process.env.LOCAL_TTS_PORT;
 });
 
 const writeNote = (note: Record<string, unknown>): void =>
   writeFileSync(sidecarOwnerPath(runDir), JSON.stringify(note), 'utf8');
+
+describe('resolveSidecarPort', () => {
+  it('returns 9000 when LOCAL_TTS_PORT is not set', () => {
+    expect(resolveSidecarPort()).toBe(9000);
+  });
+
+  it('resolves LOCAL_TTS_PORT when set to a valid port', () => {
+    process.env.LOCAL_TTS_PORT = '9010';
+    expect(resolveSidecarPort()).toBe(9010);
+  });
+
+  it('handles LOCAL_TTS_PORT with per-slot offset (#2632)', () => {
+    // Slot 0: 9000, Slot 1: 9010, Slot 2: 9020, etc.
+    process.env.LOCAL_TTS_PORT = '9020';
+    expect(resolveSidecarPort()).toBe(9020);
+  });
+
+  it('returns 9000 when LOCAL_TTS_PORT is empty string', () => {
+    process.env.LOCAL_TTS_PORT = '';
+    expect(resolveSidecarPort()).toBe(9000);
+  });
+
+  it('returns 9000 when LOCAL_TTS_PORT is not a valid number', () => {
+    process.env.LOCAL_TTS_PORT = 'not-a-number';
+    expect(resolveSidecarPort()).toBe(9000);
+  });
+
+  it('returns 9000 when LOCAL_TTS_PORT is out of range (0)', () => {
+    process.env.LOCAL_TTS_PORT = '0';
+    expect(resolveSidecarPort()).toBe(9000);
+  });
+
+  it('returns 9000 when LOCAL_TTS_PORT is out of range (negative)', () => {
+    process.env.LOCAL_TTS_PORT = '-1';
+    expect(resolveSidecarPort()).toBe(9000);
+  });
+
+  it('returns 9000 when LOCAL_TTS_PORT is out of range (>65535)', () => {
+    process.env.LOCAL_TTS_PORT = '65536';
+    expect(resolveSidecarPort()).toBe(9000);
+  });
+
+  it('floors floating-point LOCAL_TTS_PORT values', () => {
+    process.env.LOCAL_TTS_PORT = '9010.9';
+    expect(resolveSidecarPort()).toBe(9010);
+  });
+});
 
 describe('readSidecarOwner', () => {
   it('returns null when the note is absent', () => {
