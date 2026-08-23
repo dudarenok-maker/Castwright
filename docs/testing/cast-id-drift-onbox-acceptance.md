@@ -8,8 +8,10 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A29](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A30](onbox-acceptance-register.md) (Wave 3, §8 below), and A45 (#2128 audio currency, §9 below) — **A45 is discharged (2026-08-11)
-and no longer in the register; §9 below is its record**
+> Register rows: [`onbox-acceptance-register.md` A29](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A30](onbox-acceptance-register.md) (Wave 3, §8 below), and A45 (#2128 audio currency, §9 below) — **B3 is discharged (2026-08-21)
+and A45 (2026-08-11); neither is in the register any more, and §7 and §9
+below are their records. Do not follow B3 to whatever now sits at that
+position — Group B renumbered and today's B2 is an unrelated #2246 row.**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---

@@ -2639,7 +2639,7 @@ surface does that) is also gone.
 
 #### #1967 — additional acceptance criteria, on top of the nine E-tests above
 
-Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A26. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
+Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A25. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
 
 **Preconditions — the hot patch was REVERTED on 2026-07-31.** The 25 copied FFmpeg DLLs are gone from `site-packages/torchcodec/` and the box is a genuine static-FFmpeg box again (`ffmpeg 8.1.1-full_build-www.gyan.dev`). Reverting no longer costs you Section E: #1967 is merged, so the fix — not the hot patch — is what makes a derive work. **The revert is not "delete every non-hash-suffixed `*.dll`"**: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's own extensions and must stay. The copied set is exactly the non-hash-suffixed files that also have a hash-suffixed twin.
 
@@ -3046,7 +3046,7 @@ render-integrity gate now rebuilds a character's persisted `audition` centroid
 reference when its voice is reassigned, so correct new-voice lines are no
 longer falsely scored `voice-mismatch`/`severity: severe` against the old
 speaker's stale reference. A24's final sub-check ("no `voice-mismatch` rows")
-is therefore re-runnable — register row **A46** records that owed run.
+is therefore re-runnable — register row **A43** records that owed run.
 
 **DEF-F · HIGH · #1972 · open · invalidates three run-2 results**
 **What:** a per-character re-record (splice) picks its target segments from the
