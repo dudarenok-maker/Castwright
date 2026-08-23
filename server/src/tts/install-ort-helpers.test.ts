@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
-import { planOrtSwap } from '../../tts-sidecar/scripts/install-ort.mjs';
+import { planOrtSwap, extraRuntimeSteps } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 describe('planOrtSwap', () => {
   // The overlay ALWAYS installs plain `onnxruntime` (kokoro-onnx's core dep). The
@@ -24,10 +24,42 @@ describe('planOrtSwap', () => {
     // just "whatever was latest on PyPI on their install date" — bump this
     // assertion's version alongside install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT
     // when the pin is next deliberately moved.
+    // #2600: onnxruntime-gpu declares nvidia-cudnn-cu12 only in its OPTIONAL
+    // [cudnn] extra, and `--no-deps` on the install step above suppresses
+    // extras entirely — so nothing here ever lands cuDNN, and a real
+    // CUDAExecutionProvider InferenceSession silently falls back to CPU. The
+    // cuDNN step below is separate and deliberately does NOT carry --no-deps:
+    // cuDNN's own dependency tree (cublas) doesn't intersect the
+    // overlay's numpy/protobuf/flatbuffers pins, so pulling it in full is safe
+    // where dropping --no-deps on the onnxruntime-gpu step itself is not.
+    // cublas is named alongside cuDNN (review finding M2) so pip's
+    // resolver treats its pin as a top-level constraint rather than letting
+    // cuDNN's own unpinned transitive requirement pick whatever is latest.
+    // Pass 2 review (N4/N6, PR #2617): the cublas pin is a floor-plus-cap on
+    // the 12.8.x line torch cu128 actually bundles (`~=12.8.0`, not the prior
+    // `~=12.9` — see install-ort.mjs's own comment for why that excluded the
+    // exact patch it meant to protect). nvrtc is DROPPED from this step:
+    // onnxruntime's own preload_dlls() never looks for it on Windows (it's a
+    // Linux-only entry in its DLL list there), so pinning it here bought
+    // nothing on this platform.
     expect(plan.steps).toEqual([
       ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
       ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.26,<1.27'],
+      ['install', 'nvidia-cudnn-cu12~=9.0', 'nvidia-cublas-cu12~=12.8.0'],
     ]);
+  });
+
+  // extraRuntimeSteps is the exported gate itself — tested directly rather
+  // than only indirectly through planOrtSwap, since no profile installed
+  // TODAY exercises a non-onnxruntime-gpu SWAP (amd/apple/cpu are all
+  // 'onnxruntime', i.e. skip): a future onnxruntime-directml re-enable must
+  // not silently inherit a CUDA-only cuDNN package.
+  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN+cublas step (no nvrtc — Windows-unused, N6)', () => {
+    expect(extraRuntimeSteps('onnxruntime-gpu')).toEqual([
+      ['install', 'nvidia-cudnn-cu12~=9.0', 'nvidia-cublas-cu12~=12.8.0'],
+    ]);
+    expect(extraRuntimeSteps('onnxruntime-directml')).toEqual([]);
+    expect(extraRuntimeSteps('onnxruntime')).toEqual([]);
   });
 
   // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model, so the AMD

@@ -231,7 +231,16 @@ export function installForProfile(
     for (const step of ort.steps) {
       if (!runPip(step)) {
         if (venvDir) marker.del(venvDir, ort);
-        throw new Error(`ONNX runtime swap failed (pip ${step.join(' ')}) for the ${profile} overlay`);
+        // Pass 3 review finding N8 (PR #2617): a failure of the cuDNN/cublas
+        // step (extraRuntimeSteps, #2600) used to be reported as "ONNX
+        // runtime swap failed" too -- the same headline the actual
+        // uninstall/reinstall swap steps use -- even though it is now by far
+        // the largest and most network-fragile of the (up to) three pip
+        // calls in this loop. Name the failing step correctly so a network
+        // hiccup on the cuDNN download doesn't read as an ORT-swap problem.
+        const isRuntimeDepsStep = step.some((arg) => arg.startsWith('nvidia-'));
+        const label = isRuntimeDepsStep ? 'cuDNN/cublas runtime install' : 'ONNX runtime swap';
+        throw new Error(`${label} failed (pip ${step.join(' ')}) for the ${profile} overlay`);
       }
     }
     if (venvDir) marker.write(venvDir, ort);

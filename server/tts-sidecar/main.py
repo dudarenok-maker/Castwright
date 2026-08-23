@@ -25,6 +25,7 @@ import asyncio
 import functools
 import gc
 import hashlib
+import io
 import json
 import logging
 import math
@@ -37,7 +38,7 @@ import threading
 import time
 import wave
 from collections import deque
-from contextlib import asynccontextmanager, contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext, redirect_stdout
 from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
@@ -110,6 +111,214 @@ logging.basicConfig(
     datefmt=LOG_DATEFMT,
 )
 log = logging.getLogger("sidecar")
+
+
+def _measure_nvidia_dll_provenance(onnxruntime) -> Optional[tuple]:
+    """Best-effort: of the DLLs `preload_dlls()` was asked to find, how many
+    actually exist under `<site-packages>/nvidia/<pkg>/bin` -- the directory
+    `extraRuntimeSteps` (install-ort.mjs) installs into. `preload_dlls()`
+    itself only reports on-load *failure*, never *where* a DLL that loaded
+    came from, so a clean capture alone cannot distinguish "loaded from
+    nvidia/" from "resolved off PATH via a system CUDA toolkit or torch"
+    (pass-4 review finding P2, PR #2617). Uses onnxruntime's own (private)
+    `_get_nvidia_dll_paths` to build the expected path list -- the same
+    helper `preload_dlls()` itself calls -- so this stays in lockstep with
+    whatever DLL set the installed onnxruntime build actually wants.
+
+    Returns `(found, total)`, or `None` when the running onnxruntime build
+    doesn't expose what this needs (an older build, or a test double) --
+    callers must not assume nvidia/ provenance in that case either.
+    """
+    get_paths = getattr(onnxruntime, "_get_nvidia_dll_paths", None)
+    ort_file = getattr(onnxruntime, "__file__", None)
+    if get_paths is None or not ort_file:
+        return None
+    try:
+        site_packages = os.path.dirname(os.path.dirname(os.path.abspath(ort_file)))
+        dll_paths = get_paths(sys.platform == "win32")
+        found = sum(
+            1 for p in dll_paths if os.path.isfile(os.path.join(site_packages, *p))
+        )
+        return found, len(dll_paths)
+    except Exception:
+        return None
+
+
+def _preload_ort_cuda_dlls() -> str:
+    """#2600 (review finding 1, PR #2617): installing `nvidia-cudnn-cu12` (see
+    install-ort.mjs's `extraRuntimeSteps`) lands the cuDNN DLLs on disk but does
+    NOT make them findable — on Windows, `<venv>/Lib/site-packages/nvidia/cudnn/bin`
+    is never added to the process DLL search path by anything in the
+    onnxruntime-gpu wheel (`_ld_preload.py` is empty/manylinux-only,
+    `_pybind_state.py`'s Windows branch only checks `vcruntime140_1.dll`, and the
+    installed package has zero `add_dll_directory` calls). The one mechanism
+    onnxruntime ships that reaches those directories is its own opt-in
+    `onnxruntime.preload_dlls()` — its docstring names the only alternative
+    (`import torch` before `import onnxruntime`), which this file deliberately
+    does NOT do (every `import torch` here is lazy, inside an engine method).
+
+    Called once, from the `_lifespan` startup sequence, before anything in this
+    process constructs an onnxruntime `InferenceSession` (Kokoro's CUDA session
+    included, preloaded further down the same sequence) — calling it only after
+    a failed CUDA-EP load would be too late (Windows caches the failed
+    LoadLibrary for the process lifetime). NOT at raw module-import time (pass 2
+    review finding N5, PR #2617): ~45 sidecar test modules `import main` at
+    module scope, and this call is neither free nor relevant to most of them.
+
+    `directory=""` (pass 2 review finding N1, PR #2617): the default
+    (`directory=None`) makes `preload_dlls()` prefer `<torch>/lib` whenever the
+    installed torch's CUDA major matches onnxruntime's — read from onnxruntime's
+    own `preload_dlls()` source (`onnxruntime/__init__.py`) in the live sidecar
+    venv: when `directory` is truthy it joins ONLY THE BASENAME of each DLL's
+    relative path under that directory, discarding the `nvidia/<pkg>/bin/`
+    components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
+    `site-packages/nvidia/...` is never even looked at; on this box that path
+    resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
+    same "torch/lib, not the installed cuDNN" shape register row A36 already
+    recorded as not fixing the bug. Passing `directory=""` (falsy, but not
+    `None`) skips the `torch/lib` branch and, per the same source, joins the
+    FULL relative path under site-packages instead — i.e. it looks under
+    `nvidia/<pkg>/bin/` exactly where `extraRuntimeSteps` installs.
+
+    Guarded end to end: an onnxruntime build without the `preload_dlls` symbol
+    (older release, or a non-GPU wheel that never needed it) degrades to a
+    logged no-op rather than crashing the sidecar, and `preload_dlls()` itself
+    raising (e.g. the `[cuda]`-extra packages absent) is caught rather than
+    propagated — the CUDA execution provider silently falling back to CPU is
+    the pre-existing failure mode either way, and this function's whole job is
+    to make that outcome LOUD instead of silent, never to guarantee GPU use.
+
+    `preload_dlls()` itself never raises on a missing/failed DLL load — it only
+    `print()`s a "Failed to load ..." line per DLL and returns `None` either way
+    (pass 2 review finding N2, PR #2617: importing `main` against the live venv
+    showed zero of twelve DLLs loading, eleven printed failures, and this
+    function nonetheless logging success at INFO). So a raised exception is NOT
+    the failure signal here — stdout is captured and inspected instead: any
+    "Failed to load" line means the CUDA execution provider may still silently
+    fall back to CPU, which is logged as a WARNING, not an INFO line, and
+    reflected in the returned status.
+
+    Pass-4 review finding P4 (PR #2617), residue of N9(c): the "Failed to
+    load" / "Skip loading" substrings this guard matches on are onnxruntime's
+    OWN prose, not pinned anywhere to `ONNXRUNTIME_GPU_CONSTRAINT` -- a future
+    onnxruntime release that rewords its per-DLL failure message would fall
+    through every branch below and report `preloaded` again with nothing
+    having loaded, the exact #2600 symptom reopened inside the guard written
+    to close it. Unreachable at the pinned version; re-check this coupling by
+    hand whenever that constant (`install-ort.mjs`) is bumped.
+
+    Returns a status string for tests; not part of any external contract.
+    """
+    try:
+        import onnxruntime  # type: ignore
+    except Exception as e:
+        log.info("[ort-preload] onnxruntime not importable yet (%s); skipping DLL preload.", e)
+        return "not-importable"
+    preload = getattr(onnxruntime, "preload_dlls", None)
+    if preload is None:
+        log.info(
+            "[ort-preload] onnxruntime %s has no preload_dlls() (older build). CUDA "
+            "cuDNN/cublas DLLs will only be found if something else in this process "
+            "(e.g. an earlier `import torch`) already added them to the DLL search "
+            "path -- the CUDA execution provider may silently fall back to CPU.",
+            getattr(onnxruntime, "__version__", "?"),
+        )
+        return "unavailable"
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            preload(directory="")
+    except Exception as e:
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() raised (%s) -- the CUDA "
+            "execution provider may silently fall back to CPU.",
+            e,
+        )
+        return "failed"
+    output = buf.getvalue()
+    for line in output.splitlines():
+        if line.strip():
+            log.info("[ort-preload] %s", line)
+    if "Failed to load" in output:
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() ran but at least one CUDA/cuDNN "
+            "DLL failed to load (see lines above) -- the CUDA execution provider may "
+            "silently fall back to CPU."
+        )
+        return "failed"
+    if "Skip loading" in output:
+        # Pass 3 review finding N9(b): `directory=""` does not defeat this
+        # branch -- it is gated on `"torch" in sys.modules`, never on
+        # `directory`. If it ever fires here, preload_dlls() looked at
+        # nothing at all and torch's own bundled DLLs are what the CUDA
+        # execution provider will find -- the exact "torch/lib, not the
+        # installed cuDNN" shape register row A36 recorded as NOT fixing the
+        # bug. That is a distinct, worse outcome than a genuine preload and
+        # must not be folded into "preloaded".
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
+            "torch was already imported (see lines above) -- it fell back to torch's "
+            "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
+            "nvidia/<pkg>/bin, which register row A36 already recorded as not fixing the "
+            "CUDA-fallback bug."
+        )
+        return "torch-skip"
+    if not output and not getattr(onnxruntime, "cuda_version", ""):
+        # Pass 3 review finding N9(a): a CPU/AMD/Apple-profile `onnxruntime`
+        # build has no `cuda_version` and preload_dlls() returns immediately
+        # having done nothing and printed nothing -- indistinguishable from a
+        # genuine no-op success unless this is checked explicitly. This is
+        # the live-today case: every non-NVIDIA install hits it on every
+        # start.
+        log.info(
+            "[ort-preload] onnxruntime.preload_dlls() ran but this onnxruntime build has "
+            "no CUDA support (cuda_version is empty) -- there was nothing to preload; the "
+            "CUDA execution provider is not available on this install regardless."
+        )
+        return "no-cuda-build"
+    # Pass 4 review finding P2 (PR #2617): an empty `output` here means every
+    # DLL `preload_dlls()` tried is loadable *from somewhere* -- it does NOT
+    # mean it came from `nvidia/<pkg>/bin` (where `extraRuntimeSteps` in
+    # install-ort.mjs installs). `preload_dlls()` has a second loop that
+    # retries, by bare filename, any DLL it didn't find at its full
+    # `nvidia/<pkg>/bin` path -- the Windows loader then resolves that name
+    # off the default search path (PATH), which can hand back a system CUDA
+    # toolkit's or torch's own bundled copy instead, and prints nothing
+    # either way. So provenance has to be measured, not assumed from a clean
+    # capture.
+    provenance = _measure_nvidia_dll_provenance(onnxruntime)
+    if provenance is None:
+        log.info(
+            "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+            "DLLs from somewhere loadable -- this onnxruntime build does not expose enough "
+            "to confirm whether they came from nvidia/<pkg>/bin or resolved off PATH instead."
+        )
+    else:
+        found, total = provenance
+        if found == total:
+            log.info(
+                "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+                "DLLs; all %d expected files were found under nvidia/<pkg>/bin.",
+                total,
+            )
+        else:
+            log.warning(
+                "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+                "DLLs, but only %d of %d expected files were found under nvidia/<pkg>/bin -- "
+                "the rest resolved via preload_dlls()'s bare-name PATH fallback (e.g. a "
+                "system CUDA toolkit or torch's own bundled DLLs), not the installer's own "
+                "runtime -- see register row A36's Named assumption.",
+                found,
+                total,
+            )
+    return "preloaded"
+
+
+async def _startup_ort_cuda_preload() -> None:
+    """Lifespan wrapper around `_preload_ort_cuda_dlls` — same async-wrapper
+    shape `_startup_cuda_env_shadow_check` uses around its own sync helper,
+    further down this module."""
+    _preload_ort_cuda_dlls()
 
 
 def error_response(e: Exception, log, status: int = 500):
@@ -661,6 +870,7 @@ async def _lifespan(_app: FastAPI):
     `tests/test_lifespan_order.py` drives this very context manager and pins
     both sequences by name, so a later edit cannot quietly drop or reshuffle a
     handler."""
+    await _startup_ort_cuda_preload()
     await _configure_vd_kokoro_coupling()
     await _start_design_idle_watchdog()
     await _start_asr_idle_watchdog()
