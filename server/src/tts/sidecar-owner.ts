@@ -31,7 +31,12 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Resolve the sidecar port from LOCAL_TTS_PORT env var (default 9000).
-    Used to support per-worktree port isolation (#2632). */
+    Used to support per-worktree port isolation (#2632).
+
+    IMPORTANT: Invalid values are logged as errors and fall through to 9000.
+    This is intentional but loud — a typo in LOCAL_TTS_PORT (e.g. 99999 instead
+    of 9999) would silently cause cross-worktree adoption, so we warn and fail
+    open to :9000 instead of silent divergence. */
 export function resolveSidecarPort(): number {
   const raw = process.env.LOCAL_TTS_PORT;
   if (raw) {
@@ -39,6 +44,11 @@ export function resolveSidecarPort(): number {
     if (Number.isFinite(parsed) && parsed > 0 && parsed < 65536) {
       return Math.floor(parsed);
     }
+    // Invalid value — log error and fall back to default
+    console.error(
+      `[sidecar-owner] Invalid LOCAL_TTS_PORT="${raw}" (must be 1-65535). Falling back to default 9000. ` +
+      `Check for typos (e.g., 99999 instead of 9999) and update server/.env.`,
+    );
   }
   return 9000;
 }

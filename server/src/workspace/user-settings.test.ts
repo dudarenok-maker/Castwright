@@ -892,4 +892,13 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     // Rejects the evil URL, then derives from LOCAL_TTS_PORT (#2632)
     expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
   });
+
+  it('prioritizes customised sidecarUrl over LOCAL_TTS_URL (per openapi.yaml:4539)', () => {
+    process.env.LOCAL_TTS_URL = 'http://localhost:9999';
+    // User explicitly set a different URL via the UI
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://192.168.1.20:9000' });
+
+    // User's explicit URL wins over the env var (documented API contract)
+    expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
+  });
 });

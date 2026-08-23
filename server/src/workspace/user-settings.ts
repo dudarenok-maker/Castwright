@@ -457,34 +457,17 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
 }
 
 /** Synchronous resolver: returns sidecarUrl with per-worktree port support (#2632).
-    Precedence:
-    1. LOCAL_TTS_URL env var (most dynamic override)
-    2. Cached sidecarUrl if user explicitly set it (not the factory default)
+    Precedence (per openapi.yaml:4539 — sidecarUrl "Overrides the LOCAL_TTS_URL"):
+    1. Cached sidecarUrl if user explicitly set it (not the factory default) — highest priority
+    2. LOCAL_TTS_URL env var (dynamic override)
     3. Derived from LOCAL_TTS_PORT env var (per-worktree isolation)
-    4. DEFAULT_USER_SETTINGS.sidecarUrl fallback (localhost:9000)
+    4. Derived from default 9000 fallback
 
     Strips trailing slashes for consistency with prior call-site behaviour. */
 export function getResolvedSidecarUrl(): string {
   const c = cached;
 
-  // 1. Check LOCAL_TTS_URL env var first — most dynamic, takes priority
-  if (process.env.LOCAL_TTS_URL) {
-    const raw = process.env.LOCAL_TTS_URL;
-    /* srv-21 guard — refuse non-private hosts to block SSRF */
-    if (!isPrivateHostUrl(raw)) {
-      if (raw !== lastWarnedSidecarUrl) {
-        lastWarnedSidecarUrl = raw;
-        console.warn(
-          `[srv-21] Ignoring non-local sidecar URL from LOCAL_TTS_URL ${JSON.stringify(raw)} — ` +
-            `falling back to derived URL. The sidecar must run on a loopback/private host.`,
-        );
-      }
-    } else {
-      return raw.replace(/\/+$/, '');
-    }
-  }
-
-  // 2. Check cached sidecarUrl — if user explicitly customized it, use it
+  // 1. Check cached sidecarUrl — if user explicitly customized it, use it (highest priority)
   if (c?.sidecarUrl && c.sidecarUrl !== DEFAULT_USER_SETTINGS.sidecarUrl) {
     const raw = c.sidecarUrl;
     if (isPrivateHostUrl(raw)) {
@@ -495,6 +478,22 @@ export function getResolvedSidecarUrl(): string {
       lastWarnedSidecarUrl = raw;
       console.warn(
         `[srv-21] Ignoring non-local sidecar URL from user settings ${JSON.stringify(raw)} — ` +
+          `falling back to LOCAL_TTS_URL or derived URL. The sidecar must run on a loopback/private host.`,
+      );
+    }
+  }
+
+  // 2. Check LOCAL_TTS_URL env var — dynamic override, beats port derivation
+  if (process.env.LOCAL_TTS_URL) {
+    const raw = process.env.LOCAL_TTS_URL;
+    /* srv-21 guard — refuse non-private hosts to block SSRF */
+    if (isPrivateHostUrl(raw)) {
+      return raw.replace(/\/+$/, '');
+    }
+    if (raw !== lastWarnedSidecarUrl) {
+      lastWarnedSidecarUrl = raw;
+      console.warn(
+        `[srv-21] Ignoring non-local sidecar URL from LOCAL_TTS_URL ${JSON.stringify(raw)} — ` +
           `falling back to derived URL. The sidecar must run on a loopback/private host.`,
       );
     }
@@ -502,8 +501,7 @@ export function getResolvedSidecarUrl(): string {
 
   // 3. Derive from LOCAL_TTS_PORT (per-worktree port isolation, #2632)
   const port = resolveSidecarPort();
-  const derived = `http://localhost:${port}`;
-  return derived;
+  return `http://localhost:${port}`;
 }
 let lastWarnedSidecarUrl: string | null = null;
 

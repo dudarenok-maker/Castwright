@@ -45,29 +45,53 @@ describe('resolveSidecarPort', () => {
     expect(resolveSidecarPort()).toBe(9020);
   });
 
-  it('returns 9000 when LOCAL_TTS_PORT is empty string', () => {
+  it('returns 9000 when LOCAL_TTS_PORT is empty string (no error logged)', () => {
     process.env.LOCAL_TTS_PORT = '';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(resolveSidecarPort()).toBe(9000);
+    expect(logSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
   });
 
-  it('returns 9000 when LOCAL_TTS_PORT is not a valid number', () => {
+  it('returns 9000 when LOCAL_TTS_PORT is not a valid number (logs error S2)', () => {
     process.env.LOCAL_TTS_PORT = 'not-a-number';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(resolveSidecarPort()).toBe(9000);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="not-a-number"'));
+    logSpy.mockRestore();
   });
 
-  it('returns 9000 when LOCAL_TTS_PORT is out of range (0)', () => {
+  it('returns 9000 when LOCAL_TTS_PORT is out of range (0), logs error', () => {
     process.env.LOCAL_TTS_PORT = '0';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(resolveSidecarPort()).toBe(9000);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="0"'));
+    logSpy.mockRestore();
   });
 
-  it('returns 9000 when LOCAL_TTS_PORT is out of range (negative)', () => {
+  it('returns 9000 when LOCAL_TTS_PORT is out of range (negative), logs error', () => {
     process.env.LOCAL_TTS_PORT = '-1';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(resolveSidecarPort()).toBe(9000);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="-1"'));
+    logSpy.mockRestore();
   });
 
-  it('returns 9000 when LOCAL_TTS_PORT is out of range (>65535)', () => {
+  it('returns 9000 when LOCAL_TTS_PORT is out of range (>65535), logs error', () => {
     process.env.LOCAL_TTS_PORT = '65536';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(resolveSidecarPort()).toBe(9000);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="65536"'));
+    logSpy.mockRestore();
+  });
+
+  it('logs error for typo-like invalid port (99999 instead of 9999)', () => {
+    process.env.LOCAL_TTS_PORT = '99999';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(resolveSidecarPort()).toBe(9000);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('99999'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('typo'));
+    logSpy.mockRestore();
   });
 
   it('floors floating-point LOCAL_TTS_PORT values', () => {
