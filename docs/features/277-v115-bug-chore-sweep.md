@@ -691,7 +691,7 @@ fiction.
 
 | # | Filed as | What is actually true |
 |---|---|---|
-| #2187 | Aligner under-aligns Russian dash dialogue | **The fix shipped** (`b2be5b7b`; book alignment 67.7% → 96.0%). Open only until on-box row C2 is discharged. Not code work. |
+| #2187 | Aligner under-aligns Russian dash dialogue | **The fix shipped** (`b2be5b7b`; book alignment 67.7% → 96.0%). **Superseded: the #2187 row ran 2026-08-12/13 and discharged.** Not code work. |
 | #1976 | A finished render strands ~3.9 GB | **A bookkeeping shell.** Four of its five criteria shipped; it closes when #1996 does. Not independent work. |
 | #2015 | analysis.ts's five writes replay a merge base | **Capture is solved** (PR #2185). Only the *rebuild* half is open — do not re-solve capture. |
 

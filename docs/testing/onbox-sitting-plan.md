@@ -44,14 +44,14 @@ These need the operator's GPU box — a live card, real engine residency, a real
 TTS sidecar, a real analyzer, or a real phone/browser on the LAN. Each is one
 sitting; A1 is several sittings inside one pack.
 
-| Pack file | Rows (as numbered when each pack was written) | Est. min |
+| Pack file | Rows (each pack file's own current heading labels) | Est. min |
 |---|---|---|
 | [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A2, A3, A8, A18 | 110 |
-| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A24, A26, A32, A33, A34 | 155 |
-| `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A30 | 155 |
-| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A35 | 145 |
-| `onbox-sitting-cloning-identity.md` | A23, A25, A29, A30, A31, A41, A42, A43, A44 | 185 |
-| `onbox-sitting-multilanguage.md` | D1, D2, A36, E4 | 165 |
+| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A24, A26, A31, A32, A33 | 155 |
+| `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A27 | 155 |
+| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A34 | 145 |
+| `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A40, A41, A42, A43 | 185 |
+| `onbox-sitting-multilanguage.md` | D1, D2, A35, E4 | 165 |
 | `onbox-sitting-device-browser.md` | E1, E2, E3, E6, E7, E8 | 135 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
 
@@ -69,6 +69,27 @@ sitting; A1 is several sittings inside one pack.
 > "Rows" column above has now been reconciled to each pack file's current,
 > post-renumbering row labels — it no longer names rows by the number they
 > carried when originally written.
+
+> **Correction, 2026-08-23 (`check:register-citations` mechanical sweep).**
+> `main`'s A38 discharge (register row A38, "ORT marker refuses — not
+> repairs — a clobbered venv") renumbered A39→A38 through A44→A43,
+> contradicting this table again: it read `A32, A33, A34` for
+> `onbox-sitting-vram-contention.md` (that pack's own heading is `A31`, not
+> `A34` — a **pre-existing** mismatch this sweep also caught, unrelated to
+> the A38 discharge), `A30` for `onbox-sitting-voice-design.md` (that pack's
+> own heading is `A27`, same pre-existing shape), `A35` for
+> `onbox-sitting-qa-gate.md` (own heading `A34`, same shape), and `A36` for
+> `onbox-sitting-multilanguage.md` (own heading `A35`, same shape). The table
+> above is now reconciled to each pack file's own CURRENT heading labels
+> again. **Not fixed here, and flagged separately:** those same current pack
+> labels (`onbox-sitting-cloning-identity.md`'s `A40`–`A43`, in particular)
+> are themselves off by one against today's register — e.g. its `A43`
+> heading carries the `#1969` audition-centroid content, which the register
+> now files under `A42` (`A43` is `#2246`'s voice-design language gate). That
+> pack's own internal renumbering — several correction notes deep, spanning
+> at least two distinct historical `A43` discharges — is a bigger, riskier
+> edit than this table fix and is out of scope for this sweep; it needs its
+> own pass rather than a blind shift.
 
 <!-- The seven rows above are plain code spans, not links, until their pack
 files exist — review of PR #2470 (attempting to fix this a different way)

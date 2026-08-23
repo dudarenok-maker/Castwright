@@ -13,6 +13,7 @@
 > [`docs/features/271-fs38-wave3c-xtts.md`](../../271)
 > Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`
 > Umbrella: fs-38 · GitHub [#624](https://github.com/dudarenok-maker/Castwright/issues/624)
+> Register row: [A1](onbox-acceptance-register.md#group-a--the-gpu-box)
 
 ---
 

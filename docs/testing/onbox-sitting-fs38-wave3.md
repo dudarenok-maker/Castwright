@@ -43,7 +43,7 @@ live, not taken on the row's or the audit's word:
   | PR #1978 (fixes #1967) | `MERGED` 2026-07-31 | Yes |
   | Issue #2017 (spacy missing, E-04's `ImportError`) | `CLOSED`, closed 2026-08-01 | Yes |
   | PR #2039 (fixes #2017) | `MERGED` 2026-08-01 | Yes — confirms the row's own caveat that E-04's `F` "stands until the exact reproduction is re-run" is still the correct read: the **fix** is merged, the **re-run** is not done |
-  | Issue #2026 (Russian XTTS quality, register row A40 — not this row) | `OPEN` | Yes, correctly left open |
+  | Issue #2026 (Russian XTTS quality, register row A39 — not this row) | `OPEN` | Yes, correctly left open |
   | Issue #1998 (XTTS cross-language identity loss, feeds E-01's by-ear finding) | `OPEN` | Yes |
   | Issue #399 (`side-11`, the host-memory-leak *investigation* tracking issue) | `CLOSED`, closed 2026-07-06 | **Needs its own note — see below** |
 
