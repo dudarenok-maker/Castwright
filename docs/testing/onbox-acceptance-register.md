@@ -312,109 +312,12 @@ setup rather than repeatedly loading and evicting models.
 
 **66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Correction, 2026-08-23 (wave 5, #2606 step 6 — steps 1-5's verdicts folded
-> in).** Old total **69** → new total **66**. Arithmetic: **A** 46→44 (−2:
-> A27 discharged live via the real supervisor's owned-spawn env-injection
-> loop, not a standalone process or source read — see step 1's evidence;
-> A45 discharged live via a real venv's `pip-in-place` reinstall through
-> `bootstrap-venv.mjs` — see step 2's evidence); **B** 3→2 (−1: B2 discharged
-> live — every character's `cast.json` name came back in the manuscript's own
-> Cyrillic script against the committed short-chapter fixture, with no
-> near-duplicate id and no id-retirement-direction defect — see step 4's
-> evidence). Per the repo owner's ruling that discharged rows are removed
-> outright, not annotated (2026-08-22), all three are dropped entirely rather
-> than merged in with an outcome note — their evidence lives in
-> `docs/testing/onbox-wave5-results/` (`step-1-a27.md`, `step-2-a45.md`,
-> `step-4-b2.md`), not in this file. **C, D, E, G, H unchanged.** E9 (step 3)
-> was reconfirmed STILL OWED from a second checkout — no count change, see
-> its row's own new note. Rows renumbered contiguously within each shrunk
-> group per this file's own convention: old A28→A27 … old A44→A43, old
-> A46→A44; old B3→B2. Cross-references throughout the body were updated to
-> match. Total re-derived by counting `###` group headings in the edited
-> body (not by arithmetic subtraction): **69 → 66.**
-
-> **Correction, 2026-08-22 (merge of #2246's `feat/server-2246-language-recurrence`
-> into `main`, resolving the PR #2492 rebase).** **67 → 69.** This branch's own
-> two on-box rows — **A46** (voice-design language gate, three design sites,
-> live Qwen sidecar) and **B3** (analysis language gate + conventions-table
-> selection, live local analyzer) — merge in on top of `main`'s already-current
-> 67, both landing after that side's existing last row in each group (A45,
-> B2) per this file's contiguous-renumbering convention. **A** 45→46, **B**
-> 2→3. No other group changed; both new rows are freshly owed, not
-> corrections to an existing one.
-
-> **Correction, 2026-08-22 (merge with `main`, #2551 wave 4 close-out).**
-> **66 → 67.** Two independent changes landed on `main` while this branch
-> worked in isolation, both folded in here. First, PR #2585 (commit
-> `02dcb5cf`, merged 2026-08-21) discharged and removed the Cast/analysis
-> `characterId` drift row (`main`'s B3, this branch's B2,
-> [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)) after
-> [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)'s
-> fix (PR #2562) landed. Per the repo owner's ruling that discharged rows are
-> removed outright, not annotated (2026-08-22), that row is dropped entirely
-> rather than merged in with an outcome note — its evidence lives in
-> `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md` and the run sheet
-> `cast-id-drift-onbox-acceptance.md`, not in this file. The survivor,
-> *Stage-1 returns cast names in the manuscript's own script*
-> ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313)), renumbers
-> B3→B2; its sibling row's own remaining defect (new id-survivor, `#2584`)
-> **stays owed**, unaffected. **B** 3→2. Second, PR #2588 (closes
-> [#2586](https://github.com/dudarenok-maker/Castwright/issues/2586), merged
-> 2026-08-22) added a new row for the `speaker-qa.txt` reqHash fix's
-> one-time real-venv `pip-in-place` reinstall (both hash producers,
-> `venv-migration.mjs` and `zip-validate.ts`) — behaviour only a real venv
-> can prove. That row landed on `main` as A48 (appended after the old,
-> pre-wave-4 A47); folded into this branch's contiguous renumbering it
-> becomes **A45**, immediately after this wave's last surviving A row (A44).
-> **A** 44→45. Total re-derived by counting `###` group headings in the
-> merged body (not by arithmetic subtraction): **66 → 67.** No other group
-> changed.
-
-> **Correction, 2026-08-21 (wave 4, #2551 step 6).** Old total **74** →
-> new total **67**. Arithmetic: **A** 47→44 (−3: A22 retired, A27
-> discharged, A43 discharged — see their former rows' evidence in each
-> section's history); **B** 4→3 (−1: B2 retired — steps 1-6 discharged wave
-> 3, step 8 discharged live this wave, step 7 moved to Blocked); **E** 11→9
-> (−2: E6 and E8 moved to Blocked — hardware not available); **F** 1→0,
-> group removed entirely (Android companion app v1 confirmed live end to
-> end by the repo owner, 2026-08-21 — see plan 188's Ship notes). **C, D, G,
-> H unchanged.** Rows renumbered contiguously within each shrunk group per
-> this file's own convention (old A23→A22 … old A47→A44; old B3→B2, old
-> B4→B3; old E7→E6, old E9→E7, old E10→E8, old E11→E9) — cross-references
-> throughout the body were updated to match. **Not a retirement, only a
-> correction/shrink, so no count change:** A2 (rows 6-8 ruled not owed by
-> the repo owner, row narrows to step 9 alone), A16 (stale ⚠️ dropped), A29
-> (renamed A27; blocker re-derived live, unchanged disposition), A31 (was
-> A33; §8.8 discharged, §8.7 stays owed), A38 (was A40; partially run,
-> stays owed), B1 (blocker corrected), C1 (blocker corrected), E4 (blocker
-> corrected — box contention, not hardware), E5 (1 of 4 controls
-> discharged), E6-new (was E7; further split), G1 (debt 1 discharged, debt
-> 2 stays owed). **Blocked** 2→5 (+3: B2-step-7's CPU-only
-> `RAM_HEAVY_MODELS` clamp, E8, E6). **Unconfirmed** unchanged at 2.
-
-> **Correction, 2026-08-20 (rework of wave-3's own recording, `#2497`).** These
-> totals were rechecked against wave 3's actual dispositions rather than left
-> unchanged: A29 (renumbered A27 this wave) was mislabeled DISCHARGED (see its row) and is corrected here
-> to STILL OWED, so it does **not** leave the owed count — 74 is unchanged,
-> not stale. No wave-3 row's disposition otherwise moves a row into or out of
-> this count; E7 (renumbered E6 this wave)'s rendered half moving from the
-> wave-3 agent-runnable set to
-> the operator's `onbox-sitting-device-browser.md` pack (see E6's row) is a
-> re-binning within the 74, not a change to the total. Same arithmetic-check
-> pattern as `onbox-sitting-plan.md`'s own 2026-08-20 correction.
-
-> **Recompute, 2026-08-21 (wave-4 step 8, A37/A38/A39 re-run, `#2569`).** A39's
-> filed defect is fixed and independently verified (see its row). The box-level
-> CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been resolved by PR #2576
-> (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`), and the
-> shared Kokoro GPU-provider sub-check for A37/A38 was re-run against the fixed
-> pin (wave-4 step 8, 2026-08-21) — but **still fails on a different, distinct
-> root cause**: `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via
-> its optional `[cudnn]` extra, which `install-ort.mjs` never requests. A39's
-> row accordingly remains STILL OWED on the same basis (the shared re-check still
-> fails, same new root cause), and so does A37 (see their rows for the detailed
-> re-run findings and evidence). This does **not** leave the owed count — 67 is
-> recomputed fresh here, not carried forward, and stays unchanged.
+> **Last change: 2026-08-23 (wave 5, #2606 step 6), 69 → 66.** Three rows
+> discharged live (A27, A45, B2) and dropped per the repo owner's
+> remove-outright ruling; evidence for each lives in
+> `docs/testing/onbox-wave5-results/`. Full change-by-change history is in
+> this file's git log, not here — this section tracks the current count,
+> not how it got here.
 
 ---
 
