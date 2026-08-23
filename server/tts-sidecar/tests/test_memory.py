@@ -730,6 +730,33 @@ def test_debug_reclaim_surfaces_reclaimed_false_on_cuda_unavailable(monkeypatch)
     assert body["after"] == snapshots[1]  # before == after, but now we know why
 
 
+def test_reclaim_device_cache_exercises_real_function(monkeypatch):
+    """#2423 pass-2 C — neither route-level test above exercises the real
+    _reclaim_device_cache return-value logic; both monkeypatch it away. This pins
+    the actual function's two cases: CUDA unavailable → False, CUDA available +
+    empty_cache() succeeds → True. Uses monkeypatch-real-torch.cuda style (patch
+    torch attributes, never a fake module) so _reclaim_device_cache's internal
+    `import torch` resolves to the patched singleton."""
+    torch = pytest.importorskip("torch")
+
+    # Case 1: CUDA unavailable → False
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    result = main._reclaim_device_cache("test-device")
+    assert result is False, "Should return False when CUDA is unavailable"
+
+    # Case 2: CUDA available, empty_cache() succeeds → True
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    empty_cache_called = []
+
+    def fake_empty_cache():
+        empty_cache_called.append(True)
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", fake_empty_cache)
+    result = main._reclaim_device_cache("test-device")
+    assert result is True, "Should return True when CUDA is available and empty_cache succeeds"
+    assert len(empty_cache_called) == 1, "empty_cache() should have been called exactly once"
+
+
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
 
 

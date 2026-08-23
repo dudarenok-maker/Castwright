@@ -73,7 +73,8 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
    ```
 
    It returns the per-device figures **before and after** a bare
-   `empty_cache()`, bracketed with nothing in between. Record both as **P4**.
+   `empty_cache()`, bracketed with nothing in between, plus a `reclaimed: bool`
+   field indicating whether the reclaim actually ran. Record all three as **P4**.
 
    > Do **not** substitute a load/unload cycle. A load is an allocation pass that
    > refills and coalesces segments — conflating the two is the unsound inference
@@ -88,19 +89,19 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
 
 ## Results
 
-| Point | When | Device | reserved MB | allocated MB | inactive_split MB | reserved − allocated | nvidia-smi used | RSS MB | Engines loaded |
-|---|---|---|---|---|---|---|---|---|---|
-| P0 | fresh | | | | | | | | |
-| P1 | mid-render | | | | | | | | |
-| P2 | +0 s | | | | | | | | |
-| P3 | +180 s | | | | | | | | |
-| P4 before | reclaim | | | | | | | | |
-| P4 after | reclaim | | | | | | | | |
-| P5 | cuda:1 render | | | | | | | | |
+| Point | When | Device | reserved MB | allocated MB | inactive_split MB | reserved − allocated | nvidia-smi used | RSS MB | Engines loaded | reclaimed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| P0 | fresh | | | | | | | | | |
+| P1 | mid-render | | | | | | | | | |
+| P2 | +0 s | | | | | | | | | |
+| P3 | +180 s | | | | | | | | | |
+| P4 before | reclaim | | | | | | | | | |
+| P4 after | reclaim | | | | | | | | | |
+| P5 | cuda:1 render | | | | | | | | | |
 
 **RSS at P2 vs 8192 MB:** ☐ above ☐ below
 *(Above means the memory watchdog's unconditional 60 s `gc+empty_cache` was
-already firing throughout — `main.py:7915`, `:7953-7960`.)*
+already firing throughout — `main.py:7957-7964` (`_mem_warn_threshold_mb()`).)*
 
 ---
 
@@ -110,7 +111,8 @@ already firing throughout — `main.py:7915`, `:7953-7960`.)*
 |---|---|
 | Strand absent at P3 | Self-heals at the existing TTLs. #1996 criterion 1 is already satisfied on `main`. |
 | P4 `reserved` drops sharply | **Uncollected cache.** A scheduled reclaim is the fix — subject to every constraint in §7 of the design. |
-| P4 `reserved` barely moves, `inactive_split` dominates | **Fragmentation.** `empty_cache()` cannot fix this at any cadence; re-open the recycle threshold instead. |
+| P4 `reserved` barely moves, `inactive_split` dominates, `reclaimed: true` | **Fragmentation.** `empty_cache()` cannot fix this at any cadence; re-open the recycle threshold instead. |
+| P4 `reserved` barely moves, `reclaimed: false` | **Invalid reading.** The reclaim never ran — CUDA was unavailable or `empty_cache()` threw. Retry once; treat repeated `false` as a separate finding (a live-context problem), not a #1996 answer. |
 | Strand present at P3 *and* P4 frees it *and* RSS was above 8192 MB at P2 | Contradicts the 60 s watchdog reclaim having run. Investigate that before designing anything — one of the two observations is wrong. |
 
 Record the outcome as a comment on

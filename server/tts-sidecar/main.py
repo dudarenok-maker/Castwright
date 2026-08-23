@@ -3879,7 +3879,7 @@ class PlacementController:
         reserve_mb: Optional[Callable[[], int]] = None,
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
-        reclaim: Optional[Callable[[str], None]] = None,
+        reclaim: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.probe = probe
         self.footprints = footprints if footprints is not None else FootprintTable()
@@ -9632,9 +9632,12 @@ def debug_reclaim() -> dict[str, Any]:
     surface that brackets `empty_cache()` with nothing else in between (a
     load/unload cycle would conflate the reclaim with an allocation pass).
 
-    Not inert: it frees real memory when it runs. The watchdog performs an
-    identical reclaim operation, but only above the 8192 MB RSS threshold
-    (see main.py:7953-7960), so this route can trigger a reclaim below that
+    Not inert: it frees real memory when it runs. The watchdog calls
+    `_reclaim_host_and_vram()`, which runs `gc.collect()` unconditionally then
+    `empty_cache()` conditionally (if CUDA available); `_reclaim_device_cache`
+    reverses the order (CUDA check first, then gc only if available), and
+    gates the whole operation on an RSS threshold (see main.py:7957-7964,
+    `_mem_warn_threshold_mb()`), so this route can trigger a reclaim below that
     threshold too. No auth wrapper, matching every other `/debug` route in
     this family (`debug_codec_timing`/`debug_codec_timing_reset` above) —
     loopback-bound by default via LOCAL_TTS_HOST configuration."""
