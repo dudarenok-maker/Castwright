@@ -140,7 +140,7 @@ def _preload_ort_cuda_dlls() -> str:
     own `preload_dlls()` source (`onnxruntime/__init__.py`) in the live sidecar
     venv: when `directory` is truthy it joins ONLY THE BASENAME of each DLL's
     relative path under that directory, discarding the `nvidia/<pkg>/bin/`
-    components entirely — so the 1.37 GB `extraRuntimeSteps` installs under
+    components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
     `site-packages/nvidia/...` is never even looked at; on this box that path
     resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
     same "torch/lib, not the installed cuDNN" shape register row A37 already
@@ -206,9 +206,39 @@ def _preload_ort_cuda_dlls() -> str:
             "silently fall back to CPU."
         )
         return "failed"
+    if "Skip loading" in output:
+        # Pass 3 review finding N9(b): `directory=""` does not defeat this
+        # branch -- it is gated on `"torch" in sys.modules`, never on
+        # `directory`. If it ever fires here, preload_dlls() looked at
+        # nothing at all and torch's own bundled DLLs are what the CUDA
+        # execution provider will find -- the exact "torch/lib, not the
+        # installed cuDNN" shape register row A37 recorded as NOT fixing the
+        # bug. That is a distinct, worse outcome than a genuine preload and
+        # must not be folded into "preloaded".
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
+            "torch was already imported (see lines above) -- it fell back to torch's "
+            "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
+            "nvidia/<pkg>/bin, which register row A37 already recorded as not fixing the "
+            "CUDA-fallback bug."
+        )
+        return "torch-skip"
+    if not output and not getattr(onnxruntime, "cuda_version", ""):
+        # Pass 3 review finding N9(a): a CPU/AMD/Apple-profile `onnxruntime`
+        # build has no `cuda_version` and preload_dlls() returns immediately
+        # having done nothing and printed nothing -- indistinguishable from a
+        # genuine no-op success unless this is checked explicitly. This is
+        # the live-today case: every non-NVIDIA install hits it on every
+        # start.
+        log.info(
+            "[ort-preload] onnxruntime.preload_dlls() ran but this onnxruntime build has "
+            "no CUDA support (cuda_version is empty) -- there was nothing to preload; the "
+            "CUDA execution provider is not available on this install regardless."
+        )
+        return "no-cuda-build"
     log.info(
         "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
-        "DLLs (nvidia/<pkg>/bin, or torch already had them -- see lines above)."
+        "DLLs (nvidia/<pkg>/bin -- see lines above)."
     )
     return "preloaded"
 

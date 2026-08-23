@@ -2295,6 +2295,53 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > silently fall back to CPU (distinct from #2534, which fixed the CUDA-13-vs-12
 > mismatch itself).
 
+> **PR #2617 note (pass-3 review N10/N11) — what the next run must read, and
+> what it is still assuming.** #2600's fix ships `main._preload_ort_cuda_dlls()`,
+> called once at lifespan startup, which forces onnxruntime's own
+> `preload_dlls(directory="")` to search `<venv>/Lib/site-packages/nvidia/<pkg>/bin`
+> instead of `torch/lib`. It logs one of four outcomes, each with an
+> `[ort-preload]` prefix — **read these lines first**, before repeating the old
+> "still CPU" dead end:
+> - `RESULT: preloaded` — every DLL `preload_dlls()` tried loaded cleanly from
+>   `nvidia/<pkg>/bin`.
+> - `RESULT: failed` — at least one "Failed to load ..." line appears above it;
+>   the CUDA execution provider may still fall back to CPU. This is the
+>   observed live-venv shape today (12 of 12 DLLs failed) — see the two DLLs
+>   named next.
+> - `onnxruntime.preload_dlls() skipped its own DLL search because torch was
+>   already imported` — the torch-early-return branch fired (gated only on
+>   `"torch" in sys.modules`, unaffected by `directory=""`); torch's own bundled
+>   DLLs are what the provider will find, the same torch/lib-only outcome this
+>   row already recorded as not fixing the bug.
+> - `onnxruntime.preload_dlls() ran but this onnxruntime build has no CUDA
+>   support` — a non-NVIDIA `onnxruntime` build; not applicable to this row's
+>   nvidia profile.
+>
+> **`get_available_providers()` listing `CUDAExecutionProvider` proves nothing**
+> (wave-3/wave-4 both saw it list the provider while actual `InferenceSession`
+> construction still fell back to CPU) — a real `InferenceSession` must be
+> constructed and its **actual** provider recorded, same as wave-3/wave-4 did.
+>
+> **Named assumption, currently unverified on this box:** `install-ort.mjs`'s
+> `extraRuntimeSteps` installs `nvidia-cudnn-cu12` and `nvidia-cublas-cu12` but
+> deliberately **not** `nvidia-cufft-cu12` or `nvidia-cuda-runtime-cu12` — two
+> of the four CUDA DLLs `preload_dlls()` asks for on Windows
+> (`cufft64_11.dll`, `cudart64_12.dll`). The assumption is that this box's
+> **system CUDA 12.4 toolkit** supplies those two via `PATH`, so onnxruntime's
+> fallback bare-name `LoadLibrary` still finds them even though `nvidia/` does
+> not carry them. If the `RESULT: failed` lines name exactly those two DLLs,
+> that assumption is false on this box — the alternative is installing the
+> `[cuda]` extras (`onnxruntime-gpu[cuda]` or the two packages directly), not
+> a further cuDNN/cublas change.
+> - **New process-wide coupling to also confirm (N11):** the preload
+>   `ctypes.CDLL`s `nvidia/cublas/bin/cublas64_12.dll` (pip-resolved to
+>   `12.8.5.5`) by full path at lifespan step 1, ahead of any lazy `import torch`
+>   — so any later `LoadLibrary("cublas64_12.dll")` torch issues (Qwen, XTTS,
+>   Whisper) binds to that already-loaded module instead of torch's own bundled
+>   `12.8.4`. Same minor line, expected benign, but **unverified** — after this
+>   preload lands, confirm Qwen / XTTS / Whisper still synthesise correctly on
+>   this box, not just that Kokoro reports the right provider.
+
 ### A38 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha

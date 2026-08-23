@@ -281,6 +281,13 @@ const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
 // exclude 12.8.4.1 (>=12.8.0 is satisfied by any 12.8.x patch). Only a genuine
 // minor bump (torch moving off cu128) needs bumping this alongside
 // NVIDIA_CUDNN_CONSTRAINT and ONNXRUNTIME_GPU_CONSTRAINT.
+//
+// PASS 3 REVIEW FIX (N14, PR #2617): admitting 12.8.4.1 is NOT the same as
+// resolving to it. pip picks the HIGHEST version this constraint admits
+// (12.8.5.5 as of this writing), not torch's own bundled 12.8.4 — so the
+// cross-minor collision this comment set out to prevent narrows to an
+// intra-minor one (12.8.5.5 vs. 12.8.4.x), not zero. Almost certainly
+// ABI-safe within one minor line, but it is a narrowing, not a resolution.
 const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 
 // PASS 2 REVIEW FIX (N6, PR #2617): nvrtc DROPPED from this step entirely.

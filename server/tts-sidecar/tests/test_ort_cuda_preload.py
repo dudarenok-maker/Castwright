@@ -3,7 +3,9 @@ cuDNN DLLs on disk but does not make them findable by onnxruntime's CUDA
 execution provider on Windows (no `.pth`, no importable module, and the
 onnxruntime-gpu wheel never touches the DLL search path itself). The fix is
 `main._preload_ort_cuda_dlls()`, which calls onnxruntime's own opt-in
-`preload_dlls()` once at import time.
+`preload_dlls()` once from the `_lifespan` startup sequence (pass 2 review
+finding N5, PR #2617 -- NOT at raw module-import time; see
+`test_lifespan_order.py` for the ordering pin).
 
 This suite pins two properties: (1) the preload is actually attempted when the
 symbol exists, and (2) every failure shape — no `preload_dlls` attribute (an
@@ -16,6 +18,7 @@ string.
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -44,7 +47,9 @@ def test_preload_runs_when_symbol_present(monkeypatch, caplog) -> None:
     monkeypatch.setitem(
         sys.modules,
         "onnxruntime",
-        _module_with("onnxruntime", preload_dlls=_fake_preload, __version__="1.27.0"),
+        _module_with(
+            "onnxruntime", preload_dlls=_fake_preload, __version__="1.27.0", cuda_version="12.9"
+        ),
     )
 
     with caplog.at_level(logging.INFO, logger="sidecar"):
@@ -76,7 +81,9 @@ def test_preload_passes_directory_empty_string(monkeypatch, caplog) -> None:
     monkeypatch.setitem(
         sys.modules,
         "onnxruntime",
-        _module_with("onnxruntime", preload_dlls=_fake_preload, __version__="1.27.0"),
+        _module_with(
+            "onnxruntime", preload_dlls=_fake_preload, __version__="1.27.0", cuda_version="12.9"
+        ),
     )
 
     with caplog.at_level(logging.INFO, logger="sidecar"):
@@ -169,3 +176,102 @@ def test_onnxruntime_not_importable_degrades_to_noop(monkeypatch, caplog) -> Non
 
     assert result == "not-importable"
     assert any("not importable yet" in r.message for r in caplog.records)
+
+
+def test_preload_no_cuda_build_is_not_reported_as_preloaded(monkeypatch, caplog) -> None:
+    """Pass 3 review finding N9(a): a CPU/AMD/Apple-profile `onnxruntime`
+    build has an empty `cuda_version` and `preload_dlls()` returns
+    immediately having loaded nothing and printed nothing -- indistinguishable
+    from a genuine success unless `cuda_version` is checked explicitly. This
+    is the live-today case: `installRecipe` resolves every non-NVIDIA profile
+    to plain `onnxruntime`, so every such install was logging "loaded the
+    CUDA/cudnn/cublas/cufft DLLs" at every start before this fix."""
+
+    def _noop(**kwargs) -> None:
+        pass  # the real CPU-build behaviour: no prints, nothing loaded
+
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        _module_with(
+            "onnxruntime", preload_dlls=_noop, __version__="1.27.0", cuda_version=""
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="sidecar"):
+        result = main._preload_ort_cuda_dlls()
+
+    assert result == "no-cuda-build", (
+        "a CPU/AMD/Apple build that loaded nothing must not be reported as 'preloaded'"
+    )
+    assert not any("loaded the CUDA" in r.message for r in caplog.records), (
+        "a no-op on a non-CUDA build must not claim the CUDA DLLs were loaded"
+    )
+
+
+def test_preload_torch_skip_is_not_reported_as_preloaded(monkeypatch, caplog) -> None:
+    """Pass 3 review finding N9(b): onnxruntime's torch-early-return branch
+    (`is_cuda_cudnn_imported_by_torch`) is gated purely on `"torch" in
+    sys.modules`, never on `directory` -- `directory=""` (this PR's N1 fix)
+    does NOT defeat it. If it ever fires, `preload_dlls()` looked under
+    neither `nvidia/<pkg>/bin` nor anywhere else: it prints exactly one line
+    ("Skip loading CUDA and cuDNN DLLs since torch is imported.") and returns,
+    leaving torch's own bundled DLLs as whatever the CUDA execution provider
+    finds -- the same torch/lib-only outcome register row A37 already
+    recorded as not fixing the bug. That must be reported distinctly, not
+    folded into "preloaded" just because no "Failed to load" line appeared."""
+
+    def _torch_skip(**kwargs) -> None:
+        print("Skip loading CUDA and cuDNN DLLs since torch is imported.")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        _module_with(
+            "onnxruntime",
+            preload_dlls=_torch_skip,
+            __version__="1.27.0",
+            cuda_version="12.9",
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="sidecar"):
+        result = main._preload_ort_cuda_dlls()
+
+    assert result == "torch-skip", (
+        "a preload_dlls() call that skipped its own search because torch was already "
+        "imported must not be reported as 'preloaded'"
+    )
+    assert any(
+        r.levelno == logging.WARNING and "skipped its own DLL search" in r.message
+        for r in caplog.records
+    ), "the torch-skip outcome must be logged at WARNING, not folded into a quiet success"
+
+
+def test_fresh_import_of_main_does_not_import_torch() -> None:
+    """Pass 3 review finding N9(b) (latent path): nothing today pins the
+    assumption that `main.py` has no module-level `import torch` -- if one
+    were ever added (directly, or transitively via some other module-level
+    import), `"torch" in sys.modules` would already be True by the time
+    `_startup_ort_cuda_preload()` runs, silently reopening the torch-skip
+    outcome above and the guard would still log success. A plain `import
+    main` inside this process can't test that: ~45 other sidecar test
+    modules already `import main` (and some import torch directly) in the
+    same pytest session, so `sys.modules` is contaminated by collection
+    order, not by main.py's own behaviour. This uses a genuinely fresh
+    subprocess, same technique `test_module_import_order.py` uses for the
+    same reason."""
+    sidecar_dir = SIDECAR_ROOT
+    result = subprocess.run(
+        [sys.executable, "-c", "import main, sys; print('torch' in sys.modules)"],
+        cwd=str(sidecar_dir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False", (
+        "main.py must not import torch at module scope -- doing so would make "
+        "onnxruntime.preload_dlls() take its torch-early-return branch (N9) instead of "
+        "searching nvidia/<pkg>/bin, silently reopening the bug #2600 exists to close"
+    )

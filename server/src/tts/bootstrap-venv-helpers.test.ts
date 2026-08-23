@@ -77,7 +77,7 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     );
   });
 
-  it('nvidia: a failed cuDNN step (extraRuntimeSteps, #2600) is ALSO fatal', () => {
+  it('nvidia: a failed cuDNN step (extraRuntimeSteps, #2600) is ALSO fatal, and named correctly', () => {
     // Review finding M3: the prior "a failed ORT swap is fatal" test above
     // trips at the UNINSTALL step (joined[2]) and never reaches the cuDNN
     // install — so a failure of THIS step specifically (by far the largest
@@ -85,9 +85,15 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // exercised. Without this coverage a broken/network-failed cuDNN install
     // could silently succeed the overall bootstrap and leave Kokoro on CPU
     // with no error raised anywhere.
+    //
+    // Pass 3 review finding N8 (PR #2617): this step's own failure used to be
+    // reported as "ONNX runtime swap failed" too — the same headline the
+    // uninstall/reinstall steps use — which names the wrong step for what is
+    // now the largest, most network-fragile pip call in the loop. It must be
+    // named distinctly.
     const pip = fakePip(['nvidia-cudnn-cu12']); // only the cuDNN step fails
     expect(() => installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toThrow(
-      /ONNX runtime swap failed/,
+      /cuDNN\/cublas runtime install failed/,
     );
   });
 
