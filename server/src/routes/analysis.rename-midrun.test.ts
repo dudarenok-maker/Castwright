@@ -195,6 +195,8 @@ async function seedRunnableBook(): Promise<{
       isStandalone: true,
       manuscriptFile: 'manuscript.md',
       castConfirmed: true,
+      language: 'en',
+
       chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),

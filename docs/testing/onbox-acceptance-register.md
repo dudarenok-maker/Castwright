@@ -300,8 +300,8 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 46 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
@@ -310,7 +310,17 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**69 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+
+> **Correction, 2026-08-22 (merge of #2246's `feat/server-2246-language-recurrence`
+> into `main`, resolving the PR #2492 rebase).** **67 → 69.** This branch's own
+> two on-box rows — **A46** (voice-design language gate, three design sites,
+> live Qwen sidecar) and **B3** (analysis language gate + conventions-table
+> selection, live local analyzer) — merge in on top of `main`'s already-current
+> 67, both landing after that side's existing last row in each group (A45,
+> B2) per this file's contiguous-renumbering convention. **A** 45→46, **B**
+> 2→3. No other group changed; both new rows are freshly owed, not
+> corrections to an existing one.
 
 > **Correction, 2026-08-22 (merge with `main`, #2551 wave 4 close-out).**
 > **66 → 67.** Two independent changes landed on `main` while this branch
@@ -2737,6 +2747,42 @@ Path B's four bullets — one path is sufficient, they exercise the same
 `decideVenvAction`/`classifyVenvState` logic through different producers.
 *Cost:* one pip-in-place reinstall, once, on an old-stamped venv.
 
+### A46 · Voice-design language gate actually blocks the three design sites before they reach a live sidecar, and doesn't false-positive when set (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)) · **single 8 GB card, live Qwen sidecar**
+
+`routes/cast-design.ts:768`, `routes/qwen-voice.ts:578`, and
+`routes/single-design.ts:304` (the design's sites 6-8) each resolve a book's
+language and pass it into `sidecarLanguageName`, which throws for an
+*unregistered* language but — before this branch — silently defaulted an
+absent book language to `'en'`, a registry hit that disarmed that throw.
+`requireBookStateLanguage` now throws `BookLanguageUnsetError` before the
+sidecar is ever reached, and each route already sends
+`{ type: 'error', code: 'unsupported_language' }` then `res.end()` in its
+existing streaming envelope (the design's tier table); the new code is
+`language_unset`. Unit/integration coverage proves the throw and the error
+shape against a mocked sidecar. What it cannot prove is the thing this row is
+for: that on a real book with no `language` set, hitting **Design voice** on
+all three surfaces against a live Qwen sidecar returns the gate's error and
+never opens a sidecar connection at all — and, the control that matters, that
+a book *with* a language set still designs normally end-to-end through the
+same live sidecar.
+
+- Clear (or find a never-set) `language` on a real book and confirm the
+  sidecar is live and Qwen-capable.
+- Attempt voice design at **cast-design** (bulk "Design full cast"),
+  **qwen-voice** (single character design), and **single-design** (standalone
+  design panel) against the unset book. Each must surface the
+  `language_unset` error in its own existing streaming envelope, and the
+  sidecar log must show no new connection/design attempt for that request.
+- Set the book's language, repeat all three against the same book, and
+  confirm each designs normally and reaches the live sidecar as usual — the
+  gate must not fire on a book that has a language.
+
+*Needs:* a single 8 GB GPU with a live, Qwen-capable sidecar, and a book whose
+`language` can be unset and reset. *Criteria:*
+[`language-recurrence-onbox-acceptance.md`](language-recurrence-onbox-acceptance.md)
+§Voice-design gate. *Cost:* short — three attempts unset, three attempts set,
+on one book.
+
 ## Group B — local Ollama analyzer only
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4. B2 rides the characterId-drift re-analysis's own real book fixture instead of the generic chapter and has no CPU-only case.
@@ -2827,6 +2873,48 @@ If the run instead happens on a book whose language was never declared (imported
 > [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584). Full
 > evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`. **Row
 > stays owed.**
+
+### B3 · An unset book hits the analysis language gate, the prompt resolves it, and analysis then selects the right conventions table (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md))
+
+`resolveBookLanguageForManuscript` (`routes/analysis.ts:3160-3167`, the
+design's site 1) is the 25,063-line path the design gives its own
+three-point treatment: the gate now lives in the POST handler before the
+analysis job detaches (a returnable `409`), the `located === null`
+(pre-confirm, no book on disk) branch still resolves `'en'`, and the in-loop
+path — if a book's language is cleared after the job starts — emits an SSE
+`error` with `code: 'language_unset'` via `classifyAnalysisFailure`. Unit
+tests cover the gate against a mocked analyzer and a mocked
+`conventionsFor`. What they cannot prove is the full loop on a real book:
+that the `409` (or the confirm-screen "Decide later" / library "unset"
+affordance) actually surfaces to a user driving a real import, that setting
+the language through the resulting prompt actually unblocks the same book's
+analysis, and that the analyzer then picks
+`conventionsFor(<the set language>).quotePairs` rather than the English
+default — i.e. that a Russian (or other non-`'en'`) book's dash-opened
+dialogue is recognised as dialogue rather than narration once the language
+is set, which only a live analyzer run can show.
+
+- Produce a book with `language: null` on disk (import with detection
+  surrendered and "Decide later", or a bundle/restore/sample path that
+  leaves it unset).
+- Start analysis against it through the normal UI/API path; confirm the
+  request is refused with the `language_unset` shape (`409` pre-detach)
+  rather than silently analysing as English.
+- Resolve the language through the prompt (library "unset" badge → Book
+  settings row, or the confirm-screen re-entry), then re-start analysis on
+  the same book against a live local analyzer.
+- Confirm the analyzer's conventions table matches the language just set —
+  for a non-`'en'` language with a `dialogueOpen` marker (e.g. Russian),
+  confirm dash-opened dialogue lines are attributed as dialogue rather than
+  falling to the narrator, the same distinction #2325's dialogue-collapse
+  guard measures.
+
+*Needs:* a real local Ollama (or Gemini) analyzer; no TTS/GPU rendering
+required. *Criteria:*
+[`language-recurrence-onbox-acceptance.md`](language-recurrence-onbox-acceptance.md)
+§Analysis language gate. *Cost:* short — one import left unset, one refused
+analysis attempt, one prompt resolution, one real analysis run on a short
+chapter.
 
 ---
 

@@ -44,6 +44,7 @@ import { api, AnalysisError } from '../lib/api';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
+import { emitLanguageGuard } from '../lib/language-guard-bus';
 
 interface AnalysisRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
@@ -174,6 +175,41 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            manuscript), don't poison the new snapshot with the old
            run's terminal state. */
         if (handle !== localHandle) return;
+        /* Task 9d (#2407) — streaming shape. An unset book language is not a
+           generic stream failure: route it to the language-guard host instead of
+           the error toast, and re-run this SAME openHandle call (which re-issues
+           the subscribe POST) once the language is saved. A dismissed guard falls
+           back to the ordinary AnalysisError halted+toast path below, so the pill
+           never sits spinning on a modal the user closed. */
+        /* Defensive — this branch is unreachable as shipped: the pre-filter in
+           openHandle catches language_unset before the subscribe POST ever starts,
+           so a 200 with a detached throw that carries this code cannot occur here.
+           Kept as a defence-in-depth fallback in case the pre-filter is later
+           relaxed or bypassed. */
+        if (e instanceof AnalysisError && e.code === 'language_unset') {
+          const fail = (): void => {
+            dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'error',
+                message: e.message,
+                dedupeKey: 'analysis-stream',
+              }),
+            );
+          };
+          if (
+            emitLanguageGuard({
+              selector: { manuscriptId },
+              shape: 'sse',
+              sseSource: 'analysis',
+              onRetry: () => { closeHandle(); openHandle(snap); },
+              onDismiss: fail,
+            })
+          )
+            return;
+          fail();
+          return;
+        }
         if (e instanceof AnalysisError && e.code === 'aborted') {
           dispatch(analysisActions.setPaused({ manuscriptId }));
           return;

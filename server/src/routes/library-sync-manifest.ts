@@ -55,7 +55,7 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
       /* srv-35 — guarantee a stable uuid on every chapter (and persist the
          migration) so the manifest keys are durable. Idempotent. */
       if (ensureChapterUuids(state)) {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), state).catch(() => {
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null }).catch(() => {
           /* best-effort migration write; the in-memory state already has
              the uuids for this response. */
         });

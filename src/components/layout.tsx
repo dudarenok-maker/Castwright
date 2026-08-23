@@ -72,6 +72,7 @@ import {
 import { useTheme } from '../lib/use-theme';
 import { useAccessibilitySettings } from '../lib/use-accessibility-settings';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
+import { useLanguageGuard } from '../hooks/use-language-guard';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
@@ -1162,6 +1163,11 @@ export function Layout() {
      gated symmetrically. */
   const { guard: reverseAnalyzerGuard, modal: reverseAnalyzerGuardModal } =
     useReverseLocalAnalyzerGuard();
+  /* Task 9 (#2246) — the global language-guard host. The four 409 sites in
+     src/lib/api.ts route a language-unset failure here (via the shared bus)
+     instead of surfacing a generic error toast; this hook owns the one modal
+     instance for the whole layout. */
+  const { modal: languageGuardModal } = useLanguageGuard();
   const showGlobalTtsPill =
     stageKind === 'analysing' || stageKind === 'confirm' || stageKind === 'ready';
   /* Pills only render for engines actually in use by the current book —
@@ -2455,6 +2461,7 @@ export function Layout() {
         />
       )}
       {reverseAnalyzerGuardModal}
+      {languageGuardModal}
       <TourOverlay />
     </div>
   );

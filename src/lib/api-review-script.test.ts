@@ -22,6 +22,19 @@ describe('realReviewScript — chapter-failed is surfaced', () => {
     expect(failed).toEqual([{ chapterId: 2, message: 'Chapter 2 is too large — split it first.' }]);
     expect(res.totalOps).toBe(0);
   });
+  it('passes the machine-readable code through when a chapter-failed event carries one (#2409)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ kind: 'phase', phaseId: 0, progress: 0, label: 'Reviewing — chapter 2', chapterId: 2 }),
+      JSON.stringify({ kind: 'chapter-failed', chapterId: 2, message: 'Set the book language first.', code: 'language_unset' }),
+      JSON.stringify({ kind: 'result', done: true, reviewedChapters: 0, totalOps: 0 }),
+    ])));
+    const { api } = await import('./api');
+    const failed: Array<{ chapterId: number; message: string; code?: string }> = [];
+    const res = await api.reviewScript('bk', { chapterId: 2, onChapterFailed: (e) => failed.push(e) });
+    expect(failed).toEqual([{ chapterId: 2, message: 'Set the book language first.', code: 'language_unset' }]);
+    expect(res.totalOps).toBe(0);
+  });
+
 });
 
 describe('realReviewScript — chapter/ETA fields', () => {

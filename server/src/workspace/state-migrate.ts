@@ -30,6 +30,13 @@
 import type { BookStateJson } from './scan.js';
 import { writeJsonAtomic, readJsonWithRecovery } from './state-io.js';
 
+/** The shape writeStateJsonAtomic accepts. Identical to BookStateJson except
+ *  `language` is REQUIRED and explicitly nullable: a writer must state the
+ *  language or state that there isn't one. `undefined` — "I didn't think about
+ *  it" — is not expressible, which is the whole point. BookStateJson keeps
+ *  `language?: string` because that is the truth about disk. */
+export type BookStateJsonWrite = Omit<BookStateJson, 'language'> & { language: string | null };
+
 export const CURRENT_STATE_SCHEMA = 1;
 
 /** Thrown when state.json declares a schema newer than the server's
@@ -113,10 +120,19 @@ export const STATE_BACKUP_KEEP = 3;
  *  revisions.json, ...) stay on the bare `writeJsonAtomic` shape:
  *  they're cheaper to re-derive on loss and not worth the disk
  *  multiplier. */
-export async function writeStateJsonAtomic(path: string, state: BookStateJson): Promise<void> {
-  await writeJsonAtomic(path, stampStateSchema(state), {
-    rotate: { keep: STATE_BACKUP_KEEP },
-  });
+export async function writeStateJsonAtomic(path: string, state: BookStateJsonWrite): Promise<void> {
+  await writeJsonAtomic(
+    path,
+    /* Stamp the schema inline (not via stampStateSchema): a writer's explicit
+       `language: null` — "stated absence" — must survive to disk verbatim
+       (Task 3 relies on a surrendered book being written with a literal
+       `null`, key present; stampStateSchema's `T extends BookStateJson`
+       constraint rejects `language: string | null`). */
+    { ...state, schema: CURRENT_STATE_SCHEMA },
+    {
+      rotate: { keep: STATE_BACKUP_KEEP },
+    },
+  );
 }
 
 /** Read state.json with backup recovery. On a torn / corrupt main

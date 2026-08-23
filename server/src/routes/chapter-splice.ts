@@ -45,7 +45,7 @@ import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { manuscriptEditsJsonPath } from '../workspace/paths.js';
-import { bookStateLanguage } from '../workspace/scan.js';
+import { bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import {
   spliceChapterSegments,
   secToByteOffset,
@@ -106,6 +106,16 @@ chapterSpliceRouter.post(
     const chapterId = Number(req.params.chapterId);
     const body = (req.body ?? {}) as SpliceRequestBody;
 
+    /* Task 6 pre-flight — resolve the book and its language BEFORE the SSE
+       stream opens, so an unset language answers a real HTTP `409
+       { error: 'language_unset' }` instead of a streamed 200. `fail()` below
+       is SSE-framed; a 409 needs a clean JSON response, so the book lookup is
+       hoisted above the header setup and reused by the not-found branch. */
+    const located = await findBookByBookId(bookId);
+    if (located && bookStateLanguageOrNull(located.state) === null) {
+      return res.status(409).json({ error: 'language_unset' });
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -140,7 +150,6 @@ chapterSpliceRouter.post(
       reqModelKey = body.modelKey;
     }
 
-    const located = await findBookByBookId(bookId);
     if (!located) return fail(`No book found for id "${bookId}".`);
     const { bookDir, state } = located;
 

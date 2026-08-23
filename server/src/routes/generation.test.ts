@@ -53,7 +53,7 @@ vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
   return {
     ...actual,
-    selectTtsProvider: () => ({ synthesize: vi.fn() }),
+    selectTtsProvider: vi.fn(() => ({ synthesize: vi.fn() })),
   };
 });
 /* No sidecar in the test. The preload gate now POLLS through a respawn (plan
@@ -94,6 +94,26 @@ vi.mock('../diagnostics/disk.js', async (importOriginal) => {
   return {
     ...actual,
     probeDiskSpace: async (path: string) => ({ status: 'ok' as const, freeGb: diskFreeGb, path }),
+  };
+});
+
+/* Task 2 (#2515) — the route's "no fallback engine" abort (generation.ts:928-940:
+   Qwen unavailable AND non-English AND !coquiEligible) needs
+   `resolveEligibleEngines` to report Coqui ineligible. Every registered
+   non-English book language (ru/es/fr/de/zh/ja — tts/language-registry.ts) IS
+   inside Coqui's supported set today, so no real book language can reach that
+   branch. Reach it through the seam the route uses to derive `coquiEligible`
+   instead. `simulateNoCoquiFallback` stays false by default so the other tests
+   in this file see the real behaviour. */
+let simulateNoCoquiFallback = false;
+vi.mock('../tts/language.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/language.js')>();
+  return {
+    ...actual,
+    resolveEligibleEngines: (bookLanguage: string, installed: import('../tts/model-keys.js').TtsEngine[]) => {
+      if (simulateNoCoquiFallback) return installed.filter((e) => e !== 'coqui');
+      return actual.resolveEligibleEngines(bookLanguage, installed);
+    },
   };
 });
 
@@ -189,6 +209,7 @@ beforeAll(async () => {
         { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
         { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
       ],
+      language: 'en',
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -506,10 +527,11 @@ describe('POST /api/books/:bookId/generation', () => {
       .send({ modelKey: 'not-a-real-model' });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks).toHaveLength(1);
+    expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].chapterId).toBeUndefined();
     expect(ticks[0].errorReason).toMatch(/modelKey/i);
+    expect(ticks[1].type).toBe('idle');
   });
 
   it('srv-28: emits a disk_low warning tick (warn mode) when free space is tight, run proceeds', async () => {
@@ -535,11 +557,61 @@ describe('POST /api/books/:bookId/generation', () => {
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks).toHaveLength(1);
+    expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].errorCode).toBe('disk-full');
     expect(ticks[0].chapterId).toBeUndefined();
     expect(String(ticks[0].remediation)).toMatch(/free up disk space/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('emits idle after a book-not-found chapter_failed', async () => {
+    const res = await request(app)
+      .post(`/api/books/does-not-exist/generation`)
+      .send({ modelKey: 'gemini-2.5-flash' });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(String(ticks[0].errorReason)).toMatch(/No book found/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('emits idle after a provider-selection chapter_failed', async () => {
+    const { selectTtsProvider } = await import('../tts/index.js');
+    const mockedSelect = selectTtsProvider as unknown as ReturnType<typeof vi.fn>;
+    mockedSelect.mockImplementationOnce(() => {
+      throw new Error('no provider available in test');
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash' });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(String(ticks[0].errorReason)).toMatch(/no provider available/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('emits idle after a cast-not-confirmed chapter_failed', async () => {
+    const fsModule = await import('node:fs');
+    const castPath0 = join(bookDir, '.audiobook', 'cast.json');
+    const originalCast = fsModule.readFileSync(castPath0, 'utf8');
+    fsModule.writeFileSync(castPath0, JSON.stringify({ characters: [] }));
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash' });
+      expect(res.status).toBe(200);
+      const ticks = parseTicks(res.text);
+      expect(ticks).toHaveLength(2);
+      expect(ticks[0].type).toBe('chapter_failed');
+      expect(String(ticks[0].errorReason)).toMatch(/Cast not confirmed/i);
+      expect(ticks[1].type).toBe('idle');
+    } finally {
+      fsModule.writeFileSync(castPath0, originalCast);
+    }
   });
 
   /* ── Pause endpoint + sticky-across-reload contract ──────────────── */
@@ -892,6 +964,56 @@ describe('POST /api/books/:bookId/generation — Qwen→Kokoro fallback is loud,
   });
 });
 
+/* Task 2 (#2515) — the fs-2 no-fallback abort (generation.ts:928-940). A
+   non-English book whose language has NO Coqui fallback must abort the whole
+   run (chapter_failed + idle) rather than render cross-language garbage when
+   Qwen is unavailable. `coquiEligible` is forced off via
+   `simulateNoCoquiFallback` (see the module mock above) because no registered
+   non-English language is outside Coqui's eligible set today. */
+describe('POST /api/books/:bookId/generation — no-fallback abort (fs-2, generation.ts:928-940)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let fsModule: typeof import('node:fs');
+  let originalState: string;
+  let originalQwenState: import('../workspace/user-settings.js').QwenInstallState;
+
+  beforeAll(async () => {
+    fsModule = await import('node:fs');
+    originalState = fsModule.readFileSync(statePath(), 'utf8');
+    const { getLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    originalQwenState = getLastKnownQwenInstallState();
+  });
+
+  afterEach(async () => {
+    fsModule.writeFileSync(statePath(), originalState);
+    const { setLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownQwenInstallState(originalQwenState);
+    simulateNoCoquiFallback = false;
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot)) fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  it('aborts with chapter_failed /requires Qwen/ then idle for a non-English no-fallback book when Qwen is unavailable', async () => {
+    const state = JSON.parse(originalState) as Record<string, unknown>;
+    state.language = 'ru';
+    fsModule.writeFileSync(statePath(), JSON.stringify(state));
+    simulateNoCoquiFallback = true;
+    const { setLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownQwenInstallState('not-installed');
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'qwen3-tts-0.6b', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    /* Exactly one read-only bail-out: chapter_failed then idle, nothing else. */
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].chapterId).toBeUndefined();
+    expect(String(ticks[0].errorReason)).toMatch(/requires Qwen/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+});
+
 describe('POST /api/books/:bookId/generation — Bug E run aggregates on every tick', () => {
   it('every LIVE broadcast tick carries runDone / runTotal / runInProgress', async () => {
     const res = await request(app)
@@ -1036,9 +1158,10 @@ describe('POST /api/books/:bookId/generation — plan 70c auto-heal', () => {
       .send({ modelKey: 'gemini-2.5-flash', force: true });
     expect(res.status).toBe(200);
     const ticks = parseTicks(res.text);
-    expect(ticks).toHaveLength(1);
+    expect(ticks).toHaveLength(2);
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].errorReason as string).toMatch(/No analysed sentences cached/i);
+    expect(ticks[1].type).toBe('idle');
   });
 });
 
@@ -1219,6 +1342,8 @@ describe('POST /api/books/:bookId/generation — unsupported persisted language 
     expect(failed?.errorReason as string).toMatch(
       /unsupported language reached the voice pipeline/i,
     );
+    const idleTick = ticks[ticks.length - 1];
+    expect(idleTick.type).toBe('idle');
   });
 });
 
@@ -1713,6 +1838,7 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
           { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
           { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
         ],
+        language: 'en',
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -2095,5 +2221,126 @@ describe('triggerScoring (srv-36 hardening)', () => {
     } finally {
       configSpy.mockRestore();
     }
+  });
+});
+/* ── Task 3 (#2515) — the requireBookStateLanguage catch must emit a
+   classified, chapter-scoped failure tick (errorCode 'language-unset' + idle)
+   instead of a bare errorReason, matching the pattern Task 2 applied to the
+   other eight early bail-outs. These use the same beforeAll-capture /
+   afterEach-restore of state.json as the fs-38 Wave 3c block above so they
+   don't corrupt shared fixture state for later tests in the file. */
+describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let fsModule: typeof import('node:fs');
+  let originalState: string;
+
+  beforeAll(async () => {
+    fsModule = await import('node:fs');
+    originalState = fsModule.readFileSync(statePath(), 'utf8');
+  });
+
+  afterEach(() => {
+    fsModule.writeFileSync(statePath(), originalState);
+  });
+
+  function setBookLanguage(lang: string | null): void {
+    const state = JSON.parse(fsModule.readFileSync(statePath(), 'utf8')) as Record<string, unknown>;
+    state.language = lang;
+    fsModule.writeFileSync(statePath(), JSON.stringify(state));
+  }
+
+  function setChapterExcluded(chapterId: number, excluded: boolean): void {
+    const state = JSON.parse(fsModule.readFileSync(statePath(), 'utf8')) as {
+      chapters?: Array<{ id: number; excluded?: boolean }>;
+    };
+    const chapter = state.chapters?.find((c) => c.id === chapterId);
+    if (chapter) {
+      chapter.excluded = excluded;
+      fsModule.writeFileSync(statePath(), JSON.stringify(state));
+    }
+  }
+
+  it('emits errorCode + chapterId for an unset-language book, single requested chapter', async () => {
+    setBookLanguage(null);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('language-unset');
+    expect(ticks[0].chapterId).toBe(1);
+    /* This is requireBookStateLanguage's/BookLanguageUnsetError's actual
+       thrown message, verified against server/src/workspace/scan.ts's
+       current implementation — NOT the remediation copy added in Task 1,
+       which is a separate field with its own wording. */
+    expect(String(ticks[0].errorReason)).toMatch(/no language is set for this book/i);
+    expect(ticks[1].type).toBe('idle');
+  });
+
+  it('attaches chapterId for multi-chapter unset-language open (whole-book request)', async () => {
+    setBookLanguage(null);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    /* F9 fix: chapterId must be present even on whole-book requests so the
+       frontend's language-guard detection can recognize this as a
+       guard-relevant event (requires chapterId != null). */
+    expect(ticks[0].chapterId).toBe(1); // first chapter in the book
+    expect(ticks[0].errorCode).toBe('language-unset');
+  });
+
+  it('G7: skips excluded chapters when picking guard chapterId for unset-language whole-book request', async () => {
+    /* G7 regression test: ensure guardChapterId picks the first NON-excluded
+       chapter when the book's first chapter is excluded. Without this fix,
+       the guard could name an excluded chapter that the rest of the system
+       treats as not-really-there. */
+    setBookLanguage(null);
+    setChapterExcluded(1, true); // exclude chapter 1
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('language-unset');
+    /* G7 fix: chapterId should be 2 (the first non-excluded chapter),
+       not 1 (which is excluded). */
+    expect(ticks[0].chapterId).toBe(2);
+  });
+
+  it('P2: falls back to first chapter id when every chapter is excluded and language is unset', async () => {
+    /* P2 regression test: when ALL chapters are excluded for an unset-language
+       whole-book request, guardChapterId must still be present (not omitted).
+       Without this fix, it would become undefined and the chapter_failed event
+       would lose its chapterId field, reintroducing the F9 bug. The fallback
+       should name the first chapter even though it's excluded, preserving F9's
+       guarantee that chapterId is always attached. */
+    setBookLanguage(null);
+    // Exclude all chapters (the test fixture has chapters 1-2)
+    setChapterExcluded(1, true);
+    setChapterExcluded(2, true);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true }); // no chapterIds
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('language-unset');
+    /* P2 fix: chapterId should still be present (the first chapter's id,
+       even though it's excluded) rather than undefined. */
+    expect(ticks[0].chapterId).toBe(1);
+    expect(ticks[0].chapterId).not.toBeUndefined();
+  });
+
+  it('a book with a language set is unaffected', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    const ticks = parseTicks(res.text);
+    expect(ticks.every((t) => t.errorCode !== 'language-unset')).toBe(true);
   });
 });

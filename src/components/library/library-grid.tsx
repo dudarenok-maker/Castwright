@@ -27,8 +27,9 @@ import {
 import { Pill } from '../primitives';
 import { Stat } from '../stat-tiles';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
-import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-book-meta';
+import { EditBookMetaModal, type EditBookMetaPatch, type LanguageGuardShape } from '../../modals/edit-book-meta';
 import { CoverPicker } from '../../modals/cover-picker';
+import { LibraryLanguageAffordance } from './library-language-affordance';
 import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
 import { safeImageSrc } from '../../lib/safe-url';
 import { useAppSelector } from '../../store';
@@ -184,6 +185,11 @@ function BookCard({
   const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  /* Task 9 — when the edit modal was opened from the unset-language
+     affordance it runs in guard mode (language-focussed, must set one
+     before Save). Null when opened from the "…" menu, where the full
+     field set is editable. */
+  const [editLangGuard, setEditLangGuard] = useState<LanguageGuardShape | null>(null);
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   /* Locally-overridden cover URL after the picker resolves. The library
      slice re-hydrates async via onCoverChanged, but a same-URL refetch
@@ -339,6 +345,18 @@ function BookCard({
         <div data-testid={`book-meta-strip-${book.bookId}`} className="mb-3">
           <p className="text-sm font-semibold text-ink leading-snug truncate">{book.title}</p>
           <p className="text-xs text-ink/55 leading-snug truncate">{seriesLine}</p>
+          {/* Task 9 — the language badge (set) or "unset" affordance (missing).
+              The affordance opens the settings modal in guard mode so the risk
+              this book's unset language represents is fixable from the card. */}
+          <div className="mt-2 flex">
+            <LibraryLanguageAffordance
+              book={book}
+              onSetLanguage={() => {
+                setEditLangGuard('409');
+                setEditOpen(true);
+              }}
+            />
+          </div>
         </div>
         <div className="flex items-center justify-between gap-2 mb-3">
           <Pill color={meta.color}>
@@ -428,12 +446,18 @@ function BookCard({
         <EditBookMetaModal
           open={editOpen}
           book={book}
-          onClose={() => setEditOpen(false)}
+          onClose={() => {
+            setEditOpen(false);
+            setEditLangGuard(null);
+          }}
+          guard={editLangGuard}
           onSave={async (patch) => {
             /* Close optimistically and let the parent handler surface any
-               errors through the layout's showError toast. Mirrors the
-               delete/reparse pattern. */
+               errors through the layout's showError toast. The unset
+               affordance opens this modal in guard mode (language-focussed)
+               with no original action to retry, so no onRetry is passed. */
             setEditOpen(false);
+            setEditLangGuard(null);
             await onEdit(patch);
           }}
         />

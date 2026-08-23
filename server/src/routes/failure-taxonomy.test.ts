@@ -412,6 +412,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'cuda-poisoned',
         'disk-full',
         'gpu-acceleration-unavailable',
+        'language-unset',
         'lock-contention',
         'model-not-loaded',
         'oom',

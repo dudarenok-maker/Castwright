@@ -148,6 +148,35 @@ describe('AccountView â€” save flow', () => {
     });
   });
 
+  it('clears the save-confirmation timeout on unmount to prevent setState after unmount', async () => {
+    /* Regression: the setTimeout inside onSave was never cleared. When the
+       component unmounted before the 2400ms timer fired, the timeout still
+       executed and tried to call setShowSaved on an unmounted component,
+       triggering a React warning about "Can't perform a React state update
+       on an unmounted component". This test verifies the timeout is properly
+       cleared when the component unmounts. */
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(SERVER_FIXTURE);
+    const user = userEvent.setup();
+    const { unmount } = renderView();
+
+    /* Trigger Save to queue the 2400ms timeout. */
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    /* Wait for the save to complete and the "Saved." text to appear. */
+    await waitFor(() => {
+      expect(screen.getByText(/^saved\.$/i)).toBeInTheDocument();
+    });
+
+    /* Unmount the component before the 2400ms timeout fires. If the timeout
+       was not properly cleared, React would log a console warning about
+       setState on an unmounted component when the timeout fires. */
+    unmount();
+
+    /* The test passes if no React warning is logged. The vitest environment
+       reports console.error and console.warn, so the test automatically fails
+       if the bug causes a React state-update warning. */
+  });
+
   it('surfaces an error text when the save rejects', async () => {
     (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('disk full'),

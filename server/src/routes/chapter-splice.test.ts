@@ -143,6 +143,7 @@ beforeAll(async () => {
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
+      language: 'en',
       chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
@@ -302,6 +303,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
         isStandalone: true,
         manuscriptFile: 'manuscript.txt',
         castConfirmed: true,
+        language: 'en',
         chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -657,6 +659,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #1972 attribut
         isStandalone: true,
         manuscriptFile: 'manuscript.txt',
         castConfirmed: true,
+        language: 'en',
         chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:01' }],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -788,6 +791,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix) — #2128 castHistory
         isStandalone: true,
         manuscriptFile: 'manuscript.txt',
         castConfirmed: true,
+        language: 'en',
         chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:01' }],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -886,3 +890,101 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix) — #2128 castHistory
     expect(after.synthesizedAt).not.toBe(prior.synthesizedAt);
   });
 });
+describe('POST /:bookId/chapters/:chapterId/splice — unset book language (Task 6 #2246)', () => {
+  /* Pre-flight tier regression: a book that never stated a language must
+     answer a real HTTP 409 `{ error: 'language_unset' }` BEFORE the SSE
+     stream opens — never silently splice as English. The displayed message
+     is the fixed client-facing sentence and carries no filesystem path. */
+  let unsetBookId: string;
+  let unsetAudioRoot: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Unset-Lang Author';
+    const series = 'Standalones';
+    const title = 'Unset-Lang Story';
+    unsetBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    unsetAudioRoot = join(bookDir, 'audio');
+    mkdirSync(unsetAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    /* Deliberately NO `language` key — the field is absent (a legacy book). */
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: unsetBookId,
+        manuscriptId: 'm_unset_lang',
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:01' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+    const chapterPcm = Buffer.concat([tone(0.5, 12000), tone(0.5, 3000)]);
+    const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(unsetAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(unsetAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: unsetBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.5 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 0.5, endSec: 1.0 },
+        ],
+      }),
+    );
+  });
+
+  it('answers 409 { error: "language_unset" } before the stream opens', async () => {
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(unsetBookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 10 });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'language_unset' });
+  });
+
+  it('the control: the same book WITH a language set reaches the stream (not a 409)', async () => {
+    const statePath = join(workspaceRoot, 'books', 'Unset-Lang Author', 'Standalones', 'Unset-Lang Story', '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    state.language = 'en';
+    writeFileSync(statePath, JSON.stringify(state));
+    try {
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(unsetBookId)}/chapters/1/splice`)
+        .send({ mode: 'remix', characterId: 'castor', gainDb: 10 });
+      expect(res.status).not.toBe(409);
+      const events = parseSse(res.text);
+      expect(events.some((e) => e.type === 'splice_complete')).toBe(true);
+    } finally {
+      delete state.language;
+      writeFileSync(statePath, JSON.stringify(state));
+    }
+  });
+});
+

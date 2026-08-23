@@ -249,6 +249,8 @@ function seedStateJson(): void {
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
+      language: 'en',
+
       chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),

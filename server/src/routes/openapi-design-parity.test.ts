@@ -204,7 +204,13 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     const codes = [
       ...new Set([...singleDesignSrc.matchAll(/type:\s*'error',\s*code:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1])),
     ].sort();
-    expect(codes).toEqual(['design_failed', 'lock-contention', 'not_found', 'unsupported_language']);
+    expect(codes).toEqual([
+      'design_failed',
+      'language_unset',
+      'lock-contention',
+      'not_found',
+      'unsupported_language',
+    ]);
     const block = schemaBlock(yaml, 'SingleDesignEvent');
     const codeEnumMatch = /code:\r?\n\s*type: string\r?\n\s*enum: \[([^\]]+)\]/.exec(block);
     expect(codeEnumMatch, 'SingleDesignEvent.code enum not found').not.toBeNull();
@@ -222,5 +228,55 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     expect(typeEnum(crlf, 'CastDesignEvent')).toEqual(typeEnum(lf, 'CastDesignEvent'));
     expect(typeEnum(crlf, 'SingleDesignEvent')).toEqual(typeEnum(lf, 'SingleDesignEvent'));
     expect(describedDesignPaths(crlf).sort()).toEqual(describedDesignPaths(lf).sort());
+  });
+
+  /* #2509 B2 — the two `code.description` scalars on CastDesignEvent and
+     SingleDesignEvent were plain (unquoted, non-block) scalars that contain
+     the text ` #2246`. YAML parsing treats ` #` as a comment opener, so
+     everything from `#2246)` onward was silently discarded. The fix converts
+     both to block scalars (`description: |`). This test pins the block-scalar
+     form: if either description is ever converted back to a plain scalar,
+     the `description: |` match fails and the truncation is caught. */
+  it('CastDesignEvent.code and SingleDesignEvent.code descriptions use block scalars to avoid YAML comment truncation (#2509 B2)', () => {
+    const castBlock = schemaBlock(yaml, 'CastDesignEvent');
+    expect(castBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
+    expect(castBlock).toContain('stated language with no sidecar mapping');
+
+    const singleBlock = schemaBlock(yaml, 'SingleDesignEvent');
+    expect(singleBlock).toMatch(/code:\r?\n\s+type: string\r?\n\s+enum:.*\r?\n\s+description: \|/);
+    expect(singleBlock).toContain('stated language with no sidecar mapping');
+  });
+/* #2510 S2 — the four new 409 language_unset responses */
+  it('the analysis route declares a 409 language_unset response', () => {
+    const block = yaml.match(/\/api\/manuscripts\/\{manuscriptId\}\/analysis:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'analysis route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/'409':/);
+    expect(block![0]).toContain("error: { type: string }");
+  });
+
+  it('the splice route declares a 409 language_unset response', () => {
+    const block = yaml.match(/\/api\/books\/\{bookId\}\/chapters\/\{chapterId\}\/splice:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'splice route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/'409':/);
+    expect(block![0]).toContain("error: { type: string }");
+  });
+
+  it('the audio QA repair route declares a 409 language_unset response', () => {
+    const block = yaml.match(/\/api\/books\/\{bookId\}\/chapters\/\{chapterId\}\/audio-qa-repair:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'QA-repair route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/'409':/);
+    expect(block![0]).toContain("error: { type: string }");
+  });
+
+  it('the qwen design-voice 409 code enum contains both clone_protected and language_unset', () => {
+    const block = yaml.match(/\/api\/books\/\{bookId\}\/cast\/\{characterId\}\/design-voice\/stream:[\s\S]*?(?=\n {2}\/api)/);
+    expect(block, 'design-voice route block not found').not.toBeNull();
+    expect(block![0]).toMatch(/language_unset/);
+    expect(block![0]).toMatch(/clone_protected/);
+    // Match the code: property's enum specifically, not the modelKey enum
+    const codeEnum = block![0].match(/code:\s*\{[^}]*enum:\s*\[([^\]]+)\]\s*\}/);
+    expect(codeEnum, 'code enum not found on design-voice 409').not.toBeNull();
+    const codes = codeEnum![1].split(',').map((s) => s.trim()).sort();
+    expect(codes).toEqual(['clone_protected', 'language_unset']);
   });
 });

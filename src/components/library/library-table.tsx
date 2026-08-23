@@ -31,8 +31,9 @@ import {
 } from '../../lib/icons';
 import { Pill } from '../primitives';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
-import { EditBookMetaModal, type EditBookMetaPatch } from '../../modals/edit-book-meta';
+import { EditBookMetaModal, type EditBookMetaPatch, type LanguageGuardShape } from '../../modals/edit-book-meta';
 import { CoverPicker } from '../../modals/cover-picker';
+import { LibraryLanguageAffordance } from './library-language-affordance';
 import { computeCoverStyle } from '../../lib/cover-framing';
 import { safeImageSrc } from '../../lib/safe-url';
 import type { LibraryAuthor, LibraryBook, LibrarySeries } from '../../lib/types';
@@ -273,6 +274,9 @@ function BookRow({
   const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  /* Task 9 — guard-mode flag for the edit modal when opened from the
+     unset-language affordance (language-focussed, must set one before Save). */
+  const [editLangGuard, setEditLangGuard] = useState<LanguageGuardShape | null>(null);
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   /* Locally-overridden cover URL after the picker resolves. Mirrors the
      grid's cache-bust pattern so a fresh fetch from the same URL still
@@ -329,15 +333,26 @@ function BookRow({
         </span>
       </td>
       <td className="py-2 px-2 align-middle">
-        <span className="inline-flex items-center gap-2">
-          {titleColumn}
-          {book.pinned && <IconStar className="w-3 h-3 text-ink/55" />}
-          {active && (
-            <span className="px-1.5 py-0.5 rounded-full bg-peach text-ink text-[9px] font-bold uppercase tracking-wider">
-              Open
-            </span>
-          )}
-        </span>
+        <div className="flex flex-col items-start gap-1">
+          <span className="inline-flex items-center gap-2">
+            {titleColumn}
+            {book.pinned && <IconStar className="w-3 h-3 text-ink/55" />}
+            {active && (
+              <span className="px-1.5 py-0.5 rounded-full bg-peach text-ink text-[9px] font-bold uppercase tracking-wider">
+                Open
+              </span>
+            )}
+          </span>
+          {/* Task 9 — the language badge (set) or "unset" affordance (missing).
+              The affordance opens the edit modal in guard mode. */}
+          <LibraryLanguageAffordance
+            book={book}
+            onSetLanguage={() => {
+              setEditLangGuard('409');
+              setEditOpen(true);
+            }}
+          />
+        </div>
       </td>
       {showAuthor && (
         <td className="py-2 px-2 align-middle text-ink/70 text-xs">{book.author}</td>
@@ -435,9 +450,18 @@ function BookRow({
           <EditBookMetaModal
             open={editOpen}
             book={book}
-            onClose={() => setEditOpen(false)}
-            onSave={async (patch) => {
+            onClose={() => {
               setEditOpen(false);
+              setEditLangGuard(null);
+            }}
+            guard={editLangGuard}
+            onSave={async (patch) => {
+              /* Close optimistically and let the parent handler surface any
+                 errors through the layout's showError toast. The unset
+                 affordance opens this modal in guard mode (language-focussed)
+                 with no original action to retry, so no onRetry is passed. */
+              setEditOpen(false);
+              setEditLangGuard(null);
               await onEdit(patch);
             }}
           />
