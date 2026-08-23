@@ -42,6 +42,7 @@ import main  # noqa: E402
 # order Starlette invoked them. Any change to either list is a behaviour change
 # and must be argued for, not slipped in.
 EXPECTED_STARTUP = [
+    "_startup_ort_cuda_preload",
     "_configure_vd_kokoro_coupling",
     "_start_design_idle_watchdog",
     "_start_asr_idle_watchdog",
@@ -121,7 +122,7 @@ def test_a_failing_startup_handler_aborts_boot_and_skips_the_rest(monkeypatch):
     with pytest.raises(RuntimeError, match="_start_asr_idle_watchdog"):
         asyncio.run(_run_lifespan(calls))
 
-    assert calls == EXPECTED_STARTUP[:3]
+    assert calls == EXPECTED_STARTUP[: EXPECTED_STARTUP.index("_start_asr_idle_watchdog") + 1]
 
 
 def test_shutdown_still_runs_when_the_serving_phase_raises(monkeypatch):

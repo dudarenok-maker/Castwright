@@ -29,21 +29,23 @@ describe('planOrtSwap', () => {
     // extras entirely — so nothing here ever lands cuDNN, and a real
     // CUDAExecutionProvider InferenceSession silently falls back to CPU. The
     // cuDNN step below is separate and deliberately does NOT carry --no-deps:
-    // cuDNN's own dependency tree (cublas, nvrtc) doesn't intersect the
+    // cuDNN's own dependency tree (cublas) doesn't intersect the
     // overlay's numpy/protobuf/flatbuffers pins, so pulling it in full is safe
     // where dropping --no-deps on the onnxruntime-gpu step itself is not.
-    // cublas/nvrtc are named alongside cuDNN (review finding M2) so pip's
-    // resolver treats their pins as top-level constraints rather than letting
+    // cublas is named alongside cuDNN (review finding M2) so pip's
+    // resolver treats its pin as a top-level constraint rather than letting
     // cuDNN's own unpinned transitive requirement pick whatever is latest.
+    // Pass 2 review (N4/N6, PR #2617): the cublas pin is a floor-plus-cap on
+    // the 12.8.x line torch cu128 actually bundles (`~=12.8.0`, not the prior
+    // `~=12.9` — see install-ort.mjs's own comment for why that excluded the
+    // exact patch it meant to protect). nvrtc is DROPPED from this step:
+    // onnxruntime's own preload_dlls() never looks for it on Windows (it's a
+    // Linux-only entry in its DLL list there), so pinning it here bought
+    // nothing on this platform.
     expect(plan.steps).toEqual([
       ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
       ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.26,<1.27'],
-      [
-        'install',
-        'nvidia-cudnn-cu12~=9.0',
-        'nvidia-cublas-cu12~=12.9',
-        'nvidia-cuda-nvrtc-cu12~=12.9',
-      ],
+      ['install', 'nvidia-cudnn-cu12~=9.0', 'nvidia-cublas-cu12~=12.8.0'],
     ]);
   });
 
@@ -52,14 +54,9 @@ describe('planOrtSwap', () => {
   // TODAY exercises a non-onnxruntime-gpu SWAP (amd/apple/cpu are all
   // 'onnxruntime', i.e. skip): a future onnxruntime-directml re-enable must
   // not silently inherit a CUDA-only cuDNN package.
-  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN+cublas+nvrtc step', () => {
+  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN+cublas step (no nvrtc — Windows-unused, N6)', () => {
     expect(extraRuntimeSteps('onnxruntime-gpu')).toEqual([
-      [
-        'install',
-        'nvidia-cudnn-cu12~=9.0',
-        'nvidia-cublas-cu12~=12.9',
-        'nvidia-cuda-nvrtc-cu12~=12.9',
-      ],
+      ['install', 'nvidia-cudnn-cu12~=9.0', 'nvidia-cublas-cu12~=12.8.0'],
     ]);
     expect(extraRuntimeSteps('onnxruntime-directml')).toEqual([]);
     expect(extraRuntimeSteps('onnxruntime')).toEqual([]);

@@ -56,15 +56,17 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT) so the runtime isn't whatever
     // happened to be latest on PyPI on install date.
     expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu>=1.26,<1.27');
-    // #2600: a final, separate cuDNN(+cublas+nvrtc) install — deliberately
+    // #2600: a final, separate cuDNN(+cublas) install — deliberately
     // WITHOUT --no-deps (see install-ort.mjs's extraRuntimeSteps) so
     // onnxruntime-gpu's CUDAExecutionProvider can actually construct an
-    // InferenceSession instead of silently falling back to CPU. cublas/nvrtc
-    // are pinned alongside cuDNN (review finding M2) rather than left to
-    // resolve unpinned.
-    expect(joined[4]).toBe(
-      'install nvidia-cudnn-cu12~=9.0 nvidia-cublas-cu12~=12.9 nvidia-cuda-nvrtc-cu12~=12.9',
-    );
+    // InferenceSession instead of silently falling back to CPU. cublas is
+    // pinned alongside cuDNN (review finding M2) rather than left to resolve
+    // unpinned. Pass 2 review (N4/N6, PR #2617): cublas is `~=12.8.0`, not
+    // `~=12.9` — floor-plus-cap on the 12.8.x line torch cu128 bundles,
+    // matching install-ort.mjs's own corrected comment — and nvrtc is
+    // dropped entirely (onnxruntime's own DLL list never looks for it on
+    // Windows).
+    expect(joined[4]).toBe('install nvidia-cudnn-cu12~=9.0 nvidia-cublas-cu12~=12.8.0');
     expect(pip.calls).toHaveLength(5);
   });
 

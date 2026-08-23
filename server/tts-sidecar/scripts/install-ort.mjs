@@ -260,21 +260,57 @@ function constrainForInstall(ortPackage) {
 const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
 
 // cuDNN's own dependency tree pulls in nvidia-cublas-cu12 (for nvidia-cudnn-cu12,
-// unpinned) which in turn pulls in nvidia-cuda-nvrtc-cu12 (unpinned) — measured
-// 2026-08-23 at 12.9.2.10 / 12.9.86 against this venv's CUDA-12.8 torch. Left
-// alone, that is exactly the exposure ONNXRUNTIME_GPU_CONSTRAINT's own comment
-// above says is unacceptable: whatever happens to be latest on PyPI on install
-// date, decided by a THIRD PARTY's unpinned transitive deps rather than by us.
-// It is also a real collision, not a theoretical one: torch/torchaudio (cu128)
-// ship their OWN bundled `cublas64_12.dll` in torch/lib, so an unpinned
-// nvidia-cublas-cu12 install lands a second, differently-versioned build of the
-// same DLL base name in one process, and load order decides which one a given
-// import gets. Floor-plus-cap on the currently-resolved MINOR line (mirroring
-// NVIDIA_CUDNN_CONSTRAINT's own shape) so a same-line patch (security fix)
-// still flows without a code change; only a genuine minor bump needs bumping
-// these alongside NVIDIA_CUDNN_CONSTRAINT and ONNXRUNTIME_GPU_CONSTRAINT.
-const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.9';
-const NVIDIA_CUDA_NVRTC_CONSTRAINT = 'nvidia-cuda-nvrtc-cu12~=12.9';
+// unpinned). Left alone, that is exactly the exposure ONNXRUNTIME_GPU_CONSTRAINT's
+// own comment above says is unacceptable: whatever happens to be latest on PyPI
+// on install date, decided by a THIRD PARTY's unpinned transitive dep rather
+// than by us. It is also a real collision, not a theoretical one: torch/
+// torchaudio (cu128) ship their OWN bundled `cublas64_12.dll` in torch/lib — the
+// live sidecar venv's copy reports (Windows file version info) "NVIDIA CUDA BLAS
+// Library, Version 12.8.4" — so an unpinned nvidia-cublas-cu12 install lands a
+// second, differently-versioned build of the same DLL base name in one process,
+// and load order decides which one a given import gets.
+//
+// PASS 2 REVIEW FIX (N4, PR #2617): the prior `~=12.9` pin was wrong in BOTH
+// directions. `~=V.N` (two segments) means `>=V.N, ==V.*` — since the package
+// name already encodes the cu12 major line, that cap is vacuous (a bare floor
+// admitting 12.10, 12.99, …), and worse, a floor of 12.9 EXCLUDES the very
+// 12.8.4.x line torch bundles, mandating the exact cublas64_12.dll build
+// mismatch this comment warns about. `~=12.8.0` (three segments) is
+// `>=12.8.0, ==12.8.*` — a real floor-plus-cap on the resolved MINOR line,
+// mirroring NVIDIA_CUDNN_CONSTRAINT's own `~=9.0` shape, and it does not
+// exclude 12.8.4.1 (>=12.8.0 is satisfied by any 12.8.x patch). Only a genuine
+// minor bump (torch moving off cu128) needs bumping this alongside
+// NVIDIA_CUDNN_CONSTRAINT and ONNXRUNTIME_GPU_CONSTRAINT.
+const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
+
+// PASS 2 REVIEW FIX (N6, PR #2617): nvrtc DROPPED from this step entirely.
+// onnxruntime's own `preload_dlls()` (`_get_nvidia_dll_paths`, read against the
+// live sidecar venv) never looks for an nvrtc DLL on the Windows branch at all —
+// only cublas/cublasLt/cufft/cudart + the cudnn_* set — nvrtc only appears in
+// its Linux branch (alongside curand, which this step has never pinned either).
+// So a `nvidia-cuda-nvrtc-cu12` top-level pin bought nothing on Windows: onnxruntime
+// never reads it, and cuDNN's own dependency tree already pulls SOME nvrtc build
+// in transitively regardless of whether we pin it here, at whatever version pip's
+// resolver picks — harmless dead weight on Windows since nothing in this process
+// ever loads it. Re-introduce a pin here only alongside real Linux nvidia-profile
+// support (curand would need one too, and this step would need to become
+// platform-aware — a design question, not this fix's).
+//
+// NOT fixed here, deliberately deferred to on-box acceptance (register rows
+// A37–A40): onnxruntime's Windows DLL list ALSO wants
+// `nvidia/cufft/bin/cufft64_11.dll` and `nvidia/cuda_runtime/bin/cudart64_12.dll`,
+// neither of which any pip step here installs. The working assumption is that
+// the box's own system CUDA 12.4 toolkit install supplies both via the default
+// DLL search path (PATH) once cuDNN/cublas are no longer the missing piece —
+// unconfirmed without a GPU box, and NOT to be "fixed" by adding more pip pins
+// without that on-box confirmation first (a `[cuda]`-extras pip install is the
+// named alternative hypothesis, not something to reach for pre-emptively).
+//
+// If they turn out to be genuinely missing on-box, note this ALSO needs the
+// same floor-plus-cap fix N4 applies here: torch/lib's bundled cufft64_11.dll
+// reports the same 12.8.x build line as cublas above (per the live venv's file
+// version info), so a would-be `nvidia-cufft-cu12`/`nvidia-cuda-runtime-cu12`
+// pin should float on that line too, not an arbitrary unpinned/latest one.
 
 /**
  * Extra pip step(s), if any, needed alongside an ortPackage swap so the
@@ -282,18 +318,18 @@ const NVIDIA_CUDA_NVRTC_CONSTRAINT = 'nvidia-cuda-nvrtc-cu12~=12.9';
  * available. Gated on ortPackage itself — same gating shape as
  * constrainForInstall — so a future onnxruntime-directml re-enable can never
  * inherit a CUDA-only package. Deliberately NOT `--no-deps`: cuDNN's own
- * dependency tree (cublas, nvrtc) doesn't intersect the overlay's
+ * dependency tree (cublas) doesn't intersect the overlay's
  * numpy/protobuf/flatbuffers pins, so installing it in full here is safe in a
- * way dropping `--no-deps` on the onnxruntime-gpu step itself is not. All three
+ * way dropping `--no-deps` on the onnxruntime-gpu step itself is not. Both
  * packages are named in ONE pip step (not `--no-deps`, so this is belt-and-
- * suspenders rather than load-bearing) so pip's resolver treats the pins on
- * the two transitive packages as top-level constraints instead of letting an
+ * suspenders rather than load-bearing) so pip's resolver treats the pin on
+ * the transitive package as a top-level constraint instead of letting an
  * unpinned transitive requirement from cuDNN win the resolution. Pure — no I/O.
  * @returns {string[][]}
  */
 export function extraRuntimeSteps(ortPackage) {
   return ortPackage === 'onnxruntime-gpu'
-    ? [['install', NVIDIA_CUDNN_CONSTRAINT, NVIDIA_CUBLAS_CONSTRAINT, NVIDIA_CUDA_NVRTC_CONSTRAINT]]
+    ? [['install', NVIDIA_CUDNN_CONSTRAINT, NVIDIA_CUBLAS_CONSTRAINT]]
     : [];
 }
 
