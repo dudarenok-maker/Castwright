@@ -316,7 +316,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -326,14 +326,17 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-23 (wave 5, #2606 step 6), 69 → 66.** Three rows
-> discharged live (A27, A45, B2) and dropped per the repo owner's
-> remove-outright ruling; evidence for each lives in
-> `docs/testing/onbox-wave5-results/`. Full change-by-change history is in
-> this file's git log, not here — this section tracks the current count,
-> not how it got here.
+> **Last change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
+> live (A38, "ORT marker refuses — not repairs — a clobbered venv") and
+> dropped, per the owner's remove-outright ruling — the refuse-and-log branch
+> fired exactly as designed against a real copy of the live sidecar venv.
+> Group A renumbered contiguously (old A39–A44 → A38–A43). Evidence:
+> `docs/testing/onbox-wave5-results/step-ort-b-a39.md`. Prior change: wave 5,
+> #2606 step 6, 69 → 66 (A27, A45, B2 discharged). Full change-by-change
+> history is in this file's git log, not here — this section tracks the
+> current count, not how it got here.
 
 ---
 
@@ -483,7 +486,7 @@ asserts which voice reached the provider.
   Run 3 also produced [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   (an orphaned `characterId` renders silently in the narrator's voice) and
   [#2026](https://github.com/dudarenok-maker/Castwright/issues/2026)
-  (Russian XTTS quality — register row A40). The #1944 blocker below is
+  (Russian XTTS quality — register row A39). The #1944 blocker below is
   genuinely
   gone — Coqui loaded cleanly in a post-`/embed` process during run 2, logging
   `Coqui ready — 58 speakers in manifest`. A *second*, separate blocker sat
@@ -2220,6 +2223,40 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 >   preload lands, confirm Qwen / XTTS / Whisper still synthesise correctly on
 >   this box, not just that Kokoro reports the right provider.
 
+> **2026-08-23 re-run (Castwright#2621, wave-5 lineage) — STILL OWED, root cause
+> now identified and it is NOT `install-ort.mjs`.** Re-ran against a fresh
+> throwaway venv (live venv untouched, byte-verified before/after). Marker
+> mechanics and `pip check` still **DISCHARGE** cleanly. Round 1 (fix as
+> shipped) reproduced the `[ort-preload]` **failed** line — `cufft64_11.dll`
+> and `cudart64_12.dll` could not load from anywhere — confirming the
+> "N of M expected files found under nvidia/" warning bullet above: this box's
+> system CUDA 12.4 toolkit does **not** supply those two DLLs via `PATH`, so the
+> named assumption is false here. Round 2, installing the `[cuda]` extras
+> (`nvidia-cuda-runtime-cu12`, `nvidia-cufft-cu12`, `nvidia-curand-cu12`,
+> `nvidia-nvjitlink-cu12`) into the same throwaway venv, produced a clean
+> `preload_dlls()` success — all 11 expected files resolved under
+> `nvidia/<pkg>/bin`, confirming **hypothesis 2 fixes the DLL-search problem
+> completely**. But Kokoro **still** fell back to CPU with this clean preload,
+> silently (no `[ort-preload]` warning at load time). Isolated with a bare
+> Python repro: a raw `onnxruntime.InferenceSession` with
+> `providers=['CUDAExecutionProvider','CPUExecutionProvider']` genuinely runs on
+> CUDA on this box once `preload_dlls()` has run — but `kokoro_onnx==0.5.0`'s
+> own `Kokoro.__init__` auto-detects via
+> `importlib.util.find_spec("onnxruntime-gpu")`, which is **always `None`**
+> (the `onnxruntime-gpu` pip distribution installs into the `onnxruntime`
+> import namespace, not a separately-importable `onnxruntime-gpu` module), so
+> `kokoro_onnx` always constructs with `providers=["CPUExecutionProvider"]`
+> explicitly — CUDA is never even offered to onnxruntime. `main.py`'s
+> `KokoroEngine._ensure_loaded` tries passing `providers=` explicitly when
+> `KOKORO_ORT_PROVIDERS` is set, but this installed `kokoro-onnx` version's
+> `Kokoro.__init__` has no `providers` parameter — that call raises `TypeError`
+> and falls back to the broken auto-detect path. **This is a third, distinct
+> root cause from both #2534 and #2600**, inside `kokoro-onnx`'s own
+> provider auto-detection, not `install-ort.mjs` or `preload_dlls()`. Per the
+> fold brief: reported as a finding here, not fixed. Evidence:
+> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
+> (Castwright#2621).
+
 ### A37 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
@@ -2275,164 +2312,28 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > distinct from the already-filed #2534 CUDA13/cuDNN9 gap. Full evidence:
 > `docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
-### A38 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+> **2026-08-23 (Castwright#2621, wave-5 lineage) — STILL OWED, blocked by
+> box-wide sidecar port contention again.** Started this worktree's own app
+> (frontend/API bound the assigned `5293`/`8200` ports, confirmed from the
+> server's own log). At startup the server found another process already
+> listening on the hardcoded `:9000` sidecar port and adopted it instead of
+> spawning its own, so `SIDECAR_VENV_DIR` never took effect for the running
+> app. That pre-existing sidecar (PID 7380, actively `ESTABLISHED` with a live
+> client) was identified before assuming it was safe to use; per the standing
+> rule against disrupting another agent's live process, the Install action was
+> **not** clicked against it — only a read-only `GET /health` was run
+> (`devices: {"kokoro":"cuda","coqui":"cuda","qwen":"cuda"}`, noted only as
+> context that CUDA does work for some venv on this box). Neither the Qwen3
+> install click-through nor the Kokoro-afterward check could be safely run
+> this session — **not attempted, not failed**, same structural class as
+> wave-4 step-5c and now a third piece of evidence for it. **Worth filing
+> separately:** `server/src/tts/spawn-sidecar.ts`/`sidecar-owner.ts`'s
+> hardcoded `9000` vs. `LOCAL_TTS_PORT`'s per-worktree value makes any two
+> worktrees' apps unable to run isolated TTS sessions simultaneously. Evidence:
+> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
+> (Castwright#2621).
 
-Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
-branch (the clobbered-box row of the design doc's five-state table) is fully
-unit-tested against synthetic fixtures (`server/src/tts/ort-ensure-marker.test.ts`)
-but has never run against a **real** clobbered venv — a box where a real plain
-`onnxruntime` dist-info survives alongside the GPU distribution's dist-info (pip
-uninstalls by name and never knew the two collided), but the actual files on disk
-are the GPU build. This is the population #2192 itself names as the largest affected
-group, and the state a wrong ownership predicate would entomb silently (see the
-design doc's §The three venv states).
-
-- **Manufacture the state deliberately**, on a scratch/throwaway venv (or a copy of
-  the sidecar venv) with the intent to run the repair command afterward — this is
-  destructive to a working GPU install. The corrected recipe (verified 2026-08-21,
-  see the dated note below) starts from a venv that has plain `onnxruntime`
-  installed and then force-reinstalls the GPU build **over** it: pip's
-  upgrade-detection keys on the package NAME, so installing two distributions that
-  share the `onnxruntime/` import namespace under different names does not trigger
-  a replacement, and the plain package's dist-info survives on disk:
-  ```powershell
-  python -m venv <venv>
-  <venv>\Scripts\pip install onnxruntime==1.28.0
-  <venv>\Scripts\pip install --force-reinstall --no-deps onnxruntime-gpu==1.27.0
-  ```
-  (Versions pinned for reproducibility — plain at 1.28.0, GPU at 1.27.0, so the
-  two dist-info folder names are distinguishable by directory listing alone,
-  matching the unit test fixture.)
-  Confirm both a **real** `onnxruntime-1.28.0.dist-info` (INSTALLER `pip`, non-empty
-  RECORD) and `onnxruntime_gpu-1.27.0.dist-info` coexist with **different version
-  numbers** — this is the discriminating check that proves the code either correctly
-  refused to write a marker OR incorrectly wrote one. A marker and the real plain dist-info
-  would be named identically if they were at the same version, making name-based detection useless. Also confirm
-  that `site-packages/onnxruntime/` holds the GPU build's files
-  (`capi/build_and_package_info.py` reports `package_name = 'onnxruntime-gpu'`).
-
-> **Recipe corrected, 2026-08-21 — as part of [#2545](https://github.com/dudarenok-maker/Castwright/issues/2545) (task to address [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535), the defect). Verified in ort-marker-onbox-acceptance.md §8.5.**
-> The row's original recipe (`pip install --force-reinstall onnxruntime` over a
-> venv already holding `onnxruntime-gpu`) does NOT reach `'clobbered'`: it
-> overwrites `site-packages/onnxruntime/capi/build_and_package_info.py` to report
-> `package_name = 'onnxruntime'`, so `detectOrtOwner` correctly reports `'plain'`
-> and `ensureOrtMarker` takes the silent `'deleted'` branch instead. The corrected
-> plain-then-GPU ordering (1.28.0 plain, 1.27.0 GPU) was verified against the real
-> `detectOrtOwner`/`findPlainOrtDistInfos` from
-> `server/tts-sidecar/scripts/install-ort.mjs` on a throwaway venv: it reports
-> `detectOrtOwner === 'swap'` and `findPlainOrtDistInfos.length === 1` with
-> discriminable versions (1.28.0 vs 1.27.0 in directory names), and
-> `ensureOrtMarker` returns `'clobbered'` — exactly the refuse-and-log branch this
-> row is meant to exercise (see §8.5 for complete verification).
-- **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
-  naming the condition and the exact remedy commands (PowerShell form: `$env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>` or POSIX form: `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
-  and **no** new `onnxruntime-<version>.dist-info` marker written over the real
-  distribution. `pip check` stays clean (nothing else in this throwaway venv depends on
-  `onnxruntime` to have broken requirements) — the discriminating check is the `'clobbered'` return value and the
-  log line naming the condition and remedy, confirming the box is refuse-and-logged
-  rather than silently healed at the wrong version.
-- **Run the named remedy command** and confirm it actually repairs the box: the
-  swap re-runs, `onnxruntime-gpu` is reinstalled, and a legitimate marker is
-  written afterward (`pip check` clean, Kokoro reports `CUDAExecutionProvider`
-  again).
-
-*Needs:* the existing NVIDIA dev box, no GPU activity required, ~10 minutes
-including the repair. *Criteria:* design doc §On-box acceptance item 6, the
-eight-state table and "the clobbered box takes the loud path" in
-`docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
-`docs/testing/ort-marker-onbox-acceptance.md`.
-
-> **Wave-3 step 2, 2026-08-20 — STILL OWED, real defect found.** Manufactured
-> the state exactly per this row's own recipe on a throwaway copy
-> (`pip install --force-reinstall onnxruntime` over an existing
-> `onnxruntime-gpu`) and booted a real server against it. **No `[ort-marker]`
-> log line at all** — the server booted silently as if nothing were wrong.
-> Root cause: `detectOrtOwner` reads
-> `build_and_package_info.py`'s `package_name` first, which post-reinstall
-> genuinely reads `'onnxruntime'`, so it correctly returns `owner: 'plain'`,
-> not `'swap'` — `ensureOrtMarker` never reaches the `'clobbered'` branch
-> this row expects and instead takes the silent `'deleted'` path (not
-> logged). The named remedy command itself was independently verified and
-> works correctly when run directly. Two things are true at once and both
-> are real: either the row's own manufacture recipe doesn't reach the state
-> the design doc's five-state table means by "clobbered," or the `'deleted'`
-> branch being silent is a gap on its own regardless of the recipe — a
-> decision on both is owed to a fix agent, not resolved here. Full evidence:
-> `docs/testing/onbox-wave3-results/step-2-ort-marker.md`. Filed as
-> [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
-> (see #2535).
-
-> **Wave-4 A38 re-run, 2026-08-21 — STILL OWED.** Re-ran this row's own recipe on a
-> **fresh** throwaway venv (not the sidecar's own — no venv under
-> `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime was
-> confirmed unchanged before and after this run) against branch
-> `fix/sidecar-2535-ort-marker-fix`, at committed HEAD `fe77babd` but with a
-> **local, uncommitted edit to `install-ort.mjs`** containing the corrected
-> clobbered-state message (later committed as `bd09fcfa`), fixing silent-defect
-> #2535. The recorded log message matches the 452-character wording from that
-> uncommitted edit (later bd09fcfa's wording), not the 262-character wording
-> from prior merge commit 51420399. Manufactured plain-then-GPU, confirmed `detectOrtOwner === 'swap'`
-> and one real plain dist-info present, then booted the real worktree server
-> (`tsx watch`, `SIDECAR_VENV_DIR` pointed at the throwaway venv, port 8290 —
-> free and not shared with another lane). **Result: the `'clobbered'` log
-> line fired correctly**, naming the condition and the exact remedy command,
-> and no marker was written over the real distribution (`pip check` stayed
-> clean, matching the pinned-version case rather than wave-3's mismatched
-> 1.29.0 one — nothing for boot to silently "fix" either way). Ran the named
-> remedy command directly against the throwaway venv: it uninstalled both
-> packages, reinstalled `onnxruntime-gpu==1.27.0` (`--no-deps`), and wrote a
-> legitimate marker — post-repair, `owner === 'swap'` with **zero** real plain
-> dist-infos (`findPlainOrtDistInfos.length === 0`), `pip check` clean. The
-> silent-`'deleted'` defect #2535 was filed against is gone: the loud
-> `'clobbered'` path fires exactly where wave-3 found it silent.
-> **CRITICAL NOTE:** This wave-4 run was performed with the INCORRECT recipe
-> version (1.27.0/1.27.0 — both the same version). This is a separate defect
-> from the ordering issue wave-3 step 2 exposed (which used different versions:
-> 1.29.0 plain and 1.27.0 GPU). The wave-4 run therefore did NOT fully verify
-> the fix against the intended manufactured state where the two packages have
-> different versions. The corrected recipe verification with 1.28.0 plain and
-> 1.27.0 GPU is in Wave-5 below.
-> Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by:
-> claude (Castwright#2569).
-
-> **Wave-5 A38 verification, 2026-08-21 — STILL OWED, but the filed defect is
-> fixed and verified.** Re-ran this row against the CORRECTED recipe (1.28.0
-> plain, 1.27.0 GPU) on a **fresh** throwaway venv to properly exercise the
-> fix against the intended manufactured state. **Pre-repair:** fresh venv with
-> correct versions; `detectOrtOwner === 'swap'` (GPU build's files own the
-> namespace); `findPlainOrtDistInfos.length === 1` (one real plain dist-info);
-> directory listing shows both `onnxruntime-1.28.0.dist-info` (real plain,
-> named by version) and `onnxruntime_gpu-1.27.0.dist-info` (GPU build) with
-> DIFFERENT version numbers — crucially different from wave-4's run which
-> showed both at 1.27.0. **ensureOrtMarker behavior:** returns `'clobbered'`
-> and logs the condition with remedy command. No marker written over the real
-> distribution (directory listing unchanged, `pip check` clean). **Repair:**
-> ran the named remedy command directly: uninstalled both packages, reinstalled
-> `onnxruntime-gpu==1.27.0` (`--no-deps`). Post-repair: `owner === 'swap'`;
-> `findPlainOrtDistInfos.length === 0` (stale real plain dist-info removed,
-> only marker remains); directory listing shows `onnxruntime-1.27.0.dist-info`
-> (marker written) and `onnxruntime_gpu-1.27.0.dist-info` (GPU build); `pip
-> check` clean. **Disposition:** ✓ PASS for the fix. The `'clobbered'` return
-> value fires exactly as intended against the correct manufactured state where
-> the two packages have different versions, the remedy command repairs the box
-> correctly, and the marker is written only after the swap succeeds. **Not
-> independently re-confirmed:** Kokoro reporting `CUDAExecutionProvider`
-> post-repair. `get_available_providers()` still lists it (as wave-3 also
-> saw), but constructing a real inference session was not re-attempted here —
-> the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been
-> resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to
-> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A36):
-> re-ran against the fixed pin (ONNXRUNTIME 1.26.0 via PR #2576), still fails but
-> on a new, distinct root cause — `onnxruntime-gpu` 1.26.0 requires
-> `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by
-> `install-ort.mjs` (not the #2534 defect recurring). Per that outcome this row
-> stays **STILL OWED** on the GPU-provider check basis — the row's own criteria
-> include the CUDA-provider re-check — but the population #2192 named as
-> largest-affected is no longer left in the silent failure mode.
-> Evidence: `docs/testing/ort-marker-onbox-acceptance.md` §8.5. Run by: claude
-> (Castwright#2578, wave-5, round-2 review correction).
-
-### A39 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
+### A38 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
 `upgrade/apply.ts`'s `pipInstall` marker handling (delete before the first
@@ -2470,7 +2371,22 @@ the design doc's §Changed files; run sheet §9 in
 > Castwright release directory (`release/` layout).
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
-### A40 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
+> **2026-08-23 (Castwright#2619) — STILL OWED, BLOCKED. No packaged release
+> directory available on this box.** Checked exhaustively per `paths.ts`'s own
+> definition of a real release (a `vX.Y.Z` directory under a `releases/`
+> parent, produced by the packaging pipeline, not a git checkout): neither the
+> primary checkout nor this worktree sits under a `releases/` ancestor; no
+> `*astwright*` directory anywhere under `C:\`, `Program Files`, `Program Files
+> (x86)`, or `%LOCALAPPDATA%\Programs`; no running Castwright/Electron process;
+> no uninstall-registry entry. Per the issue's own instruction, did not
+> manufacture a fake release directory (would require a release cut, out of
+> scope and forbidden by standing rules) — a hand-assembled directory would
+> not exercise the real `applyUpgrade` code path against real packaging
+> output. Matches the standing conclusion on record since wave-3. Evidence:
+> `docs/testing/onbox-wave5-results/step-ort-c-a40.md`. Run by: claude
+> (Castwright#2619).
+
+### A39 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
 
 PR #2050 fixed one of #2026's three defects (the leading dialogue em-dash) and
 deliberately shipped no register row here, because concurrent PR #2039 was
@@ -2524,7 +2440,7 @@ conflated once already during triage.
 *Cost:* short — a handful of `/synthesize` probes plus one attempt at
 reproducing the degenerate collapse.
 
-### A41 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
+### A40 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
 
 PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
 `stripHtml`/`extractFirstHeading`/`epub.ts`'s `decodeEntities` from a
@@ -2563,7 +2479,7 @@ its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
 two bullets above. *Cost:* short — one import + one chapter-title listen, plus
 one body-line listen if a suitable entity-laden EPUB is available.
 
-### A42 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
+### A41 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
 
 When the sidecar exits and respawning runs into a refused spawn (a foreign process occupying `:9000`), the supervisor's crash-loop cap must still accrete monotonically toward exhaustion, and the deadline timer must actually kill a hung listener-enumeration probe. Unit tests (`server/src/tts/sidecar-supervisor.test.ts`, `server/src/tts/spawn-sidecar.test.ts`) fully verify the refusal→cap accounting logic: a slow attempt (one that outlives `QUICK_DEATH_MS`) no longer masquerades as a long-lived child and resets the counter — instead the budget accrues regardless of attempt latency, and a cap on `consecutiveFailures` prevents infinite refusal loops. What no unit test can reach is the *real* race on a contended box: whether `LISTENER_PID_DEADLINE_MS = 5000` milliseconds is actually enough headroom for the listener-enumeration probe (`lsof` on POSIX, Windows PowerShell `Get-NetTCPConnection` query) to complete before the deadline fires on real hardware under contention, and whether the deadline timer truly kills a hung probe so the supervisor can proceed to the next backoff instead of blocking forever. Two scenarios test these separately: a foreign listener for the budget-exhaustion half (exercises the not-ours refusal path), and a manually-started sidecar under prod policy for the deadline-timer half (exercises the stale-replace path where the deadline callback is active).
 
@@ -2587,7 +2503,7 @@ When the sidecar exits and respawning runs into a refused spawn (a foreign proce
 - Cleanup: the manually-started sidecar was already killed by the server as part of the replace above, so its terminal should show it exited on its own — there is nothing left to stop. Restore `SIDECAR_NEVER_ADOPT` to its prior state (unset, or `'0'`) and restart the server, so the next run adopts a healthy pre-existing sidecar normally instead of replacing it.
 
 *Needs:* a live sidecar, a book mid-render, OS-level process-kill access, ability to bind a foreign listener on `:9000`, ability to start a fresh sidecar manually, and ability to set environment variables on the server. *Criteria:* the bullets above; the code-level contracts are `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` (budget exhaustion) and the deadline timer in `server/src/tts/spawn-sidecar.ts` at line 694 (`findListenerPid`'s `deadlineMs` parameter). *Cost:* ~2 minutes — Scenario 1 takes ~1 minute (one sidecar kill, one foreign listener binding, supervisor observation); Scenario 2 takes ~1 minute (one manual sidecar start, one SIDECAR_NEVER_ADOPT run, deadline observation). Can run sequentially or in separate sessions.
-### A43 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
+### A42 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
 
 PR #2402 fixes the #1969 `voice-mismatch` false-positive: the render-integrity
 gate now rebuilds a character's persisted audition centroid reference when its
@@ -2609,7 +2525,7 @@ must be **rebuilt for the new voice**, not reused against the old speaker's.
 reassignment, one re-render. Records A23's final sub-check ("no
 `voice-mismatch` rows").
 
-### A44 · Voice-design language gate actually blocks the three design sites before they reach a live sidecar, and doesn't false-positive when set (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)) · **single 8 GB card, live Qwen sidecar**
+### A43 · Voice-design language gate actually blocks the three design sites before they reach a live sidecar, and doesn't false-positive when set (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)) · **single 8 GB card, live Qwen sidecar**
 
 `routes/cast-design.ts:768`, `routes/qwen-voice.ts:578`, and
 `routes/single-design.ts:304` (the design's sites 6-8) each resolve a book's
@@ -3293,7 +3209,7 @@ Observe:
 > `onbox-sitting-device-browser.md` alongside E1, E2, E3, E5, E6, E9, E10,
 > and `onbox-sitting-plan.md` §2.1/§2.2 are corrected to move E7's
 > rendered-half debt from the wave-3 agent-runnable set to that operator
-> pack — the same pattern already used for A32/A42.
+> pack — the same pattern already used for A32/A41.
 > `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
 >
 > **Wave-4 step 5d, 2026-08-21 — split further, shrinks.** Observations 1, 2,
