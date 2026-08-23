@@ -850,6 +850,9 @@ these accomplishes nothing. **Nothing else in this plan has this ratio.**
 
 - **#2187** — discharge register row C2. Force `fresh: true`, and do **not**
   re-measure alignment — that is already done from cache. Then close.
+  **Superseded: the #2187 row ran 2026-08-12/13 and discharged.** Group C
+  renumbered afterwards, so today's `C2` is the unrelated #2253 dialogue-
+  convention row — do not discharge it against this instruction.
 - **#2026** — XTTS Russian quality on a stock catalogue voice (engine-level, not
   clone-related).
 - **#1998** — cloned-voice identity loss across languages (0.600 → 0.229).
