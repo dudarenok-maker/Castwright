@@ -300,8 +300,8 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 46 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
@@ -310,7 +310,28 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**69 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+
+> **Correction, 2026-08-23 (wave 5, #2606 step 6 — steps 1-5's verdicts folded
+> in).** Old total **69** → new total **66**. Arithmetic: **A** 46→44 (−2:
+> A27 discharged live via the real supervisor's owned-spawn env-injection
+> loop, not a standalone process or source read — see step 1's evidence;
+> A45 discharged live via a real venv's `pip-in-place` reinstall through
+> `bootstrap-venv.mjs` — see step 2's evidence); **B** 3→2 (−1: B2 discharged
+> live — every character's `cast.json` name came back in the manuscript's own
+> Cyrillic script against the committed short-chapter fixture, with no
+> near-duplicate id and no id-retirement-direction defect — see step 4's
+> evidence). Per the repo owner's ruling that discharged rows are removed
+> outright, not annotated (2026-08-22), all three are dropped entirely rather
+> than merged in with an outcome note — their evidence lives in
+> `docs/testing/onbox-wave5-results/` (`step-1-a27.md`, `step-2-a45.md`,
+> `step-4-b2.md`), not in this file. **C, D, E, G, H unchanged.** E9 (step 3)
+> was reconfirmed STILL OWED from a second checkout — no count change, see
+> its row's own new note. Rows renumbered contiguously within each shrunk
+> group per this file's own convention: old A28→A27 … old A44→A43, old
+> A46→A44; old B3→B2. Cross-references throughout the body were updated to
+> match. Total re-derived by counting `###` group headings in the edited
+> body (not by arithmetic subtraction): **69 → 66.**
 
 > **Correction, 2026-08-22 (merge of #2246's `feat/server-2246-language-recurrence`
 > into `main`, resolving the PR #2492 rebase).** **67 → 69.** This branch's own
@@ -543,7 +564,7 @@ asserts which voice reached the provider.
   Run 3 also produced [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   (an orphaned `characterId` renders silently in the narrator's voice) and
   [#2026](https://github.com/dudarenok-maker/Castwright/issues/2026)
-  (Russian XTTS quality — register row A41). The #1944 blocker below is
+  (Russian XTTS quality — register row A40). The #1944 blocker below is
   genuinely
   gone — Coqui loaded cleanly in a post-`/embed` process during run 2, logging
   `Coqui ready — 58 speakers in manifest`. A *second*, separate blocker sat
@@ -1312,98 +1333,7 @@ and A20, which already stage a mixed-engine render on this same card.
 
 ---
 
-### A27 · `qa.asr.model` reaches the sidecar AND every server-side reader (PR #2008, closes [#1988](https://github.com/dudarenok-maker/Castwright/issues/1988), [#1989](https://github.com/dudarenok-maker/Castwright/issues/1989)) · **no GPU needed, sidecar venv only**
-
-Registering `ASR_MODEL` as the `qa.asr.model` registry knob made a UI-set
-override reach the sidecar via the generic restart-sidecar env-injection loop,
-but the PR's own independent review found it did **not** reach the server's
-own Node-side Whisper-model readers — `whisperRepoDir()` / `whisperModelPresent()`
-/ `detectWhisperInstallStateOnDisk()` (`model-paths.ts`, `whisper-install-detect.ts`)
-cached `process.env.ASR_MODEL` in a module-load-time constant, so Model
-Manager's sizing, install-state, and **Remove** all still targeted `base`
-regardless of what was actually configured and loaded. This was verified as a
-real defect (not just a review claim) by reverting the fix and watching the
-paired tests go red — see the PR's mutation-verification comment — but the
-full failure mode needs the real sidecar + a real Hugging Face download to
-observe end to end, which no unit test can substitute for.
-
-- **Prerequisite:** comment out `ASR_MODEL` in `server/.env` first, if it's
-  set. `server/.env.example`'s generated block ships `ASR_MODEL=base`
-  uncommented; on a box seeded from that file, the value is present as a real
-  env var, and `resolver.ts` gives env unconditional precedence with
-  `locked: true` — Advanced Configuration would show the knob disabled with
-  an env pill, making step 1 below unperformable.
-- Set **Content-QA (Whisper) model** to a non-default value (e.g. `small`) in
-  Advanced Configuration and let the sidecar restart. Confirm from the sidecar
-  log / `/health` that `faster-whisper` actually loaded `small`, not `base`.
-- Open Model Manager: the Whisper row must report `small`'s on-disk size and
-  path, not `base`'s.
-- Click **Remove**. It must delete the `small` snapshot directory and leave
-  any pre-existing `base` snapshot untouched — the inverse of the pre-fix
-  behaviour, which deleted `base` and left the model actually in use on disk.
-- Run the in-app installer (Account → Models → Whisper → Install) with
-  `small` configured and confirm `install-whisper.mjs` fetches `small` (its
-  `[install-whisper]` step lines / the resulting HF cache snapshot name), not
-  `base` — pinning that the installer spawn now receives an explicit
-  `--model` flag carrying the live value rather than falling back to its own
-  `process.env.ASR_MODEL || 'base'` default. Confirm the install card's own
-  copy also names `small`, not a hard-coded `base` (m1 fix).
-- **Separately**, confirm the documented CLI path
-  (`node server/tts-sidecar/scripts/install-whisper.mjs`, no flags) fetches
-  `base` in this scenario, not `small` — it has no access to
-  `user-settings.json`, so it cannot see the UI override; only the in-app
-  installer (which always passes `--model`) reflects the configured model.
-  This is expected, not a defect — it's why the script's usage comment now
-  says to pass `--model` explicitly for a UI-configured, non-default model.
-
-*Needs:* the sidecar venv with `faster-whisper` installable, network access
-for the HF download of a second model size, and write access to the HF hub
-cache to seed/inspect both `base` and the configured model's snapshots. No GPU
-required. *Criteria:* this row plus PR #2008's description of the failure
-scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
-Remove click.
-
-> **Wave-3 step 3, 2026-08-20 — STILL OWED (partial discharge).** Run against
-> the live sidecar venv (read-only), isolated on port :9111 so the box's
-> shared :9000 sidecar was never touched. Every downstream reader is
-> DISCHARGED with real command+output: config reach (`PUT /api/config`),
-> Model Manager reflecting the override before download, a real Hugging Face
-> download of Whisper `small`, Model Manager reflecting it post-download,
-> Remove (deletes `small`, leaves `base`), the in-app installer path
-> (`--model small`), and the documented bare-CLI path (correctly falls back
-> to `base`). **What's still owed — not a caveat, the reason this row stays
-> open:** `ASR_MODEL=small` was set by hand on a standalone sidecar rather
-> than driven live through the Node supervisor's real restart-sidecar
-> env-injection loop (blocked by this box's single-instance :9000
-> constraint); the registry wiring itself was only confirmed by reading
-> `server/src/config/registry.ts` and `spawn-sidecar.ts`'s source, not
-> executed end-to-end through the supervisor. **Correction, 2026-08-20:** a
-> verify pass found this row had been mislabeled DISCHARGED on the strength
-> of that source-read alone — a read is not the same as exercising the live
-> path, and the row is corrected here to STILL OWED until the supervisor's
-> actual env-injection loop is driven for real. Full evidence:
-> `docs/testing/onbox-wave3-results/step-3-sidecar-install-config-reach.md`.
->
-> **Wave-4 step 4, 2026-08-21 — blocker RE-DERIVED LIVE, not inherited from a
-> source read.** This worktree started its own server (own HTTP port, own
-> `.env`, no port override reaching the sidecar) and confirmed live that the
-> box's single-instance `:9000` sidecar is always **adopted**, never spawned:
-> the server log read "already listening on :9000 ... skipping spawn ...
-> adopted". `buildSidecarEnv` and the other restart-sidecar env-injection
-> knobs only run on an owned spawn (`spawn-sidecar.ts`) — the adopt branch
-> returns before that code path is ever reached. So the registry
-> env-injection loop is structurally unreachable from this worktree without
-> either disturbing the shared sidecar (forbidden) or waiting for it to go
-> down (not arrangeable). This confirms, live, the same conclusion wave-3
-> reached by reading source only — the row's disposition is unchanged (STILL
-> OWED), but the evidence is now first-hand. Every other reader (resolver,
-> Model Manager, Remove, both installer paths) stays discharged from wave 3,
-> unaffected. Full evidence:
-> `docs/testing/onbox-wave4-results/step-4-b2-step8-and-a29-blocker.md` Part 2.
-
----
-
-### A28 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
+### A27 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
 
 PR #2032 (hardened further by the independent pre-merge review that produced
 this row) closes three "a gate that silently stopped asserting" defects in
@@ -1513,7 +1443,7 @@ deliberately-broken Kokoro run; well under an hour total.
 
 ---
 
-### A29 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
+### A28 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
 
 The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
 test binding it to the render's own oracle, an e2e walkthrough. What no suite
@@ -1559,7 +1489,7 @@ master clip. *Criteria:* the run sheet
 walkthrough steps 1-7 in plan 276. *Cost:* short if it rides along with A1's
 cloning session, which already stages a real clone on this card.
 
-### A30 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **single 8 GB card, Qwen resident**
+### A29 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **single 8 GB card, Qwen resident**
 
 Wave 1 ships a **read-time** fix only: `buildCastResolver` resolves a frozen
 segment's `characterId` through a separator/case normaliser before the code
@@ -1608,9 +1538,9 @@ already-analysed book.
 
 ---
 
-### A31 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped**
+### A30 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped**
 
-Wave 1 (A30) and Wave 2 (the characterId-drift re-analysis, now discharged) are proven or pending against a single already-drifted
+Wave 1 (A29) and Wave 2 (the characterId-drift re-analysis, now discharged) are proven or pending against a single already-drifted
 chapter/book each. Wave 3's `scripts/repair-cast-id-drift.mjs` is the pass meant
 to sweep the **whole** 20-book workspace at once.
 
@@ -1628,7 +1558,7 @@ to sweep the **whole** 20-book workspace at once.
 > §8.7/§8.8 text above): §8.7 needs a real TTS render of *Заказ Коалфолла*
 > ch2 plus human listening, and §8.8 needs a live-browser Cast-screen
 > cross-check — neither is agent-runnable. This row joins
-> `onbox-sitting-cloning-identity.md`'s row list alongside A30 (wave-3 step 4
+> `onbox-sitting-cloning-identity.md`'s row list alongside A29 (wave-3 step 4
 > re-confirmed the verdict without new evidence; nothing else about this row
 > changed). The live-view publish reflecting this move is still owed to the
 > operator.
@@ -1663,7 +1593,7 @@ to sweep the **whole** 20-book workspace at once.
 > `'normalised-id'` exempt on the reasoning that it depends only on the CURRENT
 > live cast list, never on `supersededBy`. **Independent review found that a
 > non-sequitur** — it proves no *rename* happened, not that the rendered bytes
-> are correct — and pointed at THIS row's own A30 evidence: *Playing with
+> are correct — and pointed at THIS row's own A29 evidence: *Playing with
 > Fire*'s `the-torment`/`lightning-dave` both recover under `'normalised-id'`
 > today, but were rendered **before Wave 1's resolver existed at all**, when
 > `resolveGroup` substituted the narrator regardless of tier. There is no
@@ -1770,7 +1700,7 @@ to sweep the **whole** 20-book workspace at once.
 >   this population, snapshot presence/absence is not neutral: **presence**
 >   means the id WAS live at render (audio already correct, drift happened
 >   after) and **absence** means the narrator was substituted (the actual
->   A30 damage this pass exists to fix). A veto on absence therefore blocks
+>   A29 damage this pass exists to fix). A veto on absence therefore blocks
 >   exactly the aliases that repair real damage and passes exactly the ones
 >   that needed no repair — replayed against the real workspace with
 >   `supersededBy` emptied, the round-1 veto would have blocked **two of the
@@ -1886,7 +1816,7 @@ workspace's analysis):**
   24 (`pool-player-2` 6, `sir-harding` 1, `silveny` 17) have no usable name
   signal anywhere in the cache or a `cast.json.bak.*`. Also includes *Playing
   with Fire*'s `the-torment` (67 segments) and `lightning-dave` (1 segment) —
-  A30's own already-affected fixture (above): both already auto-reconcile live
+  A29's own already-affected fixture (above): both already auto-reconcile live
   via the normalised-id tier, so a round-2 review fix corrected their reported
   reason from the misleading "zero rendered segments — no damage to repair"
   (which contradicted the Cast banner's own auto-reconciled section for the
@@ -1995,7 +1925,7 @@ workspace's analysis):**
   resolved through the history) and the 93 report-only ids are unchanged —
   proving the write was durable, not merely printed once.
 - Re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall` orphaned
-  chapter) and confirm the same shape A30 pins: the fresh `segments.json`
+  chapter) and confirm the same shape A29 pins: the fresh `segments.json`
   gains `characterSnapshots` entries for `mayrin`/`coalfall` naming Мэйрин's
   and Коалфолл's own live voices, not the narrator — **listen** to confirm
   audibly, not only from the JSON.
@@ -2010,7 +1940,7 @@ and any `cast.json.bak.*` files and writes `cast-id-history.json`. Needs the
 real 20-book workspace, a completed `server` build, and the ability to stop any
 locally-running Castwright server for the duration of the `--apply` call.
 Re-rendering the confirmation chapter needs the 8 GB card + Qwen resident, same
-as A30. *Criteria:* the run sheet
+as A29. *Criteria:* the run sheet
 [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §8
 (Wave 3). *Cost:* short — one script invocation against an already-imported,
 already-analysed workspace, then one chapter re-render.
@@ -2032,7 +1962,7 @@ already-analysed workspace, then one chapter re-render.
 > `docs/testing/onbox-sitting-cloning-identity.md` still correctly lists this
 > row for §8.7.
 
-### A32 · Supervisor respawn survives a refused spawn attempt ([#2037](https://github.com/dudarenok-maker/Castwright/issues/2037)) · **single 8 GB card, live sidecar**
+### A31 · Supervisor respawn survives a refused spawn attempt ([#2037](https://github.com/dudarenok-maker/Castwright/issues/2037)) · **single 8 GB card, live sidecar**
 
 Unit tests (`server/src/tts/sidecar-supervisor.test.ts`,
 `server/src/tts/spawn-sidecar.test.ts`) fully pin the fix's logic: a refused
@@ -2075,7 +2005,7 @@ operational trap that produced the #2037 outage in the first place.
 `onSpawnRefused` in `server/src/tts/spawn-sidecar.ts`. *Cost:* short — one
 kill, one log grep, one status poll.
 
-### A33 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
+### A32 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
 
 Unit tests (`server/tts-sidecar/tests/test_design_contention.py`) fully pin
 the logic with a simulated `_design_in_flight` claim: `unload_design()` now
@@ -2106,7 +2036,7 @@ two overlapping requests (a second browser tab/session is enough). *Criteria:*
 rationale is in the `_DESIGN_CONTENTION_WAIT_S_DEFAULT` comment immediately
 above `class QwenEngine`. *Cost:* short — one overlapped request pair.
 
-### A34 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
+### A33 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 
 Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`,
 `test_asr_footprint_measurement.py`) pin that a resident ASR reservation now
@@ -2150,7 +2080,7 @@ and `docs/local-llm.md`'s footprint table. *Cost:* short — rides along with
 any other GPU-ASR session (A20 already needs `ASR_DEVICE=cuda`-adjacent
 capacity behaviour; batch together).
 
-### A35 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
+### A34 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
 `classifyTranscript`'s new logic is fully pinned in
 `server/src/tts/segment-asr-qa.test.ts` with injected transcripts/signals — a
@@ -2187,7 +2117,7 @@ comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
 
-### A36 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
+### A35 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
 
 `.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
 / `SIDECAR_VRAM_RESTART_MB=0` as literal, active env assignments — and each of the
@@ -2237,7 +2167,7 @@ than a real render.
 
 ---
 
-### A37 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+### A36 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 1. A from-scratch `bootstrap-venv.mjs`
 run on the nvidia profile is unit-tested at the seam
@@ -2295,7 +2225,7 @@ scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 > silently fall back to CPU (distinct from #2534, which fixed the CUDA-13-vs-12
 > mismatch itself).
 
-### A38 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+### A37 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
 tester's exact scenario, with the app running. Every other row for this feature
@@ -2318,8 +2248,8 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > **Wave-3 step 2, 2026-08-20 — STILL OWED, not run, blocker now fixed.** Needs the full app
 > running plus a real click-through of Model Manager → Qwen → Install
 > against a throwaway copy of the sidecar venv — scoped as its own session
-> rather than rushed alongside A37/A39 in the same heartbeat. The blocker that
-> prevented full discharge (the CUDA13/cuDNN9 gap A37 found) is now resolved by
+> rather than rushed alongside A36/A38 in the same heartbeat. The blocker that
+> prevented full discharge (the CUDA13/cuDNN9 gap A36 found) is now resolved by
 > PR #2576, which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`
 > (CUDA-12 line). The row remains STILL OWED because neither the app-level test
 > nor the Kokoro GPU-provider check have been re-run against the fixed pin; see
@@ -2329,7 +2259,7 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > install still not attempted.** Re-ran only the shared Kokoro GPU-provider
 > sub-check (this row's final check) against the #2534-fixed pin
 > (`onnxruntime-gpu` 1.26.0, commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`,
-> now on `main` via `4bb738d2`) — same procedure and result as A37 above:
+> now on `main` via `4bb738d2`) — same procedure and result as A36 above:
 > `get_available_providers()` reports `CUDAExecutionProvider`, actual session
 > construction still falls back to CPU, root cause confirmed as the missing
 > `nvidia-cudnn-cu12` `[cudnn]` extra, not a #2534 recurrence. Zero discharges;
@@ -2350,7 +2280,7 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > distinct from the already-filed #2534 CUDA13/cuDNN9 gap. Full evidence:
 > `docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
-### A39 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+### A38 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
 branch (the clobbered-box row of the design doc's five-state table) is fully
@@ -2437,7 +2367,7 @@ eight-state table and "the clobbered box takes the loud path" in
 > [#2535](https://github.com/dudarenok-maker/Castwright/issues/2535)
 > (see #2535).
 
-> **Wave-4 A39 re-run, 2026-08-21 — STILL OWED.** Re-ran this row's own recipe on a
+> **Wave-4 A38 re-run, 2026-08-21 — STILL OWED.** Re-ran this row's own recipe on a
 > **fresh** throwaway venv (not the sidecar's own — no venv under
 > `server/tts-sidecar/.venv` was touched; that path's `python.exe` mtime was
 > confirmed unchanged before and after this run) against branch
@@ -2470,7 +2400,7 @@ eight-state table and "the clobbered box takes the loud path" in
 > Evidence: `docs/testing/onbox-wave4-results/step-1-a41-rerun.md`. Run by:
 > claude (Castwright#2569).
 
-> **Wave-5 A39 verification, 2026-08-21 — STILL OWED, but the filed defect is
+> **Wave-5 A38 verification, 2026-08-21 — STILL OWED, but the filed defect is
 > fixed and verified.** Re-ran this row against the CORRECTED recipe (1.28.0
 > plain, 1.27.0 GPU) on a **fresh** throwaway venv to properly exercise the
 > fix against the intended manufactured state. **Pre-repair:** fresh venv with
@@ -2496,7 +2426,7 @@ eight-state table and "the clobbered box takes the loud path" in
 > saw), but constructing a real inference session was not re-attempted here —
 > the box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) has been
 > resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to
-> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A37):
+> `>=1.26,<1.27`). GPU-provider re-check (wave-4 step 8, same procedure as A36):
 > re-ran against the fixed pin (ONNXRUNTIME 1.26.0 via PR #2576), still fails but
 > on a new, distinct root cause — `onnxruntime-gpu` 1.26.0 requires
 > `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by
@@ -2507,7 +2437,7 @@ eight-state table and "the clobbered box takes the loud path" in
 > Evidence: `docs/testing/ort-marker-onbox-acceptance.md` §8.5. Run by: claude
 > (Castwright#2578, wave-5, round-2 review correction).
 
-### A40 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
+### A39 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
 `upgrade/apply.ts`'s `pipInstall` marker handling (delete before the first
@@ -2517,7 +2447,7 @@ the real body had zero prior test coverage
 (`server/src/upgrade/apply-ort-marker.test.ts`) — but real `spawn`, a real
 `venvDir`, and a real packaged release directory have never driven it. A
 genuinely different consumer of the same `planOrtSwap` output than
-`bootstrap-venv.mjs` (A37), so that row passing proves nothing about this one.
+`bootstrap-venv.mjs` (A36), so that row passing proves nothing about this one.
 
 - Take a real installed Castwright release (not the dev checkout — the packaged
   `release/` layout `upgrade/apply.ts` targets), on NVIDIA, with a marker already
@@ -2545,7 +2475,7 @@ the design doc's §Changed files; run sheet §9 in
 > Castwright release directory (`release/` layout).
 > `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
 
-### A41 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
+### A40 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
 
 PR #2050 fixed one of #2026's three defects (the leading dialogue em-dash) and
 deliberately shipped no register row here, because concurrent PR #2039 was
@@ -2585,7 +2515,7 @@ summarised below.
   `main`, so a future `coqui-tts` upgrade has a baseline to check against.
   Not a sign-off. Pairs with #2056.
 
-**Different mechanism from A35 (#2055) — do not merge with item 2 above.** A35
+**Different mechanism from A34 (#2055) — do not merge with item 2 above.** A34
 covers the server-side ASR/WER override `qa.asr.catastrophicWer` in
 `classifyTranscript`; this row's item 2 is the sidecar-side duration heuristic
 `tts.coqui.degenGuard`. Same symptom (a Russian line collapsing into another
@@ -2599,7 +2529,7 @@ conflated once already during triage.
 *Cost:* short — a handful of `/synthesize` probes plus one attempt at
 reproducing the degenerate collapse.
 
-### A42 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
+### A41 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
 
 PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
 `stripHtml`/`extractFirstHeading`/`epub.ts`'s `decodeEntities` from a
@@ -2638,13 +2568,13 @@ its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
 two bullets above. *Cost:* short — one import + one chapter-title listen, plus
 one body-line listen if a suitable entity-laden EPUB is available.
 
-### A43 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
+### A42 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
 
 When the sidecar exits and respawning runs into a refused spawn (a foreign process occupying `:9000`), the supervisor's crash-loop cap must still accrete monotonically toward exhaustion, and the deadline timer must actually kill a hung listener-enumeration probe. Unit tests (`server/src/tts/sidecar-supervisor.test.ts`, `server/src/tts/spawn-sidecar.test.ts`) fully verify the refusal→cap accounting logic: a slow attempt (one that outlives `QUICK_DEATH_MS`) no longer masquerades as a long-lived child and resets the counter — instead the budget accrues regardless of attempt latency, and a cap on `consecutiveFailures` prevents infinite refusal loops. What no unit test can reach is the *real* race on a contended box: whether `LISTENER_PID_DEADLINE_MS = 5000` milliseconds is actually enough headroom for the listener-enumeration probe (`lsof` on POSIX, Windows PowerShell `Get-NetTCPConnection` query) to complete before the deadline fires on real hardware under contention, and whether the deadline timer truly kills a hung probe so the supervisor can proceed to the next backoff instead of blocking forever. Two scenarios test these separately: a foreign listener for the budget-exhaustion half (exercises the not-ours refusal path), and a manually-started sidecar under prod policy for the deadline-timer half (exercises the stale-replace path where the deadline callback is active).
 
 **Scenario 1: Supervisor crash-loop cap (foreign listener, not-ours refusal path)**
 
-- With a chapter actively rendering, kill the sidecar's OS process directly (e.g. `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the process from Task Manager) — **not** via `POST /api/sidecar/restart`, for the same reason as A32.
+- With a chapter actively rendering, kill the sidecar's OS process directly (e.g. `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the process from Task Manager) — **not** via `POST /api/sidecar/restart`, for the same reason as A31.
 - Immediately after kill, start a foreign listener on `:9000` that does NOT respond like a valid sidecar (e.g. `nc -l 9000` on POSIX, which accepts TCP but doesn't answer HTTP; or an HTTP server that returns a non-200 status or malformed body). This ensures the spawn attempt fails the identity check and enters the not-ours refusal path (`spawn-sidecar.ts:681`).
 - Grep the running server's own log for the supervisor counter monotonically advancing across multiple refused attempts. Expected log format: `[sidecar] supervisor: spawn refused: <reason>; respawning in <delayMs>ms (attempt <K>/<max>).` Confirm the attempt counter increases (1, 2, 3, 4, 5) and that no single slow probe resets it back to 1.
 - Confirm the respawned sidecar eventually surfaces as `'crashed'` on `GET /api/setup/models-status` once the counter exhausts. Expect the exhaustion log: `[sidecar] supervisor: <N> rapid spawn refusals (<reason>) in a row — giving up respawn. TTS is DOWN; restart the server to recover.` (Backoff schedule: `DEFAULT_BACKOFFS_MS = [2s, 5s, 15s]` with last repeating, cap `DEFAULT_MAX_CONSECUTIVE_FAILURES = 5`, total ≈52s across 5 attempts per `server/src/tts/sidecar-supervisor.ts:45-46`.)
@@ -2662,7 +2592,7 @@ When the sidecar exits and respawning runs into a refused spawn (a foreign proce
 - Cleanup: the manually-started sidecar was already killed by the server as part of the replace above, so its terminal should show it exited on its own — there is nothing left to stop. Restore `SIDECAR_NEVER_ADOPT` to its prior state (unset, or `'0'`) and restart the server, so the next run adopts a healthy pre-existing sidecar normally instead of replacing it.
 
 *Needs:* a live sidecar, a book mid-render, OS-level process-kill access, ability to bind a foreign listener on `:9000`, ability to start a fresh sidecar manually, and ability to set environment variables on the server. *Criteria:* the bullets above; the code-level contracts are `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` (budget exhaustion) and the deadline timer in `server/src/tts/spawn-sidecar.ts` at line 694 (`findListenerPid`'s `deadlineMs` parameter). *Cost:* ~2 minutes — Scenario 1 takes ~1 minute (one sidecar kill, one foreign listener binding, supervisor observation); Scenario 2 takes ~1 minute (one manual sidecar start, one SIDECAR_NEVER_ADOPT run, deadline observation). Can run sequentially or in separate sessions.
-### A44 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
+### A43 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
 
 PR #2402 fixes the #1969 `voice-mismatch` false-positive: the render-integrity
 gate now rebuilds a character's persisted audition centroid reference when its
@@ -2684,70 +2614,7 @@ must be **rebuilt for the new voice**, not reused against the old speaker's.
 reassignment, one re-render. Records A23's final sub-check ("no
 `voice-mismatch` rows").
 
-### A45 · The `speaker-qa.txt` reqHash fix actually drives a one-time `pip-in-place` reinstall on a real venv ([#2586](https://github.com/dudarenok-maker/Castwright/issues/2586), PR #2588) · **no GPU needed, sidecar venv only**
-
-PR #2588 hashes `speaker-qa.txt` into `reqHash` (`resolveRequired` in
-`venv-migration.mjs`, AND — after pass-3/pass-4 review caught the first landing
-missing it — `zip-validate.ts`'s separate `validateUpgradeZip` producer, which
-the in-app zip-upload upgrade route and `apply.ts`'s `pipInstall` gate both
-read). The decision logic (`decideVenvAction`/`classifyVenvState`) is
-exhaustively unit-tested against synthetic stamps, and the two hash producers
-are now pinned equal against each other by a test that builds matching
-requirements content on disk and in a real zip (`zip-validate.test.ts`). What
-none of that proves is that a REAL venv with a stamp recorded under the old
-2-file hash actually gets `pip-in-place`'d — not `noop`, not a full rebuild —
-and that the resulting environment carries `speaker-qa.txt`'s current pins
-(`speechbrain==1.1.0`, `huggingface_hub==0.36.2` as of this PR) afterward.
-
-Two real reinstall paths write two different files, so the criteria below are
-per-path — don't conflate them. `.req-hash` (`upgrade/apply.ts:298-308`) is
-written **only** by the in-app zip-upload path; `.venv-stamp.json` is written
-**only** by `bootstrap-venv.mjs`'s own path (Pinokio's Update action). Neither
-run writes the other file, so "both files now record the new hash" is not a
-real, checkable outcome — pick one path and check the one file it owns.
-
-The zip-upload path also needs a real pre-existing `.req-hash` to compare
-against, not a fresh one: `apply.ts:134`'s gate is
-`ctx.reqHash && ctx.reqHash !== steps.readReqHash()`, so on a venv with **no**
-prior `.req-hash` file at all, any non-null `ctx.reqHash` triggers
-`pip-in-place` regardless of whether `speaker-qa.txt` is in the hash — that
-run would pass a naive "did pip-in-place happen" check even with this PR
-fully reverted, and prove nothing about the fix. Seed a real OLD 2-file hash
-first (below) so the run being tested is a genuine hash-mismatch, not a
-first-ever-write.
-
-**Path A — Pinokio Update (`.venv-stamp.json`):**
-- Take a real sidecar venv whose `.venv-stamp.json` predates this PR (`reqHash`
-  computed from `[overlay, base]` only — any pre-#2588 install qualifies).
-- Run Pinokio's Update action (`pinokio-scripts/update.js`, which runs
-  `bootstrap-venv.mjs`).
-- Confirm the run performs a `pip-in-place` install (not a full rebuild, not a
-  `noop`) — `python-tag`/`profile` are unchanged, so `decideVenvAction` should
-  classify strictly on the `reqHash` mismatch.
-- Confirm `speaker-qa.txt`'s pins (`speechbrain`, `huggingface_hub`) are
-  present at their pinned versions afterward, and that `.venv-stamp.json` now
-  records the new 3-file hash so a second Update run is a `noop`.
-
-**Path B — in-app zip-upload upgrade (`.req-hash`):**
-- Run the zip-upload upgrade once against a build that predates this PR (or
-  hand-write a `.req-hash` file containing the old `[overlay, base]` hash) so
-  a real prior value exists to mismatch against.
-- Run the zip-upload upgrade again (Account → Application updates → stage a
-  release zip → Apply, driving `upgrade/apply.ts`) against a build carrying
-  this PR's `speaker-qa.txt`-inclusive hash.
-- Confirm this second run performs a `pip-in-place` install specifically
-  because of the `reqHash` mismatch (not merely because `.req-hash` was
-  absent — that's the false-positive path above) and that `speaker-qa.txt`'s
-  pins land in the venv afterward.
-- Confirm `.req-hash` now records the new 3-file hash so a third run is a
-  `noop`.
-
-*Needs:* sidecar venv only, no GPU. *Criteria:* Path A's four bullets OR
-Path B's four bullets — one path is sufficient, they exercise the same
-`decideVenvAction`/`classifyVenvState` logic through different producers.
-*Cost:* one pip-in-place reinstall, once, on an old-stamped venv.
-
-### A46 · Voice-design language gate actually blocks the three design sites before they reach a live sidecar, and doesn't false-positive when set (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)) · **single 8 GB card, live Qwen sidecar**
+### A44 · Voice-design language gate actually blocks the three design sites before they reach a live sidecar, and doesn't false-positive when set (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)) · **single 8 GB card, live Qwen sidecar**
 
 `routes/cast-design.ts:768`, `routes/qwen-voice.ts:578`, and
 `routes/single-design.ts:304` (the design's sites 6-8) each resolve a book's
@@ -2785,7 +2652,7 @@ on one book.
 
 ## Group B — local Ollama analyzer only
 
-A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4. B2 rides the characterId-drift re-analysis's own real book fixture instead of the generic chapter and has no CPU-only case.
+A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
 ### B1 · Analysing view honesty for local analyzers (plan 216)
 
@@ -2827,54 +2694,7 @@ at K=4 with a monotonic per-phase bar.
 > criteria as currently written would not be trustworthy. Re-derivation is
 > itself owed, not attempted here.
 
-### B2 · Stage-1 returns cast names in the manuscript's own script ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR #2317)
-
-`buildStage1ChapterInbox` never bound `name`/`aliases` to the book's script. `languagePreamble` already bound `tone`/`role`/`description`/`attributes` for a non-English book and still does — names were the one identifying field left free, and they drifted: *Ночной дозор*'s cast lists handed to stage-2 went from **0 of 75 Latin-named** (2026-08-06) to **42 of 71, 59%** (2026-08-13) across two runs of the same book with the same model weights and the same prompt; chapter 2 came back 15/15 Latin. A controlled 5× replay of the recorded stage-1 prompt reproduced 100% Latin 5/5 against the recorded response's 0/3.
-
-The fix is a prompt instruction, so **the three unit tests prove the rule renders — not that the model obeys it.** That gap is the whole reason this row exists: the defect was non-deterministic model behaviour, and only a real analyzer on a real non-English book can show the roster comes back in Cyrillic.
-
-**Fold this into the characterId-drift re-analysis** (run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7; that row's evidence retired from this register per the owner's discharged-row ruling) — it re-analyses *Заказ Коалфолла* (ru), which is exactly the fixture this needs, so both checks discharge from one re-analysis. Observe, on that same run:
-
-- Every character's `name` in the resulting `cast.json` is in **Cyrillic**, matching how the book's prose spells it — zero Latin transliterations (`Мэйрин`, not `Mairin`). The pre-fix failure looks like a roster that is *readable* but Latin.
-- Every `id` is still **ASCII kebab-case** — the carve-out. A roster that came back with a Cyrillic *id* (`борис-игнатьевич`, observed on the 2026-08-06 run) is a failure of this row even if every name is correct, because ids are the join key.
-- **No character gained a second id.** The characterId-drift re-analysis already checks `mairin` / `coalfall-dragon` survive; this row adds that the roster has no *near-duplicate pair* (e.g. both `mairin` and `mayrin`, or a name-corrected character appearing twice). That is the split-identity risk the carve-back clause exists to prevent, and it is the one way this change could make things worse rather than better.
-- Note the roster size against the recorded 13-character baseline — a drop would mean the added block cost recall.
-
-If the run instead happens on a book whose language was never declared (imported before fs-2, or left undecided at the confirm screen), that is a **more** valuable observation, not a less valuable one: those books get an empty `languagePreamble`, so this block is their only protection.
-
-*Needs:* a real analyzer (local Ollama or Gemini) and a real non-English book — no TTS/GPU rendering. *Criteria:* this row. *Cost:* none beyond the characterId-drift re-analysis, if run together.
-
-> **Wave-3 step 5, 2026-08-20 — STILL OWED, same run as the characterId-drift
-> re-analysis.** Rode that re-analysis of *Заказ Коалфолла* per this row's own
-> instruction. All Cyrillic names (zero Latin transliterations) and
-> all-ASCII-kebab-case ids **passed**. **"No character gained a second id"
-> FAILED** — exactly the near-duplicate pair (`brann-wire`/`berrin-wire`
-> duplicating `brann-weir`/`berrin-weir`) this row's own text names as the
-> worst-case outcome; full evidence and root cause:
-> `docs/testing/onbox-wave3-results/step-5-group-b.md`. Roster size moved
-> 13→16, not "still 13" as the row anticipated as the default case. Same
-> defect as the characterId-drift row, filed as
-> [#2536](https://github.com/dudarenok-maker/Castwright/issues/2536)
-> (see #2536).
-
-> **Wave-4 step 7, 2026-08-21 — STILL OWED, new defect (not #2536), after
-> #2536's fix merged.** Re-ran the same fixture (Castwright#2570) against code
-> including PR #2562. Cyrillic-names and no-second-id criteria **passed**
-> (the near-duplicate pair was itself cleaned up this run, via the
-> characterId-drift re-analysis's own discharge — see
-> `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`).
-> **"Every id is ASCII kebab-case" FAILED again, for a different reason**: the
-> established id `oduvan` was retired IN FAVOUR OF a freshly-minted Cyrillic
-> id `одуван` (`cast-id-history.json`: `"oduvan": "одуван"` — backwards from
-> the direction three other retirements took in the same run). Not a
-> surname-drift case, not a `safeId`/transliteration bug (Cyrillic ids are
-> correct-by-design for genuinely new characters, plan 219) — the defect is
-> the retirement direction choice for an already-matched character. Filed as
-> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584). Full
-> evidence: `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`. **Row
-> stays owed.**
-
-### B3 · An unset book hits the analysis language gate, the prompt resolves it, and analysis then selects the right conventions table (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md))
+### B2 · An unset book hits the analysis language gate, the prompt resolves it, and analysis then selects the right conventions table (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md))
 
 `resolveBookLanguageForManuscript` (`routes/analysis.ts:3160-3167`, the
 design's site 1) is the 25,063-line path the design gives its own
@@ -3478,7 +3298,7 @@ Observe:
 > `onbox-sitting-device-browser.md` alongside E1, E2, E3, E5, E6, E9, E10,
 > and `onbox-sitting-plan.md` §2.1/§2.2 are corrected to move E7's
 > rendered-half debt from the wave-3 agent-runnable set to that operator
-> pack — the same pattern already used for A33/A43.
+> pack — the same pattern already used for A32/A42.
 > `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
 >
 > **Wave-4 step 5d, 2026-08-21 — split further, shrinks.** Observations 1, 2,
@@ -3684,6 +3504,20 @@ exists. *Criteria:* spec §On-box acceptance
 > §4. `docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md`.
 > Filed as [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
 > (see #2537).
+
+> **Wave-5 step 3, 2026-08-23 — reconfirmation only, disposition unchanged
+> (STILL OWED).** Re-ran item (1) (the full real-workspace run) from a
+> **second checkout** (`wt-2606-onbox-wave5`, not the primary), after
+> confirming from source that the script's only filesystem write is its own
+> JSON report — never the workspace. Observed figures matched the 2026-08-14
+> discharge run's values everywhere directly comparable (23 book rows, none
+> blank; both CJK books `spokenTotal>0`; `orphanSpoken`/`dashOnlySpoken`
+> shapes unchanged; `Ночной дозор (Tetralogy)` at `spokenTotal=2122`,
+> `orphanSpoken=32`, matching the post-parser-fix baseline). No regression
+> found. Items (2) and (3) were not attempted this step (out of its scope);
+> both remain owed exactly as recorded above. No register edit was made by
+> that step itself — this note folds its verdict in per wave-5 step 6.
+> Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
 
 ## Group G — GitHub Actions itself
 
