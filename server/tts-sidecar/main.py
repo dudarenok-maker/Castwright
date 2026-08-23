@@ -113,6 +113,37 @@ logging.basicConfig(
 log = logging.getLogger("sidecar")
 
 
+def _measure_nvidia_dll_provenance(onnxruntime) -> Optional[tuple]:
+    """Best-effort: of the DLLs `preload_dlls()` was asked to find, how many
+    actually exist under `<site-packages>/nvidia/<pkg>/bin` -- the directory
+    `extraRuntimeSteps` (install-ort.mjs) installs into. `preload_dlls()`
+    itself only reports on-load *failure*, never *where* a DLL that loaded
+    came from, so a clean capture alone cannot distinguish "loaded from
+    nvidia/" from "resolved off PATH via a system CUDA toolkit or torch"
+    (pass-4 review finding P2, PR #2617). Uses onnxruntime's own (private)
+    `_get_nvidia_dll_paths` to build the expected path list -- the same
+    helper `preload_dlls()` itself calls -- so this stays in lockstep with
+    whatever DLL set the installed onnxruntime build actually wants.
+
+    Returns `(found, total)`, or `None` when the running onnxruntime build
+    doesn't expose what this needs (an older build, or a test double) --
+    callers must not assume nvidia/ provenance in that case either.
+    """
+    get_paths = getattr(onnxruntime, "_get_nvidia_dll_paths", None)
+    ort_file = getattr(onnxruntime, "__file__", None)
+    if get_paths is None or not ort_file:
+        return None
+    try:
+        site_packages = os.path.dirname(os.path.dirname(os.path.abspath(ort_file)))
+        dll_paths = get_paths(sys.platform == "win32")
+        found = sum(
+            1 for p in dll_paths if os.path.isfile(os.path.join(site_packages, *p))
+        )
+        return found, len(dll_paths)
+    except Exception:
+        return None
+
+
 def _preload_ort_cuda_dlls() -> str:
     """#2600 (review finding 1, PR #2617): installing `nvidia-cudnn-cu12` (see
     install-ort.mjs's `extraRuntimeSteps`) lands the cuDNN DLLs on disk but does
@@ -143,7 +174,7 @@ def _preload_ort_cuda_dlls() -> str:
     components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
     `site-packages/nvidia/...` is never even looked at; on this box that path
     resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
-    same "torch/lib, not the installed cuDNN" shape register row A37 already
+    same "torch/lib, not the installed cuDNN" shape register row A36 already
     recorded as not fixing the bug. Passing `directory=""` (falsy, but not
     `None`) skips the `torch/lib` branch and, per the same source, joins the
     FULL relative path under site-packages instead — i.e. it looks under
@@ -166,6 +197,15 @@ def _preload_ort_cuda_dlls() -> str:
     "Failed to load" line means the CUDA execution provider may still silently
     fall back to CPU, which is logged as a WARNING, not an INFO line, and
     reflected in the returned status.
+
+    Pass-4 review finding P4 (PR #2617), residue of N9(c): the "Failed to
+    load" / "Skip loading" substrings this guard matches on are onnxruntime's
+    OWN prose, not pinned anywhere to `ONNXRUNTIME_GPU_CONSTRAINT` -- a future
+    onnxruntime release that rewords its per-DLL failure message would fall
+    through every branch below and report `preloaded` again with nothing
+    having loaded, the exact #2600 symptom reopened inside the guard written
+    to close it. Unreachable at the pinned version; re-check this coupling by
+    hand whenever that constant (`install-ort.mjs`) is bumped.
 
     Returns a status string for tests; not part of any external contract.
     """
@@ -212,14 +252,14 @@ def _preload_ort_cuda_dlls() -> str:
         # `directory`. If it ever fires here, preload_dlls() looked at
         # nothing at all and torch's own bundled DLLs are what the CUDA
         # execution provider will find -- the exact "torch/lib, not the
-        # installed cuDNN" shape register row A37 recorded as NOT fixing the
+        # installed cuDNN" shape register row A36 recorded as NOT fixing the
         # bug. That is a distinct, worse outcome than a genuine preload and
         # must not be folded into "preloaded".
         log.warning(
             "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
             "torch was already imported (see lines above) -- it fell back to torch's "
             "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
-            "nvidia/<pkg>/bin, which register row A37 already recorded as not fixing the "
+            "nvidia/<pkg>/bin, which register row A36 already recorded as not fixing the "
             "CUDA-fallback bug."
         )
         return "torch-skip"
@@ -236,10 +276,41 @@ def _preload_ort_cuda_dlls() -> str:
             "CUDA execution provider is not available on this install regardless."
         )
         return "no-cuda-build"
-    log.info(
-        "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
-        "DLLs (nvidia/<pkg>/bin -- see lines above)."
-    )
+    # Pass 4 review finding P2 (PR #2617): an empty `output` here means every
+    # DLL `preload_dlls()` tried is loadable *from somewhere* -- it does NOT
+    # mean it came from `nvidia/<pkg>/bin` (where `extraRuntimeSteps` in
+    # install-ort.mjs installs). `preload_dlls()` has a second loop that
+    # retries, by bare filename, any DLL it didn't find at its full
+    # `nvidia/<pkg>/bin` path -- the Windows loader then resolves that name
+    # off the default search path (PATH), which can hand back a system CUDA
+    # toolkit's or torch's own bundled copy instead, and prints nothing
+    # either way. So provenance has to be measured, not assumed from a clean
+    # capture.
+    provenance = _measure_nvidia_dll_provenance(onnxruntime)
+    if provenance is None:
+        log.info(
+            "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+            "DLLs from somewhere loadable -- this onnxruntime build does not expose enough "
+            "to confirm whether they came from nvidia/<pkg>/bin or resolved off PATH instead."
+        )
+    else:
+        found, total = provenance
+        if found == total:
+            log.info(
+                "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+                "DLLs; all %d expected files were found under nvidia/<pkg>/bin.",
+                total,
+            )
+        else:
+            log.warning(
+                "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+                "DLLs, but only %d of %d expected files were found under nvidia/<pkg>/bin -- "
+                "the rest resolved via preload_dlls()'s bare-name PATH fallback (e.g. a "
+                "system CUDA toolkit or torch's own bundled DLLs), not the installer's own "
+                "runtime -- see register row A36's Named assumption.",
+                found,
+                total,
+            )
     return "preloaded"
 
 
@@ -3903,9 +3974,10 @@ class ReservationLedger:
 _reclaim_failure_traced = False
 
 
-def _reclaim_device_cache(device_key: str) -> None:
+def _reclaim_device_cache(device_key: str) -> bool:
     """Bare `gc.collect()` + `torch.cuda.empty_cache()`, with no target model
-    to unload first (#1976).
+    to unload first (#1976). Returns True if the reclaim ran (CUDA available +
+    no exception), False if CUDA is unavailable or an exception occurred.
 
     Every reclaim ELSEWHERE in this file — `unload()`, `unload_design()`,
     `maybe_free_idle*` (Qwen/Coqui), the `_idle_evict_steps` ladder — is a
@@ -3957,15 +4029,17 @@ def _reclaim_device_cache(device_key: str) -> None:
 
     Best-effort: any torch/CUDA failure (no CUDA build, a poisoned context) is
     swallowed here, matching every other reclaim path in this file — this is
-    a last-resort cushion, not a step whose failure should propagate."""
+    a last-resort cushion, not a step whose failure should propagate. Returns
+    False so callers can distinguish "ran" from "did not run"."""
     global _reclaim_failure_traced
     try:
         import torch  # type: ignore
 
         if not torch.cuda.is_available():
-            return
+            return False
         gc.collect()
         torch.cuda.empty_cache()
+        return True
     except Exception:
         log.warning(
             "stranded-cache reclaim failed for %s",
@@ -3973,6 +4047,7 @@ def _reclaim_device_cache(device_key: str) -> None:
             exc_info=not _reclaim_failure_traced,
         )
         _reclaim_failure_traced = True
+        return False
 
 
 # #1993 review (C1) — the per-device reclaim cooldown. A module constant, not
@@ -4014,7 +4089,7 @@ class PlacementController:
         reserve_mb: Optional[Callable[[], int]] = None,
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
-        reclaim: Optional[Callable[[str], None]] = None,
+        reclaim: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.probe = probe
         self.footprints = footprints if footprints is not None else FootprintTable()
@@ -8183,6 +8258,51 @@ def _cuda_vram_mb_per_device() -> dict[str, dict[str, float]]:
         return {}
 
 
+def _cuda_memory_stats_per_device() -> dict[str, dict[str, int]]:
+    """{"cuda:N"|"rocm:N": {"reserved", "allocated", "inactive_split",
+    "num_alloc_retries"}} for every CUDA-API-visible device, sourced from
+    `torch.cuda.memory_stats(i)` (#2423 — instrument for #1996's design
+    question).
+
+    Neither `_cuda_vram_mb_per_device` above (only `reserved_mb`/`total_mb`)
+    nor `debug_memory`'s `cuda` block (current-device-only, no
+    `inactive_split`) can discriminate #1996's two candidate causes:
+    uncollected cache (a scheduled reclaim fixes it) vs allocator
+    fragmentation (`empty_cache()` can never return it) — `inactive_split`
+    is the field that tells them apart. Values are raw units straight from
+    `memory_stats` (bytes for the byte-valued keys, a count for
+    `num_alloc_retries`) — deliberately NOT converted to MB like the
+    neighboring `_mb` fields, since these are new keys with their own
+    semantics, not a replacement for them.
+
+    Device keys use `probe_capacity`'s `{kind}:{i}` format (`kind = "rocm"
+    if _cuda_is_rocm() else "cuda"`), NOT a hardcoded `cuda:` prefix like
+    `_cuda_vram_mb_per_device` — copying that pattern would mislabel an
+    AMD/ROCm box's devices. `torch.cuda.memory_stats` is a CUDA/ROCm-only
+    API, so non-GPU kinds (`cpu`, `mps`) are simply never emitted here.
+
+    Never raises; {} when CUDA is unavailable — same fail-open contract as
+    `_cuda_vram_mb_per_device`."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return {}
+        kind = "rocm" if _cuda_is_rocm() else "cuda"
+        out: dict[str, dict[str, int]] = {}
+        for i in range(torch.cuda.device_count()):
+            stats = torch.cuda.memory_stats(i)
+            out[f"{kind}:{i}"] = {
+                "reserved": stats.get("reserved_bytes.all.current", 0),
+                "allocated": stats.get("allocated_bytes.all.current", 0),
+                "inactive_split": stats.get("inactive_split_bytes.all.current", 0),
+                "num_alloc_retries": stats.get("num_alloc_retries", 0),
+            }
+        return out
+    except Exception:
+        return {}
+
+
 class DeviceLedger:
     """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
     (_sample_card). Read from three thread contexts (the _memory_watchdog
@@ -9695,6 +9815,10 @@ def debug_memory() -> dict[str, Any]:
     except Exception:
         pass
     out["cuda"] = cuda
+    # #2423 — per-device memory_stats() block (reserved/allocated/
+    # inactive_split/num_alloc_retries), the instrument #1996's design
+    # decision needs. Additive: the `cuda` block above is untouched.
+    out["memory_stats"] = _cuda_memory_stats_per_device()
     return out
 
 
@@ -9707,6 +9831,29 @@ async def debug_codec_timing() -> dict:
 async def debug_codec_timing_reset() -> dict:
     _codec_timing_reset()
     return {"ok": True}
+
+
+@app.post("/debug/reclaim")
+def debug_reclaim() -> dict[str, Any]:
+    """One bare `_reclaim_device_cache()` bracketed by before/after per-device
+    `memory_stats` snapshots, in a single response (#2423). #1996's design
+    decision (scheduled reclaim vs a boundary-recycle redesign) hinges on
+    whether a bare reclaim recovers the stranded pool — this is the only
+    surface that brackets `empty_cache()` with nothing else in between (a
+    load/unload cycle would conflate the reclaim with an allocation pass).
+
+    Not inert: it frees real memory when it runs. The memory watchdog checks
+    an RSS threshold (see main.py:8662, `if warn_threshold > 0 and rss >= ...`)
+    before calling `_reclaim_host_and_vram()`; this route calls `_reclaim_device_cache`
+    directly without that check, so it can trigger the identical `gc.collect()` +
+    `empty_cache()` operation regardless of RSS — even below the watchdog's
+    threshold. No auth wrapper, matching every other `/debug` route in this family
+    (`debug_codec_timing`/`debug_codec_timing_reset` above) — loopback-bound by
+    default via LOCAL_TTS_HOST configuration."""
+    before = _cuda_memory_stats_per_device()
+    reclaimed = _reclaim_device_cache("debug-reclaim")
+    after = _cuda_memory_stats_per_device()
+    return {"before": before, "reclaimed": reclaimed, "after": after}
 
 
 @app.post("/load")

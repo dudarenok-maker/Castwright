@@ -217,7 +217,7 @@ def test_preload_torch_skip_is_not_reported_as_preloaded(monkeypatch, caplog) ->
     neither `nvidia/<pkg>/bin` nor anywhere else: it prints exactly one line
     ("Skip loading CUDA and cuDNN DLLs since torch is imported.") and returns,
     leaving torch's own bundled DLLs as whatever the CUDA execution provider
-    finds -- the same torch/lib-only outcome register row A37 already
+    finds -- the same torch/lib-only outcome register row A36 already
     recorded as not fixing the bug. That must be reported distinctly, not
     folded into "preloaded" just because no "Failed to load" line appeared."""
 
@@ -246,6 +246,70 @@ def test_preload_torch_skip_is_not_reported_as_preloaded(monkeypatch, caplog) ->
         r.levelno == logging.WARNING and "skipped its own DLL search" in r.message
         for r in caplog.records
     ), "the torch-skip outcome must be logged at WARNING, not folded into a quiet success"
+
+
+def test_preload_success_with_zero_nvidia_provenance_is_not_claimed(
+    monkeypatch, caplog, tmp_path
+) -> None:
+    """Pass 4 review finding P2 (PR #2617): an empty capture from
+    `preload_dlls()` means every DLL it was asked for loaded from
+    *somewhere* loadable -- it does NOT mean any of them came from
+    `nvidia/<pkg>/bin`, the directory `extraRuntimeSteps` (install-ort.mjs)
+    actually installs into. `preload_dlls()` has a second loop that retries,
+    by bare filename off PATH, any DLL missing from `nvidia/`, and prints
+    nothing on that path either -- so a system CUDA toolkit or torch's own
+    bundled DLLs can produce the exact same clean capture. Simulate that
+    shape: none of the expected DLLs exist on disk under `nvidia/<pkg>/bin`,
+    yet `preload_dlls()` reports a clean run. The fix must measure this
+    (via onnxruntime's own `_get_nvidia_dll_paths`) and report it at WARNING
+    with the real count, not log an unconditional INFO naming
+    `nvidia/<pkg>/bin` as the source."""
+
+    def _clean_no_output(**kwargs) -> None:
+        pass  # nothing printed -- what a PATH-resolved (not nvidia/-resolved) success looks like
+
+    def _fake_get_nvidia_dll_paths(is_windows: bool):
+        return [
+            ("nvidia", "cudnn", "bin", "cudnn64_9.dll"),
+            ("nvidia", "cublas", "bin", "cublas64_12.dll"),
+        ]
+
+    fake_onnxruntime_dir = tmp_path / "site-packages" / "onnxruntime"
+    fake_onnxruntime_dir.mkdir(parents=True)
+    fake_init = fake_onnxruntime_dir / "__init__.py"
+    fake_init.write_text("")
+    # Deliberately do NOT create nvidia/cudnn/bin or nvidia/cublas/bin under
+    # tmp_path/site-packages -- zero of the two expected DLLs exist there.
+
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        _module_with(
+            "onnxruntime",
+            preload_dlls=_clean_no_output,
+            __version__="1.27.0",
+            cuda_version="12.9",
+            __file__=str(fake_init),
+            _get_nvidia_dll_paths=_fake_get_nvidia_dll_paths,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="sidecar"):
+        result = main._preload_ort_cuda_dlls()
+
+    assert result == "preloaded"
+    assert not any(
+        "all 2 expected files were found under nvidia" in r.message for r in caplog.records
+    ), "zero of the expected DLLs exist under nvidia/<pkg>/bin -- must not claim full nvidia/ provenance"
+    assert any(
+        r.levelno == logging.WARNING
+        and "0 of 2 expected files were found under nvidia" in r.message
+        for r in caplog.records
+    ), (
+        "a success where zero of the expected DLLs are found under nvidia/<pkg>/bin must be "
+        "reported at WARNING with the measured count, not silently folded into the plain "
+        "'loaded' INFO line"
+    )
 
 
 def test_fresh_import_of_main_does_not_import_torch() -> None:

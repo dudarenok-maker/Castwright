@@ -42,14 +42,14 @@ function separatorOffsets(body: string): number[] {
   return offsets;
 }
 
-export function annotateSceneBreaks(sentences: SentenceOutput[], body: string): void {
+export function annotateSceneBreaks(sentences: SentenceOutput[], body: string, dashIsDialogueMarker: boolean = false): void {
   const separators = separatorOffsets(body);
   if (separators.length === 0 || sentences.length === 0) return;
 
   // Parallel array of each sentence's raw body offset (or null when unlocatable).
   // locateSentenceOffsets advances its cursor only on a match, so the non-null
   // offsets are monotonically increasing in index order.
-  const offsets = locateSentenceOffsets(sentences, body);
+  const offsets = locateSentenceOffsets(sentences, body, dashIsDialogueMarker);
 
   for (const sep of separators) {
     // Last sentence that located strictly before this separator.

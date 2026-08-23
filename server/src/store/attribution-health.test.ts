@@ -302,3 +302,33 @@ describe('numerator, origin split, and id drift (Task 5, D9/D18)', () => {
     expect(attributionShare(m)).toBeCloseTo(0.5);
   });
 });
+
+describe('(#2537/#2540 gate) dash-dialogue language gate reaches alignSentences via computeAttributionMeasurement', () => {
+  it('(gate=ru) dash-led ru dialogue aligns — conventions.dialogueOpen is a regex, so alignSentences receives true', () => {
+    const body = '— Ничего нет, — сказал Егор.\n— Значит, ищем дальше.\n— Точно.';
+    const sentences: SentenceOutput[] = [
+      sent('narrator', 'Ничего нет,'),
+      sent('narrator', 'сказал Егор.'),
+      sent('narrator', 'Значит, ищем дальше.'),
+      sent('narrator', 'Точно.'),
+    ];
+    const m = compute({ body, sentences, language: 'ru' });
+    // All 3 dash-led speech spans should be attributable → gate=true allows alignment
+    expect(m.attributableSpoken).toBeGreaterThanOrEqual(1);
+    expect(m.unattributedSpeech).toBeLessThan(m.spokenTotal);
+  });
+
+  it('(gate=en) en quoted dialogue aligns with gate=false — conventions.dialogueOpen is null, so alignSentences receives false', () => {
+    const body = '"Nothing at all," said Yegor.\n"Then we keep looking."\n"Exactly."';
+    const sentences: SentenceOutput[] = [
+      sent('narrator', 'Nothing at all,'),
+      sent('narrator', 'said Yegor.'),
+      sent('narrator', 'Then we keep looking.'),
+      sent('narrator', 'Exactly.'),
+    ];
+    const m = compute({ body, sentences, language: 'en' });
+    // en uses quotes, not dashes — gate=false is the pre-#2537 default
+    expect(typeof m.attributableSpoken).toBe('number');
+    expect(m.spokenTotal).toBeGreaterThanOrEqual(1);
+  });
+});

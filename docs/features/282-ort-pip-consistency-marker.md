@@ -288,9 +288,9 @@ existing box) was run end-to-end on real hardware during implementation and is
 are owed — five owed rows, plus one Blocked entry. See `docs/testing/ort-marker-onbox-acceptance.md` for
 the full evidence and per-criterion procedures, and
 `docs/testing/onbox-acceptance-register.md` for the register rows: a fresh NVIDIA
-bootstrap (A37), the reported bug itself — in-app Qwen3 install (A38), an AMD box
-(Blocked, not owed), a clobbered venv (A39), the Pinokio update path (E7), and
-the in-app upgrade path (A40, an addition not in the spec's own six — Task 8 wired
+bootstrap (A36), the reported bug itself — in-app Qwen3 install (A37), an AMD box
+(Blocked, not owed), a clobbered venv (A38), the Pinokio update path (E7), and
+the in-app upgrade path (A39, an addition not in the spec's own six — Task 8 wired
 it and nothing proves it on real hardware). Apple Silicon is **not** a separate
 criterion: it takes the same skip/delete branch as cpu and amd, already covered by
 the AMD row's mechanism.

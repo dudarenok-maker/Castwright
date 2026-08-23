@@ -228,6 +228,17 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // `onnxruntime-gpu` line never lands there and aborts `pip install` on that
 // platform. The swap in this file is reached only for the nvidia profile
 // (win/linux), so pinning it here never touches the mac path.
+//
+// ALSO check main.py's `_preload_ort_cuda_dlls` when bumping this (pass-4
+// review finding P4, PR #2617): its output guard string-matches two of
+// onnxruntime's OWN prose lines — "Failed to load" and "Skip loading" — to
+// decide whether preload_dlls() actually did anything. Those strings are not
+// pinned to this constant anywhere and a onnxruntime release that rewords its
+// per-DLL failure message would make the guard fall through to a false
+// "preloaded" again (the exact #2600 symptom, reopened inside the guard
+// written to close it) with nothing here to catch it. Not fixed now because
+// it's unreachable at the pinned version -- but re-check it by hand on any
+// bump of this constant.
 const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.26,<1.27';
 
 /**
@@ -304,7 +315,7 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // platform-aware — a design question, not this fix's).
 //
 // NOT fixed here, deliberately deferred to on-box acceptance (register rows
-// A37–A40): onnxruntime's Windows DLL list ALSO wants
+// A36–A39): onnxruntime's Windows DLL list ALSO wants
 // `nvidia/cufft/bin/cufft64_11.dll` and `nvidia/cuda_runtime/bin/cudart64_12.dll`,
 // neither of which any pip step here installs. The working assumption is that
 // the box's own system CUDA 12.4 toolkit install supplies both via the default

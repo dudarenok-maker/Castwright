@@ -2,6 +2,7 @@ import type { SentenceOutput } from '../../handoff/schemas.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { ParagraphEvidence } from './types.js';
 import { alignSentences, type AlignedSentence } from './aligner.js';
+import { conventionsFor } from './lang/index.js';
 
 /* srv-59 Task 9b (spec §5.4). Second-pass re-query of the conversation
    windows crossExamine (Task 7) flagged as unresolved. Pure orchestration
@@ -209,7 +210,7 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
   const outcome: EscalationOutcome = { attempted: 0, applied: 0 };
   if (opts.flags.length === 0) return outcome;
 
-  const alignment = alignSentences(opts.sentences, opts.paras, opts.body);
+  const alignment = alignSentences(opts.sentences, opts.paras, opts.body, conventionsFor(opts.stageCall.language)?.dialogueOpen != null);
 
   // Group escalatable flags (a speech span with a windowId) by windowId,
   // in the order their windowId is first encountered.

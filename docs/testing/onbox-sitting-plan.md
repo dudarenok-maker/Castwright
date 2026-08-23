@@ -38,7 +38,7 @@ HTML, the staleness audit, or any existing run sheet.
 Every one of the 67 register rows appears **exactly once** across the three sets
 below. The arithmetic is stated under each table and reconciled in §6.
 
-### 2.1 Operator sittings (51 rows, 8 packs)
+### 2.1 Operator sittings (48 rows, 8 packs)
 
 These need the operator's GPU box — a live card, real engine residency, a real
 TTS sidecar, a real analyzer, or a real phone/browser on the LAN. Each is one
@@ -52,7 +52,7 @@ sitting; A1 is several sittings inside one pack.
 | `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A35 | 145 |
 | `onbox-sitting-cloning-identity.md` | A23, A25, A29, A30, A31, A41, A42, A43, A44 | 185 |
 | `onbox-sitting-multilanguage.md` | D1, D2, A36, E4 | 165 |
-| `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E7, E8 | 140 |
+| `onbox-sitting-device-browser.md` | E1, E2, E3, E6, E7, E8 | 135 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
 
 > **Wave-4 note (#2551 step 6), 2026-08-21.** This wave's retirements/
@@ -78,8 +78,9 @@ fails every intermediate commit in this chain, not just the one that would
 add the dangling link. #2454's final commit (once all eight packs exist)
 flips these back to real links. See #2463 for the incident this avoids. -->
 
-**Row count:** 4 + 9 + 7 + 8 + 9 + 4 + 7 + 1 = **49** (was 52 before wave 4's
-retirements/discharges — see the 2026-08-21 correction below).
+**Row count:** 4 + 9 + 7 + 8 + 9 + 4 + 6 + 1 = **48** (was 49 before this
+wave's re-bin — see the 2026-08-23 correction below moving E5 to wave-3
+agent-runnable).
 
 > **Correction, 2026-08-20 (wave-3 step 9 of `#2497`).** `#2497`'s wave-3
 > plan (`docs/testing/onbox-wave3-plan.md` §§2-3) re-derived A33 and A43 —
@@ -131,27 +132,119 @@ retirements/discharges — see the 2026-08-21 correction below).
 > discharged and removed the Cast/analysis `characterId` drift row (this
 > plan's old B3, `#2040`) after `#2536`'s fix landed — wave-3 set −1. Net:
 > wave-3 set stays **15**, total stays **67** — the two changes offset.
+>
+> **Correction, 2026-08-23 (wave 5 step 5, `#2611`) — the device-browser
+> pack's rows re-derived one at a time; six confirmed operator-only, one
+> (E5) moves out.** The pack was binned wholesale as an operator sitting
+> because its rows are "browser-shaped." Agents in this campaign have
+> browser automation, so that reasoning was checked against each row's own
+> `Needs:`/criteria line rather than accepted on the pack's framing. The
+> line applied: **listening, physical hardware, or a live GPU** is
+> operator-only; "needs a click-through" is not, by itself.
+>
+> - **E1** stays operator-only: its own text needs *"a clean macOS machine
+>   with Pinokio, plus a short Windows follow-up"* — a specific separate
+>   physical macOS machine (zero prior on-box exercise) plus native-Stop
+>   process reaping on the Windows box, neither reachable from a browser.
+> - **E2** stays operator-only: its own text needs *"a real phone [that]
+>   installs the mkcert root CA and completes pairing"* — physical
+>   hardware.
+> - **E3** stays operator-only: it runs *"same session as E2 — shares the
+>   phone + host setup"*, so it inherits E2's real-phone requirement.
+> - **E6** stays operator-only, **unchanged from the existing 2026-08-20
+>   correction above, which this note does not undo**: wave-3 step 7 found
+>   its rendered-half observations (1, 2, 4, 5, 6) need a real browser
+>   *watching a real card render* over a genuine multi-minute bootstrap —
+>   live process-timing observation, not a DOM click-through — "same
+>   boundary as A33/A43." Observation 6 (the failure path) is this row's
+>   one remaining debt and is still owed to the operator for the same
+>   reason.
+> - **E7** stays operator-only: its own text needs *"a machine with Pinokio
+>   installed, an existing pre-fix install, nvidia profile"* — a specific
+>   physical machine in a specific pre-fix state, with the card set to the
+>   nvidia profile to install Qwen3 — physical hardware and a live GPU.
+> - **E8** stays operator-only: its own text needs *"a phone or second
+>   machine paired over `castwright.local`"* and shares E2/E3's phone
+>   session — physical hardware.
+> - **E5 moves to wave-3 agent-runnable (§2.2).** Its own text: *"a
+>   one-time DevTools touch-emulation check... minutes, any machine"* — no
+>   real phone, no physical hardware axis, no GPU, no listening. The four
+>   controls are driven via Chrome DevTools' device-toolbar touch emulation
+>   (the same `Input.dispatchTouchEvent`/`.tap()` path wave-4 step 5d
+>   already used to discharge the "Review ›" chip), which this campaign's
+>   browser automation can drive directly. "Needs a click-through" is not,
+>   by itself, operator-only — this is that case in both directions: three
+>   of the four controls stay owed for an unrelated reason (0 books in this
+>   worktree's workspace), but the row's *hardware axis* was never real to
+>   begin with.
+>
+> **Effect on this plan's sets:** `onbox-sitting-device-browser.md` drops
+> from 7 rows/140 min to **6 rows/135 min** (E1, E2, E3, E6, E7, E8);
+> operator set 49 → **48**. E5 joins §2.2's wave-3 agent-runnable set,
+> discussed there. **This is a re-binning, not a discharge — E5's own owed
+> debt (three controls, per the register's own wave-4 correction) is
+> unchanged; only which pass runs it moves.**
 
-### 2.2 Wave-3 agent-runnable (15 rows)
+### 2.2 Wave-3 agent-runnable (16 rows: 14 runnable now + 2 opportunistic)
 
 These need no GPU and no operator box. They are excluded from every pack above
 and are run, on a machine of the agent's choosing, by the wave-3 pass — not by a
-pack child in this chain.
+pack child in this chain. Two of the sixteen (G1, G2) cannot be run **on
+demand** — see the opportunistic subsection below — but they are still part
+of this set, not the operator set or the blocked set: neither needs the
+operator's GPU box, hardware, or acquisition, only a real external event.
 
-A29, A39, A40, A41, A42, A45, B1, B4, C1, C2, C3, C4, E11, G1, G2. (Named
-by the number each row carried when last binned here — A27 and E8, old
-numbering, are removed entirely, discharged/moved to Blocked this wave; see
-the 2026-08-21 correction above. The register's own current numbering
-renames several of these — e.g. old A29 is now A27 — see the register's own
-correction note for the full renumbering. A45 — old numbering A48, PR #2588
-— added by the 2026-08-22 correction above. B3 (characterId drift, #2040)
-was discharged by PR #2585 and is removed entirely.)
+**Runnable now (14 rows):** A29, A39, A40, A41, A42, A45, B1, B4, C1, C2, C3,
+C4, E11, **E5**. (Named by the number each row carried when last binned
+here — A27 and E8, old numbering, are removed entirely, discharged/moved to
+Blocked this wave; see the 2026-08-21 correction above. The register's own
+current numbering renames several of these — e.g. old A29 is now A27 — see
+the register's own correction note for the full renumbering. A45 — old
+numbering A48, PR #2588 — added by the 2026-08-22 correction above. B3
+(characterId drift, #2040) was discharged by PR #2585 and is removed
+entirely. **E5** — the device-browser pack's DevTools touch smoke-check —
+joins this wave, 2026-08-23, moved from the operator set; see the
+correction note at the end of §2.1.)
+
+**Opportunistic (2 rows) — not runnable on demand, cannot be manufactured:**
+
+- **G1** — *"Needs: a real quarantined flaky test (naturally occurring, not
+  manufactured) — the shared precondition left for both remaining halves.
+  Cost: opportunistic — piggy-back on the next real quarantine event rather
+  than manufacturing one."* (register §G1). Wave 3 recorded this row STILL
+  OWED on both its debts, unresolved by the first live dispatch — an agent
+  cannot summon a real flaky test into existence to close it.
+- **G2** — *"Needs: nothing beyond a real `vX.Y.Z` tag push — i.e. the next
+  release cut."* (register §G2). Wave 3 recorded this STILL OWED, no
+  opportunity yet — an agent must not manufacture a release tag, and wave 3
+  explicitly declined to.
+
+Both rows were previously counted inside "wave-3 agent-runnable" without
+distinguishing that neither can actually be executed by an agent picking up
+that pass today — the pass would find nothing to run and the row would look
+neglected rather than correctly blocked-pending-an-event. Moving them to a
+clearly-labelled opportunistic subset does not discharge them and does not
+remove them from the register's owed count: they stay OWED, exactly as wave
+3 and wave 4 left them, and they stay inside the wave-3 set's row count
+(neither is operator-GPU-bound or acquisition-blocked, the definitions of
+the other two sets) — only the "runnable today" framing changes.
+
+> **Correction, 2026-08-23 (wave 5 step 5, `#2611`).** G1 and G2 were listed
+> among this set's 15 "wave-3 agent-runnable" rows even though the
+> register's own text for both already says neither can be discharged on
+> demand (G1: needs a real quarantined flaky test; G2: needs a real release
+> tag push). Re-binned here into the opportunistic subsection above with
+> their own rows quoted as evidence. **This is a re-binning, not a
+> discharge — both rows stay OWED, and the wave-3 set's total row count is
+> unchanged by this move** (E5 joining separately, per §2.1's correction,
+> is what took the set from 15 to 16).
 
 
 **Row count:** 6 (group A: A29, A39, A40, A41, A42, A45 — A27 discharged,
 removed) + 2 (B: B1, B4 — B2, B3 retired/discharged, removed) + 4 (C) + 1 (E11 — E8
-moved to Blocked, removed) + 2 (G) = **15** (was 16 before B3's discharge,
-18 before wave 4's three removals).
+moved to Blocked, removed) + 1 (E5, joined 2026-08-23 from the operator set) +
+2 (G, opportunistic — G1, G2) = **16** (was 15 before this wave's two moves,
+16 before B3's discharge, 18 before wave 4's three removals).
 
 ### 2.3 Blocked-on-acquisition (3 rows, 1 pack)
 
@@ -170,7 +263,7 @@ register). (Plain code span, not a link — same not-yet-written-sibling reason 
 
 ### Arithmetic
 
-**49** (operator) + **15** (wave-3) + 3 (blocked) = **67**. Every register row
+**48** (operator) + **16** (wave-3) + 3 (blocked) = **67**. Every register row
 appears exactly once. (Before wave 4 (the 2026-08-21 correction above), this
 read 52 + 18 + 4 = 74 — wave 4's retirements/discharges/reclassifications
 account for the full delta: −3 operator, −3 wave-3, −1 blocked, net −7,
@@ -179,7 +272,15 @@ sidecar-venv-only with no GPU requirement, joining the wave-3 agent-runnable
 set: 49 + 15 + 3 → 49 + 16 + 3, **67 → 68**. However, PR #2585 discharged
 B3 (characterId drift, #2040), which reduced wave-3 from 16 back to **15**,
 restoring the total to **67**. The merge that brought both PRs in did not
-fully account for this, creating a temporary 68-row miscounting now corrected.)
+fully account for this, creating a temporary 68-row miscounting now corrected.
+**Correction, 2026-08-23 (wave 5 step 5, `#2611`).** The device-browser
+pack's rows were re-derived one at a time: E5 (DevTools touch smoke-check)
+has no real-hardware axis and moves from operator to wave-3 agent-runnable —
+operator 49 → **48**, wave-3 15 → 16. Separately, G1 and G2 were re-binned
+from wave-3's plain "agent-runnable" framing into a labelled opportunistic
+subsection of the same set — no row count change from that move alone. Net:
+49 + 15 + 3 → 48 + 16 + 3, **still 67** — a re-binning, not a discharge; no
+row's OWED/DISCHARGED status changed.)
 ---
 
 ## 3. A16 — re-derived binning and reasoning
@@ -326,21 +427,26 @@ incident** is the reason this rule exists and is named here.
 
 - **Operator sittings:** 8 packs (A1's pack is several sittings inside one file).
 - **Total estimated operator minutes (runnable packs):** 110 + 155 + 155 + 145 +
-  185 + 165 + 140 = **1,055 minutes (~17.6 hours)** (was 1,130 before wave 4 —
-  qa-gate's old-A22 (10 min), cloning-identity's old-A43 (~20 min) and A33's
-  shrink (~15 min), and device-browser's old-E6 (30 min) all dropped out —
-  see §2.1's wave-4 note).
+  185 + 165 + 135 = **1,050 minutes (~17.5 hours)** (was 1,055 before this
+  wave — device-browser's E5 (5 min) moved to wave-3 agent-runnable,
+  2026-08-23, see §2.1's correction; was 1,130 before wave 4 — qa-gate's
+  old-A22 (10 min), cloning-identity's old-A43 (~20 min) and A33's shrink
+  (~15 min), and device-browser's old-E6 (30 min) all dropped out — see
+  §2.1's wave-4 note).
 - **Excluded from that total:**
   - **A1** — "multi-hour" (the row's own unchanged estimate; not a single number).
   - **F1** — discharged 2026-08-21 (repo owner, live end-to-end on a real
     device); Group F no longer exists in the register or this plan. The
     blocked pack now carries only the three remaining blocked rows'
     **50 minutes** (H1 + H2 + D3) for when the hardware lands.
-- **Wave-3 agent-runnable:** 15 rows (was 18 before wave 4 — A27 discharged
-  and old-E8 moved to Blocked and B2 retired 2026-08-21, see §2.1/§2.2; then
-  15 → 16 as A45/PR #2588 joined 2026-08-22, but 16 → 15 again when B3 was
-  discharged by PR #2585 2026-08-22), no GPU, run off-box by the
-  wave-3 pass — not counted in operator minutes.
+- **Wave-3 agent-runnable:** 16 rows — 14 runnable now + 2 opportunistic
+  (was 15 before this wave — E5 joined from the operator set and G1/G2 were
+  re-labelled opportunistic within this same set, 2026-08-23, see §2.2; was
+  18 before wave 4 — A27 discharged and old-E8 moved to Blocked and B2
+  retired 2026-08-21, see §2.1/§2.2; then 15 → 16 as A45/PR #2588 joined
+  2026-08-22, but 16 → 15 again when B3 was discharged by PR #2585
+  2026-08-22), no GPU, run off-box by the wave-3 pass — not counted in
+  operator minutes.
 
-**Grand reconciliation:** 49 operator + 15 wave-3 + 3 blocked = **67 rows**, the
+**Grand reconciliation:** 48 operator + 16 wave-3 + 3 blocked = **67 rows**, the
 register's full owed count, each exactly once.
