@@ -3113,8 +3113,9 @@ class KokoroEngine(Engine):
         """The ONNX Runtime provider list to pass to Kokoro, parsed from the
         KOKORO_ORT_PROVIDERS env var (a JSON string list the server injects from
         the accelerator profile, e.g. ["DmlExecutionProvider","CPUExecutionProvider"]).
-        Returns [] when the env is unset/blank/malformed → kokoro-onnx
-        auto-detects (today's behaviour)."""
+        Returns [] when the env is unset/blank/malformed -- the NVIDIA default
+        profile never sets this, so [] is the common case, not the exception;
+        see `_default_ort_providers` for what fills the gap."""
         raw = os.environ.get("KOKORO_ORT_PROVIDERS")
         if not raw:
             return []
@@ -3125,6 +3126,35 @@ class KokoroEngine(Engine):
         if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
             return parsed
         return []
+
+    def _default_ort_providers(self) -> list[str]:
+        """Providers to use when KOKORO_ORT_PROVIDERS is unset (#2631) --
+        which is the NVIDIA-default case, not an edge case: the server only
+        injects KOKORO_ORT_PROVIDERS for DirectML (AMD-Windows). We must NOT
+        let kokoro-onnx's own auto-detect decide here: its `find_spec(
+        'onnxruntime-gpu')` check is not a valid module identifier, so it
+        always resolves to None and silently forces CPU regardless of what
+        hardware is actually present. Instead resolve a candidate list from
+        ORT's own reported runtime state -- `get_available_providers()` plus
+        the `cuda_version` build signal `_preload_ort_cuda_dlls` already uses
+        -- with a CPU tail so ORT itself falls back if CUDA turns out
+        unusable. An explicit KOKORO_DEVICE=cpu is honoured: no CUDA is
+        offered even if the box has it."""
+        family, _ = _parse_device(self._requested_device)
+        if family == "cpu":
+            return ["CPUExecutionProvider"]
+        try:
+            import onnxruntime as rt  # type: ignore
+        except ImportError:
+            return []
+        try:
+            available = set(rt.get_available_providers())
+        except Exception:
+            available = set()
+        has_cuda_build = bool(getattr(rt, "cuda_version", ""))
+        if "CUDAExecutionProvider" in available and has_cuda_build:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        return ["CPUExecutionProvider"]
 
     def _dml_marker_path(self) -> str:
         """Sidecar-side marker recording that the DirectML self-test passed, so
@@ -3223,21 +3253,29 @@ class KokoroEngine(Engine):
         log.info("Loading Kokoro model=%s voices=%s ...", self._model_path, self._voices_path)
         # ORT providers: honour the injected KOKORO_ORT_PROVIDERS (the server
         # resolves them from the accelerator profile — e.g. DirectML on
-        # AMD-Windows) when present, else let kokoro-onnx auto-detect (CUDA when
-        # onnxruntime-gpu is installed, CPU otherwise). The constructor's
-        # providers= kwarg has come and gone across kokoro-onnx releases, so a
-        # TypeError falls back to the proven no-arg construction.
-        providers = self._resolve_ort_providers()
-        if providers:
-            try:
-                kokoro = Kokoro(self._model_path, self._voices_path, providers=providers)
-            except TypeError:
+        # AMD-Windows) when present. When it's unset -- the NVIDIA default --
+        # resolve our own default rather than falling through to kokoro-onnx's
+        # own construction, whose auto-detect is broken upstream and always
+        # forces CPU (#2631). Either way we build the ORT session ourselves
+        # and hand it to Kokoro.from_session() -- Kokoro.__init__ doesn't
+        # accept a providers= kwarg in version 0.5.0 (upstream limitation),
+        # and letting kokoro-onnx pick providers on its own is exactly the
+        # bug we're avoiding.
+        providers = self._resolve_ort_providers() or self._default_ort_providers()
+        if providers and hasattr(Kokoro, "from_session"):
+            log.debug("Creating ONNX session with providers=%s", providers)
+            import onnxruntime as rt  # type: ignore
+            session = rt.InferenceSession(self._model_path, providers=providers)
+            kokoro = Kokoro.from_session(session, self._voices_path)
+        else:
+            if providers:
                 log.warning(
-                    "kokoro-onnx ignored providers=%s (older release); using auto-detection.",
+                    "kokoro-onnx has no Kokoro.from_session (API drift) -- "
+                    "falling back to Kokoro(...), whose own auto-detect is "
+                    "broken upstream and will force CPU regardless of the "
+                    "resolved providers=%s.",
                     providers,
                 )
-                kokoro = Kokoro(self._model_path, self._voices_path)
-        else:
             kokoro = Kokoro(self._model_path, self._voices_path)
 
         # Enumerate the voice manifest. The API has drifted across kokoro-

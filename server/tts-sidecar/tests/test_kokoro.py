@@ -79,6 +79,18 @@ class _FakeKokoro:
         self._voices = list(voices) if voices is not None else list(_FAKE_VOICE_MANIFEST)
         self.calls: list[tuple[str, str, float, str]] = []
 
+    @classmethod
+    def from_session(
+        cls, session, voices_path: str, espeak_config=None, vocab_config=None
+    ) -> "_FakeKokoro":
+        """Support from_session classmethod for the fixed code path."""
+        instance = cls.__new__(cls)
+        instance.model_path = getattr(session, "_model_path", "")
+        instance.voices_path = voices_path
+        instance._voices = list(_FAKE_VOICE_MANIFEST)
+        instance.calls = []
+        return instance
+
     def get_voices(self) -> list[str]:
         return list(self._voices)
 
@@ -95,10 +107,25 @@ def fake_kokoro_module(monkeypatch):
     """Insert a fake `kokoro_onnx` module into sys.modules so
     KokoroEngine._ensure_loaded's `from kokoro_onnx import Kokoro` works
     without the real package. Yields the _FakeKokoro class so tests can
-    assert on its constructor args / call log."""
+    assert on its constructor args / call log.
+
+    #2631: _ensure_loaded now always resolves a provider list itself (even
+    when KOKORO_ORT_PROVIDERS is unset) and builds a real ORT
+    InferenceSession before handing it to Kokoro.from_session -- which
+    _FakeKokoro exposes. `fake_weight_files` only writes empty placeholder
+    files (not valid ONNX models), so the real onnxruntime.InferenceSession
+    would fail to load them; stub it out here so every test using this
+    fixture keeps exercising _FakeKokoro rather than real ORT.
+    """
+    from unittest.mock import MagicMock
+
     fake_mod = types.ModuleType("kokoro_onnx")
     fake_mod.Kokoro = _FakeKokoro  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+    monkeypatch.setattr(
+        "onnxruntime.InferenceSession",
+        MagicMock(return_value=MagicMock(_model_path="")),
+    )
     yield _FakeKokoro
 
 
@@ -112,6 +139,15 @@ class _ProvidersKokoro:
     def __init__(self, model_path: str, voices_path: str, providers: Any = None) -> None:
         _ProvidersKokoro.last_providers = providers
         self._voices = list(_FAKE_VOICE_MANIFEST)
+
+    @classmethod
+    def from_session(
+        cls, session, voices_path: str, espeak_config=None, vocab_config=None
+    ) -> "_ProvidersKokoro":
+        """Support from_session classmethod for the fixed code path."""
+        instance = cls.__new__(cls)
+        instance._voices = list(_FAKE_VOICE_MANIFEST)
+        return instance
 
     def get_voices(self) -> list[str]:
         return list(self._voices)
@@ -137,35 +173,293 @@ def test_kokoro_honours_injected_ort_providers(
 ) -> None:
     """KOKORO_ORT_PROVIDERS (the server's accelerator-profile injection) is
     passed straight through to the Kokoro constructor."""
+    from unittest.mock import MagicMock, patch
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    # Track from_session calls to verify it's being used
+    from_session_calls: list = []
+    original_from_session = providers_kokoro_module.from_session
+
+    @classmethod
+    def tracked_from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+        from_session_calls.append(session)
+        instance = cls.__new__(cls)
+        instance._voices = list(_FAKE_VOICE_MANIFEST)
+        return instance
+
+    providers_kokoro_module.from_session = tracked_from_session
+
     monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
-    engine = main.KokoroEngine()
-    engine._ensure_loaded("v1")
-    assert providers_kokoro_module.last_providers == [
-        "DmlExecutionProvider",
-        "CPUExecutionProvider",
-    ]
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session:
+        mock_ort_session.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+
+        # Verify the session was created with the right providers
+        mock_ort_session.assert_called_once()
+        call_args = mock_ort_session.call_args
+        assert call_args[1]["providers"] == ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+        # Verify from_session was called
+        assert len(from_session_calls) == 1
 
 
-def test_kokoro_no_providers_when_env_absent(
-    providers_kokoro_module, fake_weight_files, monkeypatch
+def test_kokoro_unset_env_prefers_cuda_when_available(
+    fake_weight_files, monkeypatch
 ) -> None:
-    """With no KOKORO_ORT_PROVIDERS, no providers= is passed → kokoro-onnx
-    auto-detects (preserves today's behaviour)."""
+    """#2631: the ACTUAL reported bug. KOKORO_ORT_PROVIDERS is unset by
+    design on the NVIDIA default profile (the server never injects it there
+    -- see _kokoro_provider_options's own docstring). Kokoro must NOT fall
+    through to kokoro-onnx's own broken auto-detect (find_spec('onnxruntime-
+    gpu') is not a valid module identifier, so it always resolves to None and
+    forces CPU); it must resolve CUDA-first itself, from onnxruntime's own
+    reported availability, and go through from_session same as the
+    explicit-providers path."""
+    from unittest.mock import MagicMock, patch
+
     monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
-    engine = main.KokoroEngine()
-    engine._ensure_loaded("v1")
-    assert providers_kokoro_module.last_providers is None
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    from_session_calls: list = []
+
+    class _CudaKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            from_session_calls.append(session)
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _CudaKokoro  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+
+        mock_ort_session_class.assert_called_once()
+        assert mock_ort_session_class.call_args[1]["providers"] == [
+            "CUDAExecutionProvider", "CPUExecutionProvider"
+        ]
+        assert len(from_session_calls) == 1
+        assert engine._kokoro is not None
+
+
+def test_kokoro_unset_env_cpu_only_runtime_still_loads(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2631: KOKORO_ORT_PROVIDERS unset on a CPU-only runtime (no CUDA
+    build, no CUDA provider reported) must still load Kokoro successfully --
+    via from_session with an explicit CPU provider list, never a crash."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    from_session_calls: list = []
+
+    class _CpuOnlyKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            from_session_calls.append(session)
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _CpuOnlyKokoro  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")  # must not raise
+
+        mock_ort_session_class.assert_called_once()
+        assert mock_ort_session_class.call_args[1]["providers"] == ["CPUExecutionProvider"]
+        assert len(from_session_calls) == 1
+        assert engine._kokoro is not None
+
+
+def test_kokoro_device_env_cuda_index_pins_without_double_build(
+    fake_weight_files, monkeypatch
+) -> None:
+    """KOKORO_DEVICE=cuda:1 with KOKORO_ORT_PROVIDERS unset: the default
+    providers resolve to CUDA+CPU, and the existing device_id-pin rebuild
+    must still fire exactly once more on top of the initial session build --
+    two InferenceSession calls total. Not one (the indexed pin regressed
+    silently) and not three+ (a redundant extra rebuild)."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:1")
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    class _PinKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = session
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _PinKokoro  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+
+        assert mock_ort_session_class.call_count == 2
+        first_call, second_call = mock_ort_session_class.call_args_list
+        assert first_call[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        assert first_call[1].get("provider_options") is None
+        assert second_call[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        assert second_call[1]["provider_options"] == [{"device_id": 1}, {}]
+        assert engine._kokoro.sess is mock_session
 
 
 def test_kokoro_falls_back_when_constructor_rejects_providers(
     fake_kokoro_module, fake_weight_files, monkeypatch
 ) -> None:
-    """An older kokoro-onnx whose constructor has no providers= kwarg raises
-    TypeError; the engine must fall back to the no-arg construction and load."""
+    """With the fixed code using from_session, we no longer try to pass
+    providers= to __init__. This test is now a sanity check that the no-providers
+    path still works."""
+    from unittest.mock import patch, MagicMock
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
     monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider"]')
-    engine = main.KokoroEngine()
-    engine._ensure_loaded("v1")  # must not raise
-    assert engine._kokoro is not None
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session:
+        mock_ort_session.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")  # must not raise
+        assert engine._kokoro is not None
+
+
+def test_kokoro_uses_from_session_when_providers_specified(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2631: When KOKORO_ORT_PROVIDERS is set, the engine must create an
+    InferenceSession with those providers and pass it to Kokoro.from_session(),
+    not pass providers= to Kokoro.__init__ (which doesn't accept that kwarg).
+    This test verifies the fix by mocking InferenceSession and from_session
+    and asserting both are called correctly."""
+    from unittest.mock import MagicMock, patch
+
+    # Create a mock InferenceSession class
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    # Track calls to from_session
+    from_session_calls: list[tuple] = []
+
+    # Create a fake Kokoro that tracks from_session calls
+    class _FromSessionKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(
+            cls, session, voices_path, espeak_config=None, vocab_config=None
+        ):
+            from_session_calls.append((session, voices_path, espeak_config, vocab_config))
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    # Inject the fake Kokoro
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _FromSessionKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    # Set providers
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["CUDAExecutionProvider", "CPUExecutionProvider"]')
+
+    # Patch onnxruntime.InferenceSession to return our mock
+    with patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+
+        # Verify InferenceSession was created with the right providers
+        mock_ort_session_class.assert_called_once()
+        call_args = mock_ort_session_class.call_args
+        assert call_args[0][0] == str(fake_weight_files["model"])
+        assert call_args[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+        # Verify from_session was called with the session and voices_path
+        assert len(from_session_calls) == 1
+        session_arg, voices_path_arg, _, _ = from_session_calls[0]
+        assert session_arg is mock_session
+        assert voices_path_arg == str(fake_weight_files["voices"])
+
+        # Verify the engine loaded successfully
+        assert engine._kokoro is not None
 
 
 def test_kokoro_importerror_remediation_is_profile_aware(
@@ -206,6 +500,18 @@ class _DmlKokoro:
         self._voices = list(_FAKE_VOICE_MANIFEST)
         type(self).instances.append(self)
 
+    @classmethod
+    def from_session(
+        cls, session, voices_path: str, espeak_config=None, vocab_config=None
+    ) -> "_DmlKokoro":
+        """Support from_session classmethod for the fixed code path."""
+        instance = cls.__new__(cls)
+        instance.providers = None  # from_session doesn't have providers info
+        instance.create_calls = 0
+        instance._voices = list(_FAKE_VOICE_MANIFEST)
+        type(instance).instances.append(instance)
+        return instance
+
     def get_voices(self) -> list[str]:
         return list(self._voices)
 
@@ -229,39 +535,63 @@ def dml_kokoro_module(monkeypatch):
 def test_directml_selftest_passes_and_caches(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
     """DML in the providers → one self-test synth runs; on success a marker is
     written and _dml_status is 'directml'. A SECOND load skips the probe."""
-    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
-    engine = main.KokoroEngine()
-    engine._ensure_loaded("v1")
-    assert engine._dml_status == "directml"
-    assert dml_kokoro_module.instances[-1].create_calls == 1  # the self-test synth
-    assert os.path.isfile(engine._dml_marker_path())
+    from unittest.mock import patch, MagicMock
 
-    # Second engine over the same weights dir: marker present → no probe.
-    engine2 = main.KokoroEngine()
-    engine2._ensure_loaded("v1")
-    assert engine2._dml_status == "directml"
-    assert dml_kokoro_module.instances[-1].create_calls == 0  # skipped
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session:
+        mock_ort_session.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+        assert engine._dml_status == "directml"
+        assert dml_kokoro_module.instances[-1].create_calls == 1  # the self-test synth
+        assert os.path.isfile(engine._dml_marker_path())
+
+        # Second engine over the same weights dir: marker present → no probe.
+        engine2 = main.KokoroEngine()
+        engine2._ensure_loaded("v1")
+        assert engine2._dml_status == "directml"
+        assert dml_kokoro_module.instances[-1].create_calls == 0  # skipped
 
 
 def test_directml_selftest_fails_falls_back_to_cpu(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
     """A failing DML synth rebuilds Kokoro on the CPU EP (honest cpu in /health)."""
+    from unittest.mock import patch, MagicMock
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
     _DmlKokoro.fail_create = True
     monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
-    engine = main.KokoroEngine()
-    engine._ensure_loaded("v1")
-    assert engine._dml_status == "fallback-cpu"
-    # The kept instance was rebuilt on CPU; no marker (DML didn't pass).
-    assert dml_kokoro_module.instances[-1].providers == ["CPUExecutionProvider"]
-    assert not os.path.isfile(engine._dml_marker_path())
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session:
+        mock_ort_session.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+        assert engine._dml_status == "fallback-cpu"
+        # The kept instance was rebuilt on CPU; no marker (DML didn't pass).
+        assert dml_kokoro_module.instances[-1].providers == ["CPUExecutionProvider"]
+        assert not os.path.isfile(engine._dml_marker_path())
 
 
 def test_no_directml_selftest_when_dml_absent(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
     """A CUDA/CPU profile (no DirectML EP) never runs the Kokoro DML self-test."""
+    from unittest.mock import patch, MagicMock
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
     monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["CUDAExecutionProvider", "CPUExecutionProvider"]')
-    engine = main.KokoroEngine()
-    engine._ensure_loaded("v1")
-    assert engine._dml_status is None
-    assert dml_kokoro_module.instances[-1].create_calls == 0
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session:
+        mock_ort_session.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+        assert engine._dml_status is None
+        assert dml_kokoro_module.instances[-1].create_calls == 0
 
 
 @pytest.fixture
@@ -451,6 +781,14 @@ def test_kokoro_synthesize_handles_create_returning_array_only(fake_weight_files
     fake_mod = types.ModuleType("kokoro_onnx")
     fake_mod.Kokoro = _ArrayOnlyKokoro  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+    # See fake_kokoro_module's docstring: _ArrayOnlyKokoro inherits
+    # from_session from _FakeKokoro, so _ensure_loaded builds a real ORT
+    # session first -- stub it since fake_weight_files isn't a real model.
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(
+        "onnxruntime.InferenceSession",
+        MagicMock(return_value=MagicMock(_model_path="")),
+    )
 
     engine = main.KokoroEngine()
     result = engine.synthesize("v1", "af_heart", "Hi.")

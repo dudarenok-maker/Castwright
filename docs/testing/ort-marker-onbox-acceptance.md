@@ -138,6 +138,19 @@ check fails on a real dependency gap.
 > the fold brief's scope. Evidence:
 > `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
 > (Castwright#2621).
+>
+> **FIXED in code, 2026-08-23 (#2631) — this criterion is now re-runnable and
+> is the thing to re-check first.** The sidecar no longer lets kokoro-onnx
+> choose providers at all: it builds the ORT InferenceSession itself and hands
+> it to Kokoro.from_session(), resolving the provider list from ORT's own
+> reported state when KOKORO_ORT_PROVIDERS is unset — which is the NVIDIA
+> default, and was the path that always fell to CPU.
+>
+> Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
+> proven off-box**: get_available_providers() reports CUDA whether or not any
+> session uses it, which is exactly what hid this. Criteria 1 and 2 still need
+> a real load here and rows A36/A37 stay owed — read the provider off a live
+> Kokoro, not off the available-providers list.
 
 ---
 
