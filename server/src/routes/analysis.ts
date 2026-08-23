@@ -2301,7 +2301,7 @@ export async function attributeChapterStage2(opts: {
     const paras = parseChapterStructure(opts.chapter.body, index);
     const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
     resolveWindows(paras, rosterGenderMap(stage1.characters), firstPersonId);
-    const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
+    const alignment = alignSentences(result.sentences, paras, opts.chapter.body, conventions.dialogueOpen !== null);
     const rosterIds = new Set(stage1.characters.map((c) => c.id));
     const examined = crossExamine(alignment, {
       rosterIds,
@@ -2382,7 +2382,7 @@ export async function attributeChapterStage2(opts: {
      applyNarratorDefault branches converge) so dividers populate on every
      chapter regardless of language or structure-engine state. Mutates only the
      sceneBreakBefore flag. */
-  annotateSceneBreaks(result.sentences, opts.chapter.body);
+  annotateSceneBreaks(result.sentences, opts.chapter.body, conventions?.dialogueOpen != null);
   if (opts.onStages && rawSnapshot) {
     opts.onStages({
       raw: rawSnapshot,

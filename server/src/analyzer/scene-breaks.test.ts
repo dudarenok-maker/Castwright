@@ -1,6 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { annotateSceneBreaks } from './scene-breaks.js';
+import { locateSentenceOffsets } from './dialogue-structure/aligner.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
+
+// #2601 rework (#2604): spy on locateSentenceOffsets so we can prove the
+// dashIsDialogueMarker gate is actually threaded through the call site, rather
+// than inferred from the sceneBreakBefore flag. The spy delegates to the real
+// implementation so every existing marker-anchored test keeps its real behaviour:
+// only the call-arguments become observable.
+vi.mock('./dialogue-structure/aligner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./dialogue-structure/aligner.js')>();
+  return { ...actual, locateSentenceOffsets: vi.fn(actual.locateSentenceOffsets) };
+});
 
 function sents(...texts: string[]): SentenceOutput[] {
   return texts.map((text, i) => ({ id: i + 1, chapterId: 1, characterId: 'narrator', text }));
@@ -114,5 +125,56 @@ describe('annotateSceneBreaks — separator captured as its own sentence (#1679 
     const s = sents('* * *', 'Only scene.');
     annotateSceneBreaks(s, body);
     expect(s.every((x) => !x.sceneBreakBefore)).toBe(true);
+  });
+});
+
+describe('annotateSceneBreaks — dashIsDialogueMarker gate (#2537/#2540)', () => {
+  it('with gate=true, a dash-led scene-opening sentence is flagged when its cached text lacks the dash', () => {
+    const body = 'Prior sentence.\n\n* * *\n\n- Second scene dialogue.\n\nLater sentence.';
+    const s = sents('Prior sentence.', 'Second scene dialogue.', 'Later sentence.');
+    annotateSceneBreaks(s, body, true);
+    expect(s[1].sceneBreakBefore).toBe(true);
+    expect(s[0].sceneBreakBefore).toBeUndefined();
+  });
+
+  it('with gate=true, a dash-led scene-opening sentence is flagged when its cached text includes the dash', () => {
+    const body = 'Prior sentence.\n\n* * *\n\n- Second scene dialogue.\n\nLater sentence.';
+    const s = sents('Prior sentence.', '- Second scene dialogue.', 'Later sentence.');
+    annotateSceneBreaks(s, body, true);
+    expect(s[1].sceneBreakBefore).toBe(true);
+    expect(s[0].sceneBreakBefore).toBeUndefined();
+  });
+
+  it('with gate=false, existing 2-arg behaviour is unchanged', () => {
+    const body = 'One.\n\n* * *\n\nTwo.';
+    const s = sents('One.', 'Two.');
+    annotateSceneBreaks(s, body, false);
+    expect(s[1].sceneBreakBefore).toBe(true);
+  });
+});
+describe('annotateSceneBreaks — locateSentenceOffsets gate wiring (#2601 rework)', () => {
+  const mocked = vi.mocked(locateSentenceOffsets);
+
+  beforeEach(() => {
+    mocked.mockClear();
+  });
+
+  it('passes dashIsDialogueMarker=true through to locateSentenceOffsets as its third argument', () => {
+    const body = 'One.\n\n* * *\n\nTwo.';
+    const s = sents('One.', 'Two.');
+    annotateSceneBreaks(s, body, true);
+    // The gate must be delivered to the call site as a real third argument —
+    // proves it threads through rather than being dropped or wired backwards.
+    expect(mocked).toHaveBeenCalledTimes(1);
+    expect(mocked.mock.calls[0].length).toBe(3);
+    expect(mocked.mock.calls[0][2]).toBe(true);
+  });
+
+  it('passes dashIsDialogueMarker=false through to locateSentenceOffsets as its third argument', () => {
+    const body = 'One.\n\n* * *\n\nTwo.';
+    const s = sents('One.', 'Two.');
+    annotateSceneBreaks(s, body, false);
+    expect(mocked).toHaveBeenCalledTimes(1);
+    expect(mocked.mock.calls[0][2]).toBe(false);
   });
 });
