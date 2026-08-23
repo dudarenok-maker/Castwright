@@ -89,7 +89,7 @@ export function buildStructureEvidence(
   const index = buildNameIndex(roster, conventions);
   const paras = parseChapterStructure(body, index);
   resolveWindows(paras, genderMapOf(roster), firstPersonId(roster, conventions));
-  const alignment = alignSentences(sentences, paras, body);
+  const alignment = alignSentences(sentences, paras, body, conventions.dialogueOpen !== null);
   if (alignment.alignedPct < ALIGNMENT_FLOOR_PCT) return new Map();
 
   const nameById = new Map(roster.map((c) => [c.id, c.name]));

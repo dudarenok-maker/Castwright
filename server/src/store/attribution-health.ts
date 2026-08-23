@@ -170,7 +170,7 @@ export function computeAttributionMeasurement(
     const body = input.bodies[chapterId];
     const paras = parseChapterStructure(body, index);
     const chapterSentences = sentencesByChapter.get(chapterId) ?? [];
-    const alignment = alignSentences(chapterSentences, paras, body);
+    const alignment = alignSentences(chapterSentences, paras, body, conv.dialogueOpen !== null);
 
     // Map each aligned sentence to the spans it overlaps, per span.
     const alignedBySpan = new Map<SpanEvidence, AlignedSentence[]>();

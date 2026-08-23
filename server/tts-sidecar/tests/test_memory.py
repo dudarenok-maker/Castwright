@@ -579,6 +579,192 @@ def test_debug_memory_endpoint_shape(monkeypatch):
             assert body["cuda"]["host_pinned_active_mb"] >= 0
 
 
+# --- #2423: per-device memory_stats() diagnostics + bare-reclaim endpoint ---
+
+
+def test_debug_memory_includes_memory_stats_per_device(monkeypatch):
+    """/debug/memory's `memory_stats` block carries reserved/allocated/
+    inactive_split/num_alloc_retries per device, keyed `cuda:{i}` — the field
+    (`inactive_split`) neither the existing `cuda` block (current-device-only,
+    no inactive_split) nor `_cuda_vram_mb_per_device` (reserved/total only)
+    can surface, per #2423's rationale."""
+    torch = pytest.importorskip("torch")
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: False)
+    stats = {
+        "reserved_bytes.all.current": 4_000_000,
+        "allocated_bytes.all.current": 3_500_000,
+        "inactive_split_bytes.all.current": 250_000,
+        "num_alloc_retries": 2,
+    }
+    monkeypatch.setattr(torch.cuda, "memory_stats", lambda i: stats)
+
+    with TestClient(main.app) as client:
+        body = client.get("/debug/memory").json()
+
+    assert body["memory_stats"] == {
+        "cuda:0": {
+            "reserved": 4_000_000,
+            "allocated": 3_500_000,
+            "inactive_split": 250_000,
+            "num_alloc_retries": 2,
+        }
+    }
+
+
+def test_cuda_memory_stats_per_device_empty_when_cuda_unavailable(monkeypatch):
+    """Fail-open contract, same as `_cuda_vram_mb_per_device`: no CUDA build
+    -> {} rather than a raise, never a 500 from the routes that call it."""
+    torch = pytest.importorskip("torch")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert main._cuda_memory_stats_per_device() == {}
+
+
+def test_cuda_memory_stats_per_device_uses_rocm_prefix_on_rocm_box(monkeypatch):
+    """Device keys are derived the same way `probe_capacity` derives them
+    (`kind = "rocm" if _cuda_is_rocm() else "cuda"`), NOT a hardcoded
+    `cuda:` prefix — an AMD/ROCm box must read `rocm:N`, not silently
+    mislabel as `cuda:N` the way `_cuda_vram_mb_per_device` does."""
+    torch = pytest.importorskip("torch")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    stats = {
+        "reserved_bytes.all.current": 1_000,
+        "allocated_bytes.all.current": 900,
+        "inactive_split_bytes.all.current": 0,
+        "num_alloc_retries": 0,
+    }
+    monkeypatch.setattr(torch.cuda, "memory_stats", lambda i: stats)
+
+    out = main._cuda_memory_stats_per_device()
+
+    assert list(out.keys()) == ["rocm:0"]
+    assert "cuda:0" not in out
+
+
+def test_debug_reclaim_brackets_one_bare_reclaim_call(monkeypatch):
+    """POST /debug/reclaim returns {before, reclaimed, after} having run exactly ONE
+    `_reclaim_device_cache()` between the two snapshots — no other work in
+    between (a load/unload cycle would conflate the reclaim with an
+    allocation pass, per #2423's rationale). The `reclaimed` field surfaces
+    whether the reclaim actually ran (True) or was skipped due to CUDA
+    unavailability or error (False)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    snapshots = [
+        {"cuda:0": {"reserved": 4_000_000, "allocated": 100, "inactive_split": 3_900_000, "num_alloc_retries": 0}},
+        {"cuda:0": {"reserved": 200_000, "allocated": 100, "inactive_split": 100_000, "num_alloc_retries": 0}},
+    ]
+    calls: list[str] = []
+    snapshot_calls = {"n": 0}
+
+    def fake_snapshot():
+        calls.append("snapshot")
+        result = snapshots[snapshot_calls["n"]]
+        snapshot_calls["n"] += 1
+        return result
+
+    def fake_reclaim(device_key):
+        calls.append("reclaim")
+        return True  # Success case
+
+    monkeypatch.setattr(main, "_cuda_memory_stats_per_device", fake_snapshot)
+    monkeypatch.setattr(main, "_reclaim_device_cache", fake_reclaim)
+
+    with TestClient(main.app) as client:
+        r = client.post("/debug/reclaim")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert calls == ["snapshot", "reclaim", "snapshot"]
+    assert calls.count("reclaim") == 1
+    assert body["before"] == snapshots[0]
+    assert body["reclaimed"] is True
+    assert body["after"] == snapshots[1]
+
+
+def test_debug_reclaim_surfaces_reclaimed_false_on_cuda_unavailable(monkeypatch):
+    """POST /debug/reclaim surfaces `reclaimed: False` when _reclaim_device_cache
+    returns False (CUDA unavailable or error occurred). This distinguishes
+    "ran and freed nothing" (before == after, reclaimed: True) from "never ran"
+    (before == after, reclaimed: False), so #1996's run sheet can reliably detect
+    whether the reclaim actually executed."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    snapshots = [
+        {"cuda:0": {"reserved": 4_000_000, "allocated": 100, "inactive_split": 3_900_000, "num_alloc_retries": 0}},
+        {"cuda:0": {"reserved": 4_000_000, "allocated": 100, "inactive_split": 3_900_000, "num_alloc_retries": 0}},
+    ]
+    calls: list[str] = []
+    snapshot_calls = {"n": 0}
+
+    def fake_snapshot():
+        calls.append("snapshot")
+        result = snapshots[snapshot_calls["n"]]
+        snapshot_calls["n"] += 1
+        return result
+
+    def fake_reclaim_unavailable(device_key):
+        calls.append("reclaim")
+        return False  # CUDA unavailable or error
+
+    monkeypatch.setattr(main, "_cuda_memory_stats_per_device", fake_snapshot)
+    monkeypatch.setattr(main, "_reclaim_device_cache", fake_reclaim_unavailable)
+
+    with TestClient(main.app) as client:
+        r = client.post("/debug/reclaim")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["before"] == snapshots[0]
+    assert body["reclaimed"] is False  # The key signal: reclaim did NOT run
+    assert body["after"] == snapshots[1]  # before == after, but now we know why
+
+
+def test_reclaim_device_cache_exercises_real_function(monkeypatch):
+    """#2423 pass-2 C — neither route-level test above exercises the real
+    _reclaim_device_cache return-value logic; both monkeypatch it away. This pins
+    the actual function's two cases: CUDA unavailable → False, CUDA available +
+    empty_cache() succeeds → True. Uses monkeypatch-real-torch.cuda style (patch
+    torch attributes, never a fake module) so _reclaim_device_cache's internal
+    `import torch` resolves to the patched singleton."""
+    torch = pytest.importorskip("torch")
+
+    # Case 1: CUDA unavailable → False
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    result = main._reclaim_device_cache("test-device")
+    assert result is False, "Should return False when CUDA is unavailable"
+
+    # Case 2: CUDA available, empty_cache() succeeds → True
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    empty_cache_called = []
+
+    def fake_empty_cache():
+        empty_cache_called.append(True)
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", fake_empty_cache)
+    result = main._reclaim_device_cache("test-device")
+    assert result is True, "Should return True when CUDA is available and empty_cache succeeds"
+    assert len(empty_cache_called) == 1, "empty_cache() should have been called exactly once"
+
+    # Case 3: CUDA available, but empty_cache() raises exception → False
+    def fake_empty_cache_raises():
+        raise RuntimeError("Simulated CUDA error in empty_cache")
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", fake_empty_cache_raises)
+    result = main._reclaim_device_cache("test-device-exception")
+    assert result is False, "Should return False when an exception occurs during reclaim"
+
+
 # --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
 
 

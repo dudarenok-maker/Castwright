@@ -3504,6 +3504,45 @@ exists. *Criteria:* spec §On-box acceptance
 > §4. `docs/testing/onbox-wave3-results/step-4-real-workspace-scripts.md`.
 > Filed as [#2537](https://github.com/dudarenok-maker/Castwright/issues/2537)
 > (see #2537).
+>
+> **2026-08-21 — Root-cause fix landed in PR #2577** (commits 40bee7ff..3053f5dd on
+> branch fix/server-2537-dash-invariant-align). Item (2), the dash-stripped
+> re-run invariance check, **remains owed** — the fix addresses the root cause
+> (`alignSentences` needle-search not dash-invariant) and new unit tests pass,
+> but on-box re-verification on the real workspace is still required to confirm
+> the 14-field divergence observed on `Ночной дозор` is actually closed. Paired
+> assertion in Task 9 — run twice, second time over scratch-path copies of each
+> cache with every leading dash stripped, diff every field of every row.
+>
+> **2026-08-21 — On-box re-run against the landed fix (#2571), criterion
+> STILL FAILS.** Both passes re-run for real against commit `d9eb03ad`
+> (`fix/server-2537-dash-invariant-align`, rebased onto `origin/main`,
+> containing PR #2577's full fix series) — straight, then dash-stripped over
+> a scratch-path copy of every cache file, originals restored and verified
+> byte-identical after. 22 of 23 books: zero diffs, unchanged from wave 3.
+> **`Ночной дозор` still diverges: `narratorIdSpoken` 229→223, `share`
+> 0.1302→0.1273, `unattributedSpeech` 9→7, `splitSpeech` 337→346,
+> `tagNarratorSpan` 544→536, plus per-chapter shifts in chapters 1, 6, 7, 8**
+> — the same field names, same direction, same magnitude as wave 3's pre-fix
+> numbers. The fix is confirmed present and built into the `server/dist`
+> actually exercised (`aligner.ts`/`aligner.js` both carry the dash-invariant
+> needle-search code from #2537/#2540), and its own synthetic unit test and
+> the #2541 parent-acceptance checklist both passed — but neither reaches
+> whatever in this book's real 2,122-sentence, 1,940-dash-only-span structure
+> still produces a divergent match. **Item (2) is therefore still owed, not
+> discharged.**
+>
+> **2026-08-23 — pass-2 addendum on #2577:** an earlier draft of this entry
+> called this "a residual real-data gap … not the original defect recurring
+> unfixed" — that framing overstated what this run showed (removed above,
+> not restated here since it no longer applies). It was measured against
+> `d9eb03ad`, which predates the
+> fix's final mechanism (attempt 4, commit `5a60b088`) — a later mechanism
+> that itself needed two more blocking-regression fixes (P1/P2) found in
+> subsequent review passes of the same PR. Whether this book's divergence is
+> closed by the fix as it now stands is unconfirmed; item (2) stays owed
+> pending a fresh on-box re-run against the current commit, not `d9eb03ad`.
+> Evidence: `docs/testing/onbox-wave4-results/step-1-e11-item2-rerun.md`.
 
 > **Wave-5 step 3, 2026-08-23 — reconfirmation only, disposition unchanged
 > (STILL OWED).** Re-ran item (1) (the full real-workspace run) from a
