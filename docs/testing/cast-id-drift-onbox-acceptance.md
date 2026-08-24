@@ -882,3 +882,37 @@ silently produce a confident wrong answer rather than an error:
    segments by `modelKey` therefore returns one silent empty bucket and
    proves nothing; read the file-level `modelKey`, or `state.json`'s
    `audioModelKey`/`audioEngines`, instead.
+
+---
+
+## 10. #2584 fix (PR #2640) — wrong-direction retirement, code-level fix
+
+> Register row: (no dedicated row; this is supplementary documentation for the Wave-2 defect tracked in B4/Wave-4)
+
+### 10.1 Purpose & scope
+
+Wave 2 (§7, Wave-4 step 7 rerun) surfaced a defect that had not been caught at code review time: during a re-analysis of *Заказ Коалфолла*, the established ASCII character id `oduvan` was retired **in favor of** a freshly-minted Cyrillic id `одуван`, recorded as `"oduvan": "одуван"` in `cast-id-history.json` — backwards from the intended direction (fresh id retires onto the established one) and violating the invariant that character ids must remain ASCII kebab-case. PR #2640 (commit 2bd7b6ef) fixes this by reverting a risky bolt-on from the initial #2584 PR and relying on `remapFreshToPriorIds` (`server/src/store/remap-fresh-to-prior.ts`), whose existing **exact-name matcher** already resolves the reported case correctly and cascades to sentences.
+
+The fix is **proven via unit test** (`remap-fresh-to-prior.test.ts`), not via live re-analysis — the unit test drives a synthetic clean scenario and confirms the matcher's logic is sound. What remains **unconfirmed on real hardware** is whether the exact-name matcher actually fires the same way on the REAL production call during a re-analysis of *Заказ Коалфолла* against its existing `cast-id-history.json` — the case that originally produced the corruption. The reasons for the caution remain documented in the original #2584 issue and Wave-4's own run sheet (`docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`): the unit test's controlled scenario proves the fix's *logic*, not the real *call path* that let the wrong-direction retirement through the first time.
+
+### 10.2 Fixture & owed hardware acceptance
+
+The real, live-corrupted book: *Заказ Коалфолла* at `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`.
+
+**Current state on the box (2026-08-25):**
+- `.audiobook/cast.json` carries `"id": "одуван", "name": "Одуван"` (Cyrillic id — the defect)
+- `.audiobook/cast-id-history.json` carries `"oduvan": "одуван"` (the wrong-direction retirement, recorded 2026-08-21T07:47:44.959Z, seq 12)
+
+**Owed acceptance:** re-analyse *Заказ Коалфолла* (a full manuscript re-analysis, not a subset/chapter re-analysis) against this existing history, and confirm:
+1. The character's `cast.json` id comes back as `oduvan` (ASCII), not `одуван` (Cyrillic).
+2. If the id changed at the raw-analyzer-output layer, it is recorded in `cast-id-history.json`'s `supersededBy` map with the **correct direction** (fresh → established).
+
+This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini).
+
+### 10.3 Code-level proof (PR #2640, shipped)
+
+- New unit test (`server/src/store/remap-fresh-to-prior.test.ts`): drives a synthetic fixture where an analyzer mints a Cyrillic id for a character the cast already holds under ASCII, and confirms the exact-name matcher pairs them correctly and cascades to sentences.
+- Reverted the risky bolt-on from PR #2633's merge commit (`mergeCore` in `server/src/store/merge-analysis-cast.ts`, 2bd7b6ef's parent diff), which had no test and could let arbitrary id pairings through without matching logic.
+- Now relies entirely on `remapFreshToPriorIds`, which is exercised by both the unit test and the full integration suite (`server/src/store/merge-analysis-cast.test.ts`, existing coverage).
+
+Defects NOT filed: none. The fix is narrowly scoped and passes all existing tests.
