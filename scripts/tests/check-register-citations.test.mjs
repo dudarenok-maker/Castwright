@@ -1,7 +1,13 @@
 // Tests for scripts/check-register-citations.mjs — the mechanical checker
 // for docs/testing/onbox-acceptance-register.md row-ID citations scattered
-// across the repo (issue #2629 option 3). Uses synthetic register/file
-// fixtures rather than the real register, which changes under us.
+// across the repo (issue #2629 option 3). Most unit tests below use
+// synthetic register/file fixtures (buildRegister()) rather than the real
+// register, which changes under us. The CLI-mutation tests near the bottom
+// of this file are the exception: they exercise the real register/corpus on
+// purpose (real end-to-end wiring, not just the pure functions), so they
+// derive their target ID/subject/heading FROM the real register at test
+// run time rather than hardcoding one — see the "finding N/W" mutation
+// test's own comment for why a hardcoded row ID doesn't survive a discharge.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +22,8 @@ import {
   checkRunSheetLinkage,
   checkConflictingSubjects,
   findUnclassifiedRunSheetMentions,
+  measureWrongIdEligibleLines,
+  isLikelyBinaryFile,
 } from '../check-register-citations.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -338,6 +346,87 @@ test('checkNonexistentIds: paired control — the same discharge word on the SAM
   assert.match(annotated[0], /A99/);
 });
 
+// --- Pass-9 review of PR #2630 (finding Y): pass 8's fix (finding O) only
+// tolerated a BARE list item / table row, and only a QUOTED continuation
+// after sentence punctuation — the same shapes with a `>` in front (a
+// blockquoted list item, a blockquoted table row) or without any terminal
+// punctuation at all before a "Register rows?:" label line defeated it.
+// Measured as real corpus shapes (92 blockquoted list items across 21
+// files, 50 blockquoted table rows across 3 files), not inventions. ---
+
+test('checkNonexistentIds: a discharge word on one BLOCKQUOTED LIST ITEM does not excuse a wrong ID on the next blockquoted item (finding Y)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> - tracked as register row B3, discharged 2026-08-21\n' +
+    '> - tracked as register row A99 — still owed, run it\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /B3/);
+});
+
+test('checkNonexistentIds: paired control — the same discharge word on the SAME blockquoted list item still excuses it', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> - tracked as register row A99, discharged 2026-08-21\n' +
+    '> - tracked as register row B1 (unrelated, real row)\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A99/);
+});
+
+test('checkNonexistentIds: a discharge word on one BLOCKQUOTED TABLE ROW does not excuse a wrong ID on the next blockquoted row (finding Y)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> | `foo-onbox-acceptance.md` | register row B3 — discharged 2026-08-21 | 0 |\n' +
+    '> | `bar-onbox-acceptance.md` | register row A99                        | 30 |\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /B3/);
+});
+
+test('checkNonexistentIds: paired control — the same discharge word on the SAME blockquoted table row still excuses it', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> | `foo-onbox-acceptance.md` | register row A99 — discharged 2026-08-21 | 0 |\n' +
+    '> | `bar-onbox-acceptance.md` | register row B1 (unrelated, real row)    | 30 |\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A99/);
+});
+
+test('checkNonexistentIds: an UNPUNCTUATED "Register rows:" label line still bounds its own clause from the next quoted line (finding Y)', () => {
+  // No period before the line break — the punctuated version of this exact
+  // shape was already covered by finding O ("R4"); this is that same shape
+  // with the trailing period removed, which used to defeat the rule.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '> Register rows: A99 (Wave 4)\n> Historical note: row B3 was discharged 2026-08-21 and no longer exists.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /B3/);
+});
+
+test('checkNonexistentIds: paired control — an un-punctuated multi-line blockquote annotation with no "Register rows:" label still spans the break (finding Y regression check)', () => {
+  // Mirrors the real corpus's own device-token-scope.md shape (already
+  // pinned above) — must still NOT be bounded by the new label-line
+  // alternative, since its first line is not a "Register rows?:" label.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> Register row A99 no longer\n' +
+    '> exists.** The repo owner discharged the whole group (A99 and the plan to re-add it).\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A99/);
+});
+
 test('checkNonexistentIds: a BLOCKQUOTE CONTINUATION line opening a new sentence does not let its discharge word reach a citation one line above (finding O)', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const text =
@@ -373,6 +462,26 @@ test('checkNonexistentIds: a discharge word INSIDE AN INLINE CODE SPAN (an examp
   const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: a citation and its OWN discharge-word annotation sitting in the SAME inline code span is not a live citation at all (finding AB)', () => {
+  // Pass-9 review of PR #2630 (finding AB): the fixture above moves A99
+  // OUT of the code span, so it can never see this shape — the real bug is
+  // an example command where the citation and its annotation are the SAME
+  // code span (the real corpus's own audit note:
+  // "`grep -n \"register row B3 was discharged 2026-08-21\" docs/`"). Before
+  // the fix, ID scanning read the unblanked text (so A99 registered as a
+  // live citation) while discharge-word scanning read the blanked copy (so
+  // the SAME span's "discharged" was invisible to excuse it) — turning a
+  // documented example into a FATAL nonexistent-ID error. The fix makes
+  // citation scanning blank code spans too, so this line carries no
+  // citation for Check A to evaluate at all.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    'Audit with `grep -n "register row A99 was discharged 2026-08-21" docs/` before the sweep.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
   assert.equal(annotated.length, 0);
 });
 
@@ -765,6 +874,80 @@ test('checkConflictingSubjects: warns (unknownSubject, non-fatal) when the paire
   assert.match(unknownSubject[0], /does not appear in any current register row heading/);
 });
 
+// --- Pass-9 review of PR #2630 (finding X): the multi-ID exemption
+// (finding R) exempted an id from EVERY subject on its line once it
+// legitimately owned ANY subject on that line — silencing a genuinely wrong
+// citation whenever a DIFFERENT subject on the same line belongs to nobody
+// cited, or (on a single-ID line) to a wholly unrelated id. Fixed with
+// POSITIONAL pairing (headingTitleSegments): a multi-ID heading's own title
+// segments, not the line's whole subject set. ---
+
+test('checkConflictingSubjects: a THIRD subject that NEITHER cited id owns still fires, even though each id owns its OWN segment (finding X)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // A1 legitimately owns #1000; A2 legitimately owns #1001 — both segments
+  // are individually correct. Injecting a THIRD, unrelated subject (#9999,
+  // owned by neither) into A1's own segment must still fire against A1 —
+  // the old rule exempted A1 from #9999 too, purely because A1 owns #1000
+  // elsewhere on the same line.
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · Title one (#1000, #9999) + Title two (#1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 1); // #9999 is in no register heading at all
+  assert.match(unknownSubject[0], /A1/);
+  assert.match(unknownSubject[0], /9999/);
+  assert.equal(wrongId.length, 0);
+});
+
+test('checkConflictingSubjects: a SINGLE-ID heading with an unrelated "see also" subject still fires against that subject (finding X)', () => {
+  // A1 legitimately owns #1000 (matches its own citation) but is also
+  // paired, on the same line, with an unrelated #1001 (A2/B1's subject, not
+  // A1's) via a "see also" idiom. The old rule exempted A1 from #1001 too,
+  // once it saw A1 legitimately owned #1000 ANYWHERE on the line.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Drift Wave 1 (#1000) — see also (#1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+});
+
+// --- Pass-9 review of PR #2630 (finding Z): measureWrongIdEligibleLines
+// used to re-implement Check C's eligibility rule inline instead of calling
+// citationShapedLineIds — the function Check C itself uses — so the two
+// could silently disagree. ---
+
+test('measureWrongIdEligibleLines: agrees with checkConflictingSubjects about which lines are eligible (finding Z)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    // Existing id, wrong subject -> eligible AND produces a wrongId finding.
+    ['docs/one.md', '### A2 · Some pack section (#1000)\n\nBody.\n'],
+    // A99 doesn't exist in the register at all — Check A's territory, not
+    // eligible for Check C's measurement (the registerRows.has(id) gate).
+    ['docs/two.md', '### A99 · Some pack section (#1000)\n\nBody.\n'],
+  ]);
+  const { headingLines, headingFiles } = measureWrongIdEligibleLines(files, rows);
+  const { wrongId } = checkConflictingSubjects(files, rows);
+  assert.equal(headingLines, 1);
+  assert.equal(headingFiles, 1);
+  assert.equal(wrongId.length, 1);
+});
+
+test('measureWrongIdEligibleLines: a heading citing only a NONEXISTENT id is not counted eligible (finding Z)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([['docs/one.md', '### A99 · Some pack section (#1000)\n\nBody.\n']]);
+  const { headingLines, headingFiles, criteriaLines, criteriaFiles } = measureWrongIdEligibleLines(
+    files,
+    rows,
+  );
+  assert.equal(headingLines, 0);
+  assert.equal(headingFiles, 0);
+  assert.equal(criteriaLines, 0);
+  assert.equal(criteriaFiles, 0);
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {
@@ -1097,27 +1280,68 @@ test('CLI: Check C\'s wrongId half is FATAL and runs whether or not --strict is 
 // on the real tree exits 1 and names the defect; with the `Check C` entry
 // deleted from `fatalSections`, the same tree exits 0 with zero output
 // naming it.
-test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID heading (proves the fatality is load-bearing, finding N)', () => {
-  const TARGET = join(HERE, '..', '..', 'docs', 'testing', 'onbox-sitting-cloning-identity.md');
+// Pass-9 review of PR #2630 (finding W): the first version of this test
+// pinned two things by VERBATIM SOURCE TEXT rather than by behaviour — the
+// full real-register "A42" heading (including its URL and PR number), and
+// the exact `fatalSections` array-entry line, `errorsC` variable name
+// included. Both are brittle in the two ways this session has repeatedly
+// been burned by: a routine register discharge that renumbers A42 (the
+// EXACT event this tool exists to manage) breaks the fixture assumption,
+// and a pure behaviour-preserving rename (`errorsC` -> anything else)
+// throws "fixture assumption: the fatalSections entry must exist verbatim"
+// even though the mutation being tested for — Check C's fatality — is
+// completely unaffected. Fixed by deriving both from the CURRENT real
+// register/corpus at test run time (an owning ID + its subject number,
+// found generically, never hardcoded) and by matching the fatalSections
+// entry SHAPE (the label text plus ANY identifier after the comma) rather
+// than its exact characters.
+test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID heading (proves the fatality is load-bearing, finding N/W)', () => {
+  const REGISTER_PATH = join(HERE, '..', '..', 'docs', 'testing', 'onbox-acceptance-register.md');
+  const { rows } = parseRegisterRows(readFileSync(REGISTER_PATH, 'utf8'));
+
+  // Find any row that legitimately owns a subject number, then a DIFFERENT
+  // existing row that does not — this is exactly `legitimate.get(subject)`
+  // vs. an id absent from it, derived fresh from whatever the register
+  // currently says rather than a row ID pinned in the test's own source.
+  let ownerId, subject;
+  outer: for (const [id, row] of rows) {
+    for (const s of row.issues) {
+      ownerId = id;
+      subject = s;
+      break outer;
+    }
+  }
+  assert.ok(ownerId, 'fixture assumption: at least one real register row carries an issue/PR number');
+  let wrongIdCandidate;
+  for (const [id, row] of rows) {
+    if (id !== ownerId && !row.issues.has(subject)) {
+      wrongIdCandidate = id;
+      break;
+    }
+  }
+  assert.ok(
+    wrongIdCandidate,
+    'fixture assumption: at least two real register rows exist with non-overlapping subjects',
+  );
+
+  // A non-frozen, non-register file to inject a synthetic wrong-ID heading
+  // into — the shape this checker exists to catch, built from live register
+  // data rather than quoting a specific row's own heading text.
+  const TARGET = join(HERE, '..', '..', 'docs', 'testing', 'onbox-sitting-plan.md');
   const originalTarget = readFileSync(TARGET, 'utf8');
-  // A42 (real register row) legitimately owns #1969 — shift its own heading
-  // down by one ID (A42 -> A41), the exact "uniform mechanical ID shift"
-  // shape PR #2630 exists to catch, mirroring the real four-heading defect
-  // this branch fixed.
-  const needle =
-    "### A42 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)";
-  assert.ok(originalTarget.includes(needle), 'fixture assumption: A42 heading must exist verbatim');
-  const mutatedTarget = originalTarget.replace(needle, needle.replace('### A42 ·', '### A41 ·'));
+  const injected = `\n### ${wrongIdCandidate} · Synthetic finding-N/W pin (#${subject})\n`;
+  const mutatedTarget = originalTarget + injected;
   assert.notEqual(mutatedTarget, originalTarget);
 
   const originalCli = readFileSync(CLI_PATH, 'utf8');
-  const fatalSectionsNeedle =
-    "    ['Check C — existing row ID cited for the wrong subject', errorsC],\n";
-  assert.ok(
-    originalCli.includes(fatalSectionsNeedle),
-    'fixture assumption: the fatalSections entry must exist verbatim',
+  const fatalSectionsRegex =
+    /\[\s*'Check C — existing row ID cited for the wrong subject'\s*,\s*\w+\s*\],?\n?/;
+  assert.match(
+    originalCli,
+    fatalSectionsRegex,
+    'fixture assumption: a fatalSections entry with this label must exist, whatever its variable is named',
   );
-  const mutatedCli = originalCli.replace(fatalSectionsNeedle, '');
+  const mutatedCli = originalCli.replace(fatalSectionsRegex, '');
   assert.notEqual(mutatedCli, originalCli);
 
   try {
@@ -1127,14 +1351,17 @@ test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID
     const baseline = runCli([]);
     assert.equal(baseline.status, 1, 'a wrong-ID heading must fail the gate by default');
     assert.match(baseline.stderr, /existing row ID cited for the wrong subject/);
-    assert.match(baseline.stderr, /cited A41 for #1969.*maps to A42, not A41/);
+    assert.match(
+      baseline.stderr,
+      new RegExp(`cited ${wrongIdCandidate} for #${subject}.*maps to .*${ownerId}`),
+    );
 
     // Mutant: delete Check C from fatalSections — the defect class this PR
     // exists to catch must no longer be silently ungated.
     writeFileSync(CLI_PATH, mutatedCli);
     const mutant = runCli([]);
     assert.equal(mutant.status, 0, 'mutant should incorrectly pass once Check C is un-gated');
-    assert.doesNotMatch(mutant.stderr, /cited A41 for #1969/);
+    assert.doesNotMatch(mutant.stderr, new RegExp(`cited ${wrongIdCandidate} for #${subject}`));
   } finally {
     writeFileSync(TARGET, originalTarget);
     writeFileSync(CLI_PATH, originalCli);
@@ -1147,6 +1374,30 @@ test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID
       0,
     );
   }
+});
+
+// --- Pass-9 review of PR #2630 (finding U): `readNormalized` never throws
+// on binary content (Node's utf8 decoder substitutes U+FFFD rather than
+// erroring), so `unreadableCount` was structurally 0 for the case the
+// success line's "N unreadable/binary excluded" clause claims to cover. ---
+
+test('isLikelyBinaryFile: a real tracked PNG is detected as binary', () => {
+  const PNG = join(HERE, '..', '..', 'apps', 'android', 'android', 'app', 'src', 'main', 'res',
+    'mipmap-hdpi', 'ic_launcher.png');
+  assert.equal(isLikelyBinaryFile(PNG), true);
+});
+
+test('isLikelyBinaryFile: paired control — a real tracked text file is NOT detected as binary', () => {
+  assert.equal(isLikelyBinaryFile(CLI_PATH), false);
+});
+
+test('CLI: the real tree scan finds at least one binary file, and the success line reports it (finding U)', () => {
+  // Reproduces the actual defect on the real corpus, not just the pure
+  // helper: before the fix, this clause never printed at all, on any tree,
+  // because unreadableCount could never leave 0.
+  const result = runCli([]);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /\d+ unreadable\/binary excluded/);
 });
 
 // --- Self-referential exclusion: this checker's own source and the sibling

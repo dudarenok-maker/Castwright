@@ -9,6 +9,31 @@
 // claim living on several surfaces, with only some of them corrected. This
 // script exists to make that mechanical instead of eyeballed.
 //
+// WIRING GAP, stated explicitly rather than left implicit (pass-9 review of
+// PR #2630, finding AA): `package.json`'s `check:register-citations` script
+// is invoked from exactly one place today —
+// `scripts/tests/check-register-citations.test.mjs`'s own CLI-integration
+// tests, run as part of `npm run test:hooks`. That means this checker only
+// actually EXERCISES on a diff `verify-cache.mjs`'s `test:hooks` step
+// considers in-scope: `docs/testing/**`, the register itself, `CLAUDE.md`,
+// and `scripts/**` — NOT `docs/features/**`, `docs/superpowers/**`,
+// `src/**`, `server/**`, or `e2e/**`, even though a citation can live in any
+// of those and this checker's own real-tree run scans every one of them.
+// There is no dedicated `.github/workflows/*.yml` step for this checker the
+// way the sibling `check-onbox-register.mjs` has
+// (`onbox-register-check.yml`) — `#2629`'s option 3 ("catches rot at PR
+// time") is not fully true yet: rot in a file outside `test:hooks`' own
+// scope is caught only the NEXT time some in-scope file changes too, or on
+// a manual `npm run check:register-citations`. Widening `test:hooks`'
+// inputs to the whole tree isn't the fix — this checker's own real-tree run
+// reads essentially every tracked file, so declaring that as a `test:hooks`
+// input would make the step un-cacheable for everyone, defeating the
+// scope-gating `verify-cache.mjs` exists for. The right fix is a dedicated
+// CI step (mirroring `onbox-register-check.yml`) that always runs this
+// checker regardless of diff scope — a genuine design decision (schedule,
+// gating, whether it belongs in `verify.yml` or its own workflow), not
+// something to wire in blind here; tracked at `#2629`.
+//
 // Three checks, ordered by precision (least to most likely to need
 // judgment):
 //
@@ -86,7 +111,7 @@
 //      the moment a subject's row discharges: the subject's citations start
 //      rotting from that moment, so failing open here (as an earlier version
 //      of this check did) silences the check exactly when it is needed.
-//      Note: 22 of 65 real register rows carry no issue/PR number in their
+//      Note: 21 of 65 real register rows carry no issue/PR number in their
 //      heading at all (they cite a plan number instead), so this check's
 //      ground truth is thin for roughly a third of the register — those rows
 //      can never be cross-checked in either direction, a real coverage gap,
@@ -128,7 +153,7 @@
 //        (checkConflictingSubjects' `unknownSubject`) stays EXPLORATORY,
 //        OPT-IN, NEVER FATAL — pass `--strict` to see it; skipped and
 //        printed nothing without the flag, same as the whole check used to
-//        be. This is the genuinely thinner ground truth: 22 of the
+//        be. This is the genuinely thinner ground truth: 21 of the
 //        register's 65 real rows carry no issue/PR number in their heading
 //        at all (they cite a plan number instead, so those rows can never be
 //        cross-checked in either direction — a real, permanent coverage
@@ -140,7 +165,7 @@
 //        structural subject-set mismatch, not a wrong citation; and a row
 //        whose OWN register heading carries no issue number, so its subject
 //        can never appear in the legitimate-subject map either way — the
-//        22-of-65 gap from the other direction). Neither is a wrong
+//        21-of-65 gap from the other direction). Neither is a wrong
 //        citation, so failing on either would be a false positive; that is
 //        why this half is not promoted alongside `wrongId`.
 //
@@ -234,6 +259,7 @@
 // line says so rather than claiming universal coverage.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scrubGitEnv } from './git-env.mjs';
 import { readNormalized } from './lib/read-normalized.mjs';
@@ -708,8 +734,41 @@ const ANY_ID_TOKEN_REGEX = /\b([A-Z]\d{1,3})\b/g;
 //     discharged ...") without firing on the device-token-scope annotation,
 //     none of whose internal line breaks follow a period (each one wraps
 //     mid-sentence).
+//
+// Pass-9 review of PR #2630 (finding Y): the two shapes above only ever
+// tolerate a BARE list/table line-start, and the punctuated-sentence rule
+// only reaches a QUOTED continuation, not a quoted SOURCE line. Both gaps
+// are real corpus shapes, not inventions — measured: 92 blockquoted list
+// items across 21 files, 50 blockquoted table rows across 3 files,
+// including two of the on-box documents where discharge annotations
+// actually live (`onbox-sitting-plan.md`, `fs38-wave3-onbox-acceptance.md`).
+// Two more alternatives close them, each the SAME construct already
+// trusted above with a leading `>` tolerated in front of it — not a new
+// rule:
+//   - a blockquoted list item or table row (`> - ...`, `> | ... |`) is a
+//     boundary the same way a bare one already is; verified this doesn't
+//     touch the legitimate multi-line-quote annotation, which contains
+//     neither a list marker nor a table pipe at any of its own line
+//     breaks;
+//   - a newline into a new `>`-quoted line is ALSO a boundary when the
+//     PRECEDING line is itself a "Register rows?:" label line (this
+//     checker's own REGISTER_ROW_LABEL_LINE_REGEX idiom) — that label is,
+//     by definition, a complete citation on its own, so a line break
+//     after it can never be "mid-sentence" the way the device-token-scope
+//     annotation's un-punctuated wrap is (verified: that control's own
+//     "Register row A99 no longer" has no colon, so the lookbehind below
+//     does not match it). This closes the punctuation-optional case where
+//     the label itself supplies the completeness signal that a period
+//     otherwise would.
+//   Left OPEN, deliberately: a fully generic "was the line before this
+//   break an independently-complete sentence" rule, for a plain (non-
+//   label, non-quoted) prose paragraph with no terminal punctuation at
+//   all — no real corpus instance of this shape was found, and no narrow,
+//   measured heuristic distinguishes it from the legitimate un-punctuated
+//   multi-line-quote case above; that is a design decision, not a
+//   mechanical follow-on to this fix.
 const CLAUSE_BOUNDARY_REGEX =
-  /;|[—–](?=\s*[A-Z]\d{1,3}\s+is\b)|[.!?]\s*\r?\n[ \t]*>|\r?\n[ \t]*(?:[-*+]\s|\d+\.\s|\|)|\r?\n[ \t]*>?[ \t]*\r?\n/g;
+  /;|[—–](?=\s*[A-Z]\d{1,3}\s+is\b)|[.!?]\s*\r?\n[ \t]*>|(?<=\bRegister rows?:.*)\r?\n[ \t]*>|\r?\n[ \t]*>?[ \t]*(?:[-*+]\s|\d+\.\s|\|)|\r?\n[ \t]*>?[ \t]*\r?\n/g;
 
 /**
  * The `[start, end)` span of `text` around `pos` that is bounded by the
@@ -828,14 +887,19 @@ function idSpecificAnnotationPresent(sectionText, id) {
 // Blanks single-backtick inline code spans (never triple-backtick fences —
 // those are already blanked by stripFences before this ever runs) with
 // equal-length spaces, so character offsets used elsewhere (clauseBounds,
-// ID_PROXIMITY_CHARS) don't shift. Used ONLY to find discharge-word matches
-// (idSpecificAnnotationPresent) — never for ID-token scanning, which must
-// still see a bare-ID code span like the real corpus's `` `F1` ``/`` `F2` ``/
-// `` `F3` `` (legitimate annotations, per deBold's own comment above: "a
-// single backtick pair around an ID ... carries no ambiguity worth
-// stripping"). See idSpecificAnnotationPresent's own comment (pass-8 review
-// of PR #2630, finding O) for why an example command inside a code span
-// must not read as a real discharge annotation.
+// ID_PROXIMITY_CHARS) don't shift. Used for two things, symmetrically since
+// pass 9 (finding AB): finding discharge-word matches
+// (idSpecificAnnotationPresent) and finding citation matches
+// (extractCitationsByLine) — an example command's code span must not read
+// as a real discharge annotation OR as a real citation; blanking only one
+// side let the other fire falsely (see extractCitationsByLine's own
+// comment). Never for ID-TOKEN scanning, which must still see a bare-ID
+// code span like the real corpus's `` `F1` ``/`` `F2` ``/`` `F3` ``
+// (legitimate annotations, per deBold's own comment above: "a single
+// backtick pair around an ID ... carries no ambiguity worth stripping").
+// See idSpecificAnnotationPresent's own comment (pass-8 review of PR #2630,
+// finding O) for why an example command inside a code span must not read as
+// a real discharge annotation.
 function stripInlineCodeSpans(text) {
   return text.replace(/`[^`\n]*`/g, (m) => ' '.repeat(m.length));
 }
@@ -901,11 +965,26 @@ function deBold(text) {
  *      including en-dash range expansion);
  *   3. an anchored `### <ID> · …` section heading (HEADING_ID_REGEX) — see
  *      this file's header comment for the zero-collision measurement.
+ *
+ * Pass-9 review of PR #2630 (finding AB): scanned against a copy with
+ * single-backtick inline code spans blanked (`stripInlineCodeSpans`), the
+ * same way `idSpecificAnnotationPresent` already blanks them before its own
+ * discharge-word scan. Applying that ONLY on the discharge side was the
+ * bug, not a design choice: an example command that happens to contain the
+ * "row <ID>" idiom inside one code span (the real corpus's own
+ * `` `grep -n "register row B3 was discharged 2026-08-21" docs/` `` audit
+ * note) got treated as a live citation here while that SAME span's
+ * discharge word was invisible to the annotation scan that would have
+ * excused it — turning a documented example into a FATAL nonexistent-ID
+ * error. `stripInlineCodeSpans` preserves length, so line indexing is
+ * unaffected, and (measured against the real corpus) no live "row(s) ID"/
+ * "Register row(s):"/heading citation is itself wrapped in a single-backtick
+ * span, so this costs nothing on a real citation today.
  * @returns {Map<number, Set<string>>}
  */
 function extractCitationsByLine(text) {
   const stripped = deBold(stripFences(text));
-  const lines = stripped.split('\n');
+  const scanLines = stripInlineCodeSpans(stripped).split('\n');
   const byLine = new Map();
   const add = (i, ids) => {
     if (!ids.length) return;
@@ -913,7 +992,7 @@ function extractCitationsByLine(text) {
     for (const id of ids) byLine.get(i).add(id);
   };
 
-  lines.forEach((line, i) => {
+  scanLines.forEach((line, i) => {
     for (const m of line.matchAll(ROW_CITATION_REGEX)) {
       add(i, splitCitedIds(m[1]));
     }
@@ -1149,7 +1228,7 @@ function buildLegitimateSubjectMap(registerRows) {
 // original four wrong headings back produces 8 of 9 warnings naming exactly
 // those four lines, each stating which ID the subject actually maps to.
 // Kept exploratory/opt-in (never fatal) per the same header-comment
-// rationale — this still can't see every citation (the 22-of-65 rows with
+// rationale — this still can't see every citation (the 21-of-65 rows with
 // no issue/PR number in their heading are still uncheckable in either
 // direction, and a "Register row(s):" list is still not scanned here) — but
 // its ground truth is no longer "too thin to trust", only "incomplete".
@@ -1170,8 +1249,8 @@ const CRITERIA_SOURCE_LINE_REGEX = /\bCriteria source:/i;
  * degree: `### A40 + A41 · Title1 (#2310) + Title2 (#2106)` names its rows
  * via a fixed, anchored syntax — pass-8 review of PR #2630 (finding R) — so
  * each id IS unambiguous, it just isn't positionally bound to a single
- * subject the way a one-id heading is; checkConflictingSubjects' own
- * `idExplainedByLine` is what accounts for that (see its comment). Check C
+ * subject the way a one-id heading is; `headingTitleSegments` is what
+ * accounts for that (see its own comment, pass-9 review finding X). Check C
  * only trusts a line whose id<->row correspondence can't be ambiguous the
  * way the two excluded surfaces are.
  */
@@ -1205,6 +1284,36 @@ function citationShapedLineIds(line) {
  * @param {Map<string, object>} registerRows
  * @returns {{ wrongId: string[], unknownSubject: string[] }}
  */
+// Pass-8 review of PR #2630 (finding R) added a multi-ID exemption that
+// pass-9 review (finding X) proved over-broad: exempting an id the moment it
+// legitimately owned ANY subject on the line meant a THIRD subject that
+// neither cited id owns — or, on a single-ID line with an unrelated "see
+// also" subject, the id's own second subject — went unflagged too, since the
+// exemption applied to the id as a whole rather than to the specific
+// subject it actually explains. Fixed by pairing POSITIONALLY instead of
+// exempting: a multi-ID heading whose title splits into exactly as many
+// ` + `-joined segments as it has IDs (the real shape — "Title1 (#2310) +
+// Title2 (#2106)") pairs each id with the subject(s) named in ITS OWN
+// segment only, so a subject neither cited id's own segment claims is still
+// evaluated normally, not waved through because a DIFFERENT id/subject pair
+// on the same line happens to be correct. Returns null — meaning "check this
+// id against every subject on the whole line, the pre-finding-R behaviour" —
+// for a single-ID line, or a multi-ID heading whose title is ONE shared
+// clause rather than a per-ID pairing (e.g. "### A2 + A1 · Some combined
+// section (#1000)" — a single subject for a section that covers both IDs at
+// once; splitting that title on ` + ` yields one segment against two IDs, a
+// count mismatch that signals "not a per-ID pairing" rather than "pair id 1
+// with an empty segment").
+function headingTitleSegments(line) {
+  const m = line.match(HEADING_ID_REGEX);
+  if (!m) return null;
+  const ids = splitCitedIds(m[1]);
+  if (ids.length < 2) return null;
+  const segments = line.slice(m[0].length).split(/\s\+\s/);
+  if (segments.length !== ids.length) return null;
+  return { ids, segments };
+}
+
 export function checkConflictingSubjects(fileTexts, registerRows) {
   const legitimate = buildLegitimateSubjectMap(registerRows);
   const wrongId = [];
@@ -1218,39 +1327,22 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
       const nearbySubjects = extractSubjectNumbers(line);
       if (nearbySubjects.size === 0) return;
 
-      // Pass-8 review of PR #2630 (finding R): a MULTI-ID line
-      // (`### A40 + A41 · ...`, HEADING_ID_REGEX's `<ID> + <ID>` form) also
-      // carries multiple subjects, one per row it names — but the cross
-      // product below has no positional information tying a given subject to
-      // ITS OWN id rather than the other one on the same line. Checked
-      // against every subject on the line unconditionally, a completely
-      // correct heading (A40 legitimately owns #2310, A41 legitimately owns
-      // #2106) produces two FATAL false positives, exactly inverted from the
-      // truth ("cited A40 for #2106, but #2106 maps to A41" — true, but not
-      // what the line asserts). Fix: an id that legitimately owns AT LEAST
-      // ONE subject named on this same line is "explained" by the line as a
-      // whole, and is never flagged wrong against any OTHER subject also
-      // named on it — this is what a real multi-ID/multi-subject heading
-      // looks like. An id that owns NONE of the line's subjects is still
-      // flagged (paired control: `### A1 + A2 · ... (#1001) + (#1001)`, where
-      // A1 has no legitimate claim to #1001 at all, still fires) — so a
-      // genuinely wrong multi-ID heading still fails; only a heading that is
-      // actually correct, just with a positionally-ambiguous ID<->subject
-      // pairing, stops false-firing.
-      const idExplainedByLine = new Set();
-      for (const id of citedIds) {
-        if (!registerRows.has(id)) continue;
-        for (const subject of nearbySubjects) {
-          if (legitimate.get(subject)?.has(id)) {
-            idExplainedByLine.add(id);
-            break;
-          }
-        }
+      // Which subject(s) each cited id is actually checked against — see
+      // headingTitleSegments' own comment. Every id shares the full line's
+      // subject set UNLESS the line is a positionally-splittable multi-ID
+      // heading, in which case each id is restricted to its own segment.
+      const segmented = headingTitleSegments(line);
+      const subjectsForId = new Map();
+      for (const id of citedIds) subjectsForId.set(id, nearbySubjects);
+      if (segmented) {
+        segmented.ids.forEach((id, idx) => {
+          if (subjectsForId.has(id)) subjectsForId.set(id, extractSubjectNumbers(segmented.segments[idx]));
+        });
       }
 
       for (const id of citedIds) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
-        for (const subject of nearbySubjects) {
+        for (const subject of subjectsForId.get(id)) {
           const legitimateIds = legitimate.get(subject);
           if (!legitimateIds) {
             // The subject doesn't appear in ANY current register-row heading
@@ -1267,7 +1359,6 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
                 `verify ${id} still applies`,
             );
           } else if (!legitimateIds.has(id)) {
-            if (idExplainedByLine.has(id)) continue; // see idExplainedByLine's own comment above.
             // The subject's ID set is known and doesn't include this ID —
             // unambiguously wrong, the four-wrong-headings class PR #2630
             // exists to catch. Fatal.
@@ -1296,12 +1387,33 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
  * time, rather than asserting a number that goes stale the moment the
  * corpus changes.
  *
+ * Pass-9 review of PR #2630 (finding Z): the first version of this function
+ * RE-IMPLEMENTED Check C's eligibility rule inline (its own `headingCitedIds`/
+ * `CRITERIA_SOURCE_LINE_REGEX` calls) instead of calling
+ * `citationShapedLineIds` — the function Check C itself uses — so the two
+ * could silently disagree: deleting the heading half of
+ * `citationShapedLineIds` makes Check C detect nothing at all while this
+ * measurement kept reporting full coverage, because it never actually
+ * consulted the mutated function. Eligibility is now gated through
+ * `citationShapedLineIds` directly, so a change to what Check C trusts as
+ * citation-shaped moves this count in lockstep — they cannot disagree,
+ * because one calls the other. Two smaller inaccuracies close in the same
+ * pass: `wrongId` additionally requires `registerRows.has(id)` (a line
+ * citing only a NONEXISTENT id can never fire `wrongId`, so it isn't
+ * "eligible" either — Check A's territory, not this one), and a line that is
+ * both an anchored heading AND a `Criteria source:` line no longer risks
+ * being counted into the wrong bucket by reusing the same set for both
+ * classifications — `headingCitedIds`/`CRITERIA_SOURCE_LINE_REGEX` are still
+ * used, but only to classify WHICH surface(s) an already-`citationShapedLineIds`-
+ * eligible line matched, never to decide eligibility on their own.
+ *
  * @param {Map<string, string>} fileTexts — path -> full text (non-frozen,
  *   non-self-referential — same set Check C itself reads).
+ * @param {Map<string, object>} registerRows
  * @returns {{ headingLines: number, headingFiles: number,
  *   criteriaLines: number, criteriaFiles: number }}
  */
-function measureWrongIdEligibleLines(fileTexts) {
+export function measureWrongIdEligibleLines(fileTexts, registerRows) {
   const headingFiles = new Set();
   const criteriaFiles = new Set();
   let headingLines = 0;
@@ -1310,11 +1422,13 @@ function measureWrongIdEligibleLines(fileTexts) {
     const text = deBold(stripFences(rawText));
     for (const line of text.split('\n')) {
       if (extractSubjectNumbers(line).size === 0) continue;
+      const shapedIds = citationShapedLineIds(line);
+      if (![...shapedIds].some((id) => registerRows.has(id))) continue;
       if (headingCitedIds(line).length > 0) {
         headingLines++;
         headingFiles.add(filePath);
       }
-      if (CRITERIA_SOURCE_LINE_REGEX.test(line) && extractIdTokensWithRanges(line).size > 0) {
+      if (CRITERIA_SOURCE_LINE_REGEX.test(line)) {
         criteriaLines++;
         criteriaFiles.add(filePath);
       }
@@ -1352,6 +1466,28 @@ function fileURLToPathSafe(url) {
 
 function readRepoFile(relPath) {
   return readNormalized(join(fileURLToPathSafe(REPO_ROOT), relPath));
+}
+
+// Pass-9 review of PR #2630 (finding U): `readNormalized` is a bare
+// `readFileSync(path, 'utf8')` — Node's utf8 decoder never throws on
+// invalid byte sequences, it substitutes U+FFFD, so a binary file (a PNG
+// under `public/`, a font under `public/fonts/`, ...) was silently
+// "readable" — `readRepoFile`'s `catch` could only ever fire on a genuine
+// I/O error (ENOENT between `git ls-files` and the read, a permission
+// error), never on the binary case the CLI's own success-line clause ("N
+// unreadable/binary excluded") claims to cover, making `unreadableCount`
+// structurally 0 for the case that clause names. Sniffed the way `git`
+// itself decides "binary" for diff purposes: a NUL byte anywhere in the
+// first BINARY_SNIFF_BYTES bytes. Deliberately narrow (a Buffer read + one
+// byte scan) rather than a content-sniffing library — this only needs to
+// answer "would decoding this as text produce garbage", not classify a
+// MIME type.
+const BINARY_SNIFF_BYTES = 8000;
+
+export function isLikelyBinaryFile(absPath) {
+  const buf = readFileSync(absPath);
+  const scanLen = Math.min(buf.length, BINARY_SNIFF_BYTES);
+  return buf.subarray(0, scanLen).includes(0);
 }
 
 // This checker's own source and its own test fixtures — plus the sibling
@@ -1398,11 +1534,20 @@ export function runCheckRegisterCitationsCli(options = {}) {
   const nonFrozenTexts = new Map();
   let unreadableCount = 0;
   for (const relPath of scannedFiles) {
+    const absPath = join(fileURLToPathSafe(REPO_ROOT), relPath);
     let text;
     try {
-      text = readRepoFile(relPath);
+      // See isLikelyBinaryFile's own comment (finding U): a plain
+      // `readFileSync(path, 'utf8')` never throws on binary content, so the
+      // binary case has to be detected explicitly, before decoding — not
+      // discovered via a catch that can never fire for it.
+      if (isLikelyBinaryFile(absPath)) {
+        unreadableCount++;
+        continue;
+      }
+      text = readNormalized(absPath);
     } catch {
-      unreadableCount++; // binary or unreadable — nothing to cite here
+      unreadableCount++; // genuine I/O error — nothing to cite here
       continue;
     }
     nonFrozenTexts.set(relPath, text);
@@ -1483,7 +1628,7 @@ export function runCheckRegisterCitationsCli(options = {}) {
 
   if (!anyFatal) {
     const actuallyScanned = scannedFiles.length - unreadableCount;
-    const coverage = measureWrongIdEligibleLines(nonFrozenTexts);
+    const coverage = measureWrongIdEligibleLines(nonFrozenTexts, rows);
     console.log(
       `\ncheck:register-citations: OK. Checks A (nonexistent ID), B (run-sheet ` +
         `linkage), and C's "existing row ID cited for the wrong subject" half are the FATAL checks ` +

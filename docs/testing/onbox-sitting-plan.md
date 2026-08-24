@@ -52,7 +52,7 @@ sitting; A1 is several sittings inside one pack.
 | `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A34 | 145 |
 | `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A39, A40, A41, A42 | 185 |
 | `onbox-sitting-multilanguage.md` | D1, D2, A35, E4 | 165 |
-| `onbox-sitting-device-browser.md` | E1, E2, E3, E6, E7, E8 | 135 |
+| `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E7, E8 | 135 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
 
 > **Wave-4 note (#2551 step 6), 2026-08-21.** This wave's retirements/
