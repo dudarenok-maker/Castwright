@@ -2,6 +2,14 @@
 
 Written by wave 4 step 5 ([#2554](https://github.com/dudarenok-maker/Castwright/issues/2554)), part of the on-box register campaign (#2435, wave 4 = #2551). This is the recovery map for the cross-chain wiring that step 5 set up: if any automated flip below is missed, this table is how a human or a later agent finds the loose end without re-deriving the whole campaign from scratch.
 
+> **Row IDs below are as-of wave 4 and have since renumbered.** Register IDs are
+> positional: PR #2626 discharged rows and shifted the survivors, so `A39`,
+> `A40`, `A41`, `B3`, `B4` and `E11` in the table below no longer name the rows
+> they named when this map was written. They are deliberately left as written —
+> this is a dated snapshot of the wiring, and rewriting it would falsify the
+> record. **Resolve any row here by its subject, not its number**, against the
+> current register.
+
 **Read this together with `docs/testing/onbox-acceptance-register.md`** — the register rows are the source of truth for acceptance criteria; this document only tracks which issue does what and how the pieces connect.
 
 ## The wiring, defect by defect

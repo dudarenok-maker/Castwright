@@ -1,7 +1,7 @@
-# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A14, A15, A17, A30)
+# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A14, A15, A17, A27)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A4, A6, A7, A14, A15, A17, A30** — the rows a human has to
+> register rows **A4, A6, A7, A14, A15, A17, A27** — the rows a human has to
 > **listen to**: Qwen VoiceDesign persona/A/B audition, bulk cast design, the
 > emotion-chip manuscript preview, cross-engine audition fidelity, and the
 > golden-audio bless guards. Follows the shared format fixed by
@@ -17,7 +17,7 @@
 > depend on that residency surviving, but reuses it if present.
 >
 > **Running time total (recomputed 2026-08-20):** **155 minutes** — A4 ≈ 15,
-> A6 ≈ 20, A7 ≈ 30, A14 ≈ 15, A15 ≈ 15, A17 ≈ 15, A30 ≈ 45. Sum = 155,
+> A6 ≈ 20, A7 ≈ 30, A14 ≈ 15, A15 ≈ 15, A17 ≈ 15, A27 ≈ 45. Sum = 155,
 > matching the plan of record's stated total for this pack
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1) exactly — all seven
 > rows re-resolved as still owed, so nothing changed the arithmetic.
@@ -42,7 +42,7 @@ Stated once for the sitting; do not repeat per row.
 - [ ] **Engines available and loadable from the UI:** Qwen VoiceDesign (0.6B
       and 1.7B tiers), Coqui XTTS, Kokoro (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx`
       + `voices-v1.0.bin` on disk, sidecar venv bootstrapped) — A4 needs all
-      three plus both Qwen tiers in the same session; A30 needs Kokoro
+      three plus both Qwen tiers in the same session; A27 needs Kokoro
       specifically.
 - [ ] **A book set to the 1.7B tier** and a book/character overridden to
       Kokoro inside a Coqui book (A4's tier/engine-override checks).
@@ -59,10 +59,10 @@ Stated once for the sitting; do not repeat per row.
       (e.g. hold the sidecar near its committed-memory ceiling, or the
       supervisor's own forced-restart path if the box exposes one).
 - [ ] **`npm run test:golden-audio`** runnable from the worktree/repo root,
-      and the box **quiet** for A30 — `nvidia-smi` shows no concurrent GPU
+      and the box **quiet** for A27 — `nvidia-smi` shows no concurrent GPU
       work when that step runs (its own `--bless` contention warning should
       print nothing).
-- [ ] **Permission to hand-edit a committed baseline JSON** for A30's forced-
+- [ ] **Permission to hand-edit a committed baseline JSON** for A27's forced-
       refusal drills, with a plan to revert the hand-edit before committing
       anything.
 - [ ] **One shell** for server/CLI control; a second free for `nvidia-smi` /
@@ -74,7 +74,7 @@ Ordered so the bulk-design (Qwen-heavy) rows run first while the cast/session
 setup is fresh, the single-voice persona/A/B/emotion rows follow on the same
 Qwen residency, the multi-engine audition row (A4) comes next since it is the
 one point this sitting swaps into Kokoro/Coqui/tier variations, and the
-golden-audio bless row (A30) — which needs Kokoro alone on a **quiet** card —
+golden-audio bless row (A27) — which needs Kokoro alone on a **quiet** card —
 runs last, after everything else is evicted.
 
 ### A6 + A7 · Bulk voice-design recycle resilience (plan 200) + Design full cast (plan 195) — steps 1–3
@@ -257,7 +257,7 @@ runs last, after everything else is evicted.
     its Stop button is — not a generic "free VRAM" message.
     - Result:
 
-### A30 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
+### A27 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
 > `:1412-1518` (full procedure already spelled out there — cited, not
@@ -269,15 +269,15 @@ runs last, after everything else is evicted.
 > the row's own text. No later issue/PR/run-sheet references `--bless`,
 > `IDENTITY_COSINE_EPSILON`, or `_make_kokoro` since. STILL OWED. Run this
 > **last**, on a **quiet** card — evict every engine from the rows above
-> first (see Teardown-before-A30 note below), because this row's own
+> first (see Teardown-before-A27 note below), because this row's own
 > contention warning must print nothing for the run to mean anything.
 
 > **Evict everything from A4–A17 before starting this row.** Stop Qwen,
-> Coqui, and any resident analyzer; confirm `nvidia-smi` ≈ idle. A30 does not
+> Coqui, and any resident analyzer; confirm `nvidia-smi` ≈ idle. A27 does not
 > need CUDA (`ASR_DEVICE=cpu`/CPU Kokoro also exercises it) but does need the
 > card **uncontended** for a stable, reproducible measurement.
 
-15. **(A30.1) Clean bless run, byte-identical + noise-echo.** Run
+15. **(A27.1) Clean bless run, byte-identical + noise-echo.** Run
     `npm run test:golden-audio -- --bless --sidecar-only` on the now-quiet
     box (confirm `nvidia-smi` first — the `--bless` contention warning
     should print **nothing**). Confirm it completes and writes
@@ -296,14 +296,14 @@ runs last, after everything else is evicted.
     Record the actual **per-leaf identity-cosine deltas** observed (the
     open #2066 question this run is meant to retire) — not just pass/fail.
     - Result:
-16. **(A30.2) Force a real refusal — corrupted field.** Hand-edit a committed
+16. **(A27.2) Force a real refusal — corrupted field.** Hand-edit a committed
     baseline to null out its `transcript` (or delete its `tolerances` key),
     re-run the same `--bless` command, and confirm it **refuses** with the
     expected `GOLDEN_REBLESS_*` message and leaves the file byte-identical
     to before the attempt. Revert the hand-edit immediately after recording
     the result.
     - Result:
-17. **(A30.3) Force a real refusal — WINDOW-sized identity drift.** Hand-edit
+17. **(A27.3) Force a real refusal — WINDOW-sized identity drift.** Hand-edit
     one committed `instruct-baseline.json` `identity.cosine.<emotion>`
     figure by clearly more than `IDENTITY_COSINE_EPSILON` (e.g. +0.05),
     re-run the same `--bless` command, and confirm it refuses with
@@ -311,7 +311,7 @@ runs last, after everything else is evicted.
     which is reserved for `tolerances`), and leaves the file byte-identical.
     Revert the hand-edit immediately after recording the result.
     - Result:
-18. **(A30.4) `_make_kokoro` fails, not skips, on a real broken engine.** Run
+18. **(A27.4) `_make_kokoro` fails, not skips, on a real broken engine.** Run
     `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
     once normally (expect pass). Then deliberately break the engine — rename
     the `.onnx` weight file mid-run, or force a CUDA OOM by holding VRAM —
@@ -348,7 +348,7 @@ state and the plan-of-record files themselves on 2026-08-20 and remain owed:
   (`active`), Ship notes still the bare placeholder; body `:48` re-read
   verbatim ("Live GPU acceptance owed: the audible difference... can only be
   confirmed on a real sidecar"). STILL OWED.
-- **A30** — `gh pr view 2032` → merged 2026-07-31T23:19:54Z; `gh issue view
+- **A27** — `gh pr view 2032` → merged 2026-07-31T23:19:54Z; `gh issue view
   1995`/`2003`/`1987` → all closed 2026-07-31T23:19:56Z; amendment chain
   `gh issue view 2069`/`2062` → both closed 2026-08-05T03:37:30Z. No later
   bless run, per-leaf delta measurement, or forced-Kokoro-failure run
@@ -358,7 +358,7 @@ None of the seven rows is AMBIGUOUS (that is A2/A16's queue, not this
 pack's — the former A22 this note also used to name was retired 2026-08-21,
 see `onbox-acceptance-register.md`'s wave-4 correction note) — every plan
 file's frontmatter and body `Status:` line agree with
-each other for A4, A6, A7, A14, A15, A17 and A30, unlike A16's genuine
+each other for A4, A6, A7, A14, A15, A17 and A27, unlike A16's genuine
 frontmatter-vs-body contradiction handled in `onbox-sitting-vram-contention.md`.
 
 ## Teardown
@@ -368,11 +368,11 @@ frontmatter-vs-body contradiction handled in `onbox-sitting-vram-contention.md`.
 - [ ] Restore `server/.env`'s `QWEN_DEVICE` / `COQUI_DEVICE` pins back to
       `cuda:1` (the owner's box policy) if they were changed for this
       sitting.
-- [ ] Confirm any hand-edited baseline JSON from A30.2/A30.3 was reverted —
+- [ ] Confirm any hand-edited baseline JSON from A27.2/A27.3 was reverted —
       `git status`/`git diff` on `server/tts-sidecar/tests/golden/` shows
       clean before this sitting ends.
 - [ ] Confirm the Kokoro `.onnx` weight file (or whatever was broken for
-      A30.4) is restored and a clean `test:golden-audio` run passes.
+      A27.4) is restored and a clean `test:golden-audio` run passes.
 - [ ] Close the second browser tab/session (A7's 2nd-tab check).
 - [ ] Remove/undo whatever forced the sidecar `/recycle` (A6) and whatever
       held VRAM to force the capacity refusal (A4.4), if either is still

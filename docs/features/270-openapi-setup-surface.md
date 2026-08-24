@@ -163,7 +163,7 @@ by an `it.each(['detecting', 'bootstrapping'])` regression test.
 This is the single best illustration of why the issue was worth doing: the
 drift was invisible, tested, and shipping.
 
-**On-box acceptance owed** — [register row E7](../testing/onbox-acceptance-register.md).
+**On-box acceptance owed** — [register row E6](../testing/onbox-acceptance-register.md).
 The regression test pins the card, but it mocks `fetch`; no automated test has
 ever driven this component from a real bootstrap job, which is exactly how the
 bug survived. Proving the fix needs a box with no venv and the patience for a

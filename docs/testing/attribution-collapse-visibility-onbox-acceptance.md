@@ -4,6 +4,8 @@ status: draft
 
 # Attribution collapse visibility (#1984 Wave 1) — on-box acceptance run sheet
 
+> Register row: [`onbox-acceptance-register.md` E9](onbox-acceptance-register.md)
+
 Discharges register row **E9**. Needs a checkout (or worktree with
 `server/handoff/cache/` populated) whose cache holds the real library's
 analyses, plus `cd server && npm run build`. No GPU needed.

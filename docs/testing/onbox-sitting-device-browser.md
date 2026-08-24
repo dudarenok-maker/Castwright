@@ -40,7 +40,7 @@
 > the timing behaviour, 4 and 5 of that rendered half live** — see the
 > register's E6 row for the evidence; only observation 6 (the failure path)
 > remains owed, per §5 below. Same "still owed to the operator" pattern as
-> A31 in `onbox-sitting-cloning-identity.md`.
+> A30 in `onbox-sitting-cloning-identity.md`.
 >
 > **Running time total (recomputed 2026-08-21):** E1 30 + E2 20 + E3 15 +
 > E5 5 + E6 20 + E7 30 + E8 20 = **140 minutes** (was 170 — old-E6's 30
