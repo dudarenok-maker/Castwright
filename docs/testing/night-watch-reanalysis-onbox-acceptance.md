@@ -9,16 +9,21 @@ status: draft
 Discharged register rows **C2** ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187),
 plan [247](../features/247-dialogue-structure-attribution.md)) and narrowed **C3**
 ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253)) — as those rows were
-numbered at the time of the 2026-08-12/13 run recorded below. #2187 is complete — the
-aligner fix shipped in `b2be5b7b` — and stays open **solely** for the row that survived.
-Group C discharges are positional and renumber (see the register's own Group C intro): the
-surviving row is **today's C2**, which is what the header line above names. The cloud pass
-(**C1**, [#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)) is a separate,
-still-owed session this run sheet was NOT run against — Session B below records it as not
-yet run.
+numbered at the time of the 2026-08-12/13 run recorded below. #2187's own claim (the
+alignment/floor check, §2's "the actual #2187 claim") already **PASSED** in that run — the
+aligner fix shipped in `b2be5b7b`. #2187 stays open on GitHub **solely as a bookkeeping
+step**: per §4 "Recording the outcome" below, closing it is bundled into the PR that closes
+out this run sheet's still-owed session, not because it substantively depends on that
+session's result. Group C discharges are positional and renumber (see the register's own
+Group C intro): the surviving row is **today's C2**
+([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253), formerly this file's C3),
+which is what the header line above names. The cloud pass (**C1**,
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)) is a separate, still-owed
+session this run sheet was NOT run against — Session B below records it as not yet run.
 
-Neither historical row needed TTS, GPU synthesis, or the sidecar. C3 needed local Ollama;
-C1 needs the free-tier `GEMINI_API_KEY`.
+Of the two historical rows, neither needed TTS, GPU synthesis, or the sidecar, and the
+narrowed row (C3, today's C2) needed local Ollama. C1 — a separate, still-owed session, not
+one of the two historical rows — needs the free-tier `GEMINI_API_KEY` instead.
 
 ---
 

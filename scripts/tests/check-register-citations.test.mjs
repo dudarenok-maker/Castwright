@@ -8,10 +8,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
   parseRegisterRows,
   isFrozenPath,
-  isStableSuperpowersDoc,
   checkNonexistentIds,
   checkRunSheetLinkage,
   checkConflictingSubjects,
@@ -197,6 +197,58 @@ test('checkNonexistentIds: an annotation in a DIFFERENT section does not excuse 
   assert.match(annotated[0], /B3/);
 });
 
+// Pass-6 review of PR #2630 (finding C): paired real-tree injection proved a
+// discharge word ANYWHERE in the enclosing section/window excused EVERY
+// nonexistent-ID citation in it, not just the one the annotation was
+// actually about. Real repro: a `// see register row A44 ...` comment 9
+// lines above an unrelated UI-toast assertion whose text happens to contain
+// "no longer exists" (about a dead character alias, nothing to do with a
+// register row) disarmed the check for A44. Requiring the annotation to
+// name the SAME id it excuses closes this without touching any of the 10
+// live annotations in the real corpus (each already names its own id right
+// next to the discharge word).
+test('checkNonexistentIds: a discharge word nearby that does NOT reference the cited ID does not excuse it (finding C)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // Padded with unrelated filler lines (each ~70 chars) so the ID mention
+  // and the discharge word sit well over ID_PROXIMITY_CHARS (120) apart,
+  // reproducing the real shape: a `no longer exists` UI-toast assertion
+  // several lines below an unrelated discharge comment.
+  const filler = Array.from(
+    { length: 8 },
+    (_, n) => `      const someUnrelatedSetupLine${n} = doSomethingElseEntirely(n);`,
+  );
+  const text = [
+    '## Some section',
+    '',
+    '// see register row A9 for the discharge history this repro pins',
+    ...filler,
+    'Names the dead target and says it was',
+    'no longer exists, so it was not restored.',
+    '',
+  ].join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(annotated.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+});
+
+test('checkNonexistentIds: a discharge annotation that DOES name the cited ID right next to it still excuses it (paired control)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = [
+    '## Some section',
+    '',
+    '// see register row A9 — discharged 2026-08-21, no longer exists.',
+    '',
+    'Names the dead target and says it was',
+    'no longer exists, so it was not restored.',
+    '',
+  ].join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A9/);
+});
+
 // --- Check B: bidirectional run-sheet linkage ---
 //
 // Scoped to the run sheet's HEADER paragraph, not the whole file — see
@@ -254,6 +306,27 @@ test('checkRunSheetLinkage: content below the header\'s `---` is NOT read as the
   const errors = checkRunSheetLinkage(rows, readFile);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /no "Register row\(s\):" header/);
+});
+
+// Pass-6 review of PR #2630 (finding F-c): `extractIdTokensWithRanges(paragraph)`
+// mutated to `extractIdTokensWithRanges(headerRegion)` at the call site left
+// the suite green — real (night-watch C2->C4) repro: the intro prose ABOVE
+// the "Register row(s):" line legitimately mentions the CORRECT row
+// elsewhere in the header, so a widened scan over the whole header region
+// finds that correct mention and wrongly clears a paragraph that actually
+// cites the WRONG row. This fixture pins exactly that shape: intro prose
+// names A1 (correct), the "Register row(s):" paragraph itself cites A9
+// (wrong) — the real implementation must still fail, because only the
+// paragraph counts as the assertion of ownership.
+test('checkRunSheetLinkage: intro prose above the header paragraph correctly naming the row does NOT excuse the paragraph itself citing the wrong one', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const readFile = () =>
+    "# Thing\n\n> This run sheet is A1's own criteria walkthrough.\n>\n" +
+    '> Register row: A9\n\n---\n\nBody.\n';
+  const errors = checkRunSheetLinkage(rows, readFile);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /named by register row A1/);
+  assert.match(errors[0], /cites A9 instead/);
 });
 
 test('checkRunSheetLinkage: expands an en-dash ID range so a row inside it counts as cited', () => {
@@ -431,16 +504,41 @@ test('checkConflictingSubjects: does not fire when a subject legitimately spans 
   assert.equal(errors.length, 0);
 });
 
-test('checkConflictingSubjects: fires when a citation pairs an existing ID with the wrong subject', () => {
+test('checkConflictingSubjects: fires when a heading pairs an existing ID with the wrong subject', () => {
   const { rows } = parseRegisterRows(buildRegister());
-  // #1000 legitimately maps only to A1 in the register. Citing A2 for #1000
-  // is an existing-but-wrong citation — the dangerous "looks valid" case.
-  const files = new Map([['docs/bar.md', 'See register row A2 (#1000) for the fix.']]);
+  // #1000 legitimately maps only to A1 in the register. A "### A2 · ... (#1000)"
+  // heading is an existing-but-wrong citation on its own line — the shape
+  // PR #2630's finding A actually was (a uniform ID shift across headings).
+  const files = new Map([['docs/bar.md', '### A2 · Some pack section (#1000)\n\nBody.\n']]);
   const errors = checkConflictingSubjects(files, rows);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /A2/);
   assert.match(errors[0], /1000/);
   assert.match(errors[0], /A1/); // names the legitimate ID(s) for the subject
+});
+
+test('checkConflictingSubjects: fires the same way off a "Criteria source:" line', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A2 (#1000).\n'],
+  ]);
+  const errors = checkConflictingSubjects(files, rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A2/);
+  assert.match(errors[0], /1000/);
+  assert.match(errors[0], /A1/);
+});
+
+test('checkConflictingSubjects: the "row(s) ID" prose idiom alone is NOT a Check C surface any more', () => {
+  // Narrowed (finding D, PR #2630 pass 6): a bare "row A2 (#1000)" prose
+  // sentence used to be Check C's only surface, but same-line scoping over
+  // that surface can't disambiguate a line naming several rows at once (the
+  // measured false-positive shape) — Check C now trusts only a heading or a
+  // "Criteria source:" line, each of which can only ever name one row.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([['docs/bar.md', 'See register row A2 (#1000) for the fix.']]);
+  const errors = checkConflictingSubjects(files, rows);
+  assert.equal(errors.length, 0);
 });
 
 // --- frozen-path exclusion ---
@@ -461,39 +559,41 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/features/278-cast-character-identity.md'), false);
 });
 
-test('isStableSuperpowersDoc: excludes only a status: stable file whose OWN leading frontmatter says so', () => {
-  assert.equal(
-    isStableSuperpowersDoc('docs/superpowers/plans/x.md', '---\nstatus: stable\n---\n\nblah'),
-    true,
+// Pass-6 review of PR #2630 (finding B): `isStableSuperpowersDoc` used to
+// exclude any docs/superpowers/** file from Check A wholesale when its own
+// leading frontmatter said `status: stable`, on the theory that a stable
+// spec/plan is a frozen design record. That theory was false — a stable
+// doc's "Owed acceptance (on-box)" section is a LIVE pointer, not history,
+// and the exclusion hid exactly this shape going stale in the real repo
+// (2026-08-13-language-recurrence-and-prompt-design.md cited nonexistent
+// `A46`/`B3` while its non-excluded sibling plan file had already been
+// corrected). This pins that a `status: stable` docs/superpowers/** file is
+// no longer special-cased: an unannotated nonexistent-ID citation inside one
+// is a Check A error like anywhere else in the tree.
+test('checkNonexistentIds: a status: stable docs/superpowers/** file is NOT excluded — an unannotated nonexistent ID inside one still errors', () => {
+  const registerText = buildRegister();
+  const { rows } = parseRegisterRows(registerText);
+  const text =
+    '---\nstatus: stable\n---\n\n' +
+    '**Owed acceptance (on-box):** register rows A46 for the still-owed acceptance.\n';
+  const { errors, annotated } = checkNonexistentIds(
+    text,
+    'docs/superpowers/specs/x-design.md',
+    rows,
   );
-  assert.equal(
-    isStableSuperpowersDoc('docs/superpowers/plans/x.md', '---\nstatus: active\n---\n\nblah'),
-    false,
+  assert.equal(annotated.length, 0);
+  assert.ok(
+    errors.some((e) => e.includes('cited A46')),
+    `expected an A46 error, got: ${JSON.stringify(errors)}`,
   );
-  assert.equal(isStableSuperpowersDoc('docs/features/x.md', '---\nstatus: stable\n---\n'), false);
 });
 
-test('isStableSuperpowersDoc: a file with NO leading frontmatter fence is never excluded, even if the phrase appears in prose', () => {
-  // Real bug: docs/superpowers/plans/2026-07-05-github-issues-kanban-board.md
-  // has no frontmatter at all and opens with a heading — its only
-  // `status: stable` match was inside a FENCED YAML EXAMPLE later in the
-  // body, instructing the reader to write that frontmatter into a DIFFERENT
-  // file. A whole-file regex excluded all 1,900 live lines of that plan from
-  // every check.
-  const text = [
-    '# GitHub Projects Kanban Board Implementation Plan',
-    '',
-    'Some intro. See register row A99.',
-    '',
-    '```yaml',
-    '---',
-    'status: stable',
-    'shipped: 2026-07-05',
-    '---',
-    '```',
-    '',
-  ].join('\n');
-  assert.equal(isStableSuperpowersDoc('docs/superpowers/plans/x.md', text), false);
+test('checkNonexistentIds: a status: active docs/superpowers/** file was never excluded either — unaffected by the removal', () => {
+  const registerText = buildRegister();
+  const { rows } = parseRegisterRows(registerText);
+  const text = '---\nstatus: active\n---\n\nSee register row A46 for the still-owed acceptance.\n';
+  const { errors } = checkNonexistentIds(text, 'docs/superpowers/plans/x.md', rows);
+  assert.ok(errors.some((e) => e.includes('cited A46')));
 });
 
 // --- Check A: annotation must be ADJACENT to the citation it excuses ---
@@ -533,6 +633,45 @@ test('checkNonexistentIds: a discharge phrase a few lines away (no headings at a
   assert.equal(errors.length, 0);
   assert.equal(annotated.length, 1);
   assert.match(annotated[0], /A9/);
+});
+
+// Pass-6 review of PR #2630 (finding F-b): the test above alone can't pin
+// ANNOTATION_WINDOW_LINES' actual value (25) — its 2-line, no-heading
+// fixture takes the `end - start <= MAX_ANNOTATION_SECTION_LINES` whole-
+// section path, never reaching the ±25-line WINDOW fallback the constant
+// actually governs; setting the constant to 0 leaves it green. These two
+// pin the real lower bound on real-corpus-shaped input: a headingless file
+// long enough (>60 lines total) to force the window fallback, with the SAME
+// id both cited and annotated — one pair 23 lines apart (the measured real
+// gap that widened this constant from 5 to 25 in the first place) which
+// must still excuse, and one pair 30 lines apart which must NOT (a window
+// mutated down to e.g. 5 would make the first assertion below fail too).
+function buildWindowFixture(gapLines) {
+  const lines = [];
+  // Deliberately no "row" word here — this line must not itself be a SECOND
+  // Check A citation of A9 (which would confound the assertions below); it
+  // mirrors the real corpus's "A9 — discharged 2026-08-21" annotation shape.
+  lines.push('A9 was discharged and no longer exists.');
+  for (let i = 0; i < gapLines - 1; i++) lines.push(`filler line ${i}`);
+  lines.push('See register row A9 for details.');
+  for (let i = 0; i < 40; i++) lines.push(`trailing filler ${i}`); // push total > 60 lines
+  return lines.join('\n');
+}
+
+test('checkNonexistentIds: annotation 23 lines above the citation (measured real gap) still excuses it', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const { errors, annotated } = checkNonexistentIds(buildWindowFixture(23), 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A9/);
+});
+
+test('checkNonexistentIds: annotation 30 lines above the citation (past the window) does NOT excuse it', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const { errors, annotated } = checkNonexistentIds(buildWindowFixture(30), 'docs/foo.md', rows);
+  assert.equal(annotated.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
 });
 
 test('checkNonexistentIds: a heading-bounded section that is actually huge (heading far above, none below) falls back to the small window too', () => {
@@ -577,22 +716,33 @@ test('checkNonexistentIds: a bold-wrapped ID in prose ("rows **C1** ... and **C2
   assert.match(errors[0], /A9/);
 });
 
-test('checkNonexistentIds: a bare ID in a markdown heading, even in an onbox-named file, is NOT a citation — no "row(s)" context', () => {
+test('checkNonexistentIds: an ANCHORED "### <ID> · ..." heading IS a citation (pass 6, PR #2630 finding A)', () => {
+  // A48 does not exist in the fixture register (A1, A2, B1 only) — an
+  // unannotated heading citing it is exactly PR #2630's finding A shape (a
+  // uniform ID shift across a run of pack headings) and must error.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '### A48 · Some pack section';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/testing/onbox-sitting-foo.md', rows);
+  assert.equal(annotated.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A48/);
+});
+
+test('checkNonexistentIds: an UN-ANCHORED heading is still NOT a citation — the D13/D18 collision case the anchor was measured against', () => {
   // Real false positive this precision fix closes:
   // attribution-collapse-visibility-onbox-acceptance.md numbers its OWN
   // internal defects "## 5 · D13 verdict ..." / "## 3 · The D18-trap sanity
   // check" — a doc-local scheme that shares this register's [A-H]\d{1,3}
   // shape and an "onbox" filename, with no relationship to a register row at
-  // all. An earlier version of this check treated a bare ID in a heading of
-  // an onbox-named file as a citation and self-flagged on exactly this file.
+  // all. The token in the ID POSITION there is "5"/"3", not "D13"/"D18" — an
+  // ANCHORED `^#{2,6}\s+<ID>\s*·` never matches that heading shape at all,
+  // which is exactly why it's the surface Check A now trusts (34 headings
+  // tree-wide, 0 collisions, measured pass 6 of PR #2630).
   const { rows } = parseRegisterRows(buildRegister());
-  const text = '### A99 · Some pack section';
-  const inOnboxFile = checkNonexistentIds(text, 'docs/testing/onbox-sitting-foo.md', rows);
-  assert.equal(inOnboxFile.errors.length, 0);
-  assert.equal(inOnboxFile.annotated.length, 0);
-
-  const elsewhere = checkNonexistentIds(text, 'docs/superpowers/specs/some-design.md', rows);
-  assert.equal(elsewhere.errors.length, 0);
+  const text = '## 5 · D13 verdict — some section title';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/testing/onbox-sitting-foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 0);
 });
 
 test('checkNonexistentIds: a bare ID in a "row"-labelled table cell is NOT a citation — no "row(s)" context', () => {
@@ -616,7 +766,9 @@ test('checkNonexistentIds: a bare ID in a "row"-labelled table cell is NOT a cit
 test('checkConflictingSubjects: warns (not silently passes) when the paired subject number maps to NO current register row at all', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const files = new Map([
-    ['docs/bar.md', 'Discharge register row A1 for #9999.'], // #9999 is in no heading
+    // #9999 is in no register heading — a "Criteria source:" line naming A1
+    // for it must still warn rather than silently pass.
+    ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A1 for #9999.\n'],
   ]);
   const errors = checkConflictingSubjects(files, rows);
   assert.equal(errors.length, 1);
@@ -711,4 +863,31 @@ test('CLI: the sibling check-onbox-register.mjs checker\'s test fixtures are exc
   // the real register.
   const result = runCli([]);
   assert.doesNotMatch(result.stdout, /check-onbox-register\.test\.mjs/);
+});
+
+// Pass-6 review of PR #2630 (finding F-a): the test above alone can't fail
+// even with the exclusion deleted — before Check A recognised the anchored
+// heading surface, that sibling file's "### F1 · thing 1" / "### F2 · thing
+// 2" fixtures weren't citations under any surface Check A trusted, so
+// removing the path from SELF_REFERENTIAL_PATHS changed the CLI's output by
+// zero characters and this test passed regardless. Now that headings ARE a
+// Check A surface (see the "ANCHORED heading IS a citation" test above),
+// the exclusion is genuinely load-bearing — this mutates the real script on
+// disk, in-process, to prove it, then restores byte-for-byte.
+test('CLI mutation: removing check-onbox-register.test.mjs from SELF_REFERENTIAL_PATHS makes it self-flag (proves the exclusion is load-bearing)', () => {
+  const original = readFileSync(CLI_PATH, 'utf8');
+  const needle = "  'scripts/tests/check-onbox-register.test.mjs',\n";
+  assert.ok(original.includes(needle), 'fixture assumption: the exclusion entry must exist verbatim');
+  const mutated = original.replace(needle, '');
+  assert.notEqual(mutated, original);
+  try {
+    writeFileSync(CLI_PATH, mutated);
+    const result = runCli([]);
+    assert.equal(result.status, 1, 'mutated CLI should now fail on its own self-referential fixtures');
+    assert.match(result.stderr, /check-onbox-register\.test\.mjs.*cited F1/);
+    assert.match(result.stderr, /check-onbox-register\.test\.mjs.*cited F2/);
+  } finally {
+    writeFileSync(CLI_PATH, original);
+    assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');
+  }
 });

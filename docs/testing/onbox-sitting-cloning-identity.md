@@ -1,7 +1,7 @@
-# On-box sitting pack — cloning + character-identity (A23, A25, A28, A29, A30, A40, A41, A42, A43)
+# On-box sitting pack — cloning + character-identity (A23, A25, A28, A29, A30, A39, A40, A41, A42)
 
 > **Sitting pack** for wave 2 of `#2435`, step 6 of the `#2453` chain. Covers
-> register rows **A23, A25, A28, A29, A30, A40, A41, A42, A43** —
+> register rows **A23, A25, A28, A29, A30, A39, A40, A41, A42** —
 > clone-derive, clone-readiness, `characterId` drift and resolution, Russian
 > XTTS quality, entity decode, and the audition-centroid fix. Follows the
 > shared format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5;
@@ -31,8 +31,8 @@
 > via `CUDA_VISIBLE_DEVICES=0` (A29/A30).
 >
 > **Running time total (recomputed 2026-08-21):** **170 minutes** for the
-> original eight rows (A23 ≈ 30, A25 ≈ 15, A28 ≈ 30, A29 ≈ 20, A40 ≈ 20,
-> A41 ≈ 20, A42 ≈ 10, A43 ≈ 25 — matching
+> original eight rows (A23 ≈ 30, A25 ≈ 15, A28 ≈ 30, A29 ≈ 20, A39 ≈ 20,
+> A40 ≈ 20, A41 ≈ 10, A42 ≈ 25 — matching
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1 exactly), **plus
 > ≈ 15 minutes for A30 §8.7 alone** (one re-render + listen; §8.8's
 > ≈ 15 minutes and A43's ≈ 20 minutes are discharged, dropped from this
@@ -46,9 +46,9 @@ Stated once for the sitting; do not repeat per row.
 - [ ] **A real cloned voice, ingested WITHOUT a transcript**
       (`master.transcript === ''`) — A28's gate needs it in this state at the
       start of the sitting; A28 §4 fills the transcript in, and every later
-      row that wants "a cloneable voice" (A23, A43) reuses the now-transcribed
+      row that wants "a cloneable voice" (A23, A42) reuses the now-transcribed
       clone rather than a second ingest.
-- [ ] **A non-English book** (A23, A41) — cast the clone above onto a
+- [ ] **A non-English book** (A23, A40) — cast the clone above onto a
       character with dialogue in it. `ASR_DEVICE` and `ASR_COMPUTE_TYPE` must
       agree (a `cpu` device with a pinned `int8_float16` makes every
       `/transcribe` 500 — A23 needs a working `/transcribe`).
@@ -61,11 +61,11 @@ Stated once for the sitting; do not repeat per row.
       `19-chapter-fifteen-point-blank.segments.json`, and their `.mp3`s**
       before re-rendering, so a bad run can be reverted without re-importing.
 - [ ] **An EPUB carrying named HTML entities** in its first-chapter heading
-      and/or body (A41) — reuse the non-English book above if it qualifies,
+      and/or body (A40) — reuse the non-English book above if it qualifies,
       otherwise hand-substitute `&mdash;`/an accented named entity into a real
       chapter. Confirm one exists in the on-box corpus before the sitting.
 - [ ] **A Russian book or line on the stock catalogue Coqui voice
-      `Damien Black`** (A40) — no clone needed, every #2026 defect reproduces
+      `Damien Black`** (A39) — no clone needed, every #2026 defect reproduces
       on it.
 - [ ] **A genuinely static-FFmpeg box** for A25 — `ffmpeg` on PATH, no hot-
       patched FFmpeg DLLs inside `site-packages/torchcodec/` (confirm
@@ -73,7 +73,7 @@ Stated once for the sitting; do not repeat per row.
       back to hot-patched and A25 needs re-checking against register.md
       §A25 item 1's three verified preconditions before trusting the result).
 - [ ] **A live sidecar and a book mid-render, plus OS-level process-kill
-      access** (A42) — `taskkill`/Task Manager, ability to bind a foreign
+      access** (A41) — `taskkill`/Task Manager, ability to bind a foreign
       listener on `:9000`, ability to start a fresh sidecar manually, and
       ability to set `SIDECAR_NEVER_ADOPT` on the server process.
 - [ ] **A30 §8.7 (added 2026-08-20):** the same *Заказ Коалфолла* real
@@ -88,9 +88,9 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 ## Procedure
 
 Ordered so the Qwen-resident rows run first (A28 fixes the clone's transcript
-that A23 and A43 then reuse), the same non-English book and cast id-drift work
+that A23 and A42 then reuse), the same non-English book and cast id-drift work
 ride the same Qwen residency, the engine swaps once into Coqui/XTTS for the
-two Russian/Coqui-derive rows, and the disruptive sidecar-kill row (A42) runs
+two Russian/Coqui-derive rows, and the disruptive sidecar-kill row (A41) runs
 last, alone, since it deliberately crashes the sidecar twice.
 
 ### A28 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md))
@@ -101,7 +101,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > Run sheet's every `Result:` line (§§3–6) is still an unfilled blank, SHA/
 > date/run-by line unfilled — no on-box run recorded. STILL OWED. Run **§4
 > first** — it is the load-bearing section per the run sheet's own §1 note —
-> and its "Add transcript" step is why this row runs before A23/A43: it
+> and its "Add transcript" step is why this row runs before A23/A42: it
 > converts the sitting's transcript-less clone into one with a real
 > transcript, which those rows then use.
 
@@ -161,9 +161,9 @@ last, alone, since it deliberately crashes the sidecar twice.
    render, not something to engineer.
    - Result:
 
-### A43 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)
+### A42 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)
 
-> **Criteria source:** `onbox-acceptance-register.md` A43. Re-resolved
+> **Criteria source:** `onbox-acceptance-register.md` A42. Re-resolved
 > 2026-08-20: `gh pr view 2402` → merged 2026-08-16T03:56:05Z, title matches.
 > Only mock/unit coverage exists (`aggregate-audition-voice-reassign.test.ts`)
 > — no run sheet under `docs/testing/`. STILL OWED. Records A23's final
@@ -190,7 +190,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > closed 2026-08-04T17:40:01Z, matches. The run sheet's §§3–6 `Result:` lines
 > are all still unfilled blanks. §9 of that same run sheet (dated
 > 2026-08-11) re-rendered a **different** book (*Заказ Коалфолла*, for the
-> since-discharged A42 audio-currency row) — it does not touch *Playing with
+> since-discharged A45 audio-currency row) — it does not touch *Playing with
 > Fire* ch19/ch16, the fixture this row names. STILL OWED. No clone needed —
 > switch the cast target to the *Playing with Fire* workspace book
 > (Preconditions) while Qwen stays resident.
@@ -225,9 +225,9 @@ last, alone, since it deliberately crashes the sidecar twice.
     the criterion, not just the JSON.
     - Result:
 
-### A41 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
+### A40 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
 
-> **Criteria source:** `onbox-acceptance-register.md` A41. Re-resolved
+> **Criteria source:** `onbox-acceptance-register.md` A40. Re-resolved
 > 2026-08-20: `gh issue view 2310` → closed 2026-08-13T04:25:10Z; `gh pr view
 > 2316` → merged 2026-08-13T04:43:29Z, title matches ("widen named-entity
 > decode to the full HTML5 set"). Every layer proved only by unit/e2e tests
@@ -250,7 +250,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     analyzer chain, not a gate on this fix.
     - Result:
 
-### A40 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050)
+### A39 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050)
 
 > **Criteria source:** [`fs38-wave3-onbox-acceptance.md`](fs38-wave3-onbox-acceptance.md)
 > `#2026 — additional acceptance criteria: Russian XTTS quality` section
@@ -287,7 +287,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > **Item 4 (Pinokio `import torchcodec` check) is explicitly batched with row
 > E1 in `onbox-sitting-device-browser.md`, which already owns the Pinokio
 > box — not run in this sitting.** Only item 2 runs here, on the same
-> static-FFmpeg box confirmed in Preconditions, same Coqui residency as A40.
+> static-FFmpeg box confirmed in Preconditions, same Coqui residency as A39.
 
 21. **Item 2 — latent equivalence, audible half.** Decode equivalence was
     already measured bit-identical (max difference 0.0) during PR #1978's
@@ -296,9 +296,9 @@ last, alone, since it deliberately crashes the sidecar twice.
     and confirm the rendered output is equivalent by ear.
     - Result:
 
-### A42 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
+### A41 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
 
-> **Criteria source:** `onbox-acceptance-register.md` A42 — full scenario
+> **Criteria source:** `onbox-acceptance-register.md` A41 — full scenario
 > text already spelled out there (`:2473-2496`), cited not restated except
 > for the exact commands below. Re-resolved 2026-08-20: `gh issue view 2106`
 > → closed 2026-08-16T03:05:14Z; `gh pr view 2398` → merged
@@ -367,15 +367,15 @@ remain owed:
 - **A29** — `gh issue view 2040` closed, matches. Run sheet §§3-6 blank; §9's
   2026-08-11 run covers a different book for a different (discharged) row.
   STILL OWED.
-- **A40** — `gh issue view 2026` still **OPEN**; `gh pr view 2050` merged,
+- **A39** — `gh issue view 2026` still **OPEN**; `gh pr view 2050` merged,
   matches; `gh issue view 2057` closed but only reconciled the register, not
   the acceptance. Cited run-sheet section's Result line still the unchecked
   template. STILL OWED.
-- **A41** — `gh issue view 2310` closed; `gh pr view 2316` merged, matches.
+- **A40** — `gh issue view 2310` closed; `gh pr view 2316` merged, matches.
   No run sheet or dated result anywhere for a real EPUB. STILL OWED.
-- **A42** — `gh issue view 2106` closed; `gh pr view 2398` merged, matches.
+- **A41** — `gh issue view 2106` closed; `gh pr view 2398` merged, matches.
   No run sheet under `docs/testing/` at all. STILL OWED.
-- **A43** — `gh pr view 2402` merged, matches. Only mock/unit coverage
+- **A42** — `gh pr view 2402` merged, matches. Only mock/unit coverage
   exists; no run sheet. STILL OWED.
 
 None of the rows is AMBIGUOUS (that is A2/A16's queue, not this
@@ -389,9 +389,9 @@ A16's genuine frontmatter-vs-body contradiction handled in
 
 - [ ] Evict Qwen (Base + VoiceDesign) and Coqui/XTTS so the next sitting
       starts cold.
-- [ ] Confirm `SIDECAR_NEVER_ADOPT` is unset (A42 Scenario 2 cleanup) and the
+- [ ] Confirm `SIDECAR_NEVER_ADOPT` is unset (A41 Scenario 2 cleanup) and the
       server has been restarted at least once since.
-- [ ] Confirm no foreign listener is still bound on `:9000` (A42 Scenario 1).
+- [ ] Confirm no foreign listener is still bound on `:9000` (A41 Scenario 1).
 - [ ] Restore the *Playing with Fire* workspace book from the backups taken
       in Preconditions if either re-render (A29 §§13-14) needs reverting, or
       confirm the new state is intentionally kept.

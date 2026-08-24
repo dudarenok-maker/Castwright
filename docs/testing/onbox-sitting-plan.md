@@ -50,7 +50,7 @@ sitting; A1 is several sittings inside one pack.
 | `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A24, A26, A31, A32, A33 | 155 |
 | `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A27 | 155 |
 | `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A34 | 145 |
-| `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A40, A41, A42, A43 | 185 |
+| `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A39, A40, A41, A42 | 185 |
 | `onbox-sitting-multilanguage.md` | D1, D2, A35, E4 | 165 |
 | `onbox-sitting-device-browser.md` | E1, E2, E3, E6, E7, E8 | 135 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
@@ -90,6 +90,14 @@ sitting; A1 is several sittings inside one pack.
 > at least two distinct historical `A43` discharges — is a bigger, riskier
 > edit than this table fix and is out of scope for this sweep; it needs its
 > own pass rather than a blind shift.
+
+> **Correction, 2026-08-25 (PR #2630 pass-6 review).** The `A40`–`A43` fix
+> flagged as out of scope above is now done, resolved individually against
+> the register by subject/issue rather than by shift:
+> `onbox-sitting-cloning-identity.md`'s four wrong headings (`#1969`→`A42`,
+> `#2310`→`A40`, `#2026`→`A39`, `#2106`→`A41`) are corrected, and this
+> table's row above is updated to match that pack's own current heading
+> labels — `A23, A25, A28, A29, A30, A39, A40, A41, A42`.
 
 <!-- The seven rows above are plain code spans, not links, until their pack
 files exist — review of PR #2470 (attempting to fix this a different way)
