@@ -20,35 +20,50 @@
 //      "annotate, don't renumber" rule — renumbering it to whatever now
 //      occupies that slot would be the exact silent corruption this checker
 //      exists to catch elsewhere. So a nonexistent-ID citation is an ERROR
-//      unless the same markdown SECTION (bounded by the nearest enclosing
-//      heading of any level) also contains an explicit discharge/removal
-//      annotation, in which case it is downgraded to a printed,
-//      non-fatal NOTE — still visible, never silently dropped, but it
-//      doesn't fail the gate. An *unannotated* nonexistent ID is still a
-//      hard error, always.
+//      unless a discharge/removal annotation appears NEAR the citation — see
+//      enclosingSectionText's own comment for exactly how "near" is bounded —
+//      in which case it is downgraded to a printed, non-fatal NOTE — still
+//      visible, never silently dropped, but it doesn't fail the gate. An
+//      *unannotated* nonexistent ID is still a hard error, always.
+//
+//      A citation must carry EXPLICIT "row(s)"/"Register row(s):" context —
+//      a bare `[A-H]\d{1,3}` token on its own is never enough. An earlier
+//      version of this check also treated a bare ID in a markdown heading or
+//      a "row"-labelled table cell (scoped to onbox-acceptance-named files)
+//      as a citation, on the theory that the filename scoping made it safe.
+//      Measurement proved otherwise:
+//      `attribution-collapse-visibility-onbox-acceptance.md` numbers its OWN
+//      internal defects `D13`/`D18` in section headings ("## 5 · D13
+//      verdict …") — a doc-local scheme that happens to share this
+//      register's `[A-H]\d{1,3}` shape and an "onbox" filename, with no
+//      relationship to a register row at all. There is no window or heading
+//      test that tells the two schemes apart from the bare token alone, so
+//      the surface was removed for Check A entirely; the broad bare-ID
+//      parsing survives only inside Check B's run-sheet HEADER region (see
+//      below), where the preceding "Register row(s):" label already
+//      supplies the context a bare heading can't.
 //   B. Bidirectional run-sheet linkage — a register row that OWNS its run
-//      sheet (asserted via one of TWO markers measured in the real
-//      register — the prose phrase "run sheet", or the structured bold
-//      field `*Criteria:*`) creates a two-way link: that run sheet's own
-//      HEADER (its leading `> Register row(s): ...` paragraph, not the
-//      whole file) must cite the row back. A forward-only scan (does the
-//      row name a real file?) misses a run sheet whose header still cites a
-//      stale ID — and a whole-file scan is just as blind to it, since the
-//      body legitimately re-mentions the correct ID elsewhere (Result
-//      lines, discharge notes); only the header actually asserts ownership.
-//      A header with no such line is itself a reportable finding, not a
-//      silent widen-the-scan fallback.
+//      sheet (asserted via one of THREE markers measured in the real
+//      register — the prose phrase "run sheet", the structured bold field
+//      `*Criteria:*`, or the plain `Full criteria:` label) creates a
+//      two-way link: that run sheet's own HEADER (its leading `> Register
+//      row(s): ...` paragraph, not the whole file) must cite the row back. A
+//      forward-only scan (does the row name a real file?) misses a run
+//      sheet whose header still cites a stale ID — and a whole-file scan is
+//      just as blind to it, since the body legitimately re-mentions the
+//      correct ID elsewhere (Result lines, discharge notes); only the header
+//      actually asserts ownership. A header with no such line is itself a
+//      reportable finding, not a silent widen-the-scan fallback.
 //
 //      WHAT THIS DOES NOT CHECK, and says so out loud: a `*-onbox-
 //      acceptance.md` path a row mentions but that neither marker
 //      classifies as owned (a borrowed reference, e.g. A39 borrowing
 //      fs38-wave3's section; or a phrasing this checker doesn't recognise
-//      yet, e.g. plain "Full criteria:" without the bold) is NEVER run
-//      through Check B — there is no third check that verifies a borrowed
-//      reference's target. Those pairs are listed by name in a dedicated
-//      "mentioned but not classified as owned" section instead, precisely
-//      so a green exit here is never mistaken for "every citation
-//      everywhere is verified." See findUnclassifiedRunSheetMentions.
+//      yet) is NEVER run through Check B — there is no third check that
+//      verifies a borrowed reference's target. Those pairs are listed by
+//      name in a dedicated "mentioned but not classified as owned" section
+//      instead, precisely so a green exit here is never mistaken for "every
+//      citation everywhere is verified." See findUnclassifiedRunSheetMentions.
 //   C. One subject, conflicting IDs — the recurring "one claim, N surfaces"
 //      defect. Built off the register's OWN heading-line issue/PR numbers as
 //      ground truth: for each register row, the issue/PR numbers in its
@@ -57,24 +72,69 @@
 //      currently says (a subject CAN legitimately span two rows — e.g. one
 //      Group A row and one Group B row for the same issue — so a naive
 //      "same subject cited near 2+ different IDs" rule would misfire on
-//      that correct, current state). A citation is flagged only when it
-//      pairs an EXISTING row ID with a subject number whose legitimate set
-//      does not include that ID — the dangerous case where a stale citation
-//      still looks superficially valid because the ID happens to exist,
-//      just for something else now. Grounded in the register's own current
-//      state rather than a heuristic — but the SUBJECT-to-citation
-//      association itself is still a proximity heuristic (nearby issue
-//      numbers in the same sentence/bullet), and that proximity can pick
-//      the wrong subject out of a paragraph that mentions several (measured:
-//      two real cases where an unrelated issue number sat next to an
-//      already-correct citation). A tighter same-line-only association was
-//      tried and does not remove either measured case — both false
-//      positives already share a physical line with the citation — so this
-//      check is a printed, non-fatal WARNING rather than an error: real
-//      enough to always show, not precise enough to fail the gate on.
+//      that correct, current state). A citation is flagged when it pairs an
+//      EXISTING row ID with a subject number that either (a) legitimately
+//      maps to a DIFFERENT set of IDs — the dangerous case where a stale
+//      citation still looks superficially valid because the ID happens to
+//      exist, just for something else now — or (b) does not appear in any
+//      current register row heading AT ALL, which is exactly what happens
+//      the moment a subject's row discharges: the subject's citations start
+//      rotting from that moment, so failing open here (as an earlier version
+//      of this check did) silences the check exactly when it is needed.
+//      Note: 22 of 65 real register rows carry no issue/PR number in their
+//      heading at all (they cite a plan number instead), so this check's
+//      ground truth is thin for roughly a third of the register — those rows
+//      can never be cross-checked in either direction, a real coverage gap,
+//      not a bug. Grounded in the register's own current state rather than a
+//      heuristic — but the SUBJECT-to-citation association itself is still a
+//      proximity heuristic (nearby issue numbers in the same sentence/
+//      bullet), and that proximity can pick the wrong subject out of a
+//      paragraph that mentions several (measured: two real cases where an
+//      unrelated issue number sat next to an already-correct citation). A
+//      tighter same-line-only association was tried and does not remove
+//      either measured case — both false positives already share a physical
+//      line with the citation.
+//
+//      EXPLORATORY, OPT-IN, NEVER FATAL — pass `--strict` to run it at all;
+//      it is skipped by default and prints nothing without the flag. The
+//      "one subject, N surfaces" idea is sound, but its ground truth is not:
+//      22 of the register's 65 real rows carry no issue/PR number in their
+//      heading at all (they cite a plan number instead), and a nearby issue
+//      number is routinely NOT the row's own subject — a campaign reference
+//      (`#2435`), a review reference, a PR reference sitting in the same
+//      paragraph or sitting-pack table row. Measured against the real repo:
+//      118 warnings, and manual triage found the overwhelming majority
+//      noise, not signal — no window size tried separates the real one or
+//      two hits from the rest. Kept, deliberately not deleted, for someone
+//      auditing a specific subject by hand; not trustworthy enough to gate
+//      on, or even to print unasked.
 //
 // Frozen paths are excluded from all three checks — see isFrozenPath's own
-// comment for why each one is frozen.
+// comment for why each one is frozen. This script's own source, its own test
+// fixtures, and the sibling `check-onbox-register.mjs` checker's test
+// fixtures are excluded from scanning entirely (not just Check A/B/C — see
+// SELF_REFERENTIAL_PATHS) for the same reason SELF_TEST_PATH always was:
+// they use this corpus's exact vocabulary ("row A46/B3", discharge wording,
+// synthetic nonexistent IDs like `F1`/`F2`) as WORKED EXAMPLES in comments
+// and fixtures, not as real citations of anything in the real register —
+// scanning them made the checker self-flagging on its own explanatory prose.
+//
+// Citation-surface coverage (what counts as a "citation" at all, for Checks
+// A and C): the prose idiom "row(s) [:]? ID[, ID ...]" (optionally
+// bold/backtick-decorated), and a "Register row(s):" label line anywhere in
+// a scanned file (any decoration — this is the single most common citation
+// shape in the corpus and the checker's own header used to falsely claim the
+// plain-whitespace idiom above was "the citation idiom actually in use
+// here"; measurement showed otherwise). A bare ID with neither of those —
+// e.g. in a markdown heading or a table cell — is NOT a citation surface for
+// Check A: `attribution-collapse-visibility-onbox-acceptance.md`'s own
+// `D13`/`D18` defect-numbering headings share this register's `[A-H]\d{1,3}`
+// shape and an "onbox" filename with no relationship to a register row, and
+// no bare-token surface can tell the two schemes apart (see Check A's own
+// comment above). The bare-ID surface survives only inside Check B's
+// run-sheet HEADER region, where "Register row(s):" already supplies the
+// context. Anything outside those shapes is not examined; the CLI success
+// line says so rather than claiming universal coverage.
 
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -91,18 +151,26 @@ const LIVE_VIEW_PATH = 'docs/testing/onbox-acceptance-register-live-view.html';
 // real row count would need.
 const ROW_ID_TOKEN = '[A-Z]\\d{1,3}';
 
-// Matches `row`/`rows` followed by one or more ID tokens separated by `/`,
-// `,`, `&`, or `and` — covers every real shape found in this repo: "row
-// A1", "rows A46/B3", "rows A2, A3", "row A28 and A29". Deliberately
-// requires the literal word "row(s)" directly before the first token: that
-// is the citation idiom actually in use here ("register row A29", "on-box
-// register row E10", "discharge register row C2") — see this file's own
-// header for why a wider net (bare "(A29)") was left out rather than
-// chasing every prose shape.
+// Matches `row`/`rows`, optionally followed by a colon, then one or more ID
+// tokens separated by `/`, `,`, `&`, or `and` — covers every real shape found
+// in this repo: "row A1", "rows A46/B3", "rows A2, A3", "row A28 and A29",
+// "Register row: A30", "register rows: A32/A33". The colon is optional
+// because "Register row(s):" — the single most common form in this corpus —
+// was previously unmatchable (a bare `\s+` after "row(s)" doesn't allow the
+// colon in between).
 const ROW_CITATION_REGEX = new RegExp(
-  `\\brows?\\s+(${ROW_ID_TOKEN}(?:\\s*(?:[/,&]|\\s+and\\s+)\\s*${ROW_ID_TOKEN})*)`,
+  `\\brows?:?\\s+(${ROW_ID_TOKEN}(?:\\s*(?:[/,&]|\\s+and\\s+)\\s*${ROW_ID_TOKEN})*)`,
   'gi',
 );
+
+// A line that carries the register's own canonical ownership/citation label
+// ("Register row:"/"Register rows:", any decoration, any prefix like `>` or
+// a markdown link/backtick wrapper before the first ID) — e.g. "> Register
+// row: [`onbox-acceptance-register.md` A30](onbox-acceptance-register.md)".
+// Every bare ID token on such a line counts as cited, via
+// extractIdTokensWithRanges (shared with Check B's header-paragraph parsing,
+// including en-dash range expansion).
+const REGISTER_ROW_LABEL_LINE_REGEX = /\bRegister rows?:/i;
 
 // Pulls the individual ID tokens back out of one ROW_CITATION_REGEX match's
 // captured list, e.g. "A46/B3" -> ["A46", "B3"].
@@ -130,6 +198,7 @@ function extractSubjectNumbers(text) {
 // an ID inside it would falsify what actually happened, not fix drift.
 const FROZEN_EXACT = new Set([
   'docs/testing/onbox-acceptance-staleness-audit.md',
+  'docs/testing/onbox-wave3-plan.md',
   'docs/testing/onbox-wave4-linkage.md',
   'docs/release-notes-next.md',
   'RELEASE_NOTES.md',
@@ -150,15 +219,24 @@ export function isFrozenPath(relPath) {
   return FROZEN_PREFIXES.some((prefix) => p.startsWith(prefix));
 }
 
-// A docs/superpowers/** file is excluded only when it has shipped
-// (`status: stable`) — CLAUDE.md's Ship-notes convention. Everything else
+// A docs/superpowers/** file is excluded only when ITS OWN leading
+// frontmatter (a `---`-fenced block at the very top of the file) says
+// `status: stable` — CLAUDE.md's Ship-notes convention. Everything else
 // under docs/superpowers/ stays IN SCOPE: excluding the whole directory
 // wholesale is exactly the assumption that let a blocking citation bug
 // through review twice (see this repo's history — do not reintroduce it).
+// Deliberately does NOT scan the whole file for the phrase — a fenced yaml
+// EXAMPLE later in the document's body ("here is the frontmatter to add to
+// the OTHER file") is not this file's own frontmatter, and a whole-file scan
+// silently excludes the file anyway.
 export function isStableSuperpowersDoc(relPath, text) {
   const p = relPath.replace(/\\/g, '/');
   if (!p.startsWith('docs/superpowers/')) return false;
-  return /^status:\s*stable\s*$/m.test(text);
+  if (!(text.startsWith('---\n') || text.startsWith('---\r\n'))) return false;
+  const end = text.indexOf('\n---', 3);
+  if (end === -1) return false;
+  const frontmatter = text.slice(0, end);
+  return /^status:\s*stable\s*$/m.test(frontmatter);
 }
 
 // --- Register parsing ---------------------------------------------------
@@ -213,34 +291,45 @@ function normaliseRunSheetPath(matchedPath) {
 // ownership marker — see extractRunSheetMentions' own comment.
 const RUN_SHEET_PHRASE_WINDOW = 60;
 
-// The register uses TWO distinct phrasings to assert ownership of a run
-// sheet, both confirmed by direct measurement against the real register:
-// the prose phrase "run sheet" ("the run sheet `docs/testing/...`", "Run
-// sheet: [...]", "run sheet §3 in `...`"), and the structured field
-// `*Criteria:*` (bold markdown, e.g. "*Needs:* ... *Criteria:*
-// [`language-recurrence-onbox-acceptance.md`](...) §Voice-design gate.").
-// Deliberately NOT matched: plain "Full criteria:"/"criteria" without the
-// bold markers — that phrasing introduces night-watch-reanalysis's mention
-// at register.md:2866, which is prose pointing at detail, not a structured
-// ownership field, the same distinction as the "already exist in ...'s
-// section" borrowed-reference shape below. Loosening this to bare
-// "criteria" would misclassify that reference as ownership.
-const OWNERSHIP_MARKER_REGEXES = [/run sheet/i, /\*criteria:\*/i];
+// The register uses THREE distinct phrasings to assert ownership of a run
+// sheet, all confirmed by direct measurement against the real register: the
+// prose phrase "run sheet" ("the run sheet `docs/testing/...`", "Run sheet:
+// [...]", "run sheet §3 in `...`"), the structured field `*Criteria:*` (bold
+// markdown, e.g. "*Needs:* ... *Criteria:* [`language-recurrence-onbox-
+// acceptance.md`](...) §Voice-design gate."), and the plain (unbolded) label
+// "Full criteria:" — the one real instance is C2's own body ("`state.json`'s
+// ... carries a populated `unresolved`. Full criteria:
+// `docs/testing/night-watch-reanalysis-onbox-acceptance.md` §2A.5..."),
+// which is genuine ownership, not a borrowed reference (measured: it is the
+// ONLY "Full criteria:"/"criteria:" occurrence in the register with no
+// possessive "'s" naming a subsection of someone else's file — see
+// POSSESSIVE_SUBSECTION_REGEX below, which still guards this marker the same
+// as the other two). Deliberately NOT matched: bare "criteria" without
+// either "Full " or the bold markers — that generic a phrase would also
+// match the "already exist in ...'s section" borrowed-reference prose, which
+// the possessive-exclusion below is what actually tells apart, not the
+// marker text itself; a still-broader "criteria:" marker was tried and does
+// not misfire against the current register (verified), but "Full criteria:"
+// is the narrowest marker that fixes the one measured miss without widening
+// past what's demonstrated.
+const OWNERSHIP_MARKER_REGEXES = [/run sheet/i, /\*criteria:\*/i, /\bfull criteria:/i];
 
-// `*Criteria:*` is NOT exclusively an ownership marker — A39's own body uses
-// it for exactly the same borrowed-subsection shape as "already exist in
-// ...'s section": "*Criteria:* `docs/testing/fs38-wave3-onbox-acceptance
-// .md`'s `#2026 — ...` section" cites fs38-wave3 (owned by A1) for a
-// SUBSECTION, not as A39's own run sheet — measured directly: without this
-// exclusion, A39 misclassifies as owning fs38-wave3 and Check B then reports
-// a false failure (fs38-wave3's header correctly cites A1, not A39). The
-// distinguishing shape in both borrowed forms is the possessive "'s"
-// (straight or curly apostrophe) immediately following the path, naming a
-// section WITHIN the file rather than the file as the criteria destination
-// itself — the genuine `*Criteria:*` ownership shape (language-recurrence's
-// rows) never has this, it names the whole file, then a separate "§...
-// gate." clause. A short lookahead (past an optional closing `` ` ``/`]`/`)`
-// the path sits inside) is enough to tell the two apart.
+// `*Criteria:*` (and `Full criteria:`) are NOT exclusively ownership markers
+// — A39's own body uses `*Criteria:*` for exactly the same borrowed-
+// subsection shape as "already exist in ...'s section": "*Criteria:*
+// `docs/testing/fs38-wave3-onbox-acceptance.md`'s `#2026 — ...` section"
+// cites fs38-wave3 (owned by A1) for a SUBSECTION, not as A39's own run
+// sheet — measured directly: without this exclusion, A39 misclassifies as
+// owning fs38-wave3 and Check B then reports a false failure (fs38-wave3's
+// header correctly cites A1, not A39). The distinguishing shape in both
+// borrowed forms is the possessive "'s" (straight or curly apostrophe)
+// immediately following the path, naming a section WITHIN the file rather
+// than the file as the criteria destination itself — the genuine
+// `*Criteria:*`/`Full criteria:` ownership shape (language-recurrence's
+// rows, C2's night-watch-reanalysis reference) never has this, it names the
+// whole file, then a separate "§... gate."/"§2A.5" clause. A short lookahead
+// (past an optional closing `` ` ``/`]`/`)` the path sits inside) is enough
+// to tell the two apart.
 const POSSESSIVE_SUBSECTION_REGEX = /^[`\])]*['’]s\b/;
 
 function isPossessiveSubsectionReference(rowBody, matchEnd) {
@@ -341,12 +430,43 @@ const DISCHARGE_ANNOTATION_REGEX = /\bdischarged\b|\bno longer exists?\b|\bremov
 // generic since it scans arbitrary repo markdown, not just the register.
 const ANY_HEADING_REGEX = /^#{1,6}\s/;
 
+// A "section" only counts as a genuine bound when it's actually small — see
+// enclosingSectionText's comment. Most real markdown sections in this corpus
+// are well under this; a file with NO headings at all (every .ts/.tsx/.mjs/
+// .html/.json/.yml file, and some .md files) makes `enclosingSectionText`'s
+// naive heading search return start=0/end=lines.length — the WHOLE FILE — a
+// real, measured bug: one occurrence of "discharged" anywhere in such a file
+// (however unrelated to the citation) silently excused every nonexistent-ID
+// citation in it.
+const MAX_ANNOTATION_SECTION_LINES = 60;
+
+// When no small heading-bounded section applies, fall back to this many
+// lines on each side of the citation — "nearby paragraphs", not the whole
+// file — so the annotation must genuinely be adjacent to the citation it
+// excuses. Widened from 5: measured against the real corpus, a legitimate
+// annotation and the citation it excuses can sit up to ~23 lines apart
+// inside one un-headinged blockquote paragraph
+// (`docs/superpowers/plans/2026-08-05-device-token-scope.md`'s "Stale
+// premise" notes, added after the fact above a step that still names the
+// discharged group) — a 5-line window missed both real instances measured.
+// 25 catches both while staying well under MAX_ANNOTATION_SECTION_LINES, so
+// it's still "a handful of paragraphs," not the whole-file blind spot this
+// fallback exists to avoid.
+const ANNOTATION_WINDOW_LINES = 25;
+
 /**
- * The text of the smallest markdown section containing `lineIndex` (0-based):
- * from the nearest heading at or before it, to the next heading (any level)
- * strictly after it, or EOF. A citation with no heading above it at all (a
- * file with no headings, or one at the very top before any heading) uses the
- * whole file — there is no smaller enclosing unit to bound it to.
+ * The text used to look for a discharge/removal annotation "near" a
+ * citation at `lineIndex` (0-based). Prefers the smallest markdown section
+ * containing the citation — from the nearest heading at or before it to the
+ * next heading (any level) strictly after it, or EOF — but only when that
+ * section is itself small (<= MAX_ANNOTATION_SECTION_LINES): a heading-
+ * bounded "section" that turns out to be the entire file (no headings at
+ * all, or headings too far away to be a real bound) is not actually bounded,
+ * and is exactly the shape that let an unrelated "no longer exists" sentence
+ * anywhere in a 2,000-line test file disarm this check for the whole file.
+ * In that case, fall back to a small fixed window around the citation
+ * itself — the annotation must be adjacent to the citation it excuses, not
+ * merely present somewhere in the same document.
  */
 function enclosingSectionText(lines, lineIndex) {
   let start = 0;
@@ -363,33 +483,83 @@ function enclosingSectionText(lines, lineIndex) {
       break;
     }
   }
-  return lines.slice(start, end).join('\n');
+  if (end - start <= MAX_ANNOTATION_SECTION_LINES) {
+    return lines.slice(start, end).join('\n');
+  }
+  const windowStart = Math.max(0, lineIndex - ANNOTATION_WINDOW_LINES);
+  const windowEnd = Math.min(lines.length, lineIndex + ANNOTATION_WINDOW_LINES + 1);
+  return lines.slice(windowStart, windowEnd).join('\n');
+}
+
+// De-bolds a line so a bold-wrapped ID ("Discharges register rows **C1** ...
+// and **C2**") still matches the plain-token regexes below — `**` is
+// markdown emphasis, never part of a real ID or a discharge-annotation word,
+// so stripping it everywhere is safe. Triple-backtick/tilde FENCED blocks are
+// blanked separately by stripFences before this ever runs; this only strips
+// the inline `**...**` marker itself, not code spans (a single backtick pair
+// around an ID, e.g. `` `A30` ``, doesn't interfere with the token regexes
+// and carries no ambiguity worth stripping).
+function deBold(text) {
+  return text.replace(/\*\*/g, '');
+}
+
+/**
+ * Every ID cited in `text`, keyed by (0-based) line index, from the two
+ * surfaces Check A trusts — both require EXPLICIT "row(s)"/"Register
+ * row(s):" context, never a bare token alone (see this file's header
+ * comment for why the bare-ID heading/table-cell surface was removed):
+ *   1. the "row(s) [:]? ID[, ID ...]" prose idiom (ROW_CITATION_REGEX);
+ *   2. a "Register row(s):" label line, any decoration, any surrounding
+ *      markdown (REGISTER_ROW_LABEL_LINE_REGEX + extractIdTokensWithRanges,
+ *      including en-dash range expansion).
+ * @returns {Map<number, Set<string>>}
+ */
+function extractCitationsByLine(text) {
+  const stripped = deBold(stripFences(text));
+  const lines = stripped.split('\n');
+  const byLine = new Map();
+  const add = (i, ids) => {
+    if (!ids.length) return;
+    if (!byLine.has(i)) byLine.set(i, new Set());
+    for (const id of ids) byLine.get(i).add(id);
+  };
+
+  lines.forEach((line, i) => {
+    for (const m of line.matchAll(ROW_CITATION_REGEX)) {
+      add(i, splitCitedIds(m[1]));
+    }
+    if (REGISTER_ROW_LABEL_LINE_REGEX.test(line)) {
+      add(i, [...extractIdTokensWithRanges(line)]);
+    }
+  });
+
+  return byLine;
 }
 
 /**
  * @returns {{ errors: string[], annotated: string[] }} — `errors` are
  *   unannotated nonexistent-ID citations (fail the gate); `annotated` are
  *   the same defect but with a discharge/removal annotation already present
- *   in the citation's own section (printed, non-fatal — see this file's
- *   header comment for why a correct tree can legitimately contain these).
+ *   near the citation (printed, non-fatal — see this file's header comment
+ *   for why a correct tree can legitimately contain these).
  */
 export function checkNonexistentIds(text, filePath, registerRows) {
   const errors = [];
   const annotated = [];
-  const lines = text.split('\n');
-  lines.forEach((line, i) => {
-    for (const m of line.matchAll(ROW_CITATION_REGEX)) {
-      for (const id of splitCitedIds(m[1])) {
-        if (registerRows.has(id)) continue;
-        const message = `${filePath}:${i + 1} — cited ${id} — no such row in ${REGISTER_PATH} (nonexistent ID)`;
-        if (DISCHARGE_ANNOTATION_REGEX.test(enclosingSectionText(lines, i))) {
-          annotated.push(`${message} — annotated as discharged/removed, not failing`);
-        } else {
-          errors.push(message);
-        }
+  const lines = deBold(stripFences(text)).split('\n');
+  const byLine = extractCitationsByLine(text);
+  const sortedLineIndexes = [...byLine.keys()].sort((a, b) => a - b);
+  for (const i of sortedLineIndexes) {
+    for (const id of [...byLine.get(i)].sort()) {
+      if (registerRows.has(id)) continue;
+      const message = `${filePath}:${i + 1} — cited ${id} — no such row in ${REGISTER_PATH} (nonexistent ID)`;
+      if (DISCHARGE_ANNOTATION_REGEX.test(enclosingSectionText(lines, i))) {
+        annotated.push(`${message} — annotated as discharged/removed, not failing`);
+      } else {
+        errors.push(message);
       }
     }
-  });
+  }
   return { errors, annotated };
 }
 
@@ -402,10 +572,13 @@ export function checkNonexistentIds(text, filePath, registerRows) {
  */
 // Run sheets carry their own citation idiom, distinct from the "register
 // row A29" prose used elsewhere: a header line ("Register rows:
-// [A36–A38](...)"), an en-dash/hyphen ID range, or a criteria table's
-// "Register row" column — none of which say the word "row" next to the ID
-// every time. Requiring ROW_CITATION_REGEX here would make every one of
-// those a false "doesn't cite back".
+// [A36–A38](...)"), or an en-dash/hyphen ID range — neither of which say the
+// word "row" next to the ID every time. Requiring ROW_CITATION_REGEX here
+// would make every one of those a false "doesn't cite back". (A criteria
+// TABLE cell is not among these — this check only ever reads the header
+// paragraph, and no real run-sheet header places a table there; see the
+// paired test for what actually happens when a table appears below the
+// header instead.)
 //
 // A whole-file bare-token scan (the first version of this check) is WRONG,
 // not just imprecise: a real run sheet's body legitimately mentions its own
@@ -578,7 +751,8 @@ const SUBJECT_CONTEXT_WINDOW = 200;
 export function checkConflictingSubjects(fileTexts, registerRows) {
   const legitimate = buildLegitimateSubjectMap(registerRows);
   const errors = [];
-  for (const [filePath, text] of fileTexts) {
+  for (const [filePath, rawText] of fileTexts) {
+    const text = deBold(stripFences(rawText));
     for (const m of text.matchAll(ROW_CITATION_REGEX)) {
       const citedIds = splitCitedIds(m[1]);
       const windowStart = Math.max(0, m.index - SUBJECT_CONTEXT_WINDOW);
@@ -589,8 +763,19 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
         for (const subject of nearbySubjects) {
           const legitimateIds = legitimate.get(subject);
-          if (!legitimateIds) continue; // subject not in the register at all — can't validate
-          if (!legitimateIds.has(id)) {
+          if (!legitimateIds) {
+            // The subject doesn't appear in ANY current register-row heading
+            // at all — the exact moment its citations start rotting, since a
+            // subject leaves the register precisely when its row discharges.
+            // Failing open here (the earlier behaviour) silenced this check
+            // at the one moment it was needed; see this file's header
+            // comment for the worked example.
+            errors.push(
+              `${filePath}:${lineNo} — cited ${id} for #${subject}, but #${subject} does not ` +
+                `appear in any current register row heading (its row may have discharged) — ` +
+                `verify ${id} still applies`,
+            );
+          } else if (!legitimateIds.has(id)) {
             errors.push(
               `${filePath}:${lineNo} — cited ${id} for #${subject}, but the register's #${subject} ` +
                 `maps to ${[...legitimateIds].sort().join('/')}, not ${id}`,
@@ -629,13 +814,34 @@ function readRepoFile(relPath) {
   return readNormalized(join(fileURLToPathSafe(REPO_ROOT), relPath));
 }
 
-export function runCheckRegisterCitationsCli() {
+// This checker's own source and its own test fixtures — plus the sibling
+// `check-onbox-register.mjs` checker's test fixtures — deliberately use the
+// discharge/removal vocabulary (DISCHARGE_ANNOTATION_REGEX), the "row(s) ID"
+// idiom, and synthetic nonexistent IDs (`A46`, `B3`, `F1`, `F2`, ...) as
+// EXAMPLES in comments and fixtures, not as real citations of anything in
+// the real register. Scanning any of them as if they were a real citation
+// surface means this checker's own green depends on its explanatory prose
+// and the sibling checker's test wording (measured: this file's own source
+// comment for ROW_CITATION_REGEX cites "rows A46/B3" as a worked example and
+// self-flagged; `check-onbox-register.test.mjs` synthesizes `F1`/`F2` as
+// fixture row IDs and self-flagged too). Exclude the instrument's own
+// corpus, the same way FROZEN_EXACT excludes the register itself.
+const SELF_REFERENTIAL_PATHS = new Set([
+  'scripts/check-register-citations.mjs',
+  'scripts/tests/check-register-citations.test.mjs',
+  'scripts/tests/check-onbox-register.test.mjs',
+]);
+
+export function runCheckRegisterCitationsCli(options = {}) {
+  const strict = options.strict ?? process.argv.includes('--strict');
+
   const registerText = readRepoFile(REGISTER_PATH);
   const { rows } = parseRegisterRows(registerText);
 
   const allFiles = gitLsFiles();
   const scannedFiles = allFiles.filter((p) => {
     if (isFrozenPath(p)) return false;
+    if (SELF_REFERENTIAL_PATHS.has(p)) return false;
     return true;
   });
 
@@ -657,33 +863,38 @@ export function runCheckRegisterCitationsCli() {
   }
 
   const errorsB = checkRunSheetLinkage(rows, (p) => readRepoFile(p));
-  const warningsC = checkConflictingSubjects(nonFrozenTexts, rows);
+  const warningsC = strict ? checkConflictingSubjects(nonFrozenTexts, rows) : null;
   const unclassifiedRunSheets = findUnclassifiedRunSheetMentions(rows).map(
     ({ path, id }) => `${path} — mentioned by register row ${id}`,
   );
 
   // Two severities. FATAL sections fail the gate (exit 1); NOTE/WARNING
   // sections always print — nothing is dropped silently — but never cause a
-  // correct tree to go red. Check A's annotated bucket and Check C both live
-  // here: Check A because this repo's own "annotate, don't renumber" rule
-  // deliberately keeps some nonexistent-ID citations as history, and Check C
-  // because its subject-to-citation pairing is a proximity heuristic that
-  // measurably still produces the occasional benign false positive (see
-  // this file's header comment) — see each list's own definition above for
-  // why. The unclassified-run-sheet list is non-fatal for the same reason a
-  // borrowed reference is legitimate (A39 borrowing fs38-wave3's section) —
-  // but it MUST print, because a pair excluded from Check B's owned set is
-  // one Check B will never evaluate at all; see
-  // findUnclassifiedRunSheetMentions' own comment.
+  // correct tree to go red. Check A's annotated bucket lives here because
+  // this repo's own "annotate, don't renumber" rule deliberately keeps some
+  // nonexistent-ID citations as history — see each list's own definition
+  // above for why. The unclassified-run-sheet list is non-fatal for the same
+  // reason a borrowed reference is legitimate (A39 borrowing fs38-wave3's
+  // section) — but it MUST print, because a pair excluded from Check B's
+  // owned set is one Check B will never evaluate at all; see
+  // findUnclassifiedRunSheetMentions' own comment. Check C is a THIRD
+  // severity, opt-in: it only runs (and only ever prints) under `--strict` —
+  // see this file's header comment for why its ground truth isn't precise
+  // enough to trust unasked, let alone gate on.
   const fatalSections = [
     ['Check A — nonexistent row ID', errorsA],
     ['Check B — run sheet does not cite its row back', errorsB],
   ];
   const nonFatalSections = [
     ['Check A — nonexistent row ID, already annotated as discharged/removed (not failing)', annotatedA],
-    ['Check C — one subject, conflicting row IDs (WARNING, not failing — see header comment)', warningsC],
     ['Run sheets mentioned but not classified as owned (not checked)', unclassifiedRunSheets],
   ];
+  if (strict) {
+    nonFatalSections.push([
+      'Check C — one subject, conflicting row IDs (--strict, exploratory, not failing — see header comment)',
+      warningsC,
+    ]);
+  }
 
   let anyFatal = false;
   for (const [label, errors] of fatalSections) {
@@ -698,8 +909,27 @@ export function runCheckRegisterCitationsCli() {
     for (const n of notes) console.log(`  ${n}`);
   }
 
+  const ownedPairCount = [...rows.values()].reduce((n, r) => n + r.runSheetPaths.size, 0);
+  const strictNote = strict
+    ? `Check C ran under --strict and found ${warningsC.length} warning(s) above — exploratory, ` +
+      `never fatal (see header comment for why its ground truth is too thin to trust further).`
+    : `Check C (one subject, conflicting row IDs) did NOT run — it is opt-in and exploratory; ` +
+      `pass --strict to run it. It is never fatal even under --strict.`;
+
   if (!anyFatal) {
-    console.log(`\ncheck:register-citations: OK — no broken register-row citations found.`);
+    console.log(
+      `\ncheck:register-citations: OK. Checks A (nonexistent ID) and B (run-sheet ` +
+        `linkage) are the only FATAL checks and found nothing to fail on: ${scannedFiles.length} ` +
+        `scanned files carry no unannotated nonexistent-row-ID citation, and Check B verified all ` +
+        `${ownedPairCount} owned run-sheet header pairs cite their row back. ${strictNote} The ` +
+        `unclassified-run-sheet list above is printed but UNCHECKED — a mention Check B's ownership ` +
+        `markers don't classify as owned (a borrowed reference, or an unrecognised phrasing) is never ` +
+        `verified in either direction, by design; see findUnclassifiedRunSheetMentions' own comment. ` +
+        `Citation surfaces covered by Checks A/C: the "row(s) ID" prose idiom and "Register row(s):" ` +
+        `label lines (any decoration) — a bare ID with neither, e.g. in a heading or table cell, is ` +
+        `not a citation surface for either check (see header comment for why). Check B additionally ` +
+        `parses the bare-ID/range idiom, but only inside a run sheet's own header region.`,
+    );
     return;
   }
   throw new CliExitError(1);

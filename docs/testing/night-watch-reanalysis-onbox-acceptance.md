@@ -4,13 +4,21 @@ status: draft
 
 # Ночной дозор re-analysis — on-box acceptance run sheet
 
-Discharges register rows **C1** ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
-and **C2** ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187), plan
-[247](../features/247-dialogue-structure-attribution.md)). #2187 is otherwise complete —
-the aligner fix shipped in `b2be5b7b` — and stays open **solely** for C2.
+> Register row: [C2](onbox-acceptance-register.md)
 
-Neither row needs TTS, GPU synthesis, or the sidecar. C2 needs local Ollama; C1 needs
-the free-tier `GEMINI_API_KEY`.
+Discharged register rows **C2** ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187),
+plan [247](../features/247-dialogue-structure-attribution.md)) and narrowed **C3**
+([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253)) — as those rows were
+numbered at the time of the 2026-08-12/13 run recorded below. #2187 is complete — the
+aligner fix shipped in `b2be5b7b` — and stays open **solely** for the row that survived.
+Group C discharges are positional and renumber (see the register's own Group C intro): the
+surviving row is **today's C2**, which is what the header line above names. The cloud pass
+(**C1**, [#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)) is a separate,
+still-owed session this run sheet was NOT run against — Session B below records it as not
+yet run.
+
+Neither historical row needed TTS, GPU synthesis, or the sidecar. C3 needed local Ollama;
+C1 needs the free-tier `GEMINI_API_KEY`.
 
 ---
 

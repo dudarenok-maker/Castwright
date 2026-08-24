@@ -5,6 +5,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   parseRegisterRows,
   isFrozenPath,
@@ -14,6 +17,13 @@ import {
   checkConflictingSubjects,
   findUnclassifiedRunSheetMentions,
 } from '../check-register-citations.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI_PATH = join(HERE, '..', 'check-register-citations.mjs');
+
+function runCli(args) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+}
 
 // A minimal but structurally real register: two groups, a run-sheet
 // cross-reference on one row, and a "Blocked" section that reuses a live
@@ -225,18 +235,37 @@ test('checkRunSheetLinkage: does not fire when the header paragraph cites the ro
   assert.equal(errors.length, 0);
 });
 
-test('checkRunSheetLinkage: a criteria-table "Register row" cell counts, still scoped to the header region', () => {
+test('checkRunSheetLinkage: content below the header\'s `---` is NOT read as the header paragraph, even when it carries a genuine-looking "Register row:" line', () => {
+  // Real bug: the previous version of this test put NO "Register row:" line
+  // anywhere in the body either, so it passed vacuously — a mutant that
+  // deletes extractHeaderRegion's `---`-truncation entirely (returning the
+  // whole file) still produced "no header line found" and the test stayed
+  // green, because there was nothing past the `---` for the widened scan to
+  // wrongly pick up. This fixture puts a real "Register row: A1" line AFTER
+  // the `---` (inside what looks like a criteria table, but a plain prose
+  // line would trip the same mutant) — a whole-file mutant would find it and
+  // wrongly report 0 errors; the real implementation must still fail with
+  // "no header line found", because that line sits in the BODY, not the
+  // header paragraph the header region is supposed to be bounded to.
   const { rows } = parseRegisterRows(buildRegister());
   const readFile = () =>
-    '# Thing\n\n> Register row: A1\n\n---\n\n| # | Criterion | Register row |\n|---|---|---|\n| 1 | Thing | A1 |\n';
+    '# Thing\n\n> Some other metadata, no row line.\n\n---\n\n| # | Criterion | Register row |\n' +
+    '|---|---|---|\n| 1 | Thing | A1 |\n\nRegister row: A1\n';
   const errors = checkRunSheetLinkage(rows, readFile);
-  assert.equal(errors.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /no "Register row\(s\):" header/);
 });
 
 test('checkRunSheetLinkage: expands an en-dash ID range so a row inside it counts as cited', () => {
   const { rows } = parseRegisterRows(buildRegister());
-  // A1 sits "inside" a written range A1-A2 without being spelled out itself.
-  const readFile = () => '# Thing\n\n> Register rows: A1-A2\n\n---\n\nBody.\n';
+  // A1 must sit STRICTLY INSIDE a written range, unreachable by the bare-
+  // token scan alone — "A0-A2" contains the literal substrings "A0" and
+  // "A2", never "A1", so A1 is only found via range expansion. (The
+  // previous fixture, "A1-A2" asserting on A1, was vacuous: A1 is the
+  // range's own spelled-out start endpoint, already matched by the plain
+  // bare-token scan with the range loop deleted entirely — see the mutation
+  // note this test now guards against.)
+  const readFile = () => '# Thing\n\n> Register rows: A0-A2\n\n---\n\nBody.\n';
   const errors = checkRunSheetLinkage(rows, readFile);
   assert.equal(errors.length, 0);
 });
@@ -421,6 +450,7 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/testing/onbox-wave4-results/x.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-wave5-results/x.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-staleness-audit.md'), true);
+  assert.equal(isFrozenPath('docs/testing/onbox-wave3-plan.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-wave4-linkage.md'), true);
   assert.equal(isFrozenPath('docs/release-notes-next.md'), true);
   assert.equal(isFrozenPath('RELEASE_NOTES.md'), true);
@@ -431,14 +461,254 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/features/278-cast-character-identity.md'), false);
 });
 
-test('isStableSuperpowersDoc: excludes only a status: stable file under docs/superpowers', () => {
+test('isStableSuperpowersDoc: excludes only a status: stable file whose OWN leading frontmatter says so', () => {
   assert.equal(
-    isStableSuperpowersDoc('docs/superpowers/plans/x.md', 'blah\nstatus: stable\nblah'),
+    isStableSuperpowersDoc('docs/superpowers/plans/x.md', '---\nstatus: stable\n---\n\nblah'),
     true,
   );
   assert.equal(
-    isStableSuperpowersDoc('docs/superpowers/plans/x.md', 'blah\nstatus: active\nblah'),
+    isStableSuperpowersDoc('docs/superpowers/plans/x.md', '---\nstatus: active\n---\n\nblah'),
     false,
   );
-  assert.equal(isStableSuperpowersDoc('docs/features/x.md', 'status: stable'), false);
+  assert.equal(isStableSuperpowersDoc('docs/features/x.md', '---\nstatus: stable\n---\n'), false);
+});
+
+test('isStableSuperpowersDoc: a file with NO leading frontmatter fence is never excluded, even if the phrase appears in prose', () => {
+  // Real bug: docs/superpowers/plans/2026-07-05-github-issues-kanban-board.md
+  // has no frontmatter at all and opens with a heading — its only
+  // `status: stable` match was inside a FENCED YAML EXAMPLE later in the
+  // body, instructing the reader to write that frontmatter into a DIFFERENT
+  // file. A whole-file regex excluded all 1,900 live lines of that plan from
+  // every check.
+  const text = [
+    '# GitHub Projects Kanban Board Implementation Plan',
+    '',
+    'Some intro. See register row A99.',
+    '',
+    '```yaml',
+    '---',
+    'status: stable',
+    'shipped: 2026-07-05',
+    '---',
+    '```',
+    '',
+  ].join('\n');
+  assert.equal(isStableSuperpowersDoc('docs/superpowers/plans/x.md', text), false);
+});
+
+// --- Check A: annotation must be ADJACENT to the citation it excuses ---
+//
+// Real bug: enclosingSectionText bounded a citation to "the nearest
+// enclosing markdown heading" — but NO .ts/.tsx/.mjs/.html/.json/.yml file
+// (and some .md files) has any heading at all, so the "section" silently
+// became the WHOLE FILE, and one occurrence of "discharged"/"no longer
+// exists" ANYWHERE in it disarmed Check A for the entire file. Measured: an
+// injected nonexistent `A44` in `src/views/cast.test.tsx` was excused by an
+// unrelated UI-toast assertion 296 lines away ("the 'wren' alias no longer
+// exists"). These tests pin the fix: a small, bounded window when no small
+// heading-bounded section exists.
+
+test('checkNonexistentIds: an unrelated discharge phrase far away in a file with NO markdown headings does not excuse a nonexistent citation', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const lines = [];
+  lines.push('See register row A9 for details.'); // line 1 — the citation
+  // No markdown headings anywhere in this file (mirrors real .tsx/.ts/.mjs
+  // files, none of which have a `#` heading) — enough filler that the
+  // "whole file" bound this produces without the size cap would exceed it.
+  for (let i = 0; i < 70; i++) lines.push(`filler line ${i}`);
+  lines.push('the "wren" alias no longer exists and was not restored.'); // far away
+  const { errors, annotated } = checkNonexistentIds(lines.join('\n'), 'src/views/cast.test.tsx', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: a discharge phrase a few lines away (no headings at all) still excuses the citation — "near", not "same heading-bounded section"', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = [
+    'See register row A9 for details.',
+    'It was discharged and no longer exists.',
+  ].join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'src/views/cast.test.tsx', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A9/);
+});
+
+test('checkNonexistentIds: a heading-bounded section that is actually huge (heading far above, none below) falls back to the small window too', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // Uses A1 (an EXISTING row) for the nearby annotation sentence — a
+  // nonexistent ID there would itself be a second, unrelated finding this
+  // test isn't about, muddying the assertion below.
+  const lines = ['# Some huge doc', '', 'register row A1 was discharged and no longer exists.'];
+  for (let i = 0; i < 100; i++) lines.push(`filler line ${i}`);
+  lines.push('See register row A9 for details.'); // far below the one heading, no heading after
+  const { errors, annotated } = checkNonexistentIds(lines.join('\n'), 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+  assert.equal(annotated.length, 0);
+});
+
+// --- Check A: fence-aware, per checkNonexistentIds now calling stripFences ---
+
+test('checkNonexistentIds: a citation inside a fenced code block is not scanned (mirrors parseRegisterRows\' own fence-awareness)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = ['```', 'See register row A9 for details.', '```'].join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 0);
+});
+
+// --- Check A / general citation-surface coverage (widened net) ---
+
+test('checkNonexistentIds: a "Register row:" label line with no whitespace before the colon is now matched ("Register rows:" idiom)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '> Register row: [`onbox-acceptance-register.md` A44](onbox-acceptance-register.md)';
+  const { errors } = checkNonexistentIds(text, 'docs/testing/foo-onbox-acceptance.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A44/);
+});
+
+test('checkNonexistentIds: a bold-wrapped ID in prose ("rows **C1** ... and **C2**") is matched', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'Discharges register rows **A9** and **A1**.';
+  const { errors } = checkNonexistentIds(text, 'docs/testing/foo-onbox-acceptance.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+});
+
+test('checkNonexistentIds: a bare ID in a markdown heading, even in an onbox-named file, is NOT a citation — no "row(s)" context', () => {
+  // Real false positive this precision fix closes:
+  // attribution-collapse-visibility-onbox-acceptance.md numbers its OWN
+  // internal defects "## 5 · D13 verdict ..." / "## 3 · The D18-trap sanity
+  // check" — a doc-local scheme that shares this register's [A-H]\d{1,3}
+  // shape and an "onbox" filename, with no relationship to a register row at
+  // all. An earlier version of this check treated a bare ID in a heading of
+  // an onbox-named file as a citation and self-flagged on exactly this file.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '### A99 · Some pack section';
+  const inOnboxFile = checkNonexistentIds(text, 'docs/testing/onbox-sitting-foo.md', rows);
+  assert.equal(inOnboxFile.errors.length, 0);
+  assert.equal(inOnboxFile.annotated.length, 0);
+
+  const elsewhere = checkNonexistentIds(text, 'docs/superpowers/specs/some-design.md', rows);
+  assert.equal(elsewhere.errors.length, 0);
+});
+
+test('checkNonexistentIds: a bare ID in a "row"-labelled table cell is NOT a citation — no "row(s)" context', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = ['| Pack file | Rows | Est. min |', '|---|---|---|', '| foo.md | A99 | 10 |'].join('\n');
+  const inOnboxFile = checkNonexistentIds(text, 'docs/testing/onbox-sitting-plan.md', rows);
+  assert.equal(inOnboxFile.errors.length, 0);
+  assert.equal(inOnboxFile.annotated.length, 0);
+});
+
+// --- Check C: fails CLOSED, not open, on a subject absent from the register ---
+//
+// Real bug: a subject number that legitimately maps to no register row at
+// all (its row discharged, or it never had one) made checkConflictingSubjects
+// silently `continue` — but a subject leaves the register PRECISELY when its
+// row discharges, which is the exact moment its citations start rotting.
+// Paired control below is the thread's own worked example: "Discharge
+// register row C2 for #2187" (no current row) vs "...for #1969" (maps to
+// A42) — both must now warn.
+
+test('checkConflictingSubjects: warns (not silently passes) when the paired subject number maps to NO current register row at all', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', 'Discharge register row A1 for #9999.'], // #9999 is in no heading
+  ]);
+  const errors = checkConflictingSubjects(files, rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A1/);
+  assert.match(errors[0], /9999/);
+  assert.match(errors[0], /does not appear in any current register row heading/);
+});
+
+// --- Check B ownership: the plain "Full criteria:" label (unbolded) ---
+
+test('parseRegisterRows: a "Full criteria:"-introduced run sheet (no bold) is classified as OWNED, matching the real C2/night-watch shape', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+irrelevant table
+
+## Group A — the GPU box
+
+### A1 · Thing (#1000)
+
+Confirm the invariant end to end. Full criteria:
+\`docs/testing/night-watch-onbox-acceptance.md\` §2A.5, and plan 247's target 1.
+
+---
+`;
+  const { rows } = parseRegisterRows(text);
+  assert.deepEqual([...rows.get('A1').runSheetPaths], [
+    'docs/testing/night-watch-onbox-acceptance.md',
+  ]);
+});
+
+test('parseRegisterRows: "Full criteria: `path`\'s ... section" (possessive) is still a borrowed reference, not ownership, even unbolded', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+irrelevant table
+
+## Group A — the GPU box
+
+### A1 · Owns it (#1000)
+
+Run sheet: \`docs/testing/thing-onbox-acceptance.md\`.
+
+### A2 · Borrows a subsection (#1001)
+
+Full criteria: \`docs/testing/thing-onbox-acceptance.md\`'s \`#1001 — extra\` section.
+
+---
+`;
+  const { rows } = parseRegisterRows(text);
+  assert.deepEqual([...rows.get('A2').runSheetPaths], []);
+});
+
+// --- Check C is opt-in (--strict), off by default ---
+//
+// Real repo integration, mirroring check-onbox-register.test.mjs's own
+// runCli precedent: exercises the actual CLI flag-gating end to end against
+// the real register and repo tree, rather than just the pure
+// checkConflictingSubjects function (already covered above).
+
+test('CLI: without --strict, Check C does not run and the success line says so', () => {
+  const result = runCli([]);
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout, /Check C —/);
+  assert.match(result.stdout, /Check C .* did NOT run — it is opt-in and exploratory/);
+});
+
+test('CLI: with --strict, Check C runs and prints under its own opt-in label, still non-fatal', () => {
+  const result = runCli(['--strict']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Check C — one subject, conflicting row IDs \(--strict, exploratory, not failing/);
+  assert.match(result.stdout, /Check C ran under --strict and found \d+ warning\(s\) above/);
+});
+
+// --- Self-referential exclusion: this checker's own source and the sibling
+// checker's test fixtures are never scanned as citation surfaces ---
+
+test('CLI: this script\'s own source file does not self-flag on its explanatory-comment worked examples', () => {
+  // scripts/check-register-citations.mjs's own comments cite "rows A46/B3"
+  // and similar nonexistent IDs as worked examples of the citation idioms it
+  // recognises — scanning the script as a citation surface made it
+  // self-flagging (Check A fatal) before SELF_REFERENTIAL_PATHS excluded it.
+  const result = runCli([]);
+  assert.doesNotMatch(result.stdout, /check-register-citations\.mjs/);
+});
+
+test('CLI: the sibling check-onbox-register.mjs checker\'s test fixtures are excluded, same as this checker\'s own', () => {
+  // check-onbox-register.test.mjs synthesizes nonexistent row IDs (F1, F2)
+  // as fixture data for ITS OWN tests, not as real citations of anything in
+  // the real register.
+  const result = runCli([]);
+  assert.doesNotMatch(result.stdout, /check-onbox-register\.test\.mjs/);
 });
