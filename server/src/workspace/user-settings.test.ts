@@ -908,8 +908,8 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     // User's explicit URL wins over the env var (documented API contract)
     expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
   });
-});
 
+  // N1: DEFAULT-valued LOCAL_TTS_URL should not shadow port derivation
   it('N1: treats DEFAULT-valued LOCAL_TTS_URL as non-choice, lets port derivation win', () => {
     // Pre-existing server/.env has DEFAULT value, which should not shadow port derivation
     process.env.LOCAL_TTS_PORT = '9110';
@@ -930,22 +930,86 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
   });
 
-  it('N2: uses sidecarUrl even when set to factory default if key is explicitly in file', () => {
-    // User explicitly set sidecarUrl=http://localhost:9000 in their settings file
-    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
-    // Mark sidecarUrl as explicitly set (was in the file)
-    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
-
-    // Explicitly-set sidecarUrl wins, even though it equals the default
-    expect(getResolvedSidecarUrl()).toBe('http://localhost:9000');
-  });
-
-  it('N2: ignores sidecarUrl when not explicitly set, uses port derivation', () => {
-    // sidecarUrl field never in file — cached value is default but key not explicitly set
+  // N2/B3: sidecarUrl requires BOTH key-present AND value-different (not just key-present)
+  it('B3 regression: sidecarUrl at factory default (written by unrelated writer) loses to port derivation', () => {
+    // Reproduces B3: an unrelated writer (e.g., writeSetupCompletedAt) writes the complete merged
+    // object, including sidecarUrl at factory default. Key-presence alone would wrongly claim "user chose this".
+    // Requires BOTH key-present AND value-different to correctly read as unset.
     process.env.LOCAL_TTS_PORT = '9110';
-    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
-    // Don't mark sidecarUrl as explicitly set
 
-    // Not-explicitly-set sidecarUrl (factory default) loses to port derivation
+    // Simulate file that has sidecarUrl at factory default (as written by unrelated writer)
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl'])); // Key IS in the file
+
+    // Key present at default value should lose to port derivation (B3 fix requires both conditions)
     expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
   });
+
+  it('N2: uses sidecarUrl when value differs from factory default and key is present', () => {
+    // User explicitly set sidecarUrl to a custom value in their settings file.
+    // Key-present AND value-different → use it.
+    process.env.LOCAL_TTS_PORT = '9110';
+
+    // Simulate file that has sidecarUrl at custom value
+    const customUrl = 'http://192.168.1.20:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: customUrl });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl'])); // Key IS in the file
+
+    // Key present with non-default value should win
+    expect(getResolvedSidecarUrl()).toBe(customUrl);
+  });
+
+  // N8: the four tests above hand-set explicitlySetKeys directly — they never
+  // call readUserSettings(), so they exercise the FLAG, not the mechanism that
+  // populates it from a real file. These two go through the real read path:
+  // write a settings file to disk, call readUserSettings(), then resolve.
+  it('B3 regression (live path): sidecarUrl written by an UNRELATED writer at factory default loses to LOCAL_TTS_PORT', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    // This is the real shape of ~/.castwright/user-settings.json on a box
+    // that has completed onboarding: setupCompletedAt/tourCompletedAt were
+    // written by writeSetupCompletedAt/writeTourCompletedAt, which persist
+    // the FULL merged object — including sidecarUrl at its factory default,
+    // even though no one ever chose that value. #2632 B3.
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        setupCompletedAt: '2026-01-01T00:00:00.000Z',
+        tourCompletedAt: '2026-01-01T00:00:00.000Z',
+        sidecarUrl: DEFAULT_USER_SETTINGS.sidecarUrl,
+      }),
+    );
+    try {
+      process.env.LOCAL_TTS_PORT = '9110';
+      await mod.readUserSettings(); // real path: populates explicitlySetKeys from disk
+      expect(mod.getResolvedSidecarUrl()).toBe('http://localhost:9110');
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+
+  it('live path: a genuinely user-chosen non-default sidecarUrl still wins over LOCAL_TTS_PORT', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    const customUrl = 'http://192.168.1.20:9000';
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        setupCompletedAt: '2026-01-01T00:00:00.000Z',
+        tourCompletedAt: '2026-01-01T00:00:00.000Z',
+        sidecarUrl: customUrl,
+      }),
+    );
+    try {
+      process.env.LOCAL_TTS_PORT = '9110';
+      await mod.readUserSettings();
+      expect(mod.getResolvedSidecarUrl()).toBe(customUrl);
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+});

@@ -17,9 +17,10 @@
 //   3. Creates ../wt-<slug> via `git worktree add -b <branch> <path> <base>`.
 //   4. Writes <worktree>/.env.local with VITE_PORT / PORT / VITE_API_PORT /
 //      LOCAL_TTS_PORT / PLAYWRIGHT_PORT for this slot.
-//   5. Writes <worktree>/server/.env with PORT / WORKSPACE_DIR for this slot
+//   5. Writes <worktree>/server/.env with PORT / WORKSPACE_DIR / LOCAL_TTS_PORT for this slot
 //      — an ISOLATED workspace of its own, never the primary checkout's (two
 //      servers on two branches can't safely share one cast.json/state.json).
+//      LOCAL_TTS_PORT per-worktree isolation prevents sidecar port conflicts (#2632).
 //      Nothing is copied from the primary checkout's server/.env, so secrets
 //      (e.g. GEMINI_API_KEY) never leak into a worktree (#2345).
 //   6. Runs `npm install` (root, which also activates husky hooks via the

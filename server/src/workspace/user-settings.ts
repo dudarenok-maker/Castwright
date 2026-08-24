@@ -492,9 +492,13 @@ export function getResolvedSidecarUrl(): string {
   const c = cached;
 
   // 1. Check cached sidecarUrl — if user explicitly set it, use it (highest priority).
-  //    Use wasKeyExplicitlySet() to distinguish "explicitly set (even to default value)"
-  //    from "never set, using defaults" (#2632 N2).
-  if (c?.sidecarUrl && wasKeyExplicitlySet('sidecarUrl')) {
+  //    Requires BOTH: (1) key is present on disk (wasKeyExplicitlySet), AND (2) value differs
+  //    from factory default. Key-presence alone is unreliable: all settings writers persist the
+  //    complete merged object, so unrelated writes (e.g., writeSetupCompletedAt) write sidecarUrl
+  //    at the default, making presence a false signal of user choice (#2632 N2 / B3).
+  //    Value-difference alone was the old sentinel that failed when user explicitly picked :9000.
+  //    Together, they close both cases: key-present-at-default correctly reads as unset.
+  if (c?.sidecarUrl && wasKeyExplicitlySet('sidecarUrl') && c.sidecarUrl !== DEFAULT_USER_SETTINGS.sidecarUrl) {
     const raw = c.sidecarUrl;
     if (isPrivateHostUrl(raw)) {
       return raw.replace(/\/+$/, '');
@@ -868,6 +872,7 @@ export async function clearAllConfigOverrides(): Promise<void> {
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
 export function _resetUserSettingsCache(): void {
   cached = null;
+  explicitlySetKeys = new Set(); // Reset tracked keys alongside cached settings
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';

@@ -63,8 +63,9 @@ export function resolveSidecarPort(): number {
 }
 
 /** The sidecar port the supervisor manages — resolved from LOCAL_TTS_PORT env var
-    (default 9000). Recorded in the note for diagnostics; the guard keys on pid/ppid,
-    not port. */
+    (default 9000). Recorded in the note for diagnostics; the guard keys on
+    pid/ppid AND port (#2632) — a different port is treated as an independent
+    sidecar, not a conflict. */
 function SIDECAR_PORT(): number {
   return resolveSidecarPort();
 }
