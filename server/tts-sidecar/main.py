@@ -3113,9 +3113,12 @@ class KokoroEngine(Engine):
         """The ONNX Runtime provider list to pass to Kokoro, parsed from the
         KOKORO_ORT_PROVIDERS env var (a JSON string list the server injects from
         the accelerator profile, e.g. ["DmlExecutionProvider","CPUExecutionProvider"]).
-        Returns [] when the env is unset/blank/malformed -- the NVIDIA default
-        profile never sets this, so [] is the common case, not the exception;
-        see `_default_ort_providers` for what fills the gap."""
+        Returns [] when the env is unset/blank/malformed. In production the
+        server (spawn-sidecar.ts) injects this unconditionally for every
+        accelerator profile, nvidia included, so [] here means a sidecar
+        launched standalone (start.ps1/start.sh set nothing), not the
+        NVIDIA default -- see `_default_ort_providers` for what fills that
+        gap."""
         raw = os.environ.get("KOKORO_ORT_PROVIDERS")
         if not raw:
             return []
@@ -3129,9 +3132,11 @@ class KokoroEngine(Engine):
 
     def _default_ort_providers(self) -> list[str]:
         """Providers to use when KOKORO_ORT_PROVIDERS is unset (#2631) --
-        which is the NVIDIA-default case, not an edge case: the server only
-        injects KOKORO_ORT_PROVIDERS for DirectML (AMD-Windows). We must NOT
-        let kokoro-onnx's own auto-detect decide here: its `find_spec(
+        the standalone-launch case: the server (spawn-sidecar.ts) injects
+        KOKORO_ORT_PROVIDERS unconditionally for every accelerator profile,
+        nvidia included, so this only fires for a sidecar launched directly
+        via start.ps1/start.sh, which set nothing. Even there we must NOT
+        let kokoro-onnx's own auto-detect decide: its `find_spec(
         'onnxruntime-gpu')` check is not a valid module identifier, so it
         always resolves to None and silently forces CPU regardless of what
         hardware is actually present. Instead resolve a candidate list from
@@ -3174,12 +3179,17 @@ class KokoroEngine(Engine):
         except Exception as e:
             log.warning("Kokoro DirectML self-test failed (%s); falling back to CPU EP.", e)
             self._dml_status = "fallback-cpu"
-            try:
-                return kokoro_cls(
-                    self._model_path, self._voices_path, providers=["CPUExecutionProvider"]
+            # Same session-building path as the main load: kokoro_cls (0.5.0)
+            # doesn't accept providers= in its constructor either (#2631), so
+            # build the CPU-EP session ourselves and hand it to from_session
+            # rather than relying on kokoro-onnx's own broken auto-detect.
+            if hasattr(kokoro_cls, "from_session"):
+                import onnxruntime as rt  # type: ignore
+                session = rt.InferenceSession(
+                    self._model_path, providers=["CPUExecutionProvider"]
                 )
-            except TypeError:
-                return kokoro_cls(self._model_path, self._voices_path)
+                return kokoro_cls.from_session(session, self._voices_path)
+            return kokoro_cls(self._model_path, self._voices_path)
         self._dml_status = "directml"
         try:
             with open(self._dml_marker_path(), "w", encoding="utf-8") as f:
@@ -3251,30 +3261,56 @@ class KokoroEngine(Engine):
             )
 
         log.info("Loading Kokoro model=%s voices=%s ...", self._model_path, self._voices_path)
-        # ORT providers: honour the injected KOKORO_ORT_PROVIDERS (the server
-        # resolves them from the accelerator profile — e.g. DirectML on
-        # AMD-Windows) when present. When it's unset -- the NVIDIA default --
-        # resolve our own default rather than falling through to kokoro-onnx's
-        # own construction, whose auto-detect is broken upstream and always
-        # forces CPU (#2631). Either way we build the ORT session ourselves
+        # ORT providers: honour the injected KOKORO_ORT_PROVIDERS -- the server
+        # (spawn-sidecar.ts) resolves and injects this for every accelerator
+        # profile, nvidia included, so it is set in the normal server-spawned
+        # case (CUDA+CPU on nvidia, CPU-only on amd/cpu -- see
+        # accelerator-profile.mjs's ortProviders()). When it's unset -- a
+        # sidecar launched standalone via start.ps1/start.sh, which set
+        # nothing -- resolve our own default rather than falling through to
+        # kokoro-onnx's own construction, whose auto-detect is broken
+        # upstream and always forces CPU (#2631). Either way we build the ORT session ourselves
         # and hand it to Kokoro.from_session() -- Kokoro.__init__ doesn't
         # accept a providers= kwarg in version 0.5.0 (upstream limitation),
         # and letting kokoro-onnx pick providers on its own is exactly the
         # bug we're avoiding.
         providers = self._resolve_ort_providers() or self._default_ort_providers()
-        if providers and hasattr(Kokoro, "from_session"):
-            log.debug("Creating ONNX session with providers=%s", providers)
-            import onnxruntime as rt  # type: ignore
-            session = rt.InferenceSession(self._model_path, providers=providers)
-            kokoro = Kokoro.from_session(session, self._voices_path)
+        # Indexed CUDA pin (KOKORO_DEVICE=cuda:1): resolved BEFORE the
+        # initial build so it can be folded into that single build, rather
+        # than building once unpinned (implicitly landing on CUDA device_id
+        # 0) and rebuilding afterward. The old build-then-rebuild sequence
+        # briefly put a real CUDA context on GPU 0 -- a card the VRAM
+        # placement ledger never admitted -- before moving it to the
+        # requested index (#2631 review S3). Only fires for an indexed pin;
+        # cpu / auto / plain cuda leave provider_options unset, so those
+        # paths build exactly as before.
+        po = _kokoro_provider_options(self._requested_device, providers)
+        if po is not None:
+            build_providers, provider_options = po if isinstance(po, tuple) else (providers, po)
         else:
-            if providers:
+            build_providers, provider_options = providers, None
+
+        if build_providers and hasattr(Kokoro, "from_session"):
+            log.debug("Creating ONNX session with providers=%s", build_providers)
+            import onnxruntime as rt  # type: ignore
+            session_kwargs: dict[str, Any] = {"providers": build_providers}
+            if provider_options is not None:
+                session_kwargs["provider_options"] = provider_options
+            session = rt.InferenceSession(self._model_path, **session_kwargs)
+            kokoro = Kokoro.from_session(session, self._voices_path)
+            if provider_options is not None:
+                log.info(
+                    "Kokoro pinned to %s via provider device_id (session built once).",
+                    self._requested_device,
+                )
+        else:
+            if build_providers:
                 log.warning(
                     "kokoro-onnx has no Kokoro.from_session (API drift) -- "
                     "falling back to Kokoro(...), whose own auto-detect is "
                     "broken upstream and will force CPU regardless of the "
                     "resolved providers=%s.",
-                    providers,
+                    build_providers,
                 )
             kokoro = Kokoro(self._model_path, self._voices_path)
 
@@ -3321,28 +3357,6 @@ class KokoroEngine(Engine):
             kokoro = self._directml_selftest_or_fallback(Kokoro, kokoro)
 
         self._kokoro = kokoro
-
-        # Indexed CUDA pin (KOKORO_DEVICE=cuda:1). The installed kokoro-onnx
-        # version's Kokoro.__init__ has no provider_options= kwarg; we reach
-        # device_id by rebuilding the InferenceSession on the final kept
-        # instance (post-DML-selftest). Only fires for an indexed pin — cpu /
-        # auto / plain cuda leave the session unchanged (helper returns None).
-        po = _kokoro_provider_options(self._requested_device, providers)
-        if po is not None:
-            try:
-                import onnxruntime as rt  # type: ignore
-                provs, opts = po if isinstance(po, tuple) else (providers, po)
-                self._kokoro.sess = rt.InferenceSession(
-                    self._model_path, providers=provs, provider_options=opts
-                )
-                log.info(
-                    "Kokoro pinned to %s via provider device_id (sess rebuilt).",
-                    self._requested_device,
-                )
-            except Exception as e:
-                log.warning(
-                    "Kokoro device_id pin failed (%s) — ORT session unchanged.", e
-                )
 
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
@@ -4888,12 +4902,14 @@ def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
     Returns None when there is no index to pin (cpu / auto / plain cuda) so the
-    existing no-pin path stays exactly as-is. When ``providers`` is empty (the
-    NVIDIA default — KOKORO_ORT_PROVIDERS unset so kokoro-onnx auto-selects),
-    SYNTHESIZE a ``["CUDAExecutionProvider","CPUExecutionProvider"]`` list and
-    return ``(providers, options)`` as a tuple so the device_id has somewhere to
-    attach. When ``providers`` is already populated, return a ``list[dict]``
-    aligned to it so the caller can pass it directly as ``provider_options``."""
+    existing no-pin path stays exactly as-is. When ``providers`` is empty --
+    the server always injects KOKORO_ORT_PROVIDERS, so in practice this only
+    happens for a standalone-launched sidecar whose own resolution also came
+    back empty -- SYNTHESIZE a ``["CUDAExecutionProvider","CPUExecutionProvider"]``
+    list and return ``(providers, options)`` as a tuple so the device_id has
+    somewhere to attach. When ``providers`` is already populated (the normal
+    case), return a ``list[dict]`` aligned to it so the caller can pass it
+    directly as ``provider_options``."""
     family, index = _parse_device(device)
     if family != "cuda" or index is None:
         return None

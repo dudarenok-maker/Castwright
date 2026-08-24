@@ -19,7 +19,7 @@ import os
 import sys
 import types
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 import pytest
@@ -130,14 +130,20 @@ def fake_kokoro_module(monkeypatch):
 
 
 class _ProvidersKokoro:
-    """Kokoro stub whose constructor ACCEPTS a providers= kwarg (newer
-    kokoro-onnx releases), recording what it was given so a test can assert the
-    injected ORT provider list is honoured."""
+    """Kokoro stub for the KOKORO_ORT_PROVIDERS-honouring path. The
+    constructor deliberately does NOT accept a `providers` kwarg, matching
+    the real kokoro_onnx==0.5.0 `Kokoro.__init__` signature
+    (`(self, model_path, voices_path, espeak_config=None,
+    vocab_config=None)`) -- a stub that accepted one would be MORE
+    permissive than production and would silently pass a test that calls
+    `Kokoro(model_path, voices_path, providers=...)` directly, a call the
+    real class raises TypeError on. Production always builds via
+    `from_session` now, so this constructor isn't exercised by the fixed
+    load path -- kept strict anyway so a regression back to the old
+    direct-constructor-with-providers= call would fail here exactly as it
+    would against the real package (#2631 review)."""
 
-    last_providers: Any = "UNSET"
-
-    def __init__(self, model_path: str, voices_path: str, providers: Any = None) -> None:
-        _ProvidersKokoro.last_providers = providers
+    def __init__(self, model_path: str, voices_path: str) -> None:
         self._voices = list(_FAKE_VOICE_MANIFEST)
 
     @classmethod
@@ -160,8 +166,7 @@ class _ProvidersKokoro:
 
 @pytest.fixture
 def providers_kokoro_module(monkeypatch):
-    """A kokoro_onnx whose Kokoro accepts + records providers=."""
-    _ProvidersKokoro.last_providers = "UNSET"
+    """A kokoro_onnx whose Kokoro accepts providers=."""
     fake_mod = types.ModuleType("kokoro_onnx")
     fake_mod.Kokoro = _ProvidersKokoro  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
@@ -175,12 +180,19 @@ def test_kokoro_honours_injected_ort_providers(
     passed straight through to the Kokoro constructor."""
     from unittest.mock import MagicMock, patch
 
+    # Hermetic: an ambient KOKORO_DEVICE (e.g. cuda:1) would fold a device_id
+    # pin into this same session build, adding a second (unexpected here)
+    # assertion target and making the test's InferenceSession-call-count
+    # assumption environment-dependent (#2631 review M1).
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
     mock_session = MagicMock()
     mock_session._model_path = str(fake_weight_files["model"])
 
-    # Track from_session calls to verify it's being used
+    # Track from_session calls to verify it's being used. monkeypatch.setattr
+    # (not a raw attribute assignment) so the stub is restored automatically
+    # at teardown rather than leaking into later tests (#2631 review M4).
     from_session_calls: list = []
-    original_from_session = providers_kokoro_module.from_session
 
     @classmethod
     def tracked_from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
@@ -189,7 +201,7 @@ def test_kokoro_honours_injected_ort_providers(
         instance._voices = list(_FAKE_VOICE_MANIFEST)
         return instance
 
-    providers_kokoro_module.from_session = tracked_from_session
+    monkeypatch.setattr(providers_kokoro_module, "from_session", tracked_from_session)
 
     monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
 
@@ -210,14 +222,15 @@ def test_kokoro_honours_injected_ort_providers(
 def test_kokoro_unset_env_prefers_cuda_when_available(
     fake_weight_files, monkeypatch
 ) -> None:
-    """#2631: the ACTUAL reported bug. KOKORO_ORT_PROVIDERS is unset by
-    design on the NVIDIA default profile (the server never injects it there
-    -- see _kokoro_provider_options's own docstring). Kokoro must NOT fall
-    through to kokoro-onnx's own broken auto-detect (find_spec('onnxruntime-
-    gpu') is not a valid module identifier, so it always resolves to None and
-    forces CPU); it must resolve CUDA-first itself, from onnxruntime's own
-    reported availability, and go through from_session same as the
-    explicit-providers path."""
+    """#2631: covers the standalone-launch fallback (KOKORO_ORT_PROVIDERS
+    unset -- the server always injects it in the normal server-spawned
+    case, so this exercises a sidecar launched directly via
+    start.ps1/start.sh, which set nothing). Even there, Kokoro must NOT
+    fall through to kokoro-onnx's own broken auto-detect (find_spec(
+    'onnxruntime-gpu') is not a valid module identifier, so it always
+    resolves to None and forces CPU); it must resolve CUDA-first itself,
+    from onnxruntime's own reported availability, and go through
+    from_session same as the explicit-providers path."""
     from unittest.mock import MagicMock, patch
 
     monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
@@ -318,14 +331,58 @@ def test_kokoro_unset_env_cpu_only_runtime_still_loads(
         assert engine._kokoro is not None
 
 
+def test_default_ort_providers_honours_explicit_cpu_even_with_cuda_available(
+    monkeypatch,
+) -> None:
+    """KOKORO_DEVICE=cpu must return CPU-only even when CUDA is fully
+    available (in get_available_providers() AND has a cuda_version build) --
+    an explicit CPU request is never overridden into CUDA. Regression for
+    the `family == "cpu"` early return in `_default_ort_providers`, which
+    review-gate mutation testing found survived removal against the then-
+    existing suite (#2631 review M2)."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("KOKORO_DEVICE", "cpu")
+    engine = main.KokoroEngine()
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True):
+        assert engine._default_ort_providers() == ["CPUExecutionProvider"]
+
+
+def test_default_ort_providers_requires_cuda_build_not_just_reported_provider(
+    monkeypatch,
+) -> None:
+    """CUDAExecutionProvider appearing in get_available_providers() is not
+    sufficient on its own -- get_available_providers() reflects what ORT was
+    compiled with, not what actually has a usable CUDA build behind it. This
+    pins that a build with no cuda_version stays CPU-only even though CUDA
+    is (falsely) reported available. Regression for the `and has_cuda_build`
+    conjunct in `_default_ort_providers`, which review-gate mutation testing
+    found survived removal against the then-existing suite (#2631 review
+    M2)."""
+    from unittest.mock import patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+    engine = main.KokoroEngine()
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "", create=True):
+        assert engine._default_ort_providers() == ["CPUExecutionProvider"]
+
+
 def test_kokoro_device_env_cuda_index_pins_without_double_build(
     fake_weight_files, monkeypatch
 ) -> None:
     """KOKORO_DEVICE=cuda:1 with KOKORO_ORT_PROVIDERS unset: the default
-    providers resolve to CUDA+CPU, and the existing device_id-pin rebuild
-    must still fire exactly once more on top of the initial session build --
-    two InferenceSession calls total. Not one (the indexed pin regressed
-    silently) and not three+ (a redundant extra rebuild)."""
+    providers resolve to CUDA+CPU, and the indexed pin must be folded into
+    the INITIAL session build -- exactly ONE InferenceSession call, with
+    provider_options set for device_id=1 from the start. Building an
+    unpinned session first (implicitly landing on GPU 0) and rebuilding
+    pinned afterward would briefly put a real CUDA context on a card the
+    placement ledger never admitted (#2631 review S3)."""
     from unittest.mock import MagicMock, patch
 
     monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
@@ -365,21 +422,23 @@ def test_kokoro_device_env_cuda_index_pins_without_double_build(
         engine = main.KokoroEngine()
         engine._ensure_loaded("v1")
 
-        assert mock_ort_session_class.call_count == 2
-        first_call, second_call = mock_ort_session_class.call_args_list
-        assert first_call[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        assert first_call[1].get("provider_options") is None
-        assert second_call[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        assert second_call[1]["provider_options"] == [{"device_id": 1}, {}]
+        mock_ort_session_class.assert_called_once()
+        call_args = mock_ort_session_class.call_args
+        assert call_args[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        assert call_args[1]["provider_options"] == [{"device_id": 1}, {}]
         assert engine._kokoro.sess is mock_session
 
 
-def test_kokoro_falls_back_when_constructor_rejects_providers(
+def test_kokoro_loads_via_from_session_with_dml_provider_only(
     fake_kokoro_module, fake_weight_files, monkeypatch
 ) -> None:
-    """With the fixed code using from_session, we no longer try to pass
-    providers= to __init__. This test is now a sanity check that the no-providers
-    path still works."""
+    """KOKORO_ORT_PROVIDERS=["DmlExecutionProvider"] (a single entry, no CPU
+    tail) still builds via from_session and completes the DirectML
+    self-test without raising. Renamed from the old
+    test_kokoro_falls_back_when_constructor_rejects_providers, whose name
+    and docstring both described a providers=-rejection fallback that this
+    test does not exercise -- it sets KOKORO_ORT_PROVIDERS, so it is on the
+    explicit-providers path, not a no-providers path (#2631 review M3)."""
     from unittest.mock import patch, MagicMock
 
     mock_session = MagicMock()
@@ -403,6 +462,11 @@ def test_kokoro_uses_from_session_when_providers_specified(
     This test verifies the fix by mocking InferenceSession and from_session
     and asserting both are called correctly."""
     from unittest.mock import MagicMock, patch
+
+    # Hermetic: an ambient KOKORO_DEVICE (e.g. cuda:1) would fold a device_id
+    # pin into this same session build, making assert_called_once() fail for
+    # a reason unrelated to what this test checks (#2631 review M1).
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
 
     # Create a mock InferenceSession class
     mock_session = MagicMock()
@@ -487,15 +551,21 @@ def test_kokoro_importerror_remediation_is_profile_aware(
 
 
 class _DmlKokoro:
-    """Kokoro stub for the DirectML self-test: records the providers it was
-    built with and how many times create() ran; create() raises when
-    fail_create is set (simulating the DML ConvTranspose failure)."""
+    """Kokoro stub for the DirectML self-test: records how many times
+    create() ran; create() raises when fail_create is set (simulating the
+    DML ConvTranspose failure).
+
+    The constructor deliberately does NOT accept a `providers` kwarg,
+    matching the real kokoro_onnx==0.5.0 `Kokoro.__init__` signature
+    (`(self, model_path, voices_path, espeak_config=None,
+    vocab_config=None)`) -- a stub that accepted one would hide a
+    production TypeError behind a test double that is more permissive
+    than the real class (#2631 review S2)."""
 
     instances: list["_DmlKokoro"] = []
     fail_create: bool = False
 
-    def __init__(self, model_path: str, voices_path: str, providers: Any = None) -> None:
-        self.providers = providers
+    def __init__(self, model_path: str, voices_path: str) -> None:
         self.create_calls = 0
         self._voices = list(_FAKE_VOICE_MANIFEST)
         type(self).instances.append(self)
@@ -558,13 +628,24 @@ def test_directml_selftest_passes_and_caches(dml_kokoro_module, fake_weight_file
 
 
 def test_directml_selftest_fails_falls_back_to_cpu(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
-    """A failing DML synth rebuilds Kokoro on the CPU EP (honest cpu in /health)."""
+    """A failing DML synth rebuilds Kokoro on the CPU EP via from_session
+    (honest cpu in /health) -- NOT via `Kokoro(..., providers=...)`, which
+    kokoro_onnx==0.5.0's real constructor rejects with a TypeError (#2631
+    review S2). Asserting on the InferenceSession call args -- rather than
+    on a `.providers` attribute the stub's constructor no longer accepts --
+    is what makes this test fail if the fallback regresses to that
+    impossible call: `_DmlKokoro.__init__` takes no `providers` kwarg, so a
+    stub asserting on it would mask the same bug the real class exposes."""
     from unittest.mock import patch, MagicMock
 
     mock_session = MagicMock()
     mock_session._model_path = str(fake_weight_files["model"])
 
-    _DmlKokoro.fail_create = True
+    # monkeypatch.setattr (not a raw class-attribute assignment) so this is
+    # restored at teardown regardless of test order/failure, rather than
+    # relying on dml_kokoro_module's next setup to reset it back to False
+    # (#2631 review M4/M5 pattern).
+    monkeypatch.setattr(_DmlKokoro, "fail_create", True)
     monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
 
     with patch("onnxruntime.InferenceSession") as mock_ort_session:
@@ -572,8 +653,9 @@ def test_directml_selftest_fails_falls_back_to_cpu(dml_kokoro_module, fake_weigh
         engine = main.KokoroEngine()
         engine._ensure_loaded("v1")
         assert engine._dml_status == "fallback-cpu"
-        # The kept instance was rebuilt on CPU; no marker (DML didn't pass).
-        assert dml_kokoro_module.instances[-1].providers == ["CPUExecutionProvider"]
+        # The fallback session (the last InferenceSession build) was built
+        # on the CPU EP alone; no marker (DML didn't pass).
+        assert mock_ort_session.call_args_list[-1][1]["providers"] == ["CPUExecutionProvider"]
         assert not os.path.isfile(engine._dml_marker_path())
 
 
@@ -1122,9 +1204,14 @@ def test_kokoro_provider_options_indexed_cuda() -> None:
 
 
 def test_kokoro_provider_options_synthesizes_when_providers_empty() -> None:
-    """On an NVIDIA box where KOKORO_ORT_PROVIDERS is unset, providers=[] is
-    the default (kokoro-onnx auto-detects CUDA).  The pin must SYNTHESIZE a
-    CUDA+CPU list and return (providers, options) so device_id has a home."""
+    """Unit-level coverage of `_kokoro_provider_options` itself, called
+    directly with an empty providers list -- the server always injects
+    KOKORO_ORT_PROVIDERS, so in the running engine `providers` reaching this
+    helper is never actually empty (`_default_ort_providers` always returns
+    a non-empty list too); this defensive branch would only fire if both of
+    those resolved to nothing. The pin must still SYNTHESIZE a CUDA+CPU list
+    and return (providers, options) so device_id has a home (#2631 review
+    M6 -- corrects the prior docstring's false "NVIDIA default" premise)."""
     assert main._kokoro_provider_options("cuda:1", []) == (
         ["CUDAExecutionProvider", "CPUExecutionProvider"], [{"device_id": 1}, {}]
     )

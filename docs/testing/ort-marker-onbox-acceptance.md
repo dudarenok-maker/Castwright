@@ -142,9 +142,13 @@ check fails on a real dependency gap.
 > **FIXED in code, 2026-08-23 (#2631) — this criterion is now re-runnable and
 > is the thing to re-check first.** The sidecar no longer lets kokoro-onnx
 > choose providers at all: it builds the ORT InferenceSession itself and hands
-> it to Kokoro.from_session(), resolving the provider list from ORT's own
-> reported state when KOKORO_ORT_PROVIDERS is unset — which is the NVIDIA
-> default, and was the path that always fell to CPU.
+> it to Kokoro.from_session(). The server (spawn-sidecar.ts) already injects
+> KOKORO_ORT_PROVIDERS for every accelerator profile, nvidia included, so on
+> a server-spawned sidecar that injected CUDA+CPU list is what reaches the
+> session — this is the path that was previously falling to CPU.
+> Resolving providers from ORT's own reported state only fires when
+> KOKORO_ORT_PROVIDERS is unset, which is the sidecar-launched-standalone
+> case (start.ps1/start.sh set nothing), not the NVIDIA default.
 >
 > Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
 > proven off-box**: get_available_providers() reports CUDA whether or not any
