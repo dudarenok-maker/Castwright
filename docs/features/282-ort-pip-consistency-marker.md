@@ -282,10 +282,11 @@ Node-side `.mjs`/TypeScript); e2e (no router/redux/layout seam).
 
 ### On-box acceptance
 
-The design doc's §On-box acceptance names six criteria; one (self-heal on an
-existing box) was run end-to-end on real hardware during implementation and is
-**discharged**, not owed. The other five, plus one addition the spec doesn't name,
-are owed — five owed rows, plus one Blocked entry. See `docs/testing/ort-marker-onbox-acceptance.md` for
+The design doc's §On-box acceptance names six criteria; two (self-heal on an
+existing box, and the clobbered-venv case) were run end-to-end on real hardware
+and are **discharged**, not owed. The other three, plus one addition the spec
+doesn't name, are owed — four owed rows, plus one Blocked entry. See
+`docs/testing/ort-marker-onbox-acceptance.md` for
 the full evidence and per-criterion procedures, and
 `docs/testing/onbox-acceptance-register.md` for the register rows: a fresh NVIDIA
 bootstrap (A36), the reported bug itself — in-app Qwen3 install (A37), an AMD box

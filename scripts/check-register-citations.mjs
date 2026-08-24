@@ -153,6 +153,37 @@
 //      truth "too thin to trust" for the `wrongId` half; "incomplete" (never
 //      "wrong") is the honest description of the `unknownSubject` half.
 //
+//      MEASURED COVERAGE, not just precision — pass-8 review of PR #2630
+//      (finding M/S): `wrongId` can only ever fire on a line that is BOTH
+//      citation-shaped (an anchored heading or a `Criteria source:` line) AND
+//      carries a subject number on that same physical line
+//      (`extractSubjectNumbers`). Measured on the real corpus at the time of
+//      this comment: 23 of the tree's 32 anchored headings carry a subject
+//      number, across 5 files (all `docs/testing/onbox-sitting-*.md`); 0 of
+//      its 32 `Criteria source:` lines do — every real instance in this
+//      corpus cites its subject in a different sentence than the one naming
+//      the row, or names no subject at all. So the `Criteria source:` surface
+//      contributes NOTHING on the corpus as it stands, and the fatal half's
+//      entire real coverage is those 23 lines in 5 files — `runCheckRegisterCitationsCli`'s
+//      success line reports the live count each run rather than repeating
+//      this frozen number, since the corpus changes under it. Two real
+//      consequences follow, and this PR is explicit about both rather than
+//      letting the success line imply broader coverage than this: (1) a
+//      wrong ID cited via the "row(s) ID" prose idiom, a "Register row(s):"
+//      label line, or a citation-shaped line with no subject number next to
+//      it is invisible to `wrongId` — Check A only catches it if the ID is
+//      also nonexistent, never merely wrong-for-its-subject; (2) a wrong ID
+//      that arrives via a DISCHARGE — the cited ID still exists, just for a
+//      DIFFERENT subject now, because the citation's own original subject's
+//      row discharged and left the register entirely — routes to the
+//      non-fatal, opt-in `unknownSubject` bucket by construction, not
+//      `wrongId`, because the discriminator between the two branches is
+//      "does the register still know this subject at all", and a discharge
+//      answers no. Widening `wrongId` to that class is deliberately deferred
+//      (see #2629) rather than attempted here, since the two live
+//      `unknownSubject` residuals on this corpus are legitimately benign and
+//      a naive widening would false-positive on them.
+//
 // Frozen paths are excluded from all three checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
 // fixtures, and the sibling `check-onbox-register.mjs` checker's test
@@ -639,20 +670,46 @@ const ANY_ID_TOKEN_REGEX = /\b([A-Z]\d{1,3})\b/g;
 // followed by "<ID> is", e.g. "... F3\" below) — see \`docs/...\`'s..." or
 // "... Task A-T5 above — the ...", is a plain mid-sentence dash, not a
 // clause break, and treating every dash as one broke two real multi-ID
-// annotations. A plain sentence-ending `.` is DELIBERATELY not a boundary
-// here either: one real annotation (`2026-08-05-device-token-scope.md`'s
-// "... no longer exists.** Same note as Task A-T5 above — the \"Add on-box
-// row F3\" ...") legitimately spans a period between the discharge word and
-// the ID it excuses. The semicolon IS a boundary — measured: the real
-// corpus's own `cast-id-drift-onbox-acceptance.md` discharge clause ends its
-// "B3 is discharged ... and A45 ..." sentence with one ("... (2026-08-11);
-// neither is in the register any more ..."), and without that boundary the
-// clause ran on through the rest of the same blockquote (no blank line
-// separates them) and wrongly reached a citation several lines further down
-// — the exact shape a paired real-tree injection needs to defeat (see
-// finding D's INJ-A/INJ-B). Used to bound which ID mentions a discharge word
-// can legitimately excuse — see idSpecificAnnotationPresent's own comment.
-const CLAUSE_BOUNDARY_REGEX = /;|[—–](?=\s*[A-Z]\d{1,3}\s+is\b)|\r?\n[ \t]*>?[ \t]*\r?\n/g;
+// annotations. A plain sentence-ending `.` MID-TEXT is DELIBERATELY not a
+// boundary here either: one real annotation (`2026-08-05-device-token-
+// scope.md`'s "... no longer exists.** Same note as Task A-T5 above — the
+// \"Add on-box row F3\" ...") legitimately spans a period between the
+// discharge word and the ID it excuses. The semicolon IS a boundary —
+// measured: the real corpus's own `cast-id-drift-onbox-acceptance.md`
+// discharge clause ends its "B3 is discharged ... and A45 ..." sentence with
+// one ("... (2026-08-11); neither is in the register any more ..."), and
+// without that boundary the clause ran on through the rest of the same
+// blockquote (no blank line separates them) and wrongly reached a citation
+// several lines further down — the exact shape a paired real-tree injection
+// needs to defeat (see finding D's INJ-A/INJ-B).
+//
+// Pass-8 review of PR #2630 (finding O): a single bare newline (no blank
+// line) was NOT a boundary at all — deliberately, so a legitimate multi-line
+// blockquote annotation (the device-token-scope example above, wrapped
+// across five `>` lines with no blank line anywhere in it) still reads as
+// one clause. But that same permissiveness let a discharge word on one table
+// row / list item / blockquote line excuse a citation on an ADJACENT,
+// unrelated row/item/line, with nothing but a bare newline between them
+// (real-tree paired injections R1/R3/R4, plus a nested-list repro, all
+// defeated the pre-pass-8 rule this way). Two more boundary shapes close
+// that gap without touching the legitimate multi-line-quote case above
+// (verified: neither shape's pattern occurs anywhere inside it):
+//   - a newline immediately followed by the START of a NEW table row
+//     (`|`), list item (`-`/`*`/`+`/`1.`), or blockquote line whose own
+//     content begins a fresh sentence-ending-terminated clause is bounded by
+//     the rule below; a bare list/table/quote line-start is always treated
+//     as beginning its own clause, since a legitimate cross-item annotation
+//     spanning two separate rows/bullets with no connecting punctuation is
+//     not a real shape in this corpus;
+//   - sentence-ending punctuation (`.`/`!`/`?`) immediately followed by a
+//     newline into a new `>`-quoted line — i.e. a completed sentence that
+//     happens to end exactly at a blockquote line break — closes the R4
+//     shape ("Register rows: A99 (Wave 4).\n> Historical note: ... B3 was
+//     discharged ...") without firing on the device-token-scope annotation,
+//     none of whose internal line breaks follow a period (each one wraps
+//     mid-sentence).
+const CLAUSE_BOUNDARY_REGEX =
+  /;|[—–](?=\s*[A-Z]\d{1,3}\s+is\b)|[.!?]\s*\r?\n[ \t]*>|\r?\n[ \t]*(?:[-*+]\s|\d+\.\s|\|)|\r?\n[ \t]*>?[ \t]*\r?\n/g;
 
 /**
  * The `[start, end)` span of `text` around `pos` that is bounded by the
@@ -729,10 +786,28 @@ function clauseBounds(text, pos) {
  * discharge word to their farthest legitimate ID) so an unpunctuated run-on
  * paragraph, or a clause with no closing dash at all, can't turn into an
  * unbounded excuse.
+ *
+ * Pass-8 review of PR #2630 (finding O): the DISCHARGE-WORD SCAN runs
+ * against a copy with single-backtick INLINE CODE SPANS blanked
+ * (`stripInlineCodeSpans`), the same way `stripFences` blanks triple-
+ * backtick blocks — a real-tree paired injection showed a discharge word
+ * sitting inside an example command (`` `grep "register row A99 was
+ * discharged" docs/` ``) disarming the check, even though the text is an
+ * instruction to run a search, not an assertion about anything. Blanking
+ * preserves length, so the match indices found against the blanked copy are
+ * still valid offsets into `sectionText`. The ID-TOKEN SCAN deliberately
+ * keeps reading the ORIGINAL, unblanked `sectionText` — a bare-ID code span
+ * like the real corpus's `` `F1` ``/`` `F2` ``/`` `F3` `` is a legitimate
+ * annotation (see deBold's own comment: "a single backtick pair around an
+ * ID ... carries no ambiguity worth stripping"), and blanking it too broke
+ * that real annotation (measured: `docs/superpowers/plans/2026-08-05-
+ * device-token-scope.md`'s `F2`/`F3` citations went from correctly-excused
+ * to falsely-flagged the first time this was tried).
  */
 function idSpecificAnnotationPresent(sectionText, id) {
+  const dischargeScanText = stripInlineCodeSpans(sectionText);
   const dischargeMatches = [
-    ...sectionText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
+    ...dischargeScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
   ];
   if (dischargeMatches.length === 0) return false;
   for (const dm of dischargeMatches) {
@@ -748,6 +823,21 @@ function idSpecificAnnotationPresent(sectionText, id) {
     }
   }
   return false;
+}
+
+// Blanks single-backtick inline code spans (never triple-backtick fences —
+// those are already blanked by stripFences before this ever runs) with
+// equal-length spaces, so character offsets used elsewhere (clauseBounds,
+// ID_PROXIMITY_CHARS) don't shift. Used ONLY to find discharge-word matches
+// (idSpecificAnnotationPresent) — never for ID-token scanning, which must
+// still see a bare-ID code span like the real corpus's `` `F1` ``/`` `F2` ``/
+// `` `F3` `` (legitimate annotations, per deBold's own comment above: "a
+// single backtick pair around an ID ... carries no ambiguity worth
+// stripping"). See idSpecificAnnotationPresent's own comment (pass-8 review
+// of PR #2630, finding O) for why an example command inside a code span
+// must not read as a real discharge annotation.
+function stripInlineCodeSpans(text) {
+  return text.replace(/`[^`\n]*`/g, (m) => ' '.repeat(m.length));
 }
 
 /**
@@ -1066,16 +1156,24 @@ function buildLegitimateSubjectMap(registerRows) {
 const CRITERIA_SOURCE_LINE_REGEX = /\bCriteria source:/i;
 
 /**
- * A line counts as "citation-shaped" for Check C only when it names EXACTLY
- * ONE row unambiguously: an anchored `### <ID> · …` heading, or the sibling
- * `Criteria source:` idiom (every use in the corpus is a
+ * A line counts as "citation-shaped" for Check C only when every row it
+ * names is unambiguous: an anchored `### <ID> [+ <ID> ...] · …` heading, or
+ * the sibling `Criteria source:` idiom (every use in the corpus is a
  * `> **Criteria source:** ... <ID>.` line immediately under a pack section's
  * own heading). Deliberately narrower than Check A's three surfaces — the
  * "row(s) ID" prose idiom and a "Register row(s):" label line can both name
- * several rows on one physical line, which is exactly the shape that kept
- * two of the old window's false positives alive under same-line scoping
- * too (see this section's own comment above); Check C only trusts a line
- * that can't be ambiguous in that way.
+ * several rows with NO fixed correspondence to the subjects also on the
+ * line (which subject goes with which row is not recoverable from the text
+ * at all), which is exactly the shape that kept two of the old window's
+ * false positives alive under same-line scoping too (see this section's own
+ * comment above). A multi-ID heading is different in kind, not just in
+ * degree: `### A40 + A41 · Title1 (#2310) + Title2 (#2106)` names its rows
+ * via a fixed, anchored syntax — pass-8 review of PR #2630 (finding R) — so
+ * each id IS unambiguous, it just isn't positionally bound to a single
+ * subject the way a one-id heading is; checkConflictingSubjects' own
+ * `idExplainedByLine` is what accounts for that (see its comment). Check C
+ * only trusts a line whose id<->row correspondence can't be ambiguous the
+ * way the two excluded surfaces are.
  */
 function citationShapedLineIds(line) {
   const ids = new Set();
@@ -1119,6 +1217,37 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
       if (citedIds.size === 0) return;
       const nearbySubjects = extractSubjectNumbers(line);
       if (nearbySubjects.size === 0) return;
+
+      // Pass-8 review of PR #2630 (finding R): a MULTI-ID line
+      // (`### A40 + A41 · ...`, HEADING_ID_REGEX's `<ID> + <ID>` form) also
+      // carries multiple subjects, one per row it names — but the cross
+      // product below has no positional information tying a given subject to
+      // ITS OWN id rather than the other one on the same line. Checked
+      // against every subject on the line unconditionally, a completely
+      // correct heading (A40 legitimately owns #2310, A41 legitimately owns
+      // #2106) produces two FATAL false positives, exactly inverted from the
+      // truth ("cited A40 for #2106, but #2106 maps to A41" — true, but not
+      // what the line asserts). Fix: an id that legitimately owns AT LEAST
+      // ONE subject named on this same line is "explained" by the line as a
+      // whole, and is never flagged wrong against any OTHER subject also
+      // named on it — this is what a real multi-ID/multi-subject heading
+      // looks like. An id that owns NONE of the line's subjects is still
+      // flagged (paired control: `### A1 + A2 · ... (#1001) + (#1001)`, where
+      // A1 has no legitimate claim to #1001 at all, still fires) — so a
+      // genuinely wrong multi-ID heading still fails; only a heading that is
+      // actually correct, just with a positionally-ambiguous ID<->subject
+      // pairing, stops false-firing.
+      const idExplainedByLine = new Set();
+      for (const id of citedIds) {
+        if (!registerRows.has(id)) continue;
+        for (const subject of nearbySubjects) {
+          if (legitimate.get(subject)?.has(id)) {
+            idExplainedByLine.add(id);
+            break;
+          }
+        }
+      }
+
       for (const id of citedIds) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
         for (const subject of nearbySubjects) {
@@ -1138,6 +1267,7 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
                 `verify ${id} still applies`,
             );
           } else if (!legitimateIds.has(id)) {
+            if (idExplainedByLine.has(id)) continue; // see idExplainedByLine's own comment above.
             // The subject's ID set is known and doesn't include this ID —
             // unambiguously wrong, the four-wrong-headings class PR #2630
             // exists to catch. Fatal.
@@ -1151,6 +1281,51 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
     });
   }
   return { wrongId, unknownSubject };
+}
+
+/**
+ * Pass-8 review of PR #2630 (finding M/S): the CLI's success line used to
+ * claim broad coverage for Check C's fatal (`wrongId`) half without ever
+ * measuring how many lines it can actually fire on. `citationShapedLineIds`
+ * only trusts two surfaces (an anchored heading, or a `Criteria source:`
+ * line), and `wrongId` additionally requires a subject number on THAT SAME
+ * line (`checkConflictingSubjects`'s `extractSubjectNumbers(line)`) — a
+ * heading or `Criteria source:` line with no subject number at all can never
+ * fire `wrongId`, only (at most) `unknownSubject`'s non-fatal, opt-in
+ * sibling, or nothing. This measures the real corpus directly, at CLI-run
+ * time, rather than asserting a number that goes stale the moment the
+ * corpus changes.
+ *
+ * @param {Map<string, string>} fileTexts — path -> full text (non-frozen,
+ *   non-self-referential — same set Check C itself reads).
+ * @returns {{ headingLines: number, headingFiles: number,
+ *   criteriaLines: number, criteriaFiles: number }}
+ */
+function measureWrongIdEligibleLines(fileTexts) {
+  const headingFiles = new Set();
+  const criteriaFiles = new Set();
+  let headingLines = 0;
+  let criteriaLines = 0;
+  for (const [filePath, rawText] of fileTexts) {
+    const text = deBold(stripFences(rawText));
+    for (const line of text.split('\n')) {
+      if (extractSubjectNumbers(line).size === 0) continue;
+      if (headingCitedIds(line).length > 0) {
+        headingLines++;
+        headingFiles.add(filePath);
+      }
+      if (CRITERIA_SOURCE_LINE_REGEX.test(line) && extractIdTokensWithRanges(line).size > 0) {
+        criteriaLines++;
+        criteriaFiles.add(filePath);
+      }
+    }
+  }
+  return {
+    headingLines,
+    headingFiles: headingFiles.size,
+    criteriaLines,
+    criteriaFiles: criteriaFiles.size,
+  };
 }
 
 // --- CLI ------------------------------------------------------------------
@@ -1308,6 +1483,7 @@ export function runCheckRegisterCitationsCli(options = {}) {
 
   if (!anyFatal) {
     const actuallyScanned = scannedFiles.length - unreadableCount;
+    const coverage = measureWrongIdEligibleLines(nonFrozenTexts);
     console.log(
       `\ncheck:register-citations: OK. Checks A (nonexistent ID), B (run-sheet ` +
         `linkage), and C's "existing row ID cited for the wrong subject" half are the FATAL checks ` +
@@ -1326,7 +1502,19 @@ export function runCheckRegisterCitationsCli(options = {}) {
         `line — a bare ID with none of Check A's three surfaces, e.g. in a ` +
         `table cell or an un-anchored heading, is not a citation surface for either check (see header ` +
         `comment for why). Check B additionally parses the bare-ID/range idiom, but only inside a run ` +
-        `sheet's own header region.`,
+        `sheet's own header region. MEASURED coverage of Check C's fatal half, on this corpus: it can ` +
+        `only ever fire on an anchored heading or "Criteria source:" line that ALSO carries a subject ` +
+        `number on the same physical line — right now that is ${coverage.headingLines} anchored-heading ` +
+        `line(s) in ${coverage.headingFiles} file(s) and ${coverage.criteriaLines} "Criteria source:" ` +
+        `line(s) in ${coverage.criteriaFiles} file(s) (Check A, by contrast, sees every "row(s) ID"/ ` +
+        `"Register row(s):"/heading occurrence tree-wide). A wrong ID cited in the "row(s) ID" prose ` +
+        `idiom, in a "Register row(s):" label line, or on a heading/"Criteria source:" line with no ` +
+        `subject number next to it is NOT DETECTED by Check C's fatal half at all — Check A only ` +
+        `catches it if the ID is nonexistent, not merely wrong-for-its-subject. A wrong ID that arrives ` +
+        `via a DISCHARGE (the cited ID still exists, for something else, but its subject left the ` +
+        `register entirely) is also not caught by the fatal half — it lands in the exploratory, ` +
+        `non-fatal "unknownSubject" bucket instead (--strict only), by construction; see ` +
+        `checkConflictingSubjects' own comment for why widening that is deferred, not silently absent.`,
     );
     return;
   }
