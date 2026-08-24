@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveSidecarSweepPort } from '../lib/sidecar-sweep-port.mjs';
+import { resolveSidecarSweepPort, buildPortsToSweep } from '../lib/sidecar-sweep-port.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -115,20 +115,100 @@ test('resolveSidecarSweepPort never returns the factory-default 9000 as a guess'
   });
 });
 
-// #2632 N29 — call-site coverage. Pass 6 noted that reverting stop-app.mjs's
-// `ttsPort` back to a literal 9000 leaves the helper-level tests above green,
-// because none of them exercise the call site. Read the real source text so
-// this fails if that call site regresses.
-test('stop-app.mjs computes ttsPort via resolveSidecarSweepPort, not a literal 9000', () => {
+// #2632 N34 — call-site coverage, BEHAVIOURAL this time. Pass 6's source-text
+// guard pinned the ASSIGNMENT (`const ttsPort = resolveSidecarSweepPort(...)`)
+// but not the USE one line below — reverting `portsToSweep` to
+// `[8080, 8443, 9000]` (resolver still called, result discarded) left that
+// guard green. buildPortsToSweep() is the ENTIRE call-site computation
+// (resolve + assemble), so testing it end-to-end via real temp files proves
+// the resolved port actually reaches the swept list — there's no separate
+// "call site" left to independently mutate away from the tested behaviour.
+test('buildPortsToSweep includes the resolved sidecar port from tts.owner.json', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.json'),
+      JSON.stringify({ pid: 1, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.deepEqual(buildPortsToSweep([8080, 8443], dir, envPath), [8080, 8443, 9010]);
+    });
+  });
+});
+
+test('buildPortsToSweep includes the resolved sidecar port from server/.env fallback', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
+      assert.deepEqual(buildPortsToSweep([8080, 8443], dir, envPath), [8080, 8443, 9030]);
+    });
+  });
+});
+
+test('buildPortsToSweep sweeps only the base ports when no sidecar port resolves', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv(null, (envPath) => {
+      assert.deepEqual(buildPortsToSweep([8080, 8443], dir, envPath), [8080, 8443]);
+    });
+  });
+});
+
+// Narrow structural check on top of the behavioural coverage above: proves
+// stop-app.mjs's own call site actually feeds buildPortsToSweep's result to
+// portsToSweep, rather than reassigning a literal array after calling it for
+// its side effects. Deliberately does NOT pin the resolver/runDir/envPath
+// identifiers (that brittleness — reddening on a plain rename — was pass 7's
+// other finding about this same guard).
+test('stop-app.mjs assigns portsToSweep from buildPortsToSweep(), not a hardcoded array', () => {
   const source = readFileSync(resolve(__dirname, '..', 'stop-app.mjs'), 'utf8');
   assert.match(
     source,
-    /const ttsPort = resolveSidecarSweepPort\(runDir, serverEnvPath\);/,
-    'stop-app.mjs must derive ttsPort from resolveSidecarSweepPort(runDir, serverEnvPath)',
+    /portsToSweep\s*=\s*buildPortsToSweep\(/,
+    'stop-app.mjs must assign portsToSweep from buildPortsToSweep(...)',
   );
   assert.doesNotMatch(
     source,
-    /const ttsPort = 9000;/,
-    'stop-app.mjs must not hardcode ttsPort to the factory default 9000',
+    /portsToSweep\s*=\s*\[[^\]]*9000[^\]]*\]/,
+    'stop-app.mjs must not hardcode a literal 9000 into the swept ports array',
   );
+});
+
+// #2632 N36 — the server/.env tier must reject exactly what the server's own
+// resolveSidecarPort() (server/src/tts/sidecar-owner.ts, N28) rejects, not a
+// looser superset. A leading "+", exponent notation, hex, or a decimal point
+// all pass Number() but must not resolve to a port here.
+test('resolveSidecarSweepPort rejects LOCAL_TTS_PORT spellings the server rejects', () => {
+  const invalidSpellings = ['+9010', '1e4', '0x2386', '9010.0'];
+  for (const spelling of invalidSpellings) {
+    withTempRunDir((dir) => {
+      withTempServerEnv(`LOCAL_TTS_PORT=${spelling}\n`, (envPath) => {
+        assert.equal(
+          resolveSidecarSweepPort(dir, envPath),
+          null,
+          `expected LOCAL_TTS_PORT=${spelling} to resolve to null (server rejects it too)`,
+        );
+      });
+    });
+  }
+});
+
+test('resolveSidecarSweepPort accepts a leading-zero spelling the server also accepts', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv('LOCAL_TTS_PORT=007\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 7);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort prefers a shell-exported LOCAL_TTS_PORT over server/.env, mirroring process.loadEnvFile precedence', () => {
+  const prev = process.env.LOCAL_TTS_PORT;
+  process.env.LOCAL_TTS_PORT = '9100';
+  try {
+    withTempRunDir((dir) => {
+      withTempServerEnv('LOCAL_TTS_PORT=9010\n', (envPath) => {
+        assert.equal(resolveSidecarSweepPort(dir, envPath), 9100);
+      });
+    });
+  } finally {
+    if (prev === undefined) delete process.env.LOCAL_TTS_PORT;
+    else process.env.LOCAL_TTS_PORT = prev;
+  }
 });

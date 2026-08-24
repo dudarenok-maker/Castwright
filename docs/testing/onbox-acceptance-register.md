@@ -304,20 +304,26 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
+> **Last change: 2026-08-25 (#2632, PR #2635), 65 → 66.** Added **E10** — the
+> sidecar-sweep worktree fix ships behaviour that only two live checkouts can
+> prove (that `npm run stop` sweeps the RIGHT checkout's sidecar, not the
+> primary's); nothing in that PR exercises `stop-app.mjs`/`.ps1` end to end
+> against a real listener.
+>
+> **Prior change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
 > live (A38, "ORT marker refuses — not repairs — a clobbered venv") and
 > dropped, per the owner's remove-outright ruling — the refuse-and-log branch
 > fired exactly as designed against a real copy of the live sidecar venv.
 > Group A renumbered contiguously (old A39–A44 → A38–A43). Evidence:
-> `docs/testing/onbox-wave5-results/step-ort-b-a39.md`. Prior change: wave 5,
+> `docs/testing/onbox-wave5-results/step-ort-b-a39.md`. Before that: wave 5,
 > #2606 step 6, 69 → 66 (A27, A45, B2 discharged). Full change-by-change
 > history is in this file's git log, not here — this section tracks the
 > current count, not how it got here.
@@ -3452,6 +3458,34 @@ exists. *Criteria:* spec §On-box acceptance
 > both remain owed exactly as recorded above. No register edit was made by
 > that step itself — this note folds its verdict in per wave-5 step 6.
 > Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
+
+### E10 · `npm run stop` sweeps the RIGHT checkout's sidecar (#2632, PR #2635) · **two live checkouts, no GPU needed**
+
+`scripts/stop-app.mjs`/`stop-app.ps1`'s belt-and-braces orphan sweep now
+resolves the per-checkout `LOCAL_TTS_PORT` (`scripts/lib/sidecar-sweep-port.mjs`
+/`.psm1`) instead of hardcoding the factory default `:9000` — the fix for the
+worktree hazard where `npm run stop` in one checkout force-killed a
+**different** checkout's live sidecar. The resolver and the swept-port-list
+assembly are both unit-tested against real temp files (`scripts/tests/
+sidecar-sweep-port.test.mjs`/`.Tests.ps1`), but nothing in this PR executes
+`stop-app.ps1`/`.mjs` end to end against two REAL listening sidecars — the
+actual claim this branch exists to make (*"in a worktree, `npm run stop` kills
+my sidecar and not the primary's"*) has never been observed. Two checkouts
+each running a live sidecar is "a real sidecar" in this register's own
+vocabulary (see A1, D-group entries).
+
+*Needs:* two checkouts of this repo (e.g. the primary + a `wt-new.mjs`
+worktree), one with `server/.env` `LOCAL_TTS_PORT` unset (default `9000`) and
+the other with `LOCAL_TTS_PORT=9010`; both servers started (`npm start` /
+`npm run dev`) so both sidecars are live and each owns a `tts.owner.json`
+note. From the `9010` checkout, run `npm run stop` and observe: the `:9010`
+sidecar dies, the `:9000` sidecar (the other checkout) survives. Then repeat
+after a clean shutdown of the `9010` sidecar (so `tts.owner.json` is absent
+and the sweep falls back to `server/.env`) and confirm the same discrimination
+holds. *Cost:* under 10 minutes with both stacks already running. *Criteria:*
+this PR's description (§On-box acceptance) and `docs/features/` plan 43's
+stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
+module-level comment for the exact fallback order being exercised.
 
 ## Group G — GitHub Actions itself
 

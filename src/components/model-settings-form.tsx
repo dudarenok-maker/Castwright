@@ -467,7 +467,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       <SettingsSection group={GROUP_SERVER_CONFIG} overriddenCount={0}>
         <FieldRow
           label="Voice engine URL"
-          sublabel="Local voice engine endpoint. Defaults to this checkout's own sidecar (derived from LOCAL_TTS_PORT, shown below as http://localhost:9000). Only change this to point at a different sidecar — do not leave it blank; an empty value fails validation and discards the whole save."
+          sublabel="Voice engine endpoint used to generate speech. Defaults to the voice engine bundled with this app. Only change this if you're pointing at a different voice engine — do not leave it blank; an empty value fails validation and discards the whole save."
         >
           <input
             type="text"

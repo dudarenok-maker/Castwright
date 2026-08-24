@@ -149,7 +149,8 @@ describe('playSampleWithAutoLoad', () => {
     const message = await playSampleWithAutoLoad({ args: sampleArgs, playback }).catch(
       (e) => (e as Error).message,
     );
-    expect(message).toMatch(/Voice engine.*unreachable.*LOCAL_TTS_PORT/s);
+    expect(message).toMatch(/Voice engine.*unreachable/s);
+    expect(message).not.toMatch(/LOCAL_TTS_PORT|this checkout/);
     expect(message).toMatch(/ECONNREFUSED/);
     expect(api.loadSidecar).not.toHaveBeenCalled();
     expect(api.getVoiceSample).not.toHaveBeenCalled();
@@ -186,7 +187,7 @@ describe('playSampleWithAutoLoad', () => {
     });
     const playback = { play: vi.fn() };
     await expect(playSampleWithAutoLoad({ args: sampleArgs, playback })).rejects.toThrow(
-      /Voice engine.*unreachable.*LOCAL_TTS_PORT/s,
+      /Voice engine.*unreachable/s,
     );
   });
 

@@ -27,15 +27,36 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+/** Single validity rule for a LOCAL_TTS_PORT spelling, shared with the
+    server's own resolveSidecarPort() (server/src/tts/sidecar-owner.ts,
+    hardened at #2632 N28): a plain decimal-integer spelling only, 1-65535.
+    `Number()` alone silently accepts "+9010", "1e4", "0x2386", "9010.0" —
+    spellings the server's `/^\d+$/` gate rejects (logs "Invalid
+    LOCAL_TTS_PORT" and falls back to 9000). This helper must reject exactly
+    what the server rejects (#2632 N36), or the sweep can target a port the
+    server never actually bound to. */
+function parseLocalTtsPortValue(raw) {
+  if (!/^\d+$/.test(raw)) return null;
+  const port = Number(raw);
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
+}
+
 function parseLocalTtsPortFromServerEnv(serverEnvPath) {
+  // #2632 N36 — process.loadEnvFile (server/src/load-env.ts) does NOT
+  // overwrite an already-present process.env entry, so a shell-exported
+  // LOCAL_TTS_PORT wins over server/.env for the real server process too.
+  // Mirror that precedence here: if THIS shell has LOCAL_TTS_PORT set, that
+  // is the value the server would also resolve to (same shell, same
+  // load-env semantics) — prefer it over the file rather than naming a
+  // configured-but-overridden port.
+  if (process.env.LOCAL_TTS_PORT) {
+    return parseLocalTtsPortValue(process.env.LOCAL_TTS_PORT);
+  }
   try {
     const raw = readFileSync(serverEnvPath, 'utf8');
     const match = raw.match(/^\s*LOCAL_TTS_PORT\s*=\s*(\S+)\s*$/m);
     if (!match) return null;
-    const port = Number(match[1]);
-    if (Number.isInteger(port) && port > 0 && port < 65536) {
-      return port;
-    }
+    return parseLocalTtsPortValue(match[1]);
   } catch {
     // Missing/unreadable server/.env — no fallback available from here.
   }
@@ -62,4 +83,17 @@ export function resolveSidecarSweepPort(runDir, serverEnvPath) {
     // Absent, unreadable, or corrupt — fall through to the server/.env fallback.
   }
   return serverEnvPath ? parseLocalTtsPortFromServerEnv(serverEnvPath) : null;
+}
+
+/** Build the full list of ports stop-app.mjs should probe/sweep: the base
+    ports (frontend/server/LAN-HTTPS) plus the resolved sidecar port, when
+    one resolves. This is the ENTIRE call-site computation, not just the
+    port-resolution step — pulled out so the exact list stop-app.mjs sweeps
+    is itself unit-testable, rather than only resolveSidecarSweepPort() in
+    isolation. #2632 N34: a call site that stops USING the resolved port
+    (while still calling the resolver) must redden a test — that requires
+    testing the assembled list, not the resolver alone. */
+export function buildPortsToSweep(basePorts, runDir, serverEnvPath) {
+  const ttsPort = resolveSidecarSweepPort(runDir, serverEnvPath);
+  return ttsPort ? [...basePorts, ttsPort] : [...basePorts];
 }

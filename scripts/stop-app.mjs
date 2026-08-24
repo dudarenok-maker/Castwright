@@ -8,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import net from 'node:net';
-import { resolveSidecarSweepPort } from './lib/sidecar-sweep-port.mjs';
+import { buildPortsToSweep } from './lib/sidecar-sweep-port.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -91,9 +91,8 @@ async function probeAndSweep(port) {
 // about (and stop-app.ps1's sibling would force-kill) a DIFFERENT checkout's
 // sidecar from a worktree (#2632 N27/N29). When neither source yields a
 // port, skip sweeping the TTS port entirely rather than guessing 9000.
-const ttsPort = resolveSidecarSweepPort(runDir, serverEnvPath);
 const stillListening = [];
-const portsToSweep = ttsPort ? [8080, 8443, ttsPort] : [8080, 8443];
+const portsToSweep = buildPortsToSweep([8080, 8443], runDir, serverEnvPath);
 for (const port of portsToSweep) {
   if (await probeAndSweep(port)) stillListening.push(port);
 }

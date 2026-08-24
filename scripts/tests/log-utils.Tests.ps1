@@ -128,3 +128,65 @@ Describe 'Remove-OldRotatedLogs' {
         { Remove-OldRotatedLogs -Dir $missing -MaxAgeDays 7 } | Should -Not -Throw
     }
 }
+
+Describe 'Resolve-RunDir (#2632 N35)' {
+    BeforeEach {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "rundir-$([Guid]::NewGuid())"
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+    }
+    AfterEach {
+        if (Test-Path $script:tempDir) {
+            Remove-Item $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'defaults to <RepoRoot>\.run when APP_RUN_DIR is unset' {
+        Resolve-RunDir -RepoRoot $script:tempDir | Should -Be (Join-Path $script:tempDir ".run")
+    }
+
+    It 'returns an absolute, EXISTING path unchanged' {
+        $existing = Join-Path $script:tempDir "shared-run"
+        New-Item -ItemType Directory -Path $existing | Out-Null
+
+        Resolve-RunDir -RepoRoot $script:tempDir -AppRunDir $existing | Should -Be $existing
+    }
+
+    # The defect this whole finding is about: Resolve-Path returns $null
+    # (silently) for a path that does not exist yet — a versioned install
+    # before its first launch, or autoStartSidecar off so nothing has mkdir'd
+    # .run\ yet. Resolve-RunDir must return a real, non-null lexical path
+    # here, exactly like Node's path.resolve() would, or every downstream
+    # consumer (Join-Path, Get-SidecarSweepPort -RunDir) fails to bind and
+    # the stop script silently reports "nothing to stop".
+    It 'returns a non-null lexical path for an absolute path that does NOT exist yet' {
+        $nonExistent = Join-Path $script:tempDir "not-created-yet"
+
+        $result = Resolve-RunDir -RepoRoot $script:tempDir -AppRunDir $nonExistent
+
+        $result | Should -Not -BeNullOrEmpty
+        $result | Should -Be $nonExistent
+    }
+
+    It 'never touches the filesystem for a glob-shaped path (would fail Test-Path/expand under Resolve-Path)' {
+        $globPath = Join-Path $script:tempDir "run-[wt]"
+
+        $result = Resolve-RunDir -RepoRoot $script:tempDir -AppRunDir $globPath
+
+        $result | Should -Be $globPath
+    }
+}
+
+Describe 'start-app.ps1 / stop-app.ps1 agree on $runDir (#2632 N35)' {
+    # The regression this finding names: start-app.ps1 was never migrated
+    # off a hardcoded <repoRoot>\.run, so with APP_RUN_DIR set the launcher
+    # wrote PIDs to one directory and the stopper looked in another. Both
+    # must resolve $runDir via the SAME shared helper.
+    It 'both scripts assign $runDir from Resolve-RunDir' {
+        $startSource = Get-Content (Join-Path $PSScriptRoot "..\start-app.ps1") -Raw
+        $stopSource  = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
+
+        $startSource | Should -Match '\$runDir\s*=\s*Resolve-RunDir\b'
+        $stopSource  | Should -Match '\$runDir\s*=\s*Resolve-RunDir\b'
+        $startSource | Should -Not -Match '\$runDir\s*=\s*Join-Path \$repoRoot "\.run"'
+    }
+}

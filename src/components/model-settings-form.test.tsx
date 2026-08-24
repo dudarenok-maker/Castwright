@@ -138,4 +138,20 @@ describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {
     const fieldText = input.closest('label')?.textContent ?? '';
     expect(fieldText.toLowerCase()).not.toMatch(/leave blank/);
   });
+
+  // #2632 N37 — the sublabel used to claim the value shown below (the
+  // input's placeholder) is "derived from LOCAL_TTS_PORT". The placeholder
+  // is a hardcoded literal, never updated from LOCAL_TTS_PORT, and hidden
+  // once the field is populated — the sentence was false, and falsest in
+  // exactly the per-worktree scenario #2632 exists for. It's also shipped
+  // copy: "LOCAL_TTS_PORT" / "this checkout" are repo jargon a packaged-app
+  // end user has never seen.
+  it('does not claim the value below is derived from LOCAL_TTS_PORT, and avoids repo jargon', async () => {
+    renderForm();
+    const input = await screen.findByTestId('account-sidecar-url');
+    const fieldText = input.closest('label')?.textContent ?? '';
+    expect(fieldText).not.toMatch(/shown below/i);
+    expect(fieldText).not.toMatch(/LOCAL_TTS_PORT/);
+    expect(fieldText).not.toMatch(/this checkout/i);
+  });
 });
