@@ -85,15 +85,17 @@ $basePorts = @()
 if ($serverPort) { $basePorts = @($serverPort) + $basePorts }
 if ($vitePort) { $basePorts = @($vitePort) + $basePorts }
 $ports = Get-PortsToSweep -BasePorts $basePorts -RunDir $runDir -ServerEnvPath $serverEnvPath
-$conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
-if ($conns) {
-    foreach ($c in $conns) {
-        try {
-            Stop-Process -Id $c.OwningProcess -Force -ErrorAction Stop
-            Write-Status "[SWEEP] killed pid=$($c.OwningProcess) on :$($c.LocalPort)"
-            $killedAny = $true
-        } catch {
-            Write-Status "[SWEEP] could not kill pid=$($c.OwningProcess) on :$($c.LocalPort): $($_.Exception.Message)"
+if ($ports) {
+    $conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
+    if ($conns) {
+        foreach ($c in $conns) {
+            try {
+                Stop-Process -Id $c.OwningProcess -Force -ErrorAction Stop
+                Write-Status "[SWEEP] killed pid=$($c.OwningProcess) on :$($c.LocalPort)"
+                $killedAny = $true
+            } catch {
+                Write-Status "[SWEEP] could not kill pid=$($c.OwningProcess) on :$($c.LocalPort): $($_.Exception.Message)"
+            }
         }
     }
 }

@@ -62,7 +62,10 @@ function resolvePortFromEnvFile(envPath, key) {
   }
   try {
     const raw = readFileSync(envPath, 'utf8');
-    const re = new RegExp(`^\\s*${key}\\s*=\\s*(\\S+)\\s*$`, 'gm');
+    // #2632 N48 — 'i' flag: process.env is case-insensitive on Windows, so
+    // process.loadEnvFile setting process.env.PORT from a `port=`/`Port=`
+    // line there is real behaviour, not a spelling this reader may ignore.
+    const re = new RegExp(`^\\s*${key}\\s*=\\s*(\\S+)\\s*$`, 'gmi');
     let match;
     let lastValue = null;
     while ((match = re.exec(raw)) !== null) {

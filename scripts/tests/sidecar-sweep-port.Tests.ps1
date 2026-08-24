@@ -208,6 +208,24 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
         $ports | Should -Be @(5173, 8080, 8443)
     }
+
+    # #2632 N46 — a checkout with neither .env.local nor a server\.env PORT
+    # line (the primary checkout's actual today-state, and the default for
+    # anything derived from server/.env.example) resolves $basePorts to an
+    # EMPTY array at the stop-app.ps1 call site. [Parameter(Mandatory)] alone
+    # on an [int[]] rejects an empty array at bind time — before the function
+    # body even runs — so this shape must be exercised directly, not just
+    # inferred from the non-empty cases above.
+    It 'returns an empty array (never throws) when BasePorts is empty and no sidecar port resolves' {
+        $ports = Get-PortsToSweep -BasePorts @() -RunDir $script:tempDir -ServerEnvPath $script:envPath
+        $ports | Should -Be @()
+    }
+
+    It 'returns just the sidecar port when BasePorts is empty but LOCAL_TTS_PORT=9010 resolves' {
+        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9010" -Encoding utf8
+        $ports = Get-PortsToSweep -BasePorts @() -RunDir $script:tempDir -ServerEnvPath $script:envPath
+        $ports | Should -Be @(9010)
+    }
 }
 
 Describe 'stop-app.ps1 call site (#2632 N34)' {

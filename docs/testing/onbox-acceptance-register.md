@@ -3525,11 +3525,22 @@ longer in either script's sweep list at all; this is a smoke check on the
 removal, not a new required step for every run of this row. On Windows
 PowerShell only (`stop-app.ps1` force-kills; `stop-app.mjs`, the prod
 launcher, only warns and never runs Vite, so its own check is limited to
-(1)/(2)/the server pair of (3)/(4)). *Cost:* under 10 minutes with both
-stacks already running. *Criteria:* this PR's description (§On-box
-acceptance) and `docs/features/` plan 43's stop-script contract, plus
-`scripts/lib/sidecar-sweep-port.mjs`'s own module-level comment for the
-exact fallback order being exercised.
+(1)/(2)/the server pair of (3)/(4)). **A fifth observation, in the PRIMARY
+checkout itself** (#2632 N46): with no `.env.local` and no `PORT` line in
+`server/.env` — the primary checkout's actual today-state, and the default
+for anything derived from `server/.env.example` — `Get-PortsToSweep`'s
+`-BasePorts` resolves to an empty array at the `stop-app.ps1` call site.
+Run `scripts/stop-app.ps1` there (with nothing needing to actually be
+running — this observation is about the script not throwing, not about
+what it kills) and confirm: no red `ParameterBindingValidationException`/
+`Cannot bind argument` block appears, and the script still reports its
+outcome truthfully (`[OK] nothing to stop`, or the correct sweep line if a
+listener is present) rather than silently swallowing the error and printing
+a false "nothing to stop" while a raw exception scrolled past above it.
+*Cost:* under 2 minutes, no live stack needed for this one. *Criteria:*
+this PR's description (§On-box acceptance) and `docs/features/` plan 43's
+stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
+module-level comment for the exact fallback order being exercised.
 
 ## Group G — GitHub Actions itself
 

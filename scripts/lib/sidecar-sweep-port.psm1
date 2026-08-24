@@ -155,6 +155,7 @@ function Get-PortsToSweep {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [int[]] $BasePorts,
         [Parameter(Mandatory)]
         [string] $RunDir,

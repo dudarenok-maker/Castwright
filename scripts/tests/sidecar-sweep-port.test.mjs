@@ -156,6 +156,30 @@ test('buildPortsToSweep sweeps only the base ports when no sidecar port resolves
   });
 });
 
+// #2632 N46 — the PowerShell twin (Get-PortsToSweep) declares its BasePorts
+// parameter [Parameter(Mandatory)] with no [AllowEmptyCollection()], which
+// REJECTS an empty array at bind time in a checkout with neither
+// .env.local nor a server/.env PORT line (the primary checkout's actual
+// today-state). buildPortsToSweep takes a plain JS array, which has no such
+// binding-stage validation, but this pins that the DEGRADE is correct on
+// both sides of the empty-base-list cell so a future divergence between the
+// two languages reddens here rather than only in PowerShell.
+test('buildPortsToSweep returns an empty array when basePorts is empty and no sidecar port resolves', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv(null, (envPath) => {
+      assert.deepEqual(buildPortsToSweep([], dir, envPath), []);
+    });
+  });
+});
+
+test('buildPortsToSweep returns just the sidecar port when basePorts is empty but LOCAL_TTS_PORT=9010 resolves', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv('LOCAL_TTS_PORT=9010\n', (envPath) => {
+      assert.deepEqual(buildPortsToSweep([], dir, envPath), [9010]);
+    });
+  });
+});
+
 // Narrow structural check on top of the behavioural coverage above: proves
 // stop-app.mjs's own call site actually feeds buildPortsToSweep's result to
 // portsToSweep, rather than reassigning a literal array after calling it for
@@ -315,6 +339,22 @@ test('resolveConfiguredServerPort resolves a worktree-shaped server/.env to its 
     const resolved = resolveConfiguredServerPort(envPath);
     assert.equal(resolved, 8090);
     assert.notEqual(resolved, 8080);
+  });
+});
+
+// #2632 N48 — process.loadEnvFile sets process.env keys, and on Windows
+// process.env is case-insensitive, so a real `port=8090` or `Port=8090` line
+// DOES set process.env.PORT there and the server binds :8090 from it. The
+// key-matching regex here had no `i` flag, so it read `port=8090` as no
+// match at all (null) — diverging from both the real Node loader AND from
+// PowerShell's `-match`, which is case-insensitive by default and already
+// resolved this correctly. Node was the wrong side, failing safe but wrong.
+test('resolveConfiguredServerPort reads a lowercase/mixed-case PORT key, matching process.loadEnvFile on Windows', () => {
+  withTempServerEnv('port=8090\n', (envPath) => {
+    assert.equal(resolveConfiguredServerPort(envPath), 8090);
+  });
+  withTempServerEnv('Port=8095\n', (envPath) => {
+    assert.equal(resolveConfiguredServerPort(envPath), 8095);
   });
 });
 
