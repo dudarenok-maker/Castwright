@@ -249,6 +249,61 @@ test('checkNonexistentIds: a discharge annotation that DOES name the cited ID ri
   assert.match(annotated[0], /A9/);
 });
 
+// Pass-7 review of PR #2630 (finding D): a discharge word within
+// ID_PROXIMITY_CHARS of the CITED id used to excuse it even when the
+// discharge word actually belongs to a DIFFERENT id on the same multi-ID
+// line — real paired injection on `cast-id-drift-onbox-acceptance.md:11`
+// ("... and A45 (#2128 audio currency, §9 below), and A99 (Wave 4) — **B3
+// is discharged (2026-08-21) ...") smuggled a nonexistent A99 through
+// unannotated: the discharge word sat within 120 chars of A45, A99, AND B3,
+// so the old per-id-window check excused all three. Binding the discharge
+// word to only its own CLAUSE fixes it: the em-dash right before "B3 is
+// discharged" opens a new clause (this corpus's own convention for
+// introducing a discharge sentence), so an ID named BEFORE that dash — in
+// the row list, not the discharge clause — is excluded even though it sits
+// well within ID_PROXIMITY_CHARS.
+test('checkNonexistentIds: a discharge word on a multi-ID line only excuses IDs in its own clause, not every ID within the window (finding D)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> Register rows: A2 (Wave 1), and A9 (Wave 4) — **B3 is discharged (2026-08-21) ' +
+    'and no longer exists.**\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  // A9 is nonexistent and named BEFORE the clause-opening dash, not inside
+  // the discharge clause itself — it must still hard-error, not be silently
+  // excused by B3's discharge note.
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /B3/);
+});
+
+test('checkNonexistentIds: paired control — the same discharge word DOES excuse the ID it actually sits next to', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '> Register rows: A2 (Wave 1) — **A9 is discharged (2026-08-21) and no longer exists.**\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A9/);
+});
+
+// Pass-7 review of PR #2630 (finding I): the existing anchor test's fixture
+// ('## 5 · D13 verdict') fails to match HEADING_ID_REGEX with OR without the
+// '^' anchor — what saves it is the ID token POSITION ('5', not 'D13'), not
+// the anchor itself. Measured tree-wide: the anchored and un-anchored
+// regexes match identically on every live file (0 differing lines), so
+// deleting '^' from HEADING_ID_REGEX left the 49-test suite fully green —
+// the code was right, the proof was hollow. This fixture distinguishes the
+// two directly: a blockquoted heading-shaped line does not start the
+// string with '#', so the ANCHORED regex must not match it, while an
+// un-anchored `test()` would still find "### A48 ·" partway into the line.
+test('checkNonexistentIds: a blockquoted heading-shaped line is NOT a citation — pins the "^" anchor directly (finding I)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '> ### A48 · Some quoted heading text\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/testing/onbox-sitting-foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 0);
+});
+
 // --- Check B: bidirectional run-sheet linkage ---
 //
 // Scoped to the run sheet's HEADER paragraph, not the whole file — see
@@ -500,33 +555,37 @@ test('checkConflictingSubjects: does not fire when a subject legitimately spans 
   const files = new Map([
     ['docs/bar.md', 'See register row A2 (#1001) and register row B1 (#1001) — both are correct.'],
   ]);
-  const errors = checkConflictingSubjects(files, rows);
-  assert.equal(errors.length, 0);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
 });
 
-test('checkConflictingSubjects: fires when a heading pairs an existing ID with the wrong subject', () => {
+test('checkConflictingSubjects: fires (wrongId, FATAL) when a heading pairs an existing ID with the wrong subject', () => {
   const { rows } = parseRegisterRows(buildRegister());
   // #1000 legitimately maps only to A1 in the register. A "### A2 · ... (#1000)"
   // heading is an existing-but-wrong citation on its own line — the shape
   // PR #2630's finding A actually was (a uniform ID shift across headings).
+  // Pass 7 (finding G): this class is now `wrongId` — FATAL, not exploratory.
   const files = new Map([['docs/bar.md', '### A2 · Some pack section (#1000)\n\nBody.\n']]);
-  const errors = checkConflictingSubjects(files, rows);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /A2/);
-  assert.match(errors[0], /1000/);
-  assert.match(errors[0], /A1/); // names the legitimate ID(s) for the subject
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /A2/);
+  assert.match(wrongId[0], /1000/);
+  assert.match(wrongId[0], /A1/); // names the legitimate ID(s) for the subject
 });
 
-test('checkConflictingSubjects: fires the same way off a "Criteria source:" line', () => {
+test('checkConflictingSubjects: fires the same way (wrongId) off a "Criteria source:" line', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const files = new Map([
     ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A2 (#1000).\n'],
   ]);
-  const errors = checkConflictingSubjects(files, rows);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /A2/);
-  assert.match(errors[0], /1000/);
-  assert.match(errors[0], /A1/);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /A2/);
+  assert.match(wrongId[0], /1000/);
+  assert.match(wrongId[0], /A1/);
 });
 
 test('checkConflictingSubjects: the "row(s) ID" prose idiom alone is NOT a Check C surface any more', () => {
@@ -537,8 +596,41 @@ test('checkConflictingSubjects: the "row(s) ID" prose idiom alone is NOT a Check
   // "Criteria source:" line, each of which can only ever name one row.
   const { rows } = parseRegisterRows(buildRegister());
   const files = new Map([['docs/bar.md', 'See register row A2 (#1000) for the fix.']]);
-  const errors = checkConflictingSubjects(files, rows);
-  assert.equal(errors.length, 0);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: a "### A6 + A7 · ..." two-row heading is checked for BOTH IDs', () => {
+  // Pass-7 review of PR #2630 (finding F): the heading surface used to
+  // capture only the first ID token, so a real two-row heading shape
+  // (`onbox-sitting-voice-design.md:80`'s "### A6 + A7 · ...") silently
+  // skipped checking its second ID entirely. #1000 legitimately maps only to
+  // A1 — a "### A2 + A1 · ... (#1000)" heading is wrong for its first ID
+  // (A2) and right for its second (A1); both must be evaluated.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([['docs/bar.md', '### A2 + A1 · Some combined section (#1000)\n\nBody.\n']]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /A2/);
+  assert.doesNotMatch(wrongId[0], /cited A1/);
+});
+
+test('checkConflictingSubjects: warns (unknownSubject, non-fatal) when the paired subject number maps to NO current register row at all', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    // #9999 is in no register heading — a "Criteria source:" line naming A1
+    // for it must still warn rather than silently pass, but as the
+    // exploratory/non-fatal `unknownSubject` class, not `wrongId`.
+    ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A1 for #9999.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 1);
+  assert.match(unknownSubject[0], /A1/);
+  assert.match(unknownSubject[0], /9999/);
+  assert.match(unknownSubject[0], /does not appear in any current register row heading/);
 });
 
 // --- frozen-path exclusion ---
@@ -552,11 +644,21 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/testing/onbox-wave4-linkage.md'), true);
   assert.equal(isFrozenPath('docs/release-notes-next.md'), true);
   assert.equal(isFrozenPath('RELEASE_NOTES.md'), true);
-  assert.equal(isFrozenPath('docs/features/archive/44-pr-hygiene.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register-live-view.html'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-sitting-plan.md'), false);
   assert.equal(isFrozenPath('docs/features/278-cast-character-identity.md'), false);
+  // Pass-7 review of PR #2630 (finding B): `docs/features/archive/` used to
+  // be frozen wholesale, hiding a live nonexistent-ID citation one directory
+  // over from the isStableSuperpowersDoc shape pass 6 already fixed. It is
+  // no longer exempted — an archived plan's own "Ship notes"/discharge
+  // annotation is what legitimately excuses a stale citation now, same as
+  // anywhere else in the tree.
+  assert.equal(isFrozenPath('docs/features/archive/44-pr-hygiene.md'), false);
+  assert.equal(
+    isFrozenPath('docs/features/archive/283-castwright-local-rebind.md'),
+    false,
+  );
 });
 
 // Pass-6 review of PR #2630 (finding B): `isStableSuperpowersDoc` used to
@@ -759,23 +861,11 @@ test('checkNonexistentIds: a bare ID in a "row"-labelled table cell is NOT a cit
 // all (its row discharged, or it never had one) made checkConflictingSubjects
 // silently `continue` — but a subject leaves the register PRECISELY when its
 // row discharges, which is the exact moment its citations start rotting.
-// Paired control below is the thread's own worked example: "Discharge
-// register row C2 for #2187" (no current row) vs "...for #1969" (maps to
-// A42) — both must now warn.
-
-test('checkConflictingSubjects: warns (not silently passes) when the paired subject number maps to NO current register row at all', () => {
-  const { rows } = parseRegisterRows(buildRegister());
-  const files = new Map([
-    // #9999 is in no register heading — a "Criteria source:" line naming A1
-    // for it must still warn rather than silently pass.
-    ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A1 for #9999.\n'],
-  ]);
-  const errors = checkConflictingSubjects(files, rows);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /A1/);
-  assert.match(errors[0], /9999/);
-  assert.match(errors[0], /does not appear in any current register row heading/);
-});
+// Paired control is the thread's own worked example: "Discharge register row
+// C2 for #2187" (no current row) vs "...for #1969" (maps to A42) — both must
+// now warn. Covered above (`checkConflictingSubjects: warns (unknownSubject,
+// non-fatal) ...`), which pins this against the current wrongId/unknownSubject
+// split (pass 7, finding G) rather than the old single-array return.
 
 // --- Check B ownership: the plain "Full criteria:" label (unbolded) ---
 
@@ -824,25 +914,41 @@ Full criteria: \`docs/testing/thing-onbox-acceptance.md\`'s \`#1001 — extra\` 
   assert.deepEqual([...rows.get('A2').runSheetPaths], []);
 });
 
-// --- Check C is opt-in (--strict), off by default ---
+// --- Check C: `unknownSubject` is opt-in (--strict), off by default;
+// `wrongId` is FATAL and unconditional (pass 7, finding G) ---
 //
 // Real repo integration, mirroring check-onbox-register.test.mjs's own
 // runCli precedent: exercises the actual CLI flag-gating end to end against
 // the real register and repo tree, rather than just the pure
 // checkConflictingSubjects function (already covered above).
 
-test('CLI: without --strict, Check C does not run and the success line says so', () => {
+test('CLI: without --strict, Check C\'s exploratory half does not print and the success line says so', () => {
   const result = runCli([]);
   assert.equal(result.status, 0);
-  assert.doesNotMatch(result.stdout, /Check C —/);
-  assert.match(result.stdout, /Check C .* did NOT run — it is opt-in and exploratory/);
+  assert.doesNotMatch(result.stdout, /Check C — subject not found/);
+  assert.match(result.stdout, /Check C's exploratory .* did NOT run/);
 });
 
-test('CLI: with --strict, Check C runs and prints under its own opt-in label, still non-fatal', () => {
+test('CLI: with --strict, Check C\'s exploratory half runs and prints under its own opt-in label, still non-fatal', () => {
   const result = runCli(['--strict']);
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /Check C — one subject, conflicting row IDs \(--strict, exploratory, not failing/);
-  assert.match(result.stdout, /Check C ran under --strict and found \d+ warning\(s\) above/);
+  assert.match(
+    result.stdout,
+    /Check C — subject not found in any current register heading \(--strict, exploratory, not failing/,
+  );
+  assert.match(result.stdout, /Check C's exploratory .* found \d+ warning\(s\) above/);
+});
+
+test('CLI: Check C\'s wrongId half is FATAL and runs whether or not --strict is passed', () => {
+  // The real tree at HEAD carries no existing-ID-cited-for-the-wrong-subject
+  // citation, so both runs exit 0 — but the success line must name Check C's
+  // wrongId half as one of the checks that ran and found nothing to fail on,
+  // in BOTH invocations, proving it isn't gated by the flag.
+  for (const args of [[], ['--strict']]) {
+    const result = runCli(args);
+    assert.equal(result.status, 0, `expected exit 0 for args ${JSON.stringify(args)}`);
+    assert.match(result.stdout, /existing row ID cited for the wrong subject.* half are the FATAL checks/);
+  }
 });
 
 // --- Self-referential exclusion: this checker's own source and the sibling

@@ -315,7 +315,7 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // platform-aware — a design question, not this fix's).
 //
 // NOT fixed here, deliberately deferred to on-box acceptance (register rows
-// A36–A39): onnxruntime's Windows DLL list ALSO wants
+// A36–A38): onnxruntime's Windows DLL list ALSO wants
 // `nvidia/cufft/bin/cufft64_11.dll` and `nvidia/cuda_runtime/bin/cudart64_12.dll`,
 // neither of which any pip step here installs. The working assumption is that
 // the box's own system CUDA 12.4 toolkit install supplies both via the default
