@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster } from './roster-dedup.js';
+import {
+  dedupeRosterByName,
+  composeRewrites,
+  pruneSuggestionsToRoster,
+  stripEstablishedAsciiRewrites,
+} from './roster-dedup.js';
+import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
+import { applyRewriteToPriorCast } from '../store/merge-analysis-cast.js';
 
 const c = (over: { id: string; name: string; role?: string; color?: string; gender?: string; [key: string]: unknown }) =>
   ({ role: 'r', color: 'c', ...over });
@@ -104,6 +111,81 @@ describe('composeRewrites', () => {
     const result = composeRewrites({ a: 'b' }, { c: 'd' });
     // No chaining, no identity entries, just both individual mappings
     expect(result).toEqual({ a: 'b', c: 'd' });
+  });
+});
+
+describe('stripEstablishedAsciiRewrites (#2584/#2570)', () => {
+  it('strips an entry whose key is an established ASCII prior id rewritten to a non-ASCII target', () => {
+    const rewrites = { oduvan: 'одуван' };
+    const priorCast = [{ id: 'oduvan' }];
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({});
+  });
+
+  it('keeps an entry whose key is not a prior row id at all (fresh-to-fresh dedup)', () => {
+    const rewrites = { a: 'b' };
+    const priorCast = [{ id: 'z' }];
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ a: 'b' });
+  });
+
+  it('keeps a genuine improvement — a non-ASCII established id rewritten to an ASCII target', () => {
+    const rewrites = { одуван: 'oduvan' };
+    const priorCast = [{ id: 'одуван' }];
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ одуван: 'oduvan' });
+  });
+
+  it('keeps an entry when both the established id and the target are ASCII', () => {
+    const rewrites = { 'oduvan-x': 'oduvan' };
+    const priorCast = [{ id: 'oduvan-x' }];
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ 'oduvan-x': 'oduvan' });
+  });
+
+  it('keeps an entry when both the established id and the target are non-ASCII', () => {
+    const rewrites = { одуван: 'ольга' };
+    const priorCast = [{ id: 'одуван' }];
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ одуван: 'ольга' });
+  });
+});
+
+describe('#2584/#2570 real-shape regression — a same-run fresh-side duplicate collides with an established ASCII id', () => {
+  /* Reproduces the reviewer's exact chain from PR #2640's review comment
+     (https://github.com/dudarenok-maker/Castwright/pull/2640#issuecomment-5402516754),
+     byte-identical to what was recorded on the real box's cast-merges.json:
+
+       1. dedupeRosterByName rewrites : {"oduvan":"одуван","owdovan":"одуван"}
+       2. remapFreshToPriorIds        : {}          <- SKIPPED (bug)
+       3. applyRewriteToPriorCast     : [{"from":"oduvan","to":"одуван"}]  <- corruption
+
+     The analyzer detected THREE fresh candidate rows for "Одуван" this run
+     (oduvan, owdovan, одуван) — its own non-determinism, unrelated to the
+     established cast — and dedupeRosterByName arbitrarily collapsed them
+     onto `одуван` as ITS internal survivor. `oduvan` also happens to be the
+     established prior cast row's raw id, purely by coincidence. */
+  const rawRewrites = { oduvan: 'одуван', owdovan: 'одуван' };
+  const priorCast = [{ id: 'oduvan', name: 'Одуван', voiceState: 'tuned' }];
+  const freshRoster = [{ id: 'одуван', name: 'Одуван' }];
+  const sentences = [{ characterId: 'одуван' }];
+
+  it('without stripping: reproduces the exact real-box corruption at both sites', () => {
+    const unfilteredRemap = remapFreshToPriorIds(freshRoster, sentences, priorCast, rawRewrites);
+    expect(unfilteredRemap.rewrites).toEqual({}); // "already converged" — wrongly skipped
+    expect(unfilteredRemap.characters[0].id).toBe('одуван'); // established ascii id lost
+
+    const unfilteredApply = applyRewriteToPriorCast(priorCast, rawRewrites);
+    expect(unfilteredApply.retirements).toEqual([{ from: 'oduvan', to: 'одуван' }]); // wrong-direction retirement
+  });
+
+  it('with stripping: the fresh row + sentences cascade onto the established id, and the prior row is left unretired', () => {
+    const filtered = stripEstablishedAsciiRewrites(rawRewrites, priorCast);
+    expect(filtered).not.toHaveProperty('oduvan');
+
+    const remap = remapFreshToPriorIds(freshRoster, sentences, priorCast, filtered);
+    expect(remap.characters[0].id).toBe('oduvan');
+    expect(remap.sentences[0].characterId).toBe('oduvan');
+    expect(remap.rewrites).toEqual({ одуван: 'oduvan' });
+
+    const applied = applyRewriteToPriorCast(priorCast, filtered);
+    expect(applied.retirements).toEqual([]);
+    expect(applied.priorCast[0].id).toBe('oduvan');
   });
 });
 

@@ -45,6 +45,50 @@ export function composeRewrites(
   return result;
 }
 
+// ── stripEstablishedAsciiRewrites ────────────────────────────────────────────
+
+/** ASCII kebab-case test — lowercase letters/digits, single hyphens between
+    groups, no leading/trailing hyphen. Matches the pre-plan-219 legacy slug
+    shape (`safeId`'s Latin-only output). */
+function isAsciiKebabId(id: string): boolean {
+  return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id);
+}
+
+/** #2584/#2570 — a run's OWN fresh-side dedup rewrite table (this module's
+    `composeRewrites` output, composed from `dedupeRosterByName`'s and
+    `foldMinorCast`'s rewrites) can, purely by coincidence, contain an entry
+    whose KEY equals an ESTABLISHED prior cast row's raw id. This happens
+    when the analyzer rosters several near-duplicate fresh rows for the SAME
+    character in one run (e.g. `oduvan`, `owdovan`, `одуван`, all "Одуван")
+    and `dedupeRosterByName` arbitrarily collapses them onto one of its own
+    survivors — nothing about that choice is informed by which id the
+    ESTABLISHED cast already considers stable. When one of the collapsed
+    fresh ids (the rewrite entry's KEY) happens to also be a prior row's raw
+    id, and that prior id is already the stable ASCII-kebab form while the
+    dedup's chosen survivor (the entry's VALUE) is NOT, applying the entry
+    against the prior cast (Site 1,
+    `applyRewriteToPriorCast`) retires the established ASCII id in favour of
+    the fresh non-canonical one, and feeding the same entry into
+    `remapFreshToPriorIds` makes it treat the pair as "already converged" on
+    the wrong id — the #2584 regression, confirmed end-to-end against the
+    real analyzer output shape (PR #2640 review).
+
+    Strip only that narrow shape. Anything else — a genuine improvement onto
+    a MORE canonical id than a non-ASCII established one, or a fresh-to-fresh
+    dedup entry that never touches any prior row — is left untouched. */
+export function stripEstablishedAsciiRewrites<T extends { id: string }>(
+  rewrites: Record<string, string>,
+  priorCast: ReadonlyArray<T>,
+): Record<string, string> {
+  const priorIds = new Set(priorCast.map((p) => p.id));
+  const result: Record<string, string> = {};
+  for (const [from, to] of Object.entries(rewrites)) {
+    if (priorIds.has(from) && isAsciiKebabId(from) && !isAsciiKebabId(to)) continue;
+    result[from] = to;
+  }
+  return result;
+}
+
 // ── dedupeRosterByName ───────────────────────────────────────────────────────
 
 export function dedupeRosterByName(
