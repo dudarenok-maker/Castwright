@@ -136,16 +136,6 @@ function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean 
   });
 }
 
-/** True when an already-built id is stable ASCII kebab-case: lowercase `a-z`,
-    `0-9`, and single `-` separators (e.g. `oduvan`, `brann-wire`). Driver for
-    the established-id survival rule (#2584): when the name-fallback matches a
-    dropped existing row whose id is already ASCII-kebab, that established id is
-    the stable one and survives the drift — a freshly-minted non-ASCII id (e.g.
-    the Cyrillic kebab `одуван`) is retired TO it. */
-function isAsciiKebabId(id: string): boolean {
-  return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id);
-}
-
 /** Voiced/reused characters present in `existing` but dropped by the fresh
     roster — i.e. the rows that carry-forward re-adds. Exposed so a caller can
     name them in a change-log entry. */
@@ -410,10 +400,6 @@ function mergeCore<T extends { id: string }>(
 
   const overlaid = fresh.map((f) => {
     let old = byId.get(f.id);
-    // #2584: when the name-fallback confirms a dropped established row whose id
-    // is already ASCII-kebab, that established id survives (fresh id retired TO
-    // it) — `old` is that row, so the merged object must keep old.id.
-    let establishedIdSurvives = false;
     if (nameFallback && !old) {
       const key = nameOf(f as T & Record<string, unknown>);
       // A fresh narrator-id row never adopts a name-fallback candidate
@@ -447,25 +433,12 @@ function mergeCore<T extends { id: string }>(
         ) {
           old = cand;
           claimedByName.add(cand.id);
-          // Established-id survival rule (#2584): when the dropped existing
-          // row's id is already ASCII-kebab it survives, and the freshly-minted
-          // id is retired TO it (retirements keep `from`=retired, `to`=survivor).
-          // When it is not ASCII-kebab, today's direction holds — the fresh id
-          // may be a genuine improvement.
-          establishedIdSurvives = isAsciiKebabId(cand.id);
-          if (establishedIdSurvives) {
-            retirements.push({ from: f.id, to: cand.id });
-          } else {
-            retirements.push({ from: cand.id, to: f.id });
-          }
+          retirements.push({ from: cand.id, to: f.id });
         }
       }
     }
     if (!old) return f;
     const merged = { ...(f as Record<string, unknown>) };
-    // #2584: when the established ASCII-kebab id won the name-fallback, write it
-    // back as the merged row's live id (default above would keep the fresh id).
-    if (establishedIdSurvives) merged.id = old.id;
     for (const key of PRESERVED_VOICE_FIELDS) {
       if (old[key] !== undefined) merged[key] = old[key];
     }
