@@ -2,7 +2,7 @@
    coverPickerDefaultTab field across schema parse, write+read round-trip,
    and legacy-file back-compat. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
@@ -1010,6 +1010,27 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     } finally {
       writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
       mod._resetUserSettingsCache();
+    }
+  });
+
+  // N19: the two srv-21 rejection sites (user-settings sidecarUrl, LOCAL_TTS_URL)
+  // used to share one dedupe variable, so an identical rejected value on both
+  // sources latched the first site's warning and silently suppressed the second's.
+  it('N19: an identical rejected non-private value on BOTH sidecarUrl and LOCAL_TTS_URL warns for both sources, not just the first', () => {
+    const evilUrl = 'http://evil.example.com:9000';
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = evilUrl;
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: evilUrl });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('from user settings'))).toBe(true);
+      expect(messages.some((m) => m.includes('from LOCAL_TTS_URL'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

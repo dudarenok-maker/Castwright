@@ -464,7 +464,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       <SettingsSection group={GROUP_SERVER_CONFIG} overriddenCount={0}>
         <FieldRow
           label="Voice engine URL"
-          sublabel="Local voice engine endpoint. Default: http://localhost:9000"
+          sublabel="Local voice engine endpoint. Leave blank to use this checkout's LOCAL_TTS_PORT (default http://localhost:9000)."
         >
           <input
             type="text"

@@ -496,8 +496,13 @@ export function getResolvedSidecarUrl(): string {
   //    from factory default. Key-presence alone is unreliable: all settings writers persist the
   //    complete merged object, so unrelated writes (e.g., writeSetupCompletedAt) write sidecarUrl
   //    at the default, making presence a false signal of user choice (#2632 N2 / B3).
-  //    Value-difference alone was the old sentinel that failed when user explicitly picked :9000.
-  //    Together, they close both cases: key-present-at-default correctly reads as unset.
+  //    Value-difference alone was the old sentinel that failed when user explicitly picked :9000,
+  //    and still does: that one case (a user who deliberately picks http://localhost:9000) remains
+  //    mis-served on this head, tracked at #2639. In every production state checked so far,
+  //    value-difference already implies key-presence (readUserSettings derives both from the same
+  //    file, writeUserSettings sets sentKeys alongside the value), so today the key check is
+  //    belt-and-braces rather than load-bearing — kept as defence-in-depth in case a future writer
+  //    sets the value without the key, and cheap to keep either way.
   if (c?.sidecarUrl && wasKeyExplicitlySet('sidecarUrl') && c.sidecarUrl !== DEFAULT_USER_SETTINGS.sidecarUrl) {
     const raw = c.sidecarUrl;
     if (isPrivateHostUrl(raw)) {
@@ -522,8 +527,8 @@ export function getResolvedSidecarUrl(): string {
     if (isPrivateHostUrl(raw)) {
       return raw.replace(/\/+$/, '');
     }
-    if (raw !== lastWarnedSidecarUrl) {
-      lastWarnedSidecarUrl = raw;
+    if (raw !== lastWarnedEnvSidecarUrl) {
+      lastWarnedEnvSidecarUrl = raw;
       console.warn(
         `[srv-21] Ignoring non-local sidecar URL from LOCAL_TTS_URL ${JSON.stringify(raw)} — ` +
           `falling back to derived URL. The sidecar must run on a loopback/private host.`,
@@ -536,6 +541,12 @@ export function getResolvedSidecarUrl(): string {
   return `http://localhost:${port}`;
 }
 let lastWarnedSidecarUrl: string | null = null;
+/* Separate from lastWarnedSidecarUrl (#2632 N19) — the two srv-21 rejection
+   sites above (user settings sidecarUrl, LOCAL_TTS_URL) must dedupe
+   independently, or an identical rejected value on both sources latches the
+   first site's variable and silently suppresses the second site's warning,
+   which names a different source in its log line. */
+let lastWarnedEnvSidecarUrl: string | null = null;
 
 /** Same fallback chain as getResolvedSidecarUrl, but for the local Ollama
     daemon: cached user-settings → OLLAMA_URL env → DEFAULT_USER_SETTINGS. */

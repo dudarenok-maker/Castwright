@@ -112,8 +112,11 @@ async function prepareSidecar(
     /* Default to sidecar wording (covers older Node servers that don't
        emit `proxy`) — they're the more common failure mode now that
        :8080 is more stable than the Python sidecar's CUDA path. */
+    /* Don't name a specific port: since #2632 the sidecar port is
+       per-checkout (LOCAL_TTS_PORT, default 9000) — naming :9000 here would
+       tell a worktree operator to kill the wrong process's port. */
     throw new Error(
-      `Voice engine (:9000) is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding :9000). [${reason}]`,
+      `Voice engine is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding this checkout's sidecar port, LOCAL_TTS_PORT, default :9000). [${reason}]`,
     );
   }
   if (health.modelLoaded) {

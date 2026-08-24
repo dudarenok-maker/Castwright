@@ -66,7 +66,7 @@ export function resolveSidecarPort(): number {
     (default 9000). Recorded in the note for diagnostics; the guard keys on
     pid/ppid AND port (#2632) — a different port is treated as an independent
     sidecar, not a conflict. */
-function SIDECAR_PORT(): number {
+function sidecarPort(): number {
   return resolveSidecarPort();
 }
 const OWNER_FILE = 'tts.owner.json';
@@ -103,7 +103,7 @@ export function readSidecarOwner(runDir: string): SidecarOwnerNote | null {
     return {
       pid: p.pid,
       ppid: typeof p.ppid === 'number' ? p.ppid : -1,
-      port: typeof p.port === 'number' ? p.port : SIDECAR_PORT(),
+      port: typeof p.port === 'number' ? p.port : sidecarPort(),
       startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
     };
   } catch {
@@ -140,7 +140,7 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
     runDir,
     pid = process.pid,
     ppid = process.ppid,
-    port = SIDECAR_PORT(),
+    port = sidecarPort(),
     nowIso = () => new Date().toISOString(),
   } = opts;
   mkdirSync(runDir, { recursive: true });
@@ -206,7 +206,7 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
     runDir,
     pid = process.pid,
     ppid = process.ppid,
-    port = SIDECAR_PORT(),
+    port = sidecarPort(),
     aliveFn,
     log = (m) => console.error(m),
     exit = (c) => process.exit(c),

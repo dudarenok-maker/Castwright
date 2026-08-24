@@ -103,7 +103,7 @@ export interface SidecarHandle {
 /** Resolved from LOCAL_TTS_PORT env var (default 9000) via resolveSidecarPort.
     Defined as a function here so spawnSidecar can read the current env value
     each time it's called, supporting per-worktree port isolation (#2632). */
-function DEFAULT_PORT(): number {
+function defaultPort(): number {
   return resolveSidecarPort();
 }
 
@@ -604,7 +604,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     autoStart,
     modelKey,
     repoRoot,
-    port = DEFAULT_PORT(),
+    port = defaultPort(),
     host = DEFAULT_HOST,
     log = console.log,
     warn = console.warn,

@@ -1045,8 +1045,9 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    `PORT_STEP`) and step each port by `10 × N` off its own base —
    `VITE_PORT` off `5173`, `PORT`/`VITE_API_PORT` off `8080`, `LOCAL_TTS_PORT`
    off `9000` — e.g. slot 1 is `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
-   `LOCAL_TTS_PORT=9010`. Set all three in `.env.local` and `PORT` **and
-   `LOCAL_TTS_PORT`** in `server/.env`, and point `WORKSPACE_DIR` at a directory this worktree
+   `LOCAL_TTS_PORT=9010`. Set `VITE_PORT`, `VITE_API_PORT`, and `PORT` — all
+   three — in `.env.local`; separately, set `PORT` **and `LOCAL_TTS_PORT`** in
+   `server/.env`. Point `WORKSPACE_DIR` at a directory this worktree
    alone owns (e.g. `../castwright-workspace-<slug>`, relative to `server/`)
    so two servers never share one `cast.json`/`state.json`. Do not copy the
    primary checkout's `server/.env` wholesale — that would leak secrets like
