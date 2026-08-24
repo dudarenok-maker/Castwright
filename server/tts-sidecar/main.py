@@ -9700,6 +9700,7 @@ def health() -> dict[str, Any]:
         # `committed_mb` / `vram_reserved_mb` / `vram_total_mb` (may be None) give
         # the boundary decision observability without a separate /debug/memory hit.
         "recycle_pending": _recycle_pending,
+        "inflight_synth": _inflight_synth,
         "committed_mb": _process_commit_mb(),
         # CURRENT-DEVICE-ONLY (#1976) — `_cuda_vram_mb()` reads
         # `torch.cuda.current_device()`, not necessarily the render/recycle
@@ -9755,6 +9756,11 @@ def debug_memory() -> dict[str, Any]:
         "garbage": len(gc.garbage),
         "tracked_objects": len(gc.get_objects()),
     }
+    # #1996 — surface the pending-synth counter (process-wide, not engine-
+    # specific) so an idle probe can read a positive "nothing generating" signal
+    # instead of inferring it from a fixed wall-clock wait. Same plain GIL-safe
+    # int read the drain-before-recycle path already does.
+    out["inflight_synth"] = _inflight_synth
     engines: dict[str, Any] = {}
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):

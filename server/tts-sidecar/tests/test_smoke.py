@@ -256,10 +256,24 @@ def test_health_responsive_during_busy_synth(client: TestClient) -> None:
         f"/health took {elapsed:.3f}s during an in-flight synth — event loop "
         "is being blocked. Did /synthesize stop using asyncio.to_thread?"
     )
+    # #1996 — while the synth is genuinely in flight, the surfaced counter must
+    # read 1 so an idle probe gets a positive "currently generating" signal.
+    assert r.json()["inflight_synth"] == 1, (
+        f"/health should report inflight_synth == 1 during a busy synth, "
+        f"got {r.json()['inflight_synth']}"
+    )
 
     synth_thread.join(timeout=5.0)
     assert not synth_thread.is_alive(), "synth thread never finished"
     assert len(fake.calls) == 1, "synth fake should have been called exactly once"
+
+    # #1996 — once the synth has drained, the counter must read 0 again.
+    r_idle = client.get("/health")
+    assert r_idle.status_code == 200
+    assert r_idle.json()["inflight_synth"] == 0, (
+        f"/health should report inflight_synth == 0 after the synth finishes, "
+        f"got {r_idle.json()['inflight_synth']}"
+    )
 
 
 def test_synthesize_returns_substitution_header_when_voice_unknown(monkeypatch):
