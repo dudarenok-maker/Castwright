@@ -433,6 +433,88 @@ def test_kokoro_device_env_cuda_index_pins_without_double_build(
         assert engine._kokoro.sess is mock_session
 
 
+def test_kokoro_session_device_drift_reports_unknown_not_false_cpu(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2647 regression: `_kokoro_session_device` reading the ORT session's
+    providers can itself fail -- kokoro-onnx API drift, or any other
+    exception -- and returns None in that case. Before this fix,
+    `_ensure_loaded` fell back to `resolved_device` (the requested/intent
+    device) whenever that happened:
+
+        self._resolved_device = _kokoro_session_device(self) or resolved_device
+
+    which manufactured a confident but FALSE "cpu" claim (or masked a real
+    fallback with the cuda intent) — "cpu" was also KokoroEngine.__init__'s
+    own placeholder value, so the two meanings were indistinguishable and
+    the honest "unknown" reconcile in `_engine_actual_card` was unreachable
+    for Kokoro.
+
+    This uses a REAL `KokoroEngine()` (its actual `__init__` sets
+    `_resolved_device`) and drives it through the actual `_ensure_loaded`
+    load path -- not a hand-built stand-in missing an attribute production
+    code always sets -- so the test breaks if `__init__` or the load path's
+    handling of `_resolved_device` regresses."""
+    from unittest.mock import MagicMock, patch
+
+    # Requested cuda: if a false "cpu" claim leaked through, `fell_back`
+    # would wrongly flip True (or a real fallback would wrongly read as
+    # "no fallback" via the cuda intent) -- either way the badge would lie.
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:0")
+
+    class _DriftedSession:
+        """Simulates kokoro-onnx API drift: the ORT session no longer
+        exposes get_providers() the way `_kokoro_session_device` expects."""
+
+        def get_providers(self):
+            raise AttributeError("get_providers removed in this kokoro-onnx release")
+
+    class _DriftKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _DriftedSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _DriftKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1")
+
+        # The load succeeded (a real model is resident) but the ORT session
+        # read drifted -- `_resolved_device` must stay at its "unknown" (None)
+        # value, never fall back to the requested/intent device.
+        assert engine._kokoro is not None
+        assert engine._resolved_device is None
+
+        card = main._engine_actual_card(engine)
+        assert card is not None
+        assert card["family"] == "unknown"
+        assert card["fell_back"] is False
+
+
 def test_kokoro_loads_via_from_session_with_dml_provider_only(
     fake_kokoro_module, fake_weight_files, monkeypatch
 ) -> None:

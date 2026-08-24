@@ -3120,11 +3120,18 @@ class KokoroEngine(Engine):
         # CoquiEngine's `_resolved_device`: `_device` is the PREF (env pin /
         # admitted placement), only ever meaningful once a load has actually
         # published it; `_resolved_device` is what the ORT session actually
-        # landed on, read via `_kokoro_session_device` at publish time, so a
-        # silent CPU fallback isn't masked by a `_device` that still reads
-        # 'cuda'. "cpu" here (not "auto") matches `_kokoro_session_device`'s
-        # own None-fallback shape and Coqui's unloaded-state default.
-        self._resolved_device: str = "cpu"
+        # landed on, read via `_kokoro_session_device` at publish time. Unlike
+        # Coqui, Kokoro's ORT introspection can itself fail (kokoro-onnx API
+        # drift, or any other exception) — and "cpu" is also a genuine
+        # resolved placement, so it CANNOT double as "unknown" the way Coqui's
+        # unloaded-state default does (#2647): a "cpu" init/reset value is
+        # indistinguishable from an honest cpu resolution, which made the
+        # honest-"unknown" reconcile in `_engine_actual_card` unreachable for
+        # Kokoro and let API drift assert a confident but false "cpu" claim.
+        # `None` is the distinct "not known yet" sentinel — `_parse_device`
+        # already maps a falsy value to "auto", which is exactly what routes
+        # `_engine_actual_card` into its reconcile-or-"unknown" path.
+        self._resolved_device: Optional[str] = None
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -3420,8 +3427,14 @@ class KokoroEngine(Engine):
         # ORT session actually landed on, read via `_kokoro_session_device`
         # now that `self._kokoro` is set -- not `resolved_device`, which is
         # only the intent and can diverge from it (a silent CPU fallback).
+        # #2647: do NOT fall back to `resolved_device` (the intent) when the
+        # session read comes back None (kokoro-onnx API drift, or any other
+        # exception) -- that would manufacture a confident but false claim.
+        # Leave `_resolved_device` at its "unknown" value (None, from
+        # __init__ or the last `unload()`) so `_engine_actual_card` takes
+        # its honest reconcile-or-"unknown" path instead.
         self._device = resolved_device
-        self._resolved_device = _kokoro_session_device(self) or resolved_device
+        self._resolved_device = _kokoro_session_device(self)
 
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
@@ -3454,8 +3467,14 @@ class KokoroEngine(Engine):
         # Ground truth follows the pref back to "nothing loaded" (#2631
         # review B3, mirrors CoquiEngine's `_drop_model_locked`) — otherwise
         # `_engine_actual_card` would keep reporting the last-loaded card's
-        # ORT providers for an engine that is no longer resident.
-        self._resolved_device = "cpu"
+        # ORT providers for an engine that is no longer resident. `None`
+        # (#2647), not "cpu" — this engine has no model, so it has no
+        # resolved device at all, and `_engine_actual_card`'s top-level
+        # `self._kokoro is None` gate means this value is never read while
+        # unloaded regardless; keeping it at the same "unknown" sentinel as
+        # __init__ avoids reintroducing a value that reads as a real
+        # placement if that gate is ever loosened.
+        self._resolved_device = None
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
@@ -9653,11 +9672,23 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         # cpu fallback isn't masked by the cuda pref; then `device` (SPK,
         # demoted to cpu on failure) and `_device` (Whisper, which has no
         # `_resolved_device` split — see #2631 review N10).
-        family, _ = _parse_device(
-            getattr(engine, "_resolved_device", None)
-            or getattr(engine, "device", None)
-            or getattr(engine, "_device", None)
-        )
+        #
+        # `_resolved_device` must be checked via `hasattr`, not folded into the
+        # same `or` chain as the fallbacks (#2647): Coqui/Kokoro engines ALWAYS
+        # carry this attribute, but Kokoro's can genuinely be `None` — "not
+        # known yet" (init, or the ORT session read failed under kokoro-onnx
+        # API drift) — which is a real answer, not an absent one. Folding it
+        # into `or` treated "unknown" the same as "attribute doesn't exist"
+        # and fell through to `_device` (the pref/intent), manufacturing a
+        # false confident claim from what was only ever requested. An engine
+        # that has no `_resolved_device` split at all (SPK, Whisper) still
+        # falls through to the pref, unchanged.
+        if hasattr(engine, "_resolved_device"):
+            family, _ = _parse_device(getattr(engine, "_resolved_device"))
+        else:
+            family, _ = _parse_device(
+                getattr(engine, "device", None) or getattr(engine, "_device", None)
+            )
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
