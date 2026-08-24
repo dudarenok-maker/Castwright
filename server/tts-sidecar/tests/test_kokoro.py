@@ -582,6 +582,73 @@ def test_kokoro_cpu_admission_device_overrides_injected_cuda_providers(
         assert "CUDAExecutionProvider" not in mock_ort_session_class.call_args[1]["providers"]
 
 
+def test_kokoro_unload_restores_device_pin_after_cpu_admission(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2631 review S4: a CPU admission (`_ensure_loaded(..., device="cpu")`)
+    must NOT permanently overwrite a KOKORO_DEVICE=cuda:N pin. Before this
+    fix, B1 made `_requested_device` -- which `unload()` never restored --
+    double as both the pristine env pin AND the per-load admitted device, so
+    a CPU admission stuck there until process restart: every later
+    `_ensure_loaded()` (even after `unload()`) kept resolving to CPU-only
+    providers, silently discarding the operator's card pin. Mirrors
+    CoquiEngine's `_device`/`_requested_device` split, whose
+    `_drop_model_locked` restores `self._device = self._requested_device`
+    (the #1730 gap-3 fix) on every teardown."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:0")
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    class _StickyPinKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _StickyPinKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+
+        engine = main.KokoroEngine()
+        # Admission ledger refuses the GPU for this cold load.
+        engine._ensure_loaded("v1", device="cpu")
+        assert mock_ort_session_class.call_args[1]["providers"] == ["CPUExecutionProvider"]
+
+        engine.unload()
+        assert engine._kokoro is None
+
+        # No device= argument this time -- a real lazy /synthesize re-load,
+        # which must fall back to the env-derived KOKORO_DEVICE=cuda:0 pin,
+        # not the stale "cpu" admission from the previous load.
+        engine._ensure_loaded("v1")
+        assert mock_ort_session_class.call_count == 2
+        assert mock_ort_session_class.call_args[1]["providers"] == [
+            "CUDAExecutionProvider", "CPUExecutionProvider"
+        ]
+        assert mock_ort_session_class.call_args[1]["provider_options"] == [{"device_id": 0}, {}]
+
+
 def test_kokoro_importerror_remediation_is_profile_aware(
     fake_weight_files, monkeypatch
 ) -> None:

@@ -3106,7 +3106,16 @@ class KokoroEngine(Engine):
         self._dml_status: Optional[str] = None
         # KOKORO_DEVICE=cuda:N — captured here so the sess-replacement in
         # _ensure_loaded can pin the ORT InferenceSession to the indexed GPU.
-        self._requested_device: str = _read_device_env("KOKORO_DEVICE") or "auto"
+        # Mirrors CoquiEngine's `_device`/`_requested_device` split (#2631
+        # review S4): `_device` is the MUTABLE per-load decision (env pin,
+        # then overwritten by an admitted `device=` argument for that cold
+        # load); `_requested_device` is the PRISTINE env-derived value,
+        # never mutated after __init__, so `unload()` has something to
+        # restore `_device` from. Before this split, an admitted "cpu"
+        # overwrote `_requested_device` itself, with no teardown restore —
+        # a CPU admission then stuck for the rest of the process lifetime.
+        self._device: str = _read_device_env("KOKORO_DEVICE") or "auto"
+        self._requested_device: str = self._device  # preserved before any per-load admission
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -3145,7 +3154,7 @@ class KokoroEngine(Engine):
         -- with a CPU tail so ORT itself falls back if CUDA turns out
         unusable. An explicit KOKORO_DEVICE=cpu is honoured: no CUDA is
         offered even if the box has it."""
-        family, _ = _parse_device(self._requested_device)
+        family, _ = _parse_device(self._device)
         if family == "cpu":
             return ["CPUExecutionProvider"]
         try:
@@ -3203,11 +3212,13 @@ class KokoroEngine(Engine):
             return
         # Capacity-aware placement (task 2, vram-aware-placement plan): a
         # concrete `device` from an admitted reservation overrides the
-        # env-derived pin for THIS cold load; `None` leaves
-        # `_requested_device` (already set from KOKORO_DEVICE at __init__)
-        # untouched, so env resolution stays byte-for-byte unchanged.
+        # env-derived pin for THIS cold load; `None` leaves `_device`
+        # (already set from KOKORO_DEVICE at __init__, or restored from
+        # `_requested_device` by the last `unload()`) untouched, so env
+        # resolution stays byte-for-byte unchanged. `_requested_device`
+        # itself is never written here — see #2631 review S4.
         if device is not None:
-            self._requested_device = device
+            self._device = device
         try:
             from kokoro_onnx import Kokoro  # type: ignore
             _record_kokoro_import_result(True)
@@ -3278,12 +3289,12 @@ class KokoroEngine(Engine):
         # list came from (#2631 review B1). The server injects
         # KOKORO_ORT_PROVIDERS unconditionally on every spawn -- CUDA on the
         # nvidia profile -- and `_default_ort_providers` only fires when that
-        # env is unset; neither is a device decision. `self._requested_device`
-        # already folds in both the admitted `device=` argument (the VRAM
-        # ledger's placement) and KOKORO_DEVICE, so resolving it FIRST and
+        # env is unset; neither is a device decision. `self._device` already
+        # folds in both the admitted `device=` argument (the VRAM ledger's
+        # placement) and KOKORO_DEVICE, so resolving it FIRST and
         # short-circuiting to CPU-only here is the single point that makes a
         # CPU decision authoritative over an injected/derived provider list.
-        family, _ = _parse_device(self._requested_device)
+        family, _ = _parse_device(self._device)
         if family == "cpu":
             providers = ["CPUExecutionProvider"]
         else:
@@ -3297,7 +3308,7 @@ class KokoroEngine(Engine):
         # requested index (#2631 review S3). Only fires for an indexed pin;
         # cpu / auto / plain cuda leave provider_options unset, so those
         # paths build exactly as before.
-        po = _kokoro_provider_options(self._requested_device, providers)
+        po = _kokoro_provider_options(self._device, providers)
         if po is not None:
             build_providers, provider_options = po if isinstance(po, tuple) else (providers, po)
         else:
@@ -3314,7 +3325,7 @@ class KokoroEngine(Engine):
             if provider_options is not None:
                 log.info(
                     "Kokoro pinned to %s via provider device_id (session built once).",
-                    self._requested_device,
+                    self._device,
                 )
         else:
             if build_providers:
@@ -3377,13 +3388,24 @@ class KokoroEngine(Engine):
         )
 
     def unload(self) -> None:
-        """Drop the Kokoro model. Idempotent. Kokoro is eagerly preloaded
-        at startup so this is rarely called in production — kept for
-        symmetry with CoquiEngine and to let tests reset state."""
+        """Drop the Kokoro model. Idempotent. NOT rarely called in
+        production (#2631 review N7, correcting the prior docstring here):
+        Kokoro is eagerly preloaded only when PRELOAD_KOKORO=1, which is
+        OFF by default (fs-60) — the ordinary case is lazy, on-demand
+        loading, and this fires on every `/unload` request PLUS two
+        automatic VRAM-eviction call sites (the VoiceDesign-load eviction
+        above, and the Qwen 1.7B-Base-mint eviction) whenever Kokoro happens
+        to be resident; both evict-then-reload on the next synth. Restore the
+        env/admission pin here (mirrors CoquiEngine's `_drop_model_locked`
+        restoring `self._device = self._requested_device`, the #1730 gap-3
+        fix) — otherwise a CPU admission from the load this is dropping
+        would stick as the device for every future load until process
+        restart (#2631 review S4)."""
         if self._kokoro is None:
             return
         self._kokoro = None
         self._voices = []
+        self._device = self._requested_device
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
@@ -9461,11 +9483,21 @@ def _normalize_device_family(raw: Optional[str], torch_module: Any = None) -> Op
 
 
 def _predict_kokoro_device(ort_module: Any) -> Optional[str]:
-    """Predict which device family Kokoro would land on, from ORT's own
-    reported available providers -- NOT kokoro-onnx's own auto-selection,
-    which is broken upstream (its `find_spec("onnxruntime-gpu")` check is not
-    a valid module identifier, always resolves to None, and so always forces
-    CPU regardless of what hardware is present; see `_default_ort_providers`).
+    """Predict which device family Kokoro would land on IF neither deciding
+    input were set -- this reads ONLY ORT's own reported available
+    providers, and ignores BOTH `KokoroEngine._device` (the KOKORO_DEVICE
+    env pin / an admitted placement, which forces CPU-only regardless of
+    what's available -- see `_ensure_loaded`'s CPU-forcing check) and
+    KOKORO_ORT_PROVIDERS (the server's per-accelerator-profile injection,
+    which can hand down a CPU-only list on a box where CUDA is otherwise
+    available). On an nvidia box with either of those set to something
+    other than CUDA, this prediction diverges from the real decision
+    (#2631 review N5 -- corrects the prior docstring's claim, which
+    described a real prediction rather than this best-effort ORT-only
+    guess). NOT kokoro-onnx's own auto-selection, which is broken upstream
+    (its `find_spec("onnxruntime-gpu")` check is not a valid module
+    identifier, always resolves to None, and so always forces CPU
+    regardless of what hardware is present; see `_default_ort_providers`).
     DirectML → directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a
     broken/absent onnxruntime (→ cpu)."""
     try:

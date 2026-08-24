@@ -155,6 +155,33 @@ check fails on a real dependency gap.
 > session uses it, which is exactly what hid this. Criteria 1 and 2 still need
 > a real load here and rows A36/A37 stay owed — read the provider off a live
 > Kokoro, not off the available-providers list.
+>
+> **A CPU session here is not automatically this criterion failing (#2631
+> review N6).** This box's VRAM ledger (`admit()`, `main.py`) is a genuine
+> `cpu` decision, not just a fallback bug: when no GPU candidate has headroom
+> for Kokoro's footprint, `admit()` returns `{"device": "cpu"}` **by design**,
+> and `_ensure_loaded` correctly honours it — that's the S4 fix this run also
+> covers, working as intended, not a fourth root cause. This sheet is
+> routinely read with GPU time booked (i.e. the card may be busy with another
+> load, an analyzer, or a concurrent generation at the moment this criterion
+> is run), so a CPU session is an expected outcome under contention, not
+> automatically a repeat of #2534/#2600/#2621's bug. Tell the two apart
+> before filing a fourth root cause:
+> - **Check the card's free VRAM at the moment of the load** (`nvidia-smi` /
+>   the sidecar's own `/gpus` payload). If another resident model (analyzer,
+>   Coqui, Qwen) left too little headroom for Kokoro's footprint, `cpu` is the
+>   correct, by-design outcome — re-run this criterion with the card idle.
+> - **Check the sidecar log around the load.** A by-design admission logs
+>   nothing above `log.debug` today (the S4 finding also flags this as too
+>   quiet), but the absence of `_directml_selftest_or_fallback`'s WARNING
+>   ("Kokoro DirectML self-test failed") and of the kokoro-onnx-auto-detect
+>   remediation path both being silent is itself a negative signal — a
+>   *genuine* upstream/wiring bug (the #2534/#2600/#2621 shape) usually
+>   surfaces there.
+> - **Re-run with the card verifiably idle** (no other resident engine, no
+>   concurrent generation). If Kokoro still lands on CPU with KOKORO_DEVICE
+>   unset/cuda and a free card, that is the real criterion failure this row
+>   exists to catch — only then is it a fourth root cause.
 
 ---
 
