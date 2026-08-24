@@ -767,8 +767,36 @@ const ANY_ID_TOKEN_REGEX = /\b([A-Z]\d{1,3})\b/g;
 //   measured heuristic distinguishes it from the legitimate un-punctuated
 //   multi-line-quote case above; that is a design decision, not a
 //   mechanical follow-on to this fix.
+//
+// Pass-10 review of PR #2630 (finding AE): pass 9's four `>`-tolerant
+// alternatives above only ever tolerated exactly ONE `>` (`>?`, zero or
+// one), and the label alternative keyed on the literal string "Register
+// rows?:". Two real corpus shapes defeated both:
+//   - a NESTED blockquote (`> > - ...`, two markers) still isn't a bare
+//     list/table line-start under a single optional `>` — measured: 10
+//     nested-blockquote lines exist in the corpus today (none currently
+//     carries a discharge marker, so this is latent, not yet a live miss,
+//     but "a section covering two rows, titled once" nests exactly this
+//     way elsewhere in this same review round — see finding AC).
+//   - "Rows:" (no "Register" prefix) is the SAME citation label
+//     `ROW_CITATION_REGEX` already recognises elsewhere in this file (its
+//     own comment: "the colon is optional ... 'Register row(s):' — the
+//     single most common form" — the "Register " part was never load-
+//     bearing for THAT regex either), so a line reading "> Rows: A99 (Wave
+//     4)" already supplies the same completeness signal a "Register rows:"
+//     line does, but the boundary lookbehind didn't recognise it.
+// Both alternatives below now accept `(?:>[ \t]*)+` (or `*` where the
+// existing rule already tolerated zero) in place of the single `>?`, for
+// arbitrary nesting depth, and the label lookbehind accepts an optional
+// "Register " prefix rather than requiring it. Verified this doesn't touch
+// the legitimate multi-line-quote annotation (device-token-scope.md) or any
+// other pinned case: none of those wraps a list/table marker inside nested
+// `>` markers, and none opens with a bare "rows?:" label at all. Left OPEN,
+// same as before: a plain, unlabelled, unpunctuated blockquote continuation
+// with no list/table marker at the break — that is D9's own design
+// question, not a mechanical extension of this fix.
 const CLAUSE_BOUNDARY_REGEX =
-  /;|[—–](?=\s*[A-Z]\d{1,3}\s+is\b)|[.!?]\s*\r?\n[ \t]*>|(?<=\bRegister rows?:.*)\r?\n[ \t]*>|\r?\n[ \t]*>?[ \t]*(?:[-*+]\s|\d+\.\s|\|)|\r?\n[ \t]*>?[ \t]*\r?\n/g;
+  /;|[—–](?=\s*[A-Z]\d{1,3}\s+is\b)|[.!?]\s*\r?\n[ \t]*(?:>[ \t]*)+|(?<=\b(?:Register )?[Rr]ows?:.*)\r?\n[ \t]*(?:>[ \t]*)+|\r?\n[ \t]*(?:>[ \t]*)*(?:[-*+]\s|\d+\.\s|\|)|\r?\n[ \t]*(?:>[ \t]*)*\r?\n/g;
 
 /**
  * The `[start, end)` span of `text` around `pos` that is bounded by the
@@ -885,23 +913,65 @@ function idSpecificAnnotationPresent(sectionText, id) {
 }
 
 // Blanks single-backtick inline code spans (never triple-backtick fences —
-// those are already blanked by stripFences before this ever runs) with
-// equal-length spaces, so character offsets used elsewhere (clauseBounds,
-// ID_PROXIMITY_CHARS) don't shift. Used for two things, symmetrically since
-// pass 9 (finding AB): finding discharge-word matches
-// (idSpecificAnnotationPresent) and finding citation matches
-// (extractCitationsByLine) — an example command's code span must not read
-// as a real discharge annotation OR as a real citation; blanking only one
-// side let the other fire falsely (see extractCitationsByLine's own
-// comment). Never for ID-TOKEN scanning, which must still see a bare-ID
-// code span like the real corpus's `` `F1` ``/`` `F2` ``/`` `F3` ``
-// (legitimate annotations, per deBold's own comment above: "a single
-// backtick pair around an ID ... carries no ambiguity worth stripping").
-// See idSpecificAnnotationPresent's own comment (pass-8 review of PR #2630,
+// those are already blanked by stripFences before this ever runs), so
+// character offsets used elsewhere (clauseBounds, ID_PROXIMITY_CHARS) don't
+// shift. Used for finding discharge-word matches (idSpecificAnnotationPresent),
+// finding citation matches (extractCitationsByLine), and — since pass 10 —
+// checkConflictingSubjects's own line scan: an example command's code span
+// must not read as a real discharge annotation OR as a real citation;
+// blanking only some of the three let another one fire falsely (see
+// extractCitationsByLine's and checkConflictingSubjects's own comments).
+// Never for ID-TOKEN scanning, which must still see a bare-ID code span like
+// the real corpus's `` `F1` ``/`` `F2` ``/`` `F3` `` (legitimate
+// annotations, per deBold's own comment above: "a single backtick pair
+// around an ID ... carries no ambiguity worth stripping"). See
+// idSpecificAnnotationPresent's own comment (pass-8 review of PR #2630,
 // finding O) for why an example command inside a code span must not read as
 // a real discharge annotation.
+//
+// Pass-10 review of PR #2630 (finding AD): blanking the WHOLE span with
+// plain spaces was two bugs in one, both measured against the real corpus:
+//
+//   - MANUFACTURED citation: "Skip rows `1-3` A99 in the export table."
+//     blanks `1-3` to spaces, and ROW_CITATION_REGEX's `\brows?:?\s+<ID>`
+//     then lets its own `\s+` bridge straight across the blanked run to
+//     reach "A99" — a token that was never actually adjacent to "rows" in
+//     the source. A plain-space blank is indistinguishable from real
+//     whitespace to `\s+`, so it creates adjacency that never existed.
+//   - SILENT MISS: "See register row `A99` for the outstanding work." blanks
+//     the ID itself away, even though a single backtick pair around a bare
+//     ID is this repo's OWN documented in-house style for a legitimate
+//     citation (the exact shape deBold's comment already carves out for the
+//     discharge-annotation side) — `fs38-wave3-onbox-acceptance.md:2643`'s
+//     `` Register row: `docs/testing/onbox-acceptance-register.md` A25. ``
+//     is this corpus's own real instance of the idiom.
+//
+// Fixed by treating a span whose ENTIRE (trimmed) content is exactly one row
+// ID token as the id itself rather than blank: the backticks and any
+// interior padding are replaced with spaces, but the id text stays legible
+// to every consumer of the blanked copy — length-preserving either way, so
+// offsets are unaffected. Any OTHER span (an example command, a path, a
+// non-ID token like `1-3`) is blanked with a placeholder that is neither
+// whitespace nor an ID/word character (a Private Use Area codepoint, chosen
+// because it is guaranteed not to occur in real markdown source — unlike
+// the NUL byte, which this repo's own `BINARY_SNIFF_BYTES` comment notes
+// DOES occur, as a composite-key separator, in two real tracked files) — so
+// `\s+`-based regexes can no longer bridge across a blanked span the way a
+// plain-space blank did.
+const CODE_SPAN_BLANK_CHAR = '';
+const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
+
 function stripInlineCodeSpans(text) {
-  return text.replace(/`[^`\n]*`/g, (m) => ' '.repeat(m.length));
+  return text.replace(/`([^`\n]*)`/g, (m, inner) => {
+    const trimmed = inner.trim();
+    if (SINGLE_ID_SPAN_REGEX.test(trimmed)) {
+      const pad = m.length - trimmed.length;
+      const before = Math.floor(pad / 2);
+      const after = pad - before;
+      return ' '.repeat(before) + trimmed + ' '.repeat(after);
+    }
+    return CODE_SPAN_BLANK_CHAR.repeat(m.length);
+  });
 }
 
 /**
@@ -1304,6 +1374,16 @@ function citationShapedLineIds(line) {
 // once; splitting that title on ` + ` yields one segment against two IDs, a
 // count mismatch that signals "not a per-ID pairing" rather than "pair id 1
 // with an empty segment").
+//
+// Pass-10 review of PR #2630 (finding AC): the ` + `-with-matching-count
+// shape is the ONLY one this function recognises, deliberately — it is the
+// one spelling where positional pairing is unambiguous. Every OTHER
+// multi-ID title shape (a comma or `&` between subjects, an en-dash, a
+// segment/id count mismatch, a bold- or link-wrapped id) returns `null`
+// here, same as before this pass. What changed is what `checkConflictingSubjects`
+// does with that `null` — see its own comment below for why "check every id
+// against every subject" (this function's pre-existing `null` contract) is
+// no longer what happens next.
 function headingTitleSegments(line) {
   const m = line.match(HEADING_ID_REGEX);
   if (!m) return null;
@@ -1314,12 +1394,55 @@ function headingTitleSegments(line) {
   return { ids, segments };
 }
 
+/**
+ * Records one id/subject pairing's verdict — shared by the positional
+ * (`headingTitleSegments`) and non-positional paths in `checkConflictingSubjects`
+ * so both produce identically-worded messages.
+ */
+function recordSubjectConflict(filePath, lineIndex, id, subject, legitimate, wrongId, unknownSubject) {
+  const legitimateIds = legitimate.get(subject);
+  if (!legitimateIds) {
+    // The subject doesn't appear in ANY current register-row heading at
+    // all — the exact moment its citations start rotting, since a subject
+    // leaves the register precisely when its row discharges. Failing open
+    // here (the earlier behaviour) silenced this check at the one moment it
+    // was needed; see this file's header comment for the worked example.
+    // Genuinely ambiguous (a structural coverage gap, not a proven-wrong
+    // citation) — stays in the non-fatal, opt-in bucket.
+    unknownSubject.push(
+      `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but #${subject} does not ` +
+        `appear in any current register row heading (its row may have discharged) — ` +
+        `verify ${id} still applies`,
+    );
+  } else if (!legitimateIds.has(id)) {
+    // The subject's ID set is known and doesn't include this ID —
+    // unambiguously wrong, the four-wrong-headings class PR #2630 exists to
+    // catch. Fatal.
+    wrongId.push(
+      `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
+        `maps to ${[...legitimateIds].sort().join('/')}, not ${id}`,
+    );
+  }
+}
+
 export function checkConflictingSubjects(fileTexts, registerRows) {
   const legitimate = buildLegitimateSubjectMap(registerRows);
   const wrongId = [];
   const unknownSubject = [];
   for (const [filePath, rawText] of fileTexts) {
-    const text = deBold(stripFences(rawText));
+    // Pass-10 review of PR #2630 (finding AD): this scan used to read
+    // `deBold(stripFences(rawText))` directly — the UNBLANKED path — so an
+    // example command inside a single-backtick span (e.g. `` `grep -n
+    // "Criteria source: A41 for #2310" docs/` ``) still tripped
+    // `CRITERIA_SOURCE_LINE_REGEX` and fired a FATAL `wrongId`, the same
+    // class of bug pass 9 (finding AB) already fixed for Check A's
+    // `extractCitationsByLine` — just left armed one caller over. Routing
+    // through the same `stripInlineCodeSpans` blanks that example the same
+    // way, and does so without hiding a real single-backtick-wrapped ID
+    // citation (see `stripInlineCodeSpans`'s own comment) — anchored
+    // headings can't appear inside a code span at all (`^#{2,6}`), so this
+    // only ever changes behaviour on the `Criteria source:` surface.
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText)));
     const lines = text.split('\n');
     lines.forEach((line, i) => {
       const citedIds = citationShapedLineIds(line);
@@ -1327,46 +1450,60 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
       const nearbySubjects = extractSubjectNumbers(line);
       if (nearbySubjects.size === 0) return;
 
-      // Which subject(s) each cited id is actually checked against — see
-      // headingTitleSegments' own comment. Every id shares the full line's
-      // subject set UNLESS the line is a positionally-splittable multi-ID
-      // heading, in which case each id is restricted to its own segment.
       const segmented = headingTitleSegments(line);
-      const subjectsForId = new Map();
-      for (const id of citedIds) subjectsForId.set(id, nearbySubjects);
       if (segmented) {
+        // Positional pairing: each id is checked only against its own
+        // title segment's subject(s) — see headingTitleSegments' own
+        // comment. Pass-10 review of PR #2630 (finding AH): iterating
+        // `segmented.ids` BY INDEX (not through a Map keyed by id, as
+        // before) means a duplicated id across two segments
+        // ("### A40 + A40 · A (#2310) + B (#2106)") is checked against
+        // BOTH segments rather than the second silently overwriting the
+        // first's result.
         segmented.ids.forEach((id, idx) => {
-          if (subjectsForId.has(id)) subjectsForId.set(id, extractSubjectNumbers(segmented.segments[idx]));
+          if (!registerRows.has(id)) return; // Check A's territory, not this one.
+          for (const subject of extractSubjectNumbers(segmented.segments[idx])) {
+            recordSubjectConflict(filePath, i, id, subject, legitimate, wrongId, unknownSubject);
+          }
         });
+        return;
       }
 
+      // Pass-10 review of PR #2630 (finding AC): a multi-ID line whose
+      // title ISN'T the one recognised positional shape used to fall back
+      // to "check every id against every subject on the line" — the exact
+      // full cross product finding R (pass 8) was raised about, reopened
+      // for every title shape but the one pinned ` + `-with-matching-count
+      // test: a comma ("Wave 4 acceptance (#2310, #2106)"), an en-dash, an
+      // `&`, or a segment/id count mismatch ("decode (#2310) + addendum
+      // (#2106) + notes") all produced two FATAL false positives on a
+      // CORRECT heading, each the exact inversion pass 8 quoted.
+      //
+      // The bounded fix — the one pass 9 offered first, before positional
+      // segmentation was tried: this is pass-8 finding R's ORIGINAL
+      // principle (an id legitimately owning ANY subject on a shared
+      // multi-ID line is enough to explain it against the line's OTHER
+      // subjects too), applied only where segmentation doesn't. It is
+      // deliberately less precise than the positional path above — it
+      // cannot isolate a THIRD, unrelated subject on the line the way
+      // `headingTitleSegments` can (see finding X, which is exactly why
+      // finding R's original rule was narrowed to segments in the first
+      // place) — a real, named trade, not an oversight: measured zero real
+      // instances of that residual shape on the corpus as it stands.
+      //
+      // An id that owns NONE of the line's subjects gets no such pass — it
+      // is checked against every subject on the line, same as a single-ID
+      // line (see the "A2 + A1 · Some combined section" pinned test below:
+      // one shared subject, one id owns it, the other doesn't, and the one
+      // that doesn't must still fire).
       for (const id of citedIds) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
-        for (const subject of subjectsForId.get(id)) {
-          const legitimateIds = legitimate.get(subject);
-          if (!legitimateIds) {
-            // The subject doesn't appear in ANY current register-row heading
-            // at all — the exact moment its citations start rotting, since a
-            // subject leaves the register precisely when its row discharges.
-            // Failing open here (the earlier behaviour) silenced this check
-            // at the one moment it was needed; see this file's header
-            // comment for the worked example. Genuinely ambiguous (a
-            // structural coverage gap, not a proven-wrong citation) — stays
-            // in the non-fatal, opt-in bucket.
-            unknownSubject.push(
-              `${filePath}:${i + 1} — cited ${id} for #${subject}, but #${subject} does not ` +
-                `appear in any current register row heading (its row may have discharged) — ` +
-                `verify ${id} still applies`,
-            );
-          } else if (!legitimateIds.has(id)) {
-            // The subject's ID set is known and doesn't include this ID —
-            // unambiguously wrong, the four-wrong-headings class PR #2630
-            // exists to catch. Fatal.
-            wrongId.push(
-              `${filePath}:${i + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
-                `maps to ${[...legitimateIds].sort().join('/')}, not ${id}`,
-            );
-          }
+        const ownsAnySubjectHere = [...nearbySubjects].some((subject) =>
+          legitimate.get(subject)?.has(id),
+        );
+        if (ownsAnySubjectHere && citedIds.size >= 2) continue;
+        for (const subject of nearbySubjects) {
+          recordSubjectConflict(filePath, i, id, subject, legitimate, wrongId, unknownSubject);
         }
       }
     });
@@ -1419,7 +1556,15 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
   let headingLines = 0;
   let criteriaLines = 0;
   for (const [filePath, rawText] of fileTexts) {
-    const text = deBold(stripFences(rawText));
+    // Pass-10 review of PR #2630 (finding AD): must read the SAME blanked
+    // copy `checkConflictingSubjects` now does (stripInlineCodeSpans) — the
+    // finding-Z coupling this function exists to preserve ("this measures
+    // the real corpus directly ... rather than asserting a number that goes
+    // stale") is a coupling to what Check C actually evaluates, so scanning
+    // an unblanked copy here would silently disagree with Check C again the
+    // moment a `Criteria source:`-shaped example command inside a code span
+    // is counted as eligible here but is (correctly) blanked away there.
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText)));
     for (const line of text.split('\n')) {
       if (extractSubjectNumbers(line).size === 0) continue;
       const shapedIds = citationShapedLineIds(line);

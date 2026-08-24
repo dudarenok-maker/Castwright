@@ -427,6 +427,62 @@ test('checkNonexistentIds: paired control — an un-punctuated multi-line blockq
   assert.match(annotated[0], /A99/);
 });
 
+// --- Pass-10 review of PR #2630 (finding AE): pass 9's `>`-tolerant
+// boundaries only ever tolerated exactly ONE `>` (nested `> >` blockquotes
+// still defeated them), and the label lookbehind keyed on the literal
+// string "Register rows?:" (a bare "Rows:" label — the SAME citation idiom
+// ROW_CITATION_REGEX already recognises elsewhere in this file — didn't
+// bound). Both are real corpus shapes (10 nested-blockquote lines; "Rows:"
+// is the same prose idiom already matched without "Register"), not
+// inventions. ---
+
+test('checkNonexistentIds: a discharge word on one NESTED (>  >) BLOCKQUOTED LIST ITEM does not excuse a wrong ID on the next nested item (finding AE)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> > - tracked as register row B3, discharged 2026-08-21\n' +
+    '> > - tracked as register row A99 — still owed, run it\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /B3/);
+});
+
+test('checkNonexistentIds: paired control — the same discharge word on the SAME nested blockquoted list item still excuses it', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> > - tracked as register row A99, discharged 2026-08-21\n' +
+    '> > - tracked as register row B1 (unrelated, real row)\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A99/);
+});
+
+test('checkNonexistentIds: a "Rows:" label line (no "Register" prefix) still bounds its own clause from the next quoted line (finding AE)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '> Rows: A99 (Wave 4)\n> Historical note: row B3 was discharged 2026-08-21 and no longer exists.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /B3/);
+});
+
+test('checkNonexistentIds: paired control — a legitimate multi-line blockquote annotation still spans the break, unaffected by the "Rows:" label widening', () => {
+  // Mirrors the real corpus's own device-token-scope.md shape (already
+  // pinned above): its first line is "Register row A99 no longer" — no
+  // colon at all — so it must not be bounded by either label alternative.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text =
+    '> Register row A99 no longer\n' +
+    '> exists.** The repo owner discharged the whole group (A99 and the plan to re-add it).\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A99/);
+});
+
 test('checkNonexistentIds: a BLOCKQUOTE CONTINUATION line opening a new sentence does not let its discharge word reach a citation one line above (finding O)', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const text =
@@ -494,6 +550,81 @@ test('checkNonexistentIds: paired control — the same discharge word OUTSIDE a 
   assert.equal(errors.length, 0);
   assert.equal(annotated.length, 1);
   assert.match(annotated[0], /A99/);
+});
+
+// --- Pass-10 review of PR #2630 (finding AD): the single blanking strategy
+// finding AB introduced (blank a whole code span with equal-length spaces)
+// was two new bugs, both directions of the same defect class this checker
+// exists to close. Fixed by only blanking a span whose content ISN'T a bare
+// row-ID token, and blanking with a non-whitespace placeholder rather than
+// spaces — see stripInlineCodeSpans' own comment. ---
+
+test('checkNonexistentIds: a non-ID code span does NOT manufacture a citation by letting `\\s+` bridge across it (finding AD)', () => {
+  // "Skip rows `1-3` A99" — under finding AB's plain-space blanking, "rows"
+  // + the blanked run + "A99" reads as "rows   A99", and ROW_CITATION_REGEX's
+  // own `\s+` bridges straight across to a token ("A99") that was never
+  // actually adjacent to "rows" in the source.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'Skip rows `1-3` A99 in the export table.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: paired control — the same shape with the code span removed still manufactures nothing ("1-3" is not an ID)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'Skip rows 1-3 A99 in the export table.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: a single-backtick-wrapped ID in the "row(s) ID" idiom is STILL a live citation, not silently dropped (finding AD)', () => {
+  // "See register row `A99`" — finding AB's whole-span blanking erased the
+  // ID itself, even though this repo's own in-house style treats a single
+  // backtick pair around a bare ID as carrying no ambiguity (deBold's own
+  // comment). A99 doesn't exist in the register, so this must still be a
+  // hard, fatal citation error — not a silent miss.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'See register row `A99` for the outstanding work.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: a backticked ID on a "Register rows:" label line is still recognised alongside a bare one (finding AD)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'Register rows: `A99`, A2 — both need a look.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A99/);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkConflictingSubjects: a "Criteria source:" phrase INSIDE an example command\'s code span does not fatally fire (finding AD)', () => {
+  // Check C used to read the UNBLANKED text — the same class of bug finding
+  // AB already fixed for Check A's citation scan, left armed one caller
+  // over. #1001 legitimately maps to A2/B1, not A1, so the unblanked
+  // reading of this example grep command would fire FATAL wrongId.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', 'Audit with `grep -n "Criteria source: A1 for #1001" docs/` before the sweep.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: paired control — the same "Criteria source:" phrase OUTSIDE a code span still fires', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', 'Audit results: Criteria source: A1 for #1001 in the sweep.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
 });
 
 // Pass-7 review of PR #2630 (finding I): the existing anchor test's fixture
@@ -907,6 +1038,93 @@ test('checkConflictingSubjects: a SINGLE-ID heading with an unrelated "see also"
   const { rows } = parseRegisterRows(buildRegister());
   const files = new Map([
     ['docs/bar.md', '### A1 · Drift Wave 1 (#1000) — see also (#1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+});
+
+// --- Pass-10 review of PR #2630 (finding AC): `headingTitleSegments` only
+// recognises ONE positional shape (` + `-joined titles with a matching
+// segment/id count) — every OTHER multi-ID title shape used to fall back to
+// the pre-finding-R full cross product, reopening finding R's own false
+// positive for a CORRECT heading in every shape but the one pinned test.
+// Enumerated here: a comma, an `&`, an en-dash, and a segment/id count
+// mismatch — all four correct on the same A1(#1000)/A2(#1001) pairing the
+// existing finding-R tests above use, so a regression in any one of them
+// shows up as a false FATAL, same as finding R originally did. ---
+
+test('checkConflictingSubjects: a correct multi-ID heading with a COMMA between subjects does not false-fire (finding AC)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · Wave 4 acceptance (#1000, #1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: a correct multi-ID heading joined by "&" does not false-fire (finding AC)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · decode (#1000) & addendum (#1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: a correct multi-ID heading joined by an EN-DASH does not false-fire (finding AC)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · decode (#1000) – addendum (#1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: a correct multi-ID heading with a SEGMENT/ID COUNT MISMATCH (3 segments, 2 ids) does not false-fire (finding AC)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · decode (#1000) + addendum (#1001) + notes\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: control — a GENUINELY WRONG comma-joined multi-ID heading still fires (finding AC)', () => {
+  // Paired control for the four fixes above: #1001 legitimately maps to
+  // A2/B1, never A1 — A1 has no legitimate claim to it at all, so citing A1
+  // for #1001 alongside A2 (who DOES own it) must still fire, proving the
+  // bounded fix doesn't just stop flagging everything on a multi-ID line.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · Wave 4 acceptance (#1001, #1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+});
+
+// --- Pass-10 review of PR #2630 (finding AH): a duplicated ID across two
+// title segments used to key `subjectsForId` through a Map by id, so the
+// SECOND segment's subject set silently overwrote the first's — the first
+// segment's check never ran at all. Iterating positionally (by index, not
+// through a Map) fixes it: A1 (cited twice) is wrong for its FIRST segment's
+// subject and right for its second — the old code kept only the second
+// check and missed the defect entirely. ---
+
+test('checkConflictingSubjects: a DUPLICATED ID across two title segments is checked against BOTH, not just the last (finding AH)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    // A1 legitimately owns only #1000. Its first segment names #1001 (wrong
+    // for A1), its second names #1000 (right for A1) — a Map keyed by id
+    // would have the second `.set()` erase the first's wrong-subject check.
+    ['docs/bar.md', '### A1 + A1 · Title one (#1001) + Title two (#1000)\n\nBody.\n'],
   ]);
   const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
   assert.equal(unknownSubject.length, 0);
