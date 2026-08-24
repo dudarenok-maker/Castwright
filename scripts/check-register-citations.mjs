@@ -1391,6 +1391,19 @@ function headingTitleSegments(line) {
   if (ids.length < 2) return null;
   const segments = line.slice(m[0].length).split(/\s\+\s/);
   if (segments.length !== ids.length) return null;
+  // Pass-11 review of PR #2630 (finding AK): a matching segment/id count
+  // alone doesn't prove the ` + ` split fell on the per-ID boundary — a
+  // natural-language conjunction INSIDE one segment's own prose ("decode +
+  // encode acceptance (#2310, #2106)") can split into the right NUMBER of
+  // pieces by coincidence while mis-pairing every id, because the split
+  // point isn't the one between the two titles at all. The one shape this
+  // function is meant to recognise is "each id's own clause carries its own
+  // subject(s)" — a segment with NO subject number at all means the split
+  // didn't land where a real per-ID title boundary would put it (a genuine
+  // per-ID segment always has something to cite), so falling through to
+  // `null` here routes to `checkConflictingSubjects`' non-positional,
+  // exemption-based path instead of pairing ids to the wrong segments.
+  if (!segments.every((segment) => extractSubjectNumbers(segment).size > 0)) return null;
   return { ids, segments };
 }
 
@@ -1496,12 +1509,23 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
       // line (see the "A2 + A1 · Some combined section" pinned test below:
       // one shared subject, one id owns it, the other doesn't, and the one
       // that doesn't must still fire).
+      // Pass-11 review of PR #2630 (finding AI): the exemption below used to
+      // gate on `citedIds.size >= 2` — every citation-shaped ID TOKEN on the
+      // line, register row or not. `citedIds` isn't filtered to real rows,
+      // so a token that is provably not a row at all (nonexistent, or an
+      // annotated-discharged id no longer in `registerRows`) still counted
+      // toward "two ids explain this line", buying the exemption for the id
+      // that IS real even though nothing actually explains the line's other
+      // subject(s). Gate on the ids that resolve to a real row instead —
+      // `rowIds`, not the raw token set — so a fake second id can no longer
+      // disarm the check for the real one.
+      const rowIds = [...citedIds].filter((rid) => registerRows.has(rid));
       for (const id of citedIds) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
         const ownsAnySubjectHere = [...nearbySubjects].some((subject) =>
           legitimate.get(subject)?.has(id),
         );
-        if (ownsAnySubjectHere && citedIds.size >= 2) continue;
+        if (ownsAnySubjectHere && rowIds.length >= 2) continue;
         for (const subject of nearbySubjects) {
           recordSubjectConflict(filePath, i, id, subject, legitimate, wrongId, unknownSubject);
         }

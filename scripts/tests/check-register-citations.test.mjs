@@ -1132,6 +1132,101 @@ test('checkConflictingSubjects: a DUPLICATED ID across two title segments is che
   assert.match(wrongId[0], /cited A1 for #1001/);
 });
 
+// --- Pass-11 review of PR #2630 (finding AI): the multi-ID exemption gated
+// on `citedIds.size >= 2` — every citation-shaped ID TOKEN on the line,
+// register row or not — instead of on how many of those tokens actually
+// resolve to a real row. A token that is provably NOT a row (nonexistent, or
+// an annotated-discharged id that has left the register entirely) still
+// counted as "a second id explains this line", silently exempting a real,
+// wrong id from a subject it doesn't own. ---
+
+test('checkConflictingSubjects: control — the exemption still applies when TWO REAL rows share a line (finding AI)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · Wave 4 acceptance (#1000, #1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: the exemption no longer applies when one of the ID tokens is NOT a register row (finding AI)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // A99 doesn't exist in the register at all. A1 legitimately owns only
+  // #1000; #1001 belongs to A2/B1. Before the fix, `citedIds.size >= 2`
+  // counted A99 as a second id "explaining" the line and silently exempted
+  // A1 from #1001 too, even though nothing legitimately explains it there.
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A99 · Wave 4 acceptance (#1000, #1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+});
+
+test('checkConflictingSubjects: composite — an ANNOTATED-DISCHARGED id shares the exemption bug\'s shape and is fixed the same way (finding AI)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // Mirrors the pass-11 composite: a live row (A1) sharing a heading with an
+  // id whose row has since discharged ("B3" — absent from buildRegister()'s
+  // rows, same as a nonexistent id from Check C's point of view; Check A's
+  // separate "annotate, don't renumber" carve-out doesn't add B3 back into
+  // `registerRows`). This is exactly the shape that, pre-fix, silenced
+  // Check C's FATAL bucket for the whole line — the one this checker exists
+  // to catch a mechanical ID shift with.
+  const files = new Map([
+    [
+      'docs/bar.md',
+      '### A1 + B3 · Wave 4 acceptance (#1000, #1001)\n\n' +
+        'Register row B3 was discharged on 2026-08-21 and no longer exists.\n',
+    ],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+});
+
+// --- Pass-11 review of PR #2630 (finding AK): `headingTitleSegments` only
+// checked that the ` + `-split segment count matched the id count — a
+// natural-language "+" INSIDE one segment's own prose can produce that same
+// count by coincidence while landing the split in the wrong place entirely,
+// mis-pairing every id to the wrong segment. ---
+
+test('headingTitleSegments / checkConflictingSubjects: a natural-language "+" inside the title prose no longer mis-pairs positionally (finding AK)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // "decode + encode acceptance (#1000, #1001)" splits into 2 segments on
+  // `\s\+\s` purely by coincidence with the 2 ids — the "+" is a natural
+  // conjunction in the prose, not a per-ID boundary, and the first segment
+  // ("decode") never carries a subject of its own at all. Before the fix
+  // this was accepted as positional and fatally mis-fired "cited A2 for
+  // #1000" even though A2 correctly owns only #1001 and never claimed
+  // #1000 — the exact false positive this heading shape must not produce.
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · decode + encode acceptance (#1000, #1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: control — a genuine per-ID positional heading still pairs correctly and fires on a real mismatch (finding AK)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // Each segment carries its own subject, so this is the real positional
+  // shape — and it is deliberately SWAPPED (A1 paired with #1001, A2 paired
+  // with #1000) to prove the fix didn't just widen the fallback and lose
+  // the positional path's precision.
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · decode (#1001) + encode (#1000)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(wrongId.length, 2);
+  const joined = wrongId.join('\n');
+  assert.match(joined, /cited A1 for #1001/);
+  assert.match(joined, /cited A2 for #1000/);
+});
+
 // --- Pass-9 review of PR #2630 (finding Z): measureWrongIdEligibleLines
 // used to re-implement Check C's eligibility rule inline instead of calling
 // citationShapedLineIds — the function Check C itself uses — so the two
