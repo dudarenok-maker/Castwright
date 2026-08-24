@@ -139,6 +139,18 @@ describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {
     expect(fieldText.toLowerCase()).not.toMatch(/leave blank/);
   });
 
+  // #2632 N43 — the test above (and the one below) are negative-only and pass
+  // vacuously if the sublabel prop is deleted outright, which would ship the
+  // field with NO guidance at all, including the "don't leave it blank" line
+  // RELEASE_NOTES.md:186 advertises. Anchor the copy that must actually be
+  // present, not just the jargon that must be absent.
+  it('does instruct the user not to leave the field blank', async () => {
+    renderForm();
+    const input = await screen.findByTestId('account-sidecar-url');
+    const fieldText = input.closest('label')?.textContent ?? '';
+    expect(fieldText).toMatch(/do not leave it blank/i);
+  });
+
   // #2632 N37 — the sublabel used to claim the value shown below (the
   // input's placeholder) is "derived from LOCAL_TTS_PORT". The placeholder
   // is a hardcoded literal, never updated from LOCAL_TTS_PORT, and hidden

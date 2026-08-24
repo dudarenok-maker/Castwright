@@ -190,10 +190,12 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-23 (wave 5, #2606 step 6), 69 → 66.</b> Three rows discharged
-    live (A27, A45, B2) and dropped per the repo owner's remove-outright ruling; evidence
-    for each lives in <code>docs/testing/onbox-wave5-results/</code>. This page tracks the
-    current count, not how it got here — see this file's git log for the full history.
+    <b>Last change: 2026-08-25 (#2632, PR #2635), 65 → 66.</b> Added <b>E10</b> — the
+    sidecar-sweep worktree fix ships behaviour that only two live checkouts can prove
+    (that <code>npm run stop</code> sweeps the RIGHT checkout's sidecar, not the
+    primary's); nothing in that PR exercises <code>stop-app.mjs</code>/<code>.ps1</code>
+    end to end against a real listener. This page tracks the current count, not how it
+    got here — see this file's git log for the full history.
   </div>
 
   <div class="tscroll">

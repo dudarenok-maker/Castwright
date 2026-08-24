@@ -41,26 +41,63 @@ function parseLocalTtsPortValue(raw) {
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
 }
 
-function parseLocalTtsPortFromServerEnv(serverEnvPath) {
-  // #2632 N36 — process.loadEnvFile (server/src/load-env.ts) does NOT
-  // overwrite an already-present process.env entry, so a shell-exported
-  // LOCAL_TTS_PORT wins over server/.env for the real server process too.
-  // Mirror that precedence here: if THIS shell has LOCAL_TTS_PORT set, that
-  // is the value the server would also resolve to (same shell, same
-  // load-env semantics) — prefer it over the file rather than naming a
-  // configured-but-overridden port.
-  if (process.env.LOCAL_TTS_PORT) {
-    return parseLocalTtsPortValue(process.env.LOCAL_TTS_PORT);
+/** Resolve a single `KEY=value` env line's port value out of an env-style
+    file, mirroring process.loadEnvFile's own precedence and parsing rules —
+    shared by LOCAL_TTS_PORT (server/.env), PORT (server/.env), and VITE_PORT
+    (.env.local), the three env-sourced ports stop-app.mjs sweeps (#2632 N39).
+
+    Two things this MUST match about process.loadEnvFile, both measured
+    directly against the real function rather than assumed:
+    - #2632 N36: a shell-exported value wins over the file — loadEnvFile
+      never overwrites an already-present process.env entry, so if THIS
+      shell already has `key` set, that's the value the server would also
+      resolve to.
+    - #2632 N42: on a DUPLICATE key, loadEnvFile takes the LAST assignment
+      (later `process.env[key] = value` calls simply overwrite earlier
+      ones) — so this reader must take the last matching line too, not the
+      first, or it can target a port the server never actually bound to. */
+function resolvePortFromEnvFile(envPath, key) {
+  if (process.env[key]) {
+    return parseLocalTtsPortValue(process.env[key]);
   }
   try {
-    const raw = readFileSync(serverEnvPath, 'utf8');
-    const match = raw.match(/^\s*LOCAL_TTS_PORT\s*=\s*(\S+)\s*$/m);
-    if (!match) return null;
-    return parseLocalTtsPortValue(match[1]);
+    const raw = readFileSync(envPath, 'utf8');
+    const re = new RegExp(`^\\s*${key}\\s*=\\s*(\\S+)\\s*$`, 'gm');
+    let match;
+    let lastValue = null;
+    while ((match = re.exec(raw)) !== null) {
+      lastValue = match[1];
+    }
+    if (lastValue === null) return null;
+    return parseLocalTtsPortValue(lastValue);
   } catch {
-    // Missing/unreadable server/.env — no fallback available from here.
+    // Missing/unreadable env file — no fallback available from here.
   }
   return null;
+}
+
+function parseLocalTtsPortFromServerEnv(serverEnvPath) {
+  return resolvePortFromEnvFile(serverEnvPath, 'LOCAL_TTS_PORT');
+}
+
+/** Resolve this checkout's own configured `PORT` (server/.env) — the same
+    per-checkout, never-guess-the-primary's-value discipline as the TTS
+    port, extended to the class of hardcoded base ports (#2632 N39): a
+    worktree's `server/.env` always carries an explicit PORT (wt-new.mjs
+    writes one per slot), so this resolves for every worktree; a
+    hand-edited primary checkout with no PORT line returns null, meaning
+    "don't sweep the server port" rather than guessing :8080 — the same
+    trade `resolveSidecarSweepPort` already makes for LOCAL_TTS_PORT. */
+export function resolveConfiguredServerPort(serverEnvPath) {
+  return serverEnvPath ? resolvePortFromEnvFile(serverEnvPath, 'PORT') : null;
+}
+
+/** Resolve this checkout's own configured `VITE_PORT` (.env.local) — the
+    Vite-side sibling of resolveConfiguredServerPort (#2632 N39). Only
+    stop-app.ps1 sweeps a Vite port; stop-app.mjs is the prod launcher and
+    never runs Vite. */
+export function resolveConfiguredVitePort(envLocalPath) {
+  return envLocalPath ? resolvePortFromEnvFile(envLocalPath, 'VITE_PORT') : null;
 }
 
 /** Resolve the sidecar port to sweep: the port this checkout's `.run/`

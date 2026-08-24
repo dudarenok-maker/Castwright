@@ -100,6 +100,76 @@ Describe 'Get-SidecarSweepPort' {
             else { $env:LOCAL_TTS_PORT = $prev }
         }
     }
+
+    # #2632 N42 — process.loadEnvFile takes the LAST assignment of a
+    # duplicate key; this reader used to take the FIRST regex match, which
+    # could sweep/force-kill a port the server never actually bound to.
+    It 'takes the LAST LOCAL_TTS_PORT line on a duplicate key, matching process.loadEnvFile' {
+        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9010`nLOCAL_TTS_PORT=9020" -Encoding utf8
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9020
+    }
+}
+
+Describe 'Get-ConfiguredServerPort / Get-ConfiguredVitePort (#2632 N39)' {
+    BeforeEach {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "sweep-port-$([Guid]::NewGuid())"
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+        $script:envPath = Join-Path $script:tempDir "server.env"
+    }
+    AfterEach {
+        if (Test-Path $script:tempDir) {
+            Remove-Item $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'reads this checkout''s own PORT from server\.env' {
+        Set-Content -Path $script:envPath -Value "PORT=8200`nWORKSPACE_DIR=..\workspace" -Encoding utf8
+        Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be 8200
+    }
+
+    It 'takes the LAST PORT line on a duplicate key' {
+        Set-Content -Path $script:envPath -Value "PORT=8080`nPORT=8200" -Encoding utf8
+        Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be 8200
+    }
+
+    It 'returns $null (sweep nothing) when server\.env has no PORT line' {
+        Set-Content -Path $script:envPath -Value "WORKSPACE_DIR=..\workspace" -Encoding utf8
+        Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be $null
+    }
+
+    It 'prefers a shell-set PORT over server\.env' {
+        Set-Content -Path $script:envPath -Value "PORT=8200" -Encoding utf8
+        $prev = $env:PORT
+        $env:PORT = '8300'
+        try {
+            Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be 8300
+        } finally {
+            if ($null -eq $prev) { Remove-Item Env:\PORT -ErrorAction SilentlyContinue }
+            else { $env:PORT = $prev }
+        }
+    }
+
+    It 'reads this checkout''s own VITE_PORT from .env.local' {
+        Set-Content -Path $script:envPath -Value "VITE_PORT=5293`nPORT=8200" -Encoding utf8
+        Get-ConfiguredVitePort -EnvLocalPath $script:envPath | Should -Be 5293
+    }
+
+    It 'returns $null (sweep nothing) when .env.local has no VITE_PORT line' {
+        Set-Content -Path $script:envPath -Value "PORT=8200" -Encoding utf8
+        Get-ConfiguredVitePort -EnvLocalPath $script:envPath | Should -Be $null
+    }
+
+    # #2632 N39 — stop-app.ps1 used to hardcode @(5173, 8080, 8443) as its
+    # base sweep list, which is the PRIMARY checkout's ports regardless of
+    # what THIS checkout is configured for. Behavioural: drives a
+    # worktree-shaped server\.env through the real resolver the same way
+    # stop-app.ps1's call site does, so a reversion has nowhere to hide.
+    It 'resolves a worktree-shaped server\.env to its OWN port, not the primary''s 8080' {
+        Set-Content -Path $script:envPath -Value "PORT=8090`nWORKSPACE_DIR=..\castwright-workspace`nLOCAL_TTS_PORT=9010" -Encoding utf8
+        $resolved = Get-ConfiguredServerPort -ServerEnvPath $script:envPath
+        $resolved | Should -Be 8090
+        $resolved | Should -Not -Be 8080
+    }
 }
 
 Describe 'Get-PortsToSweep (#2632 N34)' {
@@ -150,5 +220,28 @@ Describe 'stop-app.ps1 call site (#2632 N34)' {
         $source = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
         $source | Should -Match '\$ports\s*=\s*Get-PortsToSweep\b'
         $source | Should -Not -Match '\$ports\s*=\s*@\([^)]*9000[^)]*\)'
+    }
+
+    # #2632 N39 — the base-port half of the same hazard: stop-app.ps1 used to
+    # pass a literal @(5173, 8080, 8443) as -BasePorts, which is the PRIMARY
+    # checkout's ports regardless of what THIS checkout is configured for.
+    It 'resolves its base ports via Get-ConfiguredServerPort/Get-ConfiguredVitePort, not a hardcoded 5173/8080' {
+        $source = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
+        $source | Should -Match 'Get-ConfiguredServerPort\b'
+        $source | Should -Match 'Get-ConfiguredVitePort\b'
+        $source | Should -Not -Match '-BasePorts\s*@\(5173'
+    }
+
+    # #2632 N39 pass-8 follow-up — 8443 (LAN HTTPS) is not per-worktree
+    # offset by wt-new.mjs, and unlike PORT/VITE_PORT its config alone can't
+    # establish ownership of the currently-bound process (dev mode never
+    # rebinds, so a losing checkout's LAN server never even starts — "my
+    # config says LAN_HTTPS=1" doesn't mean "the thing on :8443 is mine").
+    # $basePorts must never gain a literal 8443, in any form.
+    It 'never assembles a literal 8443 into $basePorts' {
+        $source = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
+        $source | Should -Not -Match '\$basePorts\s*=\s*@\(8443\)'
+        $source | Should -Not -Match '\+\s*@\(8443\)'
+        $source | Should -Not -Match '8443\)\s*\+\s*\$basePorts'
     }
 }

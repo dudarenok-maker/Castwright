@@ -21,7 +21,12 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveSidecarSweepPort, buildPortsToSweep } from '../lib/sidecar-sweep-port.mjs';
+import {
+  resolveSidecarSweepPort,
+  buildPortsToSweep,
+  resolveConfiguredServerPort,
+  resolveConfiguredVitePort,
+} from '../lib/sidecar-sweep-port.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -171,6 +176,49 @@ test('stop-app.mjs assigns portsToSweep from buildPortsToSweep(), not a hardcode
   );
 });
 
+// #2632 N39 — the base-port half of the same hazard: stop-app.mjs used to
+// pass a literal [8080, 8443] into buildPortsToSweep, which is the PRIMARY
+// checkout's server port regardless of what THIS checkout is configured
+// for. Pin the call site to resolve the server port via
+// resolveConfiguredServerPort rather than hardcoding 8080 into the array
+// buildPortsToSweep receives.
+test('stop-app.mjs resolves its server base port via resolveConfiguredServerPort, not a hardcoded 8080', () => {
+  const source = readFileSync(resolve(__dirname, '..', 'stop-app.mjs'), 'utf8');
+  assert.match(
+    source,
+    /resolveConfiguredServerPort\(/,
+    'stop-app.mjs must call resolveConfiguredServerPort(...) to resolve its own server port',
+  );
+  assert.doesNotMatch(
+    source,
+    /buildPortsToSweep\(\s*\[\s*8080\b/,
+    'stop-app.mjs must not pass a hardcoded 8080 into buildPortsToSweep(...)',
+  );
+});
+
+// #2632 N39 pass-8 follow-up — 8443 (LAN HTTPS) must never re-appear in
+// basePorts either. It is not per-worktree offset by wt-new.mjs, and unlike
+// PORT/LOCAL_TTS_PORT there is no way to resolve it safely: this launcher
+// always spawns NODE_ENV=production, so listenWithAutoRebind can rebind
+// LAN_HTTPS_PORT away from its configured value on conflict — a
+// server/.env-derived guess could still name a port this checkout never
+// bound, and there is no owner-note file (unlike .run/tts.owner.json) to
+// settle it. basePorts must stay resolver-derived only, never a literal
+// 8443 added back in.
+test('stop-app.mjs never assembles a literal 8443 into basePorts', () => {
+  const source = readFileSync(resolve(__dirname, '..', 'stop-app.mjs'), 'utf8');
+  assert.doesNotMatch(
+    source,
+    /basePorts\s*=\s*serverPort\s*\?\s*\[serverPort,\s*8443\]/,
+    'stop-app.mjs must not hardcode 8443 alongside the resolved server port',
+  );
+  assert.doesNotMatch(
+    source,
+    /\[\s*8443\s*\]/,
+    'stop-app.mjs must not fall back to a literal [8443] array',
+  );
+});
+
 // #2632 N36 — the server/.env tier must reject exactly what the server's own
 // resolveSidecarPort() (server/src/tts/sidecar-owner.ts, N28) rejects, not a
 // looser superset. A leading "+", exponent notation, hex, or a decimal point
@@ -195,6 +243,78 @@ test('resolveSidecarSweepPort accepts a leading-zero spelling the server also ac
     withTempServerEnv('LOCAL_TTS_PORT=007\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 7);
     });
+  });
+});
+
+// #2632 N42 — process.loadEnvFile takes the LAST assignment of a duplicate
+// key (later process.env[key] = value calls simply overwrite earlier ones);
+// the sweep-port reader used to take the FIRST regex match instead, which
+// meant a hand-edited server/.env with two LOCAL_TTS_PORT lines swept a
+// port the server never actually bound to (harmful direction, same class of
+// hazard N36 exists to prevent). This must take the last line, like the
+// real loader does.
+test('resolveSidecarSweepPort takes the LAST LOCAL_TTS_PORT line on a duplicate key, matching process.loadEnvFile', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv('LOCAL_TTS_PORT=9010\nLOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9020);
+    });
+  });
+});
+
+test('resolveConfiguredServerPort reads this checkout\'s own PORT from server/.env', () => {
+  withTempServerEnv('PORT=8200\nWORKSPACE_DIR=../workspace\n', (envPath) => {
+    assert.equal(resolveConfiguredServerPort(envPath), 8200);
+  });
+});
+
+test('resolveConfiguredServerPort takes the LAST PORT line on a duplicate key', () => {
+  withTempServerEnv('PORT=8080\nPORT=8200\n', (envPath) => {
+    assert.equal(resolveConfiguredServerPort(envPath), 8200);
+  });
+});
+
+test('resolveConfiguredServerPort returns null (sweep nothing) when server/.env has no PORT line', () => {
+  withTempServerEnv('WORKSPACE_DIR=../workspace\n', (envPath) => {
+    assert.equal(resolveConfiguredServerPort(envPath), null);
+  });
+});
+
+test('resolveConfiguredServerPort prefers a shell-exported PORT over server/.env', () => {
+  const prev = process.env.PORT;
+  process.env.PORT = '8300';
+  try {
+    withTempServerEnv('PORT=8200\n', (envPath) => {
+      assert.equal(resolveConfiguredServerPort(envPath), 8300);
+    });
+  } finally {
+    if (prev === undefined) delete process.env.PORT;
+    else process.env.PORT = prev;
+  }
+});
+
+test('resolveConfiguredVitePort reads this checkout\'s own VITE_PORT from .env.local', () => {
+  withTempServerEnv('VITE_PORT=5293\nPORT=8200\n', (envPath) => {
+    assert.equal(resolveConfiguredVitePort(envPath), 5293);
+  });
+});
+
+test('resolveConfiguredVitePort returns null (sweep nothing) when .env.local has no VITE_PORT line', () => {
+  withTempServerEnv('PORT=8200\n', (envPath) => {
+    assert.equal(resolveConfiguredVitePort(envPath), null);
+  });
+});
+
+// #2632 N39 — stop-app.mjs used to hardcode [8080, 8443] as its base sweep
+// ports, which is the PRIMARY checkout's server port regardless of what
+// THIS checkout is actually configured for. Behavioural, not source-text:
+// drives the real call site's inputs (a slot-1-shaped server/.env) through
+// resolveConfiguredServerPort the same way stop-app.mjs's call site does,
+// so a reversion back to a hardcoded 8080 has nowhere to hide.
+test('resolveConfiguredServerPort resolves a worktree-shaped server/.env to its OWN port, not the primary\'s 8080', () => {
+  withTempServerEnv('PORT=8090\nWORKSPACE_DIR=../castwright-workspace\nLOCAL_TTS_PORT=9010\n', (envPath) => {
+    const resolved = resolveConfiguredServerPort(envPath);
+    assert.equal(resolved, 8090);
+    assert.notEqual(resolved, 8080);
   });
 });
 

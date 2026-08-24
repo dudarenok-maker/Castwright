@@ -44,33 +44,80 @@ function Get-LocalTtsPortValue {
     return $null
 }
 
+# Resolve a single `KEY=value` env line's port value out of an env-style
+# file, mirroring process.loadEnvFile's own precedence and parsing rules —
+# shared by LOCAL_TTS_PORT (server\.env), PORT (server\.env), and VITE_PORT
+# (.env.local), the three env-sourced ports stop-app.ps1 sweeps (#2632 N39).
+#
+# Two things this MUST match about process.loadEnvFile, both measured
+# directly against the real function rather than assumed:
+# - #2632 N36: a shell-exported value wins over the file — loadEnvFile
+#   never overwrites an already-present process.env entry, so if THIS shell
+#   already has $Key set, that's the value the server would also resolve to.
+# - #2632 N42: on a DUPLICATE key, loadEnvFile takes the LAST assignment
+#   (later process.env[key] = value calls simply overwrite earlier ones) —
+#   so this reader must take the last matching line too, not the first, or
+#   it can target a port the server never actually bound to.
+function Get-ConfiguredPortFromEnv {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Key,
+        [string] $EnvPath
+    )
+    $envValue = [Environment]::GetEnvironmentVariable($Key)
+    if ($envValue) {
+        return Get-LocalTtsPortValue -Raw $envValue
+    }
+    if (-not $EnvPath -or -not (Test-Path $EnvPath)) { return $null }
+    try {
+        $lines = Get-Content $EnvPath -ErrorAction Stop
+    } catch {
+        return $null
+    }
+    $found = $null
+    foreach ($line in $lines) {
+        if ($line -match "^\s*$Key\s*=\s*(\S+)\s*$") {
+            $found = $Matches[1]
+        }
+    }
+    if ($null -eq $found) { return $null }
+    return Get-LocalTtsPortValue -Raw $found
+}
+
 function Get-LocalTtsPortFromServerEnv {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [string] $ServerEnvPath
     )
-    # #2632 N36 — process.loadEnvFile (server/src/load-env.ts) does NOT
-    # overwrite an already-present process.env entry, so a shell-exported
-    # LOCAL_TTS_PORT wins over server\.env for the real server process too.
-    # Mirror that precedence here: if THIS shell has LOCAL_TTS_PORT set,
-    # that's the value the server would also resolve to — prefer it over
-    # the file rather than naming a configured-but-overridden port.
-    if ($env:LOCAL_TTS_PORT) {
-        return Get-LocalTtsPortValue -Raw $env:LOCAL_TTS_PORT
-    }
-    if (-not (Test-Path $ServerEnvPath)) { return $null }
-    try {
-        $lines = Get-Content $ServerEnvPath -ErrorAction Stop
-    } catch {
-        return $null
-    }
-    foreach ($line in $lines) {
-        if ($line -match '^\s*LOCAL_TTS_PORT\s*=\s*(\S+)\s*$') {
-            return Get-LocalTtsPortValue -Raw $Matches[1]
-        }
-    }
-    return $null
+    return Get-ConfiguredPortFromEnv -Key 'LOCAL_TTS_PORT' -EnvPath $ServerEnvPath
+}
+
+# Resolve this checkout's own configured PORT (server\.env) — the same
+# per-checkout, never-guess-the-primary's-value discipline as the TTS port,
+# extended to the class of hardcoded base ports (#2632 N39): a worktree's
+# server\.env always carries an explicit PORT (wt-new.mjs writes one per
+# slot), so this resolves for every worktree; a hand-edited primary checkout
+# with no PORT line returns $null, meaning "don't sweep the server port"
+# rather than guessing :8080 — the same trade Get-SidecarSweepPort already
+# makes for LOCAL_TTS_PORT.
+function Get-ConfiguredServerPort {
+    [CmdletBinding()]
+    param(
+        [string] $ServerEnvPath
+    )
+    return Get-ConfiguredPortFromEnv -Key 'PORT' -EnvPath $ServerEnvPath
+}
+
+# Resolve this checkout's own configured VITE_PORT (.env.local) — the
+# Vite-side sibling of Get-ConfiguredServerPort (#2632 N39).
+function Get-ConfiguredVitePort {
+    [CmdletBinding()]
+    param(
+        [string] $EnvLocalPath
+    )
+    return Get-ConfiguredPortFromEnv -Key 'VITE_PORT' -EnvPath $EnvLocalPath
 }
 
 function Get-SidecarSweepPort {
@@ -118,4 +165,4 @@ function Get-PortsToSweep {
     return @($BasePorts)
 }
 
-Export-ModuleMember -Function Get-SidecarSweepPort, Get-LocalTtsPortFromServerEnv, Get-PortsToSweep, Get-LocalTtsPortValue
+Export-ModuleMember -Function Get-SidecarSweepPort, Get-LocalTtsPortFromServerEnv, Get-PortsToSweep, Get-LocalTtsPortValue, Get-ConfiguredPortFromEnv, Get-ConfiguredServerPort, Get-ConfiguredVitePort
