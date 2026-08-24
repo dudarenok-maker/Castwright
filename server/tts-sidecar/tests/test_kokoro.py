@@ -649,6 +649,94 @@ def test_kokoro_unload_restores_device_pin_after_cpu_admission(
         assert mock_ort_session_class.call_args[1]["provider_options"] == [{"device_id": 0}, {}]
 
 
+def test_kokoro_failed_cold_load_does_not_poison_device_pin(
+    monkeypatch, tmp_path
+) -> None:
+    """#2631 review B2: a FAILED cold load must not permanently overwrite
+    `self._device`. Before this fix, `_ensure_loaded` wrote `self._device =
+    device` unconditionally at the TOP of the method, before every failure
+    point (the weights-missing RuntimeError included) -- so a CPU-admitted
+    load (`device="cpu"`, the VRAM ledger refusing the GPU under contention)
+    that then fails for an ordinary reason left `_device='cpu'` stuck with
+    `_kokoro` still `None`. `unload()`'s `if self._kokoro is None: return`
+    idempotence guard then made the restore this fix relies on unreachable
+    forever: every later lazy reload (even with KOKORO_DEVICE=cuda:0 set)
+    kept building CPU-only providers for the rest of the process lifetime --
+    verbatim the outcome S4 was raised to prevent, on the one path S4's own
+    fix (which only covers a SUCCEEDING load) doesn't reach."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+    monkeypatch.setenv("KOKORO_DEVICE", "cuda:0")
+    model_path = tmp_path / "kokoro-v1.0.onnx"
+    voices_path = tmp_path / "voices-v1.0.bin"
+    # Weights not installed yet -- install-kokoro.ps1 hasn't run. The path is
+    # baked into the engine at __init__, so writing real files here later
+    # (below) lets the SAME engine instance load successfully afterward.
+    monkeypatch.setenv("KOKORO_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("KOKORO_VOICES_PATH", str(voices_path))
+
+    class _StickyPinKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _StickyPinKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    engine = main.KokoroEngine()
+    assert engine._device == "cuda:0"
+
+    # A CPU-admitted cold load that then fails: weights not installed.
+    with pytest.raises(RuntimeError, match="install-kokoro"):
+        engine._ensure_loaded("v1", device="cpu")
+
+    # The failed load must not have touched the pin -- this is the bug:
+    # pre-fix, `_device` read 'cpu' here even though nothing loaded.
+    assert engine._device == "cuda:0"
+    assert engine._kokoro is None
+
+    # unload() must be a genuine no-op with nothing to restore -- nothing
+    # was ever poisoned in the first place.
+    engine.unload()
+    assert engine._device == "cuda:0"
+    assert engine._kokoro is None
+
+    # Weights now present (install-kokoro.ps1 ran). The next lazy reload (no
+    # device= -- a real /synthesize re-load) must still honour the env pin,
+    # not a leftover CPU admission from the failed load above.
+    model_path.write_bytes(b"")
+    voices_path.write_bytes(b"")
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(model_path)
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine._ensure_loaded("v1")
+        assert mock_ort_session_class.call_args[1]["providers"] == [
+            "CUDAExecutionProvider", "CPUExecutionProvider"
+        ]
+        assert mock_ort_session_class.call_args[1]["provider_options"] == [{"device_id": 0}, {}]
+        assert engine._device == "cuda:0"
+
+
 def test_kokoro_importerror_remediation_is_profile_aware(
     fake_weight_files, monkeypatch
 ) -> None:

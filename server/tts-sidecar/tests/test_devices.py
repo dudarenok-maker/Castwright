@@ -48,24 +48,57 @@ def test_engine_actual_card_unknown_family_when_all_probes_fail():
 # --- Kokoro ORT provider reconcile ---
 
 def _fake_kokoro_cpu_session():
-    """Kokoro engine: requested cuda:1 but ORT resolved to CPU-only providers."""
+    """Kokoro engine, real post-#2631-B3-fix shape: KOKORO_DEVICE=cuda:1 (the
+    pristine `_requested_device`), a plain env-derived load so `_device` still
+    reads that same intent ('cuda:1') — but the ORT session actually resolved
+    to CPU-only providers, so ground truth (`_resolved_device`, set from the
+    session at publish time — see `KokoroEngine._ensure_loaded`) disagrees
+    with the intent string. A real KokoroEngine has all three attrs since the
+    B2/B3 fix; the pre-fix double here had NONE of them ('No device/_device/
+    _model attrs — mirrors a real KokoroEngine'), which was false as of
+    #2631's B1/S4 commit and is why this regression test stayed green
+    against code where the reconcile it exists to pin was silenced (#2631
+    review B3)."""
     sess = types.SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
     kok = types.SimpleNamespace(sess=sess)
-    # No device/_device/_model attrs — mirrors a real KokoroEngine
-    return types.SimpleNamespace(_requested_device="cuda:1", _kokoro=kok)
+    return types.SimpleNamespace(
+        _requested_device="cuda:1", _device="cuda:1", _resolved_device="cpu", _kokoro=kok)
 
 
 def _fake_kokoro_cuda_session():
-    """Kokoro engine: requested cuda:0, ORT kept the CUDA EP."""
+    """Kokoro engine: requested cuda:0, ORT kept the CUDA EP — intent and
+    ground truth agree."""
     sess = types.SimpleNamespace(get_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"])
     kok = types.SimpleNamespace(sess=sess)
-    return types.SimpleNamespace(_requested_device="cuda:0", _kokoro=kok)
+    return types.SimpleNamespace(
+        _requested_device="cuda:0", _device="cuda:0", _resolved_device="cuda", _kokoro=kok)
+
+
+def _fake_kokoro_admitted_cpu_session():
+    """Kokoro engine: KOKORO_DEVICE=cuda:1 (`_requested_device`), but THIS
+    load was admitted onto cpu by the VRAM ledger under contention — `_device`
+    (the per-load decision) diverges from `_requested_device` and reads 'cpu',
+    not 'cuda:1'. The ORT session agrees (`_resolved_device` == 'cpu' too).
+    This is the admitted-device fell_back shape the prior fake pair never
+    covered (#2631 review B3) — distinct from `_fake_kokoro_cpu_session`,
+    where `_device` still reads the (stale) 'cuda:1' intent because the ORT
+    fallback there is silent/unrequested, not admission-driven."""
+    sess = types.SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
+    kok = types.SimpleNamespace(sess=sess)
+    return types.SimpleNamespace(
+        _requested_device="cuda:1", _device="cpu", _resolved_device="cpu", _kokoro=kok)
 
 
 def test_engine_actual_card_kokoro_cuda_to_cpu_provider_drop_flags_fell_back():
     # Regression: tier-2 _parse_device(None) returns "auto", not None, so the
     # tier-3 guard `if family is None:` was False and the Kokoro reconcile was
     # unreachable. Fix: guard must be `if family in (None, "auto"):`.
+    #
+    # Also pins #2631 review B3: `_device` here reads 'cuda:1' (the stale
+    # intent) — if `_engine_actual_card` read `_device` before
+    # `_resolved_device`, this would wrongly report family='cuda',
+    # fell_back=False. It must prefer `_resolved_device` ('cpu', the ORT
+    # ground truth) instead.
     card = main._engine_actual_card(_fake_kokoro_cpu_session())
     assert card["family"] == "cpu"
     assert card["index"] is None
@@ -77,6 +110,17 @@ def test_engine_actual_card_kokoro_cuda_resident_no_fallback():
     assert card["family"] == "cuda"
     assert card["index"] is None
     assert card["fell_back"] is False
+
+
+def test_engine_actual_card_kokoro_admitted_cpu_flags_fell_back():
+    # #2631 review B3: an ADMITTED cpu placement (KOKORO_DEVICE=cuda:1, but
+    # the VRAM ledger admitted this load onto cpu under contention) must still
+    # read as cpu/fell_back — the badge fires on "requested cuda, landed cpu"
+    # regardless of WHY it landed there.
+    card = main._engine_actual_card(_fake_kokoro_admitted_cpu_session())
+    assert card["family"] == "cpu"
+    assert card["index"] is None
+    assert card["fell_back"] is True
 
 
 # --- _resident_engines_by_card + _build_gpus_payload (Task 9) ---

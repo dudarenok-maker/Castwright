@@ -160,24 +160,39 @@ check fails on a real dependency gap.
 > review N6).** This box's VRAM ledger (`admit()`, `main.py`) is a genuine
 > `cpu` decision, not just a fallback bug: when no GPU candidate has headroom
 > for Kokoro's footprint, `admit()` returns `{"device": "cpu"}` **by design**,
-> and `_ensure_loaded` correctly honours it — that's the S4 fix this run also
-> covers, working as intended, not a fourth root cause. This sheet is
+> and `_ensure_loaded` correctly honours it — that's the **B1** fix this run
+> also covers (#2631 review S6, corrected: S4 is the unload-restore fix, not
+> the CPU-placement-honouring one), working as intended, not a fourth root
+> cause. This sheet is
 > routinely read with GPU time booked (i.e. the card may be busy with another
 > load, an analyzer, or a concurrent generation at the moment this criterion
 > is run), so a CPU session is an expected outcome under contention, not
 > automatically a repeat of #2534/#2600/#2621's bug. Tell the two apart
 > before filing a fourth root cause:
 > - **Check the card's free VRAM at the moment of the load** (`nvidia-smi` /
->   the sidecar's own `/gpus` payload). If another resident model (analyzer,
->   Coqui, Qwen) left too little headroom for Kokoro's footprint, `cpu` is the
->   correct, by-design outcome — re-run this criterion with the card idle.
-> - **Check the sidecar log around the load.** A by-design admission logs
->   nothing above `log.debug` today (the S4 finding also flags this as too
->   quiet), but the absence of `_directml_selftest_or_fallback`'s WARNING
->   ("Kokoro DirectML self-test failed") and of the kokoro-onnx-auto-detect
->   remediation path both being silent is itself a negative signal — a
->   *genuine* upstream/wiring bug (the #2534/#2600/#2621 shape) usually
->   surfaces there.
+>   the sidecar's own `/capacity` payload, or `/health`'s `gpus[]` — **not**
+>   `/gpus`, which does not exist as its own route: `gpus` is a field inside
+>   `/health`, not a separate endpoint) (#2631 review S6, corrects this bullet's
+>   endpoint name). If another resident model (analyzer, Coqui, Qwen) left too
+>   little headroom for Kokoro's footprint, `cpu` is the correct, by-design
+>   outcome — re-run this criterion with the card idle.
+> - **Check `/health`'s ground truth for the loaded session, not the log**
+>   (#2631 review S6, replacing this bullet — the prior version pointed at two
+>   signals that are structurally silent on an nvidia box: `_directml_selftest_
+>   or_fallback`'s WARNING only fires `if "DmlExecutionProvider" in providers`,
+>   which A36/A37 (nvidia) never build, and the kokoro-onnx-auto-detect
+>   remediation path only fires on an `ImportError`, which a loaded-but-CPU
+>   Kokoro by definition didn't hit — so their absence proves nothing here, and
+>   reading it as "by-design" is backwards in exactly the case this row exists
+>   to catch: #2534, #2600 and #2621 were all silent). Read `/health`'s
+>   `devices.kokoro` — it reports the real ONNX Runtime session providers
+>   (`cuda`/`cpu`), not the env pin, so it can't be fooled by a `_device` that
+>   still says `cuda`. Since #2631's B3 fix, also check `gpus[].resident[]`
+>   for the Kokoro entry's `stale_reason: 'cpu_fallback'` — it fires whenever
+>   `KOKORO_DEVICE`/an admitted pin requested `cuda` and the session actually
+>   landed on `cpu`, which includes the by-design contention case above, so it
+>   corroborates a CPU session rather than distinguishing contention from a
+>   genuine bug on its own — bullets 1 and 3 still make that call.
 > - **Re-run with the card verifiably idle** (no other resident engine, no
 >   concurrent generation). If Kokoro still lands on CPU with KOKORO_DEVICE
 >   unset/cuda and a free card, that is the real criterion failure this row
