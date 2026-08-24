@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import net from 'node:net';
+import { resolveSidecarSweepPort } from './lib/sidecar-sweep-port.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -79,8 +80,13 @@ async function probeAndSweep(port) {
   });
 }
 
+// The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); read the actual
+// owned port from .run/tts.owner.json rather than assuming 9000 — a
+// hardcoded 9000 here would warn about (and stop-app.ps1's sibling would
+// force-kill) a DIFFERENT checkout's sidecar from a worktree (#2632 N27).
+const ttsPort = resolveSidecarSweepPort(runDir);
 const stillListening = [];
-for (const port of [8080, 8443, 9000]) {
+for (const port of [8080, 8443, ttsPort]) {
   if (await probeAndSweep(port)) stillListening.push(port);
 }
 

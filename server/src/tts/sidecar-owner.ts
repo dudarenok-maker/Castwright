@@ -1,14 +1,14 @@
-/* #1030 — single-owner guard for the TTS sidecar (:9000).
+/* #1030 — single-owner guard for the TTS sidecar (LOCAL_TTS_PORT, default :9000).
  *
  * Plan 43 moved sidecar ownership to the Node server, and the srv-15 supervisor
- * kills + respawns any :9000 sidecar it judges "unfit" (stale protocol, prod
- * never-adopt policy, ceiling mismatch, leak-saturated). With ONE server that's
- * correct. With TWO server stacks on DIFFERENT HTTP ports (e.g. `npm start` dev
- * on :8080 + `start:lan` on :8443) the existing EADDRINUSE guard never trips, so
- * both boot and share the one global :9000 — and each sees the OTHER's healthy,
- * in-use sidecar as unfit and replaces it, in an endless kill/respawn loop (the
- * recycle storm: generation stalls because the sidecar is killed out from under
- * an in-flight chapter).
+ * kills + respawns any sidecar on that port it judges "unfit" (stale protocol,
+ * prod never-adopt policy, ceiling mismatch, leak-saturated). With ONE server
+ * that's correct. With TWO server stacks on DIFFERENT HTTP ports (e.g. `npm
+ * start` dev on :8080 + `start:lan` on :8443) the existing EADDRINUSE guard
+ * never trips, so both boot and share the one sidecar port — and each sees
+ * the OTHER's healthy, in-use sidecar as unfit and replaces it, in an
+ * endless kill/respawn loop (the recycle storm: generation stalls because
+ * the sidecar is killed out from under an in-flight chapter).
  *
  * Fix (Option B, mirroring `listenWithAutoRebind`'s EADDRINUSE handling in
  * crash-logging.ts): the owning server drops a note (.run/tts.owner.json)
@@ -46,9 +46,20 @@ let lastWarnedInvalidPort: string | null = null;
 export function resolveSidecarPort(): number {
   const raw = process.env.LOCAL_TTS_PORT;
   if (raw) {
-    const parsed = Number(raw);
+    // #2632 N28 — require a plain decimal-integer spelling before coercing.
+    // Number() silently ACCEPTS non-integer/non-decimal spellings Node
+    // parses fine but the shell launchers (start.ps1/.sh, which take the raw
+    // string as --port) do not: "9010.9" floors to 9010, "0x2386" parses as
+    // 9094, "1e4" as 10000 — all pass the finite/range gate below with NO
+    // log line, unlike "99999". The accepted trade (pass 2, srv-21-style
+    // dedup) is that a Node-vs-launcher divergence is safe because it is
+    // ANNOUNCED at the moment it is created; a silent coercion breaks that
+    // premise. Gating on /^\d+$/ first routes every non-plain-integer
+    // spelling through the same loud invalid-value path "99999" already
+    // takes, restoring the premise without touching the accepted trade.
+    const parsed = /^\d+$/.test(raw) ? Number(raw) : NaN;
     if (Number.isFinite(parsed) && parsed > 0 && parsed < 65536) {
-      return Math.floor(parsed);
+      return parsed;
     }
     // Invalid value — log error once per unique value, then fall back to default (N3 dedup)
     if (raw !== lastWarnedInvalidPort) {

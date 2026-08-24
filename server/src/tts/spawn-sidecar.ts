@@ -8,13 +8,16 @@
    `scripts/stop-app.ps1` reaps it the same as before.
 
    Three early-exit cases:
-     1. autoStart === false           → log and return null.
-     2. port 9000 already listening   → log "skipping spawn" and return null;
-                                        a manual `npm run tts:sidecar`
-                                        keeps working as before.
-     3. spawn fails (no venv, etc.)   → the child exits non-zero; the
-                                        sidecar-health route surfaces the
-                                        failure. We never crash the parent. */
+     1. autoStart === false            → log and return null.
+     2. the resolved port (LOCAL_TTS_PORT, default 9000) already listening
+                                        → log "skipping spawn" and return
+                                          null; a manual `npm run
+                                          tts:sidecar` keeps working as
+                                          before.
+     3. spawn fails (no venv, etc.)    → the child exits non-zero; the
+                                          sidecar-health route surfaces the
+                                          failure. We never crash the
+                                          parent. */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';

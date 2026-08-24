@@ -4536,8 +4536,14 @@ components:
         sidecarUrl:
           type: string
           description: |
-            Overrides the LOCAL_TTS_URL env var. Re-read on every request
-            by the sidecar provider + health probe.
+            Overrides the LOCAL_TTS_URL env var ONLY when explicitly set by
+            the user to a value other than the factory default
+            (http://localhost:9000) — a factory-default value (whether typed
+            by the user or written incidentally by an unrelated settings
+            write) is treated as no choice at all, so it never shadows
+            LOCAL_TTS_URL or the per-checkout LOCAL_TTS_PORT derivation
+            (#2632). Re-read on every request by the sidecar provider +
+            health probe.
         analysisEngine:
           type: string
           enum: [local, gemini]

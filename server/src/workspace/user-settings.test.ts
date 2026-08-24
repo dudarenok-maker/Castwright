@@ -930,6 +930,42 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
   });
 
+  // N21: a trailing slash or a case change on the factory-default LOCAL_TTS_URL
+  // must still be treated as a non-choice — otherwise it beats port derivation
+  // and the server spawns its own sidecar on LOCAL_TTS_PORT while talking to
+  // whatever else holds :9000 (the exact split #2632/N1 exists to prevent).
+  it('N21: trailing-slash factory-default LOCAL_TTS_URL is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://localhost:9000/';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N21: case-varied factory-default LOCAL_TTS_URL is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://LOCALHOST:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N21: trailing-slash factory-default sidecarUrl setting is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://localhost:9000/' });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N21: case-varied factory-default sidecarUrl setting is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://LOCALHOST:9000' });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
   // N2/B3: sidecarUrl requires BOTH key-present AND value-different (not just key-present)
   it('B3 regression: sidecarUrl at factory default (written by unrelated writer) loses to port derivation', () => {
     // Reproduces B3: an unrelated writer (e.g., writeSetupCompletedAt) writes the complete merged
@@ -1025,6 +1061,40 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
+      expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('from user settings'))).toBe(true);
+      expect(messages.some((m) => m.includes('from LOCAL_TTS_URL'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // N26: _resetUserSettingsCache() must clear BOTH srv-21 warn-dedup latches,
+  // or a rejected value that was already warned about in an earlier test (or
+  // an earlier call in the same test) silently gets zero warnings after a
+  // reset — a suppressed-warning bug that would read as a passing dedupe test.
+  it('N26: _resetUserSettingsCache() clears both warn-dedup latches so a repeated rejected value warns again', () => {
+    const evilUrl = 'http://evil.example.com:9000';
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = evilUrl;
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: evilUrl });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // First resolution latches both dedupe variables and warns for both sources.
+      expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      warnSpy.mockClear();
+
+      // Without a reset, the identical rejected value would warn zero more
+      // times here (that's the dedupe working as intended, not this bug).
+      // A reset should behave as if nothing was ever latched.
+      _resetUserSettingsCache();
+      _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: evilUrl });
+      _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
       expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
       const messages = warnSpy.mock.calls.map((call) => String(call[0]));
       expect(messages.some((m) => m.includes('from user settings'))).toBe(true);

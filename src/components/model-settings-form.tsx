@@ -180,7 +180,10 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
 
   /* srv-21 — block Save on a sidecar URL that isn't an http(s) private/loopback
      host (prevents pointing the server's outbound fetches at an arbitrary
-     remote). Empty is allowed (falls back to the server default). */
+     remote). NOTE: an empty value is NOT actually allowed — the settings
+     schema requires sidecarUrl to be non-empty (#2632 N22), so this check's
+     blank-string carve-out never reaches Save in practice; it exists only so
+     an in-progress clear doesn't flash the invalid-URL error while typing. */
   const sidecarUrlInvalid = sidecarUrl.trim() !== '' && !isPrivateHostUrl(sidecarUrl);
 
   const dirty = useMemo(() => {
@@ -464,7 +467,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       <SettingsSection group={GROUP_SERVER_CONFIG} overriddenCount={0}>
         <FieldRow
           label="Voice engine URL"
-          sublabel="Local voice engine endpoint. Leave blank to use this checkout's LOCAL_TTS_PORT (default http://localhost:9000)."
+          sublabel="Local voice engine endpoint. Defaults to this checkout's own sidecar (derived from LOCAL_TTS_PORT, shown below as http://localhost:9000). Only change this to point at a different sidecar — do not leave it blank; an empty value fails validation and discards the whole save."
         >
           <input
             type="text"

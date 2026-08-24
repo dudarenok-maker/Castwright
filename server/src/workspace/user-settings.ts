@@ -488,6 +488,18 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
     If LOCAL_TTS_URL equals this, treat it as a non-choice and let port derivation win (#2632 N1). */
 const DEFAULT_LOCAL_TTS_URL = 'http://localhost:9000';
 
+/** Normalises a sidecar URL for default-vs-explicit-choice comparisons only
+    (#2632 N21) — strips the same trailing slash(es) the function's own return
+    path already strips (`raw.replace(/\/+$/, '')` below), and lowercases, so
+    "http://localhost:9000/" and "http://LOCALHOST:9000" still compare equal to
+    the canonical default. Without this, a spelling that is the factory default
+    in every sense but one beat port derivation and reinstated the spawn-here /
+    talk-there split #2632/N1 exists to prevent. Comparison-only: the returned
+    URL itself keeps its original casing, only the trailing slash is stripped. */
+function normalizeSidecarUrlForCompare(raw: string): string {
+  return raw.replace(/\/+$/, '').toLowerCase();
+}
+
 export function getResolvedSidecarUrl(): string {
   const c = cached;
 
@@ -503,7 +515,11 @@ export function getResolvedSidecarUrl(): string {
   //    file, writeUserSettings sets sentKeys alongside the value), so today the key check is
   //    belt-and-braces rather than load-bearing — kept as defence-in-depth in case a future writer
   //    sets the value without the key, and cheap to keep either way.
-  if (c?.sidecarUrl && wasKeyExplicitlySet('sidecarUrl') && c.sidecarUrl !== DEFAULT_USER_SETTINGS.sidecarUrl) {
+  if (
+    c?.sidecarUrl &&
+    wasKeyExplicitlySet('sidecarUrl') &&
+    normalizeSidecarUrlForCompare(c.sidecarUrl) !== normalizeSidecarUrlForCompare(DEFAULT_USER_SETTINGS.sidecarUrl)
+  ) {
     const raw = c.sidecarUrl;
     if (isPrivateHostUrl(raw)) {
       return raw.replace(/\/+$/, '');
@@ -521,7 +537,10 @@ export function getResolvedSidecarUrl(): string {
   // 2. Check LOCAL_TTS_URL env var — but only if it's NOT the default value (#2632 N1).
   //    A DEFAULT-valued LOCAL_TTS_URL is indistinguishable from unset, so don't let it
   //    shadow the per-worktree port derivation. A non-default value is an explicit choice.
-  if (process.env.LOCAL_TTS_URL && process.env.LOCAL_TTS_URL !== DEFAULT_LOCAL_TTS_URL) {
+  if (
+    process.env.LOCAL_TTS_URL &&
+    normalizeSidecarUrlForCompare(process.env.LOCAL_TTS_URL) !== normalizeSidecarUrlForCompare(DEFAULT_LOCAL_TTS_URL)
+  ) {
     const raw = process.env.LOCAL_TTS_URL;
     /* srv-21 guard — refuse non-private hosts to block SSRF */
     if (isPrivateHostUrl(raw)) {
@@ -887,6 +906,11 @@ export function _resetUserSettingsCache(): void {
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
+  // #2632 N26: clear both srv-21 warn-dedup latches too, or a later test that
+  // reuses a rejected value a prior test already latched gets ZERO warnings —
+  // and would misread as a passing dedupe test rather than a suppressed one.
+  lastWarnedSidecarUrl = null;
+  lastWarnedEnvSidecarUrl = null;
 }
 
 /** Test-only: seed the in-process cache with a partial override atop

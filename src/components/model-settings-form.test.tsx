@@ -125,3 +125,17 @@ describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
     });
   });
 });
+
+describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+  });
+
+  it('never instructs the user to leave the field blank — sidecarUrl is required by the schema and blank 400s the whole save', async () => {
+    renderForm();
+    const input = await screen.findByTestId('account-sidecar-url');
+    const fieldText = input.closest('label')?.textContent ?? '';
+    expect(fieldText.toLowerCase()).not.toMatch(/leave blank/);
+  });
+});

@@ -109,9 +109,55 @@ describe('resolveSidecarPort', () => {
     logSpy.mockRestore();
   });
 
-  it('floors floating-point LOCAL_TTS_PORT values', () => {
+  // #2632 N28: a coerced-but-not-plain-integer LOCAL_TTS_PORT used to be
+  // silently accepted (Number('9010.9') floors to 9010 with no log line),
+  // unlike "99999" — but the shell launchers take the raw string as --port
+  // and reject "9010.9" outright, so the operator got "sidecar not
+  // reachable" with nothing pointing at the cause. Same class for hex
+  // ("0x2386" -> 9094) and scientific notation ("1e4" -> 10000): all three
+  // now take the same loud invalid-value path "99999" already did.
+  it('N28: rejects a floating-point LOCAL_TTS_PORT and logs, rather than silently flooring it', () => {
     process.env.LOCAL_TTS_PORT = '9010.9';
-    expect(resolveSidecarPort()).toBe(9010);
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(resolveSidecarPort()).toBe(9000);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="9010.9"'));
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('N28: rejects a hex-spelled LOCAL_TTS_PORT and logs, rather than silently coercing it', () => {
+    process.env.LOCAL_TTS_PORT = '0x2386';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(resolveSidecarPort()).toBe(9000);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="0x2386"'));
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('N28: rejects a scientific-notation LOCAL_TTS_PORT and logs, rather than silently coercing it', () => {
+    process.env.LOCAL_TTS_PORT = '1e4';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(resolveSidecarPort()).toBe(9000);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid LOCAL_TTS_PORT="1e4"'));
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('accepts a plain decimal-integer LOCAL_TTS_PORT with no log line', () => {
+    process.env.LOCAL_TTS_PORT = '9010';
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(resolveSidecarPort()).toBe(9010);
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
 

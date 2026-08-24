@@ -9,6 +9,8 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
 $runDir = Join-Path $repoRoot ".run"
 
+Import-Module (Join-Path $PSScriptRoot "lib\sidecar-sweep-port.psm1") -Force
+
 function Write-Status($msg) { try { Write-Host $msg } catch {} }
 
 $names = @("frontend", "server", "tts")
@@ -33,7 +35,12 @@ foreach ($name in $names) {
 
 # Belt-and-braces: kill any orphaned listeners on our ports. :8443 is the LAN
 # HTTPS port (LAN_HTTPS=1 in server/.env or npm run dev:lan) — sweep it too.
-$ports = @(5173, 8080, 8443, 9000)
+# The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); read the actual
+# owned port from .run\tts.owner.json rather than assuming 9000 — a hardcoded
+# 9000 here would force-kill a DIFFERENT checkout's sidecar from a worktree
+# (#2632 N27).
+$ttsPort = Get-SidecarSweepPort -RunDir $runDir
+$ports = @(5173, 8080, 8443, $ttsPort)
 $conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
 if ($conns) {
     foreach ($c in $conns) {
