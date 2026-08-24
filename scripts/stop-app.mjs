@@ -12,7 +12,12 @@ import { resolveSidecarSweepPort } from './lib/sidecar-sweep-port.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
-const runDir = resolve(repoRoot, '.run');
+// Mirror server/src/app-dirs.ts's resolveRunDir(): honour APP_RUN_DIR (the
+// versioned-install layout, fs-1) so this sweep looks in the SAME .run/ the
+// server actually wrote its owner note to, rather than always <repoRoot>/.run
+// (#2632 N29).
+const runDir = process.env.APP_RUN_DIR ? resolve(process.env.APP_RUN_DIR) : resolve(repoRoot, '.run');
+const serverEnvPath = resolve(repoRoot, 'server', '.env');
 
 const isWindows = process.platform === 'win32';
 
@@ -81,12 +86,15 @@ async function probeAndSweep(port) {
 }
 
 // The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); read the actual
-// owned port from .run/tts.owner.json rather than assuming 9000 — a
-// hardcoded 9000 here would warn about (and stop-app.ps1's sibling would
-// force-kill) a DIFFERENT checkout's sidecar from a worktree (#2632 N27).
-const ttsPort = resolveSidecarSweepPort(runDir);
+// owned port from .run/tts.owner.json, falling back to this checkout's own
+// server/.env, rather than assuming 9000 — a hardcoded 9000 here would warn
+// about (and stop-app.ps1's sibling would force-kill) a DIFFERENT checkout's
+// sidecar from a worktree (#2632 N27/N29). When neither source yields a
+// port, skip sweeping the TTS port entirely rather than guessing 9000.
+const ttsPort = resolveSidecarSweepPort(runDir, serverEnvPath);
 const stillListening = [];
-for (const port of [8080, 8443, ttsPort]) {
+const portsToSweep = ttsPort ? [8080, 8443, ttsPort] : [8080, 8443];
+for (const port of portsToSweep) {
   if (await probeAndSweep(port)) stillListening.push(port);
 }
 

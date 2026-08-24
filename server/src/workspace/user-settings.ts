@@ -477,9 +477,12 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
 }
 
 /** Synchronous resolver: returns sidecarUrl with per-worktree port support (#2632).
-    Precedence (per openapi.yaml:4539 — sidecarUrl "Overrides the LOCAL_TTS_URL"):
+    Precedence (per openapi.yaml:4539 — sidecarUrl "Overrides the LOCAL_TTS_URL env
+    var ONLY when explicitly set by the user to a value other than the factory
+    default"; #2632 N23 — a factory-default value is no choice at all, whether
+    typed by the user or written incidentally by an unrelated settings write):
     1. Cached sidecarUrl if user explicitly set it (not the factory default) — highest priority
-    2. LOCAL_TTS_URL env var (dynamic override)
+    2. LOCAL_TTS_URL env var, itself only if non-default (dynamic override, #2632 N1)
     3. Derived from LOCAL_TTS_PORT env var (per-worktree isolation)
     4. Derived from default 9000 fallback
 
