@@ -166,7 +166,9 @@ class _ProvidersKokoro:
 
 @pytest.fixture
 def providers_kokoro_module(monkeypatch):
-    """A kokoro_onnx whose Kokoro accepts providers=."""
+    """A kokoro_onnx stub supporting the from_session() path (see
+    _ProvidersKokoro above — its constructor deliberately rejects providers=,
+    matching the real kokoro_onnx==0.5.0 signature)."""
     fake_mod = types.ModuleType("kokoro_onnx")
     fake_mod.Kokoro = _ProvidersKokoro  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
@@ -177,7 +179,9 @@ def test_kokoro_honours_injected_ort_providers(
     providers_kokoro_module, fake_weight_files, monkeypatch
 ) -> None:
     """KOKORO_ORT_PROVIDERS (the server's accelerator-profile injection) is
-    passed straight through to the Kokoro constructor."""
+    used to build the ORT InferenceSession, which is then handed to
+    Kokoro.from_session() — not passed as a providers= kwarg to the Kokoro
+    constructor, which kokoro_onnx==0.5.0 doesn't accept."""
     from unittest.mock import MagicMock, patch
 
     # Hermetic: an ambient KOKORO_DEVICE (e.g. cuda:1) would fold a device_id
@@ -526,6 +530,58 @@ def test_kokoro_uses_from_session_when_providers_specified(
         assert engine._kokoro is not None
 
 
+def test_kokoro_cpu_admission_device_overrides_injected_cuda_providers(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2631 review B1: a capacity-ledger CPU placement decision must win over
+    whatever provider list the server injected. The server (spawn-sidecar.ts)
+    sets KOKORO_ORT_PROVIDERS unconditionally on every spawn -- CUDA on the
+    nvidia profile -- so `_ensure_loaded(..., device="cpu")` (the shape the
+    VRAM-admission caller uses when the ledger refuses the GPU) must not let
+    that injected list put the session on CUDA anyway. Before the fix,
+    `providers = self._resolve_ort_providers() or self._default_ort_providers()`
+    ignored the device= argument entirely and always took the injected CUDA
+    list."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+    monkeypatch.setenv(
+        "KOKORO_ORT_PROVIDERS", '["CUDAExecutionProvider", "CPUExecutionProvider"]'
+    )
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    class _AdmissionCpuKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _AdmissionCpuKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1", device="cpu")
+
+        mock_ort_session_class.assert_called_once()
+        assert mock_ort_session_class.call_args[1]["providers"] == ["CPUExecutionProvider"]
+        assert "CUDAExecutionProvider" not in mock_ort_session_class.call_args[1]["providers"]
+
+
 def test_kokoro_importerror_remediation_is_profile_aware(
     fake_weight_files, monkeypatch
 ) -> None:
@@ -576,7 +632,6 @@ class _DmlKokoro:
     ) -> "_DmlKokoro":
         """Support from_session classmethod for the fixed code path."""
         instance = cls.__new__(cls)
-        instance.providers = None  # from_session doesn't have providers info
         instance.create_calls = 0
         instance._voices = list(_FAKE_VOICE_MANIFEST)
         type(instance).instances.append(instance)

@@ -3274,7 +3274,20 @@ class KokoroEngine(Engine):
         # accept a providers= kwarg in version 0.5.0 (upstream limitation),
         # and letting kokoro-onnx pick providers on its own is exactly the
         # bug we're avoiding.
-        providers = self._resolve_ort_providers() or self._default_ort_providers()
+        # CPU intent must win over the provider list regardless of where that
+        # list came from (#2631 review B1). The server injects
+        # KOKORO_ORT_PROVIDERS unconditionally on every spawn -- CUDA on the
+        # nvidia profile -- and `_default_ort_providers` only fires when that
+        # env is unset; neither is a device decision. `self._requested_device`
+        # already folds in both the admitted `device=` argument (the VRAM
+        # ledger's placement) and KOKORO_DEVICE, so resolving it FIRST and
+        # short-circuiting to CPU-only here is the single point that makes a
+        # CPU decision authoritative over an injected/derived provider list.
+        family, _ = _parse_device(self._requested_device)
+        if family == "cpu":
+            providers = ["CPUExecutionProvider"]
+        else:
+            providers = self._resolve_ort_providers() or self._default_ort_providers()
         # Indexed CUDA pin (KOKORO_DEVICE=cuda:1): resolved BEFORE the
         # initial build so it can be folded into that single build, rather
         # than building once unpinned (implicitly landing on CUDA device_id
@@ -9448,9 +9461,13 @@ def _normalize_device_family(raw: Optional[str], torch_module: Any = None) -> Op
 
 
 def _predict_kokoro_device(ort_module: Any) -> Optional[str]:
-    """Mirror kokoro-onnx's auto-selection from the available EPs: DirectML →
-    directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a broken/absent
-    onnxruntime (→ cpu)."""
+    """Predict which device family Kokoro would land on, from ORT's own
+    reported available providers -- NOT kokoro-onnx's own auto-selection,
+    which is broken upstream (its `find_spec("onnxruntime-gpu")` check is not
+    a valid module identifier, always resolves to None, and so always forces
+    CPU regardless of what hardware is present; see `_default_ort_providers`).
+    DirectML → directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a
+    broken/absent onnxruntime (→ cpu)."""
     try:
         providers = list(ort_module.get_available_providers())
     except Exception:
