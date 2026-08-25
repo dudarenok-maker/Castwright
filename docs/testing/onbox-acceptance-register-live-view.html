@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">68</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">69</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -190,7 +190,18 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-26 (#2584/#2570 fix, PR #2640), 67 → 68.</b> New row
+    <b>Last change: 2026-08-26 (<a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a>, successor to closed <a href="https://github.com/dudarenok-maker/Castwright/issues/1976">#1976</a>/<a href="https://github.com/dudarenok-maker/Castwright/issues/1996">#1996</a>), 68 → 69.</b>
+    New row <b>A46</b> added — the 2026-08-25 idle-gated VRAM measurement
+    narrowed the "stranded" pool to look like the Qwen Base 0.6B + Whisper
+    resident-model floor, but never captured <code>allocated</code> right
+    after an explicit unload to confirm that, so it can't rule out a genuine
+    leak underneath. #1976 and #1996 were closed as <code>not planned</code>
+    (superseded, not fixed) to declutter their accreted measurement history;
+    #2656 carries the actual remaining work and this row.
+  </div>
+
+  <div class="callout warn">
+    <b>Prior change: 2026-08-26 (#2584/#2570 fix, PR #2640), 67 → 68.</b> New row
     <b>A45</b> added — PR #2640's <code>stripEstablishedAsciiRewrites</code> fix is proven at the
     unit/route level but still owes a real re-analysis of <span lang="ru">Заказ Коалфолла</span>
     against its existing <code>cast-id-history.json</code>; see
@@ -237,7 +248,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>45</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>46</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -253,7 +264,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">45 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">46 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -897,6 +908,19 @@
           <li>If the raw analyzer output still mints a different id this run, confirm any recorded <code>cast-id-history.json</code> entry names the correct direction (fresh id superseded by the established one), not the reverse.</li>
         </ul>
         <p class="src">The real workspace book above and a real analyzer (local Ollama or Gemini) — no GPU/TTS sidecar required, since this is an analysis-only defect · <a href="https://github.com/dudarenok-maker/Castwright/issues/2584">#2584</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2640">PR #2640</a> · criteria in <code>cast-id-drift-onbox-acceptance.md</code> §10 · short — one full re-analysis of an already-imported book</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">A46</span><span class="iname">Stranded VRAM after a chapter render — resident-model floor or genuine leak?</span><span class="risk">single or dual GPU box, real render</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The 2026-08-25 idle-gated measurement (<code>docs/testing/1996-stranded-vram-measurement.md</code> @ <code>218cc562</code>, on <code>fix/sidecar-1996-idle-vram-measurement</code>, unmerged) found the ~5.45 GB <code>allocated</code> after a chapter render is byte-identical across a confirmed-idle 21 s window, and <code>/debug/reclaim</code> recovers only 6.4% of <code>reserved</code> — neither a self-heal, nor uncollected cache, nor fragmentation. At the idle point, <code>qwen.base_loaded=true</code> (Qwen Base 0.6B has <b>no idle TTL</b> — button-driven, evicts only on explicit <code>/unload</code>) and <code>whisper.model_loaded=true</code> (120 s TTL, only 21 s elapsed). That reading is consistent with "this is just the two resident models' own live weights, not a leak" — but the run never captured what <code>allocated</code> looks like <i>after</i> those models are actually unloaded, so it cannot rule out a genuine leak sitting on top of that floor. Nothing in any existing log or prior measurement attempt (including the original #1976 report, predating the <code>/debug/memory</code> diagnostics) contains this reading — it does not exist yet at any recorded point in this repo's history. <a href="https://github.com/dudarenok-maker/Castwright/issues/1976">#1976</a> and <a href="https://github.com/dudarenok-maker/Castwright/issues/1996">#1996</a> were closed as <code>not planned</code> (superseded, not fixed) to declutter their accreted measurement history; this row and <a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a> carry the actual remaining work.</p>
+        <ul>
+          <li>Reproduce P2/P3 from the linked run sheet: render a chapter, confirm the box idle (poll <code>inflight_synth</code>, not a fixed wall-clock).</li>
+          <li><b>New step:</b> issue <code>POST /unload {qwen}</code> and confirm/force Whisper past its <code>ASR_IDLE_TTL</code>, then read <code>/debug/memory</code> again.</li>
+          <li>Diff that post-unload <code>allocated</code>/<code>reserved</code> against the P3 baseline already on record for this box's device. Drops to near-zero (matching Qwen Base 0.6B + Whisper's known weight sizes) → the resident floor fully explains #1976's original "stranded" report; no lever ever needed, close #2656 as working-as-intended and correct #1976/#1996's language for the record. Residual gap remains → that gap is a genuine leak, needs its own root-cause pass in the placement/eviction code.</li>
+        </ul>
+        <p class="src">A live sidecar with Qwen Base 0.6B and Whisper both resident, and the ability to force an explicit <code>/unload</code> + TTL lapse mid-session · <a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a> · criteria: extend <code>docs/testing/1996-stranded-vram-measurement.md</code>, don't replace it · short — one idle render, one explicit unload, one reading</p>
       </div>
     </details>
 
