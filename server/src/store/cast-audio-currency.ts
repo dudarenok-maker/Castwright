@@ -46,7 +46,7 @@
    'unknown' list: ANY tier — not only `'normalised-id'` — additionally reads
    `false`, never vacuously `true` or `'unknown'`, when its segment recorded
    `renderedFallbackCharacterId` (render-time narrator substitution; register
-   row A32). Originally added (fix round, PR #2244 review gate, F1) checking
+   row A29). Originally added (fix round, PR #2244 review gate, F1) checking
    only inside the `'normalised-id'` branch; round 2's review gate found the
    identical fail-open one tier over — nothing bumps `history.seq` when the
    live roster changes underneath an already-matched alias, so a marker
@@ -149,7 +149,7 @@ export function isAudioCurrent(
   /* `'normalised-id'` has no history entry, so there is no marker to compare
      against. Its hazard is different in kind: the render may predate the
      four-tier resolver EXISTING (pre-Wave-1 `resolveGroup` did a bare
-     `castById.get()` and substituted the narrator). Per register row A32 that
+     `castById.get()` and substituted the narrator). Per register row A29 that
      is `the-torment` (67 segments) and `lightning-dave` (1) — 68 of the 188
      known damaged segments. The substitution case for THIS tier is now
      caught by the hoisted check above; a finite stamp with no substitution

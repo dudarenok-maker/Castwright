@@ -1028,26 +1028,29 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    output has been observed looking entirely genuine — real timings, real test
    counts — while gating nothing. If it matters, run
    `npm run verify:fast:branch` by hand.
-5. **Create `server/.env`** with its own `PORT` and `WORKSPACE_DIR`, **and** a
-   root **`.env.local`** with matching `VITE_PORT` / `VITE_API_PORT` / `PORT`.
+5. **Create `server/.env`** with its own `PORT`, `WORKSPACE_DIR`, **and `LOCAL_TTS_PORT`**,
+   **and** a root **`.env.local`** with matching `VITE_PORT` / `VITE_API_PORT` / `PORT`.
    Both halves are required: `vite.config.ts` resolves its API-proxy target
    from `VITE_API_PORT ?? PORT`, falling back to `8080` (no `strictPort`)
    when neither is set — so a worktree with only `server/.env` filled in gets
    a frontend that silently proxies `/api` to whatever's already listening on
    `:8080` (typically the primary checkout's server and workspace) while its
-   own correctly-isolated server sits idle. A tool-made worktree
-   (`EnterWorktree`, Agent `isolation: "worktree"`) never has this file —
-   only `scripts/wt-new.mjs` writes one, and it's git-ignored — so this step
-   doesn't error when skipped, it just silently breaks isolation. Pick an
+   own correctly-isolated server sits idle. `LOCAL_TTS_PORT` in `server/.env`
+   isolates the TTS sidecar to a per-worktree port (#2632), so multiple
+   worktrees can run sidecars concurrently without port conflict. A tool-made
+   worktree (`EnterWorktree`, Agent `isolation: "worktree"`) never has this
+   file — only `scripts/wt-new.mjs` writes it, and it's git-ignored — so this
+   step doesn't error when skipped, it just silently breaks isolation. Pick an
    unused slot N (mirroring `scripts/wt-new.mjs`'s own `BASE_PORTS`/
    `PORT_STEP`) and step each port by `10 × N` off its own base —
-   `VITE_PORT` off `5173`, `PORT`/`VITE_API_PORT` off `8080` — e.g. slot 1 is
-   `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`. Set all three in
-   `.env.local` and `PORT` in `server/.env`, and point `WORKSPACE_DIR`
-   at a directory this worktree alone owns (e.g.
-   `../castwright-workspace-<slug>`, relative to `server/`) so two servers
-   never share one `cast.json`/`state.json`. Do not copy the primary
-   checkout's `server/.env` wholesale — that would leak secrets like
+   `VITE_PORT` off `5173`, `PORT`/`VITE_API_PORT` off `8080`, `LOCAL_TTS_PORT`
+   off `9000` — e.g. slot 1 is `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
+   `LOCAL_TTS_PORT=9010`. Set `VITE_PORT`, `VITE_API_PORT`, and `PORT` — all
+   three — in `.env.local`; separately, set `PORT` **and `LOCAL_TTS_PORT`** in
+   `server/.env`. Point `WORKSPACE_DIR` at a directory this worktree
+   alone owns (e.g. `../castwright-workspace-<slug>`, relative to `server/`)
+   so two servers never share one `cast.json`/`state.json`. Do not copy the
+   primary checkout's `server/.env` wholesale — that would leak secrets like
    `GEMINI_API_KEY` into the worktree (#2345); `.env.local` carries no
    secrets, so writing it from scratch is fine.
 

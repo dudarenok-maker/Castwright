@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
+import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
   resolveUserSettingsPath,
   USER_SETTINGS_PATH,
@@ -340,6 +341,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 };
 
 let cached: UserSettings | null = null;
+/** Track which keys were explicitly in the persisted JSON file, vs. filled from defaults.
+    Used by getResolvedSidecarUrl() to distinguish "user explicitly set this to the default value"
+    from "this field was never in the file and is using the default" (#2632 N2). */
+let explicitlySetKeys: Set<string> = new Set();
 let writeChain: Promise<unknown> = Promise.resolve();
 
 /** Reads from disk; falls back to defaults when the file is missing or
@@ -355,8 +360,12 @@ export async function readUserSettings(): Promise<UserSettings> {
   const raw = await readJson<unknown>(USER_SETTINGS_PATH);
   if (!raw) {
     cached = { ...DEFAULT_USER_SETTINGS };
+    explicitlySetKeys = new Set();
     return cached;
   }
+  // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
+  explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
+
   const migrated = migrateLegacyEagerLoadFields(raw);
   if (migrated !== raw) {
     await writeJsonAtomic(USER_SETTINGS_PATH, migrated).catch((err) => {
@@ -375,6 +384,14 @@ export async function readUserSettings(): Promise<UserSettings> {
     upstream to warm the cache. */
 export function getCachedUserSettings(): UserSettings {
   return cached ?? { ...DEFAULT_USER_SETTINGS };
+}
+
+/** Check whether a key was explicitly present in the persisted settings file.
+    Used by getResolvedSidecarUrl() to distinguish "user set this to the default value"
+    from "this field was never in the file" (#2632 N2). Returns false if readUserSettings()
+    hasn't been called yet. */
+export function wasKeyExplicitlySet(key: string): boolean {
+  return explicitlySetKeys.has(key);
 }
 
 const patchSchema = userSettingsSchema.partial();
@@ -417,6 +434,10 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     }
     await writeJsonAtomic(USER_SETTINGS_PATH, merged);
     cached = merged;
+    // Track that sentKeys are now explicitly set in the file (#2632 N2)
+    for (const key of sentKeys) {
+      explicitlySetKeys.add(key);
+    }
     return merged;
   });
   writeChain = next.catch(() => undefined);
@@ -455,34 +476,99 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
   return out;
 }
 
-/** Synchronous resolver: returns sidecarUrl from the in-memory user-settings
-    cache, falling back to the LOCAL_TTS_URL env var, then
-    DEFAULT_USER_SETTINGS.sidecarUrl. Strips trailing slashes for
-    consistency with prior call-site behaviour. The final fallback comes
-    from the same defaults document that seeds a fresh user-settings.json
-    — one source of truth, no duplicated URL literals. */
+/** Synchronous resolver: returns sidecarUrl with per-worktree port support (#2632).
+    Precedence (per openapi.yaml:4539 — sidecarUrl "Overrides the LOCAL_TTS_URL env
+    var ONLY when explicitly set by the user to a value other than the factory
+    default"; #2632 N23 — a factory-default value is no choice at all, whether
+    typed by the user or written incidentally by an unrelated settings write):
+    1. Cached sidecarUrl if user explicitly set it (not the factory default) — highest priority
+    2. LOCAL_TTS_URL env var, itself only if non-default (dynamic override, #2632 N1)
+    3. Derived from LOCAL_TTS_PORT env var (per-worktree isolation)
+    4. Derived from default 9000 fallback
+
+    Strips trailing slashes for consistency with prior call-site behaviour. */
+/** Default value for LOCAL_TTS_URL in server/.env — indistinguishable from unset.
+    If LOCAL_TTS_URL equals this, treat it as a non-choice and let port derivation win (#2632 N1). */
+const DEFAULT_LOCAL_TTS_URL = 'http://localhost:9000';
+
+/** Normalises a sidecar URL for default-vs-explicit-choice comparisons only
+    (#2632 N21) — strips the same trailing slash(es) the function's own return
+    path already strips (`raw.replace(/\/+$/, '')` below), and lowercases, so
+    "http://localhost:9000/" and "http://LOCALHOST:9000" still compare equal to
+    the canonical default. Without this, a spelling that is the factory default
+    in every sense but one beat port derivation and reinstated the spawn-here /
+    talk-there split #2632/N1 exists to prevent. Comparison-only: the returned
+    URL itself keeps its original casing, only the trailing slash is stripped. */
+function normalizeSidecarUrlForCompare(raw: string): string {
+  return raw.replace(/\/+$/, '').toLowerCase();
+}
+
 export function getResolvedSidecarUrl(): string {
   const c = cached;
-  const raw = c?.sidecarUrl ?? process.env.LOCAL_TTS_URL ?? DEFAULT_USER_SETTINGS.sidecarUrl;
-  /* srv-21 — the sidecar is always local; refuse to fetch from a non-private
-     host. A misconfigured/hostile sidecarUrl (set via the UI/API) would
-     otherwise turn every server→sidecar fetch into an SSRF. Fall back to the
-     factory default rather than throwing so a bad value can't wedge the server.
-     The frontend blocks saving such a value too (src/lib/sidecar-url.ts). */
-  if (!isPrivateHostUrl(raw)) {
+
+  // 1. Check cached sidecarUrl — if user explicitly set it, use it (highest priority).
+  //    Requires BOTH: (1) key is present on disk (wasKeyExplicitlySet), AND (2) value differs
+  //    from factory default. Key-presence alone is unreliable: all settings writers persist the
+  //    complete merged object, so unrelated writes (e.g., writeSetupCompletedAt) write sidecarUrl
+  //    at the default, making presence a false signal of user choice (#2632 N2 / B3).
+  //    Value-difference alone was the old sentinel that failed when user explicitly picked :9000,
+  //    and still does: that one case (a user who deliberately picks http://localhost:9000) remains
+  //    mis-served on this head, tracked at #2639. In every production state checked so far,
+  //    value-difference already implies key-presence (readUserSettings derives both from the same
+  //    file, writeUserSettings sets sentKeys alongside the value), so today the key check is
+  //    belt-and-braces rather than load-bearing — kept as defence-in-depth in case a future writer
+  //    sets the value without the key, and cheap to keep either way.
+  if (
+    c?.sidecarUrl &&
+    wasKeyExplicitlySet('sidecarUrl') &&
+    normalizeSidecarUrlForCompare(c.sidecarUrl) !== normalizeSidecarUrlForCompare(DEFAULT_USER_SETTINGS.sidecarUrl)
+  ) {
+    const raw = c.sidecarUrl;
+    if (isPrivateHostUrl(raw)) {
+      return raw.replace(/\/+$/, '');
+    }
+    /* Non-private user URL fails srv-21 guard */
     if (raw !== lastWarnedSidecarUrl) {
       lastWarnedSidecarUrl = raw;
       console.warn(
-        `[srv-21] Ignoring non-local sidecar URL ${JSON.stringify(raw)} — ` +
-          `falling back to ${DEFAULT_USER_SETTINGS.sidecarUrl}. The sidecar must run on a ` +
-          `loopback/private host.`,
+        `[srv-21] Ignoring non-local sidecar URL from user settings ${JSON.stringify(raw)} — ` +
+          `falling back to LOCAL_TTS_URL or derived URL. The sidecar must run on a loopback/private host.`,
       );
     }
-    return DEFAULT_USER_SETTINGS.sidecarUrl.replace(/\/+$/, '');
   }
-  return raw.replace(/\/+$/, '');
+
+  // 2. Check LOCAL_TTS_URL env var — but only if it's NOT the default value (#2632 N1).
+  //    A DEFAULT-valued LOCAL_TTS_URL is indistinguishable from unset, so don't let it
+  //    shadow the per-worktree port derivation. A non-default value is an explicit choice.
+  if (
+    process.env.LOCAL_TTS_URL &&
+    normalizeSidecarUrlForCompare(process.env.LOCAL_TTS_URL) !== normalizeSidecarUrlForCompare(DEFAULT_LOCAL_TTS_URL)
+  ) {
+    const raw = process.env.LOCAL_TTS_URL;
+    /* srv-21 guard — refuse non-private hosts to block SSRF */
+    if (isPrivateHostUrl(raw)) {
+      return raw.replace(/\/+$/, '');
+    }
+    if (raw !== lastWarnedEnvSidecarUrl) {
+      lastWarnedEnvSidecarUrl = raw;
+      console.warn(
+        `[srv-21] Ignoring non-local sidecar URL from LOCAL_TTS_URL ${JSON.stringify(raw)} — ` +
+          `falling back to derived URL. The sidecar must run on a loopback/private host.`,
+      );
+    }
+  }
+
+  // 3. Derive from LOCAL_TTS_PORT (per-worktree port isolation, #2632)
+  const port = resolveSidecarPort();
+  return `http://localhost:${port}`;
 }
 let lastWarnedSidecarUrl: string | null = null;
+/* Separate from lastWarnedSidecarUrl (#2632 N19) — the two srv-21 rejection
+   sites above (user settings sidecarUrl, LOCAL_TTS_URL) must dedupe
+   independently, or an identical rejected value on both sources latches the
+   first site's variable and silently suppresses the second site's warning,
+   which names a different source in its log line. */
+let lastWarnedEnvSidecarUrl: string | null = null;
 
 /** Same fallback chain as getResolvedSidecarUrl, but for the local Ollama
     daemon: cached user-settings → OLLAMA_URL env → DEFAULT_USER_SETTINGS. */
@@ -819,9 +905,15 @@ export async function clearAllConfigOverrides(): Promise<void> {
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
 export function _resetUserSettingsCache(): void {
   cached = null;
+  explicitlySetKeys = new Set(); // Reset tracked keys alongside cached settings
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
+  // #2632 N26: clear both srv-21 warn-dedup latches too, or a later test that
+  // reuses a rejected value a prior test already latched gets ZERO warnings —
+  // and would misread as a passing dedupe test rather than a suppressed one.
+  lastWarnedSidecarUrl = null;
+  lastWarnedEnvSidecarUrl = null;
 }
 
 /** Test-only: seed the in-process cache with a partial override atop
@@ -831,4 +923,10 @@ export function _resetUserSettingsCache(): void {
     getResolvedAnalysisEngine), tests drive the engine through this. */
 export function _setUserSettingsCacheForTest(partial: Partial<UserSettings>): void {
   cached = { ...DEFAULT_USER_SETTINGS, ...partial };
+  explicitlySetKeys = new Set(); // Clear tracked keys for test isolation
+}
+
+/** Test helper to set which keys are tracked as explicitly set. */
+export function _setExplicitlySetKeysForTest(keys: Set<string>): void {
+  explicitlySetKeys = keys;
 }

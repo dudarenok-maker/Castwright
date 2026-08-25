@@ -8,13 +8,16 @@
    `scripts/stop-app.ps1` reaps it the same as before.
 
    Three early-exit cases:
-     1. autoStart === false           → log and return null.
-     2. port 9000 already listening   → log "skipping spawn" and return null;
-                                        a manual `npm run tts:sidecar`
-                                        keeps working as before.
-     3. spawn fails (no venv, etc.)   → the child exits non-zero; the
-                                        sidecar-health route surfaces the
-                                        failure. We never crash the parent. */
+     1. autoStart === false            → log and return null.
+     2. the resolved port (LOCAL_TTS_PORT, default 9000) already listening
+                                        → log "skipping spawn" and return
+                                          null; a manual `npm run
+                                          tts:sidecar` keeps working as
+                                          before.
+     3. spawn fails (no venv, etc.)    → the child exits non-zero; the
+                                          sidecar-health route surfaces the
+                                          failure. We never crash the
+                                          parent. */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';
@@ -28,6 +31,7 @@ import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
 import { resolveKnob, resolveKnobForSidecarEnv, isEnvValueRejected } from '../config/resolver.js';
+import { resolveSidecarPort } from './sidecar-owner.js';
 import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
@@ -99,7 +103,13 @@ export interface SidecarHandle {
   kill: () => Promise<void>;
 }
 
-const DEFAULT_PORT = 9000;
+/** Resolved from LOCAL_TTS_PORT env var (default 9000) via resolveSidecarPort.
+    Defined as a function here so spawnSidecar can read the current env value
+    each time it's called, supporting per-worktree port isolation (#2632). */
+function defaultPort(): number {
+  return resolveSidecarPort();
+}
+
 const DEFAULT_HOST = '127.0.0.1';
 const PROBE_TIMEOUT_MS = 250;
 
@@ -597,7 +607,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     autoStart,
     modelKey,
     repoRoot,
-    port = DEFAULT_PORT,
+    port = defaultPort(),
     host = DEFAULT_HOST,
     log = console.log,
     warn = console.warn,

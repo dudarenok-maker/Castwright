@@ -3245,8 +3245,14 @@ export interface components {
              */
             resolvedTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
-             * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
-             *     by the sidecar provider + health probe.
+             * @description Overrides the LOCAL_TTS_URL env var ONLY when explicitly set by
+             *     the user to a value other than the factory default
+             *     (http://localhost:9000) — a factory-default value (whether typed
+             *     by the user or written incidentally by an unrelated settings
+             *     write) is treated as no choice at all, so it never shadows
+             *     LOCAL_TTS_URL or the per-checkout LOCAL_TTS_PORT derivation
+             *     (#2632). Re-read on every request by the sidecar provider +
+             *     health probe.
              */
             sidecarUrl: string;
             /**

@@ -719,11 +719,12 @@ Shipped: 2026-08-22. Merge SHA: `fbdba1ca2046bb119674b787b342ea02aede3f5c` (PR #
 - Task 10 — the confirm-screen import-time signal on `languageFallback`, gated on
   **D-1** ("Decide later" ships).
 
-**Owed acceptance (on-box):** register rows A46 (the three voice-design sites —
-`cast-design`, `qwen-voice`, `single-design` — actually refuse before a live Qwen
-sidecar connection opens on an unset book, and design normally once set) and B3 (an
-unset book hits the analysis language gate, the prompt resolves it, and a live local
-analyzer then selects the set language's own conventions table). Run sheet:
+**Owed acceptance (on-box):** register rows A43/B2 (renumbered by later discharges
+since this was written) — the three voice-design sites (`cast-design`, `qwen-voice`,
+`single-design`) actually refuse before a live Qwen sidecar connection opens on an
+unset book and design normally once set, and an unset book hits the analysis
+language gate, the prompt resolves it, and a live local analyzer then selects the
+set language's own conventions table. Run sheet:
 [`docs/testing/language-recurrence-onbox-acceptance.md`](../../testing/language-recurrence-onbox-acceptance.md).
 
 **Re-confirming the inherited assumption stated at the top of this document** (that the

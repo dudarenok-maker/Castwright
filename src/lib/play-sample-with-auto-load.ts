@@ -112,8 +112,14 @@ async function prepareSidecar(
     /* Default to sidecar wording (covers older Node servers that don't
        emit `proxy`) — they're the more common failure mode now that
        :8080 is more stable than the Python sidecar's CUDA path. */
+    /* Don't name a specific port or env var: since #2632 the sidecar port is
+       per-checkout (LOCAL_TTS_PORT) — naming :9000 here would tell a
+       worktree operator to kill the wrong process's port. It's also
+       shipped, end-user-facing copy (#2632 N37) — "LOCAL_TTS_PORT" and
+       "this checkout" are repo/dev jargon a packaged-app user has never
+       seen, so point at the Account settings field instead of the env var. */
     throw new Error(
-      `Voice engine (:9000) is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding :9000). [${reason}]`,
+      `Voice engine is unreachable — restart the app to relaunch it (or, if you changed its connection details, check Account → Voice engine URL). [${reason}]`,
     );
   }
   if (health.modelLoaded) {
