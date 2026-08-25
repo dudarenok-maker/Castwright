@@ -188,11 +188,18 @@ check fails on a real dependency gap.
 >   `devices.kokoro` — it reports the real ONNX Runtime session providers
 >   (`cuda`/`cpu`), not the env pin, so it can't be fooled by a `_device` that
 >   still says `cuda`. Since #2631's B3 fix, also check `gpus[].resident[]`
->   for the Kokoro entry's `stale_reason: 'cpu_fallback'` — it fires whenever
->   `KOKORO_DEVICE`/an admitted pin requested `cuda` and the session actually
->   landed on `cpu`, which includes the by-design contention case above, so it
->   corroborates a CPU session rather than distinguishing contention from a
->   genuine bug on its own — bullets 1 and 3 still make that call.
+>   for the Kokoro entry's `stale_reason: 'cpu_fallback'` (#2647: the badge
+>   compares THIS LOAD's own intent, not the pristine `KOKORO_DEVICE` env
+>   pin) — a VRAM-ledger admission onto `cpu` under contention (bullet 1's
+>   by-design case) publishes `cpu` as that load's own `_device` before the
+>   load runs, so `stale_reason` correctly stays ABSENT for it: that session
+>   asked for cpu and got cpu, which is compliance, not a fallback. The badge
+>   fires only when this load's own intent was `cuda` — an env pin, or an
+>   admitted `cuda:N` placement — and the session silently landed on `cpu`
+>   anyway, so its presence DOES distinguish the two: seeing it here is
+>   itself the genuine-bug signal (#2534/#2600/#2621's shape), and bullets 1
+>   and 3 remain how you tell a by-design contention CPU session (no badge)
+>   from that fourth root cause (badge present).
 > - **Re-run with the card verifiably idle** (no other resident engine, no
 >   concurrent generation). If Kokoro still lands on CPU with KOKORO_DEVICE
 >   unset/cuda and a free card, that is the real criterion failure this row
