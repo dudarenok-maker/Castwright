@@ -578,9 +578,19 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        after the fact (the "Add transcript" cast-time-gate CTA). Only a
        cloned entry that actually carries a master clip has a transcript to
        edit at all — a designed/imported voice, or a cloned entry whose
-       master is somehow absent, has nothing for this to mean. */
+       master is somehow absent, has nothing for this to mean.
+
+       #2068 item 3 (fs-38) — the `master` existence check is NOT done here.
+       `provenance` is immutable, so reading it pre-lock is timing-insensitive.
+       But `master` CAN disappear between the pre-lock `existing` read and the
+       post-lock `fresh` read inside `updateEntry` — validating it here (on
+       `existing.master`) would pass a check that the write then silently skips
+       (the write is guarded on `fresh.master`), returning 200 for a write that
+       never happened. The `master` check is moved inside the locked callback
+       below, where it reads `fresh.master` and returns 409 Conflict if the
+       resource changed underneath the request. */
     if (body.transcript !== undefined) {
-      if (existing.provenance !== 'cloned' || !existing.master) {
+      if (existing.provenance !== 'cloned') {
         return res
           .status(400)
           .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });
@@ -607,7 +617,19 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        clobber a concurrent engine-slot write (e.g. an in-flight xtts
        derive) that landed in the window between this handler's first read
        and its write. The transcript edit below applies that SAME reasoning
-       to `master`/`engines`: it mutates off `fresh`, never `existing`. */
+       to `master`/`engines`: it mutates off `fresh`, never `existing`.
+
+       #2068 item 3 (fs-38) — the `master` existence check moved here from
+       the pre-lock block above, into the `body.transcript !== undefined`
+       branch below. If `fresh.master` is absent at that point (the entry
+       was cloned and HAD a master when `existing` was read, but the master
+       clip was removed before the lock was acquired), the request is in
+       conflict with the current state of the resource: return 409 and
+       perform no write, rather than silently writing nothing and returning
+       200. The flag is set inside the callback (under the lock) and checked
+       after `updateEntry` resolves — same pattern the retry route below
+       uses for `entryFound`/`noop`. */
+    let conflict = false;
     const written = await updateEntry(voiceUuid, (fresh) => {
       if (!fresh) return null;
       let next: VoiceLibraryEntry = {
@@ -617,7 +639,12 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
         ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
         ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
       };
-      if (body.transcript !== undefined && fresh.master) {
+      if (body.transcript !== undefined) {
+        const master = fresh.master;
+        if (!master) {
+          conflict = true;
+          return undefined;
+        }
         const transcript = body.transcript as string;
         /* Plan 276 Decision 6 [R3] — three invalidations a transcript edit
            must carry, none of which is "re-derive the qwen .pt":
@@ -648,7 +675,7 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
         next = {
           ...next,
           sampleTranscript: transcript,
-          master: { ...fresh.master, transcript, transcriptSource: 'user', languageCode: undefined },
+          master: { ...master, transcript, transcriptSource: 'user', languageCode: undefined },
           languageCode: undefined,
         };
         /* Decision 6's third clause — a non-empty corrected transcript
@@ -667,6 +694,11 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
       }
       return next;
     });
+    if (conflict) {
+      return res
+        .status(409)
+        .json({ error: '`master` clip was removed before this transcript edit could be applied.' });
+    }
     if (!written) {
       return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     }

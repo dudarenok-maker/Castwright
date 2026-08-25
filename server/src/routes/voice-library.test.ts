@@ -581,7 +581,7 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
       expect(onDisk?.master).toBeUndefined();
     });
 
-    it('rejects `transcript` on a cloned entry with no master clip with 400', async () => {
+    it('rejects `transcript` on a cloned entry with no master clip with 409', async () => {
       await vl.writeEntry(
         makeEntry({
           voiceUuid: 'transcript-nomaster-1',
@@ -600,7 +600,46 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
         .patch('/api/voice-library/transcript-nomaster-1')
         .send({ transcript: 'a new transcript' });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
+    });
+
+    /* #2068 item 3 (fs-38) — the race this fix exists for: `master` WAS
+       present when `existing` was read pre-lock, but is gone by the time
+       `fresh` is read inside `updateEntry`'s lock. The old code returned
+       200 having written nothing (the write was guarded on `fresh.master`,
+       which was absent); the fix returns 409 Conflict and performs no write.
+
+       A `readEntry` spy alone cannot simulate this: `updateEntry` calls
+       `readEntry` internally (same module scope), so `vi.spyOn` on the
+       module namespace does not intercept that call. Instead this test
+       spies on `updateEntry` itself (an external call from the route),
+       and inside the spy strips `master` from disk before delegating to
+       the real `updateEntry` — so the real internal `fresh` read sees no
+       master while the route's pre-lock `existing` read (which already
+       completed before the spy ran) saw one. */
+    it('returns 409 when master disappears between the pre-lock read and the lock', async () => {
+      const entryWithMaster = makeClonedMasterEntry('transcript-race-1');
+      await vl.writeEntry(entryWithMaster);
+
+      const realUpdateEntry = vl.updateEntry;
+      const updateSpy = vi.spyOn(vl, 'updateEntry').mockImplementation(async (uuid, mutate) => {
+        // Simulate master disappearing between the pre-lock read and the lock:
+        // strip master from disk, then delegate to the real updateEntry whose
+        // internal fresh read will now see no master.
+        const current = await vl.readEntry(uuid);
+        if (current?.master) {
+          await vl.writeEntry({ ...current, master: undefined });
+        }
+        return realUpdateEntry(uuid, mutate);
+      });
+
+      const res = await request(app)
+        .patch('/api/voice-library/transcript-race-1')
+        .send({ transcript: 'the corrected transcript' });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toHaveProperty('error');
+      updateSpy.mockRestore();
     });
 
     it('rejects a non-string `transcript` with 400', async () => {
