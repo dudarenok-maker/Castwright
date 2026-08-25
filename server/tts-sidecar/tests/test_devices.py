@@ -75,14 +75,14 @@ def _fake_kokoro_cuda_session():
 
 
 def _fake_kokoro_admitted_cpu_session():
-    """Kokoro engine: KOKORO_DEVICE=cuda:1 (`_requested_device`), but THIS
-    load was admitted onto cpu by the VRAM ledger under contention — `_device`
-    (the per-load decision) diverges from `_requested_device` and reads 'cpu',
-    not 'cuda:1'. The ORT session agrees (`_resolved_device` == 'cpu' too).
-    This is the admitted-device fell_back shape the prior fake pair never
-    covered (#2631 review B3) — distinct from `_fake_kokoro_cpu_session`,
-    where `_device` still reads the (stale) 'cuda:1' intent because the ORT
-    fallback there is silent/unrequested, not admission-driven."""
+    """Kokoro engine: KOKORO_DEVICE=cuda:1 (`_requested_device`, the pristine
+    env pin), but THIS load was admitted onto cpu by the VRAM ledger under
+    contention — `_device` (the per-load decision) diverges from
+    `_requested_device` and reads 'cpu', not 'cuda:1'. The ORT session agrees
+    (`_resolved_device` == 'cpu' too): this load asked for cpu and got cpu.
+    Distinct from `_fake_kokoro_cpu_session`, where `_device` still reads the
+    (stale) 'cuda:1' intent because the ORT fallback there is silent/
+    unrequested, not admission-driven."""
     sess = types.SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
     kok = types.SimpleNamespace(sess=sess)
     return types.SimpleNamespace(
@@ -112,15 +112,28 @@ def test_engine_actual_card_kokoro_cuda_resident_no_fallback():
     assert card["fell_back"] is False
 
 
-def test_engine_actual_card_kokoro_admitted_cpu_flags_fell_back():
-    # #2631 review B3: an ADMITTED cpu placement (KOKORO_DEVICE=cuda:1, but
-    # the VRAM ledger admitted this load onto cpu under contention) must still
-    # read as cpu/fell_back — the badge fires on "requested cuda, landed cpu"
-    # regardless of WHY it landed there.
+def test_engine_actual_card_kokoro_admitted_cpu_is_not_fell_back():
+    # #2647 supersedes #2631 review B3's semantics here. B3 read `_device`
+    # ('cpu', the per-load decision) as diverging from `_requested_device`
+    # ('cuda:1', the pristine env pin) and flagged that divergence itself as
+    # `fell_back` — "the operator asked for cuda, this session is on cpu."
+    # #2647 is why that reading doesn't hold: on the shipped default
+    # (KOKORO_DEVICE unset), `_requested_device` never leaves "auto", so a
+    # detector keyed on it can never fire in production regardless of what
+    # the VRAM ledger admits — the actual regression this ticket exists to
+    # fix. The corrected comparison is THIS LOAD's own intent (`_device`,
+    # which the admission already overwrote to 'cpu' before the load ran)
+    # against what actually happened (`_resolved_device`, also 'cpu') — they
+    # AGREE: this load asked for cpu (the ledger's own capacity-driven
+    # decision, not a silent failure) and got cpu. That is compliance, not a
+    # fallback, so `fell_back` must be False. The badge exists to catch a
+    # load whose OWN intent was cuda but which silently landed on cpu anyway
+    # — see `_fake_kokoro_cpu_session` above for that shape, which still
+    # correctly flags True.
     card = main._engine_actual_card(_fake_kokoro_admitted_cpu_session())
     assert card["family"] == "cpu"
     assert card["index"] is None
-    assert card["fell_back"] is True
+    assert card["fell_back"] is False
 
 
 # --- _resident_engines_by_card + _build_gpus_payload (Task 9) ---

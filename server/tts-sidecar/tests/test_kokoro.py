@@ -515,6 +515,153 @@ def test_kokoro_session_device_drift_reports_unknown_not_false_cpu(
         assert card["fell_back"] is False
 
 
+def test_kokoro_default_config_admitted_cuda_landing_on_cpu_flags_fell_back(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2647 (the ticket's actual regression, distinct from the drift test
+    above): on the SHIPPED DEFAULT (KOKORO_DEVICE unset), a load the VRAM
+    ledger admits onto cuda (`_ensure_loaded(..., device="cuda:0")` — the
+    real `/load` route's admission call shape) that silently lands on cpu
+    providers must flag `fell_back = True`.
+
+    Before this fix, `_engine_actual_card`'s `requested_fam` came from
+    `_requested_device` — written ONCE at `__init__` from `KOKORO_DEVICE` and
+    never touched again. On the default (unset) config that is "auto"
+    forever, no matter what a per-load admission decides, so
+    `requested_fam == "cuda"` could never be true and `fell_back` was dead
+    code on every shipped install — the actual bug #2636 introduced. The fix
+    compares against `_device` instead, which the admission overwrites for
+    THIS load before it runs, and which a successful load leaves holding
+    that same concrete decision.
+
+    Uses a REAL `KokoroEngine()` driven through the actual `_ensure_loaded`
+    load path (not a hand-built stand-in), so this breaks if `__init__` or
+    the load path's admission handling regresses."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)  # the shipped default
+
+    class _CpuOnlySession:
+        """A real ORT session that only ended up with CPU providers despite
+        being asked to build with CUDA+CPU below -- the actual silent-
+        fallback shape (#2534/#2600/#2621), not an exception/API-drift."""
+
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    class _SilentFallbackKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CpuOnlySession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _SilentFallbackKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        # The VRAM-ledger admission call shape (see /load's kokoro branch):
+        # a concrete `device=` argument overrides the env-derived pref for
+        # THIS cold load, even though KOKORO_DEVICE is unset.
+        engine._ensure_loaded("v1", device="cuda:0")
+
+        # This load's own intent was cuda:0 (the admission), confirmed on
+        # the real attribute _ensure_loaded's publish-on-success writes.
+        assert engine._device == "cuda:0"
+        # ...but the ORT session actually only carries CPU providers.
+        assert engine._resolved_device == "cpu"
+
+        card = main._engine_actual_card(engine)
+        assert card is not None
+        assert card["family"] == "cpu"
+        assert card["fell_back"] is True
+
+
+def test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back(
+    fake_weight_files, monkeypatch
+) -> None:
+    """#2647 (behaviour decision, pinned per the repo owner's call): when
+    NOTHING asked for cuda for this load — no KOKORO_DEVICE env pin AND no
+    VRAM-ledger admission override — `_device` resolves to "auto", and
+    `_parse_device("auto") != "cuda"`, so `fell_back` stays False however the
+    load actually lands, cpu included. This is deliberate, not a gap: a cpu
+    result with no cuda ask anywhere in the picture is "unconfigured, ran
+    wherever it ran," not a silent fallback from anything. Contrast
+    `test_kokoro_default_config_admitted_cuda_landing_on_cpu_flags_fell_back`
+    above, where an ADMISSION did ask for cuda on this same unset-env config
+    and `fell_back` must fire.
+
+    Real `KokoroEngine()` through the actual `_ensure_loaded` load path, same
+    standard as the other regression tests in this file."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)  # the shipped default
+
+    class _CpuOnlySession:
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    class _AutoCpuKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CpuOnlySession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _AutoCpuKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    with patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        # No device= override -- no admission ever ran for this load.
+        engine._ensure_loaded("v1")
+
+        assert engine._device == "auto"  # nothing ever asked for cuda
+        assert engine._resolved_device == "cpu"
+
+        card = main._engine_actual_card(engine)
+        assert card is not None
+        assert card["family"] == "cpu"
+        assert card["fell_back"] is False
+
+
 def test_kokoro_loads_via_from_session_with_dml_provider_only(
     fake_kokoro_module, fake_weight_files, monkeypatch
 ) -> None:

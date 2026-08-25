@@ -9656,7 +9656,37 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     )
     if model is None:
         return None
-    requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    # #2647: compare THIS LOAD's actual intent, not the pristine env pin.
+    # `_requested_device` (Coqui/Kokoro/Whisper) is written ONCE at __init__
+    # from the env var and never touched again — so on the shipped default
+    # (no KOKORO_DEVICE/COQUI_DEVICE/ASR_DEVICE pin), it reads "auto" forever,
+    # even on a load the VRAM-ledger admission ITSELF steered onto "cuda:N"
+    # for capacity reasons. `_parse_device("auto")` never equals "cuda", so
+    # `fell_back` below could never fire on that (the shipped) default —
+    # dead code, not a working detector, and exactly the regression #2636
+    # introduced. `_device` is the field that actually carries this load's
+    # intent: it starts from the same env pin, but an admitted `device=`
+    # argument (VRAM-ledger placement) overwrites it BEFORE the load runs,
+    # and a successful load leaves it holding that same concrete decision
+    # (Coqui `_publish_loaded_locked`, Kokoro `_ensure_loaded`, Qwen
+    # `_ensure_device_resolved`/`_ensure_base_loaded` all converge here) — so
+    # comparing THAT against the actual outcome is a real, load-scoped
+    # comparison instead of a config-scoped one. Engines with no such split
+    # (SPK: only `.device`, which itself doubles as the actual outcome after
+    # a self-demotion — there is no separate pre-outcome intent value left to
+    # read) fall back to `_requested_device` unchanged; SPK's and Whisper's
+    # own admission call sites (`/embed`, `/transcribe`) only ever admit a
+    # GPU placement when the env pin ALREADY says cuda/rocm, so
+    # `_requested_device` already reflects this load's real intent for them
+    # regardless. Qwen has `_device` too, so it takes this same branch, but
+    # it's a no-op there: Qwen loads via a plain torch `.to(self._device)`,
+    # which cannot silently land elsewhere the way an ORT session's provider
+    # list can, and the top-of-function torch introspection above already
+    # reads Qwen's real device straight from the model, not from this string.
+    if hasattr(engine, "_device"):
+        requested_fam, _ = _parse_device(getattr(engine, "_device"))
+    else:
+        requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
     # actual device: prefer the loaded torch module's real device; fall back to the string attr
     family = index = None
     try:
@@ -9695,6 +9725,16 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
             family = ks
     if family in (None, "auto"):
         family = "unknown"
+    # #2647 (behaviour decision): when this load's intent was "auto" — no env
+    # pin AND no VRAM-ledger admission ever overrode it — `requested_fam` is
+    # "auto", never "cuda", so `fell_back` stays False however the load
+    # actually landed. That is deliberate, not a gap this comparison misses:
+    # nothing ever asked for cuda on that load, so a cpu outcome is simply
+    # "unconfigured, ran wherever it ran," not a silent fallback from
+    # anything. The badge exists to catch "this load intended cuda (an env
+    # pin or an admitted placement) and silently got cpu anyway" — pinned by
+    # `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`
+    # in test_kokoro.py.
     fell_back = (requested_fam == "cuda" and family == "cpu")
     return {"family": family, "index": index, "fell_back": fell_back}
 
