@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">65</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">66</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -190,10 +190,13 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-23 (wave 5, #2606 step 6), 69 → 66.</b> Three rows discharged
-    live (A27, A45, B2) and dropped per the repo owner's remove-outright ruling; evidence
-    for each lives in <code>docs/testing/onbox-wave5-results/</code>. This page tracks the
-    current count, not how it got here — see this file's git log for the full history.
+    <b>Last change: 2026-08-25 (#2632, PR #2635), 65 → 66.</b> Added <b>E10</b> — the
+    sidecar-sweep worktree fix ships behaviour that only two live checkouts can prove
+    (that <code>npm run stop</code> sweeps the RIGHT checkout's sidecar, Vite, AND
+    server, not the primary's); nothing in that PR exercises
+    <code>stop-app.mjs</code>/<code>.ps1</code> end to end against a real listener.
+    This page tracks the current count, not how it got here — see this file's git log
+    for the full history.
   </div>
 
   <div class="tscroll">
@@ -204,7 +207,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>9</td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>10</td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td>2</td></tr>
     </tbody>
@@ -1206,7 +1209,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">9 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1315,6 +1318,16 @@
         <div class="flag"><b>Re-run 2026-08-21 against PR #2577's fix (commit <code>d9eb03ad</code>), STILL FAILS.</b> Same recipe; 22 of 23 books remain byte-identical, <i lang="ru">Ночной дозор</i> still diverges on the same fields. <b>Correction, 2026-08-23 (pass-5 review, #2577):</b> an earlier note here called this "a residual real-data gap, not the original defect recurring unfixed" — that overstated what the run showed. <code>d9eb03ad</code> predates the fix's final mechanism (attempt 4, commit <code>5a60b088</code>), which itself needed two further blocking-regression fixes (P1/P2) found in later review passes of the same PR. Whether this book's divergence is closed by the fix as it now stands is <b>unconfirmed</b>; item (2) stays STILL OWED pending a fresh on-box re-run against the current commit, not <code>d9eb03ad</code>. <code>docs/testing/onbox-wave4-results/step-1-e11-item2-rerun.md</code>.</div>
         <div class="flag"><b>Wave-5 step 3, 2026-08-23 — reconfirmation only, disposition unchanged (STILL OWED).</b> Re-ran item (1) (the full real-workspace run) from a second checkout (<code>wt-2606-onbox-wave5</code>, not the primary), after confirming from source that the script's only filesystem write is its own JSON report — never the workspace. Observed figures matched the 2026-08-14 discharge run's values everywhere directly comparable (23 book rows, none blank; both CJK books <code>spokenTotal&gt;0</code>; <code>orphanSpoken</code>/<code>dashOnlySpoken</code> shapes unchanged; <i lang="ru">Ночной дозор (Tetralogy)</i> at <code>spokenTotal=2122</code>, <code>orphanSpoken=32</code>). No regression found. Items (2) and (3) were not attempted this step (out of scope); both remain owed. No register edit was made by that step itself — this note folds its verdict in per wave-5 step 6. Evidence: <code>docs/testing/onbox-wave5-results/step-3-e9.md</code>.</div>
         <p class="src">A checkout (or worktree with its cache populated from one) whose cache holds the real library&#39;s analyses, <code>cd server &amp;&amp; npm run build</code>, then <code>WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs</code> · under 5 min once <code>server/dist</code> exists · <a href="https://github.com/dudarenok-maker/Castwright/issues/1984">#1984</a> Wave 1 · <a href="https://github.com/dudarenok-maker/Castwright/blob/main/docs/superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md">plan</a> · full checklist: <code>docs/testing/attribution-collapse-visibility-onbox-acceptance.md</code></p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">E10</span><span class="iname">npm run stop sweeps the RIGHT checkout&#39;s sidecar, Vite, AND server (#2632, PR #2635)</span><span class="risk">Two live checkouts, no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>scripts/stop-app.mjs</code>/<code>stop-app.ps1</code>&#39;s belt-and-braces orphan sweep now resolves every per-checkout port it sweeps — <code>LOCAL_TTS_PORT</code>, <code>PORT</code>, and (PowerShell only) <code>VITE_PORT</code> — via <code>scripts/lib/sidecar-sweep-port.mjs</code>/<code>.psm1</code>, instead of hardcoding the factory defaults <code>:9000</code>/<code>:8080</code>/<code>:5173</code>. Pass 8 found the first cut of this fix resolved only the TTS port and left the other three base ports (<code>:5173</code>, <code>:8080</code>, <code>:8443</code>) hardcoded — the primary checkout&#39;s own values — so <code>npm run stop</code> run from a worktree following the <code>npm run dev</code> workflow force-killed the <b>primary&#39;s</b> Vite and server while leaving the worktree&#39;s own Vite/server untouched, the exact inversion of this branch&#39;s headline claim. The first follow-up fix resolved <code>PORT</code> from this checkout&#39;s own <code>server/.env</code> and <code>VITE_PORT</code> from its own <code>.env.local</code> the same way <code>LOCAL_TTS_PORT</code> already was, sweeping neither when unconfigured rather than guessing the primary&#39;s value.</p>
+        <p>A second follow-up removed <code>:8443</code> (LAN HTTPS) from the sweep entirely, rather than resolving it the same way: unlike <code>PORT</code>/<code>VITE_PORT</code>, config alone can&#39;t establish ownership of the currently-bound process even when THIS checkout&#39;s own <code>server/.env</code> sets <code>LAN_HTTPS=1</code> — in production <code>listenWithAutoRebind</code> auto-rebinds on conflict, so the configured value is only a start port; in dev, &#8220;my config says <code>LAN_HTTPS=1</code>&#8221; only means this checkout would hold <code>:8443</code> if it won the race, not that it currently does. There is no owner-note file for the main server&#39;s bound port the way <code>.run/tts.owner.json</code> exists for the sidecar, so neither script has an authoritative source to settle it — the sweep now sweeps nothing for <code>:8443</code> rather than guess. This is a <b>coverage tradeoff, not a defect</b>: killing nothing is always safer than a live-but-wrong guess that force-kills a different checkout&#39;s server.</p>
+        <p>The resolver and the swept-port-list assembly are both unit-tested against real temp files (<code>scripts/tests/sidecar-sweep-port.test.mjs</code>/<code>.Tests.ps1</code>), including mutation-style guards pinning that <code>:8443</code> never re-enters either script&#39;s base-port list, but nothing in this PR executes <code>stop-app.ps1</code>/<code>.mjs</code> end to end against real listeners — the actual claim this branch exists to make (&#8220;in a worktree, <code>npm run stop</code> stops my whole stack and none of the primary&#39;s&#8221;) has never been observed. Two checkouts each running a live stack is &#8220;a real sidecar&#8221; in this register&#39;s own vocabulary (see A1, D-group entries).</p>
+        <p class="src">Two checkouts of this repo (e.g. the primary + a <code>wt-new.mjs</code> worktree, e.g. slot 1: <code>VITE_PORT=5183</code>, <code>PORT</code>/<code>VITE_API_PORT=8090</code>, <code>LOCAL_TTS_PORT=9010</code>), each with <b>all three</b> of Vite, the server, and the sidecar live (<code>npm start</code> / <code>npm run dev</code>) so each checkout owns a <code>tts.owner.json</code> note. From the worktree, run <code>npm run stop</code> and observe <b>four</b> things, not just the sidecar pair: (1) the worktree&#39;s own sidecar (<code>:9010</code>) dies; (2) the primary&#39;s sidecar (<code>:9000</code>) survives; (3) the worktree&#39;s own Vite (<code>:5183</code>) and server (<code>:8090</code>) die; (4) the <b>primary&#39;s</b> Vite (<code>:5173</code>) and server (<code>:8080</code>) survive — this last pair is the one pass 8 found broken and is the one an operator must not skip. Then repeat after a clean shutdown of the worktree&#39;s sidecar (so <code>tts.owner.json</code> is absent and the sweep falls back to <code>server/.env</code>/<code>.env.local</code>) and confirm the same four-way discrimination holds. <b>Optionally</b>, if exercising the LAN-HTTPS path too: start the primary with <code>LAN_HTTPS=1</code> (so it&#39;s listening on <code>:8443</code>), then from the worktree run <code>npm run stop</code> and confirm the <b>primary&#39;s <code>:8443</code> also survives</b> — a smoke check on the removal, not a required step every run. On Windows PowerShell only (<code>stop-app.ps1</code> force-kills; <code>stop-app.mjs</code>, the prod launcher, only warns and never runs Vite). <b>A fifth observation, in the PRIMARY checkout itself</b> (#2632 N46): with no <code>.env.local</code> and no <code>PORT</code> line in <code>server/.env</code> — the primary checkout&#39;s actual today-state — <code>Get-PortsToSweep</code>&#39;s <code>-BasePorts</code> resolves to an empty array at the <code>stop-app.ps1</code> call site. Run <code>scripts/stop-app.ps1</code> there (nothing needs to actually be running) and confirm: no red <code>ParameterBindingValidationException</code>/<code>Cannot bind argument</code> block appears, and the script still reports its outcome truthfully (<code>[OK] nothing to stop</code>, or the correct sweep line if a listener is present) rather than silently swallowing the error and printing a false "nothing to stop" while a raw exception scrolled past above it — the observer must not skip this one either. Under 10 min with the stacks already running, under 2 more for the fifth observation · <a href="https://github.com/dudarenok-maker/Castwright/issues/2632">#2632</a> · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2635">#2635</a></p>
       </div>
     </details>
 

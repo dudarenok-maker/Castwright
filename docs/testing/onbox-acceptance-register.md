@@ -320,20 +320,26 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
+> **Last change: 2026-08-25 (#2632, PR #2635), 65 → 66.** Added **E10** — the
+> sidecar-sweep worktree fix ships behaviour that only two live checkouts can
+> prove (that `npm run stop` sweeps the RIGHT checkout's sidecar, not the
+> primary's); nothing in that PR exercises `stop-app.mjs`/`.ps1` end to end
+> against a real listener.
+>
+> **Prior change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
 > live (A38, "ORT marker refuses — not repairs — a clobbered venv") and
 > dropped, per the owner's remove-outright ruling — the refuse-and-log branch
 > fired exactly as designed against a real copy of the live sidecar venv.
 > Group A renumbered contiguously (old A39–A44 → A38–A43). Evidence:
-> `docs/testing/onbox-wave5-results/step-ort-b-a39.md`. Prior change: wave 5,
+> `docs/testing/onbox-wave5-results/step-ort-b-a39.md`. Before that: wave 5,
 > #2606 step 6, 69 → 66 (A27, A45, B2 discharged). Full change-by-change
 > history is in this file's git log, not here — this section tracks the
 > current count, not how it got here.
@@ -3468,6 +3474,89 @@ exists. *Criteria:* spec §On-box acceptance
 > both remain owed exactly as recorded above. No register edit was made by
 > that step itself — this note folds its verdict in per wave-5 step 6.
 > Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
+
+### E10 · `npm run stop` sweeps the RIGHT checkout's sidecar, Vite, AND server (#2632, PR #2635) · **two live checkouts, no GPU needed**
+
+`scripts/stop-app.mjs`/`stop-app.ps1`'s belt-and-braces orphan sweep now
+resolves every per-checkout port it sweeps — `LOCAL_TTS_PORT`, `PORT`, and
+(PowerShell only) `VITE_PORT` — via `scripts/lib/sidecar-sweep-port.mjs`/
+`.psm1`, instead of hardcoding the factory defaults `:9000`/`:8080`/`:5173`.
+Pass 8 found the first cut of this fix resolved only the TTS port and left
+the other three base ports (`:5173`, `:8080`, `:8443`) hardcoded — the
+primary checkout's own values — so `npm run stop` run from a worktree
+following the `npm run dev` workflow force-killed the **primary's** Vite and
+server while leaving the worktree's own Vite/server untouched, the exact
+inversion of this branch's headline claim. The first follow-up fix resolved
+`PORT` from this checkout's own `server/.env` and `VITE_PORT` from its own
+`.env.local` the same way `LOCAL_TTS_PORT` already was, sweeping neither
+when unconfigured rather than guessing the primary's value.
+
+A second follow-up removed `:8443` (LAN HTTPS) from the sweep entirely,
+rather than resolving it the same way: unlike `PORT`/`VITE_PORT`, config
+alone can't establish ownership of the currently-bound process even when
+THIS checkout's own `server/.env` sets `LAN_HTTPS=1`. Two reasons: (a) in
+production (`stop-app.mjs`'s launcher always sets `NODE_ENV=production`),
+`listenWithAutoRebind` (`server/src/index.ts`) auto-rebinds `LAN_HTTPS_PORT`
+on conflict, so the configured value is only a `startPort`, not necessarily
+where the process actually listens; (b) even in dev (`stop-app.ps1`'s world,
+where dev mode never rebinds — a losing checkout's server exits with an
+actionable `EADDRINUSE` instead), "my config says `LAN_HTTPS=1`" only means
+*this checkout would hold `:8443` if it won the race*, not that it currently
+does. There is no owner-note file for the main server's bound port the way
+`.run/tts.owner.json` exists for the sidecar, so neither script has an
+authoritative source to settle it — the sweep now sweeps nothing for
+`:8443` rather than guess. This is a **coverage tradeoff, not a defect**: an
+orphaned LAN-HTTPS listener with no surviving PID file is no longer
+auto-reaped by either script and needs a manual kill (`netstat -ano | findstr
+:8443`) — accepted because a live-but-wrong guess can force-kill a different
+checkout's server, and killing nothing is always safer than that.
+
+The resolver and the swept-port-list assembly are both unit-tested against
+real temp files (`scripts/tests/sidecar-sweep-port.test.mjs`/`.Tests.ps1`),
+including mutation-style guards pinning that `:8443` never re-enters either
+script's base-port list, but nothing in this PR executes `stop-app.ps1`/
+`.mjs` end to end against real listeners — the actual claim this branch
+exists to make (*"in a worktree, `npm run stop` stops my whole stack and
+none of the primary's"*) has never been observed. Two checkouts each
+running a live stack is "a real sidecar" in this register's own vocabulary
+(see A1, D-group entries).
+
+*Needs:* two checkouts of this repo (e.g. the primary + a `wt-new.mjs`
+worktree, e.g. slot 1: `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
+`LOCAL_TTS_PORT=9010`), each with **all three** of Vite, the server, and the
+sidecar live (`npm start` / `npm run dev`) so each checkout owns a
+`tts.owner.json` note. From the worktree, run `npm run stop` and observe
+**four** things, not just the sidecar pair: (1) the worktree's own sidecar
+(`:9010`) dies; (2) the primary's sidecar (`:9000`) survives; (3) the
+worktree's own Vite (`:5183`) and server (`:8090`) die; (4) the **primary's**
+Vite (`:5173`) and server (`:8080`) survive — this last pair is the one pass
+8 found broken and is the one an operator must not skip. Then repeat after a
+clean shutdown of the worktree's sidecar (so `tts.owner.json` is absent and
+the sweep falls back to `server/.env`/`.env.local`) and confirm the same
+four-way discrimination holds. **Optionally**, if exercising the LAN-HTTPS
+path too: start the primary with `LAN_HTTPS=1` (so it's listening on
+`:8443`), then from the worktree run `npm run stop` and confirm the
+**primary's `:8443` also survives** — it should, because `:8443` is no
+longer in either script's sweep list at all; this is a smoke check on the
+removal, not a new required step for every run of this row. On Windows
+PowerShell only (`stop-app.ps1` force-kills; `stop-app.mjs`, the prod
+launcher, only warns and never runs Vite, so its own check is limited to
+(1)/(2)/the server pair of (3)/(4)). **A fifth observation, in the PRIMARY
+checkout itself** (#2632 N46): with no `.env.local` and no `PORT` line in
+`server/.env` — the primary checkout's actual today-state, and the default
+for anything derived from `server/.env.example` — `Get-PortsToSweep`'s
+`-BasePorts` resolves to an empty array at the `stop-app.ps1` call site.
+Run `scripts/stop-app.ps1` there (with nothing needing to actually be
+running — this observation is about the script not throwing, not about
+what it kills) and confirm: no red `ParameterBindingValidationException`/
+`Cannot bind argument` block appears, and the script still reports its
+outcome truthfully (`[OK] nothing to stop`, or the correct sweep line if a
+listener is present) rather than silently swallowing the error and printing
+a false "nothing to stop" while a raw exception scrolled past above it.
+*Cost:* under 2 minutes, no live stack needed for this one. *Criteria:*
+this PR's description (§On-box acceptance) and `docs/features/` plan 43's
+stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
+module-level comment for the exact fallback order being exercised.
 
 ## Group G — GitHub Actions itself
 
