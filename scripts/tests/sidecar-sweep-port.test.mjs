@@ -26,6 +26,7 @@ import {
   buildPortsToSweep,
   resolveConfiguredServerPort,
   resolveConfiguredVitePort,
+  getStopSummaryMessage,
 } from '../lib/sidecar-sweep-port.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -371,4 +372,82 @@ test('resolveSidecarSweepPort prefers a shell-exported LOCAL_TTS_PORT over serve
     if (prev === undefined) delete process.env.LOCAL_TTS_PORT;
     else process.env.LOCAL_TTS_PORT = prev;
   }
+});
+
+// #2632 N52 — a server/.env whose first bytes are a UTF-8 BOM (EF BB BF)
+// decodes to a leading U+FEFF. process.loadEnvFile does NOT strip that BOM
+// before parsing keys, so the BOM-prefixed first line's key is literally
+// "﻿LOCAL_TTS_PORT" — the server's own resolveSidecarPort() never sees
+// plain LOCAL_TTS_PORT and falls back to 9000. Measured directly against
+// process.loadEnvFile (not assumed): with this exact byte layout,
+// process.env.LOCAL_TTS_PORT stays undefined. A reader that resolves 9010
+// here disagrees with what the server actually binds — the exact
+// cross-checkout kill hazard this sweep exists to prevent.
+function withTempServerEnvBytes(bytes, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'sweep-port-env-'));
+  const envPath = join(dir, '.env');
+  try {
+    writeFileSync(envPath, bytes);
+    return fn(envPath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('resolveSidecarSweepPort returns null on a BOM-prefixed LOCAL_TTS_PORT line, matching process.loadEnvFile', () => {
+  const bomBytes = Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]),
+    Buffer.from('LOCAL_TTS_PORT=9010\n', 'utf8'),
+  ]);
+  withTempRunDir((dir) => {
+    withTempServerEnvBytes(bomBytes, (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), null);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort still resolves LOCAL_TTS_PORT with no BOM present (control for the BOM cell)', () => {
+  const noBomBytes = Buffer.from('LOCAL_TTS_PORT=9010\n', 'utf8');
+  withTempRunDir((dir) => {
+    withTempServerEnvBytes(noBomBytes, (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+// #2632 N52 — a duplicate key whose LAST occurrence carries a trailing
+// comment. Measured directly against process.loadEnvFile: it strips the
+// inline `# comment` from an unquoted value and takes the LAST assignment,
+// so `LOCAL_TTS_PORT=9010\nLOCAL_TTS_PORT=9011 # comment\n` resolves
+// process.env.LOCAL_TTS_PORT to "9011". A reader whose regex requires the
+// captured token to run to end-of-line (no trailing comment) fails to match
+// that last line at all and silently falls back to the EARLIER value
+// (9010) the server has already overwritten.
+test('resolveSidecarSweepPort takes the LAST duplicate value even when it carries a trailing comment, matching process.loadEnvFile', () => {
+  withTempRunDir((dir) => {
+    withTempServerEnv('LOCAL_TTS_PORT=9010\nLOCAL_TTS_PORT=9011 # comment\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9011);
+    });
+  });
+});
+
+// #2632 N53 — stop-app.mjs/.ps1 used to print "[OK] nothing to stop"
+// unconditionally whenever no PID kill happened, even after a sweep
+// reported a still-listening/undead port, or when zero ports even resolved
+// for this checkout (so nothing was actually checked). Both are false
+// reassurance distinct from "checked known ports and found them clear".
+test('getStopSummaryMessage returns null when a PID kill happened (per-item lines already said so)', () => {
+  assert.equal(getStopSummaryMessage(true, false, [8080]), null);
+});
+
+test('getStopSummaryMessage returns null when the sweep is incomplete (a kill failed / something still listens)', () => {
+  assert.equal(getStopSummaryMessage(false, true, [8080]), null);
+});
+
+test('getStopSummaryMessage distinguishes "no ports resolved" from "checked and clear"', () => {
+  assert.equal(
+    getStopSummaryMessage(false, false, []),
+    '[OK] nothing to stop (no ports resolved for this checkout)',
+  );
+  assert.equal(getStopSummaryMessage(false, false, [8080]), '[OK] nothing to stop');
 });

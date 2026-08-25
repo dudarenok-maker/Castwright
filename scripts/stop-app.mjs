@@ -10,7 +10,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import net from 'node:net';
-import { buildPortsToSweep, resolveConfiguredServerPort } from './lib/sidecar-sweep-port.mjs';
+import {
+  buildPortsToSweep,
+  getStopSummaryMessage,
+  resolveConfiguredServerPort,
+} from './lib/sidecar-sweep-port.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -136,7 +140,9 @@ if (stillListening.length > 0) {
   );
 }
 
-if (!killedAny && stillListening.length === 0) {
-  info('[OK] nothing to stop');
-}
+// #2632 N53 — a still-listening port, or zero ports resolved for this
+// checkout, must not both read as the same "[OK] nothing to stop" claim.
+// See getStopSummaryMessage's own comment.
+const summary = getStopSummaryMessage(killedAny, stillListening.length > 0, portsToSweep);
+if (summary) info(summary);
 process.exit(0);

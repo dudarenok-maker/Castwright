@@ -49,7 +49,7 @@ function Get-LocalTtsPortValue {
 # shared by LOCAL_TTS_PORT (server\.env), PORT (server\.env), and VITE_PORT
 # (.env.local), the three env-sourced ports stop-app.ps1 sweeps (#2632 N39).
 #
-# Two things this MUST match about process.loadEnvFile, both measured
+# Four things this MUST match about process.loadEnvFile, all measured
 # directly against the real function rather than assumed:
 # - #2632 N36: a shell-exported value wins over the file — loadEnvFile
 #   never overwrites an already-present process.env entry, so if THIS shell
@@ -58,6 +58,23 @@ function Get-LocalTtsPortValue {
 #   (later process.env[key] = value calls simply overwrite earlier ones) —
 #   so this reader must take the last matching line too, not the first, or
 #   it can target a port the server never actually bound to.
+# - #2632 N52 — BOM: `Get-Content` auto-detects and SILENTLY STRIPS a
+#   leading UTF-8 BOM (measured directly: a BOM-prefixed file's first
+#   character reads as 'L', not U+FEFF, through `Get-Content -Raw`).
+#   process.loadEnvFile does NOT strip it — the BOM-prefixed first line's
+#   key is literally "﻿LOCAL_TTS_PORT", which never matches plain
+#   "LOCAL_TTS_PORT" server-side. Reading raw bytes and decoding them
+#   ourselves (rather than through Get-Content) preserves the BOM
+#   character, so it blocks the match here exactly like it blocks the
+#   server's own key lookup (.NET regex `\s` does NOT match U+FEFF, unlike
+#   JS regex `\s` — measured directly).
+# - #2632 N52 — inline comments: process.loadEnvFile strips an unquoted
+#   value's trailing `#...` comment and trims the result (measured:
+#   `PORT=9011 # x` and even `PORT=9011#x` both resolve process.env.PORT to
+#   "9011"). A match that requires the captured token to run to
+#   end-of-line (no trailing comment) fails to match a commented
+#   duplicate's LAST line at all, silently falling back to an EARLIER
+#   value the server has already overwritten.
 function Get-ConfiguredPortFromEnv {
     [CmdletBinding()]
     param(
@@ -71,14 +88,21 @@ function Get-ConfiguredPortFromEnv {
     }
     if (-not $EnvPath -or -not (Test-Path $EnvPath)) { return $null }
     try {
-        $lines = Get-Content $EnvPath -ErrorAction Stop
+        # Raw bytes decoded by hand (never Get-Content) so a leading BOM
+        # survives into $raw exactly as process.loadEnvFile sees it.
+        $bytes = [System.IO.File]::ReadAllBytes($EnvPath)
+        $raw = [System.Text.Encoding]::UTF8.GetString($bytes)
     } catch {
         return $null
     }
+    $lines = $raw -split "`r`n|`n|`r"
     $found = $null
     foreach ($line in $lines) {
-        if ($line -match "^\s*$Key\s*=\s*(\S+)\s*$") {
-            $found = $Matches[1]
+        if ($line -match "^[ \t]*$Key[ \t]*=[ \t]*(.*)$") {
+            $value = $Matches[1]
+            $hashIndex = $value.IndexOf('#')
+            if ($hashIndex -ge 0) { $value = $value.Substring(0, $hashIndex) }
+            $found = $value.Trim()
         }
     }
     if ($null -eq $found) { return $null }
@@ -111,7 +135,16 @@ function Get-ConfiguredServerPort {
 }
 
 # Resolve this checkout's own configured VITE_PORT (.env.local) — the
-# Vite-side sibling of Get-ConfiguredServerPort (#2632 N39).
+# Vite-side sibling of Get-ConfiguredServerPort (#2632 N39), sharing ITS OWN
+# reader's process.loadEnvFile-mirroring contract. That contract is THIS
+# reader's only, not Vite's: vite.config.ts reads VITE_PORT itself via
+# Vite's loadEnv (dotenv-based) plus a bare Number() — a different parser
+# with different rules (no BOM handling, no digit-only gate, silently
+# coerces spellings Get-LocalTtsPortValue rejects). Any divergence between
+# the two readers fails safe (this one only decides what stop-app.ps1
+# sweeps, never what Vite actually binds to), so no behaviour change
+# follows from this being two separate parsers — noted here only so this
+# reader isn't mistaken for Vite's own.
 function Get-ConfiguredVitePort {
     [CmdletBinding()]
     param(
@@ -166,4 +199,30 @@ function Get-PortsToSweep {
     return @($BasePorts)
 }
 
-Export-ModuleMember -Function Get-SidecarSweepPort, Get-LocalTtsPortFromServerEnv, Get-PortsToSweep, Get-LocalTtsPortValue, Get-ConfiguredPortFromEnv, Get-ConfiguredServerPort, Get-ConfiguredVitePort
+# #2632 N53 — decide the final stop-summary line (or none), so stop-app.ps1
+# stops unconditionally claiming "[OK] nothing to stop". Three distinct
+# outcomes were being collapsed into one message:
+# - a PID kill actually happened (KilledAny) — the per-item [STOP] lines
+#   already said so, no summary needed;
+# - the sweep found something it could not clear (SweepIncomplete: a
+#   Stop-Process kill was denied) — claiming "nothing to stop" here is
+#   false reassurance, and the [SWEEP] line above already reported it;
+# - zero ports resolved for this checkout at all (Ports is empty) — this
+#   means "nothing was CHECKED", not "checked and found clear", and must
+#   read differently from the confirmed-clear case.
+# Pulled out (mirrors Get-PortsToSweep) so this decision is itself
+# unit-testable without spinning up real listeners/PIDs.
+function Get-StopSummaryMessage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [bool] $KilledAny,
+        [Parameter(Mandatory)] [bool] $SweepIncomplete,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [int[]] $Ports
+    )
+    if ($KilledAny) { return $null }
+    if ($SweepIncomplete) { return $null }
+    if ($Ports.Count -eq 0) { return "[OK] nothing to stop (no ports resolved for this checkout)" }
+    return "[OK] nothing to stop"
+}
+
+Export-ModuleMember -Function Get-SidecarSweepPort, Get-LocalTtsPortFromServerEnv, Get-PortsToSweep, Get-LocalTtsPortValue, Get-ConfiguredPortFromEnv, Get-ConfiguredServerPort, Get-ConfiguredVitePort, Get-StopSummaryMessage

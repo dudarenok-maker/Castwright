@@ -12,6 +12,37 @@
 BeforeAll {
     $modulePath = Join-Path $PSScriptRoot "..\lib\sidecar-sweep-port.psm1"
     Import-Module $modulePath -Force
+
+    # #2632 N52 — `Set-Content -Encoding utf8` WRITES a UTF-8 BOM under
+    # Windows PowerShell 5.1 (measured: `ef bb bf 4c` — the file's own
+    # fixtures were quietly exercising the BOM-prefixed cell on every run
+    # under 5.1, never the plain one, and could never surface a BOM/no-BOM
+    # divergence either way). Write exact bytes instead so a test controls
+    # precisely what it means to test. No-BOM is the default for every
+    # existing "plain env content" fixture; Set-EnvFixtureWithBom exists
+    # only for the dedicated BOM cell below. Defined here (inside BeforeAll,
+    # like the module import above) rather than at script scope: Pester 5
+    # runs discovery and Run in separate passes, and a plain top-level
+    # `function` from discovery is not guaranteed visible to It blocks in Run.
+    function Set-EnvFixture {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)] [string] $Path,
+            [Parameter(Mandatory)] [string] $Content
+        )
+        [System.IO.File]::WriteAllBytes($Path, [System.Text.Encoding]::UTF8.GetBytes($Content))
+    }
+
+    function Set-EnvFixtureWithBom {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)] [string] $Path,
+            [Parameter(Mandatory)] [string] $Content
+        )
+        $bom = [byte[]](0xEF, 0xBB, 0xBF)
+        $bytes = $bom + [System.Text.Encoding]::UTF8.GetBytes($Content)
+        [System.IO.File]::WriteAllBytes($Path, $bytes)
+    }
 }
 
 Describe 'Get-SidecarSweepPort' {
@@ -29,13 +60,13 @@ Describe 'Get-SidecarSweepPort' {
     It 'returns the per-checkout port recorded in tts.owner.json over server\.env (#2632 N27 fix)' {
         $notePath = Join-Path $script:tempDir "tts.owner.json"
         Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9020" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
     It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.json is absent (#2632 N29)' {
-        Set-Content -Path $script:envPath -Value "PORT=8080`nLOCAL_TTS_PORT=9030" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8080`nLOCAL_TTS_PORT=9030"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
     }
@@ -43,7 +74,7 @@ Describe 'Get-SidecarSweepPort' {
     It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.json is corrupt JSON' {
         $notePath = Join-Path $script:tempDir "tts.owner.json"
         Set-Content -Path $notePath -Value 'not valid json {{{' -Encoding utf8
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9040" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9040"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9040
     }
@@ -51,7 +82,7 @@ Describe 'Get-SidecarSweepPort' {
     It 'falls back to server\.env LOCAL_TTS_PORT when the recorded port is out of range' {
         $notePath = Join-Path $script:tempDir "tts.owner.json"
         Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":99999,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9050" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9050"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9050
     }
@@ -61,7 +92,7 @@ Describe 'Get-SidecarSweepPort' {
     }
 
     It 'returns $null when server\.env has no LOCAL_TTS_PORT line' {
-        Set-Content -Path $script:envPath -Value "PORT=8080`nWORKSPACE_DIR=..\workspace" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8080`nWORKSPACE_DIR=..\workspace"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be $null
     }
@@ -80,17 +111,17 @@ Describe 'Get-SidecarSweepPort' {
         @{ Spelling = '9010.0' }
     ) {
         param($Spelling)
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=$Spelling" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=$Spelling"
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be $null
     }
 
     It 'accepts a leading-zero spelling the server also accepts' {
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=007" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=007"
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 7
     }
 
     It 'prefers a shell-set LOCAL_TTS_PORT over server\.env, mirroring process.loadEnvFile precedence' {
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9010" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010"
         $prev = $env:LOCAL_TTS_PORT
         $env:LOCAL_TTS_PORT = '9100'
         try {
@@ -105,8 +136,62 @@ Describe 'Get-SidecarSweepPort' {
     # duplicate key; this reader used to take the FIRST regex match, which
     # could sweep/force-kill a port the server never actually bound to.
     It 'takes the LAST LOCAL_TTS_PORT line on a duplicate key, matching process.loadEnvFile' {
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9010`nLOCAL_TTS_PORT=9020" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010`nLOCAL_TTS_PORT=9020"
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9020
+    }
+
+    # #2632 N52 — a server\.env whose first bytes are a UTF-8 BOM (EF BB BF)
+    # decodes to a leading U+FEFF. process.loadEnvFile does NOT strip that
+    # BOM before parsing keys, so the BOM-prefixed first line's key is
+    # literally "﻿LOCAL_TTS_PORT" — the server's own resolveSidecarPort()
+    # never sees plain LOCAL_TTS_PORT and falls back to 9000. Measured
+    # directly against process.loadEnvFile (not assumed): with this exact
+    # byte layout, process.env.LOCAL_TTS_PORT stays undefined. This reader
+    # must resolve $null here too, matching the server, not 9010 — the exact
+    # cross-checkout kill hazard this sweep exists to prevent.
+    It 'returns $null on a BOM-prefixed LOCAL_TTS_PORT line, matching process.loadEnvFile' {
+        Set-EnvFixtureWithBom -Path $script:envPath -Content "LOCAL_TTS_PORT=9010"
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be $null
+    }
+
+    It 'still resolves LOCAL_TTS_PORT with no BOM present (control for the BOM cell)' {
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010"
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
+    }
+
+    # #2632 N52 — a duplicate key whose LAST occurrence carries a trailing
+    # comment. Measured directly against process.loadEnvFile: it strips the
+    # inline `# comment` from an unquoted value and takes the LAST
+    # assignment, so this content resolves process.env.LOCAL_TTS_PORT to
+    # "9011". A reader whose match requires the captured token to run to
+    # end-of-line (no trailing comment) fails to match that last line at
+    # all and silently falls back to the EARLIER value (9010) the server
+    # has already overwritten.
+    It 'takes the LAST duplicate value even when it carries a trailing comment, matching process.loadEnvFile' {
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010`nLOCAL_TTS_PORT=9011 # comment"
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9011
+    }
+}
+
+# #2632 N53 — stop-app.ps1 used to print "[OK] nothing to stop"
+# unconditionally whenever no PID kill happened, even after a
+# Stop-Process sweep-kill was denied, or when zero ports even resolved for
+# this checkout (so nothing was actually checked). Both are false
+# reassurance distinct from "checked known ports and found them clear".
+Describe 'Get-StopSummaryMessage (#2632 N53)' {
+    It 'returns $null when a PID kill happened (per-item lines already said so)' {
+        Get-StopSummaryMessage -KilledAny $true -SweepIncomplete $false -Ports @(8080) | Should -Be $null
+    }
+
+    It 'returns $null when the sweep is incomplete (a Stop-Process kill was denied)' {
+        Get-StopSummaryMessage -KilledAny $false -SweepIncomplete $true -Ports @(8080) | Should -Be $null
+    }
+
+    It 'distinguishes "no ports resolved" from "checked and clear"' {
+        Get-StopSummaryMessage -KilledAny $false -SweepIncomplete $false -Ports @() |
+            Should -Be "[OK] nothing to stop (no ports resolved for this checkout)"
+        Get-StopSummaryMessage -KilledAny $false -SweepIncomplete $false -Ports @(8080) |
+            Should -Be "[OK] nothing to stop"
     }
 }
 
@@ -123,22 +208,22 @@ Describe 'Get-ConfiguredServerPort / Get-ConfiguredVitePort (#2632 N39)' {
     }
 
     It 'reads this checkout''s own PORT from server\.env' {
-        Set-Content -Path $script:envPath -Value "PORT=8200`nWORKSPACE_DIR=..\workspace" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8200`nWORKSPACE_DIR=..\workspace"
         Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be 8200
     }
 
     It 'takes the LAST PORT line on a duplicate key' {
-        Set-Content -Path $script:envPath -Value "PORT=8080`nPORT=8200" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8080`nPORT=8200"
         Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be 8200
     }
 
     It 'returns $null (sweep nothing) when server\.env has no PORT line' {
-        Set-Content -Path $script:envPath -Value "WORKSPACE_DIR=..\workspace" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "WORKSPACE_DIR=..\workspace"
         Get-ConfiguredServerPort -ServerEnvPath $script:envPath | Should -Be $null
     }
 
     It 'prefers a shell-set PORT over server\.env' {
-        Set-Content -Path $script:envPath -Value "PORT=8200" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8200"
         $prev = $env:PORT
         $env:PORT = '8300'
         try {
@@ -150,12 +235,12 @@ Describe 'Get-ConfiguredServerPort / Get-ConfiguredVitePort (#2632 N39)' {
     }
 
     It 'reads this checkout''s own VITE_PORT from .env.local' {
-        Set-Content -Path $script:envPath -Value "VITE_PORT=5293`nPORT=8200" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "VITE_PORT=5293`nPORT=8200"
         Get-ConfiguredVitePort -EnvLocalPath $script:envPath | Should -Be 5293
     }
 
     It 'returns $null (sweep nothing) when .env.local has no VITE_PORT line' {
-        Set-Content -Path $script:envPath -Value "PORT=8200" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8200"
         Get-ConfiguredVitePort -EnvLocalPath $script:envPath | Should -Be $null
     }
 
@@ -165,7 +250,7 @@ Describe 'Get-ConfiguredServerPort / Get-ConfiguredVitePort (#2632 N39)' {
     # worktree-shaped server\.env through the real resolver the same way
     # stop-app.ps1's call site does, so a reversion has nowhere to hide.
     It 'resolves a worktree-shaped server\.env to its OWN port, not the primary''s 8080' {
-        Set-Content -Path $script:envPath -Value "PORT=8090`nWORKSPACE_DIR=..\castwright-workspace`nLOCAL_TTS_PORT=9010" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "PORT=8090`nWORKSPACE_DIR=..\castwright-workspace`nLOCAL_TTS_PORT=9010"
         $resolved = Get-ConfiguredServerPort -ServerEnvPath $script:envPath
         $resolved | Should -Be 8090
         $resolved | Should -Not -Be 8080
@@ -198,7 +283,7 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     }
 
     It 'includes the resolved sidecar port from server\.env fallback' {
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9030" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9030"
 
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
         $ports | Should -Be @(5173, 8080, 8443, 9030)
@@ -222,7 +307,7 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     }
 
     It 'returns just the sidecar port when BasePorts is empty but LOCAL_TTS_PORT=9010 resolves' {
-        Set-Content -Path $script:envPath -Value "LOCAL_TTS_PORT=9010" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010"
         $ports = Get-PortsToSweep -BasePorts @() -RunDir $script:tempDir -ServerEnvPath $script:envPath
         $ports | Should -Be @(9010)
     }

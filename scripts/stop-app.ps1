@@ -85,6 +85,7 @@ $basePorts = @()
 if ($serverPort) { $basePorts = @($serverPort) + $basePorts }
 if ($vitePort) { $basePorts = @($vitePort) + $basePorts }
 $ports = Get-PortsToSweep -BasePorts $basePorts -RunDir $runDir -ServerEnvPath $serverEnvPath
+$sweepIncomplete = $false
 if ($ports) {
     $conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
     if ($conns) {
@@ -95,10 +96,15 @@ if ($ports) {
                 $killedAny = $true
             } catch {
                 Write-Status "[SWEEP] could not kill pid=$($c.OwningProcess) on :$($c.LocalPort): $($_.Exception.Message)"
+                $sweepIncomplete = $true
             }
         }
     }
 }
 
-if (-not $killedAny) { Write-Status "[OK] nothing to stop" }
+# #2632 N53 — a denied sweep-kill, or zero ports resolved for this
+# checkout, must not both read as the same "[OK] nothing to stop" claim.
+# See Get-StopSummaryMessage's own comment.
+$summary = Get-StopSummaryMessage -KilledAny $killedAny -SweepIncomplete $sweepIncomplete -Ports $ports
+if ($summary) { Write-Status $summary }
 exit 0
