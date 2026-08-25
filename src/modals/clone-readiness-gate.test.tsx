@@ -313,4 +313,57 @@ describe('CloneReadinessGateModal', () => {
       dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
     ).toBe(false);
   });
+
+  it('Proceed anyway is disabled while cast-on-engine write is pending, preventing race', async () => {
+    mockVerdicts = [
+      verdict({
+        characterId: 'c1',
+        characterName: 'Alice',
+        reason: 'wrong-engine',
+        engine: 'qwen',
+        castOnEngine: 'coqui',
+      }),
+    ];
+    const store = makeStore({ characters: [char({ id: 'c1', ttsEngine: 'qwen' })] });
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
+    render(
+      <Provider store={store}>
+        <CloneReadinessGateModal />
+      </Provider>,
+    );
+
+    const castButton = screen.getByRole('button', { name: 'Cast on Coqui' });
+    const proceedButton = screen.getByRole('button', { name: 'Proceed anyway' });
+
+    // Initially enabled
+    expect(proceedButton).not.toBeDisabled();
+
+    // Click Cast on engine – this should trigger pending state
+    fireEvent.click(castButton);
+
+    // Button should immediately become disabled / show pending text
+    expect(proceedButton).toBeDisabled();
+    expect(proceedButton).toHaveTextContent('Waiting for cast save');
+
+    // Immediate second click should NOT dispatch requestStartGeneration
+    fireEvent.click(proceedButton);
+    expect(
+      dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+    ).toBe(false);
+
+    // Wait for pending window to expire
+    await waitFor(
+      () => {
+        expect(proceedButton).not.toBeDisabled();
+        expect(proceedButton).toHaveTextContent('Proceed anyway');
+      },
+      { timeout: 800 },
+    );
+
+    // Now clicking should work
+    fireEvent.click(proceedButton);
+    expect(
+      dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+    ).toBe(true);
+  });
 });

@@ -87,9 +87,11 @@ const NO_CLONE_VERDICTS: CloneCharacterVerdict[] = [];
 function CloneVerdictRow({
   verdict,
   character,
+  onCastPending,
 }: {
   verdict: CloneCharacterVerdict;
   character: Character | undefined;
+  onCastPending?: () => void;
 }) {
   const dispatch = useAppDispatch();
   const [editingTranscript, setEditingTranscript] = useState(false);
@@ -140,6 +142,7 @@ function CloneVerdictRow({
 
   const onCastOnEngine = () => {
     if (!character || !verdict.castOnEngine) return;
+    onCastPending?.();
     dispatch(castActions.updateCharacter({ ...character, ttsEngine: verdict.castOnEngine }));
   };
 
@@ -224,9 +227,17 @@ export function CloneReadinessGateModal() {
     gate ? selectCloneReadinessVerdicts(s, gate.bookId) : NO_CLONE_VERDICTS,
   );
 
+  const [pendingCastWrite, setPendingCastWrite] = useState(false);
+
   if (!gate) return null;
 
   const onClose = () => dispatch(uiActions.closeCloneReadinessGate());
+
+  const handleCastPending = () => {
+    setPendingCastWrite(true);
+    // debounce window is 500ms; give a small buffer so the PUT is definitely in flight
+    setTimeout(() => setPendingCastWrite(false), 600);
+  };
 
   /* Decision 1 — warn-and-allow. Deliberately dispatches
      `requestStartGeneration` directly, NEVER `openStartGenPrompt`: this
@@ -271,6 +282,7 @@ export function CloneReadinessGateModal() {
                   key={v.characterId}
                   verdict={v}
                   character={characters.find((c) => c.id === v.characterId)}
+                  onCastPending={handleCastPending}
                 />
               ))}
             </ul>
@@ -283,8 +295,8 @@ export function CloneReadinessGateModal() {
             >
               Cancel
             </button>
-            <PrimaryButton variant="dark" onClick={onProceedAnyway}>
-              Proceed anyway
+            <PrimaryButton variant="dark" onClick={onProceedAnyway} disabled={pendingCastWrite}>
+              {pendingCastWrite ? 'Waiting for cast save…' : 'Proceed anyway'}
             </PrimaryButton>
           </div>
         </div>
