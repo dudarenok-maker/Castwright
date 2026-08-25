@@ -316,7 +316,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 46 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -326,9 +326,18 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**68 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**69 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-26 (#2584/#2570 fix, PR #2640), 67 → 68.** New row
+> **Last change: 2026-08-26 (#2656, successor to closed #1976/#1996), 68 → 69.**
+> New row **A46** added — the 2026-08-25 idle-gated VRAM measurement narrowed
+> the "stranded" pool to look like the Qwen Base 0.6B + Whisper resident-model
+> floor, but never captured `allocated` right after an explicit unload to
+> confirm that, so it can't rule out a genuine leak underneath. #1976 and
+> #1996 were closed as `not planned` (superseded, not fixed) to declutter
+> their accreted measurement history; #2656 carries the actual remaining
+> work and this row.
+>
+> **Prior change: 2026-08-26 (#2584/#2570 fix, PR #2640), 67 → 68.** New row
 > **A45** added — PR #2640's `stripEstablishedAsciiRewrites` fix is proven at the
 > unit/route level but still owes a real re-analysis of *Заказ Коалфолла*
 > against its existing `cast-id-history.json`; see
@@ -2746,6 +2755,46 @@ Gemini) — no GPU/TTS sidecar required, since this is an analysis-only
 defect. *Criteria:*
 [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §10.
 *Cost:* short — one full re-analysis of an already-imported book.
+
+---
+
+### A46 · Stranded VRAM after a chapter render — resident-model floor or genuine leak? ([#2656](https://github.com/dudarenok-maker/Castwright/issues/2656), successor to closed [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976)/[#1996](https://github.com/dudarenok-maker/Castwright/issues/1996)) · **single or dual GPU box, real render**
+
+The 2026-08-25 idle-gated measurement
+(`docs/testing/1996-stranded-vram-measurement.md` @ `218cc562`, on
+`fix/sidecar-1996-idle-vram-measurement`, unmerged) found the ~5.45 GB
+`allocated` after a chapter render is byte-identical across a confirmed-idle
+21 s window, and `/debug/reclaim` recovers only 6.4% of `reserved` — neither
+a self-heal, nor uncollected cache, nor fragmentation. At the idle point,
+`qwen.base_loaded=true` (Qwen Base 0.6B has **no idle TTL** — button-driven,
+evicts only on explicit `/unload`) and `whisper.model_loaded=true` (120 s
+TTL, only 21 s elapsed). That reading is consistent with "this is just the
+two resident models' own live weights, not a leak" — but the run never
+captured what `allocated` looks like *after* those models are actually
+unloaded, so it cannot rule out a genuine leak sitting on top of that floor.
+Nothing in any existing log or prior measurement attempt (including the
+original #1976 report, predating the `/debug/memory` diagnostics) contains
+this reading — it does not exist yet at any recorded point in this repo's
+history.
+
+- Reproduce P2/P3 from the linked run sheet: render a chapter, confirm the
+  box idle (poll `inflight_synth`, not a fixed wall-clock).
+- **New step:** issue `POST /unload {qwen}` and confirm/force Whisper past
+  its `ASR_IDLE_TTL`, then read `/debug/memory` again.
+- Diff that post-unload `allocated`/`reserved` against the P3 baseline
+  already on record for this box's device.
+  - Drops to near-zero (matching Qwen Base 0.6B + Whisper's known weight
+    sizes) → the resident floor fully explains #1976's original "stranded"
+    report; no lever ever needed, close #2656 as working-as-intended and
+    correct #1976/#1996's language for the record.
+  - Residual gap remains → that gap is a genuine leak, needs its own
+    root-cause pass in the placement/eviction code.
+
+*Needs:* a live sidecar with Qwen Base 0.6B and Whisper both resident, and
+the ability to force an explicit `/unload` + TTL lapse mid-session. *Criteria:*
+[#2656](https://github.com/dudarenok-maker/Castwright/issues/2656) — extend
+`docs/testing/1996-stranded-vram-measurement.md`, don't replace it. *Cost:*
+short — one idle render, one explicit unload, one reading.
 
 ## Group B — local Ollama analyzer only
 
