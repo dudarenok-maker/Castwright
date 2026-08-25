@@ -258,7 +258,11 @@ def test_engine_actual_card_whisper_uses_requested_device_not_mutable_device():
     itself is tautological and can never flag a fallback. A real
     WhisperEngine instance (isinstance check, not a SimpleNamespace double)
     with a pristine cuda intent (`_requested_device`, frozen at __init__)
-    that later landed on cpu (`_device`, mutated) must still be flagged."""
+    that later landed on cpu (`_device`, mutated) must still be flagged.
+    Note: this fixture is deliberately synthetic. No production path currently
+    reaches a divergence between Whisper's requested and actual devices,
+    because /transcribe passes cpu_capable=False, so admission returns either
+    a GPU key or noCapacity. This test guards against a future regression."""
     eng = main.WhisperEngine()
     eng._requested_device = "cuda"
     eng._device = "cpu"

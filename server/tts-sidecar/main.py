@@ -3355,9 +3355,12 @@ class KokoroEngine(Engine):
         # `rt.cuda_version`) reads ORT's own build/runtime metadata -- no
         # session or CUDA context is created by it.
         #
-        # No usable GPU (`providers` has no CUDA entry) resolves the intent to
-        # "cpu": nothing asked for cuda on this load, so landing on cpu is not
-        # a fallback -- see `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`.
+        # No CUDA execution provider (`providers` has no CUDA entry) resolves
+        # the intent to "cpu": nothing asked for cuda on this load, so landing
+        # on cpu is not a fallback -- see `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`.
+        # Note: this test does not cover DirectML or ROCm providers, which are
+        # also GPUs but not CUDA. They are currently unreachable in shipping
+        # because `accelerator-profile.mjs` gates CUDA-only to the nvidia profile.
         intent_device = resolved_device
         if family == "auto":
             intent_device = "cuda" if "CUDAExecutionProvider" in providers else "cpu"
@@ -4915,9 +4918,13 @@ def _is_resident(engine_id: str) -> Optional[str]:
     still occupies that GPU's VRAM even when we can no longer read back
     confirmation of it. When the actual-card probe comes back "unknown" for
     a LOADED engine (`card` is not None), fall back to this load's own
-    intent (`_device`) -- an admitted placement or an explicit env pin is
-    the best remaining evidence of where the weights actually live. This
-    keeps `PlacementController` booking VRAM against the right card instead
+    intent (`_device`) -- this load's resolved intent (the device family
+    the load actually requested, from either a pin, an admission, or on
+    an unpinned auto load, from provider availability). For an auto load,
+    that intent was "cuda" even when no admission/pin was involved, so a
+    phantom ~1GB conservative VRAM booking may linger until the load
+    unwinds. This is the best remaining evidence of where the weights
+    actually live. This keeps `PlacementController` booking VRAM against the right card instead
     of silently dropping the constraint and admitting a second heavy engine
     onto a card that is already full."""
     named: dict[str, Any] = dict(ENGINES)
@@ -9754,6 +9761,10 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     # the regression this `isinstance` carve-out closes (#2647 follow-up).
     # Whisper is routed to the SAME `_requested_device` branch SPK already
     # uses, restoring the pre-#2647 comparison the paragraph above describes.
+    # This isinstance carve-out is defensive against a future regression where
+    # Whisper's requested and actual devices diverge, but no production path
+    # currently reaches it: /transcribe always passes cpu_capable=False, so
+    # admission returns either a GPU key or noCapacity, never a divergence.
     if isinstance(engine, WhisperEngine):
         requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
     elif hasattr(engine, "_device"):
