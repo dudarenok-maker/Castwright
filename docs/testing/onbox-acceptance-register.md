@@ -316,7 +316,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -326,9 +326,18 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**68 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-26 (#2643), 67 → 67 (no count change).** **A44**'s
+> **Last change: 2026-08-26 (#2584/#2570 fix, PR #2640), 67 → 68.** New row
+> **A45** added — PR #2640's `stripEstablishedAsciiRewrites` fix is proven at the
+> unit/route level but still owes a real re-analysis of *Заказ Коалфолла*
+> against its existing `cast-id-history.json`; see
+> [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
+> §10.2. Numbered A45, not A44 — #2647 claimed A44 for an unrelated Kokoro
+> finding independently and concurrently; this row is the later of the two to
+> land.
+>
+> **Prior change: 2026-08-26 (#2643), 67 → 67 (no count change).** **A44**'s
 > own text is corrected, not discharged: #2647's fix compared this load's
 > intent against `_device`, but nothing ever resolved the string `"auto"`
 > into a concrete card before that comparison, so `fell_back` stayed
@@ -2589,6 +2598,8 @@ same live sidecar.
 §Voice-design gate. *Cost:* short — three attempts unset, three attempts set,
 on one book.
 
+---
+
 ### A44 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
 
 `_engine_actual_card`'s `fell_back` flag (#2631 review B3, the silent-CPU-fallback
@@ -2690,6 +2701,51 @@ covers this alarm-correctness surface specifically;
 neighbouring ORT-marker/GPU-provider mechanism (A36–A38) but not this
 bookkeeping. *Cost:* short — one genuine-fallback load, one contended-admission
 load, one drift simulation, one unpinned-auto load with its negative control.
+
+---
+
+### A45 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
+
+Wave 2's re-analysis (§7 rerun, A29/A30's sibling campaign) surfaced a
+defect PR #2640 fixed at the code level across five rounds of review:
+`stripEstablishedAsciiRewrites` (`server/src/analyzer/roster-dedup.ts`)
+now strips a same-run dedup rewrite that retires an established ASCII cast
+id in favour of a freshly-minted non-ASCII one, gated on a direct
+name-equivalence check (`normaliseForMatch`, the same "same character by
+name" comparator `remapFreshToPriorIds`/`mergeAnalysisResultWithExistingCast`
+already use) between the established prior row and the fresh survivor it
+would be retired in favour of — not on which dedup tier produced the entry,
+which round 5 found is not a sound signal (a Tier-3 alias merge can produce
+the identical id shape without ever passing through Tier-1). The fix is
+proven unit-level (`roster-dedup.test.ts`) at all four of `analysis.ts`'s
+call sites, but only 2 of those 4 are independently asserted at route level
+by real `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in
+`analysis.test.ts` — the two feeding `remapFreshToPriorIds`
+(`cumulativeForRemap`, main-route and subset-route). The other 2
+(`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same
+test runs but are not independently asserted: their effect is currently
+masked by an unrelated mechanism, `refuseRetirementsOfLiveIds`
+(`server/src/routes/analysis.ts`), so a revert of either of those two sites
+to the bare `composeRewrites(...)` call (skipping the strip) still leaves
+the whole `analysis.test.ts` suite green (verified during round 5). Nothing
+in the suite runs the real analyzer against the real, already-corrupted
+book — that needs live hardware.
+
+- Re-analyse *Заказ Коалфолла*
+  (`C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`) — a
+  **full** manuscript re-analysis, not a subset/chapter retry — against its
+  existing `cast-id-history.json`.
+- Confirm the character's `cast.json` id comes back as `oduvan` (ASCII), not
+  `одуван` (Cyrillic) — the defect's exact shape.
+- If the raw analyzer output still mints a different id this run, confirm
+  any recorded `cast-id-history.json` entry names the correct direction
+  (fresh id superseded by the established one), not the reverse.
+
+*Needs:* the real workspace above and a real analyzer (local Ollama or
+Gemini) — no GPU/TTS sidecar required, since this is an analysis-only
+defect. *Criteria:*
+[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §10.
+*Cost:* short — one full re-analysis of an already-imported book.
 
 ## Group B — local Ollama analyzer only
 

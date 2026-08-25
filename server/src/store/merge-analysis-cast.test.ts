@@ -202,6 +202,37 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(merged.find((c) => c.id === 'coalfall-dragon')!.overrideTtsVoices).toBeUndefined();
   });
 
+  it('id drift: a reserved fold-bucket id is never the name-fallback survivor (#2584 review finding F2)', () => {
+    // #2584's initial fix (reverted, see this commit) would have let a
+    // reserved fold-bucket id (MALE_BUCKET_ID/FEMALE_BUCKET_ID,
+    // 'unknown-male'/'unknown-female' — both pass an ASCII-kebab test) become
+    // the name-fallback survivor, permanently welding a real character's
+    // sentences and designed voice onto the shared bucket. The bucket row
+    // must always be the one retired, never the survivor: today's direction
+    // (dropped `old` retired, fresh `f.id` wins) already guarantees this by
+    // construction, since a name-fallback candidate is always drawn from the
+    // DROPPED side (`old`/`cand`) and never becomes `merged.id`.
+    const existing: C[] = [
+      {
+        id: 'unknown-male',
+        name: 'Timkin',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-timkin' } },
+      },
+    ];
+    const fresh: C[] = [{ id: 'timkin', name: 'Timkin', lines: 20 } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    // The real character's own correctly-slugged id survives; the bucket id
+    // is retired away. Timkin's designed voice rides onto it as normal.
+    expect(merged.map((c) => c.id)).toEqual(['timkin']);
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-timkin' } });
+    expect(merged[0].voiceState).toBe('tuned');
+    expect(retirements).toEqual([{ from: 'unknown-male', to: 'timkin' }]);
+  });
+
   it('id drift: an UNVOICED prior character whose analyzer id drifted is matched by name (RC1, #2040 Task 12)', () => {
     // Alden carries no voice/reuse field at all. Before Task 12,
     // isVoicedOrReused(old) excluded it from the candidate set entirely, so a

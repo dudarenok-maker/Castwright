@@ -1,5 +1,6 @@
 import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId, normaliseNameKey } from '../util/safe-id.js';
+import { normaliseForMatch } from '../util/text-match.js';
 import { mergeCharacterFields } from './roster-merge-fields.js';
 import { diminutiveCanonical } from './ru-diminutives.js';
 import { conventionsFor } from './dialogue-structure/lang/index.js';
@@ -45,15 +46,130 @@ export function composeRewrites(
   return result;
 }
 
+// ── stripEstablishedAsciiRewrites ────────────────────────────────────────────
+
+/** ASCII kebab-case test — lowercase letters/digits, single hyphens between
+    groups, no leading/trailing hyphen. Matches the pre-plan-219 legacy slug
+    shape (`safeId`'s Latin-only output). */
+function isAsciiKebabId(id: string): boolean {
+  return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id);
+}
+
+/** #2584/#2570 — a run's OWN fresh-side dedup rewrite table (this module's
+    `composeRewrites` output, composed from `dedupeRosterByName`'s and
+    `foldMinorCast`'s rewrites) can, purely by coincidence, contain an entry
+    whose KEY equals an ESTABLISHED prior cast row's raw id. This happens
+    when the analyzer rosters several near-duplicate fresh rows for the SAME
+    character in one run (e.g. `oduvan`, `owdovan`, `одуван`, all "Одуван")
+    and `dedupeRosterByName`'s dedup passes arbitrarily collapse them onto
+    one of its own survivors — nothing about that choice is informed by
+    which id the ESTABLISHED cast already considers stable. When one of the
+    collapsed fresh ids (the rewrite entry's KEY) happens to also be a prior
+    row's raw id, and that prior id is already the stable ASCII-kebab form
+    while the dedup's chosen survivor (the entry's VALUE) is NOT, applying
+    the entry against the prior cast (Site 1, `applyRewriteToPriorCast`)
+    retires the established ASCII id in favour of the fresh non-canonical
+    one, and feeding the same entry into `remapFreshToPriorIds` makes it
+    treat the pair as "already converged" on the wrong id — the #2584
+    regression, confirmed end-to-end against the real analyzer output shape
+    (PR #2640 review).
+
+    Strip only that narrow shape — and PR #2640's review found TWO gates
+    that each get this wrong in opposite directions:
+
+    - **Bare id-shape (rejected, 292f1cff)** — too broad: it also strips a
+      genuine Tier-3 cross-script ALIAS merge (`шеф` id `shef` ASCII, merged
+      via alias data onto `Борис Игнатьевич` id `борис-игнатьевич`
+      non-ASCII) that happens to key on an established ASCII id for a
+      completely different, deliberate reason — that merge is not a
+      same-run duplicate-fresh-row coincidence at all, and stripping it
+      silently un-merges two rows the alias data says are one person.
+    - **`tier1RewriteKeys` membership (rejected, 066de4c9)** — too narrow:
+      Tier-3 (cross-script alias merge) is alias-driven, not name-driven,
+      and has no precondition that the merged rows share a name with each
+      other, so a Tier-3-produced entry that happens to carry the #2584 id
+      shape (established ASCII key, non-ASCII value) is invisible to a
+      Tier-1-only gate whenever the merged rows' genders conflict enough to
+      make Tier-1 itself bail on the whole group (round-5 counter-example:
+      3 fresh rows literally named "Одуван Петров", genders
+      male/male/female — Tier-1 skips the group outright, `oduvan` never
+      lands in `tier1RewriteKeys`, but Tier-3's alias links still merge them
+      and produce exactly the #2584 shape).
+
+    The gate that is actually SOUND is neither the id shape nor which tier
+    produced the entry — it's whether the established prior row and the
+    fresh survivor it would be retired in favour of are the SAME PERSON by
+    NAME. Compare `priorCast`'s row at `from` against `freshRoster`'s row at
+    `to` (the survivor `to` currently resolves to, in the SAME pre-remap
+    fresh-id space `rewrites`' values live in) using `normaliseForMatch` —
+    the same "same character by name" comparator `remapFreshToPriorIds` and
+    `mergeAnalysisResultWithExistingCast` already use to reconcile fresh rows
+    against the prior cast, reused here rather than inventing a third
+    comparator. A genuine Tier-3 identity merge (шеф → Борис Игнатьевич)
+    keeps two names that are honestly different and is correctly left alone;
+    the #2584 coincidence (oduvan → одуван, name "Одуван" both sides) names
+    the exact same person and is correctly stripped — regardless of which
+    tier produced either entry.
+
+    Anything else — a genuine improvement onto a MORE canonical id than a
+    non-ASCII established one, or a fresh-to-fresh dedup entry that never
+    touches any prior row — is left untouched, same as before. */
+export function stripEstablishedAsciiRewrites<
+  T extends { id: string } & Record<string, unknown>,
+  F extends { id: string } & Record<string, unknown>,
+>(
+  rewrites: Record<string, string>,
+  priorCast: ReadonlyArray<T>,
+  freshRoster: ReadonlyArray<F>,
+): Record<string, string> {
+  const priorById = new Map(priorCast.map((p) => [p.id, p]));
+  const freshById = new Map(freshRoster.map((f) => [f.id, f]));
+  const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
+    typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
+  const result: Record<string, string> = {};
+  for (const [from, to] of Object.entries(rewrites)) {
+    const prior = priorById.get(from);
+    const survivor = freshById.get(to);
+    const priorKey = prior ? nameOf(prior) : '';
+    const survivorKey = survivor ? nameOf(survivor) : '';
+    if (
+      prior &&
+      isAsciiKebabId(from) &&
+      !isAsciiKebabId(to) &&
+      priorKey !== '' &&
+      priorKey === survivorKey
+    ) {
+      continue;
+    }
+    result[from] = to;
+  }
+  return result;
+}
+
 // ── dedupeRosterByName ───────────────────────────────────────────────────────
 
 export function dedupeRosterByName(
   characters: CharacterOutput[],
   sentences: ReadonlyArray<{ characterId: string }>,
   opts: { language?: string } = {},
-): { characters: CharacterOutput[]; rewrites: Record<string, string>; suggestions: MergeSuggestion[] } {
+): {
+  characters: CharacterOutput[];
+  rewrites: Record<string, string>;
+  suggestions: MergeSuggestion[];
+  /** The subset of `rewrites`' keys produced by Tier-1 (exact normalised
+      name) — i.e. this run's OWN fresh roster contained 2+ rows sharing the
+      exact same name and Tier-1 arbitrarily collapsed them onto one
+      survivor. NOT the signal `stripEstablishedAsciiRewrites` gates on
+      (round-5 review, #2584) — that function now compares names directly,
+      since a Tier-3 alias merge can produce the identical #2584 id shape
+      without ever passing through Tier-1 (see its doc comment). Kept for
+      diagnostics/tests that want to distinguish which tier produced a
+      given rewrite entry. */
+  tier1RewriteKeys: Set<string>;
+} {
   const lines = lineCounts(sentences);
   const rewrites: Record<string, string> = {};
+  const tier1RewriteKeys = new Set<string>();
   // Work on shallow clones so callers keep their input; preserve insertion order.
   let roster: CharacterOutput[] = characters.map((ch) => ({ ...ch }));
 
@@ -87,12 +203,18 @@ export function dedupeRosterByName(
     const survivor: CharacterOutput = { ...group[0], id: canonicalId };
 
     // Record rewrite for the first member if its id differs from canonical.
-    if (group[0].id !== canonicalId) rewrites[group[0].id] = canonicalId;
+    if (group[0].id !== canonicalId) {
+      rewrites[group[0].id] = canonicalId;
+      tier1RewriteKeys.add(group[0].id);
+    }
 
     // Merge remaining members into survivor.
     for (const member of group.slice(1)) {
       mergeCharacterFields(survivor, member);
-      if (member.id !== canonicalId) rewrites[member.id] = canonicalId;
+      if (member.id !== canonicalId) {
+        rewrites[member.id] = canonicalId;
+        tier1RewriteKeys.add(member.id);
+      }
       dropped.add(member.id);
     }
 
@@ -393,7 +515,7 @@ export function dedupeRosterByName(
     }
   }
 
-  return { characters: roster, rewrites, suggestions };
+  return { characters: roster, rewrites, suggestions, tier1RewriteKeys };
 }
 
 /** Drop suggestions whose source OR target id is not a standing character in the
