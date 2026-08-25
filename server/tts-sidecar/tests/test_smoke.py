@@ -276,6 +276,70 @@ def test_health_responsive_during_busy_synth(client: TestClient) -> None:
     )
 
 
+def test_inflight_synth_tracks_transcribe_and_embed(client: TestClient) -> None:
+    """Verify that /transcribe and /embed increment the busy signal (inflight_synth)
+    so the idle gate can detect ASR/embed activity. Regression check for #1996.
+
+    Before the fix, /transcribe and /embed did NOT increment _inflight_synth,
+    so the idle-gate measurement saw ASR running continuously and falsely
+    concluded the process was "confirmed idle" — the actual confound #1996's
+    run revealed."""
+    # Stub a slow transcriber by monkey-patching ASR.transcribe to sleep.
+    # We don't need a real Whisper model; just simulate work.
+    slow_sleep_sec = 0.5
+
+    original_transcribe = main.ASR.transcribe
+
+    def fake_slow_transcribe(pcm, sample_rate, language=None, word_timestamps=False, device=None):
+        time.sleep(slow_sleep_sec)
+        # Return minimal valid output (the test only checks inflight_synth, not transcribe results).
+        return {"text": "Hi", "language": "en", "avg_logprob": -0.5, "no_speech_prob": 0.01, "compression_ratio": 1.2}
+
+    main.ASR.transcribe = fake_slow_transcribe
+
+    try:
+        # Generate some fake PCM data (16-bit LE mono).
+        fake_pcm = b"\x00\x00" * 1000  # 1000 samples of silence.
+
+        transcribe_thread = threading.Thread(
+            target=lambda: client.post(
+                "/transcribe",
+                content=fake_pcm,
+                headers={"X-Sample-Rate": "16000"},
+            ),
+            daemon=True,
+        )
+        transcribe_thread.start()
+        # Tiny grace so the transcribe is actually running when we probe.
+        time.sleep(0.05)
+
+        # Mid-call: inflight_synth should be non-zero (at least 1 for the transcribe).
+        health_mid = client.get("/health")
+        assert health_mid.status_code == 200, "health route failed while transcribe running"
+        inflight_mid = health_mid.json().get("inflight_synth")
+        assert inflight_mid is not None, "inflight_synth field missing from /health"
+        assert inflight_mid > 0, (
+            f"inflight_synth should be > 0 during transcribe, but got {inflight_mid}. "
+            "Did /transcribe stop incrementing _inflight_synth?"
+        )
+
+        transcribe_thread.join(timeout=5.0)
+        assert not transcribe_thread.is_alive(), "transcribe thread never finished"
+
+        # After completion: inflight_synth should be back to 0.
+        health_after = client.get("/health")
+        assert health_after.status_code == 200
+        inflight_after = health_after.json().get("inflight_synth")
+        assert inflight_after is not None
+        assert inflight_after == 0, (
+            f"inflight_synth should be 0 after transcribe completes, but got {inflight_after}. "
+            "Did the finally-block decrement fail?"
+        )
+    finally:
+        # Restore the original ASR.transcribe.
+        main.ASR.transcribe = original_transcribe
+
+
 def test_synthesize_returns_substitution_header_when_voice_unknown(monkeypatch):
     """The 'index out of range in self' regression. When the Node-side voice
     catalog drifts ahead of the model's actual speaker manifest, /synthesize

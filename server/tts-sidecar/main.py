@@ -10996,6 +10996,8 @@ async def transcribe(req: Request) -> Response:
     language = req.headers.get("X-Language") or None
     word_timestamps = req.headers.get("X-Word-Timestamps") is not None
 
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Capacity-aware placement (task 4, vram-aware-placement plan): only
         # when ASR is GPU-configured (ASR_DEVICE=cuda/rocm) — the cpu-default
@@ -11031,6 +11033,8 @@ async def transcribe(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-31: clears the recycle drain regardless of outcome
     return JSONResponse(result)
 
 
@@ -11070,6 +11074,8 @@ async def embed(req: Request) -> Response:
     if sample_rate <= 0:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
 
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Capacity-aware placement (task 4, vram-aware-placement plan): only
         # when SPK is GPU-configured (SPK_DEVICE=cuda/rocm) — the cpu-default
@@ -11099,6 +11105,8 @@ async def embed(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-36: clears the recycle drain regardless of outcome
     return JSONResponse({"embedding": embedding, "dim": len(embedding), "sample_rate": SPK.TARGET_SR})
 
 
