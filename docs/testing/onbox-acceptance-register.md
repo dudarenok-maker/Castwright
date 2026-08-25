@@ -2570,15 +2570,29 @@ on one book.
 ### A44 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
 
 Wave 2's re-analysis (§7 rerun, A29/A30's sibling campaign) surfaced a
-defect PR #2640 fixed at the code level across four rounds of review:
+defect PR #2640 fixed at the code level across five rounds of review:
 `stripEstablishedAsciiRewrites` (`server/src/analyzer/roster-dedup.ts`)
-now strips the narrow same-run Tier-1 dedup coincidence that was retiring an
-established ASCII cast id in favour of a freshly-minted non-ASCII one. The
-fix is proven unit- and route-level (`roster-dedup.test.ts`,
-`analysis.test.ts` — real `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring
-tests drive all four call sites), but nothing in the suite runs the real
-analyzer against the real, already-corrupted book — that needs live
-hardware.
+now strips a same-run dedup rewrite that retires an established ASCII cast
+id in favour of a freshly-minted non-ASCII one, gated on a direct
+name-equivalence check (`normaliseForMatch`, the same "same character by
+name" comparator `remapFreshToPriorIds`/`mergeAnalysisResultWithExistingCast`
+already use) between the established prior row and the fresh survivor it
+would be retired in favour of — not on which dedup tier produced the entry,
+which round 5 found is not a sound signal (a Tier-3 alias merge can produce
+the identical id shape without ever passing through Tier-1). The fix is
+proven unit-level (`roster-dedup.test.ts`) at all four of `analysis.ts`'s
+call sites, but only 2 of those 4 are independently asserted at route level
+by real `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in
+`analysis.test.ts` — the two feeding `remapFreshToPriorIds`
+(`cumulativeForRemap`, main-route and subset-route). The other 2
+(`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same
+test runs but are not independently asserted: their effect is currently
+masked by an unrelated mechanism, `refuseRetirementsOfLiveIds`
+(`server/src/routes/analysis.ts`), so a revert of either of those two sites
+to the bare `composeRewrites(...)` call (skipping the strip) still leaves
+the whole `analysis.test.ts` suite green (verified during round 5). Nothing
+in the suite runs the real analyzer against the real, already-corrupted
+book — that needs live hardware.
 
 - Re-analyse *Заказ Коалфолла*
   (`C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`) — a
