@@ -159,23 +159,46 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
 
 ## Results
 
+Run: 2026-08-26, this box (`cuda:0` RTX 4070 Laptop 8188 MB, `cuda:1` RTX 5070 Ti
+16303 MB). Book: *The Coalfall Commission*, Chapter 3 ("Chapter One — The Knock",
+41 lines), re-rendered with `force:true` on `qwen3-tts-0.6b`. Both GPUs were idle
+(0 MiB used, 0% util) before the run started.
+
 | Point | When | time to idle | Device | reserved bytes | allocated bytes | inactive_split bytes | reserved − allocated | nvidia-smi used | RSS MB | Engines loaded | reclaimed |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| P0 | fresh | | | | | | | | | | |
-| P1 | mid-render | | | | | | | | | | |
-| P2 | +0 s | | | | | | | | | | |
-| P3 | confirmed idle | _elapsed_ | | | | | | | | | |
-| P4 before | reclaim | | | | | | | | | | |
-| P4 after | reclaim | | | | | | | | | | |
-| P5 | cuda:1 render | | | | | | | | | | |
+| P0 | fresh, 07:53:44 | | cuda:1 | 0 | 0 | 0 | 0 | 197 MiB | 1143.0 | none | |
+| P1 | mid-render, 07:54:32 (~8 s in) | | cuda:1 | 1,881,145,344 (1794.4 MB) | 1,863,124,480 (1776.7 MB) | 13,826,560 (13.2 MB) | 17,975,296 (17.1 MB) | 2051 MiB | 3965.9 | qwen base | |
+| P2 | +0 s, 07:58:36 | | cuda:1 | 6,138,363,904 (5853.4 MB) | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | 6489 MiB | 19914.2 | qwen base, whisper | |
+| P3 | confirmed idle, 07:58:57 | **21 s** | cuda:1 | 6,138,363,904 (5853.4 MB) — **identical to P2** | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | 6489 MiB | 19799.1 | qwen base, whisper | |
+| P4 before | reclaim, 07:58:58 | | cuda:1 | 6,138,363,904 (5853.4 MB) | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | | | | true |
+| P4 after | reclaim, 07:58:58 | | cuda:1 | 5,748,293,632 (5481.4 MB) | 5,717,628,928 (5453.7 MB) — **unchanged** | 30,664,704 (29.25 MB) — **unchanged** | 30,664,704 (29.25 MB) | | | | true |
+| P5 | cuda:1 render, throughout P1–P4 | | cuda:0 | 2,097,152 (2.0 MB, unchanged pre/post) | ≈0 | ≈2.0 MB | | 0–116 MiB (baseline noise) | | | |
 
-**RSS at P2 vs 8192 MB:** ☐ above ☐ below
+Reclaim delta on `cuda:1`: `reserved` dropped 390,070,272 B (**372.0 MB, 6.4% of
+the 5853.4 MB reserved**). `allocated` and `inactive_split` did not move at all.
+After the reclaim, `reserved − allocated` (30,664,704 B) exactly equals
+`inactive_split` — i.e. every byte of *freeable* cache was already reclaimed;
+nothing else in `reserved` is fragmentation.
+
+**P5 (dual-GPU cross-device check):** satisfied by the readings already taken
+rather than a second render — this box's standing device policy pins Qwen/Coqui/
+ASR to `cuda:1` exclusively (`server/.env.example:528-534`), so every render on
+this box **is** the cross-device case. `cuda:0` stayed at its 0–116 MiB baseline
+(OS/driver noise, not app-caused) across the entire P0→P4 window while `cuda:1`
+went from 197 MiB to 6489 MiB. No VRAM bleed onto the idle card.
+
+**RSS at P2 vs 8192 MB:** ☒ above ☐ below (19914 MB, 2.4× the threshold).
 *(Above means the memory watchdog's unconditional 60 s `gc+empty_cache` was
-already firing throughout — `main.py:7957-7964` (`_mem_warn_threshold_mb()`).)*
+already firing throughout — confirmed directly in `logs/tts.err.log`: `"sidecar
+memory crossed 8192MB (rss=17128MB) → forced gc+empty_cache reclaimed -0MB (now
+17128MB)"`, fired once during the render itself, before P2 was even captured.
+The watchdog was already running and reclaiming ~0 MB — it cannot touch this
+pool either, for the same reason `/debug/reclaim` mostly couldn't.)*
 
-**What was active during the wait** (from `logs/server.log`, P2 → confirmed-idle):
-
-<!-- List each request line here: route + chapter/job id. If none, write "idle window clean". -->
+**What was active during the wait** (from `logs/server.log`, P2 07:58:36 →
+confirmed-idle 07:58:57): **idle window clean** — the grep returned zero
+request lines in that 21 s window. No confound; this run's P3/P4 readings are
+trustworthy evidence, not a contaminated idle.
 
 ---
 
@@ -189,6 +212,42 @@ already firing throughout — `main.py:7957-7964` (`_mem_warn_threshold_mb()`).)
 | Idle gate took >120 s to clear | **Contaminated idle.** Legitimate background activity was still running; name it from the `logs/server.log` grep above. **Do not treat the resulting P3/P4 readings as evidence about a stranded pool at all.** |
 | P4 `reserved` barely moves, `reclaimed: false` | **Invalid reading.** The reclaim never ran — CUDA was unavailable or `empty_cache()` threw. Retry once; treat repeated `false` as a separate finding (a live-context problem), not a #1996 answer. |
 | Strand present at P3 *and* P4 frees it *and* RSS was above 8192 MB at P2 | Contradicts the 60 s watchdog reclaim having run. Investigate that before designing anything — one of the two observations is wrong. |
+
+### This run's verdict: none of the five rows above fit — a sixth case
+
+The observed shape is internally consistent but doesn't match any listed row:
+
+- Not "self-heals" — the strand is byte-identical at P2 and P3 (21 s of
+  confirmed-clean idle).
+- Not "uncollected cache" — reclaim only recovered 372.0 MB of the 5853.4 MB
+  reserved (6.4%), nowhere near "drops sharply".
+- Not "fragmentation" — `inactive_split` is 29.25 MB, a rounding error next to
+  the 5453.7 MB sitting in `allocated`. Fragmentation is not what's dominant.
+- Not "contaminated idle" — the gate cleared in 21 s (well under the 120 s
+  threshold) and the attribution grep is empty.
+- Not "invalid reading" — `reclaimed: true` both times.
+
+**What actually explains it:** `allocated` (5453.7 MB) never moved at all,
+before or after `/debug/reclaim`. `empty_cache()` only returns *reserved-but-
+unallocated* cache to the driver — by definition it cannot touch memory PyTorch
+still considers live. At P2/P3, `qwen.base_loaded=true` and
+`whisper.model_loaded=true` — and per CLAUDE.md's engine-lifecycle notes, **Qwen
+Base 0.6B has no idle TTL at all** (button-driven, evicts only on explicit
+`/unload`), and Whisper's `ASR_IDLE_TTL=120s` had only 21 s elapsed against it.
+So the 5.45 GB of `allocated` VRAM this run measured is, as far as this reading
+can tell, **the two resident models' own live weights/KV state — normal
+residency, not a leak** on top of it.
+
+This run cannot distinguish "the resident-model floor is exactly what #1976
+measured and mistook for stranded" from "there is a genuine leak sitting on top
+of that floor, currently masked by residency." Answering that needs a follow-up
+reading that either (a) waits past both TTLs (impossible for Qwen Base, which
+has none — would need an explicit `/unload` call first) or (b) captures
+`allocated` immediately after an explicit Qwen-Base unload and diffs against
+this run's P3. Recorded as the next open question rather than closing #1996's
+criterion 1 — this run neither confirms nor refutes #1976's "fully reclaimable"
+claim; it shows the claim's own measurement never separated "resident" from
+"stranded" in the first place.
 
 Record the outcome as a comment on
 [#1996](https://github.com/dudarenok-maker/Castwright/issues/1996), including the
