@@ -4872,7 +4872,19 @@ def _is_resident(engine_id: str) -> Optional[str]:
     `engine_id` is currently loaded on, or None when unloaded / on cpu / not
     cheaply knowable. Reuses `_engine_actual_card` (the same loaded-model
     probe /health's `gpus` payload already relies on) rather than duplicating
-    the per-engine attribute digging here."""
+    the per-engine attribute digging here.
+
+    An honest "unknown" `family` (kokoro-onnx API drift defeating the ORT
+    session read, #2647) must not cost residency TRACKING the way it rightly
+    costs the /health `fell_back` claim: a model genuinely loaded onto a GPU
+    still occupies that GPU's VRAM even when we can no longer read back
+    confirmation of it. When the actual-card probe comes back "unknown" for
+    a LOADED engine (`card` is not None), fall back to this load's own
+    intent (`_device`) -- an admitted placement or an explicit env pin is
+    the best remaining evidence of where the weights actually live. This
+    keeps `PlacementController` booking VRAM against the right card instead
+    of silently dropping the constraint and admitting a second heavy engine
+    onto a card that is already full."""
     named: dict[str, Any] = dict(ENGINES)
     named["asr"] = ASR
     named["spk"] = SPK
@@ -4880,7 +4892,13 @@ def _is_resident(engine_id: str) -> Optional[str]:
     if engine is None:
         return None
     card = _engine_actual_card(engine)
-    if card is None or card["family"] not in ("cuda", "rocm"):
+    if card is None:
+        return None
+    if card["family"] not in ("cuda", "rocm"):
+        if card["family"] == "unknown":
+            intent_fam, intent_idx = _parse_device(getattr(engine, "_device", None))
+            if intent_fam in ("cuda", "rocm"):
+                return f"{intent_fam}:{intent_idx if intent_idx is not None else 0}"
         return None
     index = card["index"] if card["index"] is not None else 0
     return f"{card['family']}:{index}"
@@ -9678,12 +9696,32 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     # own admission call sites (`/embed`, `/transcribe`) only ever admit a
     # GPU placement when the env pin ALREADY says cuda/rocm, so
     # `_requested_device` already reflects this load's real intent for them
-    # regardless. Qwen has `_device` too, so it takes this same branch, but
-    # it's a no-op there: Qwen loads via a plain torch `.to(self._device)`,
-    # which cannot silently land elsewhere the way an ORT session's provider
-    # list can, and the top-of-function torch introspection above already
-    # reads Qwen's real device straight from the model, not from this string.
-    if hasattr(engine, "_device"):
+    # regardless. Qwen has `_device` too, so it takes the `_device` branch
+    # below, but it's a genuine no-op there rather than a bug: `Qwen3TTSModel`
+    # (the qwen_tts wrapper `_base`/`_base17`/`_design` all hold) exposes no
+    # `.parameters()`, so the top-of-function torch introspection above never
+    # actually reaches it for Qwen (verified against the installed qwen_tts
+    # package — `getattr(wrapper, "parameters", None)` is None) and `family`
+    # below falls through to this SAME `_device` string, making
+    # `requested_fam == family` structurally, by construction, on every Qwen
+    # load — `fell_back` cannot fire, correctly, since a real torch `.to()`
+    # failure raises rather than silently landing elsewhere.
+    #
+    # Whisper ALSO has a `_device` attribute (unlike SPK), so it would
+    # wrongly take the branch below if dispatched purely on `hasattr` — but
+    # unlike Coqui/Kokoro/Qwen, Whisper's `_device` is NOT a stable per-load
+    # intent: `WhisperEngine._ensure_loaded` overwrites it with the load's
+    # own actual placement at the end (`self._device = dev`), with no
+    # separate `_resolved_device` ground truth the way Coqui/Kokoro have. So
+    # reading `_device` for both `requested_fam` and `family` (the latter via
+    # the same string fallback below) would compare that field to itself —
+    # tautologically equal, never able to flag a fallback — which is exactly
+    # the regression this `isinstance` carve-out closes (#2647 follow-up).
+    # Whisper is routed to the SAME `_requested_device` branch SPK already
+    # uses, restoring the pre-#2647 comparison the paragraph above describes.
+    if isinstance(engine, WhisperEngine):
+        requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    elif hasattr(engine, "_device"):
         requested_fam, _ = _parse_device(getattr(engine, "_device"))
     else:
         requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))

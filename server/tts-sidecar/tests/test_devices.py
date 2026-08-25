@@ -212,6 +212,99 @@ def test_build_gpus_payload_surfaces_unindexed_cpu_fallback(monkeypatch):
     assert {"engine": "kokoro", "actual_card": None, "stale_reason": "cpu_fallback"} in unindexed[0]["resident"]
 
 
+# ── review round (#2643 follow-up): Qwen/Whisper requested_fam dispatch, and
+# `_is_resident` under an honest "unknown" family ──
+
+def test_engine_actual_card_qwen_real_wrapper_shape_never_flags_fell_back():
+    """The REAL qwen_tts `Qwen3TTSModel` wrapper (what QwenEngine._base/_base17/
+    _design all hold) has no `.parameters()` method (verified against the
+    installed qwen_tts package) — so the top-of-function torch introspection
+    never reaches it, and `family` falls through to the SAME `_device` string
+    `requested_fam` also reads. The two are therefore structurally equal on
+    every real Qwen load, however `_device` is set: this pins that a "cuda"
+    intent can never be flagged `fell_back` for Qwen's actual object shape."""
+    class RealShapeQwenWrapper:
+        pass  # no .parameters() — matches qwen_tts.Qwen3TTSModel exactly
+
+    eng = types.SimpleNamespace(_device="cuda:0", _base=RealShapeQwenWrapper())
+    card = main._engine_actual_card(eng)
+    assert card["family"] == "cuda"
+    assert card["fell_back"] is False
+
+
+def test_engine_actual_card_qwen_would_flag_fell_back_if_model_exposed_parameters():
+    """Control for the test above: the comparison itself is live, not dead
+    code — if the held model DID expose `.parameters()` (a future qwen_tts
+    API change) and it disagreed with `_device`'s cuda intent, the existing
+    torch-introspection branch picks it up and flags `fell_back` exactly like
+    Coqui/Kokoro. Today's no-op is a property of the wrapper's shape, not of
+    this comparison being unreachable."""
+    class HypotheticalWrapperWithParams:
+        def parameters(self):
+            yield types.SimpleNamespace(device=types.SimpleNamespace(type="cpu", index=None))
+
+    eng = types.SimpleNamespace(_device="cuda:0", _base=HypotheticalWrapperWithParams())
+    card = main._engine_actual_card(eng)
+    assert card["family"] == "cpu"
+    assert card["fell_back"] is True
+
+
+def test_engine_actual_card_whisper_uses_requested_device_not_mutable_device():
+    """Regression: WhisperEngine has a `_device` attribute (unlike SPK), so a
+    bare `hasattr(engine, "_device")` dispatch wrongly routed it to the same
+    branch as Coqui/Kokoro/Qwen. But Whisper's `_device` is overwritten with
+    THIS LOAD's own actual placement at the end of `_ensure_loaded` (no
+    separate `_resolved_device` ground truth exists) — comparing it to
+    itself is tautological and can never flag a fallback. A real
+    WhisperEngine instance (isinstance check, not a SimpleNamespace double)
+    with a pristine cuda intent (`_requested_device`, frozen at __init__)
+    that later landed on cpu (`_device`, mutated) must still be flagged."""
+    eng = main.WhisperEngine()
+    eng._requested_device = "cuda"
+    eng._device = "cpu"
+    eng._model = object()
+    card = main._engine_actual_card(eng)
+    assert card["family"] == "cpu"
+    assert card["fell_back"] is True
+
+
+def test_engine_actual_card_whisper_matching_intent_is_not_fell_back():
+    """Companion to the above: when Whisper's frozen intent and its current
+    `_device` agree, no false positive."""
+    eng = main.WhisperEngine()
+    eng._requested_device = "cuda"
+    eng._device = "cuda:0"
+    eng._model = object()
+    card = main._engine_actual_card(eng)
+    assert card["family"] == "cuda"
+    assert card["fell_back"] is False
+
+
+def test_is_resident_falls_back_to_intent_when_actual_card_unknown(monkeypatch):
+    """#2647 companion fix (Kokoro's `_resolved_device` init sentinel moved
+    `None` -> "unknown", not "cpu") made an honest "unknown" family reachable
+    for a genuinely GPU-resident engine (ORT session read failed under
+    kokoro-onnx API drift). `_is_resident` must not drop the residency
+    constraint just because the actual-card probe couldn't confirm it —
+    PlacementController still needs to know this card is occupied."""
+    monkeypatch.setattr(main, "_engine_actual_card",
+        lambda e: {"family": "unknown", "index": None, "fell_back": False})
+    eng = types.SimpleNamespace(_device="cuda:0")
+    monkeypatch.setitem(main.ENGINES, "kokoro", eng)
+    assert main._is_resident("kokoro") == "cuda:0"
+
+
+def test_is_resident_stays_none_when_unknown_and_no_gpu_intent(monkeypatch):
+    """Companion control: an "unknown" actual card with no cuda/rocm intent
+    behind it (e.g. genuinely unloaded, or a cpu/auto pin) must still report
+    not-resident — the fallback above is scoped to a real GPU intent only."""
+    monkeypatch.setattr(main, "_engine_actual_card",
+        lambda e: {"family": "unknown", "index": None, "fell_back": False})
+    eng = types.SimpleNamespace(_device="auto")
+    monkeypatch.setitem(main.ENGINES, "kokoro", eng)
+    assert main._is_resident("kokoro") is None
+
+
 def test_build_gpus_payload_no_unindexed_entry_when_bucket_empty(monkeypatch):
     """A fully-indexed box (no -1 bucket) sees no synthetic entry — additive only."""
     monkeypatch.setattr(main, "_enumerate_cuda_devices",

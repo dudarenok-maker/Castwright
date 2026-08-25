@@ -2603,17 +2603,42 @@ kokoro-onnx import.
   construct a session — the same missing-`nvidia-cudnn-cu12` gap A36 already
   measured on this box is a ready-made way to force this — load Kokoro and
   confirm `/health`'s `gpus[].resident[]` entry for Kokoro carries
-  `stale_reason: 'cpu_fallback'`, and `devices.kokoro` reads `cpu`.
+  `stale_reason: 'cpu_fallback'`, and `devices.kokoro` reads `cpu`. Kokoro has
+  no torch ordinal (`index: None`), so this entry lands in `_build_gpus_payload`'s
+  synthetic `idx: -1` bucket (`"unindexed (cpu / ORT / CT2)"`), not under one
+  of the numbered GPU cards — look there, not in `gpus[<n>].resident[]`.
 - With the card genuinely out of headroom (load Qwen and/or Coqui first to
   consume it) and `KOKORO_DEVICE` unset (default `auto`) or pinned to `cuda`,
   trigger a Kokoro load so the VRAM ledger's `admit()` genuinely returns a CPU
   placement. Confirm the resident entry for Kokoro carries **no**
   `stale_reason: 'cpu_fallback'` — the deliberate-admission case must stay
   quiet even though the outcome is the same CPU placement as the bullet
-  above.
-- Force the kokoro-onnx API-drift branch (e.g. a `kokoro-onnx` install with no
-  `Kokoro.from_session`) and confirm `/health` reports the Kokoro card as
-  `unknown`, not `cpu`, and `fell_back` reads `False`.
+  above. **Positive control (this observation has no failure mode without
+  one):** repeat with the card genuinely idle so `admit()` places Kokoro on
+  the GPU instead — confirm the resident entry now carries the real GPU
+  index (not the `-1` bucket) and still no `stale_reason`. A GPU-admitted
+  load ALSO shows no `stale_reason`, so the CPU-admission bullet alone can't
+  tell "admission correctly chose cpu" from "admission was never actually
+  exercised, and Kokoro loaded some other way" — this control is what makes
+  it a real test of the admission path rather than a no-op that always
+  passes.
+- Force the kokoro-onnx API-drift branch. **Not** "a `kokoro-onnx` install
+  with no `Kokoro.from_session`" — verified against the installed package:
+  `Kokoro.__init__` (the fallback `_ensure_loaded` takes when
+  `from_session` is absent) ALSO always sets `self.sess =
+  rt.InferenceSession(...)`, so `_kokoro_session_device` still reads a real
+  session there and `/health` reports `cpu`/`cuda`, never `unknown` — that
+  repro can't produce the observation this bullet asks for, and an operator
+  running it would log a false PASS. `_kokoro_session_device`
+  (`main.py`) only fails when the loaded Kokoro object's ORT session isn't
+  reachable at its `.sess` attribute at all — the real drift shape is a
+  kokoro-onnx release that renames or drops that attribute. Force it
+  directly instead of depending on such a release being installed: after a
+  normal Kokoro load, drop into the sidecar process (a Python breakpoint, or
+  a one-line temporary edit to `_kokoro_session_device` that returns `None`
+  unconditionally, reverted immediately after this bullet) and confirm
+  `/health` then reports the Kokoro card as `unknown`, not `cpu`, and
+  `fell_back` reads `False`.
 
 *Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and `KOKORO_DEVICE`
 settable per run. *Criteria:* the three bullets above — no existing run sheet
