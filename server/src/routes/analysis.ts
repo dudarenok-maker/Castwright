@@ -1006,10 +1006,11 @@ export function dedupAndPrepare(
   suggestions: MergeSuggestion[];
   preDedupSentences: { id: number; chapterId: number; characterId: string }[];
   preDedupRoster: { id: string; name: string }[];
-  /** #2584/#2570 (PR #2640 N6) — passed through to `stripEstablishedAsciiRewrites`
-      at every call site so it can tell a same-run Tier-1 duplicate-name
-      coincidence apart from a genuine Tier-2a/Tier-3 identity merge. See
-      `dedupeRosterByName`'s and `stripEstablishedAsciiRewrites`'s doc comments. */
+  /** #2584/#2570 (PR #2640 N6) — no longer consumed by
+      `stripEstablishedAsciiRewrites` (round-5 review switched that function
+      to a direct name-equivalence check; see its doc comment for why the
+      tier alone isn't a sound gate). Passed through for diagnostics/tests
+      that want to distinguish which tier produced a given rewrite entry. */
   tier1RewriteKeys: Set<string>;
 } {
   // Capture pre-dedup lineage BEFORE any rewrite (journal needs the original ids/names).
@@ -5617,11 +5618,18 @@ export async function runMainAnalyzerJob(
        fresh duplicate rows for one character this run) — see the function's
        own doc comment. Without it, the entry above falsely reads as
        "already converged" and this remap skips, silently discarding the
-       established id. */
+       established id.
+
+       `characters0` (declared above) is the fresh roster in the SAME
+       pre-remap fresh-id space `cumulativeForRemap`'s values live in — the
+       composed rewrite table's `to` ids resolve against `folded.characters`
+       (plus the narrator-identity/palette/lines fields characters0 layers
+       on, none of which touch `name`), never against a roster already
+       rewritten by remapFreshToPriorIds itself. */
     const cumulativeForRemap = stripEstablishedAsciiRewrites(
       composeRewrites(dd.rewrites, folded.rewrites),
       priorCastForMerge,
-      dd.tier1RewriteKeys,
+      characters0,
     );
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
@@ -5807,11 +5815,17 @@ export async function runMainAnalyzerJob(
              #2584/#2570 — stripEstablishedAsciiRewrites (same guard as the
              remapFreshToPriorIds call above) so this Site-1 write never
              retires an established ASCII id in favour of a non-ASCII
-             survivor a fresh-side dedup collision happened to pick. */
+             survivor a fresh-side dedup collision happened to pick.
+             `characters0` again — this rewrite table is composed from the
+             SAME dd/folded ids as `cumulativeForRemap` above, so the fresh
+             roster that resolves its `to` names must be the same one:
+             `characters0`, not `characters` (already remapped onto prior
+             ids by this point) or anything reconciled/CJK-remapped further
+             down, whose names may already have been overwritten by a merge. */
           const cumulative = stripEstablishedAsciiRewrites(
             composeRewrites(dd.rewrites, folded.rewrites),
             priorCastForMerge,
-            dd.tier1RewriteKeys,
+            characters0,
           );
           const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
           if (remapped.droppedVoices.length) {
@@ -7291,11 +7305,13 @@ export async function runSubsetAnalyzerJob(
        instead of being matched here first and rewritten backwards.
 
        #2584/#2570 — stripEstablishedAsciiRewrites; see the main route's
-       matching block for the mechanism. */
+       matching block for the mechanism. `enriched0` (declared above,
+       mirroring the main route's `characters0`) is the fresh roster in the
+       SAME pre-remap fresh-id space this rewrite table's `to` ids live in. */
     const cumulativeForRemap = stripEstablishedAsciiRewrites(
       composeRewrites(dd.rewrites, folded.rewrites),
       priorCastForMerge,
-      dd.tier1RewriteKeys,
+      enriched0,
     );
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
@@ -7448,11 +7464,12 @@ export async function runSubsetAnalyzerJob(
              so designed voices ride onto the surviving canonical ids.
 
              #2584/#2570 — stripEstablishedAsciiRewrites; see the main route's
-             matching Site-1 block for the mechanism. */
+             matching Site-1 block for the mechanism. `enriched0` again, for
+             the same reason as the `cumulativeForRemap` call above. */
           const cumulative = stripEstablishedAsciiRewrites(
             composeRewrites(dd.rewrites, folded.rewrites),
             priorCastForMerge,
-            dd.tier1RewriteKeys,
+            enriched0,
           );
           const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
           if (remapped.droppedVoices.length) {

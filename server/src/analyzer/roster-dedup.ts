@@ -1,5 +1,6 @@
 import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId, normaliseNameKey } from '../util/safe-id.js';
+import { normaliseForMatch } from '../util/text-match.js';
 import { mergeCharacterFields } from './roster-merge-fields.js';
 import { diminutiveCanonical } from './ru-diminutives.js';
 import { conventionsFor } from './dialogue-structure/lang/index.js';
@@ -60,56 +61,83 @@ function isAsciiKebabId(id: string): boolean {
     whose KEY equals an ESTABLISHED prior cast row's raw id. This happens
     when the analyzer rosters several near-duplicate fresh rows for the SAME
     character in one run (e.g. `oduvan`, `owdovan`, `одуван`, all "Одуван")
-    and `dedupeRosterByName`'s Tier-1 EXACT-NAME pass arbitrarily collapses
-    them onto one of its own survivors — nothing about that choice is
-    informed by which id the ESTABLISHED cast already considers stable. When
-    one of the collapsed fresh ids (the rewrite entry's KEY) happens to also
-    be a prior row's raw id, and that prior id is already the stable
-    ASCII-kebab form while the dedup's chosen survivor (the entry's VALUE) is
-    NOT, applying the entry against the prior cast (Site 1,
-    `applyRewriteToPriorCast`) retires the established ASCII id in favour of
-    the fresh non-canonical one, and feeding the same entry into
-    `remapFreshToPriorIds` makes it treat the pair as "already converged" on
-    the wrong id — the #2584 regression, confirmed end-to-end against the
-    real analyzer output shape (PR #2640 review).
+    and `dedupeRosterByName`'s dedup passes arbitrarily collapse them onto
+    one of its own survivors — nothing about that choice is informed by
+    which id the ESTABLISHED cast already considers stable. When one of the
+    collapsed fresh ids (the rewrite entry's KEY) happens to also be a prior
+    row's raw id, and that prior id is already the stable ASCII-kebab form
+    while the dedup's chosen survivor (the entry's VALUE) is NOT, applying
+    the entry against the prior cast (Site 1, `applyRewriteToPriorCast`)
+    retires the established ASCII id in favour of the fresh non-canonical
+    one, and feeding the same entry into `remapFreshToPriorIds` makes it
+    treat the pair as "already converged" on the wrong id — the #2584
+    regression, confirmed end-to-end against the real analyzer output shape
+    (PR #2640 review).
 
-    Strip only that narrow shape — and PR #2640's pass-3 review (N6) found
-    the id-shape test alone is not narrow enough: it also strips a
-    genuine Tier-3 cross-script ALIAS merge (`шеф` id `shef` ASCII,
-    merged via alias data onto `Борис Игнатьевич` id `борис-игнатьевич`
-    non-ASCII) that happens to key on an established ASCII id for a
-    completely different, deliberate reason — that merge is not a same-run
-    duplicate-fresh-row coincidence at all, and stripping it silently
-    un-merges two rows the alias data says are one person.
+    Strip only that narrow shape — and PR #2640's review found TWO gates
+    that each get this wrong in opposite directions:
 
-    The real distinguishing fact is WHICH dedup tier produced the entry, not
-    the id shapes it connects. Tier-1 (`tier1RewriteKeys`, this same module)
-    fires when this run's OWN fresh roster contains 2+ rows that normalise to
-    the EXACT SAME name — i.e. the analyzer's own non-determinism minting
-    duplicate rows for one character — and it is that same-run duplication,
-    never anything about the established cast, that can coincidentally reuse
-    a prior ASCII id as one of the collapsed-away inputs. Tier-2a/Tier-3
-    entries merge rows with DIFFERENT normalised names (a short/long form, or
-    an alias-resolved cross-script pair) — a deliberate identity merge, never
-    a same-name coincidence, so they are never in `tier1RewriteKeys` and this
-    strip must leave them alone regardless of id shape.
+    - **Bare id-shape (rejected, 292f1cff)** — too broad: it also strips a
+      genuine Tier-3 cross-script ALIAS merge (`шеф` id `shef` ASCII, merged
+      via alias data onto `Борис Игнатьевич` id `борис-игнатьевич`
+      non-ASCII) that happens to key on an established ASCII id for a
+      completely different, deliberate reason — that merge is not a
+      same-run duplicate-fresh-row coincidence at all, and stripping it
+      silently un-merges two rows the alias data says are one person.
+    - **`tier1RewriteKeys` membership (rejected, 066de4c9)** — too narrow:
+      Tier-3 (cross-script alias merge) is alias-driven, not name-driven,
+      and has no precondition that the merged rows share a name with each
+      other, so a Tier-3-produced entry that happens to carry the #2584 id
+      shape (established ASCII key, non-ASCII value) is invisible to a
+      Tier-1-only gate whenever the merged rows' genders conflict enough to
+      make Tier-1 itself bail on the whole group (round-5 counter-example:
+      3 fresh rows literally named "Одуван Петров", genders
+      male/male/female — Tier-1 skips the group outright, `oduvan` never
+      lands in `tier1RewriteKeys`, but Tier-3's alias links still merge them
+      and produce exactly the #2584 shape).
+
+    The gate that is actually SOUND is neither the id shape nor which tier
+    produced the entry — it's whether the established prior row and the
+    fresh survivor it would be retired in favour of are the SAME PERSON by
+    NAME. Compare `priorCast`'s row at `from` against `freshRoster`'s row at
+    `to` (the survivor `to` currently resolves to, in the SAME pre-remap
+    fresh-id space `rewrites`' values live in) using `normaliseForMatch` —
+    the same "same character by name" comparator `remapFreshToPriorIds` and
+    `mergeAnalysisResultWithExistingCast` already use to reconcile fresh rows
+    against the prior cast, reused here rather than inventing a third
+    comparator. A genuine Tier-3 identity merge (шеф → Борис Игнатьевич)
+    keeps two names that are honestly different and is correctly left alone;
+    the #2584 coincidence (oduvan → одуван, name "Одуван" both sides) names
+    the exact same person and is correctly stripped — regardless of which
+    tier produced either entry.
 
     Anything else — a genuine improvement onto a MORE canonical id than a
     non-ASCII established one, or a fresh-to-fresh dedup entry that never
     touches any prior row — is left untouched, same as before. */
-export function stripEstablishedAsciiRewrites<T extends { id: string }>(
+export function stripEstablishedAsciiRewrites<
+  T extends { id: string } & Record<string, unknown>,
+  F extends { id: string } & Record<string, unknown>,
+>(
   rewrites: Record<string, string>,
   priorCast: ReadonlyArray<T>,
-  tier1RewriteKeys: ReadonlySet<string>,
+  freshRoster: ReadonlyArray<F>,
 ): Record<string, string> {
-  const priorIds = new Set(priorCast.map((p) => p.id));
+  const priorById = new Map(priorCast.map((p) => [p.id, p]));
+  const freshById = new Map(freshRoster.map((f) => [f.id, f]));
+  const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
+    typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
   const result: Record<string, string> = {};
   for (const [from, to] of Object.entries(rewrites)) {
+    const prior = priorById.get(from);
+    const survivor = freshById.get(to);
+    const priorKey = prior ? nameOf(prior) : '';
+    const survivorKey = survivor ? nameOf(survivor) : '';
     if (
-      tier1RewriteKeys.has(from) &&
-      priorIds.has(from) &&
+      prior &&
       isAsciiKebabId(from) &&
-      !isAsciiKebabId(to)
+      !isAsciiKebabId(to) &&
+      priorKey !== '' &&
+      priorKey === survivorKey
     ) {
       continue;
     }
@@ -131,9 +159,12 @@ export function dedupeRosterByName(
   /** The subset of `rewrites`' keys produced by Tier-1 (exact normalised
       name) — i.e. this run's OWN fresh roster contained 2+ rows sharing the
       exact same name and Tier-1 arbitrarily collapsed them onto one
-      survivor. See `stripEstablishedAsciiRewrites`'s doc comment for why
-      this is the signal that separates the #2584 same-run-duplicate
-      coincidence from a genuine Tier-2a/Tier-3 identity merge. */
+      survivor. NOT the signal `stripEstablishedAsciiRewrites` gates on
+      (round-5 review, #2584) — that function now compares names directly,
+      since a Tier-3 alias merge can produce the identical #2584 id shape
+      without ever passing through Tier-1 (see its doc comment). Kept for
+      diagnostics/tests that want to distinguish which tier produced a
+      given rewrite entry. */
   tier1RewriteKeys: Set<string>;
 } {
   const lines = lineCounts(sentences);
