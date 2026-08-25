@@ -316,7 +316,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -326,15 +326,22 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-25 (#2632, PR #2635), 65 → 66.** Added **E10** — the
+> **Last change: 2026-08-25 (#2647), 66 → 67.** Added **A44** — Kokoro's
+> silent-CPU-fallback alarm (`fell_back`) was structurally dead code on every
+> default install before this fix (the regression #2636 introduced); nothing
+> on real hardware has yet confirmed it fires on a genuine CUDA→CPU fallback,
+> stays quiet on a ledger-admitted CPU placement, or reads `unknown` (rather
+> than a false `cpu`) under kokoro-onnx API drift.
+>
+> **Prior change: 2026-08-25 (#2632, PR #2635), 65 → 66.** Added **E10** — the
 > sidecar-sweep worktree fix ships behaviour that only two live checkouts can
 > prove (that `npm run stop` sweeps the RIGHT checkout's sidecar, not the
 > primary's); nothing in that PR exercises `stop-app.mjs`/`.ps1` end to end
 > against a real listener.
 >
-> **Prior change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
+> Before that: 2026-08-23 (fold step, #2625), 66 → 65. One row discharged
 > live (A38, "ORT marker refuses — not repairs — a clobbered venv") and
 > dropped, per the owner's remove-outright ruling — the refuse-and-log branch
 > fired exactly as designed against a real copy of the live sidecar venv.
@@ -2566,6 +2573,55 @@ same live sidecar.
 [`language-recurrence-onbox-acceptance.md`](language-recurrence-onbox-acceptance.md)
 §Voice-design gate. *Cost:* short — three attempts unset, three attempts set,
 on one book.
+
+### A44 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
+
+`_engine_actual_card`'s `fell_back` flag (#2631 review B3, the silent-CPU-fallback
+badge behind `/health`'s `stale_reason: 'cpu_fallback'`) compared this load's
+outcome against `_requested_device` — written once at `__init__` from the
+`KOKORO_DEVICE` env pin and never touched again. On the shipped default (no
+`KOKORO_DEVICE` set), that field reads `"auto"` forever, even for a load the
+VRAM-ledger admission itself steered onto a concrete `cuda:N` for capacity
+reasons — so `fell_back` could never be `True` on any default install, the
+exact regression #2636 introduced. Fixed by comparing against `_device`
+instead — this load's own intent, which an admitted `device=` argument
+overwrites before the load runs. A companion fix makes `_resolved_device` use
+`None`, not `"cpu"`, as its "not known yet" sentinel, so a kokoro-onnx
+API-drift session-read failure reports an honest `unknown` card instead of a
+confident false `cpu`. **Ratified behaviour decision:** when the VRAM ledger
+deliberately admits a load onto CPU under contention while
+`KOKORO_DEVICE=cuda:N`, `fell_back` stays `False` — admission is compliance
+with a capacity decision, not a silent fallback; `/health`'s `devices.kokoro`
+still reports the real session device either way, so the operator can always
+see the CPU placement even when the alarm itself stays quiet. Unit tests pin
+all three branches against synthetic engine doubles; none of them can prove
+the alarm against a REAL ORT session, a REAL VRAM-ledger admission, or a REAL
+kokoro-onnx import.
+
+- With `KOKORO_DEVICE=cuda` (or `cuda:0`) and a card where the CUDA execution
+  provider is *listed* by `get_available_providers()` but cannot actually
+  construct a session — the same missing-`nvidia-cudnn-cu12` gap A36 already
+  measured on this box is a ready-made way to force this — load Kokoro and
+  confirm `/health`'s `gpus[].resident[]` entry for Kokoro carries
+  `stale_reason: 'cpu_fallback'`, and `devices.kokoro` reads `cpu`.
+- With the card genuinely out of headroom (load Qwen and/or Coqui first to
+  consume it) and `KOKORO_DEVICE` unset (default `auto`) or pinned to `cuda`,
+  trigger a Kokoro load so the VRAM ledger's `admit()` genuinely returns a CPU
+  placement. Confirm the resident entry for Kokoro carries **no**
+  `stale_reason: 'cpu_fallback'` — the deliberate-admission case must stay
+  quiet even though the outcome is the same CPU placement as the bullet
+  above.
+- Force the kokoro-onnx API-drift branch (e.g. a `kokoro-onnx` install with no
+  `Kokoro.from_session`) and confirm `/health` reports the Kokoro card as
+  `unknown`, not `cpu`, and `fell_back` reads `False`.
+
+*Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and `KOKORO_DEVICE`
+settable per run. *Criteria:* the three bullets above — no existing run sheet
+covers this alarm-correctness surface specifically;
+[`ort-marker-onbox-acceptance.md`](ort-marker-onbox-acceptance.md) covers the
+neighbouring ORT-marker/GPU-provider mechanism (A36–A38) but not this
+bookkeeping. *Cost:* short — one genuine-fallback load, one contended-admission
+load, one drift simulation.
 
 ## Group B — local Ollama analyzer only
 
