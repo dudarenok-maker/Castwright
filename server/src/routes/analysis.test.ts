@@ -5205,6 +5205,272 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   );
 });
 
+describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wiring (PR #2640 pass-3 review, N7)', () => {
+  /* N7 — none of the 4 real `stripEstablishedAsciiRewrites` call sites in
+     analysis.ts (main route x2, subset route x2) were covered by a test that
+     drives the actual route/orchestration code: reverting all 4 sites to
+     the bare `composeRewrites(...)` call (no strip) still left the full
+     server suite green. This test drives the REAL runMainAnalyzerJob against
+     a real bookDir with real file I/O — no mocked dedup/remap — reproducing
+     the exact real-box shape (`docs/testing` / PR #2640 review): the
+     analyzer's own non-determinism mints THREE fresh candidate rows across
+     three chapters for one character ("Одуван" as `oduvan`, `owdovan`,
+     `одуван`), which dedupeRosterByName's Tier-1 exact-name pass collapses
+     to `одуван` as its own internal survivor — coincidentally colliding with
+     the established prior cast row's stable ASCII id `oduvan`. Without the
+     strip at both main-route sites (5615 `cumulativeForRemap` / 5804
+     `cumulative`), the established `oduvan` row is wrongly retired in favour
+     of the non-canonical `одуван` survivor. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Одуван asked.\n\nOlga nodded and looked away.';
+
+  // Chapter 1 introduces 'oduvan', chapter 2 'owdovan', chapter 3 'одуван' —
+  // all named "Одуван". mergeRosterChapter merges by id, so all three
+  // survive as distinct rows in the whole-book roster dedupAndPrepare
+  // receives, exactly the same-run duplication dedupeRosterByName's Tier-1
+  // collapses onto one of its own choosing.
+  function stage1RosterForChapter(chapterId: number): CharacterOutput[] {
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: oduvanId,
+        name: 'Одуван',
+        role: 'lead',
+        color: '#111111',
+        gender: 'male',
+        evidence: [{ quote: 'Одуван asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: oduvanId,
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(_manuscriptId: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter(chapterId) };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-strip-ascii-rewrites-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_strip_ascii_rewrites_e2e_test',
+        manuscriptId,
+        title: 'Strip Ascii Rewrites E2E Test Book',
+        author: 'Test Author',
+        language: 'ru',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+      { id: 3, title: 'Chapter Three', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Strip Ascii Rewrites E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  it(
+    'the established ASCII id survives — the fresh Tier-1 survivor cascades onto it, not the reverse',
+    async () => {
+      const manuscriptId = `test-strip-ascii-rewrites-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      // Established prior cast row under the STABLE ASCII id, carrying a
+      // tuned voice — the identity that must survive this run.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'oduvan',
+              name: 'Одуван',
+              voiceState: 'tuned',
+              voiceUuid: 'U-oduvan',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-oduvan' } },
+            },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as {
+          characters: Array<{
+            id: string;
+            name: string;
+            voiceState?: string;
+            voiceUuid?: string;
+            overrideTtsVoices?: unknown;
+          }>;
+        };
+
+        // Sanity: this run's own fresh-side Tier-1 dedup really did collapse
+        // the three-way duplicate onto ITS OWN internal survivor — if this
+        // fails the fixture is wrong, not the wiring under test.
+        const oduvanRows = castAfter.characters.filter((c) => c.name === 'Одуван');
+        expect(oduvanRows).toHaveLength(1);
+
+        // The core N7 assertion: the ESTABLISHED ascii id survived, not the
+        // fresh dedup's own non-canonical choice. This is exactly what a
+        // revert of either main-route call site (5615/5804) breaks.
+        expect(oduvanRows[0].id).toBe('oduvan');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('одуван');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('owdovan');
+
+        // The established voice rode onto the surviving row — proves Site 1
+        // never retired 'oduvan' (a retirement would have dropped this row
+        // and let the voiceless fresh survivor win instead).
+        expect(oduvanRows[0].voiceState).toBe('tuned');
+        expect(oduvanRows[0].voiceUuid).toBe('U-oduvan');
+        expect(oduvanRows[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-U-oduvan' } });
+
+        // cast-id-history: the fresh survivor 'одуван' was retired ONTO the
+        // established id (Task 10 early remap, site 4) — but 'oduvan' itself
+        // was never retired (Site 1 must not fire on it, since the strip
+        // removed it from the composed rewrite table it consumes).
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).toHaveProperty('одуван', 'oduvan');
+        expect(history.supersededBy).not.toHaveProperty('oduvan');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
 describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persisted character id (srv-87, #2086)', () => {
   /* Clone of the harness at :3148 — real bookDir, real file I/O, no mocked
      cast-id-history. The three interim writes (`analysis.ts:3630`, `:3840`,
@@ -6787,6 +7053,260 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         // regardless of whether that bug exists. The real proof is the
         // sibling assertion one line up. Left in place as a secondary check.
         expect(history.supersededBy).not.toHaveProperty(antonPrimeId);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wiring (PR #2640 pass-3 review, N7)', () => {
+  /* Mirrors "runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites
+     wiring" above, driving runSubsetAnalyzerJob instead — the second pair of
+     the 4 real call sites (subset route :7295 `cumulativeForRemap` / :7452
+     `cumulative`). Mirrors the reference "Task 11" scaffold above: even on
+     the subset (already-analysed) path, Phase 0's `runStage1Chapter` is
+     still called per requested chapter (a fresh per-chapter cast probe
+     merged with the cache), so it must resolve, not reject — chapter 1
+     contributes `oduvan`, chapter 2 `owdovan`, chapter 3 `одуван`, all named
+     "Одуван", exactly the same-run duplicate shape as the main-path test. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Одуван asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(chapterId: number): CharacterOutput[] {
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: oduvanId,
+        name: 'Одуван',
+        role: 'lead',
+        color: '#111111',
+        gender: 'male',
+        evidence: [{ quote: 'Одуван asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: oduvanId,
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(_manuscriptId: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter(chapterId) };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-subset-strip-ascii-rewrites-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_subset_strip_ascii_rewrites_e2e_test',
+        manuscriptId,
+        title: 'Subset Strip Ascii Rewrites E2E Test Book',
+        author: 'Test Author',
+        language: 'ru',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+      { id: 3, title: 'Chapter Three', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Subset Strip Ascii Rewrites E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  function makeSubsetJob(manuscriptId: string, bookDir: string, chapterIds: number[]): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'subset',
+      subsetChapterIds: chapterIds,
+      bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it(
+    'the established ASCII id survives on the subset path — the fresh Tier-1 survivor cascades onto it, not the reverse',
+    async () => {
+      const manuscriptId = `test-subset-strip-ascii-rewrites-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'oduvan',
+              name: 'Одуван',
+              voiceState: 'tuned',
+              voiceUuid: 'U-oduvan',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-oduvan' } },
+            },
+          ],
+        }),
+      );
+
+      // stage1Existed === true so Phase 1 (and the persist block the strip
+      // guards) actually runs this pass. The per-chapter runStage1Chapter
+      // mock (above) still contributes the owdovan/одуван duplicate rows as
+      // each requested chapter runs; this seed only needs to be a valid
+      // starting roster so the "already analysed" gate is satisfied.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: stage1RosterForChapter(1),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as {
+          characters: Array<{
+            id: string;
+            name: string;
+            voiceState?: string;
+            voiceUuid?: string;
+            overrideTtsVoices?: unknown;
+          }>;
+        };
+
+        // Sanity: this run's own fresh-side Tier-1 dedup really did collapse
+        // the three-way duplicate onto ITS OWN internal survivor.
+        const oduvanRows = castAfter.characters.filter((c) => c.name === 'Одуван');
+        expect(oduvanRows).toHaveLength(1);
+
+        // Core N7 assertion for the subset-path pair of call sites.
+        expect(oduvanRows[0].id).toBe('oduvan');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('одуван');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('owdovan');
+        expect(oduvanRows[0].voiceState).toBe('tuned');
+        expect(oduvanRows[0].voiceUuid).toBe('U-oduvan');
+        expect(oduvanRows[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-U-oduvan' } });
+
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).toHaveProperty('одуван', 'oduvan');
+        expect(history.supersededBy).not.toHaveProperty('oduvan');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

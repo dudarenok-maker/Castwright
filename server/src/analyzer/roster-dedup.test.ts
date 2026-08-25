@@ -6,7 +6,7 @@ import {
   stripEstablishedAsciiRewrites,
 } from './roster-dedup.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { applyRewriteToPriorCast } from '../store/merge-analysis-cast.js';
+import { applyRewriteToPriorCast, mergeAnalysisResultWithExistingCast } from '../store/merge-analysis-cast.js';
 
 const c = (over: { id: string; name: string; role?: string; color?: string; gender?: string; [key: string]: unknown }) =>
   ({ role: 'r', color: 'c', ...over });
@@ -115,34 +115,44 @@ describe('composeRewrites', () => {
 });
 
 describe('stripEstablishedAsciiRewrites (#2584/#2570)', () => {
-  it('strips an entry whose key is an established ASCII prior id rewritten to a non-ASCII target', () => {
+  it('strips a Tier-1 entry whose key is an established ASCII prior id rewritten to a non-ASCII target', () => {
     const rewrites = { oduvan: 'одуван' };
     const priorCast = [{ id: 'oduvan' }];
-    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({});
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast, new Set(['oduvan']))).toEqual({});
   });
 
   it('keeps an entry whose key is not a prior row id at all (fresh-to-fresh dedup)', () => {
     const rewrites = { a: 'b' };
     const priorCast = [{ id: 'z' }];
-    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ a: 'b' });
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast, new Set(['a']))).toEqual({ a: 'b' });
   });
 
   it('keeps a genuine improvement — a non-ASCII established id rewritten to an ASCII target', () => {
     const rewrites = { одуван: 'oduvan' };
     const priorCast = [{ id: 'одуван' }];
-    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ одуван: 'oduvan' });
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast, new Set(['одуван']))).toEqual({ одуван: 'oduvan' });
   });
 
   it('keeps an entry when both the established id and the target are ASCII', () => {
     const rewrites = { 'oduvan-x': 'oduvan' };
     const priorCast = [{ id: 'oduvan-x' }];
-    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ 'oduvan-x': 'oduvan' });
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast, new Set(['oduvan-x']))).toEqual({ 'oduvan-x': 'oduvan' });
   });
 
   it('keeps an entry when both the established id and the target are non-ASCII', () => {
     const rewrites = { одуван: 'ольга' };
     const priorCast = [{ id: 'одуван' }];
-    expect(stripEstablishedAsciiRewrites(rewrites, priorCast)).toEqual({ одуван: 'ольга' });
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast, new Set(['одуван']))).toEqual({ одуван: 'ольга' });
+  });
+
+  it('N6 — keeps an entry that shape-matches the #2584 coincidence but did NOT come from Tier-1 (not in tier1RewriteKeys)', () => {
+    // Same id shapes as the first case above (ASCII key, non-ASCII target,
+    // key is a prior row id) but the caller did not mark this key as a
+    // Tier-1 same-run-duplicate rewrite — e.g. it came from Tier-3 alias
+    // coreference instead. Must NOT be stripped.
+    const rewrites = { oduvan: 'одуван' };
+    const priorCast = [{ id: 'oduvan' }];
+    expect(stripEstablishedAsciiRewrites(rewrites, priorCast, new Set())).toEqual({ oduvan: 'одуван' });
   });
 });
 
@@ -159,11 +169,31 @@ describe('#2584/#2570 real-shape regression — a same-run fresh-side duplicate 
      (oduvan, owdovan, одуван) — its own non-determinism, unrelated to the
      established cast — and dedupeRosterByName arbitrarily collapsed them
      onto `одуван` as ITS internal survivor. `oduvan` also happens to be the
-     established prior cast row's raw id, purely by coincidence. */
-  const rawRewrites = { oduvan: 'одуван', owdovan: 'одуван' };
+     established prior cast row's raw id, purely by coincidence.
+
+     `rawRewrites`/`tier1Keys` are derived by actually RUNNING
+     `dedupeRosterByName` on the three-way duplicate roster (rather than
+     hand-typed) so this test also proves Tier-1 really does mark both
+     collapsed ids as Tier-1-sourced — the exact signal N6's fix keys on. */
+  const freshDupeRoster = [
+    c({ id: 'oduvan', name: 'Одуван' }),
+    c({ id: 'owdovan', name: 'Одуван' }),
+    c({ id: 'одуван', name: 'Одуван' }),
+  ];
+  const dupeDedup = dedupeRosterByName(
+    freshDupeRoster as any,
+    [...sent('oduvan'), ...sent('owdovan'), ...sent('одуван')],
+  );
+  const rawRewrites = dupeDedup.rewrites;
+  const tier1Keys = dupeDedup.tier1RewriteKeys;
   const priorCast = [{ id: 'oduvan', name: 'Одуван', voiceState: 'tuned' }];
   const freshRoster = [{ id: 'одуван', name: 'Одуван' }];
   const sentences = [{ characterId: 'одуван' }];
+
+  it('dedupeRosterByName really does collapse the triplet onto одуван and mark both ids Tier-1', () => {
+    expect(rawRewrites).toEqual({ oduvan: 'одуван', owdovan: 'одуван' });
+    expect(tier1Keys).toEqual(new Set(['oduvan', 'owdovan']));
+  });
 
   it('without stripping: reproduces the exact real-box corruption at both sites', () => {
     const unfilteredRemap = remapFreshToPriorIds(freshRoster, sentences, priorCast, rawRewrites);
@@ -175,7 +205,7 @@ describe('#2584/#2570 real-shape regression — a same-run fresh-side duplicate 
   });
 
   it('with stripping: the fresh row + sentences cascade onto the established id, and the prior row is left unretired', () => {
-    const filtered = stripEstablishedAsciiRewrites(rawRewrites, priorCast);
+    const filtered = stripEstablishedAsciiRewrites(rawRewrites, priorCast, tier1Keys);
     expect(filtered).not.toHaveProperty('oduvan');
 
     const remap = remapFreshToPriorIds(freshRoster, sentences, priorCast, filtered);
@@ -186,6 +216,68 @@ describe('#2584/#2570 real-shape regression — a same-run fresh-side duplicate 
     const applied = applyRewriteToPriorCast(priorCast, filtered);
     expect(applied.retirements).toEqual([]);
     expect(applied.priorCast[0].id).toBe('oduvan');
+  });
+});
+
+describe('N6 (PR #2640 pass-3 review) — a genuine Tier-3 alias merge must NOT be blocked by the #2584 strip', () => {
+  /* Reviewer's reproduction (PR #2640 pass 3):
+       prior cast: {id:'shef', name:'Шеф', voiceState:'tuned', overrideTtsVoices:{qwen:{name:'q'}}}
+       fresh roster this run: `шеф` (id `shef`, ASCII) and `Борис Игнатьевич`
+       (id `борис-игнатьевич`, non-ASCII) as MUTUAL aliases — a genuine
+       cross-script identity merge, not a same-run duplicate-name coincidence.
+     Before this PR's original fix (292f1cff) this correctly collapsed to one
+     row (`борис-игнатьевич`) carrying the tuned voice, with a retirement
+     `shef -> борис-игнатьевич` recorded. The unconditional id-shape strip in
+     292f1cff regressed this — it wrongly treated `shef` as if it were the
+     #2584 coincidence and left it standing, orphaned and voiced, with no
+     retirement. N6 requires this scenario produce the SAME correct outcome
+     as `main` (pre-#2584-fix) again. */
+  const priorCast = [
+    {
+      id: 'shef',
+      name: 'Шеф',
+      voiceState: 'tuned',
+      overrideTtsVoices: { qwen: { name: 'q' } },
+    },
+  ];
+  const freshRoster = [
+    c({ id: 'shef', name: 'Шеф', gender: 'male', aliases: ['Борис Игнатьевич'] }),
+    c({ id: 'борис-игнатьевич', name: 'Борис Игнатьевич', gender: 'male', aliases: ['Шеф'] }),
+  ];
+  const freshSentences = [...sent('shef', 3), ...sent('борис-игнатьевич', 7)];
+
+  it('dedupeRosterByName Tier-3 merges the pair, and the rewrite is NOT Tier-1', () => {
+    const dd = dedupeRosterByName(freshRoster as any, freshSentences);
+    expect(dd.characters).toHaveLength(1);
+    expect(dd.characters[0].id).toBe('борис-игнатьевич');
+    expect(dd.rewrites).toEqual({ shef: 'борис-игнатьевич' });
+    // The distinguishing structural fact N6's fix relies on: this rewrite
+    // came from Tier-3 (different normalised names, alias-resolved), never
+    // from Tier-1 (same normalised name) — so it must be absent here.
+    expect(dd.tier1RewriteKeys.has('shef')).toBe(false);
+  });
+
+  it('end-to-end: stripEstablishedAsciiRewrites leaves the Tier-3 entry alone, the merge lands correctly', () => {
+    const dd = dedupeRosterByName(freshRoster as any, freshSentences);
+    const cumulative = composeRewrites(dd.rewrites, {});
+
+    const filtered = stripEstablishedAsciiRewrites(cumulative, priorCast, dd.tier1RewriteKeys);
+    // Must NOT be stripped — this is the regression N6 reports.
+    expect(filtered).toEqual({ shef: 'борис-игнатьевич' });
+
+    const applied = applyRewriteToPriorCast(priorCast, filtered);
+    expect(applied.retirements).toEqual([{ from: 'shef', to: 'борис-игнатьевич' }]);
+    expect(applied.priorCast).toHaveLength(1);
+    expect(applied.priorCast[0].id).toBe('борис-игнатьевич');
+    expect(applied.priorCast[0].voiceState).toBe('tuned');
+    expect((applied.priorCast[0] as any).overrideTtsVoices).toEqual({ qwen: { name: 'q' } });
+
+    // Final merge: the tuned voice rides onto the surviving id, one row only.
+    const merged = mergeAnalysisResultWithExistingCast(applied.priorCast as any, dd.characters);
+    expect(merged.characters).toHaveLength(1);
+    expect(merged.characters[0].id).toBe('борис-игнатьевич');
+    expect((merged.characters[0] as any).voiceState).toBe('tuned');
+    expect((merged.characters[0] as any).overrideTtsVoices).toEqual({ qwen: { name: 'q' } });
   });
 });
 

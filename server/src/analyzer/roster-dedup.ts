@@ -60,30 +60,59 @@ function isAsciiKebabId(id: string): boolean {
     whose KEY equals an ESTABLISHED prior cast row's raw id. This happens
     when the analyzer rosters several near-duplicate fresh rows for the SAME
     character in one run (e.g. `oduvan`, `owdovan`, `одуван`, all "Одуван")
-    and `dedupeRosterByName` arbitrarily collapses them onto one of its own
-    survivors — nothing about that choice is informed by which id the
-    ESTABLISHED cast already considers stable. When one of the collapsed
-    fresh ids (the rewrite entry's KEY) happens to also be a prior row's raw
-    id, and that prior id is already the stable ASCII-kebab form while the
-    dedup's chosen survivor (the entry's VALUE) is NOT, applying the entry
-    against the prior cast (Site 1,
+    and `dedupeRosterByName`'s Tier-1 EXACT-NAME pass arbitrarily collapses
+    them onto one of its own survivors — nothing about that choice is
+    informed by which id the ESTABLISHED cast already considers stable. When
+    one of the collapsed fresh ids (the rewrite entry's KEY) happens to also
+    be a prior row's raw id, and that prior id is already the stable
+    ASCII-kebab form while the dedup's chosen survivor (the entry's VALUE) is
+    NOT, applying the entry against the prior cast (Site 1,
     `applyRewriteToPriorCast`) retires the established ASCII id in favour of
     the fresh non-canonical one, and feeding the same entry into
     `remapFreshToPriorIds` makes it treat the pair as "already converged" on
     the wrong id — the #2584 regression, confirmed end-to-end against the
     real analyzer output shape (PR #2640 review).
 
-    Strip only that narrow shape. Anything else — a genuine improvement onto
-    a MORE canonical id than a non-ASCII established one, or a fresh-to-fresh
-    dedup entry that never touches any prior row — is left untouched. */
+    Strip only that narrow shape — and PR #2640's pass-3 review (N6) found
+    the id-shape test alone is not narrow enough: it also strips a
+    genuine Tier-3 cross-script ALIAS merge (`шеф` id `shef` ASCII,
+    merged via alias data onto `Борис Игнатьевич` id `борис-игнатьевич`
+    non-ASCII) that happens to key on an established ASCII id for a
+    completely different, deliberate reason — that merge is not a same-run
+    duplicate-fresh-row coincidence at all, and stripping it silently
+    un-merges two rows the alias data says are one person.
+
+    The real distinguishing fact is WHICH dedup tier produced the entry, not
+    the id shapes it connects. Tier-1 (`tier1RewriteKeys`, this same module)
+    fires when this run's OWN fresh roster contains 2+ rows that normalise to
+    the EXACT SAME name — i.e. the analyzer's own non-determinism minting
+    duplicate rows for one character — and it is that same-run duplication,
+    never anything about the established cast, that can coincidentally reuse
+    a prior ASCII id as one of the collapsed-away inputs. Tier-2a/Tier-3
+    entries merge rows with DIFFERENT normalised names (a short/long form, or
+    an alias-resolved cross-script pair) — a deliberate identity merge, never
+    a same-name coincidence, so they are never in `tier1RewriteKeys` and this
+    strip must leave them alone regardless of id shape.
+
+    Anything else — a genuine improvement onto a MORE canonical id than a
+    non-ASCII established one, or a fresh-to-fresh dedup entry that never
+    touches any prior row — is left untouched, same as before. */
 export function stripEstablishedAsciiRewrites<T extends { id: string }>(
   rewrites: Record<string, string>,
   priorCast: ReadonlyArray<T>,
+  tier1RewriteKeys: ReadonlySet<string>,
 ): Record<string, string> {
   const priorIds = new Set(priorCast.map((p) => p.id));
   const result: Record<string, string> = {};
   for (const [from, to] of Object.entries(rewrites)) {
-    if (priorIds.has(from) && isAsciiKebabId(from) && !isAsciiKebabId(to)) continue;
+    if (
+      tier1RewriteKeys.has(from) &&
+      priorIds.has(from) &&
+      isAsciiKebabId(from) &&
+      !isAsciiKebabId(to)
+    ) {
+      continue;
+    }
     result[from] = to;
   }
   return result;
@@ -95,9 +124,21 @@ export function dedupeRosterByName(
   characters: CharacterOutput[],
   sentences: ReadonlyArray<{ characterId: string }>,
   opts: { language?: string } = {},
-): { characters: CharacterOutput[]; rewrites: Record<string, string>; suggestions: MergeSuggestion[] } {
+): {
+  characters: CharacterOutput[];
+  rewrites: Record<string, string>;
+  suggestions: MergeSuggestion[];
+  /** The subset of `rewrites`' keys produced by Tier-1 (exact normalised
+      name) — i.e. this run's OWN fresh roster contained 2+ rows sharing the
+      exact same name and Tier-1 arbitrarily collapsed them onto one
+      survivor. See `stripEstablishedAsciiRewrites`'s doc comment for why
+      this is the signal that separates the #2584 same-run-duplicate
+      coincidence from a genuine Tier-2a/Tier-3 identity merge. */
+  tier1RewriteKeys: Set<string>;
+} {
   const lines = lineCounts(sentences);
   const rewrites: Record<string, string> = {};
+  const tier1RewriteKeys = new Set<string>();
   // Work on shallow clones so callers keep their input; preserve insertion order.
   let roster: CharacterOutput[] = characters.map((ch) => ({ ...ch }));
 
@@ -131,12 +172,18 @@ export function dedupeRosterByName(
     const survivor: CharacterOutput = { ...group[0], id: canonicalId };
 
     // Record rewrite for the first member if its id differs from canonical.
-    if (group[0].id !== canonicalId) rewrites[group[0].id] = canonicalId;
+    if (group[0].id !== canonicalId) {
+      rewrites[group[0].id] = canonicalId;
+      tier1RewriteKeys.add(group[0].id);
+    }
 
     // Merge remaining members into survivor.
     for (const member of group.slice(1)) {
       mergeCharacterFields(survivor, member);
-      if (member.id !== canonicalId) rewrites[member.id] = canonicalId;
+      if (member.id !== canonicalId) {
+        rewrites[member.id] = canonicalId;
+        tier1RewriteKeys.add(member.id);
+      }
       dropped.add(member.id);
     }
 
@@ -437,7 +484,7 @@ export function dedupeRosterByName(
     }
   }
 
-  return { characters: roster, rewrites, suggestions };
+  return { characters: roster, rewrites, suggestions, tier1RewriteKeys };
 }
 
 /** Drop suggestions whose source OR target id is not a standing character in the

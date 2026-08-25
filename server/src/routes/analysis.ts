@@ -1006,6 +1006,11 @@ export function dedupAndPrepare(
   suggestions: MergeSuggestion[];
   preDedupSentences: { id: number; chapterId: number; characterId: string }[];
   preDedupRoster: { id: string; name: string }[];
+  /** #2584/#2570 (PR #2640 N6) — passed through to `stripEstablishedAsciiRewrites`
+      at every call site so it can tell a same-run Tier-1 duplicate-name
+      coincidence apart from a genuine Tier-2a/Tier-3 identity merge. See
+      `dedupeRosterByName`'s and `stripEstablishedAsciiRewrites`'s doc comments. */
+  tier1RewriteKeys: Set<string>;
 } {
   // Capture pre-dedup lineage BEFORE any rewrite (journal needs the original ids/names).
   const preDedupSentences = sentences.map((s) => ({
@@ -1027,6 +1032,7 @@ export function dedupAndPrepare(
     suggestions: dd.suggestions,
     preDedupSentences,
     preDedupRoster,
+    tier1RewriteKeys: dd.tier1RewriteKeys,
   };
 }
 
@@ -5615,6 +5621,7 @@ export async function runMainAnalyzerJob(
     const cumulativeForRemap = stripEstablishedAsciiRewrites(
       composeRewrites(dd.rewrites, folded.rewrites),
       priorCastForMerge,
+      dd.tier1RewriteKeys,
     );
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
@@ -5804,6 +5811,7 @@ export async function runMainAnalyzerJob(
           const cumulative = stripEstablishedAsciiRewrites(
             composeRewrites(dd.rewrites, folded.rewrites),
             priorCastForMerge,
+            dd.tier1RewriteKeys,
           );
           const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
           if (remapped.droppedVoices.length) {
@@ -7287,6 +7295,7 @@ export async function runSubsetAnalyzerJob(
     const cumulativeForRemap = stripEstablishedAsciiRewrites(
       composeRewrites(dd.rewrites, folded.rewrites),
       priorCastForMerge,
+      dd.tier1RewriteKeys,
     );
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
@@ -7443,6 +7452,7 @@ export async function runSubsetAnalyzerJob(
           const cumulative = stripEstablishedAsciiRewrites(
             composeRewrites(dd.rewrites, folded.rewrites),
             priorCastForMerge,
+            dd.tier1RewriteKeys,
           );
           const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
           if (remapped.droppedVoices.length) {

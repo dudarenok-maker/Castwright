@@ -300,7 +300,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -310,17 +310,21 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**66 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
-> live (A38, "ORT marker refuses — not repairs — a clobbered venv") and
-> dropped, per the owner's remove-outright ruling — the refuse-and-log branch
-> fired exactly as designed against a real copy of the live sidecar venv.
-> Group A renumbered contiguously (old A39–A44 → A38–A43). Evidence:
-> `docs/testing/onbox-wave5-results/step-ort-b-a39.md`. Prior change: wave 5,
-> #2606 step 6, 69 → 66 (A27, A45, B2 discharged). Full change-by-change
-> history is in this file's git log, not here — this section tracks the
-> current count, not how it got here.
+> **Last change: 2026-08-25 (#2584/#2570 fix, PR #2640), 65 → 66.** New row
+> A44 added — PR #2640's `stripEstablishedAsciiRewrites` fix is proven at the
+> unit/route level but still owes a real re-analysis of *Заказ Коалфолла*
+> against its existing `cast-id-history.json`; see
+> [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
+> §10.2. Prior change: 2026-08-23 (fold step, #2625), 66 → 65. One row
+> discharged live (A38, "ORT marker refuses — not repairs — a clobbered
+> venv") and dropped, per the owner's remove-outright ruling — the
+> refuse-and-log branch fired exactly as designed against a real copy of the
+> live sidecar venv. Group A renumbered contiguously (old A39–A44 →
+> A38–A43). Evidence: `docs/testing/onbox-wave5-results/step-ort-b-a39.md`.
+> Full change-by-change history is in this file's git log, not here — this
+> section tracks the current count, not how it got here.
 
 ---
 
@@ -2544,6 +2548,37 @@ same live sidecar.
 [`language-recurrence-onbox-acceptance.md`](language-recurrence-onbox-acceptance.md)
 §Voice-design gate. *Cost:* short — three attempts unset, three attempts set,
 on one book.
+
+---
+
+### A44 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
+
+Wave 2's re-analysis (§7 rerun, A29/A30's sibling campaign) surfaced a
+defect PR #2640 fixed at the code level across four rounds of review:
+`stripEstablishedAsciiRewrites` (`server/src/analyzer/roster-dedup.ts`)
+now strips the narrow same-run Tier-1 dedup coincidence that was retiring an
+established ASCII cast id in favour of a freshly-minted non-ASCII one. The
+fix is proven unit- and route-level (`roster-dedup.test.ts`,
+`analysis.test.ts` — real `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring
+tests drive all four call sites), but nothing in the suite runs the real
+analyzer against the real, already-corrupted book — that needs live
+hardware.
+
+- Re-analyse *Заказ Коалфолла*
+  (`C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`) — a
+  **full** manuscript re-analysis, not a subset/chapter retry — against its
+  existing `cast-id-history.json`.
+- Confirm the character's `cast.json` id comes back as `oduvan` (ASCII), not
+  `одуван` (Cyrillic) — the defect's exact shape.
+- If the raw analyzer output still mints a different id this run, confirm
+  any recorded `cast-id-history.json` entry names the correct direction
+  (fresh id superseded by the established one), not the reverse.
+
+*Needs:* the real workspace above and a real analyzer (local Ollama or
+Gemini) — no GPU/TTS sidecar required, since this is an analysis-only
+defect. *Criteria:*
+[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §10.
+*Cost:* short — one full re-analysis of an already-imported book.
 
 ## Group B — local Ollama analyzer only
 

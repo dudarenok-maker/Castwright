@@ -887,7 +887,8 @@ silently produce a confident wrong answer rather than an error:
 
 ## 10. #2584 fix (PR #2640) — wrong-direction retirement, code-level fix
 
-> Register row: (no dedicated row; this is supplementary documentation for the Wave-2 defect tracked in B4/Wave-4)
+> Register row: A44 (Group A) in
+> [`onbox-acceptance-register.md`](onbox-acceptance-register.md).
 
 ### 10.1 Purpose & scope
 
@@ -911,7 +912,7 @@ The real, live-corrupted book: *Заказ Коалфолла* at `C:\AudiobookW
 1. The character's `cast.json` id comes back as `oduvan` (ASCII), not `одуван` (Cyrillic).
 2. If the id changed at the raw-analyzer-output layer, it is recorded in `cast-id-history.json`'s `supersededBy` map with the **correct direction** (fresh → established).
 
-This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer/GPU pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and this row stays open until it runs.
+This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A44 stays open until it runs.
 
 ### 10.3 Code-level proof (PR #2640, shipped)
 
