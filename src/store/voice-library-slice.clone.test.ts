@@ -25,7 +25,31 @@ function makeStore() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('cloneVoice thunk', () => {
-  it('flips clonePending and appends the returned cloned entry', async () => {
+  it('#2648 — cloneVoice refetches and stores the staleness-computed entry, not the raw /clone response', async () => {
+    const { api } = await import('../lib/api');
+    /* The raw POST /clone response: the one entry-returning route that skips
+       the server's `withComputedStaleness` (routes/voice-library.ts) — its
+       slots still say 'ready' although baseModel/coquiVersion are stale. */
+    const rawCloneResponse = {
+      voiceUuid: 'lib-clone-x', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      engines: {
+        qwen: { status: 'ready', baseModel: 'qwen2-audio-0.5b-2026-01' },
+        xtts: { status: 'ready', coquiVersion: '0.26.1' },
+      },
+      createdAt: 'a', updatedAt: 'b',
+    };
+    /* What the refetch (GET /api/voice-library) returns for the same entry:
+       `withComputedStaleness` has rewritten both slots to 'stale'. */
+    const computedEntry = {
+      ...rawCloneResponse,
+      engines: {
+        qwen: { status: 'stale', baseModel: 'qwen2-audio-0.5b-2026-01' },
+        xtts: { status: 'stale', coquiVersion: '0.26.1' },
+      },
+    };
+    vi.mocked(api.cloneVoice).mockResolvedValueOnce(rawCloneResponse as never);
+    vi.mocked(api.listVoiceLibrary).mockResolvedValueOnce({ voices: [computedEntry] } as never);
+
     const store = makeStore();
     const p = store.dispatch(
       cloneVoice({ candidateId: 'c1', consent: { personName: 'Mum', relationship: 'self', permittedUse: 'personal' } }) as never,
@@ -34,7 +58,14 @@ describe('cloneVoice thunk', () => {
     await p;
     const s = store.getState().voiceLibrary;
     expect(s.clonePending).toBe(false);
-    expect(s.entries.map((e) => e.voiceUuid)).toContain('lib-clone-x');
+    /* The thunk refetched like its sibling thunks — the staleness-computed
+       source of truth, not the raw POST /clone payload. */
+    expect(api.listVoiceLibrary).toHaveBeenCalled();
+    /* The slice ends up holding the computed entry, not the raw one. */
+    const entry = s.entries.find((e) => e.voiceUuid === 'lib-clone-x');
+    expect(entry).toEqual(computedEntry);
+    expect(entry?.engines.qwen?.status).toBe('stale');
+    expect(entry?.engines.xtts?.status).toBe('stale');
   });
 });
 
