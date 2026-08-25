@@ -143,7 +143,7 @@ Describe 'Get-SidecarSweepPort' {
     # #2632 N52 — a server\.env whose first bytes are a UTF-8 BOM (EF BB BF)
     # decodes to a leading U+FEFF. process.loadEnvFile does NOT strip that
     # BOM before parsing keys, so the BOM-prefixed first line's key is
-    # literally "﻿LOCAL_TTS_PORT" — the server's own resolveSidecarPort()
+    # literally "<BOM>LOCAL_TTS_PORT" — the server's own resolveSidecarPort()
     # never sees plain LOCAL_TTS_PORT and falls back to 9000. Measured
     # directly against process.loadEnvFile (not assumed): with this exact
     # byte layout, process.env.LOCAL_TTS_PORT stays undefined. This reader

@@ -62,7 +62,7 @@ function Get-LocalTtsPortValue {
 #   leading UTF-8 BOM (measured directly: a BOM-prefixed file's first
 #   character reads as 'L', not U+FEFF, through `Get-Content -Raw`).
 #   process.loadEnvFile does NOT strip it — the BOM-prefixed first line's
-#   key is literally "﻿LOCAL_TTS_PORT", which never matches plain
+#   key is literally "<BOM>LOCAL_TTS_PORT", which never matches plain
 #   "LOCAL_TTS_PORT" server-side. Reading raw bytes and decoding them
 #   ourselves (rather than through Get-Content) preserves the BOM
 #   character, so it blocks the match here exactly like it blocks the

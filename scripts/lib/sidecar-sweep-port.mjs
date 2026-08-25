@@ -59,7 +59,7 @@ function parseLocalTtsPortValue(raw) {
     - #2632 N52 — BOM: a leading UTF-8 BOM (EF BB BF) decodes to U+FEFF, and
       JS regex `\s` treats U+FEFF as whitespace — but process.loadEnvFile
       does NOT strip a leading BOM before parsing keys, so a BOM-prefixed
-      first line's key is literally "﻿LOCAL_TTS_PORT", which never
+      first line's key is literally "<BOM>LOCAL_TTS_PORT", which never
       matches plain "LOCAL_TTS_PORT" (measured: process.env.LOCAL_TTS_PORT
       stays undefined). A reader whose leading `\s*` swallows the BOM
       matches a key the server never actually sees. Use an explicit
