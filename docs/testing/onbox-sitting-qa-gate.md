@@ -6,7 +6,7 @@
 > Plan of record: [`onbox-sitting-plan.md`](onbox-sitting-plan.md) (§2.1, §5 pack
 > format), step 5 of the [#2453](https://github.com/dudarenok-maker/Castwright/issues/2453) chain.
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> A9, A10, A11, A12, A13, A21, A22, A35. (A22 in this pack is the row now
+> A9, A10, A11, A12, A13, A21, A22, A34. (A22 in this pack is the row now
 > numbered A22 as of wave 4, 2026-08-21 — see the correction note below.)
 > Row plans: [`228-batch-qa-rerecords.md`](../features/228-batch-qa-rerecords.md),
 > [`176-character-splice.md`](../features/176-character-splice.md),
@@ -14,10 +14,10 @@
 > [`174-audio-qa-gate.md`](../features/174-audio-qa-gate.md),
 > [`175-resource-telemetry.md`](../features/175-resource-telemetry.md),
 > [`archive/274-loudness-measurement-provenance.md`](../features/archive/274-loudness-measurement-provenance.md),
-> [`2055`](https://github.com/dudarenok-maker/Castwright/issues/2055) (A35 fix), [`2026`](https://github.com/dudarenok-maker/Castwright/issues/2026) (A35 repro source).
+> [`2055`](https://github.com/dudarenok-maker/Castwright/issues/2055) (A34 fix), [`2026`](https://github.com/dudarenok-maker/Castwright/issues/2026) (A34 repro source).
 >
 > **Running time total (recomputed 2026-08-21):** 20 (A9) + 20 (A10) + 15 (A11) + 15 (A12) +
-> 15 (A13) + 10 (A21) + 10 (A22) + 40 (A35) = **145 minutes** (was 155 —
+> 15 (A13) + 10 (A21) + 10 (A22) + 40 (A34) = **145 minutes** (was 155 —
 > the former A22, real-corpus true-peak distribution, was retired 2026-08-21;
 > see the correction note below).
 
@@ -55,14 +55,14 @@ verdicts exactly — no row is discharged or self-contradictory.
 - [ ] A rendered real book with at least one chapter already through the full
       generation + QA gate pipeline (for A21's badge-agreement check) and
       spare chapters available to re-render (for A9, A12, A22).
-- [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A35 leg, which
+- [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A34 leg, which
       additionally needs the Coqui/XTTS engine selected — see Step 9's own
       engine-swap note.
 - [ ] A second shell free for `gh`/log tailing and for triggering the
       sidecar-kill in Step 3.
 - [ ] Access to `#/admin` → "Resource trends" (A13) and to a chapter's
       Generate + Listen rows (A9, A11, A12, A21).
-- [ ] A non-English (Russian ideal) book or chapter available for A35 —
+- [ ] A non-English (Russian ideal) book or chapter available for A34 —
       required only for that step, sequence it last (Step 9).
 
 ---
@@ -170,7 +170,7 @@ outcome, but record the attempt.
 
 Result: _(fill in — failure forced or caught: yes/no; if yes, badge + report-card behaviour observed)_
 
-### 8. Catastrophic-WER override on a real Coqui language-collapse (A35 — #2055) — **engine swap, run last**
+### 8. Catastrophic-WER override on a real Coqui language-collapse (A34 — #2055) — **engine swap, run last**
 
 **Engine swap:** switch the sidecar to the Coqui/XTTS engine with ASR
 content-QA on (`SEG_ASR_ENABLED=1`, Coqui selected) — this is why this step is
@@ -211,6 +211,6 @@ Result: _(fill in — healthy-content pass false-positive count, vs. pre-#2055 b
   restore).
 
 _(Once every row above is actually run, mark the corresponding rows A9, A10,
-A11, A12, A13, A21, A22, A35 discharged in `onbox-acceptance-register.md` with
+A11, A12, A13, A21, A22, A34 discharged in `onbox-acceptance-register.md` with
 a summary of each result, and remove them from the "owed" count. This pack
 does not do that.)_

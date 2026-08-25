@@ -391,7 +391,7 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
      (`'alias'` — server tiers 'history'/'normalised-history' — AND
      `'normalised'` — server tier 'normalised-id') can be the exact damage
      `scripts/repair-cast-id-drift.mjs` lists as needing a re-render:
-     register row A32's own real fixture (`docs/testing/onbox-acceptance-
+     register row A29's own real fixture (`docs/testing/onbox-acceptance-
      register.md`) is `the-torment` (*Playing with Fire*, 67 segments),
      which resolves via the **normalised-id** tier — RC2's underscore-vs-
      hyphen split, no history entry involved at all — and was still

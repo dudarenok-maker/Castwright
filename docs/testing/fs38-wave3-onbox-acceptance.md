@@ -13,6 +13,7 @@
 > [`docs/features/271-fs38-wave3c-xtts.md`](../../271)
 > Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`
 > Umbrella: fs-38 · GitHub [#624](https://github.com/dudarenok-maker/Castwright/issues/624)
+> Register row: [A1](onbox-acceptance-register.md#group-a--the-gpu-box)
 
 ---
 
@@ -2639,7 +2640,7 @@ surface does that) is also gone.
 
 #### #1967 — additional acceptance criteria, on top of the nine E-tests above
 
-Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A26. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
+Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A25. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
 
 **Preconditions — the hot patch was REVERTED on 2026-07-31.** The 25 copied FFmpeg DLLs are gone from `site-packages/torchcodec/` and the box is a genuine static-FFmpeg box again (`ffmpeg 8.1.1-full_build-www.gyan.dev`). Reverting no longer costs you Section E: #1967 is merged, so the fix — not the hot patch — is what makes a derive work. **The revert is not "delete every non-hash-suffixed `*.dll`"**: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's own extensions and must stay. The copied set is exactly the non-hash-suffixed files that also have a hash-suffixed twin.
 
@@ -2650,7 +2651,7 @@ Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and 
 
 4. **Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` `pinokio/install.js` provisions and record whether it succeeds or fails, either way — see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. #1967's fix makes the answer moot for behaviour either way; this is a recorded fact, not a pass/fail gate.
 
-**Result:** **items 1 and 3 → P** (2026-07-31) · **item 2 → partial** (decode equivalence measured at max difference 0.0; the audible half needs a shared-FFmpeg box) · **item 4 → owed** (needs a real Pinokio install).  **Notes:** items 1 and 3 are recorded in full on register row **A26**; the mixed-engine `vram-spill` seen during item 1 is recorded on **A19**.
+**Result:** **items 1 and 3 → P** (2026-07-31) · **item 2 → partial** (decode equivalence measured at max difference 0.0; the audible half needs a shared-FFmpeg box) · **item 4 → owed** (needs a real Pinokio install).  **Notes:** items 1 and 3 are recorded in full on register row **A25**; the mixed-engine `vram-spill` seen during item 1 is recorded on **A19**.
 
 ---
 
@@ -2858,7 +2859,7 @@ and **E-01 is downgraded to a partial pass** (its identity half is retracted).
 | E (3c) | 9 | 4 (one partial) | 0 | 0 | 0 | 5 |
 | **All** | **60** | **20** | **0** | **8** | **1** | **31** |
 
-**Three run-2 results were wrong, all from one defect.** A24's identity half,
+**Three run-2 results were wrong, all from one defect.** A23's identity half,
 E-01's identity half, and C-17's `F` were each produced by a splice re-record
 that silently rendered other characters' lines ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)).
 Every one of them was recorded from `resolvedVoiceName` — **the field that
@@ -2889,14 +2890,14 @@ groups → zero PCM for that slot, so the splice would have written **silence**
 over it — audio deletion, not merely re-voicing. That strengthens the case for
 refusing the whole splice rather than reconciling silently.
 
-Run 2 also touched register row **A24** (a cloned voice renders a non-English
+Run 2 also touched register row **A23** (a cloned voice renders a non-English
 book in the book's language) — not one of the 60, tracked separately on the
-register. **A24 is NOT discharged**, for the same reason as above: its chapter
+register. **A23 is NOT discharged**, for the same reason as above: its chapter
 render used the same splice re-record, so most of what it measured was
 narrator audio, not the clone (0.949 against the chapter's own narrator). What
 survives is the direct-`/synthesize` evidence, which never touches the splice
 path (German in, `de` out, identity 0.809 against the source clip) — see the
-register's A24 row for the full breakdown. Two of A24's sub-checks remain: the
+register's A23 row for the full breakdown. Two of A23's sub-checks remain: the
 designed-self-heal-then-restart comparison, and the "no `voice-mismatch` rows"
 check, which **failed** for a reason unrelated to language — see **DEF-E**.
 
@@ -3019,7 +3020,7 @@ hash-suffixed originals so their internal imports still resolve.
 **What:** reassigning a character's voice keeps scoring it against the **old**
 voice's persisted audition centroid, so every line of the new voice is flagged
 `voice-mismatch` / `severity: severe` on audio that is correct.
-**Test ID:** register row A24, final bullet ("no `voice-mismatch` rows").
+**Test ID:** register row A23, final bullet ("no `voice-mismatch` rows").
 **Repro:** 1. A character thin enough on in-book anchors to take the audition
 reference path, rendered once so `render-integrity.centroids.json` holds an
 `audition` row. 2. Reassign it to a clearly different voice. 3. Re-render.
@@ -3031,7 +3032,7 @@ identifying the voice it was built from, and `resolveCharacterReference`
 (`aggregate.ts:221-223`) returns a persisted `audition` row unconditionally.
 `in-book` references are rebuilt each pass and self-heal; only `audition`
 persists.
-**Not a language problem.** A24's own text predicted this symptom via an English
+**Not a language problem.** A23's own text predicted this symptom via an English
 reference against a German chapter — that hypothesis is wrong: `auditionCentroid`
 *does* carry the book's language (`audition-centroid.ts:50-57`, #1951). Measured
 directly through the production `/synthesize` + `/embed` path, the clone scores
@@ -3045,8 +3046,8 @@ line burns a re-render every pass and still ends up flagged.
 render-integrity gate now rebuilds a character's persisted `audition` centroid
 reference when its voice is reassigned, so correct new-voice lines are no
 longer falsely scored `voice-mismatch`/`severity: severe` against the old
-speaker's stale reference. A24's final sub-check ("no `voice-mismatch` rows")
-is therefore re-runnable — register row **A46** records that owed run.
+speaker's stale reference. A23's final sub-check ("no `voice-mismatch` rows")
+is therefore re-runnable — register row **A42** records that owed run.
 
 **DEF-F · HIGH · #1972 · open · invalidates three run-2 results**
 **What:** a per-character re-record (splice) picks its target segments from the
@@ -3057,7 +3058,7 @@ character's line in the requested character's voice, into the requested
 character's time slot. `characterSnapshots.<id>.resolvedVoiceName` still reports
 the *assigned* voice, because `character-snapshots.ts` re-derived it from the
 cast record rather than recording what was sent.
-**Test IDs:** invalidated A24's identity half, E-01's identity half, and C-17
+**Test IDs:** invalidated A23's identity half, E-01's identity half, and C-17
 (recorded `F`, actually never exercised).
 **Repro:** any book where analysis has run since the chapter was rendered.
 Re-record any character; compare the sidecar's `voice=` log line against

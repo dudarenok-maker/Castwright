@@ -147,7 +147,7 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
       history,
       isAudioCurrent,
     );
-    // register row A32's own shape: a finite stamp with a recorded
+    // register row A29's own shape: a finite stamp with a recorded
     // narrator substitution must stay listed, not clear.
     expect(staleOrphans.get('the-torment')?.segments).toBe(1);
   });
@@ -246,7 +246,7 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
       history,
       isAudioCurrent,
     );
-    // register row A32's own recovery shape: the id resolves 'exact' TODAY,
+    // register row A29's own recovery shape: the id resolves 'exact' TODAY,
     // but the frozen bytes were rendered against the narrator, not this row.
     expect(staleOrphans.get('the_torment')?.segments).toBe(1);
   });

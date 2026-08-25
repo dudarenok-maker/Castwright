@@ -8,8 +8,10 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and A45 (#2128 audio currency, §9 below) — **A45 is discharged (2026-08-11)
-and no longer in the register; §9 below is its record**
+> Register rows: [`onbox-acceptance-register.md` A29](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A30](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A44](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
+and A45 (2026-08-11); neither is in the register any more, and §7 and §9
+below are their records. Do not follow B3 to whatever now sits at that
+position — Group B renumbered and today's B2 is an unrelated #2246 row.**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -166,7 +168,11 @@ alone; Wave 2 and Wave 3 have their own sections (§7, §8) below.
 
 ## 7. Wave 2 — stopping new drift at re-analysis time
 
-> Register row: [`onbox-acceptance-register.md` B3](onbox-acceptance-register.md)
+> Register row: **B3 — discharged 2026-08-21, row removed from the register.**
+> There is no current ID for it: Group B renumbered and today's B2 is an
+> unrelated #2246 row that reused the position, so do not follow this to
+> whatever now sits at B3. The discharge evidence is the run note in §7.2
+> below.
 
 ### 7.1 Purpose & scope
 
@@ -257,7 +263,8 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 > agent. **B4 stays STILL OWED.** Full evidence:
 > `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`.
 
-Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
+Record what was observed, by whom, and when — here only; register row B3 was
+discharged on 2026-08-21 and no longer exists. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
 
 > **Wave-5 step 4, 2026-08-23 — register row B2 (current numbering; "B4" above
 > in this section's own then-current numbering) DISCHARGED, but against a
@@ -279,7 +286,7 @@ Record what was observed, by whom, and when — here and in register row B3. An 
 
 ## 8. Wave 3 — the repair pass's `--apply` run
 
-> Register row: [`onbox-acceptance-register.md` A33](onbox-acceptance-register.md)
+> Register row: [`onbox-acceptance-register.md` A30](onbox-acceptance-register.md)
 
 ### 8.1 Purpose & scope
 
@@ -506,7 +513,7 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
    report-only ids are unchanged from §8.1 — proving the write was durable,
    not merely printed once.
 
-Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A30 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
 **#2107 fix (`fix/scripts-2107-rerender-rows`), then WIDENED by an independent
 review + owner decision:** `collectSegmentOrphans`'s resolver reads
@@ -649,7 +656,7 @@ explicitly, so this fix protects a future/test caller, not today's run.
 Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
 now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
 
-Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A33 stays open for this and §8.8.
+Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A30 stays open for this and §8.8.
 
 12. **Listen.** Confirm both characters' lines are audibly distinct from the
     narrator, not merely a different id in the JSON.
@@ -708,7 +715,7 @@ copied into this pass's throwaway workspace). Full evidence:
   write decision. Also verified: books with unreadable bak evidence **0**,
   books withheld for missing bak evidence **0** (#2135's gap not live on
   this workspace today), books scanned **20** (no drops from #2097's new
-  `collectBooks` accounting either). See register row A33 for the full
+  `collectBooks` accounting either). See register row A30 for the full
   writeup, including round 2's five smaller fixes (`collectBooks`
   `Array.isArray` shape check, its `readdirSync` guard, the same shape
   guard in `collectBakNameEntries`, `planApplyRefusal`'s absent-field
@@ -725,11 +732,11 @@ copied into this pass's throwaway workspace). Full evidence:
   today** — none of the 20 books are mid-import — a fresh dry run reports
   figures identical to step 9e: re-render **23 rows / 188 segments**,
   auto-recordable **2 aliases / 68 segments**, report-only **91 ids / 93
-  segments**, skipped **3**, books scanned **20**. See register row A33's
+  segments**, skipped **3**, books scanned **20**. See register row A30's
   round-3 correction for the full writeup.
 - [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace; #2097's own discriminator itself misclassified an ordinary mid-import book and needed a round-3 correction, see step 9f), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, then relocated at round 2 after review found the original fix couldn't fire in CI), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed at round 1, found BACKWARDS by round 2 review, corrected to an annotation** — see steps 9d/9e)
 
-Record what was observed, by whom, and when — here and in register row A33.
+Record what was observed, by whom, and when — here and in register row A30.
 This is the first time the repair pass has ever written to the real
 workspace; if anything here diverges from the dry-run numbers in §8.1, stop
 and investigate before treating the run as clean — do not paper over a

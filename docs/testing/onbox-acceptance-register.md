@@ -227,7 +227,23 @@ comparison, see the edge list above). The merge step that closes this, run
    oversight; see `checkLiveView`'s own header comment in
    `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
-   URL above as `url`.
+   URL above as `url` **and `favicon` set to 📋**.
+
+   **Provenance, so you can weigh it:** 📋 is the value the 2026-08-23 publish
+   set, recorded here at that moment. It is **not** a recovered original — if
+   earlier publishes used something else, that value is gone. So this is the pin
+   going forward, not an archaeological finding; treat a mismatch with your
+   memory of the tab icon as this line being newer than your memory, and change
+   the line only alongside a deliberate publish that changes the icon.
+
+   The favicon is pinned here because it is otherwise **unrecoverable**. The
+   publisher keeps it as artifact metadata, not in the page: it is absent from
+   this repo, absent from the published HTML, and returned by neither
+   `action: "read"` nor `action: "list"`. So an operator who does not know it
+   has no way to look it up and must guess — and a changed favicon reads as a
+   different page to anyone who keeps this register open in a tab. Publishing
+   is the one step here that cannot be undone by editing a file, so the value
+   lives in the runbook rather than in an agent's memory of the last publish.
 
 This is deliberately a MANUAL procedure with mechanical support, not a fully
 automatic gate: CI cannot run it (no credentials to fetch the published
