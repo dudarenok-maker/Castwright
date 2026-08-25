@@ -316,7 +316,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -326,14 +326,38 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
+**68 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-25 (#2584/#2570 fix, PR #2640), 66 → 67.** New row
-> A44 added — PR #2640's `stripEstablishedAsciiRewrites` fix is proven at the
+> **Last change: 2026-08-26 (#2584/#2570 fix, PR #2640), 67 → 68.** New row
+> **A45** added — PR #2640's `stripEstablishedAsciiRewrites` fix is proven at the
 > unit/route level but still owes a real re-analysis of *Заказ Коалфолла*
 > against its existing `cast-id-history.json`; see
 > [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
-> §10.2.
+> §10.2. Numbered A45, not A44 — #2647 claimed A44 for an unrelated Kokoro
+> finding independently and concurrently; this row is the later of the two to
+> land.
+>
+> **Prior change: 2026-08-26 (#2643), 67 → 67 (no count change).** **A44**'s
+> own text is corrected, not discharged: #2647's fix compared this load's
+> intent against `_device`, but nothing ever resolved the string `"auto"`
+> into a concrete card before that comparison, so `fell_back` stayed
+> structurally dead on every REAL generation path (`synthesize`, the
+> `PRELOAD_KOKORO` warm path, the admission-off `/load` branch) — none of
+> which ever pass a `device=` argument or need `KOKORO_DEVICE` set. #2643
+> resolves `"auto"` to the concrete device the load is actually attempting
+> (derived from the same provider list that builds the ORT session, so
+> placement itself is unchanged) before publishing it as intent. A44's
+> acceptance criteria gain a fourth bullet for this unpinned/no-admission
+> path — the first two existing bullets only ever exercised an explicit
+> `KOKORO_DEVICE` pin or a VRAM-ledger admission, neither of which the actual
+> regression lived on.
+>
+> **Prior change: 2026-08-25 (#2647), 66 → 67.** Added **A44** — Kokoro's
+> silent-CPU-fallback alarm (`fell_back`) was structurally dead code on every
+> default install before this fix (the regression #2636 introduced); nothing
+> on real hardware has yet confirmed it fires on a genuine CUDA→CPU fallback,
+> stays quiet on a ledger-admitted CPU placement, or reads `unknown` (rather
+> than a false `cpu`) under kokoro-onnx API drift.
 >
 > **Prior change: 2026-08-25 (#2632, PR #2635), 65 → 66.** Added **E10** — the
 > sidecar-sweep worktree fix ships behaviour that only two live checkouts can
@@ -341,7 +365,7 @@ setup rather than repeatedly loading and evicting models.
 > primary's); nothing in that PR exercises `stop-app.mjs`/`.ps1` end to end
 > against a real listener.
 >
-> **Prior change: 2026-08-23 (fold step, #2625), 66 → 65.** One row discharged
+> Before that: 2026-08-23 (fold step, #2625), 66 → 65. One row discharged
 > live (A38, "ORT marker refuses — not repairs — a clobbered venv") and
 > dropped, per the owner's remove-outright ruling — the refuse-and-log branch
 > fired exactly as designed against a real copy of the live sidecar venv.
@@ -2576,7 +2600,111 @@ on one book.
 
 ---
 
-### A44 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
+### A44 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
+
+`_engine_actual_card`'s `fell_back` flag (#2631 review B3, the silent-CPU-fallback
+badge behind `/health`'s `stale_reason: 'cpu_fallback'`) compared this load's
+outcome against `_requested_device` — written once at `__init__` from the
+`KOKORO_DEVICE` env pin and never touched again. On the shipped default (no
+`KOKORO_DEVICE` set), that field reads `"auto"` forever, even for a load the
+VRAM-ledger admission itself steered onto a concrete `cuda:N` for capacity
+reasons — so `fell_back` could never be `True` on any default install, the
+exact regression #2636 introduced. Fixed by comparing against `_device`
+instead — this load's own intent, which an admitted `device=` argument
+overwrites before the load runs. A companion fix makes `_resolved_device` use
+`None`, not `"cpu"`, as its "not known yet" sentinel, so a kokoro-onnx
+API-drift session-read failure reports an honest `unknown` card instead of a
+confident false `cpu`. **Ratified behaviour decision:** when the VRAM ledger
+deliberately admits a load onto CPU under contention while
+`KOKORO_DEVICE=cuda:N`, `fell_back` stays `False` — admission is compliance
+with a capacity decision, not a silent fallback; `/health`'s `devices.kokoro`
+still reports the real session device either way, so the operator can always
+see the CPU placement even when the alarm itself stays quiet. Unit tests pin
+all three branches against synthetic engine doubles; none of them can prove
+the alarm against a REAL ORT session, a REAL VRAM-ledger admission, or a REAL
+kokoro-onnx import.
+
+**#2643 follow-up (still unproven on real hardware, folded into this same
+row rather than a new one):** the fix above compared intent against `_device`,
+but nothing ever resolved the literal string `"auto"` into a concrete card
+before that comparison — so on the SHIPPED DEFAULT, `fell_back` stayed dead
+on every path that actually matters: `KokoroEngine.synthesize` (every real
+generation), the `PRELOAD_KOKORO` warm-up path, and the admission-off
+`/load` branch, none of which ever pass a `device=` argument or need
+`KOKORO_DEVICE` set. #2643 resolves `"auto"` into the concrete device the
+load is actually attempting (derived from the exact provider list about to
+build the ORT session, so it cannot itself change placement) and publishes
+that as intent. When no usable CUDA build/device exists, the resolved
+intent is `cpu` — landing on cpu is then not a fallback, since nothing ever
+asked for cuda. The fourth bullet below is the acceptance criterion specific
+to this path; the first three bullets above only ever drove an explicit
+`KOKORO_DEVICE` pin or a VRAM-ledger admission, neither of which the actual
+regression lived on.
+
+- With `KOKORO_DEVICE=cuda` (or `cuda:0`) and a card where the CUDA execution
+  provider is *listed* by `get_available_providers()` but cannot actually
+  construct a session — the same missing-`nvidia-cudnn-cu12` gap A36 already
+  measured on this box is a ready-made way to force this — load Kokoro and
+  confirm `/health`'s `gpus[].resident[]` entry for Kokoro carries
+  `stale_reason: 'cpu_fallback'`, and `devices.kokoro` reads `cpu`. Kokoro has
+  no torch ordinal (`index: None`), so this entry lands in `_build_gpus_payload`'s
+  synthetic `idx: -1` bucket (`"unindexed (cpu / ORT / CT2)"`), not under one
+  of the numbered GPU cards — look there, not in `gpus[<n>].resident[]`.
+- With the card genuinely out of headroom (load Qwen and/or Coqui first to
+  consume it) and `KOKORO_DEVICE` unset (default `auto`) or pinned to `cuda`,
+  trigger a Kokoro load so the VRAM ledger's `admit()` genuinely returns a CPU
+  placement. Confirm the resident entry for Kokoro carries **no**
+  `stale_reason: 'cpu_fallback'` — the deliberate-admission case must stay
+  quiet even though the outcome is the same CPU placement as the bullet
+  above. **Positive control (this observation has no failure mode without
+  one):** repeat with the card genuinely idle so `admit()` places Kokoro on
+  the GPU instead — confirm the resident entry now carries the real GPU
+  index (not the `-1` bucket) and still no `stale_reason`. A GPU-admitted
+  load ALSO shows no `stale_reason`, so the CPU-admission bullet alone can't
+  tell "admission correctly chose cpu" from "admission was never actually
+  exercised, and Kokoro loaded some other way" — this control is what makes
+  it a real test of the admission path rather than a no-op that always
+  passes.
+- Force the kokoro-onnx API-drift branch. **Not** "a `kokoro-onnx` install
+  with no `Kokoro.from_session`" — verified against the installed package:
+  `Kokoro.__init__` (the fallback `_ensure_loaded` takes when
+  `from_session` is absent) ALSO always sets `self.sess =
+  rt.InferenceSession(...)`, so `_kokoro_session_device` still reads a real
+  session there and `/health` reports `cpu`/`cuda`, never `unknown` — that
+  repro can't produce the observation this bullet asks for, and an operator
+  running it would log a false PASS. `_kokoro_session_device`
+  (`main.py`) only fails when the loaded Kokoro object's ORT session isn't
+  reachable at its `.sess` attribute at all — the real drift shape is a
+  kokoro-onnx release that renames or drops that attribute. Force it
+  directly instead of depending on such a release being installed: after a
+  normal Kokoro load, drop into the sidecar process (a Python breakpoint, or
+  a one-line temporary edit to `_kokoro_session_device` that returns `None`
+  unconditionally, reverted immediately after this bullet) and confirm
+  `/health` then reports the Kokoro card as `unknown`, not `cpu`, and
+  `fell_back` reads `False`.
+- **(#2643) The actual real-generation path: `KOKORO_DEVICE` UNSET and no
+  admission override** — i.e. a plain `POST /synthesize` (or letting
+  `PRELOAD_KOKORO` warm Kokoro up) with nothing pinning a device at all. With
+  the card genuinely CUDA-capable but forced onto CPU providers by the same
+  missing-`nvidia-cudnn-cu12` gap A36 uses, trigger a real Kokoro synth and
+  confirm `/health` now reports `stale_reason: 'cpu_fallback'` for Kokoro
+  (before #2643 this stayed silent — `_device` never left the literal string
+  `"auto"` on this exact path). **Negative control:** repeat on a box with no
+  CUDA build/device at all (or `KOKORO_DEVICE=cpu`-shaped hardware) and
+  confirm `fell_back` stays `False` — auto-resolution's own intent is `cpu`
+  there, so a cpu landing is not a fallback.
+
+*Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and `KOKORO_DEVICE`
+settable per run. *Criteria:* the four bullets above — no existing run sheet
+covers this alarm-correctness surface specifically;
+[`ort-marker-onbox-acceptance.md`](ort-marker-onbox-acceptance.md) covers the
+neighbouring ORT-marker/GPU-provider mechanism (A36–A38) but not this
+bookkeeping. *Cost:* short — one genuine-fallback load, one contended-admission
+load, one drift simulation, one unpinned-auto load with its negative control.
+
+---
+
+### A45 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
 
 Wave 2's re-analysis (§7 rerun, A29/A30's sibling campaign) surfaced a
 defect PR #2640 fixed at the code level across five rounds of review:

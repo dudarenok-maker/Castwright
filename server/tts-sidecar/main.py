@@ -3120,11 +3120,18 @@ class KokoroEngine(Engine):
         # CoquiEngine's `_resolved_device`: `_device` is the PREF (env pin /
         # admitted placement), only ever meaningful once a load has actually
         # published it; `_resolved_device` is what the ORT session actually
-        # landed on, read via `_kokoro_session_device` at publish time, so a
-        # silent CPU fallback isn't masked by a `_device` that still reads
-        # 'cuda'. "cpu" here (not "auto") matches `_kokoro_session_device`'s
-        # own None-fallback shape and Coqui's unloaded-state default.
-        self._resolved_device: str = "cpu"
+        # landed on, read via `_kokoro_session_device` at publish time. Unlike
+        # Coqui, Kokoro's ORT introspection can itself fail (kokoro-onnx API
+        # drift, or any other exception) — and "cpu" is also a genuine
+        # resolved placement, so it CANNOT double as "unknown" the way Coqui's
+        # unloaded-state default does (#2647): a "cpu" init/reset value is
+        # indistinguishable from an honest cpu resolution, which made the
+        # honest-"unknown" reconcile in `_engine_actual_card` unreachable for
+        # Kokoro and let API drift assert a confident but false "cpu" claim.
+        # `None` is the distinct "not known yet" sentinel — `_parse_device`
+        # already maps a falsy value to "auto", which is exactly what routes
+        # `_engine_actual_card` into its reconcile-or-"unknown" path.
+        self._resolved_device: Optional[str] = None
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -3328,6 +3335,35 @@ class KokoroEngine(Engine):
             providers = ["CPUExecutionProvider"]
         else:
             providers = self._resolve_ort_providers() or self._default_ort_providers(resolved_device)
+        # #2643: resolve THIS LOAD's real intent before the load runs, for
+        # `_engine_actual_card` to publish below. `family` above still reads
+        # "auto" whenever nothing pinned/admitted a concrete device -- which
+        # is every real generation path (KOKORO_DEVICE unset, and neither
+        # `synthesize`, the PRELOAD_KOKORO warm path, nor the admission-off
+        # `/load` branch ever pass `device=`). `_engine_actual_card` compares
+        # this published intent against "cuda" literally, so a comparison
+        # left at the literal string "auto" can never equal "cuda" and
+        # `fell_back` was structurally dead on that path.
+        #
+        # Derive the concrete intent from `providers` -- the EXACT list this
+        # load is about to build its ORT session with -- rather than
+        # re-running the CUDA probe separately. Reusing the already-computed
+        # decision (not making a second one) is what guarantees this can only
+        # ever describe the placement decided above, never diverge from it:
+        # actual placement is unchanged by this line. The probe itself
+        # (`_default_ort_providers` -> `rt.get_available_providers()` /
+        # `rt.cuda_version`) reads ORT's own build/runtime metadata -- no
+        # session or CUDA context is created by it.
+        #
+        # No CUDA execution provider (`providers` has no CUDA entry) resolves
+        # the intent to "cpu": nothing asked for cuda on this load, so landing
+        # on cpu is not a fallback -- see `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`.
+        # Note: this test does not cover DirectML or ROCm providers, which are
+        # also GPUs but not CUDA. They are currently unreachable in shipping
+        # because `accelerator-profile.mjs` gates CUDA-only to the nvidia profile.
+        intent_device = resolved_device
+        if family == "auto":
+            intent_device = "cuda" if "CUDAExecutionProvider" in providers else "cpu"
         # Indexed CUDA pin (KOKORO_DEVICE=cuda:1): resolved BEFORE the
         # initial build so it can be folded into that single build, rather
         # than building once unpinned (implicitly landing on CUDA device_id
@@ -3420,8 +3456,23 @@ class KokoroEngine(Engine):
         # ORT session actually landed on, read via `_kokoro_session_device`
         # now that `self._kokoro` is set -- not `resolved_device`, which is
         # only the intent and can diverge from it (a silent CPU fallback).
-        self._device = resolved_device
-        self._resolved_device = _kokoro_session_device(self) or resolved_device
+        # #2647: do NOT fall back to `resolved_device` (the intent) when the
+        # session read comes back None (kokoro-onnx API drift, or any other
+        # exception) -- that would manufacture a confident but false claim.
+        # Leave `_resolved_device` at its "unknown" value (None, from
+        # __init__ or the last `unload()`) so `_engine_actual_card` takes
+        # its honest reconcile-or-"unknown" path instead.
+        #
+        # Publish `intent_device` (#2643), not `resolved_device`: on the
+        # "auto" branch it is the CONCRETE card this load actually attempted
+        # ("cuda" or "cpu"), computed above from the same `providers` list
+        # that built the session -- resolved_device would otherwise publish
+        # the literal string "auto" forever on every unset-env load, which
+        # `_engine_actual_card` can never compare equal to "cuda". Off the
+        # "auto" branch `intent_device == resolved_device` unchanged (an env
+        # pin or an admitted `device=` argument keeps winning).
+        self._device = intent_device
+        self._resolved_device = _kokoro_session_device(self)
 
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
@@ -3454,8 +3505,14 @@ class KokoroEngine(Engine):
         # Ground truth follows the pref back to "nothing loaded" (#2631
         # review B3, mirrors CoquiEngine's `_drop_model_locked`) — otherwise
         # `_engine_actual_card` would keep reporting the last-loaded card's
-        # ORT providers for an engine that is no longer resident.
-        self._resolved_device = "cpu"
+        # ORT providers for an engine that is no longer resident. `None`
+        # (#2647), not "cpu" — this engine has no model, so it has no
+        # resolved device at all, and `_engine_actual_card`'s top-level
+        # `self._kokoro is None` gate means this value is never read while
+        # unloaded regardless; keeping it at the same "unknown" sentinel as
+        # __init__ avoids reintroducing a value that reads as a real
+        # placement if that gate is ever loosened.
+        self._resolved_device = None
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
@@ -4853,7 +4910,23 @@ def _is_resident(engine_id: str) -> Optional[str]:
     `engine_id` is currently loaded on, or None when unloaded / on cpu / not
     cheaply knowable. Reuses `_engine_actual_card` (the same loaded-model
     probe /health's `gpus` payload already relies on) rather than duplicating
-    the per-engine attribute digging here."""
+    the per-engine attribute digging here.
+
+    An honest "unknown" `family` (kokoro-onnx API drift defeating the ORT
+    session read, #2647) must not cost residency TRACKING the way it rightly
+    costs the /health `fell_back` claim: a model genuinely loaded onto a GPU
+    still occupies that GPU's VRAM even when we can no longer read back
+    confirmation of it. When the actual-card probe comes back "unknown" for
+    a LOADED engine (`card` is not None), fall back to this load's own
+    intent (`_device`) -- this load's resolved intent (the device family
+    the load actually requested, from either a pin, an admission, or on
+    an unpinned auto load, from provider availability). For an auto load,
+    that intent was "cuda" even when no admission/pin was involved, so a
+    phantom ~1GB conservative VRAM booking may linger until the load
+    unwinds. This is the best remaining evidence of where the weights
+    actually live. This keeps `PlacementController` booking VRAM against the right card instead
+    of silently dropping the constraint and admitting a second heavy engine
+    onto a card that is already full."""
     named: dict[str, Any] = dict(ENGINES)
     named["asr"] = ASR
     named["spk"] = SPK
@@ -4861,7 +4934,13 @@ def _is_resident(engine_id: str) -> Optional[str]:
     if engine is None:
         return None
     card = _engine_actual_card(engine)
-    if card is None or card["family"] not in ("cuda", "rocm"):
+    if card is None:
+        return None
+    if card["family"] not in ("cuda", "rocm"):
+        if card["family"] == "unknown":
+            intent_fam, intent_idx = _parse_device(getattr(engine, "_device", None))
+            if intent_fam in ("cuda", "rocm"):
+                return f"{intent_fam}:{intent_idx if intent_idx is not None else 0}"
         return None
     index = card["index"] if card["index"] is not None else 0
     return f"{card['family']}:{index}"
@@ -9637,7 +9716,61 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     )
     if model is None:
         return None
-    requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    # #2647: compare THIS LOAD's actual intent, not the pristine env pin.
+    # `_requested_device` (Coqui/Kokoro/Whisper) is written ONCE at __init__
+    # from the env var and never touched again — so on the shipped default
+    # (no KOKORO_DEVICE/COQUI_DEVICE/ASR_DEVICE pin), it reads "auto" forever,
+    # even on a load the VRAM-ledger admission ITSELF steered onto "cuda:N"
+    # for capacity reasons. `_parse_device("auto")` never equals "cuda", so
+    # `fell_back` below could never fire on that (the shipped) default —
+    # dead code, not a working detector, and exactly the regression #2636
+    # introduced. `_device` is the field that actually carries this load's
+    # intent: it starts from the same env pin, but an admitted `device=`
+    # argument (VRAM-ledger placement) overwrites it BEFORE the load runs,
+    # and a successful load leaves it holding that same concrete decision
+    # (Coqui `_publish_loaded_locked`, Kokoro `_ensure_loaded`, Qwen
+    # `_ensure_device_resolved`/`_ensure_base_loaded` all converge here) — so
+    # comparing THAT against the actual outcome is a real, load-scoped
+    # comparison instead of a config-scoped one. Engines with no such split
+    # (SPK: only `.device`, which itself doubles as the actual outcome after
+    # a self-demotion — there is no separate pre-outcome intent value left to
+    # read) fall back to `_requested_device` unchanged; SPK's and Whisper's
+    # own admission call sites (`/embed`, `/transcribe`) only ever admit a
+    # GPU placement when the env pin ALREADY says cuda/rocm, so
+    # `_requested_device` already reflects this load's real intent for them
+    # regardless. Qwen has `_device` too, so it takes the `_device` branch
+    # below, but it's a genuine no-op there rather than a bug: `Qwen3TTSModel`
+    # (the qwen_tts wrapper `_base`/`_base17`/`_design` all hold) exposes no
+    # `.parameters()`, so the top-of-function torch introspection above never
+    # actually reaches it for Qwen (verified against the installed qwen_tts
+    # package — `getattr(wrapper, "parameters", None)` is None) and `family`
+    # below falls through to this SAME `_device` string, making
+    # `requested_fam == family` structurally, by construction, on every Qwen
+    # load — `fell_back` cannot fire, correctly, since a real torch `.to()`
+    # failure raises rather than silently landing elsewhere.
+    #
+    # Whisper ALSO has a `_device` attribute (unlike SPK), so it would
+    # wrongly take the branch below if dispatched purely on `hasattr` — but
+    # unlike Coqui/Kokoro/Qwen, Whisper's `_device` is NOT a stable per-load
+    # intent: `WhisperEngine._ensure_loaded` overwrites it with the load's
+    # own actual placement at the end (`self._device = dev`), with no
+    # separate `_resolved_device` ground truth the way Coqui/Kokoro have. So
+    # reading `_device` for both `requested_fam` and `family` (the latter via
+    # the same string fallback below) would compare that field to itself —
+    # tautologically equal, never able to flag a fallback — which is exactly
+    # the regression this `isinstance` carve-out closes (#2647 follow-up).
+    # Whisper is routed to the SAME `_requested_device` branch SPK already
+    # uses, restoring the pre-#2647 comparison the paragraph above describes.
+    # This isinstance carve-out is defensive against a future regression where
+    # Whisper's requested and actual devices diverge, but no production path
+    # currently reaches it: /transcribe always passes cpu_capable=False, so
+    # admission returns either a GPU key or noCapacity, never a divergence.
+    if isinstance(engine, WhisperEngine):
+        requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    elif hasattr(engine, "_device"):
+        requested_fam, _ = _parse_device(getattr(engine, "_device"))
+    else:
+        requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
     # actual device: prefer the loaded torch module's real device; fall back to the string attr
     family = index = None
     try:
@@ -9653,17 +9786,39 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         # cpu fallback isn't masked by the cuda pref; then `device` (SPK,
         # demoted to cpu on failure) and `_device` (Whisper, which has no
         # `_resolved_device` split — see #2631 review N10).
-        family, _ = _parse_device(
-            getattr(engine, "_resolved_device", None)
-            or getattr(engine, "device", None)
-            or getattr(engine, "_device", None)
-        )
+        #
+        # `_resolved_device` must be checked via `hasattr`, not folded into the
+        # same `or` chain as the fallbacks (#2647): Coqui/Kokoro engines ALWAYS
+        # carry this attribute, but Kokoro's can genuinely be `None` — "not
+        # known yet" (init, or the ORT session read failed under kokoro-onnx
+        # API drift) — which is a real answer, not an absent one. Folding it
+        # into `or` treated "unknown" the same as "attribute doesn't exist"
+        # and fell through to `_device` (the pref/intent), manufacturing a
+        # false confident claim from what was only ever requested. An engine
+        # that has no `_resolved_device` split at all (SPK, Whisper) still
+        # falls through to the pref, unchanged.
+        if hasattr(engine, "_resolved_device"):
+            family, _ = _parse_device(getattr(engine, "_resolved_device"))
+        else:
+            family, _ = _parse_device(
+                getattr(engine, "device", None) or getattr(engine, "_device", None)
+            )
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
             family = ks
     if family in (None, "auto"):
         family = "unknown"
+    # #2647 (behaviour decision): when this load's intent was "auto" — no env
+    # pin AND no VRAM-ledger admission ever overrode it — `requested_fam` is
+    # "auto", never "cuda", so `fell_back` stays False however the load
+    # actually landed. That is deliberate, not a gap this comparison misses:
+    # nothing ever asked for cuda on that load, so a cpu outcome is simply
+    # "unconfigured, ran wherever it ran," not a silent fallback from
+    # anything. The badge exists to catch "this load intended cuda (an env
+    # pin or an admitted placement) and silently got cpu anyway" — pinned by
+    # `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`
+    # in test_kokoro.py.
     fell_back = (requested_fam == "cuda" and family == "cpu")
     return {"family": family, "index": index, "fell_back": fell_back}
 

@@ -8,7 +8,7 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A29](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A30](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A44](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
+> Register rows: [`onbox-acceptance-register.md` A29](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A30](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A45](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
 and A45 (2026-08-11); neither is in the register any more, and §7 and §9
 below are their records. Do not follow B3 to whatever now sits at that
 position — Group B renumbered and today's B2 is an unrelated #2246 row.**
@@ -894,7 +894,7 @@ silently produce a confident wrong answer rather than an error:
 
 ## 10. #2584 fix (PR #2640) — wrong-direction retirement, code-level fix
 
-> Register row: A44 (Group A) in
+> Register row: A45 (Group A) in
 > [`onbox-acceptance-register.md`](onbox-acceptance-register.md).
 
 ### 10.1 Purpose & scope
@@ -919,7 +919,7 @@ The real, live-corrupted book: *Заказ Коалфолла* at `C:\AudiobookW
 1. The character's `cast.json` id comes back as `oduvan` (ASCII), not `одуван` (Cyrillic).
 2. If the id changed at the raw-analyzer-output layer, it is recorded in `cast-id-history.json`'s `supersededBy` map with the **correct direction** (fresh → established).
 
-This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A44 stays open until it runs.
+This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A45 stays open until it runs.
 
 ### 10.3 Code-level proof (PR #2640, shipped)
 
@@ -929,6 +929,6 @@ This is the exact real reproduction this issue was filed from, still live on thi
 - `remap-fresh-to-prior.test.ts` (in `server/src/store/`, not `merge-analysis-cast.test.ts`) still separately proves the exact-name matcher itself handles the simple case unaided — a baseline, not the whole proof, since it doesn't exercise the real collision that made the matcher's own "already converged" guard skip.
 - `merge-analysis-cast.test.ts`'s F2 regression (reserved fold-bucket id never a name-fallback survivor via `mergeCore`) is untouched and still passes, since `mergeCore` itself is untouched by this fix.
 - The narrowly-scoped bolt-on from attempt 1 (`mergeCore` in `server/src/store/merge-analysis-cast.ts`) was introduced and reverted within this same PR's history (commits `90032fd6` then `2bd7b6ef`) — not, as an earlier draft of this section claimed, part of PR #2633's merge commit.
-- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (see the register's A44 entry for the same finding).
+- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (see the register's A45 entry for the same finding).
 
 Defects NOT filed: none. The fix is narrowly scoped (one function's gating condition changed, four call sites re-plumbed to pass the fresh roster instead of a tier-membership set) and passes the full server test suite, including `analysis.test.ts`'s 222 tests.
