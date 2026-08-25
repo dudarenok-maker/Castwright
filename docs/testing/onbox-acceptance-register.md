@@ -328,7 +328,22 @@ setup rather than repeatedly loading and evicting models.
 
 **67 owed.** Oldest: **2026-06-01** (plans 160, 161, 165) — unaffected by this wave; A14/A15 (the oldest debt) were not touched.
 
-> **Last change: 2026-08-25 (#2647), 66 → 67.** Added **A44** — Kokoro's
+> **Last change: 2026-08-26 (#2643), 67 → 67 (no count change).** **A44**'s
+> own text is corrected, not discharged: #2647's fix compared this load's
+> intent against `_device`, but nothing ever resolved the string `"auto"`
+> into a concrete card before that comparison, so `fell_back` stayed
+> structurally dead on every REAL generation path (`synthesize`, the
+> `PRELOAD_KOKORO` warm path, the admission-off `/load` branch) — none of
+> which ever pass a `device=` argument or need `KOKORO_DEVICE` set. #2643
+> resolves `"auto"` to the concrete device the load is actually attempting
+> (derived from the same provider list that builds the ORT session, so
+> placement itself is unchanged) before publishing it as intent. A44's
+> acceptance criteria gain a fourth bullet for this unpinned/no-admission
+> path — the first two existing bullets only ever exercised an explicit
+> `KOKORO_DEVICE` pin or a VRAM-ledger admission, neither of which the actual
+> regression lived on.
+>
+> **Prior change: 2026-08-25 (#2647), 66 → 67.** Added **A44** — Kokoro's
 > silent-CPU-fallback alarm (`fell_back`) was structurally dead code on every
 > default install before this fix (the regression #2636 introduced); nothing
 > on real hardware has yet confirmed it fires on a genuine CUDA→CPU fallback,
@@ -2598,6 +2613,23 @@ all three branches against synthetic engine doubles; none of them can prove
 the alarm against a REAL ORT session, a REAL VRAM-ledger admission, or a REAL
 kokoro-onnx import.
 
+**#2643 follow-up (still unproven on real hardware, folded into this same
+row rather than a new one):** the fix above compared intent against `_device`,
+but nothing ever resolved the literal string `"auto"` into a concrete card
+before that comparison — so on the SHIPPED DEFAULT, `fell_back` stayed dead
+on every path that actually matters: `KokoroEngine.synthesize` (every real
+generation), the `PRELOAD_KOKORO` warm-up path, and the admission-off
+`/load` branch, none of which ever pass a `device=` argument or need
+`KOKORO_DEVICE` set. #2643 resolves `"auto"` into the concrete device the
+load is actually attempting (derived from the exact provider list about to
+build the ORT session, so it cannot itself change placement) and publishes
+that as intent. When no usable CUDA build/device exists, the resolved
+intent is `cpu` — landing on cpu is then not a fallback, since nothing ever
+asked for cuda. The fourth bullet below is the acceptance criterion specific
+to this path; the first three bullets above only ever drove an explicit
+`KOKORO_DEVICE` pin or a VRAM-ledger admission, neither of which the actual
+regression lived on.
+
 - With `KOKORO_DEVICE=cuda` (or `cuda:0`) and a card where the CUDA execution
   provider is *listed* by `get_available_providers()` but cannot actually
   construct a session — the same missing-`nvidia-cudnn-cu12` gap A36 already
@@ -2639,14 +2671,25 @@ kokoro-onnx import.
   unconditionally, reverted immediately after this bullet) and confirm
   `/health` then reports the Kokoro card as `unknown`, not `cpu`, and
   `fell_back` reads `False`.
+- **(#2643) The actual real-generation path: `KOKORO_DEVICE` UNSET and no
+  admission override** — i.e. a plain `POST /synthesize` (or letting
+  `PRELOAD_KOKORO` warm Kokoro up) with nothing pinning a device at all. With
+  the card genuinely CUDA-capable but forced onto CPU providers by the same
+  missing-`nvidia-cudnn-cu12` gap A36 uses, trigger a real Kokoro synth and
+  confirm `/health` now reports `stale_reason: 'cpu_fallback'` for Kokoro
+  (before #2643 this stayed silent — `_device` never left the literal string
+  `"auto"` on this exact path). **Negative control:** repeat on a box with no
+  CUDA build/device at all (or `KOKORO_DEVICE=cpu`-shaped hardware) and
+  confirm `fell_back` stays `False` — auto-resolution's own intent is `cpu`
+  there, so a cpu landing is not a fallback.
 
 *Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and `KOKORO_DEVICE`
-settable per run. *Criteria:* the three bullets above — no existing run sheet
+settable per run. *Criteria:* the four bullets above — no existing run sheet
 covers this alarm-correctness surface specifically;
 [`ort-marker-onbox-acceptance.md`](ort-marker-onbox-acceptance.md) covers the
 neighbouring ORT-marker/GPU-provider mechanism (A36–A38) but not this
 bookkeeping. *Cost:* short — one genuine-fallback load, one contended-admission
-load, one drift simulation.
+load, one drift simulation, one unpinned-auto load with its negative control.
 
 ## Group B — local Ollama analyzer only
 

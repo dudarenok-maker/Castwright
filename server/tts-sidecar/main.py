@@ -3335,6 +3335,32 @@ class KokoroEngine(Engine):
             providers = ["CPUExecutionProvider"]
         else:
             providers = self._resolve_ort_providers() or self._default_ort_providers(resolved_device)
+        # #2643: resolve THIS LOAD's real intent before the load runs, for
+        # `_engine_actual_card` to publish below. `family` above still reads
+        # "auto" whenever nothing pinned/admitted a concrete device -- which
+        # is every real generation path (KOKORO_DEVICE unset, and neither
+        # `synthesize`, the PRELOAD_KOKORO warm path, nor the admission-off
+        # `/load` branch ever pass `device=`). `_engine_actual_card` compares
+        # this published intent against "cuda" literally, so a comparison
+        # left at the literal string "auto" can never equal "cuda" and
+        # `fell_back` was structurally dead on that path.
+        #
+        # Derive the concrete intent from `providers` -- the EXACT list this
+        # load is about to build its ORT session with -- rather than
+        # re-running the CUDA probe separately. Reusing the already-computed
+        # decision (not making a second one) is what guarantees this can only
+        # ever describe the placement decided above, never diverge from it:
+        # actual placement is unchanged by this line. The probe itself
+        # (`_default_ort_providers` -> `rt.get_available_providers()` /
+        # `rt.cuda_version`) reads ORT's own build/runtime metadata -- no
+        # session or CUDA context is created by it.
+        #
+        # No usable GPU (`providers` has no CUDA entry) resolves the intent to
+        # "cpu": nothing asked for cuda on this load, so landing on cpu is not
+        # a fallback -- see `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`.
+        intent_device = resolved_device
+        if family == "auto":
+            intent_device = "cuda" if "CUDAExecutionProvider" in providers else "cpu"
         # Indexed CUDA pin (KOKORO_DEVICE=cuda:1): resolved BEFORE the
         # initial build so it can be folded into that single build, rather
         # than building once unpinned (implicitly landing on CUDA device_id
@@ -3433,7 +3459,16 @@ class KokoroEngine(Engine):
         # Leave `_resolved_device` at its "unknown" value (None, from
         # __init__ or the last `unload()`) so `_engine_actual_card` takes
         # its honest reconcile-or-"unknown" path instead.
-        self._device = resolved_device
+        #
+        # Publish `intent_device` (#2643), not `resolved_device`: on the
+        # "auto" branch it is the CONCRETE card this load actually attempted
+        # ("cuda" or "cpu"), computed above from the same `providers` list
+        # that built the session -- resolved_device would otherwise publish
+        # the literal string "auto" forever on every unset-env load, which
+        # `_engine_actual_card` can never compare equal to "cuda". Off the
+        # "auto" branch `intent_device == resolved_device` unchanged (an env
+        # pin or an admitted `device=` argument keeps winning).
+        self._device = intent_device
         self._resolved_device = _kokoro_session_device(self)
 
         log.info(
