@@ -226,6 +226,29 @@ comparison, see the edge list above). The merge step that closes this, run
    discharged rather than being flagged. Accepted trade-off, not an
    oversight; see `checkLiveView`'s own header comment in
    `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
+
+   **A live version of this same limitation: the Artifact tool's own publish
+   loop (2026-08-26).** This whole procedure assumes the race is between PRs
+   landing at different *times* — you fetch, reconcile, publish, done. It does
+   not cover two worktrees publishing this same canonical URL at the same
+   *moment*: your `action: "read"` (required before every publish) fetches
+   version N, but by the time your publish request lands, the other lane has
+   already pushed N+1, so your publish is rejected as based on an unviewed
+   version; you re-read, get N+1, and by the time you publish again the other
+   lane is on N+2 — a "not viewed → view fully → identical, already refused"
+   loop that never clears on its own because the target keeps moving. The
+   tool's own suggested escape hatch, `force:true`, is wrong here: it
+   discards whatever the other lane just landed, which — per the known
+   limitation just above — is very often the newer, correct content (a
+   pre-merge publish from a branch that hasn't landed on `main` yet). Do not
+   force. Instead: find the other lane (`git branch --contains <sha>` for the
+   commit touching `docs/testing/onbox-acceptance-register-live-view.html` you
+   don't recognise, or `git log <branch> --oneline -- <that path>` across
+   `git worktree list`'s branches) and let it finish publishing; then pull
+   `main`, confirm your local copy of both tracked files matches what's now
+   live, and only then run the four-step procedure above from that synced
+   copy. Two lanes should never be mid-publish on this URL at once — if you
+   find one, that is the thing to fix, not the loop.
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url` **and `favicon` set to 📋**.
 
