@@ -99,7 +99,11 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
      if ($quietStreak -ge 5) { break }  # 5 consecutive quiet polls = 10s confirmed idle
      Start-Sleep -Seconds 2
    }
-   "Went idle after $((Get-Date) - $captureP2Time)"
+   if ($quietStreak -ge 5) {
+     "Confirmed idle after $((Get-Date) - $captureP2Time)"
+   } else {
+     "CEILING TIMEOUT after 10 minutes -- box never went idle. STOP: do not capture P3/P4."
+   }
    ```
 
    Record the actual elapsed time in the results table's **"time to idle"**
