@@ -31,7 +31,7 @@
    repeating. It dispatches `requestStartGeneration` directly, exactly like
    the non-Qwen branch of `startGenerationFlow` does for a plain book. */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -232,15 +232,6 @@ export function CloneReadinessGateModal() {
   const [pendingCastWrite, setPendingCastWrite] = useState(false);
   const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* Clean up any pending timeout on unmount */
-  useEffect(() => {
-    return () => {
-      if (pendingTimeoutRef.current !== null) {
-        clearTimeout(pendingTimeoutRef.current);
-      }
-    };
-  }, []);
-
   if (!gate) return null;
 
   const onClose = () => dispatch(uiActions.closeCloneReadinessGate());
@@ -249,7 +240,8 @@ export function CloneReadinessGateModal() {
     setPendingCastWrite(true);
     /* Clear any prior pending timeout to avoid overlapping timers re-opening the race.
        Then schedule a new timeout: wait for the debounce window plus a safety margin
-       to ensure the cast write PUT has landed before re-enabling "Proceed anyway". */
+       to ensure the cast write PUT has been issued before re-enabling "Proceed anyway".
+       (The margin covers the debounce firing; actual PUT completion is asynchronous.) */
     if (pendingTimeoutRef.current !== null) {
       clearTimeout(pendingTimeoutRef.current);
     }
