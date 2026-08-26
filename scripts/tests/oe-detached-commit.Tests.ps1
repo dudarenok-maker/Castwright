@@ -31,6 +31,28 @@ BeforeAll {
             $node.Left.VariablePath.UserPath -eq 'childScript'
         },
         $true) | Select-Object -First 1
+
+    $script:worktreeTrimAssignment = $script:ast.FindAll(
+        {
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $node.Left.VariablePath.UserPath -eq 'Worktree' -and
+            $node.Right.Expression -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+            $node.Right.Expression.Member.Value -eq 'TrimEnd' -and
+            $node.Right.Expression.Expression -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $node.Right.Expression.Expression.VariablePath.UserPath -eq 'Worktree'
+        },
+        $true) | Select-Object -First 1
+
+    $script:scratchDirAssignment = $script:ast.FindAll(
+        {
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $node.Left.VariablePath.UserPath -eq 'T'
+        },
+        $true) | Select-Object -First 1
 }
 
 Describe 'oe-detached-commit.ps1 static shape (AST-based, comment/docstring-proof)' {
@@ -54,7 +76,17 @@ Describe 'oe-detached-commit.ps1 static shape (AST-based, comment/docstring-proo
             }
         }
         $windowStyleIndex | Should -BeGreaterThan -1 -Because 'a -WindowStyle parameter must be bound on the real Start-Process call, not just mentioned in a comment'
-        $elements[$windowStyleIndex + 1].Extent.Text | Should -Be 'Hidden'
+        $windowStyleParam = $elements[$windowStyleIndex]
+        # Accept -WindowStyle Hidden (separate token), -WindowStyle:Hidden
+        # (bound directly on the parameter AST via colon syntax), and a
+        # quoted 'Hidden' -- all three are the same real flag, and a false
+        # red on the colon/quoted forms would be its own bug in this guard.
+        $value = if ($windowStyleParam.Argument) {
+            $windowStyleParam.Argument.Extent.Text.Trim("'`"")
+        } else {
+            $elements[$windowStyleIndex + 1].Extent.Text.Trim("'`"")
+        }
+        $value | Should -Be 'Hidden'
     }
 
     It 'takes the commit message as a bound parameter, never interpolated into a command string' {
@@ -84,11 +116,28 @@ Describe 'oe-detached-commit.ps1 static shape (AST-based, comment/docstring-proo
     }
 
     It 'strips a trailing backslash from -Worktree before it can escape a closing quote' {
-        $script:scriptText | Should -Match ([regex]::Escape('$Worktree = $Worktree.TrimEnd(''\'')'))
+        # AST-based, not a whole-file grep: a text match against
+        # '$Worktree.TrimEnd(''\'')' stays green even if the line is
+        # commented out (this happened during review -- pass 2 on #2662
+        # found the pass-1 fix had reintroduced the exact blind spot it had
+        # just closed, for its own two new assertions).
+        $script:worktreeTrimAssignment | Should -Not -BeNullOrEmpty -Because '$Worktree = $Worktree.TrimEnd(...) must be a real, executed assignment'
+        $trimArgs = $script:worktreeTrimAssignment.Right.Expression.Arguments
+        $trimArgs.Count | Should -Be 1
+        $trimArgs[0].Value | Should -Be '\'
     }
 
     It 'gives every scratch directory a per-call GUID component, not just a per-second timestamp' {
-        $script:scriptText | Should -Match '\[Guid\]::NewGuid\(\)'
+        $script:scratchDirAssignment | Should -Not -BeNullOrEmpty -Because 'the scratch directory ($T) must be assigned somewhere'
+        $guidCalls = $script:scratchDirAssignment.FindAll(
+            {
+                param($node)
+                $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+                $node.Member.Value -eq 'NewGuid' -and
+                $node.Static
+            },
+            $true)
+        $guidCalls.Count | Should -BeGreaterThan 0 -Because '[Guid]::NewGuid() must be part of the actual $T assignment, not just present elsewhere in the file'
     }
 }
 
@@ -106,12 +155,19 @@ Describe 'oe-detached-commit.ps1 functional smoke tests' -Skip:($env:OS -ne 'Win
         git -C $script:repoDir config user.name 'Test'
         Set-Content -Path (Join-Path $script:repoDir 'file.txt') -Value 'hello' -Encoding utf8
         git -C $script:repoDir add file.txt
+        $script:scratchDirs = @()
     }
 
     AfterEach {
         if (Test-Path $script:repoDir) {
             Remove-Item $script:repoDir -Recurse -Force -ErrorAction SilentlyContinue
         }
+        foreach ($dir in $script:scratchDirs) {
+            if (Test-Path $dir) {
+                Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $script:scratchDirs = @()
     }
 
     BeforeAll {
@@ -126,15 +182,24 @@ Describe 'oe-detached-commit.ps1 functional smoke tests' -Skip:($env:OS -ne 'Win
                 Start-Sleep -Milliseconds 200
                 $procId = Get-Content $pidPath -ErrorAction SilentlyContinue
                 $alive = $procId -and (Get-Process -Id $procId -ErrorAction SilentlyContinue)
-                $done = (Test-Path $logPath) -and (Select-String -Path $logPath -Pattern '^EXIT=' -Quiet)
             } while ($alive -and (Get-Date) -lt $deadline)
             return $logPath
+        }
+
+        # Every It below launches the real script, which creates a fresh
+        # %TEMP%\cw-commit-* scratch dir it never cleans up itself (by
+        # design -- the caller polls it after the process exits). Track
+        # each one so the test suite doesn't leak them into %TEMP% run
+        # after run (79 had accumulated there before this fix).
+        function Register-ScratchDir([string]$Dir) {
+            $script:scratchDirs += $Dir
+            return $Dir
         }
     }
 
     It 'commits detached and the commit lands with the exact message, apostrophe included' {
         $message = "test: verify detached commit don't drop quoting"
-        $scratchDir = & $script:scriptPath -Worktree $script:repoDir -Message $message
+        $scratchDir = Register-ScratchDir (& $script:scriptPath -Worktree $script:repoDir -Message $message)
         $logPath = Wait-ForDetachedCommit -ScratchDir $scratchDir
 
         (Get-Content $logPath -Raw) | Should -Match 'EXIT=0'
@@ -144,7 +209,7 @@ Describe 'oe-detached-commit.ps1 functional smoke tests' -Skip:($env:OS -ne 'Win
     It 'tolerates a trailing backslash on -Worktree instead of swallowing the rest of the command line' {
         $worktreeWithTrailingSlash = $script:repoDir + '\'
         $message = 'test: trailing backslash on worktree path'
-        $scratchDir = & $script:scriptPath -Worktree $worktreeWithTrailingSlash -Message $message
+        $scratchDir = Register-ScratchDir (& $script:scriptPath -Worktree $worktreeWithTrailingSlash -Message $message)
         $logPath = Wait-ForDetachedCommit -ScratchDir $scratchDir
 
         (Get-Content $logPath -Raw) | Should -Match 'EXIT=0'
@@ -162,8 +227,8 @@ Describe 'oe-detached-commit.ps1 functional smoke tests' -Skip:($env:OS -ne 'Win
         git -C $repoB add file.txt
 
         try {
-            $scratchA = & $script:scriptPath -Worktree $repoA -Message 'test: lane A commit'
-            $scratchB = & $script:scriptPath -Worktree $repoB -Message 'test: lane B commit'
+            $scratchA = Register-ScratchDir (& $script:scriptPath -Worktree $repoA -Message 'test: lane A commit')
+            $scratchB = Register-ScratchDir (& $script:scriptPath -Worktree $repoB -Message 'test: lane B commit')
 
             $scratchA | Should -Not -Be $scratchB
 

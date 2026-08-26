@@ -85,8 +85,10 @@ Set-Content -Path (Join-Path $T 'commit.ps1') -Value $childScript -Encoding utf8
 # Win32 argv quoting: -ArgumentList does NOT quote its elements, and a naive
 # `"`"$Value`""` wrap breaks the instant $Value ends in a backslash (the
 # backslash-quote pair is read as an escaped quote, not path-then-terminator).
-# $Worktree is already stripped above; double any trailing backslash here so
-# the rule applies uniformly to every path this script quotes.
+# Doubles a single trailing backslash, which is the only case any caller of
+# this helper can actually produce: $Worktree is fully stripped by TrimEnd
+# above, and the other two callers (the scratch dir, the commit.ps1 path)
+# are both Join-Path results, which never end in a separator.
 function ConvertTo-QuotedArg([string]$Value) {
     if ($Value.EndsWith('\')) { $Value += '\' }
     return '"' + $Value + '"'
