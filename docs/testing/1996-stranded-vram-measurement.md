@@ -212,10 +212,13 @@ memory crossed 8192MB (rss=17128MB) → forced gc+empty_cache reclaimed -0MB (no
 The watchdog was already running and reclaiming ~0 MB — it cannot touch this
 pool either, for the same reason `/debug/reclaim` mostly couldn't.)*
 
-**What was active during the wait** (from `logs/server.log`, P2 07:58:36 →
-confirmed-idle 07:58:57): **idle window clean** — the grep returned zero
-request lines in that 21 s window. No confound; this run's P3/P4 readings are
-trustworthy evidence, not a contaminated idle.
+**What was active during the wait:** This run was measured with instruments that are now known to have been broken in two ways, both fixed on this branch but after this run was captured:
+
+1. **The idle gate couldn't see ASR activity.** The sidecar's `/health` endpoint tracked `inflight_synth` only for synthesis requests (`/synthesize`), not transcription (`/transcribe`) or embedding (`/embed`). This gate declared "idle" at 07:58:57 based on five consecutive zero `inflight_synth` polls, but that metric was blind to ASR. *Fixed in commit d4aa7a6c: `/health` and `/debug/memory` now include `/transcribe` and `/embed` in the busy signal.*
+
+2. **The attribution grep read the wrong log file.** The verification step relied on grepping `logs/server.log` for request lines, which never contains per-request entries from the sidecar — a null result that looked like "nothing happened" but actually meant "this instrument cannot report anything, ever." *Fixed in commit 36091ef2: the attribution step now reads `logs/tts.log`, the sidecar's uvicorn access log.*
+
+Real forensic evidence from `logs/tts.err.log` for this specific run: Whisper `small` loaded onto `cuda:1` at 07:58:31–34 and ran continuous transcription through 07:58:51.768. The idle gate reported a quiet streak beginning at ≈07:58:49 (after an 8 s quiet window from ~5 second polls starting after 07:58:41), which **overlaps the live Whisper transcription window (07:58:31–51.768)**. This run's "confirmed idle" window was not clean; it was contaminated by active ASR transcription that the broken idle gate could not detect.
 
 ---
 
@@ -230,41 +233,17 @@ trustworthy evidence, not a contaminated idle.
 | P4 `reserved` barely moves, `reclaimed: false` | **Invalid reading.** The reclaim never ran — CUDA was unavailable or `empty_cache()` threw. Retry once; treat repeated `false` as a separate finding (a live-context problem), not a #1996 answer. |
 | Strand present at P3 *and* P4 frees it *and* RSS was above 8192 MB at P2 | Contradicts the 60 s watchdog reclaim having run. Investigate that before designing anything — one of the two observations is wrong. |
 
-### This run's verdict: none of the five rows above fit — a sixth case
+### This run's verdict: contaminated idle with misattributed residency — evidence is invalid
 
-The observed shape is internally consistent but doesn't match any listed row:
+This run fits the **"contaminated idle"** row: the idle-gate signal and the attribution verification both relied on broken instruments that are now known to have been blind to the actual work running.
 
-- Not "self-heals" — the strand is byte-identical at P2 and P3 (21 s of
-  confirmed-clean idle).
-- Not "uncollected cache" — reclaim only recovered 372.0 MB of the 5853.4 MB
-  reserved (6.4%), nowhere near "drops sharply".
-- Not "fragmentation" — `inactive_split` is 29.25 MB, a rounding error next to
-  the 5453.7 MB sitting in `allocated`. Fragmentation is not what's dominant.
-- Not "contaminated idle" — the gate cleared in 21 s (well under the 120 s
-  threshold) and the attribution grep is empty.
-- Not "invalid reading" — `reclaimed: true` both times.
+**The contamination:** Whisper ASR was transcribing continuously during what the old idle gate declared "confirmed idle" (07:58:49–07:58:57 vs actual Whisper activity 07:58:31–51.768). The old idle gate could not see this because it tracked only `inflight_synth`, not `/transcribe` or `/embed` (fixed in commit d4aa7a6c). The attribution grep checked the wrong log file (`logs/server.log` instead of `logs/tts.log`, fixed in commit 36091ef2). By the decision tree's logic: "Legitimate background activity was still running; name it from the `logs/server.log` grep above. **Do not treat the resulting P3/P4 readings as evidence about a stranded pool at all.**"
 
-**What actually explains it:** `allocated` (5453.7 MB) never moved at all,
-before or after `/debug/reclaim`. `empty_cache()` only returns *reserved-but-
-unallocated* cache to the driver — by definition it cannot touch memory PyTorch
-still considers live. At P2/P3, `qwen.base_loaded=true` and
-`whisper.model_loaded=true` — and per CLAUDE.md's engine-lifecycle notes, **Qwen
-Base 0.6B has no idle TTL at all** (button-driven, evicts only on explicit
-`/unload`), and Whisper's `ASR_IDLE_TTL=120s` had only 21 s elapsed against it.
-So the 5.45 GB of `allocated` VRAM this run measured is, as far as this reading
-can tell, **the two resident models' own live weights/KV state — normal
-residency, not a leak** on top of it.
+**The misattribution:** The run loaded three resident models — Qwen Base 0.6B (no TTL), Whisper (120s TTL), and Qwen 1.7B-Base (120s TTL) — but the `/debug/memory` endpoint at the time of this run could not represent the 1.7B model (missing the `base17_loaded` key, added retroactively in commit 42dddeb8). The ~3.3 GB gap between P1's `allocated` (1776.7 MB) and P2's `allocated` (5453.7 MB) is plausibly the Qwen 1.7B-Base model loading during session rather than something inexplicable. The 1.7B model's 120s idle TTL means P3 (21 s post-P2) would not have evicted it even if the idle window had been clean — which it was not.
 
-This run cannot distinguish "the resident-model floor is exactly what #1976
-measured and mistook for stranded" from "there is a genuine leak sitting on top
-of that floor, currently masked by residency." Answering that needs a follow-up
-reading that either (a) waits past both TTLs (impossible for Qwen Base, which
-has none — would need an explicit `/unload` call first) or (b) captures
-`allocated` immediately after an explicit Qwen-Base unload and diffs against
-this run's P3. Recorded as the next open question rather than closing #1996's
-criterion 1 — this run neither confirms nor refutes #1976's "fully reclaimable"
-claim; it shows the claim's own measurement never separated "resident" from
-"stranded" in the first place.
+**Conclusion:** This run does NOT provide trustworthy evidence. Its P3/P4 readings show a contaminated-idle state with unattributable residency, not a measurement of a stranded pool. It does not close #1996's criterion 1 (and does not discharge the acceptance row already owed).
+
+**Next step:** A valid re-run is still owed, using the now-fixed instruments (idle gate tracking ASR via the `/transcribe`/`/embed` signals, attribution grepping `logs/tts.log`, and `/debug/memory` with full `base17_loaded` visibility). This is real-hardware work that was not performed as part of this PR-review-gate fix round — no GPU re-run has been executed; only this narrative correction has landed.
 
 Record the outcome as a comment on
 [#1996](https://github.com/dudarenok-maker/Castwright/issues/1996), including the
