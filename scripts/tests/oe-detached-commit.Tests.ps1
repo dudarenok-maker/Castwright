@@ -2,14 +2,24 @@
 # Pester 5.x tests for scripts\oe-detached-commit.ps1. Invoke via
 # scripts\tests\run.ps1 or `npm run test:scripts`.
 #
-# The static checks below parse the script's AST rather than grepping its
+# Most static checks below parse the script's AST rather than grepping its
 # text: a naive `Should -Match '-WindowStyle\s+Hidden'` against the whole
 # file also matches the docstring and an explanatory comment, so it stays
 # green even if the real Start-Process call is edited to drop the flag (this
 # happened during review of PR #2662 -- a mutation that deleted the flag
-# from the live call passed the whole-file-grep version of this test).
-# Matching against the parsed CommandAst only sees executable code: comments
-# and the comment-based help block are not part of the AST at all.
+# from the live call passed the whole-file-grep version of this test, and a
+# later round found the fix had reintroduced the same blind spot for two
+# more assertions before those were AST-ified too). Matching against the
+# parsed CommandAst only sees executable code: comments and the comment-
+# based help block are not part of the AST at all.
+#
+# One exception, by design: the "no Delete-Item" check further down IS a
+# whole-file text match. It is a NEGATIVE assertion (asserts an absence, not
+# a presence), so the blind spot above cannot make it falsely pass -- at
+# worst a comment mentioning the word turns it red on a change that made no
+# real difference, never green over a real regression. Cataloguing every
+# spelling of a hallucinated cmdlet name via AST would cost more than the
+# false-red risk it avoids.
 
 BeforeAll {
     $script:scriptPath = Join-Path $PSScriptRoot '..\oe-detached-commit.ps1'
