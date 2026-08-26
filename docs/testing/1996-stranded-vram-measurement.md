@@ -84,8 +84,19 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
    transcribe, nothing that would touch an engine. Instead of a fixed 180 s
    wall clock, poll the sidecar's `/health` endpoint for `inflight_synth` (an
    int; `0` means nothing is generating) until it has been quiet for five
-   consecutive checks (10 s of confirmed idle). A 10-minute safety ceiling
+   consecutive checks (8 s of confirmed idle). A 10-minute safety ceiling
    prevents an infinite wait on a busy box.
+   
+   **Interpreting idle-gate duration:** The idle gate reports elapsed time to
+   confirm when the box truly went quiet. If the gate clears in under 120
+   seconds, the idle window is likely clean (only genuine background activity
+   that was already running, if anything). A gate that takes 120 seconds or
+   longer to clear suggests the box was actively working during what should
+   have been an idle window — consult the `logs/server.log` grep (next section)
+   to name what was running. This 120 s threshold is separate from the 8 s
+   quiet-streak requirement above and the 10-minute ceiling; it is a judgment
+   call for how long an otherwise-successful idle-gate wait is "suspiciously
+   slow" rather than straightforwardly clean.
 
    Run this as **one blocking script**, not turn-by-turn polling — it
    self-terminates once idle or after the ceiling:
@@ -96,7 +107,7 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
    while ((Get-Date) -lt $deadline) {
      $h = Invoke-RestMethod http://127.0.0.1:9000/health
      if ($h.inflight_synth -eq 0) { $quietStreak++ } else { $quietStreak = 0 }
-     if ($quietStreak -ge 5) { break }  # 5 consecutive quiet polls = 10s confirmed idle
+     if ($quietStreak -ge 5) { break }  # 5 consecutive quiet polls = 8s confirmed idle
      Start-Sleep -Seconds 2
    }
    if ($quietStreak -ge 5) {
@@ -116,7 +127,7 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
    > self-heals on `main` today (decision-tree row 1). Record it and stop; do
    > not retry until a strand appears.
 
-   **What was active during the wait.** The sidecar's `/health` endpoint with `inflight_synth` tracking (step 4 above — five consecutive zero polls = 10 s confirmed idle) is your PRIMARY signal for genuine idle. As a secondary corroboration and attribution step, grep the sidecar's access log (`logs/tts.log`, from uvicorn) for any requests during the wait window to confirm the window was clean or name what ran.
+   **What was active during the wait.** The sidecar's `/health` endpoint with `inflight_synth` tracking (step 4 above — five consecutive zero polls = 8 s confirmed idle) is your PRIMARY signal for genuine idle. As a secondary corroboration and attribution step, grep the sidecar's access log (`logs/tts.log`, from uvicorn) for any requests during the wait window to confirm the window was clean or name what ran.
 
    The sidecar access log has no per-line timestamps, so use a line-count-diff to extract the appended lines: capture the line count of `logs\tts.log` at P2, capture it again at the confirmed-idle point, and extract the lines in between. If all appended lines are `/health`, `/capacity`, `/speakers`, or `/debug/memory` polling (harmless self-polling from the run sheet's own idle-gate and capture steps), the window is clean. If a `/synthesize`, `/transcribe`, or `/embed` line appears, name it — that's the confound the decision tree's fourth row keys on.
 
