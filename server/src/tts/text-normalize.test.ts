@@ -123,17 +123,21 @@ describe('softenDashes', () => {
       expect(softenDashes(once)).toBe(once);
     });
 
-    /* Pins the dominant Russian dialogue-attribution shape (dash-open line,
-       comma, dash-attribution, verb + name) as it stands today: a doubled
-       comma with no space between them. This is PRE-EXISTING behaviour, not
-       a regression introduced by the leading-dash fix above — the prior
-       code produced the same doubled comma, since it ran the identical ", "
-       substitution for every dash regardless of position. Not fixed here
-       (out of scope for #2026 defect 2); tracked on #2059 for whether `,,`
-       should collapse to `,`. This test exists so the shape is visible
-       rather than accidental. */
-    it('produces a doubled comma on a dash-open + dash-attribution line (pre-existing, tracked on #2059, not fixed here)', () => {
-      expect(softenDashes('— Привет, — сказал Антон.')).toBe('... Привет,, сказал Антон.');
+    /* The dominant Russian dialogue-attribution shape (dash-open line,
+       comma, dash-attribution, verb + name): "— Привет, — сказал Антон."
+       Before #2059's fix, the DASH_RUN substitution produced a doubled
+       comma (",,") because the sentence already carried a comma
+       immediately before the dash run. The chained collapse step now
+       folds the doubled comma into a single ", ", so the output reads
+       naturally for TTS. */
+    it('collapses the doubled comma on a dash-open + dash-attribution line (#2059)', () => {
+      expect(softenDashes('— Привет, — сказал Антон.')).toBe('... Привет, сказал Антон.');
+    });
+
+    it('does not over-collapse a single comma adjacent to a dash run', () => {
+      /* A lone comma before a dash run must produce exactly one comma in
+         the output — the collapse step must not fire on a single `,`. */
+      expect(softenDashes('a, — b')).toBe('a, b');
     });
   });
 });
