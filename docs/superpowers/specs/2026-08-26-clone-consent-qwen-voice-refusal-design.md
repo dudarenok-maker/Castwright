@@ -462,8 +462,6 @@ if (outcome === 'skippedClone') {
   above.
 - Does not purge the cached audition MP3 in any case (pre-existing gap,
   shared with the redesign-invalidation path).
-- Does not change the frontend's own book-local `cloned` gate
-  (`emotion-variant-designer.tsx:125-127`) to be series-aware — see §2.
 - Does not fix the frontend's error-visibility gap for the residual/TOCTOU
   case in a `designAll` run (flagged above as a follow-up, not fixed here).
 - Does not address `cast-design.ts`'s base-voice path
@@ -471,34 +469,33 @@ if (outcome === 'skippedClone') {
   double-mint.
 - Does not change `#2000` §3.2's lock-granularity decision — reopening it for
   full atomicity is named as a real, larger option above, not taken here.
-- **Does not revisit whether `voices.ts`'s own write-time re-check (the
-  finalized sibling design, `2026-08-22-...md`) should also become
-  series-wide.** That design's per-book re-check has a materially different
-  risk profile than this one had in v1-v3: a base-voice *override* is
-  deliberately about not silently retargeting a book's *own* existing clone
-  marker away, not about whether a design action anywhere in the series should
-  be gated by a clone anywhere in the series. Whether the same series-wide
-  reasoning applies there is a question for that spec's own author, not
-  answered here — flagging it as a question worth asking, not a finding
-  against that document.
 
-## Noted, not fixed here — a gap in the `voices.ts` sibling design
+## Resolved via the `voices.ts` sibling design (v2)
 
-`applyOverrideToCastFiles` (`voices.ts:875`, current signature
-`Promise<number>`) has a **third call site** the sibling design doc
-(`2026-08-22-clone-consent-voices-override-refusal-design.md`) scopes out but
-whose consequence is worth naming precisely: `cast-design.ts:544-549`
-discards the function's return value entirely today (`await
-applyOverrideToCastFiles(...)`, then unconditionally `job.done += 1;
-broadcast(... 'character_designed' ...)`). Once that sibling spec's
-`{updated, skipped}` signature ships, this call site will **silently report
-`character_designed` for a base-voice write the new signature refused** — no
-type error, since discarding a changed return type compiles cleanly. The
-decision the sibling spec's implementation needs to make: should
-`cast-design.ts:544` route a non-empty `skipped` into `job.clonedSkips` the
-same way this spec's variant branch does, or something else? Naming that
-question is this note's job; deciding it belongs to whoever implements the
-sibling spec.
+Three questions this spec originally left open for the sibling's own author
+are now decided by the user and implemented in
+`2026-08-22-clone-consent-voices-override-refusal-design.md`'s v2 revision —
+noted here rather than left dangling as still-open follow-ups:
+
+- **The sibling's own write-time re-check is now series-wide too**, using the
+  same `hasClonedSlotAmongMatches`-fresh-scan model this spec uses, not the
+  narrower per-book independent check v1 of that document chose. See that
+  document's "Revision note (v2)".
+- **`cast-design.ts:544`'s base-voice call site now mirrors this spec's
+  variant branch** — its previously-discarded `{updated, skipped}` return
+  routes into the same `job.clonedSkips`/`character_skipped` channel. See
+  that document's "Signature change" section.
+- **The frontend's book-local `cloned` gate — in both
+  `emotion-variant-designer.tsx:125-127` (this spec's own frontend consumer)
+  and `profile-drawer.tsx:1102-1111` (the sibling's) — is upgraded to a new
+  `clonedElsewhereInSeries` field**, computed via the same
+  `hasClonedSlotAmongMatches` function, rather than staying book-local. See
+  that document's "Frontend series-awareness" section for the field, the
+  call-site diffs, and the reworded user-facing copy. This spec's own
+  §"Upfront checks" note above ("does not change the frontend gate") is
+  superseded by that section — the frontend gate does change, just via the
+  sibling document rather than this one, since the same field serves both
+  consumers.
 
 ## Testing
 
