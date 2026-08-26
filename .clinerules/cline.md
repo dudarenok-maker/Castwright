@@ -162,67 +162,49 @@ before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
 vitest run can report far less wall-clock on an idle box, so treat these as the
 range, not a constant.
 
-**Copy the recipe below verbatim -- do not improvise your own inline variant.**
-It avoids shell-quoting entirely by design: the commit message is written to a file with `[IO.File]::WriteAllText`, and the child script receives `$Dir` and `$Worktree` as parameters via its `param()` block rather than having anything interpolated into a command string. A freelanced one-liner that rebuilds this by hand -- embedding `$variables` or escaped `\"` quotes inside a wrapped double-quoted command -- reintroduces exactly the quoting bug this recipe exists to avoid. On `Castwright#2520` a local-model run did this, hit `The string is missing the terminator` / `Missing type name after '['` / `Exception calling "Create" with "1" argument(s)` across four self-invented variants, spent its whole turn reasoning line-by-line about *why* each one broke, and died on the output-token cap with no commit, no push, and no receipt -- while the two-file edit it was committing was already correct. **Two things require substitution per-use:** your worktree path (replace the placeholder in the `$W` assignment) and your commit message (replace `'fix(scope): subject line'` in the `[IO.File]::WriteAllText` line with a real message following Conventional Commits). **Important:** if your commit subject contains a single quote (e.g. `don't clobber X`), escape it by doubling it inside the PowerShell single-quoted string (e.g. `'don''t clobber X'`), so the quote is preserved in the final commit message and does not break the PowerShell string. The structure and quoting style are copied verbatim; the paths and message are filled in for each use.
-
-**If the detached commit command reports `The string is missing the terminator` (sometimes preceded by `Missing ')' in method call.` from the same root cause), do not diagnose it.** This is almost always an unescaped single quote in the commit message: fix it by doubling the quote (e.g. `'don''t'` for a subject containing "don't"), then retry the recipe with the same structure. Stop reasoning about it after one sentence -- that reasoning is usually wrong anyway (as it was on #2520) and it is the expensive way to fail. **If the retry produces the identical error, stop retrying** and say so once with the exact command and the error, per "Do not end your turn while it runs" below.
-
-**`Missing type name after '['` is a DIFFERENT case -- not the apostrophe bug above.** It means the command being run is not this recipe at all, but an improvised variant of it (this is exactly what happened on #2520: four self-invented wrapper attempts, none of them this recipe). The fix is not to retry that broken command -- it is to discard it and copy the recipe below verbatim instead.
-
-Note: `Exception calling "Create" with "1" argument(s)` is not a signal on its own -- it is a generic .NET method-call exception wrapper. It can wrap either error above, or an unrelated failure entirely (permission denied, missing path). Read the full message it wraps before deciding which case you are in.
-
-Launch it detached and poll. Each poll returns instantly, so the cap stops
-mattering:
+**Call `scripts/oe-detached-commit.ps1` -- do not freelance your own inline
+Start-Process variant.** It lives in every worktree (it's a tracked file, so
+`git worktree add` brings it along) and does what the old inline recipe did,
+but as a real script instead of a copy-pasted snippet a model can misremember:
+writes the message to a BOM-less file, launches `git commit` via
+`Start-Process -WindowStyle Hidden`, and hands back the scratch dir to poll.
+Because `-Message` is a bound **parameter** rather than text interpolated into
+a command string, **no apostrophe escaping is needed** -- pass the message
+exactly as written, single quotes and all:
 
 ```powershell
-# Per-run directory. A FIXED log path is read by the next poll as the PREVIOUS
-# run's result: Start-Process returns before the child truncates the file, so a
-# stale EXIT=0 reports success for a commit that is still running.
-$run = Get-Date -Format 'yyyyMMdd-HHmmss'
-$T   = Join-Path $env:TEMP "cw-commit-$run"
-$W   = 'C:\Claude\Projects\wt-<your-worktree>'
-New-Item -ItemType Directory -Path $T -Force | Out-Null
-
-# NO BOM. PS 5.1's `Set-Content -Encoding utf8` writes one, `git commit -F` does
-# NOT strip it, and scripts/validate-commit-msg.mjs then rejects the subject --
-# AFTER you have paid the whole battery, with an error echoing a subject that
-# looks perfectly valid because the BOM is invisible.
-[IO.File]::WriteAllText("$T\msg.txt", 'fix(scope): subject line', (New-Object System.Text.UTF8Encoding $false))
+$W = 'C:\Claude\Projects\wt-<your-worktree>'
+$T = & "$W\scripts\oe-detached-commit.ps1" -Worktree $W `
+       -Message "fix(scope): subject line, don't escape apostrophes here"
 ```
 
-The child script takes its paths as parameters, so nothing has to be
-interpolated into the here-string and `$LASTEXITCODE` resolves in the child:
+**Keep `$W` around** -- the poll steps below and the tiebreaker
+(`git -C $W log --oneline -1`) both use it.
 
-```powershell
-@'
-param([string]$Dir, [string]$Worktree)
-$ErrorActionPreference = 'Continue'
-git -C $Worktree commit -F (Join-Path $Dir 'msg.txt') *>&1 |
-  Out-File -FilePath (Join-Path $Dir 'commit.log') -Encoding utf8
-"EXIT=$LASTEXITCODE" | Out-File -FilePath (Join-Path $Dir 'commit.log') -Append -Encoding utf8
-'@ | Set-Content "$T\commit.ps1" -Encoding utf8
-```
+Two failure modes this script exists to close, both hit by freelanced
+variants in the past -- **do not rebuild either by hand**:
 
-**That closing `'@` must be at column zero** -- indent it (as happens
-automatically inside a markdown list item) and PS 5.1 fails with
-`WhitespaceBeforeHereStringFooter` before running anything, so no log is ever
-created and a naive poll waits forever. Same family as the `.ps1` traps under
-"Never do these".
+- **Dropping `-WindowStyle Hidden`.** A `cline-free` lane on `Castwright#2659`
+  (2026-08-26) wrote its own launcher without it, popping a visible
+  PowerShell window per commit -- and per pre-commit hook run that commit
+  triggers. The script always passes the flag; if a window is still showing,
+  something bypassed the script rather than a flag being missing from it.
+- **Quoting the message by hand.** On `Castwright#2520` a local-model run
+  built the git command as an interpolated string with an unescaped `'`, hit
+  `The string is missing the terminator` / `Missing type name after '['` /
+  `Exception calling "Create" with "1" argument(s)` across four
+  self-invented variants, spent its whole turn reasoning line-by-line about
+  *why* each one broke, and died on the output-token cap with no commit, no
+  push, and no receipt -- while the two-file edit it was committing was
+  already correct. Passing `-Message` as a parameter makes this class of bug
+  impossible. **If you see one of those errors anyway, stop reasoning about
+  it after one sentence and re-check you're actually calling the script, not
+  a hand-built variant of it -- and if a retry produces the identical error
+  even after confirming that, stop retrying** and say so once with the exact
+  command and the error, per "Do not end your turn while it runs" below.
 
-```powershell
-# Clear the log FIRST. Start-Process returns before the child truncates it, so
-# on a RETRY inside the same $T the very first poll reads the PREVIOUS
-# attempt's sentinel and reports a verdict for a run that is still going.
-Remove-Item "$T\commit.log" -ErrorAction SilentlyContinue
-
-# Quote each path argument: -ArgumentList does NOT quote its elements.
-$p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
-  '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$T\commit.ps1`"",
-  '-Dir',"`"$T`"",'-Worktree',"`"$W`"")
-$p.Id | Set-Content "$T\commit.pid"
-```
-
-Then poll until it resolves. **Check the process as well as the sentinel** --
+Then poll until it resolves. Each poll returns instantly, so the output-token
+cap stops mattering. **Check the process as well as the sentinel** --
 those two disagreeing is how you learn the child died at parse time instead of
 waiting on it forever:
 
