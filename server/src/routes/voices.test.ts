@@ -51,6 +51,7 @@ const BETA_AUTHOR = 'Beta Author';
 const BETA_TITLE = 'Beta Book';
 const ALPHA_QWEN_OVERRIDE_NAME = 'qwen-ALPHAUUID1';
 const BETA_QWEN_OVERRIDE_NAME = 'qwen-BETAUUID1';
+const SCOPE_TEST_AUTHOR = 'Ines Halvorsen';
 
 let workspaceRoot: string;
 let app: Express;
@@ -63,6 +64,7 @@ let applyTierToCastFiles: (
   seriesFilter?: { author: string; series: string },
 ) => Promise<number>;
 let applyOverrideToCastFiles: typeof import('./voices.js').applyOverrideToCastFiles;
+let hasClonedSlotAmongMatches: typeof import('./voices.js').hasClonedSlotAmongMatches;
 let writeVoiceStylePersona: typeof import('./cast-design.js').writeVoiceStylePersona;
 let standaloneA: { bookDir: string };
 let standaloneB: { bookDir: string };
@@ -144,13 +146,14 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf } =
+  const { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf, hasClonedSlotAmongMatches: hcsam } =
     await import('./voices.js');
   const paths = await import('../workspace/paths.js');
   const baseVoices = await import('../tts/base-voices.js');
   const castDesign = await import('./cast-design.js');
   applyTierToCastFiles = atcf;
   applyOverrideToCastFiles = aotcf;
+  hasClonedSlotAmongMatches = hcsam;
   writeVoiceStylePersona = castDesign.writeVoiceStylePersona;
   invalidateBaseVoiceCache = baseVoices.invalidateBaseVoiceCache;
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
@@ -2183,5 +2186,32 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
         ?.name,
     ).toBe('qwen-hoist-check');
     expect(targetNarrator.voiceStyle).toBe('a hoist-check persona');
+  });
+});
+
+it('hasClonedSlotAmongMatches is exported for reuse by qwen-voice.ts and single-design.ts', async () => {
+  const mod = await import('./voices.js');
+  expect(typeof mod.hasClonedSlotAmongMatches).toBe('function');
+});
+
+describe('hasClonedSlotAmongMatches — onlyBookDir scope (found under review)', () => {
+  let bookOneDir: string;
+
+  beforeEach(() => {
+    bookOneDir = writeBookOnDisk(
+      workspaceRoot, SCOPE_TEST_AUTHOR, 'Standalones', 'Onyx Reach', 'book-onyx',
+      [{ id: 'narrator', name: 'Narrator' }], // no clone
+      true,
+    );
+    writeBookOnDisk(
+      workspaceRoot, SCOPE_TEST_AUTHOR, 'Standalones', 'Salt Line', 'book-salt',
+      [{ id: 'narrator', name: 'Narrator', overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } } }],
+      true,
+    );
+  });
+
+  it('with no seriesFilter but an onlyBookDir, scopes the scan to that one book — a clone in an unrelated standalone book sharing the same bare id must not cause a false refusal', async () => {
+    const result = await hasClonedSlotAmongMatches('narrator', undefined, undefined, bookOneDir);
+    expect(result).toBe(false);
   });
 });

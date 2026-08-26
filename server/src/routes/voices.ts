@@ -585,38 +585,58 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
   }
 });
 
-/* fs-38 Wave 3c Task 4 — read-only pre-check for the clear branch below.
-   `applyOverrideToCastFiles(voiceId, null, ...)` wipes overrideTtsVoices
-   entirely for every matching character — including any OTHER engine slot
-   that carries a consented clone (`provenance: 'cloned'`), silently
-   reverting a real person's voice to a catalog voice. Walks the SAME
-   (workspace- or series-scoped) match set `forEachMatchingCastCharacter`
-   does, but read-only — it must run BEFORE any write so the caller can
-   refuse the whole clear atomically instead of wiping some books before
-   discovering a conflict in another. Deliberately NOT implemented by
-   reusing `forEachMatchingCastCharacter` itself (which always persists,
-   even for a no-op mutate) — a validation pass must not touch disk.
+/* Read-only scan: does any confirmed-cast character matching `voiceId`
+   (optionally scoped to a series, optionally excluding one engine) carry a
+   consented cloned voice? Exported — reused by:
+     - this file's own PUT /:voiceId/override (both the CLEAR and SET
+       upfront checks, and applyOverrideToCastFiles's own fresh write-time
+       check, all below);
+     - single-design.ts's upfront gate;
+     - qwen-voice.ts's persistEmotionVariant (write-time) and its two
+       callers' upfront checks.
+   Walks the SAME (workspace- or series-scoped) match set
+   forEachMatchingCastCharacter does, but read-only — deliberately NOT
+   implemented by reusing forEachMatchingCastCharacter itself (which always
+   persists, even for a no-op mutate) — a validation pass must not touch disk.
 
-   GATE 2 I-B1 — `otherThanEngine` serves the SET branch, which had no
-   pre-check at all. A SET does not only fill a slot: it pins
-   `replacement.ttsEngine = override.engine` (see applyOverrideToCastFiles)
-   across every matching book in scope. A character cloned on a DIFFERENT
-   clone-capable engine was therefore silently retargeted off its clone —
-   the marker survives on disk but goes inert, because
-   `resolveCharacterEngine` now routes its lines to the incoming engine.
-   Same shape Task 6a closed in cast-link-prior.ts and this wave closed in
-   `voice-override-linked.ts`'s applyToBook, which is why the predicate is
-   the same fail-safe provenance test.
+   `otherThanEngine` serves ONLY voices.ts's own SET-branch asymmetry (a SET
+   pins `ttsEngine` to the incoming engine, so a clone on a DIFFERENT
+   clone-capable engine would go inert — see the SET branch below); every
+   other caller passes it as `undefined`, meaning "any clone-capable engine
+   counts".
 
-   Scoped to the OTHER engines deliberately: a SET on the engine that
-   carries the clone is the documented [DELTA-I5] wart — the slot's
-   libraryUuid/provenance are preserved and the clone still renders, so
-   there is nothing to mute and nothing to refuse. */
-async function hasClonedSlotAmongMatches(
+   `onlyBookDir` scopes the scan to exactly one book when `seriesFilter` is
+   absent — mirrors forEachMatchingCastCharacter's own special case
+   (voices.ts:809) so a caller with no series context (a standalone book)
+   gets a book-scoped check instead of an accidental workspace-wide one on a
+   bare shared id (fs-61). Ignored whenever `seriesFilter` is present, same
+   as forEachMatchingCastCharacter. */
+export async function hasClonedSlotAmongMatches(
   voiceId: string,
   seriesFilter?: { author: string; series: string },
   otherThanEngine?: TtsEngine,
+  onlyBookDir?: string,
 ): Promise<boolean> {
+  const cloned = (c: CastCharacter): boolean =>
+    otherThanEngine
+      ? CLONE_ENGINE_LIST.some((e) => e !== otherThanEngine && hasClonedProvenance(c, e))
+      : characterHasClonedSlot(c);
+
+  /* Mirrors forEachMatchingCastCharacter's own onlyBookDir special case
+     (voices.ts:809) exactly: a caller with no series context must not fall
+     through to a workspace-wide scan on a bare character id (fs-61) — that
+     would make THIS predicate refuse across unrelated standalone books even
+     though the write it gates stays correctly single-book-scoped. */
+  if (!seriesFilter && onlyBookDir) {
+    const cast = await readJson<CastJson>(castJsonPath(onlyBookDir));
+    if (!cast?.characters?.length) return false;
+    for (const c of cast.characters) {
+      if ((c.voiceId ?? c.id) !== voiceId) continue;
+      if (cloned(c)) return true;
+    }
+    return false;
+  }
+
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -631,12 +651,7 @@ async function hasClonedSlotAmongMatches(
         if (!cast?.characters?.length) continue;
         for (const c of cast.characters) {
           if ((c.voiceId ?? c.id) !== voiceId) continue;
-          const cloned = otherThanEngine
-            ? CLONE_ENGINE_LIST.some(
-                (e) => e !== otherThanEngine && hasClonedProvenance(c, e),
-              )
-            : characterHasClonedSlot(c);
-          if (cloned) return true;
+          if (cloned(c)) return true;
         }
       }
     }
