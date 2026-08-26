@@ -2761,40 +2761,49 @@ defect. *Criteria:*
 ### A46 · Stranded VRAM after a chapter render — resident-model floor or genuine leak? ([#2656](https://github.com/dudarenok-maker/Castwright/issues/2656), successor to closed [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976)/[#1996](https://github.com/dudarenok-maker/Castwright/issues/1996)) · **single or dual GPU box, real render**
 
 The 2026-08-25 idle-gated measurement
-(`docs/testing/1996-stranded-vram-measurement.md` @ `218cc562`, on
-`fix/sidecar-1996-idle-vram-measurement`, unmerged) found the ~5.45 GB
+(`docs/testing/1996-stranded-vram-measurement.md` @ `45b913ce`, on
+`fix/sidecar-1996-idle-vram-measurement`, unmerged; PR [#2655](https://github.com/dudarenok-maker/Castwright/pull/2655)) found the ~5.45 GB
 `allocated` after a chapter render is byte-identical across a confirmed-idle
 21 s window, and `/debug/reclaim` recovers only 6.4% of `reserved` — neither
-a self-heal, nor uncollected cache, nor fragmentation. At the idle point,
-`qwen.base_loaded=true` (Qwen Base 0.6B has **no idle TTL** — button-driven,
-evicts only on explicit `/unload`) and `whisper.model_loaded=true` (120 s
-TTL, only 21 s elapsed). That reading is consistent with "this is just the
-two resident models' own live weights, not a leak" — but the run never
-captured what `allocated` looks like *after* those models are actually
-unloaded, so it cannot rule out a genuine leak sitting on top of that floor.
-Nothing in any existing log or prior measurement attempt (including the
-original #1976 report, predating the `/debug/memory` diagnostics) contains
-this reading — it does not exist yet at any recorded point in this repo's
-history.
+a self-heal, nor uncollected cache, nor fragmentation. **HOWEVER, the run's
+measurement carried two instrument bugs that invalidated its conclusion:**
+(1) the `/debug/memory` snapshot was missing a `base17_loaded` key, so it
+could not see the Qwen 1.7B-Base model (which loads during cast-design phases
+and has its own 120 s idle TTL, `QWEN_BASE17_IDLE_TTL`) — the run could have
+had three resident models live, not two; (2) the idle-gate poll (`_inflight_synth`)
+is blind to `/transcribe`/`/embed` activity (ASR), so the "confirmed-idle" 21 s
+window may have overlapped live Whisper transcription, making it not truly idle.
+Both bugs are now fixed on PR #2655 (commits d4aa7a6c and 42dddeb8). The corrected
+reading says: at the idle point, `qwen.base_loaded=true` (Qwen Base 0.6B has
+**no idle TTL** — button-driven, evicts only on explicit `/unload`),
+`qwen.base17_loaded` was unobserved (now visible), and `whisper.model_loaded=true`
+(120 s TTL, only 21 s elapsed). Because the run never captured what `allocated`
+looks like *after* all three models are actually unloaded, it cannot rule out
+a genuine leak sitting on top of the resident floor. Nothing in any existing log
+or prior measurement attempt (including the original #1976 report, predating the
+`/debug/memory` diagnostics) contains this reading — it does not exist yet at any
+recorded point in this repo's history.
 
 - Reproduce P2/P3 from the linked run sheet: render a chapter, confirm the
-  box idle (poll `inflight_synth`, not a fixed wall-clock).
-- **New step:** issue `POST /unload {qwen}` and confirm/force Whisper past
-  its `ASR_IDLE_TTL`, then read `/debug/memory` again.
+  box idle (poll `inflight_synth`, not a fixed wall-clock; note the poll is
+  ASR-blind, so verify via logs that no `/transcribe`/`/embed` was active).
+- **New step:** issue `POST /unload {qwen, base17}` and confirm/force both
+  Whisper and Qwen 1.7B-Base past their respective idle TTLs (120 s each,
+  `ASR_IDLE_TTL` and `QWEN_BASE17_IDLE_TTL`), then read `/debug/memory` again.
 - Diff that post-unload `allocated`/`reserved` against the P3 baseline
   already on record for this box's device.
-  - Drops to near-zero (matching Qwen Base 0.6B + Whisper's known weight
-    sizes) → the resident floor fully explains #1976's original "stranded"
-    report; no lever ever needed, close #2656 as working-as-intended and
-    correct #1976/#1996's language for the record.
+  - Drops to near-zero (matching Qwen Base 0.6B + Whisper + Qwen 1.7B-Base's
+    known weight sizes) → the resident floor fully explains #1976's original
+    "stranded" report; no lever ever needed, close #2656 as working-as-intended
+    and correct #1976/#1996's language for the record.
   - Residual gap remains → that gap is a genuine leak, needs its own
     root-cause pass in the placement/eviction code.
 
-*Needs:* a live sidecar with Qwen Base 0.6B and Whisper both resident, and
-the ability to force an explicit `/unload` + TTL lapse mid-session. *Criteria:*
-[#2656](https://github.com/dudarenok-maker/Castwright/issues/2656) — extend
-`docs/testing/1996-stranded-vram-measurement.md`, don't replace it. *Cost:*
-short — one idle render, one explicit unload, one reading.
+*Needs:* a live sidecar with all three models potentially resident (Qwen Base 0.6B,
+Qwen 1.7B-Base, Whisper), and the ability to force explicit `/unload` + TTL lapse
+mid-session. *Criteria:* [#2656](https://github.com/dudarenok-maker/Castwright/issues/2656)
+— extend `docs/testing/1996-stranded-vram-measurement.md`, don't replace it. *Cost:*
+short — one idle render, explicit unloads for all three models, one reading.
 
 ## Group B — local Ollama analyzer only
 
