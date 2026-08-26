@@ -997,6 +997,30 @@ judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 > must temporarily undo those pins**, or it will not exercise the single-8 GB-card scenario
 > this row is about.
 
+> **DISCHARGED 2026-08-26 (wave 6) — outcome 2, the fail-soft policy holds.** Pinned
+> `COQUI_DEVICE`/`QWEN_DEVICE` to `cuda:0` and pointed `LOCAL_TTS_URL` at a small local
+> Node proxy (`POST /unload` → forced `500`, everything else passed through unmodified)
+> on a genuinely quiet 8 GB card. Re-rendered the same Russian Coalfall chapter (12
+> designed-Qwen characters, `одуван` on a cloned Coqui/XTTS voice). Both eviction
+> directions actually fired and failed as designed:
+>
+> ```
+> [synthesise-chapter] failed to evict Coqui ahead of a Qwen phase — continuing; …
+>   Error: Sidecar /unload returned 500 Internal Server Error
+> [synthesise-chapter] fs-60 Qwen→Coqui evict failed; continuing into the Coqui phase
+>   without it (Coqui may load alongside a still-resident Qwen): Error: Sidecar /unload
+>   returned 500 Internal Server Error
+> ```
+>
+> The chapter then failed with `NoCapacityError: Not enough GPU memory for coqui (3584MB)
+> — free VRAM or attach a second GPU` — a clean, self-describing admission refusal, not a
+> raw crash. Immediately after, `/api/sidecar/health` reported `status: reachable`,
+> `recyclePending: false`, `devicesState: ready`, `qwenLoaded: true` — the sidecar was
+> fully intact, not poisoned, not stuck in a recycle storm. **This is outcome 2 from the
+> bullet below** ("a sidecar OOM error that fails the chapter with its own message"), not
+> outcome 3 — the fail-soft policy does not need revisiting on this evidence. The
+> pause-during-a-stalled-evict sub-bullet was not exercised this round.
+
 - Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
   Russian Coalfall chapter) with one designed-Qwen character and one undesigned
   character that falls back to Coqui. Force the evict to fail: point
@@ -1055,6 +1079,26 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
   button disabled, and it completes without an error banner, once the in-flight
   forward and the unload both finish. Record whether that held, and how long
   the eventual unload actually took.
+
+> **PARTIALLY run 2026-08-26 (wave 6) — bullets 1 and 4 have real data; bullets 2–3 not
+> attempted this round.** Pinned to `cuda:0` per bullet 1's own instruction. For bullet
+> 4: piped a live chapter-generation SSE stream through `grep -m1` on the
+> `"characterId":"одуван"` progress marker so `POST /api/sidecar/unload {"engine":
+> "coqui"}` fired the instant Coqui's forward was actually in flight (confirmed via the
+> raw sidecar `/health`'s `model_loaded` field, not a guess) — polling alone missed this
+> window twice first, since Coqui's residency for this character is only ~5–8 s near the
+> very end of a 252-line chapter. The unload call returned successfully in ~2.1 s and the
+> sidecar's own `/health` immediately after showed `model_loaded: false` (Coqui genuinely
+> unloaded), `poisoned: false`, `recycle_pending: true` (unrelated — approaching this
+> box's own tuned `SIDECAR_RECYCLE_SOFT_MB`, expected on a long run) — no
+> `AttributeError`, no poisoning. **What this round could not confirm** is "the chapter
+> continues to completion": the Node orchestrator process died within ~2 s of the unload
+> call. Traced afterward to `tsx watch` restarting the dev server whenever a concurrent
+> Open Engine session committed/merged/checked-out branches in the SAME checkout this run
+> started in (before this run moved to an isolated worktree per this wave's own setup
+> note) — a coincidence of timing with an unrelated cause, not something the Stop action
+> itself triggered, but not fully ruled out either since the two events landed this close
+> together. Bullets 2–3 (idle-Coqui admission timing, evict→reload cadence) are still owed.
 
 **Run this with A19 and A5** — same card, same mixed-cast book, and A19 already stages
 the Qwen+Coqui co-residency this row's first bullet needs.
@@ -1210,6 +1254,22 @@ Run sheet: [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-o
 designed Qwen voice in progress plus a second admission target (a Coqui `/load` or
 an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
+> **PARTIALLY run 2026-08-26 (wave 6) — measured, but not the exact race, and caveated.**
+> Pinned to `cuda:0`. Ran a simpler variant of the race: a Qwen chapter render in flight
+> (no prior voice design warmed first — bullet 2's precondition was skipped) plus a
+> concurrent `POST /api/sidecar/load {"engine":"coqui"}` fired mid-render from a second
+> shell, while a third loop polled `GET /api/sidecar/health` every 250 ms throughout.
+> **The second admission succeeded** (`{"status":"ready"}`) — bullet 4 confirmed, the
+> evict genuinely freed VRAM rather than 503-ing. **Measured max single-request latency:
+> 987 ms; max inter-request-start gap: 1346.9 ms** — above the ~500 ms bullet-3 target.
+> Caveat: the poller spawns a fresh `curl` process per iteration via Git-Bash on Windows,
+> which has its own non-trivial per-invocation overhead (observed elsewhere on this box
+> to run 50–200+ ms under load), so this number cannot be cleanly attributed to
+> server-side blocking alone without a lower-overhead instrument (e.g. a persistent
+> Node/Python client reusing one connection). **Still owed:** the exact race (VoiceDesign
+> actually warm via bullet 2 before the second admission fires) and a clean
+> low-overhead re-measurement of the `/health` gap.
+
 ### A25 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box; item 4 needs a Pinokio install**
 
 **The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again** — `ffmpeg 8.1.1-full_build-www.gyan.dev` on PATH, and the 25 copied FFmpeg DLLs removed from `site-packages/torchcodec/`. Note the revert is *not* "delete every non-hash-suffixed `*.dll`" as first written: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's **own** extensions, have no hash-suffixed twin, and must stay. The copied set is exactly those non-hash-suffixed files that *do* have a hash-suffixed twin. With #1967 merged the hot patch is no longer needed to unblock A1's Section E.
@@ -1298,6 +1358,27 @@ is unproven.
 (ASR or a design) once it finishes. *Criteria:* PR #1993's description +
 the C1/M3 review findings quoted above. *Cost:* short — rides along with A19
 and A20, which already stage a mixed-engine render on this same card.
+
+> **PARTIALLY run 2026-08-26 (wave 6) — bullet 1's premise did NOT reproduce, twice.** Two
+> independent clean chapter-completion measurements on a genuinely quiet
+> `cuda:0` (single sidecar process, confirmed via `nvidia-smi --query-compute-apps`
+> before each run):
+>
+> | run | post-completion `vramReservedMb` (health) | `nvidia-smi` used | ASR loaded this run? |
+> |---|---|---|---|
+> | 1 (fresh sidecar boot, first render) | **0** | 114 MiB (≈ idle baseline) | no |
+> | 2 (same chapter re-rendered) | **243.3** | 648 MiB | yes |
+>
+> Neither run shows anything close to #1976's own measured **~3.9 GB** stranded shape —
+> the first shows literally nothing stranded, the second a small few-hundred-MB pool. So
+> bullet 1 does not currently reproduce on this box for an ordinary single-chapter render,
+> and bullets 2–3 (which need a stranded pool to exist first) could not be exercised as a
+> result. This does not mean #1976's underlying lever is dead — PR #1993's own reclaim
+> mechanism may simply be doing its job well enough in the ordinary case that nothing gets
+> a chance to strand, or the ~3.9 GB shape may need a specific trigger (recycle, a
+> failed/aborted render, an ASR-QA re-record cycle) this round didn't hit. **Still owed:**
+> reproduce a genuinely stranded pool first (try forcing a chapter failure or recycle
+> mid-render, not just an ordinary completion), then run bullets 2–3 against it.
 
 ---
 
@@ -1973,6 +2054,34 @@ operational trap that produced the #2037 outage in the first place.
 `onSpawnRefused` in `server/src/tts/spawn-sidecar.ts`. *Cost:* short — one
 kill, one log grep, one status poll.
 
+> **MOSTLY DISCHARGED 2026-08-26 (wave 6) — the respawn mechanism itself is clean; final
+> chapter completion wasn't confirmed due to an unrelated second interruption.** With a
+> real chapter actively rendering (Qwen mid-forward), killed the sidecar directly —
+> `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, never `/restart`. Server
+> log, timestamped to the millisecond:
+>
+> ```
+> 15:03:54.239  (kill issued)
+> 15:03:54.969  [sidecar] child exited (code=1, signal=null)
+> 15:03:54.970  [sidecar] supervisor: child exited …; respawning in 2000ms (attempt 1/5)
+> 15:03:57.002  [sidecar] spawned pid=35924   ← different pid from the one killed
+> 15:03:57.884  [generation] chapter 3 (…): sidecar unavailable mid-synth (recycle/respawn)
+>                — riding out the respawn, re-attempt 1/2 (preserving completed groups)
+> ```
+>
+> The exit was detected in well under a second, the respawn landed at the documented
+> first-attempt `2000ms` mark exactly, and the in-flight chapter took the "rides out the
+> respawn" path rather than failing hard. Polling `GET /api/setup/models-status` from
+> ~20s after the kill onward never showed the engine reporting ready while nothing was
+> listening on the sidecar port — no sign of the #2037 gap. **Not confirmed:** the
+> chapter's own eventual completion after riding out this specific respawn — a second,
+> unrelated `tsx watch` restart (triggered by concurrent Open Engine git activity in the
+> checkout this run started in, before it moved to an isolated worktree) interrupted the
+> same render again partway through, so its terminal state traces back to that second
+> event rather than to this row's own kill. The respawn mechanism itself is the thing
+> under test here and it behaved exactly as documented; a follow-up run in the isolated
+> worktree (now set up) can confirm the completion tail cleanly.
+
 ### A32 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
 
 Unit tests (`server/tts-sidecar/tests/test_design_contention.py`) fully pin
@@ -2003,6 +2112,41 @@ two overlapping requests (a second browser tab/session is enough). *Criteria:*
 `unload_design`'s docstring in `server/tts-sidecar/main.py`; the sizing
 rationale is in the `_DESIGN_CONTENTION_WAIT_S_DEFAULT` comment immediately
 above `class QwenEngine`. *Cost:* short — one overlapped request pair.
+
+> **RUN 2026-08-26 (wave 6) — bullet 1's premise did not hold; a real gap found, filed as
+> [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678).** Started a real
+> single-character voice design
+> (`POST …/cast/hart/design-voice/stream`, `preview:true`) and confirmed via
+> `/api/sidecar/health`'s `qwenDesignEverLoaded` flipping `true` that VoiceDesign was
+> genuinely warm-resident (phases observed end to end: `loading-model` →
+> `designing` → `distilling` → `rendering` → `preview_ready`, a real persisted preview
+> artifact). **While that design was mid-flight**, fired an ordinary chapter render for a
+> *different* character on the Base 0.6B engine. Bullet 1 expects the render's synth call
+> to **wait** for the design to finish. What actually happened: the render did **not**
+> wait — it proceeded immediately, and failed:
+>
+> ```
+> chapter_failed  errorCode: "vram-spill"
+> "The GPU ran out of video memory (VRAM) mid-render — too many models were resident at once."
+> ```
+>
+> This is a **third outcome the row didn't anticipate**: not "the render waits" (the hoped
+> outcome) and not "the design fails" (the regression #2070 guards against) — instead the
+> *render* fails, while the design completes normally in the background
+> (`preview_ready` did land). Confirmed clean, not a raw crash: `/api/sidecar/health`
+> immediately after showed `status: reachable`, `qwenLoaded: true`,
+> `vramReservedMb: 5769` (under the 8585 MB card total) — the sidecar survived intact.
+> **This needs a design decision, not just a fix**: should the capacity-admission layer
+> (`SEG_CAPACITY_ADMISSION=1`) account for a warm VoiceDesign's footprint before admitting
+> a new Base render (make the render wait, per the row's original expectation), or evict
+> VoiceDesign to make room (trading the ~120s `QWEN_DESIGN_IDLE_TTL` warm-reuse win for
+> render throughput)? Both are defensible; the choice affects real UX (an operator
+> mid-cast-review who starts a chapter render). Bullet 2 (design completes normally) is
+> confirmed; bullet 3 (wedged-design timeout) was not reached — a separate design attempt
+> on an evidence-thin character (`unknown-male`, 2 lines, no rendered audio) hung
+> indefinitely with `qwenDesignEverLoaded` never flipping true and no sidecar-side log
+> activity at all, which is plausibly expected (no real audio to derive a reference clip
+> from) rather than the timeout bug bullet 3 is about, but wasn't root-caused this round.
 
 ### A33 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 
@@ -2047,6 +2191,19 @@ for the cleanest read. *Criteria:* the `asr.warm` seed comment in
 and `docs/local-llm.md`'s footprint table. *Cost:* short — rides along with
 any other GPU-ASR session (A20 already needs `ASR_DEVICE=cuda`-adjacent
 capacity behaviour; batch together).
+
+> **PARTIALLY run 2026-08-26 (wave 6) — no refusals observed across two renders, but the
+> ≥5-observation `asr.warm` p95 convergence (bullet 2) was not tracked.** With
+> `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1` and content-QA on, ASR went resident
+> (`asrLoaded: true`) during a chapter render on an uncontended `cuda:0` and no
+> `/transcribe` call 503'd `noCapacity` across two independent full-chapter renders (252
+> lines each, ASR sampling every sentence per `SEG_ASR_SAMPLE_EVERY=1`) — bullet 1
+> confirmed. Bullet 2 (watch `FootprintTable`'s learned `asr.warm` p95 settle and record
+> what it converges to) and bullet 3 (the residual foreign-process contamination case)
+> were not exercised — this round didn't read the sidecar's internal footprint state, only
+> the absence of refusals. **Still owed:** re-run reading `asr.warm`'s learned value
+> directly (via whatever internal endpoint or log line exposes `FootprintTable`) after
+> ≥5 real `/transcribe` observations.
 
 ### A34 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
