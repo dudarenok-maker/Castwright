@@ -580,17 +580,21 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        edit at all — a designed/imported voice, or a cloned entry whose
        master is somehow absent, has nothing for this to mean.
 
-       #2068 item 3 (fs-38) — the `master` existence check is NOT done here.
-       `provenance` is immutable, so reading it pre-lock is timing-insensitive.
-       But `master` CAN disappear between the pre-lock `existing` read and the
-       post-lock `fresh` read inside `updateEntry` — validating it here (on
-       `existing.master`) would pass a check that the write then silently skips
-       (the write is guarded on `fresh.master`), returning 200 for a write that
-       never happened. The `master` check is moved inside the locked callback
-       below, where it reads `fresh.master` and returns 409 Conflict if the
-       resource changed underneath the request. */
+       #2068 item 3 (fs-38) — the `master` existence check distinguishes two cases:
+       1. Permanently absent (never cloned with a master, or revoked long ago):
+          `existing.master` is already undefined at the pre-lock read. This is
+          not a race — validate and reject here with 400.
+       2. Race condition (master was present in `existing` but disappears before
+          the post-lock `fresh` read): validate pre-lock that `existing.master`
+          exists, then check post-lock in `updateEntry`'s callback on `fresh.master`.
+          If it vanished, return 409 Conflict. */
     if (body.transcript !== undefined) {
       if (existing.provenance !== 'cloned') {
+        return res
+          .status(400)
+          .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });
+      }
+      if (!existing.master) {
         return res
           .status(400)
           .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });
@@ -641,8 +645,17 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
       };
       if (body.transcript !== undefined) {
         const master = fresh.master;
+        /* #2068 item 3 — distinguish the race condition from permanent absence:
+           - If existing.master exists (pre-lock read), but fresh.master doesn't
+             (post-lock read), the resource changed underneath the request and
+             we return 409 Conflict (set flag, return undefined to skip write).
+           - If existing.master was already absent, the pre-lock check above
+             would have rejected this, so we'd never reach here.
+           In both cases, return undefined (don't write). */
         if (!master) {
-          conflict = true;
+          if (existing.master) {
+            conflict = true;
+          }
           return undefined;
         }
         const transcript = body.transcript as string;

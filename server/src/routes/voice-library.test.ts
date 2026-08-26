@@ -581,7 +581,7 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
       expect(onDisk?.master).toBeUndefined();
     });
 
-    it('rejects `transcript` on a cloned entry with no master clip with 409', async () => {
+    it('rejects `transcript` on a cloned entry with no master clip with 400', async () => {
       await vl.writeEntry(
         makeEntry({
           voiceUuid: 'transcript-nomaster-1',
@@ -600,7 +600,8 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
         .patch('/api/voice-library/transcript-nomaster-1')
         .send({ transcript: 'a new transcript' });
 
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('`transcript` can only be set on a cloned voice with a master clip.');
     });
 
     /* #2068 item 3 (fs-38) — the race this fix exists for: `master` WAS
