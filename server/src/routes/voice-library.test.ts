@@ -4638,10 +4638,13 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
      this transform, while GET / did apply it, causing a mismatch: the clone
      response could show 'ready' for a slot the list would show as 'stale'.
 
-     This regression test verifies that /clone applies the same transform as
-     GET by comparing: (1) the engines.qwen.status from the /clone response,
-     and (2) the same entry's status when fetched via GET /. Both must match,
-     proving the transform was applied at the /clone response time. */
+     The fixture stubs an OUTDATED baseModel, so a raw (untransformed) /clone
+     response would read 'ready' while the computed status must read 'stale'.
+     The test asserts the /clone response itself shows 'stale' directly —
+     not merely that it agrees with a second GET /, which stays green
+     regardless of whether the transform runs if both sides share the same
+     stub (the earlier, vacuous version of this test) — then cross-checks
+     GET / reports the same 'stale' status for good measure. */
   it('applies withComputedStaleness to /clone response, same as GET / does', async () => {
     const { writeCandidate } = await import('../workspace/clone-candidate.js');
     await writeCandidate(
