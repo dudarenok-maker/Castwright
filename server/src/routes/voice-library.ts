@@ -1372,7 +1372,15 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       await removeCandidate(candidateId);
       return (await readEntry(voiceUuid))!;
     });
-    return res.status(200).json(entry);
+    /* Plan 276 Decision 2 [R4] — this response goes through
+       `withComputedStaleness` for the same reason `GET /` does, and it is
+       load-bearing rather than cosmetic. The cloneVoice thunk
+       (src/store/voice-library-slice.ts:199-209) refetches the library to get
+       the computed entry, but `/clone` is the PRODUCER of the raw entry that
+       cloneVoice still returns to its caller at (src/modals/clone-voice-wizard.tsx:50).
+       Without this transform, the entry can read `'ready'` on the client when
+       the server would call it `'stale'`. */
+    return res.status(200).json(withComputedStaleness(entry));
   } catch (e) {
     if (e instanceof DesignInFlightError) {
       return res.status(409).json({ error: 'A clone for this sample is already running.' });

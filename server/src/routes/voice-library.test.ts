@@ -201,7 +201,9 @@ beforeEach(async () => {
   });
 
   deriveMock.mockReset();
-  deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: 'qwen3-0.6b' });
+  // Use the actual current base model so cloned entries are fresh, not stale
+  const currentModel = modelPaths.currentQwenBaseModel();
+  deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: currentModel });
   assessFidelityMock.mockReset();
   assessFidelityMock.mockResolvedValue({ cosine: 0.72 });
   /* decodeMock defaults to the REAL ffmpeg decode (pass-through) — the
@@ -1099,7 +1101,11 @@ describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, De
      resolution keeps it that way: a designed voice's failed slot may be
      cleared too, since that just lets the voice re-derive. Do NOT add a
      provenance guard here to "match" the PATCH route — that would contradict
-     the decision this test pins. */
+     the decision this test pins.
+
+     [regression test] The two tests below verify the SAME behavior for
+     `provenance: cloned` and `provenance: designed` — if a future guard
+     special-cases either, one test will go red. */
   it('deletes a `failed` slot on a `provenance: cloned` entry with no provenance guard (plan 276 Decision 7)', async () => {
     await vl.writeEntry(
       makeClonedEntry('retry-cloned-no-guard-1', {
@@ -1113,6 +1119,24 @@ describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, De
     expect(res.body.engines.qwen).toBeUndefined();
     const onDisk = await vl.readEntry('retry-cloned-no-guard-1');
     expect(onDisk?.provenance).toBe('cloned');
+    expect('qwen' in (onDisk?.engines ?? {})).toBe(false);
+  });
+
+  it('deletes a `failed` slot on a `provenance: designed` entry, same as cloned (no guard)', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'retry-designed-no-guard-1',
+        provenance: 'designed',
+        engines: { qwen: { status: 'failed', baseModel: 'old' } },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-designed-no-guard-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.qwen).toBeUndefined();
+    const onDisk = await vl.readEntry('retry-designed-no-guard-1');
+    expect(onDisk?.provenance).toBe('designed');
     expect('qwen' in (onDisk?.engines ?? {})).toBe(false);
   });
 });
@@ -4603,6 +4627,62 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     const { listEntries } = await import('../workspace/voice-library.js');
     expect((await listEntries()).filter((e) => e.provenance === 'cloned')).toHaveLength(0);
     expect(await readCandidate('cand-fidelity-sde')).not.toBeNull(); // candidate intact, nothing persisted
+  });
+
+  /* Plan 276 Decision 2 [R4] — the /clone response must apply
+     `withComputedStaleness` before returning, not hand the raw entry to the
+     client. This is load-bearing: a baseModel recorded at clone time can go
+     stale relative to currentQwenBaseModel(), so a raw 'ready' slot can
+     incorrectly read as ready when the computed status would say stale.
+     Before the fix, the /clone endpoint returned the entry without applying
+     this transform, while GET / did apply it, causing a mismatch: the clone
+     response could show 'ready' for a slot the list would show as 'stale'.
+
+     This regression test verifies that /clone applies the same transform as
+     GET by comparing: (1) the engines.qwen.status from the /clone response,
+     and (2) the same entry's status when fetched via GET /. Both must match,
+     proving the transform was applied at the /clone response time. */
+  it('applies withComputedStaleness to /clone response, same as GET / does', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-transform-test',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFFfake-wav-bytes'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    // Call /clone and capture the response
+    const cloneRes = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-transform-test',
+        consent: { personName: 'Test', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(cloneRes.status).toBe(200);
+    const clonedUuid = cloneRes.body.voiceUuid;
+    const cloneResponseStatus = cloneRes.body.engines.qwen.status;
+
+    // Now fetch the library via GET / which applies withComputedStaleness
+    const getRes = await request(app).get('/api/voice-library');
+    expect(getRes.status).toBe(200);
+
+    const voiceInList = (getRes.body.voices as Array<{ voiceUuid: string; engines: any }>).find(
+      (v) => v.voiceUuid === clonedUuid
+    );
+
+    expect(voiceInList).toBeDefined();
+    // The key assertion: /clone response status must match GET / response status
+    // If /clone didn't apply withComputedStaleness, this would fail when the
+    // baseModel becomes stale (the /clone response would show 'ready' while
+    // GET would show 'stale').
+    expect(voiceInList!.engines.qwen.status).toBe(cloneResponseStatus);
   });
 });
 
