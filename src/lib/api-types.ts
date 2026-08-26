@@ -8782,18 +8782,20 @@ export interface operations {
                      * @description Plan 276 Decision 6 — corrects a cloned voice's reference
                      *     transcript after the fact (the "Add transcript" cast-time-gate
                      *     CTA). Accepted only when the entry's `provenance` is `cloned`
-                     *     AND it carries a `master` clip; 400 otherwise. Sets
-                     *     `master.transcript` (`transcriptSource: 'user'`) and the
-                     *     entry's own `sampleTranscript` — a second persisted copy of
-                     *     the same text — and CLEARS `master.languageCode` and the
-                     *     entry's own `languageCode`: both are Whisper stamps describing
-                     *     the ORIGINAL clip, and a user-edited transcript may be in a
-                     *     different language, so a stale stamp would contradict it. A
-                     *     non-empty transcript also clears a `failed` `qwen` engine
-                     *     slot (an empty string clears the text but supplies no fix, so
-                     *     it leaves the slot's `failed` status alone). The qwen `.pt`
-                     *     distilled against the old text is left untouched — this is a
-                     *     lexical correction, not a re-derive.
+                     *     AND it carries a `master` clip; 400 if the master is permanently
+                     *     absent (never cloned with a master, or revoked), 409 if the
+                     *     master was present at request time but was removed by a concurrent
+                     *     operation before the write. Sets `master.transcript`
+                     *     (`transcriptSource: 'user'`) and the entry's own
+                     *     `sampleTranscript` — a second persisted copy of the same text —
+                     *     and CLEARS `master.languageCode` and the entry's own
+                     *     `languageCode`: both are Whisper stamps describing the ORIGINAL
+                     *     clip, and a user-edited transcript may be in a different language,
+                     *     so a stale stamp would contradict it. A non-empty transcript also
+                     *     clears a `failed` `qwen` engine slot (an empty string clears the
+                     *     text but supplies no fix, so it leaves the slot's `failed` status
+                     *     alone). The qwen `.pt` distilled against the old text is left
+                     *     untouched — this is a lexical correction, not a re-derive.
                      */
                     transcript?: string;
                 };
@@ -8819,9 +8821,11 @@ export interface operations {
                 };
             };
             /**
-             * @description `transcript` was rejected — either the entry isn't a cloned voice
-             *     with a `master` clip, the value isn't a string, or it exceeds 2000
-             *     characters.
+             * @description Request was invalid. For `transcript` updates specifically: the entry
+             *     isn't a cloned voice, the cloned entry's `master` clip is permanently
+             *     absent (never cloned with a master, or revoked), the value isn't a
+             *     string, or it exceeds 2000 characters. For other fields: validation
+             *     failed (e.g., `persona` on a non-designed voice, `name` not a string, etc.).
              */
             400: {
                 headers: {
@@ -8839,6 +8843,22 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /**
+             * @description Conflict: the `master` clip was removed by a concurrent operation
+             *     between the request validation and the write (for `transcript` updates
+             *     only). No changes were made. The caller should retry or refresh the
+             *     entry state.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };

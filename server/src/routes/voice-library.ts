@@ -578,7 +578,16 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        after the fact (the "Add transcript" cast-time-gate CTA). Only a
        cloned entry that actually carries a master clip has a transcript to
        edit at all — a designed/imported voice, or a cloned entry whose
-       master is somehow absent, has nothing for this to mean. */
+       master is somehow absent, has nothing for this to mean.
+
+       #2068 item 3 (fs-38) — the `master` existence check distinguishes two cases:
+       1. Permanently absent (never cloned with a master, or revoked long ago):
+          `existing.master` is already undefined at the pre-lock read. This is
+          not a race — validate and reject here with 400.
+       2. Race condition (master was present in `existing` but disappears before
+          the post-lock `fresh` read): validate pre-lock that `existing.master`
+          exists, then check post-lock in `updateEntry`'s callback on `fresh.master`.
+          If it vanished, return 409 Conflict. */
     if (body.transcript !== undefined) {
       if (existing.provenance !== 'cloned' || !existing.master) {
         return res
@@ -607,7 +616,19 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        clobber a concurrent engine-slot write (e.g. an in-flight xtts
        derive) that landed in the window between this handler's first read
        and its write. The transcript edit below applies that SAME reasoning
-       to `master`/`engines`: it mutates off `fresh`, never `existing`. */
+       to `master`/`engines`: it mutates off `fresh`, never `existing`.
+
+       #2068 item 3 (fs-38) — the `master` existence check moved here from
+       the pre-lock block above, into the `body.transcript !== undefined`
+       branch below. If `fresh.master` is absent at that point (the entry
+       was cloned and HAD a master when `existing` was read, but the master
+       clip was removed before the lock was acquired), the request is in
+       conflict with the current state of the resource: return 409 and
+       perform no write, rather than silently writing nothing and returning
+       200. The flag is set inside the callback (under the lock) and checked
+       after `updateEntry` resolves — same pattern the retry route below
+       uses for `entryFound`/`noop`. */
+    let conflict = false;
     const written = await updateEntry(voiceUuid, (fresh) => {
       if (!fresh) return null;
       let next: VoiceLibraryEntry = {
@@ -617,7 +638,21 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
         ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
         ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
       };
-      if (body.transcript !== undefined && fresh.master) {
+      if (body.transcript !== undefined) {
+        const master = fresh.master;
+        /* #2068 item 3 — distinguish the race condition from permanent absence:
+           - If existing.master exists (pre-lock read), but fresh.master doesn't
+             (post-lock read), the resource changed underneath the request and
+             we return 409 Conflict (set flag, return undefined to skip write).
+           - If existing.master was already absent, the pre-lock check above
+             would have rejected this, so we'd never reach here.
+           In both cases, return undefined (don't write). */
+        if (!master) {
+          if (existing.master) {
+            conflict = true;
+          }
+          return undefined;
+        }
         const transcript = body.transcript as string;
         /* Plan 276 Decision 6 [R3] — three invalidations a transcript edit
            must carry, none of which is "re-derive the qwen .pt":
@@ -648,7 +683,7 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
         next = {
           ...next,
           sampleTranscript: transcript,
-          master: { ...fresh.master, transcript, transcriptSource: 'user', languageCode: undefined },
+          master: { ...master, transcript, transcriptSource: 'user', languageCode: undefined },
           languageCode: undefined,
         };
         /* Decision 6's third clause — a non-empty corrected transcript
@@ -667,6 +702,11 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
       }
       return next;
     });
+    if (conflict) {
+      return res
+        .status(409)
+        .json({ error: '`master` clip was removed before this transcript edit could be applied.' });
+    }
     if (!written) {
       return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     }
@@ -1327,7 +1367,15 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       await removeCandidate(candidateId);
       return (await readEntry(voiceUuid))!;
     });
-    return res.status(200).json(entry);
+    /* Plan 276 Decision 2 [R4] — this response goes through
+       `withComputedStaleness` for the same reason `GET /` does, and it is
+       load-bearing rather than cosmetic. The cloneVoice thunk
+       (src/store/voice-library-slice.ts:199-209) refetches the library to get
+       the computed entry, but `/clone` is the PRODUCER of the raw entry that
+       cloneVoice still returns to its caller at (src/modals/clone-voice-wizard.tsx:50).
+       Without this transform, the entry can read `'ready'` on the client when
+       the server would call it `'stale'`. */
+    return res.status(200).json(withComputedStaleness(entry));
   } catch (e) {
     if (e instanceof DesignInFlightError) {
       return res.status(409).json({ error: 'A clone for this sample is already running.' });

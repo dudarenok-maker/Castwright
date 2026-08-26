@@ -196,9 +196,18 @@ export const cloneSample = createAsyncThunk('voiceLibrary/cloneSample', async (f
   return api.cloneVoiceSample(form);
 });
 
-export const cloneVoice = createAsyncThunk('voiceLibrary/clone', async (body: CloneVoiceBody) => {
-  return api.cloneVoice(body);
-});
+/* #2648 (Plan 276 [R4]) — like every other entry-returning thunk here,
+   refetch the library after the clone instead of trusting the raw
+   POST /clone payload: /clone is the one route that skips the server's
+   `withComputedStaleness`, so its engine slots can still read 'ready'. */
+export const cloneVoice = createAsyncThunk(
+  'voiceLibrary/clone',
+  async (body: CloneVoiceBody, { dispatch }) => {
+    const entry = await api.cloneVoice(body);
+    await dispatch(fetchVoiceLibrary());
+    return entry;
+  },
+);
 
 export const revokeVoice = createAsyncThunk(
   'voiceLibrary/revoke',
@@ -260,11 +269,8 @@ export const voiceLibrarySlice = createSlice({
       .addCase(cloneVoice.pending, (state) => {
         state.clonePending = true;
       })
-      .addCase(cloneVoice.fulfilled, (state, action: PayloadAction<VoiceLibraryEntry>) => {
+      .addCase(cloneVoice.fulfilled, (state) => {
         state.clonePending = false;
-        const idx = state.entries.findIndex((e) => e.voiceUuid === action.payload.voiceUuid);
-        if (idx >= 0) state.entries[idx] = action.payload;
-        else state.entries.push(action.payload);
       })
       .addCase(cloneVoice.rejected, (state) => {
         state.clonePending = false;

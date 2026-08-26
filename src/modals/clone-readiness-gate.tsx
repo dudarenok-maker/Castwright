@@ -31,7 +31,7 @@
    repeating. It dispatches `requestStartGeneration` directly, exactly like
    the non-Qwen branch of `startGenerationFlow` does for a plain book. */
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -42,6 +42,7 @@ import { selectCloneReadinessVerdicts } from '../store/clone-readiness-selectors
 import { isCloneEngine } from '../../server/src/tts/clone-engines';
 import { TranscriptField } from '../components/voices/transcript-field';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from '../lib/clone-transcript-limit';
+import { DEFAULT_AUTOSAVE_DEBOUNCE_MS } from '../store/settings-slice';
 import type { CloneCharacterVerdict } from '../store/clone-readiness-selectors';
 import type { Character, TtsEngine } from '../lib/types';
 
@@ -87,9 +88,11 @@ const NO_CLONE_VERDICTS: CloneCharacterVerdict[] = [];
 function CloneVerdictRow({
   verdict,
   character,
+  onCastPending,
 }: {
   verdict: CloneCharacterVerdict;
   character: Character | undefined;
+  onCastPending?: () => void;
 }) {
   const dispatch = useAppDispatch();
   const [editingTranscript, setEditingTranscript] = useState(false);
@@ -140,6 +143,7 @@ function CloneVerdictRow({
 
   const onCastOnEngine = () => {
     if (!character || !verdict.castOnEngine) return;
+    onCastPending?.();
     dispatch(castActions.updateCharacter({ ...character, ttsEngine: verdict.castOnEngine }));
   };
 
@@ -220,13 +224,30 @@ export function CloneReadinessGateModal() {
   const dispatch = useAppDispatch();
   const gate = useAppSelector((s) => s.ui.cloneReadinessGate);
   const characters = useAppSelector((s) => s.cast.characters);
+  const autosaveDebounceMs = useAppSelector((s) => s.settings?.autosaveDebounceMs ?? DEFAULT_AUTOSAVE_DEBOUNCE_MS);
   const verdicts = useAppSelector((s) =>
     gate ? selectCloneReadinessVerdicts(s, gate.bookId) : NO_CLONE_VERDICTS,
   );
 
+  const [pendingCastWrite, setPendingCastWrite] = useState(false);
+  const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   if (!gate) return null;
 
   const onClose = () => dispatch(uiActions.closeCloneReadinessGate());
+
+  const handleCastPending = () => {
+    setPendingCastWrite(true);
+    /* Clear any prior pending timeout to avoid overlapping timers re-opening the race.
+       Then schedule a new timeout: wait for the debounce window plus a safety margin
+       to ensure the cast write PUT has been issued before re-enabling "Proceed anyway".
+       (The margin covers the debounce firing; actual PUT completion is asynchronous.) */
+    if (pendingTimeoutRef.current !== null) {
+      clearTimeout(pendingTimeoutRef.current);
+    }
+    const timeoutId = setTimeout(() => setPendingCastWrite(false), autosaveDebounceMs + 100);
+    pendingTimeoutRef.current = timeoutId;
+  };
 
   /* Decision 1 — warn-and-allow. Deliberately dispatches
      `requestStartGeneration` directly, NEVER `openStartGenPrompt`: this
@@ -271,6 +292,7 @@ export function CloneReadinessGateModal() {
                   key={v.characterId}
                   verdict={v}
                   character={characters.find((c) => c.id === v.characterId)}
+                  onCastPending={handleCastPending}
                 />
               ))}
             </ul>
@@ -283,8 +305,8 @@ export function CloneReadinessGateModal() {
             >
               Cancel
             </button>
-            <PrimaryButton variant="dark" onClick={onProceedAnyway}>
-              Proceed anyway
+            <PrimaryButton variant="dark" onClick={onProceedAnyway} disabled={pendingCastWrite}>
+              {pendingCastWrite ? 'Waiting for cast save…' : 'Proceed anyway'}
             </PrimaryButton>
           </div>
         </div>
