@@ -276,7 +276,12 @@ def test_health_responsive_during_busy_synth(client: TestClient) -> None:
     )
 
 
-def test_inflight_synth_tracks_transcribe_and_embed(client: TestClient) -> None:
+async def _noop_async(*a, **k):
+    """Async no-op for mocking async methods."""
+    return None
+
+
+def test_inflight_synth_tracks_transcribe_and_embed(client: TestClient, monkeypatch) -> None:
     """Verify that /transcribe and /embed increment the busy signal (inflight_synth)
     so the idle gate can detect ASR/embed activity. Regression check for #1996.
 
@@ -289,18 +294,29 @@ def test_inflight_synth_tracks_transcribe_and_embed(client: TestClient) -> None:
     slow_sleep_sec = 0.5
 
     original_transcribe = main.ASR.transcribe
+    original_spk_embed = main.SPK.embed
+    original_spk_ensure_loaded = main.SPK.ensure_loaded
 
     def fake_slow_transcribe(pcm, sample_rate, language=None, word_timestamps=False, device=None):
         time.sleep(slow_sleep_sec)
         # Return minimal valid output (the test only checks inflight_synth, not transcribe results).
         return {"text": "Hi", "language": "en", "avg_logprob": -0.5, "no_speech_prob": 0.01, "compression_ratio": 1.2}
 
+    def fake_slow_embed(pcm, sample_rate):
+        time.sleep(slow_sleep_sec)
+        # Return a fake embedding (192-d, unit-norm shape).
+        return [0.0] * 192
+
     main.ASR.transcribe = fake_slow_transcribe
+    main.SPK.embed = fake_slow_embed
+    # Mock SPK.ensure_loaded to be an async no-op so we don't try to load the real speechbrain model.
+    main.SPK.ensure_loaded = _noop_async
 
     try:
         # Generate some fake PCM data (16-bit LE mono).
         fake_pcm = b"\x00\x00" * 1000  # 1000 samples of silence.
 
+        # Test /transcribe
         transcribe_thread = threading.Thread(
             target=lambda: client.post(
                 "/transcribe",
@@ -335,9 +351,47 @@ def test_inflight_synth_tracks_transcribe_and_embed(client: TestClient) -> None:
             f"inflight_synth should be 0 after transcribe completes, but got {inflight_after}. "
             "Did the finally-block decrement fail?"
         )
+
+        # Test /embed
+        embed_thread = threading.Thread(
+            target=lambda: client.post(
+                "/embed",
+                content=fake_pcm,
+                headers={"X-Sample-Rate": "16000"},
+            ),
+            daemon=True,
+        )
+        embed_thread.start()
+        # Tiny grace so the embed is actually running when we probe.
+        time.sleep(0.05)
+
+        # Mid-call: inflight_synth should be non-zero (at least 1 for the embed).
+        health_mid_embed = client.get("/health")
+        assert health_mid_embed.status_code == 200, "health route failed while embed running"
+        inflight_mid_embed = health_mid_embed.json().get("inflight_synth")
+        assert inflight_mid_embed is not None, "inflight_synth field missing from /health during embed"
+        assert inflight_mid_embed > 0, (
+            f"inflight_synth should be > 0 during embed, but got {inflight_mid_embed}. "
+            "Did /embed stop incrementing _inflight_synth?"
+        )
+
+        embed_thread.join(timeout=5.0)
+        assert not embed_thread.is_alive(), "embed thread never finished"
+
+        # After completion: inflight_synth should be back to 0.
+        health_after_embed = client.get("/health")
+        assert health_after_embed.status_code == 200
+        inflight_after_embed = health_after_embed.json().get("inflight_synth")
+        assert inflight_after_embed is not None
+        assert inflight_after_embed == 0, (
+            f"inflight_synth should be 0 after embed completes, but got {inflight_after_embed}. "
+            "Did the finally-block decrement fail?"
+        )
     finally:
-        # Restore the original ASR.transcribe.
+        # Restore the originals.
         main.ASR.transcribe = original_transcribe
+        main.SPK.embed = original_spk_embed
+        main.SPK.ensure_loaded = original_spk_ensure_loaded
 
 
 def test_synthesize_returns_substitution_header_when_voice_unknown(monkeypatch):

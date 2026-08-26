@@ -8139,11 +8139,11 @@ _restart_scheduled = False
 # recycle is scheduled; while it's set, /synthesize + /synthesize-batch fast-fail
 # with a (non-poisoned) 503 so no NEW chapter enters the dying process and the
 # server's in-worker recovery rides out the respawn. `_inflight_synth` counts
-# live synth calls (incremented on the event loop around each to_thread offload);
-# the recycle drains it to 0 (bounded by SIDECAR_DRAIN_GRACE_MS) before exiting so
-# the in-flight chapter finishes here instead of failing. Both are read by the
-# drain thread — a plain int read is atomic under the GIL, eventual consistency
-# is all the drain needs.
+# live synth, transcribe, and embed calls (incremented on the event loop around
+# each to_thread offload); the recycle drains it to 0 (bounded by
+# SIDECAR_DRAIN_GRACE_MS) before exiting so the in-flight chapter finishes here
+# instead of failing. Both are read by the drain thread — a plain int read is
+# atomic under the GIL, eventual consistency is all the drain needs.
 _restart_pending = False
 _inflight_synth = 0
 # side-11 item 2 — SOFT recycle signal. Set True by the watchdog once committed
