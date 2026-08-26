@@ -59,6 +59,7 @@ beforeEach(async () => {
      fixed under #2046. */
   const { voiceLibraryRouter } = await import('./voice-library.js');
   const cloneFidelityMod = await import('../tts/clone-fidelity.js');
+  const modelPaths = await import('../tts/model-paths.js');
   CLONE_FIDELITY_MIN = cloneFidelityMod.CLONE_FIDELITY_MIN;
 
   app = express();
@@ -66,7 +67,9 @@ beforeEach(async () => {
   app.use('/api/voice-library', voiceLibraryRouter);
 
   deriveMock.mockReset();
-  deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: 'qwen3-0.6b' });
+  // Use the actual current base model so cloned entries are fresh, not stale
+  const currentModel = modelPaths.currentQwenBaseModel();
+  deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: currentModel });
   embedSegmentMock.mockReset();
   decodeMock.mockReset();
   decodeMock.mockResolvedValue(Buffer.from([0, 0, 0, 0]));

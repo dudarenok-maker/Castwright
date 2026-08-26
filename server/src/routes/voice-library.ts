@@ -589,12 +589,7 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
           exists, then check post-lock in `updateEntry`'s callback on `fresh.master`.
           If it vanished, return 409 Conflict. */
     if (body.transcript !== undefined) {
-      if (existing.provenance !== 'cloned') {
-        return res
-          .status(400)
-          .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });
-      }
-      if (!existing.master) {
+      if (existing.provenance !== 'cloned' || !existing.master) {
         return res
           .status(400)
           .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });

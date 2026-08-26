@@ -1090,7 +1090,7 @@ describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, De
 
   /* #2068 item 4 (fs-38) — pinning an intentional ASYMMETRY, not an oversight.
      The sibling PATCH handler above ("rejects `transcript` on a cloned entry
-     with no master clip with 409") guards on `provenance === 'cloned'` before
+     with no master clip with 400") guards on `provenance === 'cloned'` before
      it will touch `master`/`sampleTranscript`. This route has NO equivalent
      guard: it deletes a `failed` engine slot for `provenance === 'cloned'`
      exactly the same way it would for a `designed` entry (see the other
@@ -4657,6 +4657,17 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     );
     decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
 
+    // Override deriveMock for this test to return an OUTDATED baseModel
+    // so the cloned entry will compute as stale, proving withComputedStaleness
+    // is applied. The test fixture uses an old model string that never matches
+    // the current one, ensuring staleness detection is exercised.
+    const oldModel = 'some/outdated-base-model';
+    deriveMock.mockResolvedValueOnce({
+      previewPcm: Buffer.from([1, 2, 3, 4]),
+      sampleRate: 24_000,
+      baseModel: oldModel,
+    });
+
     // Call /clone and capture the response
     const cloneRes = await request(app)
       .post('/api/voice-library/clone')
@@ -4666,10 +4677,13 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       });
 
     expect(cloneRes.status).toBe(200);
+    expect(cloneRes.body.engines.qwen.baseModel).toBe(oldModel);
+    // The /clone response must show 'stale' because withComputedStaleness
+    // compares the recorded baseModel against currentQwenBaseModel()
+    expect(cloneRes.body.engines.qwen.status).toBe('stale');
     const clonedUuid = cloneRes.body.voiceUuid;
-    const cloneResponseStatus = cloneRes.body.engines.qwen.status;
 
-    // Now fetch the library via GET / which applies withComputedStaleness
+    // Now fetch the library via GET / which also applies withComputedStaleness
     const getRes = await request(app).get('/api/voice-library');
     expect(getRes.status).toBe(200);
 
@@ -4678,11 +4692,9 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     );
 
     expect(voiceInList).toBeDefined();
-    // The key assertion: /clone response status must match GET / response status
-    // If /clone didn't apply withComputedStaleness, this would fail when the
-    // baseModel becomes stale (the /clone response would show 'ready' while
-    // GET would show 'stale').
-    expect(voiceInList!.engines.qwen.status).toBe(cloneResponseStatus);
+    // Both responses must show 'stale', proving the transform is consistently applied
+    expect(voiceInList!.engines.qwen.status).toBe('stale');
+    expect(voiceInList!.engines.qwen.status).toBe(cloneRes.body.engines.qwen.status);
   });
 });
 
