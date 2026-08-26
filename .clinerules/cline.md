@@ -173,10 +173,13 @@ a command string, **no apostrophe escaping is needed** -- pass the message
 exactly as written, single quotes and all:
 
 ```powershell
-$T = & 'C:\Claude\Projects\wt-<your-worktree>\scripts\oe-detached-commit.ps1' `
-       -Worktree 'C:\Claude\Projects\wt-<your-worktree>' `
+$W = 'C:\Claude\Projects\wt-<your-worktree>'
+$T = & "$W\scripts\oe-detached-commit.ps1" -Worktree $W `
        -Message "fix(scope): subject line, don't escape apostrophes here"
 ```
+
+**Keep `$W` around** -- the poll steps below and the tiebreaker
+(`git -C $W log --oneline -1`) both use it.
 
 Two failure modes this script exists to close, both hit by freelanced
 variants in the past -- **do not rebuild either by hand**:
@@ -194,9 +197,11 @@ variants in the past -- **do not rebuild either by hand**:
   *why* each one broke, and died on the output-token cap with no commit, no
   push, and no receipt -- while the two-file edit it was committing was
   already correct. Passing `-Message` as a parameter makes this class of bug
-  impossible: if you see one of those errors, stop reasoning about it after
-  one sentence and re-check you're actually calling the script, not a
-  hand-built variant of it.
+  impossible. **If you see one of those errors anyway, stop reasoning about
+  it after one sentence and re-check you're actually calling the script, not
+  a hand-built variant of it -- and if a retry produces the identical error
+  even after confirming that, stop retrying** and say so once with the exact
+  command and the error, per "Do not end your turn while it runs" below.
 
 Then poll until it resolves. Each poll returns instantly, so the output-token
 cap stops mattering. **Check the process as well as the sentinel** --
