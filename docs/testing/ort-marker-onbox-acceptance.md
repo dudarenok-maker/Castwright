@@ -16,7 +16,7 @@
 > Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](../features/282-ort-pip-consistency-marker.md)
 > Design of record: [`docs/superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md`](../superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md)
 > ("### On-box acceptance" section — the six numbered criteria this sheet mirrors)
-> Register rows: [A36–A38](onbox-acceptance-register.md#group-a--the-gpu-box),
+> Register rows: [A29–A31](onbox-acceptance-register.md#group-a--the-gpu-box),
 > [E7](onbox-acceptance-register.md#group-e--not-the-gpu-box),
 > [Blocked — AMD/ROCm](onbox-acceptance-register.md#blocked--hardware-not-available)
 > Issue: [#2192](https://github.com/dudarenok-maker/Castwright/issues/2192)
@@ -42,13 +42,13 @@ acceptance criterion.
 
 | # | Criterion (design doc's own wording) | Register row | Status |
 |---|---|---|---|
-| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A36 | Owed |
-| 2 | **The reported bug** — Windows + NVIDIA, app running, in-app Qwen3 install completes with no `WinError 5`; GPU Kokoro afterwards | A37 | Owed — this is #2192 itself |
+| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A29 | Owed |
+| 2 | **The reported bug** — Windows + NVIDIA, app running, in-app Qwen3 install completes with no `WinError 5`; GPU Kokoro afterwards | A30 | Owed — this is #2192 itself |
 | 3 | Self-heal on an existing (pre-marker) box | — | **Discharged**, see §5 |
 | 4 | Pinokio update path (`update.js`, the deployment shape that reported the bug) | E7 | Owed |
 | 5 | AMD box — no marker is written; the live case is the AMD→ROCm-failure→CPU-fallback ordering | Blocked (AMD/ROCm) | Blocked — no hardware |
 | 6 | Clobbered box — both dist-infos present, GPU build's files in the namespace; boot takes the loud path | *(removed)* | **Discharged, 2026-08-23 — see §8.6** |
-| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A38 (renumbered from A39, fold #2625) | Owed — blocked |
+| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A31 (renumbered from A39, fold #2625) | Owed — blocked |
 
 ## 2. Preconditions (common to all criteria)
 
@@ -65,7 +65,7 @@ acceptance criterion.
 
 ---
 
-## 3. Criterion 1 — fresh NVIDIA bootstrap (A36)
+## 3. Criterion 1 — fresh NVIDIA bootstrap (A29)
 
 ### 3.1 Procedure
 
@@ -76,7 +76,7 @@ acceptance criterion.
    at the version `onnxruntime-gpu` actually installed.
 3. Run `pip check` inside that venv.
 4. **Start the sidecar and read the `[ort-preload]` lines it logs at startup
-   before doing anything else** (#2600, PR #2617 — see the register's A36 note
+   before doing anything else** (#2600, PR #2617 — see the register's A29 note
    for the full list of the six possible lines). Note which one fired: a plain
    "loaded ... all N expected files were found under nvidia/<pkg>/bin" success,
    the WARNING variant naming fewer than the full count (PATH/torch fallback,
@@ -153,7 +153,7 @@ check fails on a real dependency gap.
 > Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
 > proven off-box**: get_available_providers() reports CUDA whether or not any
 > session uses it, which is exactly what hid this. Criteria 1 and 2 still need
-> a real load here and rows A36/A37 stay owed — read the provider off a live
+> a real load here and rows A29/A30 stay owed — read the provider off a live
 > Kokoro, not off the available-providers list.
 >
 > **A CPU session here is not automatically this criterion failing (#2631
@@ -180,7 +180,7 @@ check fails on a real dependency gap.
 >   (#2631 review S6, replacing this bullet — the prior version pointed at two
 >   signals that are structurally silent on an nvidia box: `_directml_selftest_
 >   or_fallback`'s WARNING only fires `if "DmlExecutionProvider" in providers`,
->   which A36/A37 (nvidia) never build, and the kokoro-onnx-auto-detect
+>   which A29/A30 (nvidia) never build, and the kokoro-onnx-auto-detect
 >   remediation path only fires on an `ImportError`, which a loaded-but-CPU
 >   Kokoro by definition didn't hit — so their absence proves nothing here, and
 >   reading it as "by-design" is backwards in exactly the case this row exists
@@ -207,7 +207,7 @@ check fails on a real dependency gap.
 
 ---
 
-## 4. Criterion 2 — the reported bug: in-app Qwen3 install (A37)
+## 4. Criterion 2 — the reported bug: in-app Qwen3 install (A30)
 
 This is **#2192 itself** — the alpha tester's exact scenario, with the app running.
 Every other row in this sheet is a mechanism check; this one is the actual
@@ -249,7 +249,7 @@ GPU-provider check would have measured the other lane's venv, not this
 one — worthless evidence. A structural box-contention limitation, distinct
 from the already-filed #2534 CUDA13/cuDNN9 gap.
 **Run by:** claude (wave-4 step 5c, Castwright#2561). **Date:** 2026-08-21.
-**Disposition:** Register row A37 (renumbered from A39 this wave) stays
+**Disposition:** Register row A30 (renumbered from A39 this wave) stays
 STILL OWED — partially run. Full evidence:
 `docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
@@ -490,7 +490,7 @@ and `onnxruntime-gpu` 1.27.0, reinstalled `onnxruntime-gpu==1.27.0`
 — introduced by this test's own earlier `pip install --force-reinstall
 onnxruntime` step pulling a newer numpy; not a repair defect.
 **Kokoro execution provider after repair:** not re-tested — blocked by the
-same CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap documented for A36; would report `CPUExecutionProvider`
+same CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap documented for A29; would report `CPUExecutionProvider`
 on this box regardless of marker/dist-info correctness.
 
 > **Superseded note (2026-08-21):** this run predates PR #2576, which resolved the blocking box-level CUDA/cuDNN gap by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`. The outcome recorded above is from a run before that fix. The row is still OWED for re-check of the repair command.
@@ -559,16 +559,16 @@ GPU build owning the namespace with no real plain distribution left behind.
 `get_available_providers()` still lists `CUDAExecutionProvider` but
 constructing a real inference session was not attempted — same box-level
 CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap (`#2534`) already blocking this check
-on A36/A37, not a new gap.
+on A29/A30, not a new gap.
 
 **Disposition:** the defect #2535 was filed against — the silent `'deleted'`
 path — is fixed and verified: the loud `'clobbered'` path now fires exactly
 where wave-3 found it silent, and the remedy command repairs the box
 correctly. The row stays **STILL OWED** only because its own criteria include
 the CUDA-provider re-check, blocked by the pre-existing `#2534` gap (same
-precedent as A36).
+precedent as A29).
 
-*Dated run record (2026-08-21). The `#2534` blocker cited here has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); the shared GPU-provider re-check was re-run (wave-4 step 8, 2026-08-21) and still fails, but on a new, distinct root cause — the missing `nvidia-cudnn-cu12` dependency. See disposition summary (§10) and the A36/A37 rows in onbox-acceptance-register.md for details.*
+*Dated run record (2026-08-21). The `#2534` blocker cited here has been resolved by PR #2576 (which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`); the shared GPU-provider re-check was re-run (wave-4 step 8, 2026-08-21) and still fails, but on a new, distinct root cause — the missing `nvidia-cudnn-cu12` dependency. See disposition summary (§10) and the A29/A30 rows in onbox-acceptance-register.md for details.*
 
 **Run by:** claude (Castwright#2569).
 **Date:** 2026-08-21.
@@ -696,15 +696,16 @@ tagged "no GPU needed, sidecar venv only." With the refuse-vs-repair
 distinction now proven against a real, previously-clean production-shaped
 venv and a manufactured silent-repair check finding no repair, this row is
 fully discharged and **removed from `onbox-acceptance-register.md`** (Group A
-renumbered contiguously: old A39–A44 → A38–A43) and from the live view, per
-the fold instructions.
+renumbered contiguously: old A39–A44 → A38–A43 at the time) and from the live
+view, per the fold instructions. (Group A has since renumbered again — see
+this register's own current changelog for the live mapping.)
 
 **Run by:** claude (Castwright#2620). **Date:** 2026-08-23.
 Evidence: `docs/testing/onbox-wave5-results/step-ort-b-a39.md`.
 
 ---
 
-## 9. Addition — the in-app upgrade path (A38, renumbered from A39, not one of the spec's six)
+## 9. Addition — the in-app upgrade path (A31, renumbered from A39, not one of the spec's six)
 
 **This criterion is not in the design doc's §On-box acceptance table.** It is
 owed anyway: Task 8 wired `upgrade/apply.ts`'s marker handling (with a new
@@ -762,9 +763,9 @@ Evidence: `docs/testing/onbox-wave5-results/step-ort-c-a40.md`.
 
 _(Update as each remaining criterion runs.)_
 
-- Criterion 1 — fresh NVIDIA bootstrap (A36): **Run 2026-08-20, re-check 2026-08-21 (wave-4 step 8) — STILL OWED.**
-  Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. See onbox-acceptance-register.md A36 row for full details and evidence.*
-- Criterion 2 — the reported bug, in-app Qwen3 install (A37): **STILL OWED — partially run.** Clicking
+- Criterion 1 — fresh NVIDIA bootstrap (A29): **Run 2026-08-20, re-check 2026-08-21 (wave-4 step 8) — STILL OWED.**
+  Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. See onbox-acceptance-register.md A29 row for full details and evidence.*
+- Criterion 2 — the reported bug, in-app Qwen3 install (A30): **STILL OWED — partially run.** Clicking
   Install on Qwen3-TTS Base (0.6B) in Model Manager completed cleanly with no
   `WinError 5`, but follow-on Kokoro GPU-provider check unreachable on this box
   due to port contention (distinct from #2534); see
@@ -779,13 +780,15 @@ _(Update as each remaining criterion runs.)_
   repairs the box. This row's own criteria do not require a GPU-provider
   check (tagged "no GPU needed, sidecar venv only") — fully discharged and
   removed from `onbox-acceptance-register.md` and the live view (fold #2625).
-- Addition — in-app upgrade path (A38, renumbered from A39): **STILL OWED —
+- Addition — in-app upgrade path (A31, renumbered from A39): **STILL OWED —
   BLOCKED, 2026-08-23 (§9.3).** No packaged `release/` install exists
   anywhere on this box; checked exhaustively rather than assumed. Not
   manufactured per the issue's own instruction against cutting a release.
 
 **Register and live view updated in this session (fold #2625, 2026-08-23):**
-the clobbered-box row (formerly A38) is removed per its discharge above;
-Group A renumbered contiguously (old A39–A44 → A38–A43); A36, A37 and the new
-A38 (in-app upgrade path) carry dated notes recording today's findings and
-stay STILL OWED. `npm run check:onbox-register` is green.
+the clobbered-box row (formerly A38 at that time) is removed per its discharge
+above; Group A renumbered contiguously (old A39–A44 → A38–A43 at that time);
+A29, A30 and the new A31 (in-app upgrade path, today's post-wave-7 numbers —
+A36/A37/A38 at the time this note was written) carry dated notes recording
+that session's findings and stay STILL OWED. `npm run check:onbox-register`
+was green then; Group A has since renumbered again (wave 7).

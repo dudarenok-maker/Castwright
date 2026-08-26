@@ -1,9 +1,12 @@
-# On-box sitting pack — VRAM contention + eviction (A5, A16, A19, A20, A24, A26, A31, A32, A33)
+# On-box sitting pack — VRAM contention + eviction (A5, A14, A18, A20, A25, A26)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A5, A16, A19, A20, A24, A26, A31, A32, A33** — the rows that
+> register rows **A5, A14, A18, A20, A25, A26** — the rows that
 > only mean something when the single 8 GB card is genuinely full — and nothing
-> else. Follows the shared format fixed by
+> else. (Three rows this sitting pack originally covered — A19/A16/A31 in
+> their pre-2026-08-26 numbering — are discharged and removed from the
+> register; their sections below are kept for the historical run record.)
+> Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
 > §6 was applied to every row (see
 > [`## Excluded on re-resolution`](#excluded-on-re-resolution)).
@@ -91,6 +94,10 @@ up.
 
 ### A19 · Mixed Qwen+Coqui evict fails soft (#1893) — steps 1–2
 
+> **Register row: A19 — discharged 2026-08-26, row removed from the register**
+> (real on-box measurement: a pause during a permanently-stalled evict landed
+> within ~300ms, nowhere near the 10-minute ceiling).
+
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:847-932`
 > (the correction block at `:879-908` is the authoritative current state);
 > [`onbox-acceptance-staleness-audit.md`](onbox-acceptance-staleness-audit.md) `:777-812`.
@@ -116,7 +123,7 @@ up.
    not after the 10-minute ceiling (register `:922-923`).
    - Result:
 
-### A20 · Idle Coqui is reclaimed under VRAM pressure (#1894) — steps 3–5
+### A14 · Idle Coqui is reclaimed under VRAM pressure (#1894) — steps 3–5
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:934-976`;
 > the spec at `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` §6;
@@ -171,6 +178,10 @@ up.
 
 ### A16 · fe-16 Qwen auto-load on a Russian book (plan 165) — step 7
 
+> **Register row: A16 — discharged 2026-08-26, row removed from the register**
+> (owner-confirmed live observation: the Qwen banner and auto-load-with-
+> analyzer-evicted behaviour on a real Russian book).
+
 > **Criteria source:** [`../features/archive/165-fe-15-16-language-and-revision-e2e.md`](../features/archive/165-fe-15-16-language-and-revision-e2e.md)
 > `:9` (Status line) + ship notes ("live GPU acceptance is the only owed
 > item"). Re-resolved 2026-08-19: frontmatter `status: active` (`:2`), body
@@ -194,7 +205,7 @@ up.
    - **Separately, flag for the operator:** plan 165 frontmatter says `active`,
      body says `stable` — needs reconciliation, not resolved by this pack.
 
-### A24 · `/health` stays live through a contended eviction (#1919) — step 8
+### A18 · `/health` stays live through a contended eviction (#1919) — step 8
 
 > **Criteria source:** run sheet
 > [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md)
@@ -211,7 +222,7 @@ up.
    fields here.
    - Result: _(filled in `sidecar-evict-latency-onbox-acceptance.md` §5, not here)_
 
-### A26 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
+### A20 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:1321-1355`
 > (PR #1993's description + the C1/M3 review findings it quotes). Re-resolved:
@@ -236,6 +247,10 @@ up.
 
 ### A31 · Supervisor respawn survives a refused spawn attempt (#2037) — step 10
 
+> **Register row: A31 — discharged 2026-08-26, row removed from the register**
+> (real on-box measurement: the in-flight chapter's own completion was
+> confirmed clean after riding out the respawn, in an isolated worktree).
+
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2014-2055`;
 > code contract `scheduleRespawnAttempt` (`server/src/tts/sidecar-supervisor.ts`)
 > and `onSpawnRefused` (`server/src/tts/spawn-sidecar.ts`). Re-resolved: #2037
@@ -256,7 +271,7 @@ up.
     cleanly and is resumable.
     - Result:
 
-### A32 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
+### A25 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2057-2086`;
 > `unload_design`'s docstring and the `_DESIGN_CONTENTION_WAIT_S_DEFAULT`
@@ -277,7 +292,7 @@ up.
     neighbourhood, not immediately and not never.
     - Result:
 
-### A33 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
+### A26 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2088-2127`;
 > the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB` and `_device_free_mb`'s

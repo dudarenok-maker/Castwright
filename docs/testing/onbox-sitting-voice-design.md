@@ -1,10 +1,13 @@
-# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A14, A15, A17, A27)
+# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A12, A21)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A4, A6, A7, A14, A15, A17, A27** — the rows a human has to
+> register rows **A4, A6, A7, A12, A21** — the rows a human has to
 > **listen to**: Qwen VoiceDesign persona/A/B audition, bulk cast design, the
 > emotion-chip manuscript preview, cross-engine audition fidelity, and the
-> golden-audio bless guards. Follows the shared format fixed by
+> golden-audio bless guards. (Two rows this sitting pack originally covered —
+> the persona-prompt rewrite and the emotion-chip preview — are discharged
+> 2026-08-26 and removed from the register; their sections below are kept for
+> the historical run record.) Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule
 > of §6 was applied to every row (see
 > [`## Excluded on re-resolution`](#excluded-on-re-resolution) — nothing was
@@ -126,6 +129,10 @@ runs last, after everything else is evicted.
 
 ### A14 · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
 
+> **Register row: A14 — discharged 2026-08-26, row removed from the register**
+> (owner-confirmed live observation: the rewritten pitch/purpose-clause wording
+> changes the rendered voice on a real audition).
+
 > **Criteria source:** `docs/features/160-voicedesign-persona-format.md`
 > `:88-98` (manual acceptance walkthrough), `:9` (Status line), `:132-136`
 > (Ship notes, still the unfilled placeholder). Re-resolved 2026-08-20 by
@@ -159,7 +166,7 @@ runs last, after everything else is evicted.
    drift in an existing book's cast just from this rewrite being live.
    - Result:
 
-### A15 · A/B "current vs proposed" voice audition (plan 161) — steps 7–9
+### A12 · A/B "current vs proposed" voice audition (plan 161) — steps 7–9
 
 > **Criteria source:** `docs/features/161-voice-design-compare.md` `:100-109`
 > (manual acceptance walkthrough), `:9` (Status line), `:117-121` (Ship
@@ -197,6 +204,10 @@ runs last, after everything else is evicted.
    - Result:
 
 ### A17 · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
+
+> **Register row: A17 — discharged 2026-08-26, row removed from the register**
+> (owner-confirmed live observation: the audible delta between a designed
+> variant and the base voice, on a real sidecar).
 
 > **Criteria source:** `docs/features/180-fe31-emotion-chip-preview.md`
 > `:41-48` (manual walkthrough + live-GPU acceptance line), `:9` (Status
@@ -257,7 +268,7 @@ runs last, after everything else is evicted.
     its Stop button is — not a generic "free VRAM" message.
     - Result:
 
-### A27 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
+### A21 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
 > `:1412-1518` (full procedure already spelled out there — cited, not

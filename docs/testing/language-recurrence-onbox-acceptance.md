@@ -5,7 +5,9 @@
 >
 > Design of record: [`docs/superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md`](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-13-language-recurrence-and-prompt.md`](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)
-> Register rows: [`onbox-acceptance-register.md` A43, B2](onbox-acceptance-register.md)
+> Register rows: [`onbox-acceptance-register.md` B2](onbox-acceptance-register.md) —
+> the sibling voice-design row, A43, is discharged (2026-08-26) and removed from
+> the register; §§2-4 below (the voice-design half) are its historical record.
 > Issue: [#2246](https://github.com/dudarenok-maker/Castwright/issues/2246)
 
 ---
@@ -81,7 +83,7 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
    Result (dialogue attributed correctly, not to narrator): __________
 
-## 4. §Voice-design gate — register row A43
+## 4. §Voice-design gate — register row A43 (discharged 2026-08-26, removed from the register)
 
 6. Using the still-unset book from §3 step 1 (or a fresh one), and with the
    live Qwen sidecar running, attempt **Design full cast** (cast-design).
@@ -114,7 +116,7 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 ## 5. Outcome
 
 - [ ] §3 run (register row B2)
-- [ ] §4 run (register row A43)
+- [ ] §4 run (register row A43, discharged 2026-08-26, removed from the register)
 - [ ] Defects filed: ____________________________________
 
 Record what was observed, by whom, and when — here and in the register rows.

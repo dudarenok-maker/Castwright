@@ -1,7 +1,7 @@
-# On-box sitting pack — two-card boot (A2, A3, A8, A18)
+# On-box sitting pack — two-card boot (A2, A3, A8, A13)
 
 > **Sitting pack** for wave 2 of `#2435`, step 2 of the `#2453` chain. Covers
-> register rows **A2, A3, A8, A18** — everything that needs the **2-card boot**
+> register rows **A2, A3, A8, A13** — everything that needs the **2-card boot**
 > and nothing else. Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
 > §6 was applied to every row (see [`## Excluded on re-resolution`](#excluded-on-re-resolution)).
@@ -97,7 +97,7 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 17. **Task 16/16.5 status:** confirm it remains unbuilt and gated on item 1 (it consumes the `tripEvent()` that item 1 exercises). Do not build it here.
     - Result:
 
-### A18 · Device-pin resolution survives a respawn (#1870, closes #1857)
+### A13 · Device-pin resolution survives a respawn (#1870, closes #1857)
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:829-842` — the four on-box bullets. Re-resolved: PR #1870 merged 2026-07-27T01:53:26Z; #1857 closed 2026-07-27T01:53:27Z; `server/src/tts/sidecar-env.test.ts` exists (unit-level only). The behaviour no CI test can reach is a respawn after the device index actually changes.
 
