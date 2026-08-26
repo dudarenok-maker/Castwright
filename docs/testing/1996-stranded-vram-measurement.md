@@ -179,17 +179,18 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
 
 Run: 2026-08-26, this box (`cuda:0` RTX 4070 Laptop 8188 MB, `cuda:1` RTX 5070 Ti
 16303 MB). Book: *The Coalfall Commission*, Chapter 3 ("Chapter One — The Knock",
-41 lines), re-rendered with `force:true` on `qwen3-tts-0.6b`. Both GPUs were idle
-(0 MiB used, 0% util) before the run started.
+41 lines), re-rendered with `force:true` on `qwen3-tts-0.6b`. During the session,
+Qwen 1.7B-Base also loaded and ran. Both GPUs were idle (0 MiB used, 0% util) before
+the run started.
 
 | Point | When | time to idle | Device | reserved bytes | allocated bytes | inactive_split bytes | reserved − allocated | nvidia-smi used | RSS MB | inflight_synth | Engines loaded | reclaimed |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | P0 | fresh, 07:53:44 | | cuda:1 | 0 | 0 | 0 | 0 | 197 MiB | 1143.0 | n/a — pre-fix run | none | |
 | P1 | mid-render, 07:54:32 (~8 s in) | | cuda:1 | 1,881,145,344 (1794.4 MB) | 1,863,124,480 (1776.7 MB) | 13,826,560 (13.2 MB) | 17,975,296 (17.1 MB) | 2051 MiB | 3965.9 | n/a — pre-fix run | qwen base | |
-| P2 | +0 s, 07:58:36 | | cuda:1 | 6,138,363,904 (5853.4 MB) | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | 6489 MiB | 19914.2 | n/a — pre-fix run | qwen base, whisper | |
-| P3 | confirmed idle, 07:58:57 | **21 s** | cuda:1 | 6,138,363,904 (5853.4 MB) — **identical to P2** | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | 6489 MiB | 19799.1 | n/a — pre-fix run | qwen base, whisper | |
-| P4 before | reclaim, 07:58:58 | | cuda:1 | 6,138,363,904 (5853.4 MB) | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | | | n/a — pre-fix run | | true |
-| P4 after | reclaim, 07:58:58 | | cuda:1 | 5,748,293,632 (5481.4 MB) | 5,717,628,928 (5453.7 MB) — **unchanged** | 30,664,704 (29.25 MB) — **unchanged** | 30,664,704 (29.25 MB) | | | n/a — pre-fix run | | true |
+| P2 | +0 s, 07:58:36 | | cuda:1 | 6,138,363,904 (5853.4 MB) | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | 6489 MiB | 19914.2 | n/a — pre-fix run | qwen base, qwen 1.7b-base *(from logs)*, whisper | |
+| P3 | confirmed idle, 07:58:57 | **21 s** | cuda:1 | 6,138,363,904 (5853.4 MB) — **identical to P2** | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | 6489 MiB | 19799.1 | n/a — pre-fix run | qwen base, qwen 1.7b-base *(from logs)*, whisper | |
+| P4 before | reclaim, 07:58:58 | | cuda:1 | 6,138,363,904 (5853.4 MB) | 5,717,628,928 (5453.7 MB) | 30,664,704 (29.25 MB) | 420,734,976 (401.3 MB) | | | n/a — pre-fix run | qwen base, qwen 1.7b-base *(from logs)*, whisper | true |
+| P4 after | reclaim, 07:58:58 | | cuda:1 | 5,748,293,632 (5481.4 MB) | 5,717,628,928 (5453.7 MB) — **unchanged** | 30,664,704 (29.25 MB) — **unchanged** | 30,664,704 (29.25 MB) | | | n/a — pre-fix run | qwen base, qwen 1.7b-base *(from logs)*, whisper | true |
 | P5 | cuda:1 render, throughout P1–P4 | | cuda:0 | 2,097,152 (2.0 MB, unchanged pre/post) | ≈0 | ≈2.0 MB | | 0–116 MiB (baseline noise) | | n/a — pre-fix run | | |
 
 Reclaim delta on `cuda:1`: `reserved` dropped 390,070,272 B (**372.0 MB, 6.4% of
