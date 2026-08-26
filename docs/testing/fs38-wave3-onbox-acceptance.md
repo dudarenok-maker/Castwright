@@ -3047,7 +3047,7 @@ render-integrity gate now rebuilds a character's persisted `audition` centroid
 reference when its voice is reassigned, so correct new-voice lines are no
 longer falsely scored `voice-mismatch`/`severity: severe` against the old
 speaker's stale reference. A23's final sub-check ("no `voice-mismatch` rows")
-is therefore re-runnable — register row **A42** records that owed run.
+is therefore re-runnable — register row **A35** records that owed run.
 
 **DEF-F · HIGH · #1972 · open · invalidates three run-2 results**
 **What:** a per-character re-record (splice) picks its target segments from the

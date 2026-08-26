@@ -1,7 +1,7 @@
-# On-box sitting pack — cloning + character-identity (A23, A25, A28, A29, A30, A39, A40, A41, A42)
+# On-box sitting pack — cloning + character-identity (A17, A19, A22, A23, A24, A32, A33, A34, A35)
 
 > **Sitting pack** for wave 2 of `#2435`, step 6 of the `#2453` chain. Covers
-> register rows **A23, A25, A28, A29, A30, A39, A40, A41, A42** —
+> register rows **A17, A19, A22, A23, A24, A32, A33, A34, A35** —
 > clone-derive, clone-readiness, `characterId` drift and resolution, Russian
 > XTTS quality, entity decode, and the audition-centroid fix. Follows the
 > shared format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5;
@@ -93,7 +93,7 @@ ride the same Qwen residency, the engine swaps once into Coqui/XTTS for the
 two Russian/Coqui-derive rows, and the disruptive sidecar-kill row (A41) runs
 last, alone, since it deliberately crashes the sidecar twice.
 
-### A28 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md))
+### A22 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md))
 
 > **Criteria source:** [`clone-readiness-gate-onbox-acceptance.md`](clone-readiness-gate-onbox-acceptance.md)
 > §§3–6 — cited, not restated. Re-resolved 2026-08-20: `gh issue view 1980` →
@@ -119,9 +119,9 @@ last, alone, since it deliberately crashes the sidecar twice.
 4. Run §6 (control — switch back to Coqui, confirm **no gate** fires).
    - Result:
 
-### A23 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
+### A17 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
-> **Criteria source:** `onbox-acceptance-register.md` A23 (plan 275
+> **Criteria source:** `onbox-acceptance-register.md` A17 (plan 275
 > §"On-box acceptance"). Re-resolved 2026-08-20: `gh issue view 1951` →
 > closed 2026-07-30T04:26:44Z; `gh issue view 1972` → closed
 > 2026-07-31T09:45:45Z (fixed by PR #1992, "refuse a splice when the render
@@ -161,7 +161,7 @@ last, alone, since it deliberately crashes the sidecar twice.
    render, not something to engineer.
    - Result:
 
-### A42 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)
+### A35 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)
 
 > **Criteria source:** `onbox-acceptance-register.md` A42. Re-resolved
 > 2026-08-20: `gh pr view 2402` → merged 2026-08-16T03:56:05Z, title matches.
@@ -183,14 +183,14 @@ last, alone, since it deliberately crashes the sidecar twice.
     reused against the old speaker's.
     - Result:
 
-### A29 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040))
+### A23 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040))
 
 > **Criteria source:** [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
 > §§3–5 — cited, not restated. Re-resolved 2026-08-20: `gh issue view 2040` →
 > closed 2026-08-04T17:40:01Z, matches. The run sheet's §§3–6 `Result:` lines
 > are all still unfilled blanks. §9 of that same run sheet (dated
 > 2026-08-11) re-rendered a **different** book (*Заказ Коалфолла*, for the
-> since-discharged A45 audio-currency row) — it does not touch *Playing with
+> since-discharged A37 audio-currency row) — it does not touch *Playing with
 > Fire* ch19/ch16, the fixture this row names. STILL OWED. No clone needed —
 > switch the cast target to the *Playing with Fire* workspace book
 > (Preconditions) while Qwen stays resident.
@@ -206,7 +206,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     no longer named; `pool-player-2` still named).
     - Result:
 
-### A30 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
+### A24 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
 
 > **Criteria source:** [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
 > §8.7 — cited, not restated. **Added 2026-08-20**, wave-3 step 9, per
@@ -225,7 +225,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     the criterion, not just the JSON.
     - Result:
 
-### A40 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
+### A33 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
 
 > **Criteria source:** `onbox-acceptance-register.md` A40. Re-resolved
 > 2026-08-20: `gh issue view 2310` → closed 2026-08-13T04:25:10Z; `gh pr view
@@ -250,7 +250,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     analyzer chain, not a gate on this fix.
     - Result:
 
-### A39 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050)
+### A32 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050)
 
 > **Criteria source:** [`fs38-wave3-onbox-acceptance.md`](fs38-wave3-onbox-acceptance.md)
 > `#2026 — additional acceptance criteria: Russian XTTS quality` section
@@ -277,7 +277,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     reproduces on `main`; this is a baseline record, not a sign-off).
     - Result:
 
-### A25 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967))
+### A19 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967))
 
 > **Criteria source:** `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`
 > §12; `onbox-acceptance-register.md` A25 items 1–4. Re-resolved 2026-08-20:
@@ -296,7 +296,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     and confirm the rendered output is equivalent by ear.
     - Result:
 
-### A41 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
+### A34 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
 
 > **Criteria source:** `onbox-acceptance-register.md` A41 — full scenario
 > text already spelled out there (`:2473-2496`), cited not restated except

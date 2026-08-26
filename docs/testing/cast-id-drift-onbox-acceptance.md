@@ -8,10 +8,10 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A29](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A30](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A45](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
+> Register rows: [`onbox-acceptance-register.md` A23](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A24](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A37](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
 and A45 (2026-08-11); neither is in the register any more, and §7 and §9
-below are their records. Do not follow B3 to whatever now sits at that
-position — Group B renumbered and today's B2 is an unrelated #2246 row.**
+below are their records. Do not follow B3 or A45 to whatever now sits at
+those positions — both groups renumbered since.**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -286,7 +286,7 @@ discharged on 2026-08-21 and no longer exists. An id that happens to match this 
 
 ## 8. Wave 3 — the repair pass's `--apply` run
 
-> Register row: [`onbox-acceptance-register.md` A30](onbox-acceptance-register.md)
+> Register row: [`onbox-acceptance-register.md` A24](onbox-acceptance-register.md)
 
 ### 8.1 Purpose & scope
 
@@ -513,7 +513,7 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
    report-only ids are unchanged from §8.1 — proving the write was durable,
    not merely printed once.
 
-Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A30 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A24 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
 **#2107 fix (`fix/scripts-2107-rerender-rows`), then WIDENED by an independent
 review + owner decision:** `collectSegmentOrphans`'s resolver reads
@@ -656,7 +656,7 @@ explicitly, so this fix protects a future/test caller, not today's run.
 Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
 now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
 
-Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A30 stays open for this and §8.8.
+Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A24 stays open for this and §8.8.
 
 12. **Listen.** Confirm both characters' lines are audibly distinct from the
     narrator, not merely a different id in the JSON.
@@ -715,7 +715,7 @@ copied into this pass's throwaway workspace). Full evidence:
   write decision. Also verified: books with unreadable bak evidence **0**,
   books withheld for missing bak evidence **0** (#2135's gap not live on
   this workspace today), books scanned **20** (no drops from #2097's new
-  `collectBooks` accounting either). See register row A30 for the full
+  `collectBooks` accounting either). See register row A24 for the full
   writeup, including round 2's five smaller fixes (`collectBooks`
   `Array.isArray` shape check, its `readdirSync` guard, the same shape
   guard in `collectBakNameEntries`, `planApplyRefusal`'s absent-field
@@ -732,11 +732,11 @@ copied into this pass's throwaway workspace). Full evidence:
   today** — none of the 20 books are mid-import — a fresh dry run reports
   figures identical to step 9e: re-render **23 rows / 188 segments**,
   auto-recordable **2 aliases / 68 segments**, report-only **91 ids / 93
-  segments**, skipped **3**, books scanned **20**. See register row A30's
+  segments**, skipped **3**, books scanned **20**. See register row A24's
   round-3 correction for the full writeup.
 - [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace; #2097's own discriminator itself misclassified an ordinary mid-import book and needed a round-3 correction, see step 9f), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, then relocated at round 2 after review found the original fix couldn't fire in CI), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed at round 1, found BACKWARDS by round 2 review, corrected to an annotation** — see steps 9d/9e)
 
-Record what was observed, by whom, and when — here and in register row A30.
+Record what was observed, by whom, and when — here and in register row A24.
 This is the first time the repair pass has ever written to the real
 workspace; if anything here diverges from the dry-run numbers in §8.1, stop
 and investigate before treating the run as clean — do not paper over a
@@ -894,7 +894,7 @@ silently produce a confident wrong answer rather than an error:
 
 ## 10. #2584 fix (PR #2640) — wrong-direction retirement, code-level fix
 
-> Register row: A45 (Group A) in
+> Register row: A37 (Group A) in
 > [`onbox-acceptance-register.md`](onbox-acceptance-register.md).
 
 ### 10.1 Purpose & scope
@@ -919,7 +919,7 @@ The real, live-corrupted book: *Заказ Коалфолла* at `C:\AudiobookW
 1. The character's `cast.json` id comes back as `oduvan` (ASCII), not `одуван` (Cyrillic).
 2. If the id changed at the raw-analyzer-output layer, it is recorded in `cast-id-history.json`'s `supersededBy` map with the **correct direction** (fresh → established).
 
-This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A45 stays open until it runs.
+This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A37 stays open until it runs.
 
 ### 10.3 Code-level proof (PR #2640, shipped)
 
@@ -929,6 +929,6 @@ This is the exact real reproduction this issue was filed from, still live on thi
 - `remap-fresh-to-prior.test.ts` (in `server/src/store/`, not `merge-analysis-cast.test.ts`) still separately proves the exact-name matcher itself handles the simple case unaided — a baseline, not the whole proof, since it doesn't exercise the real collision that made the matcher's own "already converged" guard skip.
 - `merge-analysis-cast.test.ts`'s F2 regression (reserved fold-bucket id never a name-fallback survivor via `mergeCore`) is untouched and still passes, since `mergeCore` itself is untouched by this fix.
 - The narrowly-scoped bolt-on from attempt 1 (`mergeCore` in `server/src/store/merge-analysis-cast.ts`) was introduced and reverted within this same PR's history (commits `90032fd6` then `2bd7b6ef`) — not, as an earlier draft of this section claimed, part of PR #2633's merge commit.
-- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (see the register's A45 entry for the same finding).
+- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (see the register's A37 entry for the same finding).
 
 Defects NOT filed: none. The fix is narrowly scoped (one function's gating condition changed, four call sites re-plumbed to pass the fresh roster instead of a tier-membership set) and passes the full server test suite, including `analysis.test.ts`'s 222 tests.

@@ -1,7 +1,7 @@
-# On-box sitting pack — multi-language render + ASR content-QA (D1, D2, A35, E4)
+# On-box sitting pack — multi-language render + ASR content-QA (D1, D2, A28, E4)
 
 > **Sitting pack** for wave 2 of `#2435`, step 7 of the `#2453` chain. Covers
-> register rows **D1, D2, A35, E4** — non-English ASR content-QA calibration,
+> register rows **D1, D2, A28, E4** — non-English ASR content-QA calibration,
 > zh/ja placeholder voice design, sidecar auto-scaled RAM/VRAM recycle
 > thresholds, and the engine-recommendation CPU caveat. Follows the shared
 > format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the
@@ -64,9 +64,9 @@ render on the same process** — E4 targets the CPU device explicitly and does
 not contend for VRAM, but starting it only after D1 is safely queued avoids
 two renders racing to write the same `render-integrity` state.
 
-### A35 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install ([#2179](https://github.com/dudarenok-maker/Castwright/issues/2179), PR [#2210](https://github.com/dudarenok-maker/Castwright/pull/2210))
+### A28 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install ([#2179](https://github.com/dudarenok-maker/Castwright/issues/2179), PR [#2210](https://github.com/dudarenok-maker/Castwright/pull/2210))
 
-> **Criteria source:** `onbox-acceptance-register.md` A35 (`:2169-2209`).
+> **Criteria source:** `onbox-acceptance-register.md` A28 (`:2169-2209`).
 > Re-resolved 2026-08-20: `gh issue view 2179` → closed 2026-08-07T01:52:50Z;
 > `gh pr view 2210` → merged 2026-08-07T01:52:49Z, title "fix(server): ship
 > .env.example as documentation, not assignments" — the fix landed.
