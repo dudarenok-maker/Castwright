@@ -50,7 +50,8 @@ Run this at each capture point and paste the output into the table below.
 ```powershell
 $ts = (Get-Date).ToString('HH:mm:ss')
 $mem = Invoke-RestMethod http://127.0.0.1:9000/debug/memory
-"$ts  rss=$($mem.process.rss_mb)MB  inflight_synth=$($mem.inflight_synth)"
+$health = Invoke-RestMethod http://127.0.0.1:9000/health
+"$ts  rss=$($mem.process.rss_mb)MB  inflight_synth=$($mem.inflight_synth)  qwen_base17_loaded=$($health.qwen_base17_loaded)"
 $mem.memory_stats | ConvertTo-Json -Depth 4
 $mem.engines | ConvertTo-Json -Depth 3
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader
@@ -92,7 +93,7 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
    seconds, the idle window is likely clean (only genuine background activity
    that was already running, if anything). A gate that takes 120 seconds or
    longer to clear suggests the box was actively working during what should
-   have been an idle window — consult the `logs/server.log` grep (next section)
+   have been an idle window — consult the `logs/tts.log` grep (next section)
    to name what was running. This 120 s threshold is separate from the 8 s
    quiet-streak requirement above and the 10-minute ceiling; it is a judgment
    call for how long an otherwise-successful idle-gate wait is "suspiciously
@@ -229,7 +230,7 @@ Real forensic evidence from `logs/tts.err.log` for this specific run: Whisper `s
 | Strand absent at P3 | Self-heals at the existing TTLs. #1996 criterion 1 is already satisfied on `main`. |
 | P4 `reserved` drops sharply | **Uncollected cache.** A scheduled reclaim is the fix — subject to every constraint in §7 of the design. |
 | P4 `reserved` barely moves, `inactive_split` dominates, `reclaimed: true` | **Fragmentation.** `empty_cache()` cannot fix this at any cadence; re-open the recycle threshold instead. |
-| Idle gate took >120 s to clear | **Contaminated idle.** Legitimate background activity was still running; name it from the `logs/server.log` grep above. **Do not treat the resulting P3/P4 readings as evidence about a stranded pool at all.** |
+| Idle gate took >120 s to clear | **Contaminated idle.** Legitimate background activity was still running; name it from the `logs/tts.log` grep above. **Do not treat the resulting P3/P4 readings as evidence about a stranded pool at all.** |
 | P4 `reserved` barely moves, `reclaimed: false` | **Invalid reading.** The reclaim never ran — CUDA was unavailable or `empty_cache()` threw. Retry once; treat repeated `false` as a separate finding (a live-context problem), not a #1996 answer. |
 | Strand present at P3 *and* P4 frees it *and* RSS was above 8192 MB at P2 | Contradicts the 60 s watchdog reclaim having run. Investigate that before designing anything — one of the two observations is wrong. |
 
@@ -237,9 +238,9 @@ Real forensic evidence from `logs/tts.err.log` for this specific run: Whisper `s
 
 This run fits the **"contaminated idle"** row: the idle-gate signal and the attribution verification both relied on broken instruments that are now known to have been blind to the actual work running.
 
-**The contamination:** Whisper ASR was transcribing continuously during what the old idle gate declared "confirmed idle" (07:58:49–07:58:57 vs actual Whisper activity 07:58:31–51.768). The old idle gate could not see this because it tracked only `inflight_synth`, not `/transcribe` or `/embed` (fixed in commit d4aa7a6c). The attribution grep checked the wrong log file (`logs/server.log` instead of `logs/tts.log`, fixed in commit 36091ef2). By the decision tree's logic: "Legitimate background activity was still running; name it from the `logs/server.log` grep above. **Do not treat the resulting P3/P4 readings as evidence about a stranded pool at all.**"
+**The contamination:** Whisper ASR was transcribing continuously during what the old idle gate declared "confirmed idle" (07:58:49–07:58:57 vs actual Whisper activity 07:58:31–51.768). The old idle gate could not see this because it tracked only `inflight_synth`, not `/transcribe` or `/embed` (fixed in commit d4aa7a6c). The attribution grep checked the wrong log file (`logs/server.log` instead of `logs/tts.log`, fixed in commit 36091ef2). Legitimate background activity (Whisper) was still running during the supposed idle window — **do not treat the resulting P3/P4 readings as evidence about a stranded pool at all.**
 
-**The misattribution:** The run loaded three resident models — Qwen Base 0.6B (no TTL), Whisper (120s TTL), and Qwen 1.7B-Base (120s TTL) — but the `/debug/memory` endpoint at the time of this run could not represent the 1.7B model (missing the `base17_loaded` key, added retroactively in commit 42dddeb8). The ~3.3 GB gap between P1's `allocated` (1776.7 MB) and P2's `allocated` (5453.7 MB) is plausibly the Qwen 1.7B-Base model loading during session rather than something inexplicable. The 1.7B model's 120s idle TTL means P3 (21 s post-P2) would not have evicted it even if the idle window had been clean — which it was not.
+**The misattribution:** The run loaded three resident models — Qwen Base 0.6B (no TTL), Whisper (120s TTL), and Qwen 1.7B-Base (120s TTL) — but the `/debug/memory` endpoint at the time of this run could not represent the 1.7B model (missing the `base17_loaded` key, added retroactively in commit 42dddeb8). The 3677.0 MB gap between P1's `allocated` (1776.7 MB) and P2's `allocated` (5453.7 MB) is the Qwen 1.7B-Base model loading during the run. Log evidence from `logs/tts.err.log` confirms: `07:57:58.112 Qwen 1.7B-Base loaded.` and `07:58:29.275 qwen batch synth: model=1.7b items=7 voices=3`. At the time this run was captured, `/debug/memory` could not track the 1.7B model's residency — but `/health` has exposed a `qwen_base17_loaded` field since well before this branch (main.py:~9645, consumed by `server/src/routes/sidecar-health.ts:~458`). The real issue is that the capture snippet in step "The capture" only calls `/debug/memory`, never `/health`, so a signal that was already available went unrecorded. The 1.7B model's 120s idle TTL means P3 (21 s post-P2) would not have evicted it even if the idle window had been clean — which it was not.
 
 **Conclusion:** This run does NOT provide trustworthy evidence. Its P3/P4 readings show a contaminated-idle state with unattributable residency, not a measurement of a stranded pool. It does not close #1996's criterion 1 (and does not discharge the acceptance row already owed).
 
