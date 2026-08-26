@@ -9769,6 +9769,7 @@ def debug_memory() -> dict[str, Any]:
         engines["qwen"] = {
             "base_loaded": qwen._base is not None,
             "design_loaded": qwen._design is not None,
+            "base17_loaded": qwen._base17 is not None,
             "prompt_cache_entries": prompt_cache_entries,
         }
     coqui = ENGINES.get("coqui")

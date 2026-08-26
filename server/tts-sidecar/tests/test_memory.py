@@ -545,11 +545,12 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     assert body["process"]["committed_mb"] > 0
     assert "gc" in body and "counts" in body["gc"]
     assert "engines" in body
-    # Qwen is registered and cold here: base/design not loaded, cache empty.
+    # Qwen is registered and cold here: base/design/base17 not loaded, cache empty.
     qwen = body["engines"].get("qwen")
     assert qwen is not None
     assert qwen["base_loaded"] is False
     assert qwen["design_loaded"] is False
+    assert qwen["base17_loaded"] is False
     assert qwen["prompt_cache_entries"] == 0
     assert "cuda" in body
     # side-11 leak attribution: on a CUDA box whose torch has the pinned-host
