@@ -20,6 +20,14 @@
   Deliberately NOT a complete HTML document: the publisher wraps the file in its
   own <!doctype html><head></head><body> skeleton, so a doctype/<html>/<head>/
   <body> here would nest. Browsers still render it standalone for local preview.
+
+  Publish loop that won't clear ("not viewed" -> view fully -> "identical,
+  already refused", repeating)? Do NOT retry harder and do NOT reach for
+  force:true. That loop is what it looks like from inside the publish tool
+  when another worktree is ACTIVELY publishing this same canonical URL right
+  now -- see "Live view" -> "A live version of this same limitation" in
+  onbox-acceptance-register.md for the diagnosis and the fix (find the other
+  lane, let it land, resync, republish -- never force over it).
 -->
 
 <title>On-box acceptance register — Castwright</title>
