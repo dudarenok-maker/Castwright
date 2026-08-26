@@ -8357,11 +8357,11 @@ _restart_scheduled = False
 # recycle is scheduled; while it's set, /synthesize + /synthesize-batch fast-fail
 # with a (non-poisoned) 503 so no NEW chapter enters the dying process and the
 # server's in-worker recovery rides out the respawn. `_inflight_synth` counts
-# live synth calls (incremented on the event loop around each to_thread offload);
-# the recycle drains it to 0 (bounded by SIDECAR_DRAIN_GRACE_MS) before exiting so
-# the in-flight chapter finishes here instead of failing. Both are read by the
-# drain thread — a plain int read is atomic under the GIL, eventual consistency
-# is all the drain needs.
+# live synth, transcribe, and embed calls (incremented on the event loop around
+# each to_thread offload); the recycle drains it to 0 (bounded by
+# SIDECAR_DRAIN_GRACE_MS) before exiting so the in-flight chapter finishes here
+# instead of failing. Both are read by the drain thread — a plain int read is
+# atomic under the GIL, eventual consistency is all the drain needs.
 _restart_pending = False
 _inflight_synth = 0
 # side-11 item 2 — SOFT recycle signal. Set True by the watchdog once committed
@@ -10016,6 +10016,7 @@ def health() -> dict[str, Any]:
         # `committed_mb` / `vram_reserved_mb` / `vram_total_mb` (may be None) give
         # the boundary decision observability without a separate /debug/memory hit.
         "recycle_pending": _recycle_pending,
+        "inflight_synth": _inflight_synth,
         "committed_mb": _process_commit_mb(),
         # CURRENT-DEVICE-ONLY (#1976) — `_cuda_vram_mb()` reads
         # `torch.cuda.current_device()`, not necessarily the render/recycle
@@ -10071,6 +10072,11 @@ def debug_memory() -> dict[str, Any]:
         "garbage": len(gc.garbage),
         "tracked_objects": len(gc.get_objects()),
     }
+    # #1996 — surface the pending-synth counter (process-wide, not engine-
+    # specific) so an idle probe can read a positive "nothing generating" signal
+    # instead of inferring it from a fixed wall-clock wait. Same plain GIL-safe
+    # int read the drain-before-recycle path already does.
+    out["inflight_synth"] = _inflight_synth
     engines: dict[str, Any] = {}
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
@@ -10079,6 +10085,7 @@ def debug_memory() -> dict[str, Any]:
         engines["qwen"] = {
             "base_loaded": qwen._base is not None,
             "design_loaded": qwen._design is not None,
+            "base17_loaded": qwen._base17 is not None,
             "prompt_cache_entries": prompt_cache_entries,
         }
     coqui = ENGINES.get("coqui")
@@ -11312,6 +11319,8 @@ async def transcribe(req: Request) -> Response:
     language = req.headers.get("X-Language") or None
     word_timestamps = req.headers.get("X-Word-Timestamps") is not None
 
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Capacity-aware placement (task 4, vram-aware-placement plan): only
         # when ASR is GPU-configured (ASR_DEVICE=cuda/rocm) — the cpu-default
@@ -11347,6 +11356,8 @@ async def transcribe(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-31: clears the recycle drain regardless of outcome
     return JSONResponse(result)
 
 
@@ -11386,6 +11397,8 @@ async def embed(req: Request) -> Response:
     if sample_rate <= 0:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
 
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Capacity-aware placement (task 4, vram-aware-placement plan): only
         # when SPK is GPU-configured (SPK_DEVICE=cuda/rocm) — the cpu-default
@@ -11415,6 +11428,8 @@ async def embed(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-36: clears the recycle drain regardless of outcome
     return JSONResponse({"embedding": embedding, "dim": len(embedding), "sample_rate": SPK.TARGET_SR})
 
 

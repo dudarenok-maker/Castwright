@@ -545,11 +545,12 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     assert body["process"]["committed_mb"] > 0
     assert "gc" in body and "counts" in body["gc"]
     assert "engines" in body
-    # Qwen is registered and cold here: base/design not loaded, cache empty.
+    # Qwen is registered and cold here: base/design/base17 not loaded, cache empty.
     qwen = body["engines"].get("qwen")
     assert qwen is not None
     assert qwen["base_loaded"] is False
     assert qwen["design_loaded"] is False
+    assert qwen["base17_loaded"] is False
     assert qwen["prompt_cache_entries"] == 0
     assert "cuda" in body
     # side-11 leak attribution: on a CUDA box whose torch has the pinned-host
@@ -1272,3 +1273,104 @@ def test_health_exposes_qwen_design_ever_loaded(monkeypatch):
     with TestClient(main.app) as client:
         body = client.get("/health").json()
     assert body["qwen_design_ever_loaded"] is True  # after a design load
+
+
+def test_debug_memory_includes_inflight_synth_top_level_key(monkeypatch):
+    """/debug/memory must expose `inflight_synth` as a top-level key (sibling to
+    `process`, `gc`, `engines`, `cuda`) so an idle-measurement probe can read the
+    in-flight counter. This test pins the structure at rest (zero value) and
+    verifies it's present. Regression test for PR #2655 review finding: the key
+    existed but was untested, so a silent regression would have passed all tests."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+
+    with TestClient(main.app) as client:
+        # At rest: call /debug/memory and verify inflight_synth is 0.
+        r = client.get("/debug/memory")
+        assert r.status_code == 200
+        body = r.json()
+
+        # Verify inflight_synth is a top-level key (not nested under engines or anything else).
+        assert "inflight_synth" in body, (
+            "inflight_synth field missing from /debug/memory at rest. "
+            "It must be a top-level key sibling to process/gc/engines/cuda."
+        )
+        # At rest, nothing is generating, so the counter must be 0.
+        assert body["inflight_synth"] == 0, (
+            f"inflight_synth should be 0 at rest, got {body['inflight_synth']}"
+        )
+
+
+def test_debug_memory_inflight_synth_tracks_busy_synth(monkeypatch):
+    """/debug/memory's `inflight_synth` key must track a real busy/idle transition,
+    not just exist as a placeholder. While a synthesize call is in flight,
+    inflight_synth > 0; once it finishes, back to 0. Regression test for PR #2655
+    review finding: the key could have been silently removed without this test
+    catching it."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    # Use CoquiEngine (not Qwen) to avoid requiring real weights; test_smoke uses
+    # the same pattern with a fake engine.
+    engine = main.CoquiEngine()
+    monkeypatch.setitem(main.ENGINES, "coqui", engine)
+
+    # Stub synthesize to sleep so we have time to probe while it's in flight.
+    slow_sleep_sec = 0.5
+    original_synthesize = engine.synthesize
+
+    def fake_slow_synthesize(model, voice, text, language=None):
+        time.sleep(slow_sleep_sec)
+        return main.SynthResult(pcm=b"\x00\x00", sample_rate=24000)
+
+    engine.synthesize = fake_slow_synthesize
+
+    try:
+        with TestClient(main.app) as client:
+            # Start a slow synthesize in a background thread.
+            synth_thread = threading.Thread(
+                target=lambda: client.post(
+                    "/synthesize",
+                    json={
+                        "engine": "coqui",
+                        "model": "xtts_v2",
+                        "voice": "Narrator",
+                        "text": "Hello.",
+                    },
+                ),
+                daemon=True,
+            )
+            synth_thread.start()
+            # Tiny grace so synthesize is actually running when we probe.
+            time.sleep(0.05)
+
+            # Mid-synth: /debug/memory must show inflight_synth > 0.
+            r_busy = client.get("/debug/memory")
+            assert r_busy.status_code == 200, "debug/memory failed while synth was running"
+            body_busy = r_busy.json()
+            assert "inflight_synth" in body_busy, (
+                "inflight_synth missing from /debug/memory during busy synth"
+            )
+            inflight_busy = body_busy["inflight_synth"]
+            assert inflight_busy > 0, (
+                f"inflight_synth should be > 0 during synthesize, got {inflight_busy}. "
+                "Did /synthesize stop incrementing _inflight_synth?"
+            )
+
+            # Wait for synth to finish.
+            synth_thread.join(timeout=5.0)
+            assert not synth_thread.is_alive(), "synth thread never finished"
+
+            # After synth: /debug/memory must show inflight_synth == 0.
+            r_idle = client.get("/debug/memory")
+            assert r_idle.status_code == 200, "debug/memory failed after synth completed"
+            body_idle = r_idle.json()
+            assert "inflight_synth" in body_idle, (
+                "inflight_synth missing from /debug/memory after synth"
+            )
+            inflight_idle = body_idle["inflight_synth"]
+            assert inflight_idle == 0, (
+                f"inflight_synth should be 0 after synth completes, got {inflight_idle}. "
+                "Did the finally-block decrement fail?"
+            )
+    finally:
+        # Restore original synthesize.
+        engine.synthesize = original_synthesize
