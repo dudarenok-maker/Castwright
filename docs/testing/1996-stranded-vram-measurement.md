@@ -112,29 +112,31 @@ Record, per device: `reserved`, `allocated`, `inactive_split`, and
    > self-heals on `main` today (decision-tree row 1). Record it and stop; do
    > not retry until a strand appears.
 
-   **What was active during the wait.** Before moving to P3/P4, grep
-   `logs/server.log` for every request timestamped between the P2 capture and
-   the confirmed-idle point. List each one (route + any chapter/job id in the
-   log line) in a new **"What was active during the wait"** subsection of the
-   results. This closes the attribution gap the Aug 23 run left open — a burst
-   of unexplained post-render Qwen activity could not be attributed to a caller
-   because `npm run dev` did not write to `logs/server.log`.
+   **What was active during the wait.** The sidecar's `/health` endpoint with `inflight_synth` tracking (step 4 above — five consecutive zero polls = 10 s confirmed idle) is your PRIMARY signal for genuine idle. As a secondary corroboration and attribution step, grep the sidecar's access log (`logs/tts.log`, from uvicorn) for any requests during the wait window to confirm the window was clean or name what ran.
+
+   The sidecar access log has no per-line timestamps, so use a line-count-diff to extract the appended lines: capture the line count of `logs\tts.log` at P2, capture it again at the confirmed-idle point, and extract the lines in between. If all appended lines are `/health`, `/capacity`, `/speakers`, or `/debug/memory` polling (harmless self-polling from the run sheet's own idle-gate and capture steps), the window is clean. If a `/synthesize`, `/transcribe`, or `/embed` line appears, name it — that's the confound the decision tree's fourth row keys on.
+
+   At P2, after capturing the memory figures, save the line count:
 
    ```powershell
-   $idleTime = Get-Date
-   Select-String -Path logs\server.log -Pattern 'GET |POST |PUT |PATCH |DELETE ' |
-     ForEach-Object {
-       $line = $_.Line
-       if ($line -match '(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})') {
-         $ts = [datetime]::Parse($matches[1])
-         if ($ts -ge $captureP2Time -and $ts -le $idleTime) { $line }
-       }
-     }
+   $ttsLogCountAtP2 = (Get-Content logs\tts.log -ErrorAction Stop).Count
+   if ($null -eq $ttsLogCountAtP2) { $ttsLogCountAtP2 = 0 }  # empty log
+   "Line count at P2: $ttsLogCountAtP2"
    ```
 
-   If the grep returns nothing, the idle window was genuinely clean. If it
-   returns entries, name them in the results — the decision tree's fourth row
-   uses this to tell a contaminated idle from a real strand.
+   Then, once the idle gate clears and you're about to capture P3, get the current line count and print the appended lines:
+
+   ```powershell
+   $ttsLogCountAtIdle = (Get-Content logs\tts.log -ErrorAction Stop).Count
+   if ($null -eq $ttsLogCountAtIdle) { $ttsLogCountAtIdle = 0 }
+   $appendedCount = $ttsLogCountAtIdle - $ttsLogCountAtP2
+   "Appended lines during wait: $appendedCount"
+   if ($appendedCount -gt 0) {
+     Get-Content logs\tts.log -Tail $appendedCount
+   }
+   ```
+
+   If the output shows no appended lines, or only `/health`/`/capacity`/`/speakers`/`/debug/memory` noise, record that the idle window was clean. If it shows `/synthesize`, `/transcribe`, or `/embed`, list those in the results as evidence of what was active during the wait.
 
 5. **The bare reclaim.** With the box still idle, one request:
 
