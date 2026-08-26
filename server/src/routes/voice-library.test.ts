@@ -1084,6 +1084,36 @@ describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, De
       baseModel: 'an-old-base-model',
     });
   });
+
+  /* #2068 item 4 (fs-38) — pinning an intentional ASYMMETRY, not an oversight.
+     The sibling PATCH handler above ("rejects `transcript` on a cloned entry
+     with no master clip with 409") guards on `provenance === 'cloned'` before
+     it will touch `master`/`sampleTranscript`. This route has NO equivalent
+     guard: it deletes a `failed` engine slot for `provenance === 'cloned'`
+     exactly the same way it would for a `designed` entry (see the other
+     tests in this block, none of which check provenance at all). Plan 276's
+     Decision 7 (docs/features/archive/276-cast-time-derivability-warning.md)
+     never conditions slot deletion on provenance — it reasons purely from
+     slot status and the `classifyClonedVoice` precedence, and #2068's own
+     resolution keeps it that way: a designed voice's failed slot may be
+     cleared too, since that just lets the voice re-derive. Do NOT add a
+     provenance guard here to "match" the PATCH route — that would contradict
+     the decision this test pins. */
+  it('deletes a `failed` slot on a `provenance: cloned` entry with no provenance guard (plan 276 Decision 7)', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-cloned-no-guard-1', {
+        engines: { qwen: { status: 'failed', baseModel: 'old' } },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-cloned-no-guard-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.qwen).toBeUndefined();
+    const onDisk = await vl.readEntry('retry-cloned-no-guard-1');
+    expect(onDisk?.provenance).toBe('cloned');
+    expect('qwen' in (onDisk?.engines ?? {})).toBe(false);
+  });
 });
 
 describe('DELETE /api/voice-library/:voiceUuid', () => {
