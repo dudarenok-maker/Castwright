@@ -10,14 +10,16 @@
    the CONSUMER: given a verdict, does the modal render the right row, the
    right CTA, and nothing else. */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, within, cleanup, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { render, screen, fireEvent, within, cleanup, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { CloneReadinessGateModal } from './clone-readiness-gate';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { voiceLibrarySlice } from '../store/voice-library-slice';
+import { settingsSlice } from '../store/settings-slice';
+import { DEFAULT_AUTOSAVE_DEBOUNCE_MS } from '../store/settings-slice';
 import type { Character } from '../lib/types';
 import type { CloneCharacterVerdict } from '../store/clone-readiness-selectors';
 
@@ -51,12 +53,18 @@ function char(over: Partial<Character> & { id: string }): Character {
   return { name: over.id, role: 'r', color: 'narrator', lines: 0, ...over } as Character;
 }
 
-function makeStore(opts: { gate?: { bookId: string } | null; characters?: Character[] } = {}) {
+function makeStore(opts: { gate?: { bookId: string } | null; characters?: Character[]; autosaveDebounceMs?: number } = {}) {
+  const baseSettings = settingsSlice.getInitialState();
+  const settingsState = {
+    ...baseSettings,
+    autosaveDebounceMs: opts.autosaveDebounceMs ?? baseSettings.autosaveDebounceMs,
+  };
   return configureStore({
     reducer: {
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
       voiceLibrary: voiceLibrarySlice.reducer,
+      settings: settingsSlice.reducer,
     },
     preloadedState: {
       ui: {
@@ -66,6 +74,7 @@ function makeStore(opts: { gate?: { bookId: string } | null; characters?: Charac
       } as never,
       cast: { ...castSlice.getInitialState(), characters: opts.characters ?? [] },
       voiceLibrary: voiceLibrarySlice.getInitialState(),
+      settings: settingsState,
     },
   });
 }
@@ -314,56 +323,178 @@ describe('CloneReadinessGateModal', () => {
     ).toBe(false);
   });
 
-  it('Proceed anyway is disabled while cast-on-engine write is pending, preventing race', async () => {
-    mockVerdicts = [
-      verdict({
-        characterId: 'c1',
-        characterName: 'Alice',
-        reason: 'wrong-engine',
-        engine: 'qwen',
-        castOnEngine: 'coqui',
-      }),
-    ];
-    const store = makeStore({ characters: [char({ id: 'c1', ttsEngine: 'qwen' })] });
-    const dispatchSpy = vi.spyOn(store, 'dispatch');
-    render(
-      <Provider store={store}>
-        <CloneReadinessGateModal />
-      </Provider>,
-    );
+  describe('cast-pending gate mechanism (fs-38 / #2068)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
 
-    const castButton = screen.getByRole('button', { name: 'Cast on Coqui' });
-    const proceedButton = screen.getByRole('button', { name: 'Proceed anyway' });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    // Initially enabled
-    expect(proceedButton).not.toBeDisabled();
+    it('Proceed anyway is disabled while cast-on-engine write is pending, with DEFAULT debounce (500ms)', () => {
+      mockVerdicts = [
+        verdict({
+          characterId: 'c1',
+          characterName: 'Alice',
+          reason: 'wrong-engine',
+          engine: 'qwen',
+          castOnEngine: 'coqui',
+        }),
+      ];
+      const store = makeStore({
+        characters: [char({ id: 'c1', ttsEngine: 'qwen' })],
+        autosaveDebounceMs: DEFAULT_AUTOSAVE_DEBOUNCE_MS, // 500ms
+      });
+      const dispatchSpy = vi.spyOn(store, 'dispatch');
+      render(
+        <Provider store={store}>
+          <CloneReadinessGateModal />
+        </Provider>,
+      );
 
-    // Click Cast on engine – this should trigger pending state
-    fireEvent.click(castButton);
+      const castButton = screen.getByRole('button', { name: 'Cast on Coqui' });
+      const proceedButton = screen.getByRole('button', { name: 'Proceed anyway' });
 
-    // Button should immediately become disabled / show pending text
-    expect(proceedButton).toBeDisabled();
-    expect(proceedButton).toHaveTextContent('Waiting for cast save');
+      // Initially enabled
+      expect(proceedButton).not.toBeDisabled();
 
-    // Immediate second click should NOT dispatch requestStartGeneration
-    fireEvent.click(proceedButton);
-    expect(
-      dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
-    ).toBe(false);
+      // Click Cast on engine – this should trigger pending state
+      fireEvent.click(castButton);
 
-    // Wait for pending window to expire
-    await waitFor(
-      () => {
-        expect(proceedButton).not.toBeDisabled();
-        expect(proceedButton).toHaveTextContent('Proceed anyway');
-      },
-      { timeout: 800 },
-    );
+      // Button should immediately become disabled
+      expect(proceedButton).toBeDisabled();
+      expect(proceedButton).toHaveTextContent('Waiting for cast save');
 
-    // Now clicking should work
-    fireEvent.click(proceedButton);
-    expect(
-      dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
-    ).toBe(true);
+      // Immediate second click should NOT dispatch requestStartGeneration
+      fireEvent.click(proceedButton);
+      expect(
+        dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+      ).toBe(false);
+
+      // Advance time: at 500ms (debounce window), button should still be disabled
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(proceedButton).toBeDisabled();
+
+      // Advance time: at 600ms (debounce + 100ms buffer), button should be re-enabled
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(proceedButton).not.toBeDisabled();
+      expect(proceedButton).toHaveTextContent('Proceed anyway');
+
+      // Now clicking should work
+      fireEvent.click(proceedButton);
+      expect(
+        dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+      ).toBe(true);
+    });
+
+    it('Proceed anyway stays disabled long enough with NON-DEFAULT debounce (2000ms)', () => {
+      mockVerdicts = [
+        verdict({
+          characterId: 'c1',
+          characterName: 'Alice',
+          reason: 'wrong-engine',
+          engine: 'qwen',
+          castOnEngine: 'coqui',
+        }),
+      ];
+      const store = makeStore({
+        characters: [char({ id: 'c1', ttsEngine: 'qwen' })],
+        autosaveDebounceMs: 2000, // Non-default: 2000ms, 4× the old hardcoded buffer
+      });
+      const dispatchSpy = vi.spyOn(store, 'dispatch');
+      render(
+        <Provider store={store}>
+          <CloneReadinessGateModal />
+        </Provider>,
+      );
+
+      const castButton = screen.getByRole('button', { name: 'Cast on Coqui' });
+      const proceedButton = screen.getByRole('button', { name: 'Proceed anyway' });
+
+      // Initially enabled
+      expect(proceedButton).not.toBeDisabled();
+
+      // Click Cast on engine
+      fireEvent.click(castButton);
+      expect(proceedButton).toBeDisabled();
+
+      // At 1500ms (below debounce), still disabled
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+      expect(proceedButton).toBeDisabled();
+
+      // At 2000ms (debounce reached), still disabled (need the 100ms buffer)
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(proceedButton).toBeDisabled();
+
+      // At 2100ms (debounce + 100ms), finally enabled
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(proceedButton).not.toBeDisabled();
+
+      // Clicking now works
+      fireEvent.click(proceedButton);
+      expect(
+        dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+      ).toBe(true);
+    });
+
+    it('overlapping clicks clear prior timeout and restart the timer', () => {
+      mockVerdicts = [
+        verdict({
+          characterId: 'c1',
+          characterName: 'Alice',
+          reason: 'wrong-engine',
+          engine: 'qwen',
+          castOnEngine: 'coqui',
+        }),
+      ];
+      const store = makeStore({
+        characters: [char({ id: 'c1', ttsEngine: 'qwen' })],
+        autosaveDebounceMs: 500,
+      });
+      render(
+        <Provider store={store}>
+          <CloneReadinessGateModal />
+        </Provider>,
+      );
+
+      const castButton = screen.getByRole('button', { name: 'Cast on Coqui' });
+      const proceedButton = screen.getByRole('button', { name: 'Proceed anyway' });
+
+      // First click at t=0
+      fireEvent.click(castButton);
+      expect(proceedButton).toBeDisabled();
+
+      // Advance 300ms (partway through the debounce)
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(proceedButton).toBeDisabled();
+
+      // Second click at t=300ms — this should RESTART the timer
+      fireEvent.click(castButton);
+
+      // At t=700ms from start (400ms after second click), timer still pending
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(proceedButton).toBeDisabled();
+
+      // At t=900ms from start (600ms after second click = debounce + 100ms), finally enabled
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(proceedButton).not.toBeDisabled();
+    });
   });
 });
