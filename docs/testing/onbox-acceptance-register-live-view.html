@@ -190,7 +190,21 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-26 (<a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a>, successor to closed <a href="https://github.com/dudarenok-maker/Castwright/issues/1976">#1976</a>/<a href="https://github.com/dudarenok-maker/Castwright/issues/1996">#1996</a>), 68 → 69.</b>
+    <b>Last change: 2026-08-26 (PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2665">#2665</a>, following an independent review of <a href="https://github.com/dudarenok-maker/Castwright/pull/2655">#2655</a>), 69 → 69 (no count change).</b>
+    <b>A46</b>'s own text is corrected, not discharged: the 2026-08-25 run's
+    "two resident models" framing was wrong on two counts — its
+    <code>/debug/memory</code> instrument had no <code>base17_loaded</code> key,
+    so it could not see a third resident model, the Qwen 1.7B-Base (its own
+    120 s idle TTL); and its idle-gate poll (<code>_inflight_synth</code>) was
+    blind to <code>/transcribe</code>/<code>/embed</code>, so the
+    "confirmed-idle" 21 s window may have overlapped live ASR. Both bugs are
+    fixed on PR #2655 (commits <code>d4aa7a6c</code>, <code>42dddeb8</code>);
+    A46's re-run instructions now unload/wait-past-TTL for all three models,
+    not two.
+  </div>
+
+  <div class="callout warn">
+    <b>Prior change: 2026-08-26 (<a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a>, successor to closed <a href="https://github.com/dudarenok-maker/Castwright/issues/1976">#1976</a>/<a href="https://github.com/dudarenok-maker/Castwright/issues/1996">#1996</a>), 68 → 69.</b>
     New row <b>A46</b> added — the 2026-08-25 idle-gated VRAM measurement
     narrowed the "stranded" pool to look like the Qwen Base 0.6B + Whisper
     resident-model floor, but never captured <code>allocated</code> right
