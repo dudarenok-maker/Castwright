@@ -382,9 +382,14 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > (`server/src/audio/render-integrity/aggregate.ts`) rather than trusting the
 > output shape alone: before reassignment, `persisted` read
 > `referenceKind: "audition"` built from the OLD voice (`cleanMean≈0.873`,
-> `pSevere≈0.673`, `pBand≈0.737`). Ivo's reassigned voice is a cloned Coqui/XTTS
-> voice, so `snap.voiceEngine` is in `STOCHASTIC_ENGINES` (`aggregate.ts:91`) and
-> `voiceInfoByChar` is populated for him (`aggregate.ts:528-548`) — i.e.
+> `pSevere≈0.673`, `pBand≈0.737`). `voiceInfoByChar` population (`aggregate.ts:532`) requires all three of
+> `snap.voiceEngine` truthy, `snap.resolvedVoiceName` truthy, and
+> `STOCHASTIC_ENGINES.has(snap.voiceEngine)`. All three hold for Ivo: the
+> reassignment named a concrete cloned Coqui/XTTS voice, so his chapter-4
+> snapshot carries a resolved voice name (only omittable when no voice is
+> assigned at all, per `character-snapshots.ts:73` — not this case) on an
+> engine in `STOCHASTIC_ENGINES` (`aggregate.ts:91`). So `voiceInfoByChar`
+> was populated for him, i.e.
 > `voiceInfo` was non-null at this render, which rules out the early
 > `if (!voiceInfo) return { status: 'too-short', ... }` branch (`:262-263`) that
 > never attempts a rebuild. With `voiceInfo` non-null, `matchesCurrentVoice(persisted,

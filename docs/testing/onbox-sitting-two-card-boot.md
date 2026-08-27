@@ -17,7 +17,7 @@
 >
 > **Running time total (recomputed 2026-08-21, stale — A8 discharged
 > 2026-08-27):** was ~110 minutes of runnable acceptance — A2 step 9 ≈ 20,
-> A3 ≈ 45, A8 ≈ 25, A18 ≈ 20 — now **~85 minutes** with A8's 25 min removed.
+> A3 ≈ 45, A8 ≈ 25, A12 ≈ 20 — now **~85 minutes** with A8's 25 min removed.
 > A2 step 3 is
 > observe-only/N-A (cannot be forced on OcuLink). **A2 rows 6–8 (steps
 > 6–8, formerly conditional) are removed from this pack** — the repo owner
@@ -35,7 +35,7 @@ Stated once for the sitting; do not repeat per row.
 - [ ] **Server up** on current `main`, built and running against the real (non-mock) sidecar.
 - [ ] **`SEG_CAPACITY_ADMISSION=1`** — the A2 walkthrough runs with admission on (plan 264 `:131`).
 - [ ] **A real, multi-chapter book loaded** (at least one non-trivial chapter for analysis and render).
-- [ ] **Advanced settings reachable** — A18 pins the Qwen/codec device there.
+- [ ] **Advanced settings reachable** — A12 pins the Qwen/codec device there.
 - [ ] **Two shells** open: one for server control / `gh api` / `curl`, one for `nvidia-smi` / `ollama ps` observation.
 - [ ] **Engines available:** Ollama `qwen3.5:9b` analyzer installed; Coqui/Kokoro/Qwen TTS weights installed; ASR with `ASR_DEVICE=cuda` available for A2 step 8.
 - [ ] **Know which card is which** before pinning — the 8 GB internal card and the 16 GB eGPU, by both index and UUID.
@@ -46,7 +46,7 @@ Stated once for the sitting; do not repeat per row.
 Ordered so shared setup happens once and engine swaps happen as few times as
 possible. A8 steps 1–4 run first while the Ollama analyzer is the resident engine
 on the 8 GB card; A8 step 5 and A2 step 9 exercise the roomier/2-card paths; A3 is
-the multi-GPU Wave 2 checklist; A18 is the device-pin respawn set, done last
+the multi-GPU Wave 2 checklist; A12 is the device-pin respawn set, done last
 because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 2-card config.
 
@@ -117,14 +117,14 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 
 ## Excluded on re-resolution
 
-None excluded at the time of this re-resolution pass. Of the four rows, A2/A3/A18
+None excluded at the time of this re-resolution pass. Of the four rows, A2/A3/A12
 remain owed; A8 was discharged 2026-08-27, after this pass — see the correction
 below and the pack header above:
 
 - **A2** — `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md` re-run → matches line 16 (the register's original "no-match" claim is wrong; the wave-1 audit already corrected it); plan 264 frontmatter `status: active`; PR #1732 re-checked via `gh api …/pulls/1732` → merged 2026-07-19T22:44:02Z. Rows 6–8 ruled **not owed** 2026-08-21 (see the procedure's correction note) — step 9 stays owed.
 - **A3** — `gh api …/issues/1230` re-checked → `state: open`, `closed_at: null`; unchecked `- [ ]` count re-run = 10. STILL OWED.
 - **A8** — plan 222 frontmatter `status: active`; header `:9` "on-box GPU acceptance owed"; walkthrough at `:54`; PR #840 merged 2026-06-16T11:02:20Z; PR #841 merged 2026-06-16T11:02:59Z. This re-resolution pass predates the 2026-08-27 discharge (see the pack header above and the procedure's Result lines) — **superseded, no longer owed.** **Finding (routed to #2435, not fixed):** PR #839 (merged 2026-06-16T07:29:25Z, "fix(server): tolerate stray model keys in analyzer schema validation") is **misattributed** in the register's `*Shipped*` line for A8 — its body is about Ollama JSON schema salvage, unrelated to GPU residency/eviction. #840/#841 are the real match. Kept here for historical accuracy; not re-actionable against a discharged, removed row.
-- **A18** — PR #1870 re-checked → merged 2026-07-27T01:53:26Z; #1857 re-checked → closed 2026-07-27T01:53:27Z; `server/src/tts/sidecar-env.test.ts` exists. STILL OWED.
+- **A12** — PR #1870 re-checked → merged 2026-07-27T01:53:26Z; #1857 re-checked → closed 2026-07-27T01:53:27Z; `server/src/tts/sidecar-env.test.ts` exists. STILL OWED.
 
 ## Teardown
 

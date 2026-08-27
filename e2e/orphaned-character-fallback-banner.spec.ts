@@ -395,7 +395,7 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
      register.md`) is `the-torment` (*Playing with Fire*, 67 segments),
      which resolves via the **normalised-id** tier — RC2's underscore-vs-
      hyphen split, no history entry involved at all — and was still
-     narrator-rendered. #2107's ruling (same register, see A22's own text)
+     narrator-rendered. #2107's ruling (same register, see A23's own text)
      is that only the `'exact'` tier means the rendered bytes are fine; this section
      never shows an `'exact'` row (an exact match isn't an orphan), so both
      resolutions it does show need the note. */
