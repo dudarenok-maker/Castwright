@@ -339,7 +339,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 36 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -349,40 +349,52 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**58 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**59 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-27 (on-box wave 9b), 59 → 58.** One row fully discharged and
+> **Last change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
+> **Old A34** (voice reassignment vs. persisted audition centroid, #1969/PR #2402)
+> had two criteria: (1) a reassignment discards the stale old-voice reference
+> rather than silently reusing it; (2) a rebuilt reference — not a failed-to-build
+> flag — is what a real render produces for the new voice. Wave 9's on-box run
+> (below) proved (1) but not (2): Ivo's cloned-voice sample was too short for
+> `auditionCentroid()` to build a real centroid, so the run produced
+> `referenceKind: "too-short"` — the row's own named failure outcome, not its
+> pass condition. Criterion (1) stays discharged (below); criterion (2) is
+> **not** discharged — it is split out as new row **A36**, so the owed total
+> returns to 59 rather than silently dropping. See A36 for the still-owed
+> criteria and [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)
+> for the full acceptance text.
+>
+> **Prior change: 2026-08-27 (on-box wave 9b), 59 → 58.** One row fully discharged and
 > dropped: **old A8** (GPU residency safety + coexistence, plan 222) — owner-confirmed
 > as proven, per this file's "record what was observed, by whom, and when" policy.
 > Group A renumbered contiguously (old A9–A36 → A8–A35).
 >
-> **Prior change: 2026-08-27 (on-box wave 9), 60 → 59.** One row fully discharged and
-> dropped: **old A34** (voice reassignment vs. persisted audition centroid, #1969/PR
-> #2402) — with the owner's explicit go-ahead, reassigned **Ivo** (the wave-8-identified
-> correctly-shaped candidate: thin on in-book anchors, one line long enough to clear
-> `MIN_DURATION_SEC`) from his designed voice to a cloned one on the real *The Coalfall
-> Commission* book, then re-rendered chapter 4. All 8 of Ivo's lines came back
-> `qa.status: 'ok'`, `reasons: []` — zero `voice-mismatch` flags. Traced this against
-> `resolveCharacterReference` (`server/src/audio/render-integrity/aggregate.ts`)
-> rather than trusting the output shape alone: before reassignment, `persisted`
-> read `referenceKind: "audition"` built from the OLD voice
-> (`cleanMean≈0.873`, `pSevere≈0.673`, `pBand≈0.737`); `matchesCurrentVoice(persisted,
-> voiceInfo)` against the NEW voice correctly returned false, so the stale reference
-> was **not** reused — it fell to a genuine `auditionCentroid()` rebuild attempt using
-> the new voice, which is the exact code path PR #2402 added. **What this confirms:**
-> reassignment is detected and the stale old-voice reference is discarded rather than
-> silently scored against, which is the row's headline safety property. **What this
-> does NOT confirm:** whether a *successful* rebuilt centroid for the new voice would
-> itself correctly flag or clear real mismatched audio — Ivo's cloned-voice sample was
-> too short for `auditionCentroid()` to produce one (`referenceKind: "too-short"` is
-> the persisted result, not a stale carryover), so the rebuild path was exercised but
-> never reached a scored comparison. That narrower question — a reassignment landing
-> on a voice with enough anchor-eligible audio to actually build and score a fresh
-> `audition` centroid — is tracked separately in
-> [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700); it is net-new
-> follow-up work, not a defect in this fix, and doesn't reopen this row. Group A
+> **Prior change: 2026-08-27 (on-box wave 9), 60 → 59.** Criterion (1) above
+> discharged: with the owner's explicit go-ahead, reassigned **Ivo** (the
+> wave-8-identified correctly-shaped candidate: thin on in-book anchors, one
+> line long enough to clear `MIN_DURATION_SEC`) from his designed voice to a
+> cloned one on the real *The Coalfall Commission* book, then re-rendered
+> chapter 4. All 8 of Ivo's lines came back `qa.status: 'ok'`, `reasons: []` —
+> zero `voice-mismatch` flags. Traced this against `resolveCharacterReference`
+> (`server/src/audio/render-integrity/aggregate.ts`) rather than trusting the
+> output shape alone: before reassignment, `persisted` read
+> `referenceKind: "audition"` built from the OLD voice (`cleanMean≈0.873`,
+> `pSevere≈0.673`, `pBand≈0.737`). Ivo's reassigned voice is a cloned Coqui/XTTS
+> voice, so `snap.voiceEngine` is in `STOCHASTIC_ENGINES` (`aggregate.ts:91`) and
+> `voiceInfoByChar` is populated for him (`aggregate.ts:528-548`) — i.e.
+> `voiceInfo` was non-null at this render, which rules out the early
+> `if (!voiceInfo) return { status: 'too-short', ... }` branch (`:262-263`) that
+> never attempts a rebuild. With `voiceInfo` non-null, `matchesCurrentVoice(persisted,
+> voiceInfo)` against the NEW voice was therefore actually evaluated and correctly
+> returned false, so the stale reference was **not** reused — it fell to a genuine
+> `auditionCentroid()` rebuild attempt using the new voice, which is the exact code
+> path PR #2402 added, and *that* attempt is what returned `too-short` (`:273`).
+> **What this confirms:** reassignment is detected and the stale old-voice reference
+> is discarded rather than silently scored against — criterion (1) above. **What
+> this does NOT confirm:** criterion (2) — split to A36. Group A
 > renumbered contiguously (old A35–A37 → A34–A36).
 >
 > **Prior change: 2026-08-27 (on-box wave 8), 61 → 60.** One row fully discharged and
@@ -2862,6 +2874,37 @@ short — one idle render, explicit unloads for all three models, one reading.
 > resident together, as in the original #1976 report) — this run's simplified
 > single-model case is suggestive but doesn't rule out a leak that only shows
 > up with all three models' allocators interacting.
+
+### A36 · Voice reassignment: a rebuilt audition centroid actually scores real audio, not just discards the stale one ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR [#2402](https://github.com/dudarenok-maker/Castwright/pull/2402), [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)) · **Coqui/XTTS resident, real cloned voice with enough anchor-eligible audio to clear `MIN_DURATION_SEC`**
+
+Split out 2026-08-27 from the just-discharged A34 (voice reassignment vs.
+persisted audition centroid). That row's on-box run (reassigning Ivo to a
+cloned voice) proved the first of the row's two criteria — a reassignment
+discards the stale old-voice reference rather than silently reusing it,
+confirmed via `matchesCurrentVoice()` returning false — but it hit
+`referenceKind: "too-short"` in `resolveCharacterReference`
+(`server/src/audio/render-integrity/aggregate.ts:266-273`) because Ivo's
+cloned-voice sample was too short for `auditionCentroid()` to build a real
+centroid. The row's second, still-unmet criterion: **a rebuilt reference,
+not the failed flag, is what a real render produces** — i.e. the rebuild
+must actually succeed and correctly score real audio, not merely be
+attempted.
+
+- Reassign a thin-on-anchors character to a new voice with **enough**
+  anchor-eligible audio that `auditionCentroid()` returns a genuine
+  `resolved` outcome (not `too-short`) for the new voice.
+- Confirm the new centroid's `cleanMean`/`pSevere`/`pBand` are real
+  (non-zero) values, distinct from the old voice's pre-reassignment values —
+  a genuine rebuild, not a stale carry-over and not an absorbing `too-short`.
+- Confirm a genuinely mismatched voice against that new centroid still
+  triggers `voice-mismatch`/`severe`, and the correctly-assigned new voice
+  does not.
+
+*Needs:* a working TTS engine (Coqui/XTTS) + a real book + a cloned or
+designed voice with a long enough sample to clear `MIN_DURATION_SEC` (3.0s
+per synthesis group). *Criteria:* full text in [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700).
+*Cost:* short, opportunistic — rides along with any cloned-voice reassignment
+test that happens to produce a long-enough sample.
 
 ## Group B — local Ollama analyzer only
 

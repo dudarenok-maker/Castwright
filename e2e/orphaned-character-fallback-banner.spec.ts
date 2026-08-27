@@ -391,12 +391,12 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
      (`'alias'` — server tiers 'history'/'normalised-history' — AND
      `'normalised'` — server tier 'normalised-id') can be the exact damage
      `scripts/repair-cast-id-drift.mjs` lists as needing a re-render:
-     register row A29's own real fixture (`docs/testing/onbox-acceptance-
+     register row A22's own real fixture (`docs/testing/onbox-acceptance-
      register.md`) is `the-torment` (*Playing with Fire*, 67 segments),
      which resolves via the **normalised-id** tier — RC2's underscore-vs-
      hyphen split, no history entry involved at all — and was still
-     narrator-rendered. #2107's ruling (same register, ~line 1508) is that
-     only the `'exact'` tier means the rendered bytes are fine; this section
+     narrator-rendered. #2107's ruling (same register, see A22's own text)
+     is that only the `'exact'` tier means the rendered bytes are fine; this section
      never shows an `'exact'` row (an exact match isn't an orphan), so both
      resolutions it does show need the note. */
   test('every auto-reconciled row is marked "audio may still need a re-render", whether it resolved via alias or via a normalised id', async ({

@@ -189,7 +189,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">58</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">59</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -198,7 +198,24 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-26 (PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2665">#2665</a>, following an independent review of <a href="https://github.com/dudarenok-maker/Castwright/pull/2655">#2655</a>), 69 → 69 (no count change).</b>
+    <b>Last change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
+    Old A34 (voice reassignment vs. persisted audition centroid, #1969/PR
+    #2402) had two criteria; the on-box run proved only the first (stale
+    reference discarded on reassignment, not silently reused). The second
+    (a rebuilt reference actually scores real audio) was <b>not</b> met — the
+    run hit <code>too-short</code>, the row's own named failure outcome — so
+    it is split out as new row <b>A36</b> rather than counted as discharged,
+    keeping the owed total honest. See the .md's own changelog for the full
+    account and <a href="https://github.com/dudarenok-maker/Castwright/issues/2700">#2700</a>.
+    Waves 8/9/9b (A34 respawn-timer discharge, old A8 GPU-residency
+    discharge, Group A renumbered three times) are recorded only in the
+    .md's changelog — this callout box was not kept current across those
+    waves; the stat strip and row list above are current, but the entries
+    below this one predate wave 7 and are historical only.
+  </div>
+
+  <div class="callout warn">
+    <b>Historical, predates wave 7: 2026-08-26 (PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2665">#2665</a>, following an independent review of <a href="https://github.com/dudarenok-maker/Castwright/pull/2655">#2655</a>), 69 → 69 (no count change).</b>
     <b>A46</b>'s own text is corrected, not discharged: the 2026-08-25 run's
     "two resident models" framing was wrong on two counts — its
     <code>/debug/memory</code> instrument had no <code>base17_loaded</code> key,
@@ -270,7 +287,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>35</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>36</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -286,7 +303,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">35 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">36 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -810,6 +827,19 @@
           <li>Diff that post-unload <code>allocated</code>/<code>reserved</code> against the P3 baseline already on record for this box's device. Drops to near-zero (matching Qwen Base 0.6B + Whisper + Qwen 1.7B-Base's known weight sizes) → the resident floor fully explains #1976's original "stranded" report; no lever ever needed, close #2656 as working-as-intended and correct #1976/#1996's language for the record. Residual gap remains → that gap is a genuine leak, needs its own root-cause pass in the placement/eviction code.</li>
         </ul>
         <p class="src">A live sidecar with all three models potentially resident (Qwen Base 0.6B, Qwen 1.7B-Base, Whisper), and the ability to force explicit <code>/unload</code> + TTL lapse mid-session · <a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a> · criteria: extend <code>docs/testing/1996-stranded-vram-measurement.md</code>, don't replace it · short — one idle render, explicit unloads for all three models, one reading</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">A36</span><span class="iname">Voice reassignment: a rebuilt audition centroid actually scores real audio, not just discards the stale one</span><span class="risk">Split from A34 2026-08-27 — unmet criterion, not yet run</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Split out 2026-08-27 from the just-discharged A34 (voice reassignment vs. persisted audition centroid). That row's on-box run (reassigning Ivo to a cloned voice) proved the first of the row's two criteria — a reassignment discards the stale old-voice reference rather than silently reusing it, confirmed via <code>matchesCurrentVoice()</code> returning false — but it hit <code>referenceKind: "too-short"</code> in <code>resolveCharacterReference</code> (<code>server/src/audio/render-integrity/aggregate.ts:266-273</code>) because Ivo's cloned-voice sample was too short for <code>auditionCentroid()</code> to build a real centroid. The row's second, still-unmet criterion: <b>a rebuilt reference, not the failed flag, is what a real render produces</b> — i.e. the rebuild must actually succeed and correctly score real audio, not merely be attempted.</p>
+        <ul>
+          <li>Reassign a thin-on-anchors character to a new voice with <b>enough</b> anchor-eligible audio that <code>auditionCentroid()</code> returns a genuine <code>resolved</code> outcome (not <code>too-short</code>) for the new voice.</li>
+          <li>Confirm the new centroid's <code>cleanMean</code>/<code>pSevere</code>/<code>pBand</code> are real (non-zero) values, distinct from the old voice's pre-reassignment values — a genuine rebuild, not a stale carry-over and not an absorbing <code>too-short</code>.</li>
+          <li>Confirm a genuinely mismatched voice against that new centroid still triggers <code>voice-mismatch</code>/<code>severe</code>, and the correctly-assigned new voice does not.</li>
+        </ul>
+        <p class="src">A working TTS engine (Coqui/XTTS) + a real book + a cloned or designed voice with a long enough sample to clear <code>MIN_DURATION_SEC</code> (3.0s per synthesis group) · <a href="https://github.com/dudarenok-maker/Castwright/issues/1969">#1969</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2402">PR #2402</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/2700">#2700</a> · full criteria text in #2700 · short, opportunistic — rides along with any cloned-voice reassignment test that happens to produce a long-enough sample</p>
       </div>
     </details>
 
@@ -1452,7 +1482,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-27</b> against branch <code>chore/ops-onbox-wave9</code> (on-box wave 9: 2 rows discharged and dropped (A34 voice reassignment, A8 GPU residency safety), Group A renumbered twice — see the .md's own changelog for the full breakdown). Full sync history is this file's git log, not this page.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-27</b> against branch <code>chore/ops-onbox-wave9</code> (on-box wave 9/9b/9c: old A34 respawn-timer and old A8 GPU-residency discharged and dropped; the voice-reassignment half of old A34 split into new A36 rather than counted as discharged, since its own criterion wasn't met — see the .md's own changelog for the full breakdown). Full sync history is this file's git log, not this page.</p>
   </footer>
 
 </div>

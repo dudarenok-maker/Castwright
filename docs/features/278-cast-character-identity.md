@@ -599,7 +599,7 @@ and the run sheet
   byte-unchanged; the liveness rail caught a real `npm run dev` via its LAN
   HTTPS half before that. **Still owed:** confirming the fix reaches actual
   audio (re-render *Заказ Коалфолла* ch2 and listen) and the Cast-screen
-  banner cross-check — see the register row A30 and the run sheet's §8.6+
+  banner cross-check — see the register row A23 and the run sheet's §8.6+
   for the full account, including two defects the run surfaced
   ([#2107](https://github.com/dudarenok-maker/Castwright/issues/2107), the
   re-render list drops an aliased row's segments after `--apply` — **fixed,

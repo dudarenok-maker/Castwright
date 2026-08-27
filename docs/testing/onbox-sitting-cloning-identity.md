@@ -220,11 +220,11 @@ last, alone, since it deliberately crashes the sidecar twice.
 > **Criteria source:** [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
 > §8.7 — cited, not restated. **Added 2026-08-20**, wave-3 step 9, per
 > `docs/testing/onbox-wave3-plan.md` §2. The write path (`--apply`) is
-> already DISCHARGED (register row A30, run 2026-08-05) — **do not re-run
+> already DISCHARGED (this row, A23 — run 2026-08-05) — **do not re-run
 > `--apply`**. **§8.8 (Cast-screen banner cross-check) was DISCHARGED live
 > by wave-4 step 5e, 2026-08-21** — removed from this pack. Only §8.7 (does
 > the fix reach actual audio) remains owed, because it needs a real render +
-> human listening — not agent-runnable. Same book/Qwen residency as A29
+> human listening — not agent-runnable. Same book/Qwen residency as A22
 > above.
 
 26. Run §8.7 — re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall`

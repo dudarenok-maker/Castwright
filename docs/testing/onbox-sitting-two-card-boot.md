@@ -15,8 +15,10 @@
 > single boot with the card connected; any step that needs a swapped enumeration
 > is a second 2-card boot, not a live replug.
 >
-> **Running time total (recomputed 2026-08-21):** **~110 minutes** of runnable
-> acceptance — A2 step 9 ≈ 20, A3 ≈ 45, A8 ≈ 25, A18 ≈ 20. A2 step 3 is
+> **Running time total (recomputed 2026-08-21, stale — A8 discharged
+> 2026-08-27):** was ~110 minutes of runnable acceptance — A2 step 9 ≈ 20,
+> A3 ≈ 45, A8 ≈ 25, A18 ≈ 20 — now **~85 minutes** with A8's 25 min removed.
+> A2 step 3 is
 > observe-only/N-A (cannot be forced on OcuLink). **A2 rows 6–8 (steps
 > 6–8, formerly conditional) are removed from this pack** — the repo owner
 > ruled 2026-08-21 that they are not owed (plan 264 itself frames them as
@@ -115,7 +117,9 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 
 ## Excluded on re-resolution
 
-None excluded. All four rows were re-resolved against live repo/issue/PR state and remain owed:
+None excluded at the time of this re-resolution pass. Of the four rows, A2/A3/A18
+remain owed; A8 was discharged 2026-08-27, after this pass — see the correction
+below and the pack header above:
 
 - **A2** — `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md` re-run → matches line 16 (the register's original "no-match" claim is wrong; the wave-1 audit already corrected it); plan 264 frontmatter `status: active`; PR #1732 re-checked via `gh api …/pulls/1732` → merged 2026-07-19T22:44:02Z. Rows 6–8 ruled **not owed** 2026-08-21 (see the procedure's correction note) — step 9 stays owed.
 - **A3** — `gh api …/issues/1230` re-checked → `state: open`, `closed_at: null`; unchecked `- [ ]` count re-run = 10. STILL OWED.

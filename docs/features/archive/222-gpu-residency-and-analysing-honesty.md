@@ -51,7 +51,7 @@ owner: null
 - `src/components/analysing/phase-card.test.tsx` — section line only when `sectionsTotal > 1`.
 - `e2e/analysing-multi-model.spec.ts` — chip shows the server-reported label; section text renders from the mock live tick.
 
-### Manual acceptance walkthrough (USER-RUN, live GPU — OWED)
+### Manual acceptance walkthrough (USER-RUN, live GPU — discharged 2026-08-27, see Ship notes)
 1. **8 GB box, analyzer = `qwen3.5:9b`:** run analysis on a multi-chapter book. Expected: VRAM holds ~steady (no per-section sawtooth); `ollama ps` shows the 9B resident throughout; no mid-stream "no response" stalls. The analysing chip reads "Qwen3.5 9B (local)" (not 4B). Large chapters show "section M/N".
 2. **8 GB, analysis finished → start generation (Qwen TTS):** expected the server evicts the 9B before the sidecar loads (≤ ~8 GB peak, no OOM).
 3. **8 GB, start generation WHILE an analysis runs on another book:** expected a clear 409 "GPU busy with analysis" refusal, not an OOM.
@@ -74,8 +74,11 @@ Tracked for the beta because real testers run 12/16 GB cards; not required for t
 - **W2 + W3** (model honesty + section progress) — issue #844, PR #841, merged `dc163972`, 2026-06-16.
 - **Wave 4** (MB-accounting + split UI) tracked open as issue #845 (beta-relevant; see Out of scope).
 - Design hardened across three adversarial-review passes (correctness/safety, scope/YAGNI, subagent-executability) before any code — see spec §11 + the plan "review fixes baked in" sections.
-- **On-box GPU acceptance — owner-confirmed 2026-08-27** (register row A8,
-  `docs/testing/onbox-acceptance-register.md`): all 5 steps of the walkthrough
+- **On-box GPU acceptance — owner-confirmed 2026-08-27** (this was register
+  row A8 at time of discharge; the row was then removed and Group A
+  renumbered, so "A8" now names an unrelated row — do not follow it forward.
+  See `docs/testing/onbox-acceptance-register.md`'s wave-9b changelog entry
+  for the discharge record): all 5 steps of the walkthrough
   above observed in day-to-day use of the app on the dev 8 GB box — VRAM
   steady during analysis (no per-section sawtooth), eviction before sidecar
   load at generation start, a clean 409 "GPU busy" refusal instead of an OOM,
