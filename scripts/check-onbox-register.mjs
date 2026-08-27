@@ -14,6 +14,16 @@
 // first, merge it, then ship the rule. Landing both at once makes every
 // `--against-published` run fail with CANNOT_VERIFY_BASELINE_ERROR, which the
 // register's runbook says can only be fixed from `main`.
+//
+// Residual limitation of checks 4a/4b (row-ID stability, #2599/#2629): 4b
+// stops a new row being allocated *forward* into an ID that's already in use,
+// and the allocation floor stops collision with the historical pre-stable-ID
+// overflow — but neither stops an author hand-typing a **discharged** ID
+// (one whose row was removed) into a new row. It sits below the group's
+// next-id, and the original row is gone, so 4a's uniqueness check has
+// nothing left to compare against. Closing that needs a retired-ID ledger,
+// which contradicts the shipped ruling that the register tracks state, not
+// history — so it stays open, deliberately.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

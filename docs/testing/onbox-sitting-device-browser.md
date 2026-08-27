@@ -23,11 +23,13 @@
 > available on the box, no container runtime) — it is no longer an owed
 > Group E row. **Steps 5 and 6 below (the old-E6 ffmpeg-floor walkthrough
 > and its grouped Pinokio `ffmpeg>=6` constraint check) are removed from
-> this pack.** Rows renumber contiguously: the old **E7** (venv-bootstrap
-> progress card, rendered half only) is now **E6**; old **E9** (ORT marker
-> — Pinokio update path) is now **E7**; old **E10** (revoke is
-> loopback-only) is now **E8**. Every step label below has been updated to
-> match.
+> this pack.** Under the pre-#2599 positional-ID rule, rows renumbered
+> contiguously: the old **E7** (venv-bootstrap progress card, rendered half
+> only) became **E6**; old **E9** (ORT marker — Pinokio update path) became
+> **E7**; old **E10** (revoke is loopback-only) became **E8**. Every step
+> label below was updated to match. (Row IDs are stable and never renumber
+> as of 2026-08-27 — see the allocation guidance in
+> `onbox-acceptance-register.md`.)
 >
 > **E7 (old numbering) added 2026-08-20**, correcting a wave-3 gap: the
 > register's E7 row (wave-3 step 7) claimed it had already "joined

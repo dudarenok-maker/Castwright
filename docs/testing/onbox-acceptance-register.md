@@ -313,6 +313,17 @@ setup rather than repeatedly loading and evicting models.
 > `main`. Copy an existing group's bare `<!-- next-id: X101 -->` line — no
 > extra caveat comment needed.
 
+> **Adding a new row to an existing group? Allocate from its `next-id`
+> marker.** Take the marker's current value as the new row's ID, then bump
+> the marker by one in the same commit (e.g. `<!-- next-id: A38 -->` becomes
+> `<!-- next-id: A39 -->` after you mint `A38`). **Never reuse an ID that has
+> been used before, even one whose row is long gone** — a discharged or
+> removed row's ID stays retired forever. Re-minting a retired ID silently
+> re-points every existing citation to it at the *old* row, which is exactly
+> the failure this stable-ID design exists to end, and no mechanical check
+> can catch it after the fact (the checker only verifies uniqueness and the
+> allocation floor, not history).
+
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were
 > wrong within a day — a prerequisite named as a blocker that was already
