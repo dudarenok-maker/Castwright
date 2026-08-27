@@ -34,9 +34,12 @@ function runCli(args) {
 }
 
 // A minimal but structurally real register: two groups, a run-sheet
-// cross-reference on one row, and a "Blocked" section that reuses a live
-// row's ID for cross-reference (mirroring the real register's E6/E8-under-
-// Blocked shape) — parsing must not be fooled by it.
+// cross-reference on one row, and a "Blocked" section whose heading reuses a
+// live row's ID. The real register no longer has that shape — #2634/#2653
+// removed the borrowed E6/E8 IDs — but the fixture keeps it deliberately:
+// it is the adversarial case parseRegisterRows's group-section restriction
+// exists to reject, and it must keep working whether or not the real file
+// happens to contain it. Parsing must not be fooled by it.
 function buildRegister() {
   return `# On-box acceptance register
 
