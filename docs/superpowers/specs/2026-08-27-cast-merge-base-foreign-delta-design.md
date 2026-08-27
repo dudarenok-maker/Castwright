@@ -1,7 +1,11 @@
 # Re-applying the foreign delta on a stale cast.json merge base
 
 **Date:** 2026-08-27
-**Status:** draft — design approved in chat, not yet planned or implemented.
+**Status:** **FALSIFIED at review round 2 — do not implement.** Its central
+premise does not hold (§13). Kept, and kept in detail, because five predecessor
+designs died undocumented enough to be re-proposed; this one records exactly
+where it broke so attempt 8 starts from here. A decision is owed before any
+further work — see §13.3.
 **Issues:** #2015 (srv-82) — the rebuild half.
 **Builds on:** `docs/superpowers/specs/2026-08-06-cast-merge-base-serialise-and-detect-design.md`
 (the detection half, shipped as PR #2185) and
@@ -481,4 +485,100 @@ undocumented (§5).
 **Confirmed sound and unchanged:** §1.1's structural finding and its site table;
 §2's "`writeChecked` discards the parsed value"; §3.2's list of nine; §3.1's
 citation of the 2026-07-31 spec §6; and that no part of this design is a re-run
-of designs 1–4.
+of designs 1–4. Round 2 re-verified all five and they hold — they are the only
+part of this document that survived.
+
+## 13. Round 2 — why this design is falsified
+
+**2026-08-27 — adversarial round 2 (Premium tier), targeting round 1's rewrites.**
+Four findings fatal to the *mechanism*, not to the prose. Each was re-verified
+against source before being accepted. §§1–12 above are left as written, so the
+failure is legible rather than tidied away.
+
+### 13.1 The central premise is false
+
+**§3.3's biconditional is unachievable over the chosen field set, because the
+allowlisted fields are not owned by the prior cast alone.** Three run-scoped
+passes mutate exactly those fields, on both sides, before `mergeCore` runs:
+
+- `linkSeriesReuseAtAnalysis` (`server/src/workspace/series-reuse-link.ts`)
+  stamps `voiceId`, `voiceUuid`, `matchedFrom`, `voiceState`, `ttsEngine`,
+  `overrideTtsVoices`, `voiceStyle` **and** `aliases` onto the **fresh** roster
+  — verified by reading the function body.
+- `pruneStaleReuseLinks` → `clearStaleLink` *deletes* seven of them from the
+  prior.
+- `dropReuseContinuityKeepDesignedVoice` strips three more on a Start-fresh run.
+
+So for eight of the eleven fields the payload's value is a function of `base`
+**and** `fresh` **and** two run-scoped transforms, and `theirs − base` cannot
+invert any of them. §3.3's stated justification — *"the fresh roster carries no
+voice fields"* — is simply false.
+
+**And `merge-analysis-cast.ts`'s own header said so all along**, in a sentence
+quoted in this design's very first source read: *"a fresh reuse-link stamped
+this run (linkSeriesReuseAtAnalysis) on a previously voiceless character is left
+intact."* Round 1's headline lesson was **cite the body, not the header**; the
+premise that killed the design was contradicted by the header *and* the body,
+and was read past twice.
+
+The worst instance is concrete, not theoretical: re-applying a foreign
+`matchedFrom` that `pruneStaleReuseLinks` deliberately cleared **resurrects the
+stale cross-series link that pass exists to kill.** The ledger does not turn a
+raced run into a clean run; it produces a third state, and at least one point in
+that state is a bug the repo has already fixed once.
+
+### 13.2 Three further fatal findings
+
+- **The captured base aliases the array the run mutates.** `readPriorCastForMerge`
+  returns `rows = cast.value.characters` — the same objects — and
+  `pruneStaleReuseLinks` mutates them in place afterwards. So
+  `computeForeignDelta` would read this run's *own* deletions in reverse and
+  report them as foreign edits. §4.1's "it has already paid for it" is wrong: the
+  capture needs a deep copy, which is real cost §2 claims the design does not pay.
+- **§6 is still unimplementable; round 1 moved the emit's position but not its
+  gate.** Step 6 still fires "if step 2 mismatched", and §1.1 — this document's
+  own foundational finding — proves the authoritative site sees no mismatch once
+  an interim write has advanced the baseline. The site whose outcome the user
+  keeps is guaranteed silent, and the interim site's "repaired" message is what
+  last-wins dedupe leaves standing. A toast claiming a repair over a field that
+  was then dropped is strictly worse than #2185's honest wording.
+- **§4.4's id map is the wrong table and an incomplete one.** The applied table
+  is `stripEstablishedAsciiRewrites(composeRewrites(…), …)`, not the bare
+  composition (#2584/#2570 exists for that difference); `dedupePriorCastByName`'s
+  fold desynchronises the namespace at **all five** sites, so the three
+  provisional sites do not have an identity map either; and `mergedFinal.retirements`
+  is missing. Worse in kind: `applyRewriteToPriorCast` resolves a canonical-id
+  collision by `voiceStateRank` — and `voiceState` is itself a delta field — so a
+  foreign edit can change *which row wins*, and applying the loser's fields onto
+  the winner welds one character's voice onto another. That is the srv-87/#2086
+  swapped-identity class.
+
+### 13.3 The finding that outlives this design, and the decision owed
+
+**The shipped #2185 detector can fire on an uncontended run.** `recordRetirements`
+runs at job start — after the capture, before all five write sites — and calls
+`clearNotLinkedEdgesForDroppedRejections`
+(`server/src/store/not-linked-edges.ts`), which takes the cast lock and writes
+`cast.json` **without advancing the baseline**. `reconcileRejectEdgesOnDisk` has
+the same shape at persist. Verified: both write through `writeJsonAtomic`, neither
+touches `CastMergeBase`. Reachable whenever a run records a retirement that drops
+a self-loop rejection.
+
+This is a defect in shipped code that this design work surfaced, and it reframes
+#2015 rather than sitting inside it:
+
+1. §7's negative control — "an uncontended run emits zero advisories" — is not
+   valid as written, and #2185's own passing negative control means only that its
+   fixture had no dropped rejections.
+2. §8's instrument would count the run's own writes as foreign conflicts,
+   contaminating the very frequency measurement it exists to produce.
+3. "The frequency half remains unmeasured" may be the wrong description of what
+   #2185 has been recording since it merged.
+
+**The decision owed, and it is the repo owner's:** whether the next round fixes
+the self-inflicted conflict source first — which is a bounded, well-specified
+change, and which must land before any frequency number means anything — or
+whether #2015's repair half is withdrawn and the detector's honest wording is
+accepted as the terminal answer. Attempt 8 should not begin before that is
+settled, because the field-set question in §13.1 has a different answer depending
+on it.
