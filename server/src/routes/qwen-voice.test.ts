@@ -1547,6 +1547,36 @@ describe('persistEmotionVariant', () => {
     await rm(bookDirFresh, { recursive: true, force: true });
   });
 
+  it('book-scoped: no clone — returns applied and records the variant', async () => {
+    const outcome = await persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
+    expect(outcome).toBe('applied');
+  });
+
+  it('book-scoped: clone present at call time — returns skippedClone and does not mutate the field', async () => {
+    const { readFile, writeFile } = await import('node:fs/promises');
+    await writeFile(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'wren',
+            voiceId: 'wren',
+            overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+          },
+        ],
+      }),
+    );
+    const outcome = await persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
+    expect(outcome).toBe('skippedClone');
+    const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    expect(cast.characters[0].overrideTtsVoices.qwen).toBeUndefined();
+  });
+
+  it('is a no-op returning notFound for an unknown character', async () => {
+    const outcome = await persistEmotionVariantFn(bookDir, 'ghost', 'angry', 'x');
+    expect(outcome).toBe('notFound');
+  });
+
   it('records the variant slot without clobbering the base name', async () => {
     const { readFile } = await import('node:fs/promises');
     await persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
@@ -1626,8 +1656,8 @@ describe('persistEmotionVariant', () => {
       return actual.readJson(path);
     });
 
-    let angryPromise: Promise<void> | undefined;
-    let sadPromise: Promise<void> | undefined;
+    let angryPromise: ReturnType<typeof persistEmotionVariantFn> | undefined;
+    let sadPromise: ReturnType<typeof persistEmotionVariantFn> | undefined;
     try {
       angryPromise = persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
       angryPromise.catch(() => {});

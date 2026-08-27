@@ -98,11 +98,11 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
    a bare "not supported" leaves the user with no next step. */
 export function clonedVariantRefusal(name: string): string {
   return (
-    `"${name}" uses a cloned voice, so emotion variants are unavailable — ` +
+    `"${name}" is linked to a cloned voice somewhere in this series, so emotion variants are unavailable — ` +
     `they are only offered for a designed voice. Minting one would re-derive a ` +
     `new performance of a real person's voice under a key their consent record ` +
-    `does not cover and revoking consent does not erase. Assign a designed ` +
-    `voice to this character to use emotion variants.`
+    `does not cover and revoking consent does not erase. Remove the clone from ` +
+    `every linked book to use emotion variants for this character.`
   );
 }
 
@@ -141,16 +141,18 @@ const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
    Preserves the base `name` (defaulting it to the derived base id when the slot
    is fresh) and any sibling variants. No-op for an unknown character. Shared by
    the single design-voice route and the bulk "Design full cast" job. */
+export type PersistEmotionVariantOutcome = 'applied' | 'skippedClone' | 'notFound';
+
 export async function persistEmotionVariant(
   bookDir: string,
   characterId: string,
   emotion: Exclude<Emotion, 'neutral'>,
   variantVoiceId: string,
   seriesFilter?: { author: string; series: string },
-): Promise<void> {
+): Promise<PersistEmotionVariantOutcome> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
-  if (!cast || !character) return;
+  if (!cast || !character) return 'notFound';
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
@@ -186,7 +188,7 @@ export async function persistEmotionVariant(
     await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) =>
       addVariant(c, baseVoiceId),
     );
-    return;
+    return 'applied'; // temporary — Task 6 replaces this whole branch with the real series-wide check
   }
 
   /* Book-scoped write — this function carries no other lock, so the read
@@ -197,14 +199,16 @@ export async function persistEmotionVariant(
      this is the mirror image of the series branch above, which propagates
      the SOURCE's baseVoiceId by design instead of re-deriving it per book;
      see that branch's comment. */
-  await withCastLock(bookDir, async () => {
+  return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
     const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-    if (!fresh || idx === -1) return;
+    if (!fresh || idx === -1) return 'notFound';
     const freshCharacter = fresh.characters[idx];
+    if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
     fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    return 'applied';
   });
 }
 
