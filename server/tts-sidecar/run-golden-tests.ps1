@@ -135,13 +135,27 @@ if (-not $kokoroPresent -and -not $qwenPresent -and -not $coquiPresent) {
     exit 0
 }
 
+# #1994: a bare bless (GOLDEN_BLESS set, no caller-supplied -k) must not
+# silently re-bless qwen-duration-baseline.json alongside kokoro-baseline.json
+# / instruct-baseline.json -- Qwen duration requires an explicit selector.
+# scripts/run-golden-audio.mjs already applies `-k 'not qwen_duration'` for its
+# own bare `--sidecar-only --bless`, but this script is also directly runnable
+# (`npm run test:golden-audio:sidecar`, CLAUDE.md), bypassing that wrapper --
+# so the same default lives here too, applied only when the caller hasn't
+# already passed their own `-k` (which a deliberate `-k qwen_duration` bless
+# needs to keep working).
+$pytestArgs = @($testsDir, '-m', 'golden', '--tb=short', '-q', '-rs') + $args
+if ($env:GOLDEN_BLESS -and -not ($args -contains '-k')) {
+    $pytestArgs += @('-k', 'not qwen_duration')
+}
+
 Push-Location $here
 try {
     # -rs (ops-45 / #1911 s5): print the reason for every SKIP. Without it a
     # skip is a single "s" and GOLDEN_ASR=0 (or an unblessed baseline) is an
     # invisible off-switch -- addopts in pytest.ini is just `-q`, with no
     # -rs/-ra of its own.
-    & $venvPython -m pytest $testsDir -m golden --tb=short -q -rs @args
+    & $venvPython -m pytest @pytestArgs
     $code = $LASTEXITCODE
 } finally {
     Pop-Location

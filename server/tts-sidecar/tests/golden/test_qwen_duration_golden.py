@@ -78,7 +78,7 @@ def _make_qwen() -> "main.QwenEngine":
 def test_qwen_golden_lengths_match_baseline():
     fixture = _load_json(FIXTURE_PATH)
     baseline = _load_json(BASELINE_PATH)
-    tol = float(baseline.get("tolerance", 0.05))
+    tol = float(baseline.get("tolerance", 0.10))
 
     engine = _make_qwen()
     voice = _resolve_voice(engine)
@@ -187,9 +187,13 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
 # `qwen-duration-fixture.json`'s `_comment`): Qwen decoding is stochastic
 # with no seed. Reproduced twice on a box with a designed Qwen voice: two
 # consecutive synths of the same line gave sample_count 86400 vs 92160 (a
-# ~6.7% spread) -- roughly 6.7% is also well beyond the placeholder 0.05
-# `tolerance` the main baseline assertion uses, so loosening the assertion to
-# that tolerance would still fail, not just vacuously pass. There is no
+# ~6.7% spread). At the time this was reproduced, the placeholder `tolerance`
+# was 0.05, so loosening the assertion to that tolerance would still have
+# failed, not just vacuously passed. The placeholder was later widened to
+# 0.10 (comfortable headroom above the observed 6.7%) specifically so a bless
+# doesn't immediately fail its own next run -- see `_bless`'s docstring. That
+# widening is a safe INTERIM value, not a measurement: it does not make the
+# dropped exact-equality check any more honest to reintroduce. There is no
 # blessed baseline yet to derive a real bound from (`qwen-duration-baseline.json`
 # ships with empty `entries` -- see its own `_comment`), so a bounded
 # same-line check has no measured spread to bound against. The right per-line

@@ -372,7 +372,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > ([#2634](https://github.com/dudarenok-maker/Castwright/issues/2634),
 > [#2653](https://github.com/dudarenok-maker/Castwright/issues/2653))
 >
-> **Previous change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+> **Prior change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
 > audible effect, not yet run).
 >
 > **Prior change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.

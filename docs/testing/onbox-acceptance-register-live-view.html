@@ -199,7 +199,17 @@
 
   <div class="callout warn">
     <b>Last change: 2026-08-27 (PR #2704), 60 → 61</b>, adding row A38 (Qwen duration golden baseline bless, #1994).
-    <br><b>Previous change: 2026-08-27, 59 → 60 via PR #2688</b>, adding row A37 (#2059's audible effect, not yet run).
+    <br><b>Previous change: 2026-08-27, 60 → 60 (no count change).</b> The Blocked section's
+    two ffmpeg rows no longer carry row IDs. They had borrowed E6 and E8 from the live
+    Group E sequence, so each of those IDs named <i>two</i> rows — one live Group E row
+    and one Blocked row — and Group E renumbers underneath the Blocked section whenever
+    a row is discharged, so the pairing drifted silently. Both Blocked headings now carry
+    their title alone (<code>ops-35 ffmpeg floor</code>, <code>ops-36 golden-assembly</code>),
+    matching the section's other three rows, and this page renders their <code>num</code>
+    cells as <code>—</code>. Cite them by title from now on. Nothing was renumbered, renamed
+    or discharged. (<a href="https://github.com/dudarenok-maker/Castwright/issues/2634">#2634</a>,
+    <a href="https://github.com/dudarenok-maker/Castwright/issues/2653">#2653</a>)
+    <br><b>Prior change: 2026-08-27, 59 → 60 via PR #2688</b>, adding row A37 (#2059's audible effect, not yet run).
     <br><b>Prior change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
     Old A34 (voice reassignment vs. persisted audition centroid, #1969/PR
     #2402) had two criteria; the on-box run proved only the first (stale
