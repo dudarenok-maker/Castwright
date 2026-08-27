@@ -326,9 +326,11 @@ setup rather than repeatedly loading and evicting models.
 > `check-register-citations.mjs` does not close the gap either: a citation
 > whose subject has left the register entirely lands in Check C's
 > `unknownSubject` bucket, which is opt-in behind `--strict` and never fatal
-> — deliberately, and deferred under #2629; Check C's fatal half fires only
-> when the cited ID still exists for a *different* subject, which is the
-> renumbering class this design abolishes. The rule above is the only guard.
+> — deliberately, and deferred under #2629. The discriminator is whether the
+> register still knows the citation's original subject at all: if it does,
+> under some other ID, Check C's fatal half fires — that is the renumbering
+> class this design abolishes; if the subject is gone entirely, which is what
+> a discharge means, nothing fatal fires. The rule above is the only guard.
 
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were
