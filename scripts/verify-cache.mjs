@@ -422,6 +422,14 @@ export const STEPS = [
         'pinokio-scripts/lib/resolve-release.js',
         'e2e/global-teardown.ts',
         '.gitattributes',
+        /* #1932 (side-18): coqui-residency-policy.guard.test.ts (server suite) reads both
+           of these at RUNTIME to guard cross-reference rot across Coqui eviction mechanisms
+           and their policy doc — no module-graph edge, same #1847 runtime-read trap as
+           openapi.yaml/scripts/** above. Without these entries, a diff confined to either
+           (exactly the shape that could break the Coqui eviction contract) reports [cached]
+           and the guard never re-runs. */
+        'server/tts-sidecar/main.py',
+        'docs/features/264-vram-aware-gpu-placement.md',
       ],
       includeLockfiles: ['server'],
     },
