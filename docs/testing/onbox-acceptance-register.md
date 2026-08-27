@@ -532,6 +532,13 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
+<!-- Allocation marker (#2599/#2629). A row ID is allocated once and never
+     reused: take this value for a new row, then bump it. DO NOT allocate from
+     this yet — until the contiguity check is removed from
+     scripts/check-onbox-register.mjs, an ID from this range fails the build.
+     Until then, keep following the existing numbering. -->
+<!-- next-id: A101 -->
+
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
@@ -2937,6 +2944,8 @@ A31's). *Cost:* short — one or two renders of a Russian test sentence.
 
 ## Group B — local Ollama analyzer only
 
+<!-- next-id: B101 -->
+
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
 ### B1 · Analysing view honesty for local analyzers (plan 216)
@@ -3024,6 +3033,8 @@ chapter.
 ---
 
 ## Group C — one *Ночной дозор* re-analysis session
+
+<!-- next-id: C101 -->
 
 **Four rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
@@ -3353,6 +3364,8 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 ## Group D — multi-language TTS render + ASR
 
+<!-- next-id: D101 -->
+
 ### D1 · Non-English ASR content-QA calibration ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
 
 Render real audio in es/ru (then fr/de), run the ASR content-QA gate against it,
@@ -3405,6 +3418,8 @@ to real output, not about VRAM or a specific card.
 ---
 
 ## Group E — not the GPU box
+
+<!-- next-id: E101 -->
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -3928,6 +3943,8 @@ module-level comment for the exact fallback order being exercised.
 
 ## Group G — GitHub Actions itself
 
+<!-- next-id: G101 -->
+
 Not physical hardware — the prerequisite is a real dispatch of a specific workflow
 on the real GitHub Actions runner, which local execution cannot substitute for
 (a fresh `ubuntu-latest` image, real `GH_TOKEN`/`gh` wiring, real `apt-get`).
@@ -4135,6 +4152,8 @@ and the observations above are recorded here.
 ---
 
 ## Group H — no hardware, needs a real CJK manuscript this corpus lacks
+
+<!-- next-id: H101 -->
 
 Not a hardware prerequisite at all — the blocker is a real-book fixture this
 repo's corpus doesn't currently have. `detectManuscriptLanguageFromChapters`
