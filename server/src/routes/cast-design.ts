@@ -430,7 +430,13 @@ async function runDesignJob(
          Reported through the existing `clonedSkips` channel, which the UI
          already renders as "already cloned: <names>"
          (src/store/cast-design-stream-middleware.ts). */
-      if (characterHasClonedSlot(character)) {
+      /* #2006 Task 8 — upgraded to the same series-wide fresh check the base
+         branch above uses (GATE 2 fix-lane-1b): a clone on a linked sibling
+         book must refuse this character too, not just a clone on this book. */
+      if (
+        characterHasClonedSlot(character) ||
+        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir))
+      ) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -572,10 +578,25 @@ async function runDesignJob(
           } else {
             /* Variant path — record the slot and propagate it across the
                series (linked cast), the same scope the base voice uses. */
-            await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
-            job.done += 1;
-            broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId,
-              ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}) });
+            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
+            if (outcome === 'skippedClone') {
+              job.skipped += 1;
+              job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+              broadcast(job, {
+                type: 'character_skipped',
+                characterId,
+                name: character.name ?? characterId,
+                reason: 'already_cloned',
+              });
+            } else {
+              /* 'applied' AND 'notFound' both reach here, deliberately — same
+                 pre-existing disposition as the JSON route (Task 7): 'notFound'
+                 is a genuinely empty write, not a refusal, and reported no
+                 differently than it always was before this task. */
+              job.done += 1;
+              broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId,
+                ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}) });
+            }
           }
           break;
         } catch (e) {
