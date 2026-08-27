@@ -842,6 +842,13 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
            `clearNotLinkedEdgesForDroppedRejections` all fired), THEN assert
            on the outcome that matters. */
         expect(readCastIdHistoryRejectedPairs(bookDir)).toEqual([]);
+        /* Further anti-vacuity: the notLinkedTo edge must have actually been
+           cleared from disk. If the write never happened, olga's notLinkedTo
+           would still contain the rejected edge. This pins that
+           `clearNotLinkedEdgesForDroppedRejections` was wired and executed. */
+        const cast = readCast(bookDir);
+        const olga = cast.characters.find((c) => c.id === 'olga');
+        expect(olga?.notLinkedTo ?? []).toEqual([]);
         expect(warningCodes(events)).toEqual([]);
         assertRunWroteRoster(bookDir);
       } finally {
@@ -900,6 +907,12 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
 
         expect(readCastIdHistoryRejectedPairs(bookDir)).toEqual([]);
+        /* Same anti-vacuity check as control 8: the notLinkedTo edge must have
+           been cleared despite the genuine foreign write. This proves the run
+           wired the write despite the injection injection. */
+        const cast = readCast(bookDir);
+        const olga = cast.characters.find((c) => c.id === 'olga');
+        expect(olga?.notLinkedTo ?? []).toEqual([]);
         expect(warningCodes(events)).toEqual(['cast_merge_base_stale']);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);

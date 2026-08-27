@@ -101,9 +101,17 @@ export async function clearNotLinkedEdgesForDroppedRejections(
          run's last `noteExternalWrite`/`writeChecked` advance but BEFORE this
          read is absorbed into the read rather than detected: no data is
          lost (the fresh read preserves whatever that write left), but that
-         one foreign write goes unreported. Strictly better than the false
-         positive this ticket fixes, and not worth widening scope to close —
-         see #2694's "Known residual" for the accepted trade. */
+         one foreign write goes unreported. This is a NEW gap introduced by
+         #2694 — pre-fix, such a write was detected (accidentally via the stale
+         baseline advancing only at `writeChecked` sites), but it fired on the
+         run's OWN writes too and could not distinguish them from real foreign
+         writes, so the pre-fix advisory was noise. Post-fix, the run's own
+         writes trigger `noteExternalWrite` to advance the baseline, the phantom
+         vanishes, and a detection gap opens for this narrow window. Still the
+         right trade: a foreign write this fresh (mid-run, mid-lock, undetected
+         by any `writeChecked` site's compare) is much less likely than the
+         phantom-on-every-multi-chapter-book cost of the old design. Not worth
+         widening scope to close — the benefit is asymmetric. */
       const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
       if (!cast?.characters?.length) return null;
       const changed = clearNotLinkedEdgesForDroppedRejectionsLocked(cast.characters, bookId, dropped);
