@@ -1453,7 +1453,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E8</span><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">—</span><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p><b>What is dormant.</b> The cross-build half of the ops-36 design — whether L1/L2/L3's hard assertions survive a genuinely different ffmpeg build, and what L4-loose's RMS-error actually is when the encoder really differs. The LOOSE branch itself is not dormant: the ops-36 demonstration forced it with a synthetic banner mismatch plus 2.0 LU of drift and it rejected at 24.79% RMS-error against a 16% tolerance.</p>
         <p><b>Why this box cannot reach it.</b> No Docker, no WSL, no container runtime of any kind on this box, and the only other <code>ffmpeg.exe</code> present is the same <code>8.1.1-full_build-www.gyan.dev</code> binary already on PATH — not a different build.</p>
@@ -1462,7 +1462,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E6</span><span class="iname">ops-35 ffmpeg floor — below-floor + Re-check walkthrough</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">—</span><span class="iname">ops-35 ffmpeg floor — below-floor + Re-check walkthrough</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p><b>What is dormant.</b> The below-floor preflight exit, the amber outdated Setup Wizard card, the Admin diagnostics <code>warn</code> row and amber health dot, and the Re-check-without-restart flip back to green (plan 269 invariant 6). Also owed: the Pinokio <code>ffmpeg&gt;=6</code> constraint, install and update.</p>
         <p><b>Why this box cannot reach it.</b> Every unit test drives the floor through a mocked <code>spawnSync</code>. Per wave-3 step 7's verification (shared with E8, above), this box has no ffmpeg swap available and no container runtime, so there is no way to put a genuinely-below-floor ffmpeg on PATH here.</p>

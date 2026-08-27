@@ -4295,7 +4295,7 @@ risking other lanes' concurrent work — not attempted. This box is
 dual-NVIDIA; this will not move until a CPU-only box exists, or one where
 GPU visibility can safely be disabled.
 
-### E8 · ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
+### ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
 
 **1. What is dormant.** The cross-build half of the ops-36 design — whether
 L1/L2/L3's hard assertions survive a genuinely different ffmpeg build, and
@@ -4329,7 +4329,7 @@ not satisfy the row's intent** — the row means a different environment, not
 a different binary on the same one. Recorded here as a neutral decision so a
 future reader can reverse it deliberately rather than stumble into it.
 
-### E6 · ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
+### ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
 
 **1. What is dormant.** The below-floor preflight exit (`npm run test:server`
 must exit 1 against ffmpeg 4.4, printing the host OS's upgrade command); the
