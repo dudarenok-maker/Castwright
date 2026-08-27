@@ -88,6 +88,11 @@ interface SidecarInfoProbe {
      down or predates the field. */
   devices: SidecarDeviceMap | null;
   devicesState: SidecarDevicesState | null;
+  /* Castwright#2709/#2710 — real-session CUDA self-test result, lifted off
+     the SAME single /health fetch as devices/devicesState above. Null when
+     the sidecar is down, predates the field, or hasn't run the self-test yet. */
+  cudaVerified: boolean | null;
+  cudaVerificationDetail: string | null;
 }
 
 /** Best-effort sidecar probe — short timeout, all-null on any failure so a
@@ -97,19 +102,24 @@ async function fetchSidecarInfo(): Promise<SidecarInfoProbe> {
   const timer = setTimeout(() => ctrl.abort(), 2000);
   try {
     const res = await fetch(`${getResolvedSidecarUrl()}/health`, { signal: ctrl.signal });
-    if (!res.ok) return { version: null, devices: null, devicesState: null };
+    if (!res.ok)
+      return { version: null, devices: null, devicesState: null, cudaVerified: null, cudaVerificationDetail: null };
     const body = (await res.json()) as {
       __version__?: string;
       devices?: unknown;
       devices_state?: unknown;
+      cuda_verified?: boolean | null;
+      cuda_verification_detail?: string | null;
     };
     return {
       version: typeof body.__version__ === 'string' ? body.__version__ : null,
       devices: normaliseDevices(body.devices),
       devicesState: normaliseDevicesState(body.devices_state),
+      cudaVerified: body.cuda_verified ?? null,
+      cudaVerificationDetail: body.cuda_verification_detail ?? null,
     };
   } catch {
-    return { version: null, devices: null, devicesState: null };
+    return { version: null, devices: null, devicesState: null, cudaVerified: null, cudaVerificationDetail: null };
   } finally {
     clearTimeout(timer);
   }
@@ -137,6 +147,8 @@ infoRouter.get('/', async (_req: Request, res: Response) => {
        engines present in the devices map. */
     devices: sidecar.devices,
     devicesState: sidecar.devicesState,
+    cudaVerified: sidecar.cudaVerified,
+    cudaVerificationDetail: sidecar.cudaVerificationDetail,
     activeEngine: engineForModelKey(getResolvedTtsModelKey()),
     /* fe-27 — in-app update notifier. Cached GitHub-Releases check, read
        non-blocking (null while cold/unreachable → notifier stays dark). */

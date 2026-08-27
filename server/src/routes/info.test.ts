@@ -109,6 +109,36 @@ describe('GET /api/info', () => {
     expect(res.body.activeEngine).toBeDefined();
   });
 
+  it('carries sidecar cudaVerified + cudaVerificationDetail off the same probe (Castwright#2710)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          __version__: '1.6.0',
+          devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+          devices_state: 'ready',
+          cuda_verified: false,
+          cuda_verification_detail: 'CUDA self-test failed: device-side assert triggered',
+        }),
+      })),
+    );
+    const res = await request(app).get('/api/info');
+    expect(res.status).toBe(200);
+    expect(res.body.cudaVerified).toBe(false);
+    expect(res.body.cudaVerificationDetail).toBe(
+      'CUDA self-test failed: device-side assert triggered',
+    );
+  });
+
+  it('reports null cudaVerified/cudaVerificationDetail when the sidecar is down', async () => {
+    // Default beforeEach stub already throws 'sidecar down'.
+    const res = await request(app).get('/api/info');
+    expect(res.status).toBe(200);
+    expect(res.body.cudaVerified).toBeNull();
+    expect(res.body.cudaVerificationDetail).toBeNull();
+  });
+
   it('reflects a post-upgrade banner + lastSeenAppVersion, then clears on dismiss', async () => {
     await writeUpgradeMeta({ lastSeenAppVersion: '1.5.1', showWhatsNew: true });
     let res = await request(app).get('/api/info');

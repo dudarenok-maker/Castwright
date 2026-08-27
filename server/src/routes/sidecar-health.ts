@@ -184,6 +184,12 @@ interface SidecarHealthBody {
      because torch's current device wasn't 0). `{}` / absent on an older
      sidecar or a CUDA-unavailable box. */
   vram_reserved_mb_by_device?: Record<string, { reserved_mb: number; total_mb: number }>;
+  /* Castwright#2709/#2710 — real-session CUDA self-test result from Kokoro's
+     first load. `null` until the sidecar has attempted the self-test (mirrors
+     the coqui_import_ok/kokoro_import_ok tri-state convention above). Absent
+     on an older sidecar → treated the same as null. */
+  cuda_verified?: boolean | null;
+  cuda_verification_detail?: string | null;
 }
 
 /* side-14 — per-engine device ground-truth. Sidecar values are normalised
@@ -394,6 +400,10 @@ export interface SidecarHealthResult {
   /* side-14 — per-engine device map + probe state, forwarded from the sidecar. */
   devices?: SidecarDeviceMap | null;
   devicesState?: SidecarDevicesState | null;
+  /* Castwright#2709/#2710 — forwarded verbatim from the sidecar body's
+     cuda_verified/cuda_verification_detail (see SidecarHealthBody above). */
+  cudaVerified?: boolean | null;
+  cudaVerificationDetail?: string | null;
   error?: string;
 }
 
@@ -503,6 +513,8 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
           : undefined,
       devices,
       devicesState: normaliseDevicesState(body.devices_state),
+      cudaVerified: body.cuda_verified ?? null,
+      cudaVerificationDetail: body.cuda_verification_detail ?? null,
     };
   } catch (e) {
     clearTimeout(timer);

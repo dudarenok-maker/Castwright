@@ -1060,6 +1060,40 @@ describe('GET /api/sidecar/health — side-14 device fields', () => {
     expect(res.body.devicesState).toBeNull();
   });
 
+  it('forwards cuda_verified / cuda_verification_detail as cudaVerified / cudaVerificationDetail (Castwright#2710)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro'],
+          cuda_verified: false,
+          cuda_verification_detail: 'CUDA self-test failed: device-side assert triggered',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.status).toBe(200);
+    expect(res.body.cudaVerified).toBe(false);
+    expect(res.body.cudaVerificationDetail).toBe(
+      'CUDA self-test failed: device-side assert triggered',
+    );
+  });
+
+  it('defaults cudaVerified/cudaVerificationDetail to null on an old sidecar body', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['kokoro'] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.cudaVerified).toBeNull();
+    expect(res.body.cudaVerificationDetail).toBeNull();
+  });
+
   it('ignores a malformed devices field (non-object) rather than forwarding junk', async () => {
     /* A body with devices: "cuda" (or any non-object) must be coerced to null
        rather than blindly forwarded — the frontend only knows how to render a
