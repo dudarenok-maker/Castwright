@@ -362,11 +362,14 @@ It is driven by the **generation plan** — Node knows which engine each
 remaining chapter needs, so it can free the VRAM at a boundary where "no
 further Coqui work is queued" is a *fact* rather than a prediction. Each call
 is bounded by `withCallTimeout` and carries the chapter's abort signal. Both
-evicts are deliberately **fail-soft** — only abort signals are rethrown; other
-failures (socket errors, timeouts) are logged as warnings and execution
-continues. This is correct for both the leading and trailing positions: the
-trailing evict destroys synthesised work if it throws, and the leading evict
-should not break a whole chapter if a transient sidecar hiccup occurs.
+evicts are deliberately **fail-soft** on non-abort errors: socket errors and
+timeouts are logged as warnings and execution continues. The leading evict
+additionally rethrows abort signals for pause detection (`routes/generation.ts`
+names its own `AbortError`); the trailing evict swallows aborts too, since by
+the time it fires the chapter's synthesis work is already complete. This
+asymmetry is correct: the trailing evict's abort swallow does not lose
+synthesised work (all groups are done), while the leading evict's abort rethrow
+ensures a paused generation is visible to the pause-detection path.
 
 ### Mechanism B — sidecar, demand-driven, reactive
 
@@ -419,12 +422,13 @@ outside the current book's render.
 
 1. **Mechanism A's timeout and abort.** Each `/unload` call is bounded by
    `withCallTimeout` and carries the chapter's abort signal. Both evicts must
-   remain fail-soft (aborting only on genuine abort signals, not transient
-   errors): only abort signals rethrow; other failures are logged as warnings
-   and execution continues. The trailing evict is already-synthesised work
-   that would be lost on exception. The leading evict must not break the
-   chapter if a transient sidecar hiccup (socket error, timeout) occurs
-   mid-evict.
+   remain fail-soft on transient errors (socket errors, timeouts are logged as
+   warnings and execution continues), but they differ on aborts: the leading
+   evict rethrows `AbortError` for pause detection (`routes/generation.ts`
+   names its own `AbortError`), while the trailing evict swallows abort signals
+   too since by that point all synthesis work is done. The trailing evict
+   cannot lose synthesised audio by failing, and the leading evict must signal
+   a pause through its abort path if the generation is cancelled mid-evict.
 
 2. **Mechanism B's lock-guarded idle check.** `maybe_free_idle`
    (`server/tts-sidecar/main.py:2273`) re-validates the idle condition under
@@ -432,14 +436,22 @@ outside the current book's render.
    never free the model out from under an active forward. Any change to
    `maybe_free_idle` must preserve this re-validation-under-lock.
 
-3. **Mechanism B's non-reentrant lock.** `_drop_model_locked()` must not be
+3. **Mechanism B's non-reentrant lock.** `_drop_model_locked()` MUST be
    called while already holding `_synth_lock` (it is a non-reentrant
-   `threading.Lock`) — only the `/unload` route calls `unload()` without
-   the lock. Internal holders that need the same teardown call
-   `_drop_model_locked()` and then `_reclaim_after_drop()` after releasing
-   the lock; `maybe_free_idle` is the one such caller
-   (`server/tts-sidecar/main.py:2051-2055`). Any future caller must follow
-   the same release-then-reclaim sequence.
+   `threading.Lock`); by contrast, the public `unload()` method MUST NOT be
+   called while holding the lock — it acquires the lock itself. Internal
+   callers that need the same teardown (e.g., `maybe_free_idle` at
+   `server/tts-sidecar/main.py:2273`) acquire the lock, call
+   `_drop_model_locked()` inside it, then release the lock and call
+   `_reclaim_after_drop()` afterwards. This sequence is critical: releasing
+   the lock BEFORE reclaim allows a concurrent forward to complete its own
+   reference-drop, which is essential for the actual VRAM reclamation to work.
+   Any future internal caller must follow the same acquire-drop-release-reclaim
+   sequence; any future code that nulls or reassigns a model field must mirror
+   `_drop_model_locked()`'s full teardown (including the device restoration
+   that `_drop_model_locked()` already handles) to avoid the double-allocation
+   race documented in `unload()`'s own docstring
+   (`server/tts-sidecar/main.py:2040-2049`).
 
 ## Ship notes
 

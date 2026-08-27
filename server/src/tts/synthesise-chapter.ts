@@ -2967,13 +2967,14 @@ export async function synthesiseChapter(
        Task 11 clears on unload) once per mixed dispatch — and is accepted
        deliberately: 3.5 GB held across an entire book is the worse trade.
 
-       Fail-SOFT, same as the leading evict (see lines 2919-2943 above):
-       every group is already synthesised by the time this runs, so letting a
-       sidecar recycle window (502/ECONNREFUSED on `/unload`) throw would
-       destroy a chapter's completed work purely to free VRAM — the exact
-       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. Both
-       evicts catch non-abort errors and log warnings, preserving chapter
-       completion over VRAM reclamation. The main addition this trailing evict
+       Fail-SOFT on ALL errors (including aborts), unlike the leading evict:
+       every group is already synthesised by the time this runs, so letting any
+       error throw would destroy a chapter's completed work purely to free VRAM — the exact
+       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. This
+       asymmetry is correct: the leading evict rethrows AbortError for pause
+       detection (routes/generation.ts), but at this point (end of synthesis
+       work), swallowing the abort doesn't lose audio, and the chapter must not
+       fail on VRAM-cleanup housekeeping. The main addition this trailing evict
        brings is the `withCallTimeout` bounded ceiling that matches the leading
        one: previously unbounded, it could stall a chapter whose groups are
        all already synthesised. */
