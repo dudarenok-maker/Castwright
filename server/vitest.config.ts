@@ -225,7 +225,10 @@ export default defineConfig({
       '{**/server/tts-sidecar/requirements/**,**/.*/**/server/tts-sidecar/requirements/**}',
       /* coqui-residency-policy.guard.test.ts (#1932 side-18): reads three files at
          RUNTIME to catch cross-reference rot across the two Coqui eviction mechanisms
-         and their policy doc — no module-graph edges, same #1847 runtime-read trap. */
+         and their policy doc. The sidecar main.py and docs file have no module-graph
+         edges (same #1847 runtime-read trap); synthesise-chapter.ts IS importable
+         but is included here for consistency with the guard's uniform readFileSync
+         approach rather than being split into two separate tracking mechanisms. */
       '{**/server/src/tts/synthesise-chapter.ts,**/.*/**/server/src/tts/synthesise-chapter.ts}',
       '{**/server/tts-sidecar/main.py,**/.*/**/server/tts-sidecar/main.py}',
       '{**/docs/features/264-vram-aware-gpu-placement.md,**/.*/**/docs/features/264-vram-aware-gpu-placement.md}',

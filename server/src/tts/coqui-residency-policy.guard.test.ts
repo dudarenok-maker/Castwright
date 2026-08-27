@@ -23,9 +23,17 @@ const SYNTHESISE_CHAPTER_PATH = join(process.cwd(), 'src', 'tts', 'synthesise-ch
 const SIDECAR_MAIN_PATH = join(process.cwd(), 'tts-sidecar', 'main.py');
 /* NOTE: When plan 264 is archived (status → stable), this path will move to
    docs/features/archive/264-vram-aware-gpu-placement.md. Keep the path
-   hardcoded so the guard fails-closed if archival forgets to update it;
-   also update the cross-reference comments in synthesise-chapter.ts and
-   main.py that point at this doc in the same commit. */
+   hardcoded so the guard fails-closed if archival forgets to update it.
+   On archival, update all FIVE of these in the same commit (two code comments
+   fail loudly on archival when forgotten; three CI entries fail silently):
+   1. The cross-reference comment in synthesise-chapter.ts (search for the TOKEN)
+   2. The cross-reference comments in main.py (search for the TOKEN)
+   3. server/vitest.config.ts forceRerunTriggers entry (will miss config-only diffs)
+   4. server/src/force-rerun-triggers.test.ts MAIN_COVERED row (guard goes stale)
+   5. scripts/verify-cache.mjs test:server extraFiles entry (fails SILENTLY if
+      forgotten — hashFile returns a sentinel for a missing path rather than
+      throwing, so a docs-only PR would just silently stop invalidating the
+      verify cache, reopen the bug this PR #2715 fixed, and never error) */
 const POLICY_DOC_PATH = join(REPO_ROOT, 'docs', 'features', '264-vram-aware-gpu-placement.md');
 
 function occurrences(haystack: string, needle: string): number {

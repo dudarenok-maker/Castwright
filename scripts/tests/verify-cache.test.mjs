@@ -422,6 +422,11 @@ test("stepTouchedByDiff: server/tts-sidecar/main.py diff matches test:server via
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), false);
 });
 
+test("stepTouchedByDiff: docs/features/264-vram-aware-gpu-placement.md diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715)", () => {
+  const diff = ['docs/features/264-vram-aware-gpu-placement.md'];
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
+});
+
 test('stepTouchedByDiff: a frontend diff is in scope for test, not test:server', () => {
   const diff = ['src/views/listen.tsx'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
