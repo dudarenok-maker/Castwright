@@ -315,14 +315,16 @@ setup rather than repeatedly loading and evicting models.
 
 > **Adding a new row to an existing group? Allocate from its `next-id`
 > marker.** Take the marker's current value as the new row's ID, then bump
-> the marker by one in the same commit (e.g. `<!-- next-id: A38 -->` becomes
-> `<!-- next-id: A39 -->` after you mint `A38`). **Never reuse an ID that has
+> the marker by one in the same commit (e.g. `<!-- next-id: A101 -->` becomes
+> `<!-- next-id: A102 -->` after you mint `A101`). **Never reuse an ID that has
 > been used before, even one whose row is long gone** — a discharged or
 > removed row's ID stays retired forever. Re-minting a retired ID silently
 > re-points every existing citation to it at the *old* row, which is exactly
-> the failure this stable-ID design exists to end, and no mechanical check
-> can catch it after the fact (the checker only verifies uniqueness and the
-> allocation floor, not history).
+> the failure this stable-ID design exists to end. This register's own
+> checker cannot catch it after the fact (it only verifies uniqueness and the
+> allocation floor, not history); `check-register-citations.mjs`'s Check C
+> fatal half does catch this shape, but only on its measured coverage — 22
+> anchored-heading lines across 5 files, not the whole corpus.
 
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were

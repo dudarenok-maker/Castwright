@@ -252,13 +252,20 @@ test('4a: the same row ID in two sections is reported', () => {
 // ACROSS sections. This pins the narrower, same-section case: two identical
 // `### E6` headings inside one Group E section.
 test('4a: the same row ID twice in the SAME section is reported', () => {
+  // The glance count is fixtured to agree with the body's physical row count
+  // (2 headings, even though both are E6) so check 1 stays satisfied and
+  // this test can assert 4a's duplicate-ID error fires ALONE.
   const text = registerFixture({
-    glance: [['E', 1]],
+    glance: [['E', 2]],
     groups: [{ letter: 'E', nextId: 101, rows: [6, 6] }],
   });
-  assert.ok(
-    checkRegister(text).some((e) => e.includes('Row ID E6 appears more than once')),
-    'a duplicate row ID within the same group section must be reported',
+  assert.deepEqual(
+    checkRegister(text),
+    [
+      'Row ID E6 appears more than once (2 headings). Row IDs are allocated once and never ' +
+        "reused — give the newer row its group's next-id instead.",
+    ],
+    '4a must fire alone, with check 1 satisfied by the matching glance count',
   );
 });
 

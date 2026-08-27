@@ -200,9 +200,7 @@ function formatRowList(letter, numbers) {
   if (numbers.length === 0) return 'no rows';
   const sorted = [...numbers].sort((a, b) => a - b);
   if (sorted.length === 1) return `${letter}${sorted[0]}`;
-  const isContiguous =
-    new Set(sorted).size === sorted.length &&
-    sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
+  const isContiguous = sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
   if (isContiguous) return `${letter}${sorted[0]}–${letter}${sorted[sorted.length - 1]}`;
   return sorted.map((n) => `${letter}${n}`).join(', ');
 }
@@ -1065,9 +1063,12 @@ export function checkLiveView(
             '(present on the published page, absent from this register) — there is nothing ' +
             'to suppress. That means the ID is either not on the live page at all, or is ' +
             "still IN this register — check for a typo, or that you actually removed the " +
-            'row from the register before running this: --discharging only has something to ' +
-            'suppress once the row is genuinely absent from the register you are about to ' +
-            'publish.',
+            'row from the register before running this; or its whole group was already ' +
+            'discharged on origin/main (the baseline agrees with this register, so that ' +
+            "group's stale live-page section is already a silent no-op and needs no name) — " +
+            'drop it from --discharging. --discharging only has something to suppress once ' +
+            'the row is genuinely absent from the register you are about to publish AND ' +
+            'still present on the baseline.',
         );
       }
     }
