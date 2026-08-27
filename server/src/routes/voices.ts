@@ -659,6 +659,42 @@ export async function hasClonedSlotAmongMatches(
   return false;
 }
 
+/* Batched sibling of hasClonedSlotAmongMatches: ONE walk of the matched
+   scope returns every voiceId with a consented cloned slot anywhere in it,
+   instead of one walk PER voiceId. Exists specifically so a caller who
+   needs a per-character answer for MANY characters at once (Character API
+   serialization, below) does one scan and then O(1) Set lookups, rather
+   than re-walking the whole workspace once per character — the latter is
+   an O(characters × books) cost on a hot read path. `excludeBookDir` drops
+   one specific book from consideration (used to answer "cloned on some
+   OTHER linked book", excluding the caller's own). */
+export async function findClonedVoiceIdsAmongMatches(
+  seriesFilter?: { author: string; series: string },
+  excludeBookDir?: string,
+): Promise<Set<string>> {
+  const cloned = new Set<string>();
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (excludeBookDir && bookDir === excludeBookDir) continue;
+        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        if (!state || !state.castConfirmed) continue;
+        if (seriesFilter) {
+          if (state.isStandalone === true) continue;
+          if (state.author !== seriesFilter.author || state.series !== seriesFilter.series) continue;
+        }
+        const cast = await readJson<CastJson>(castJsonPath(bookDir));
+        if (!cast?.characters?.length) continue;
+        for (const c of cast.characters) {
+          if (characterHasClonedSlot(c)) cloned.add(c.voiceId ?? c.id);
+        }
+      }
+    }
+  }
+  return cloned;
+}
+
 /* PUT /api/voices/:voiceId/override — set or clear the manual base-voice
    override for every cast.json character whose voiceId matches. Body shape:
        { override: { engine, name } }   to set

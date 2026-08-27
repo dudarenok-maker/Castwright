@@ -65,6 +65,7 @@ let applyTierToCastFiles: (
 ) => Promise<number>;
 let applyOverrideToCastFiles: typeof import('./voices.js').applyOverrideToCastFiles;
 let hasClonedSlotAmongMatches: typeof import('./voices.js').hasClonedSlotAmongMatches;
+let findClonedVoiceIdsAmongMatches: typeof import('./voices.js').findClonedVoiceIdsAmongMatches;
 let writeVoiceStylePersona: typeof import('./cast-design.js').writeVoiceStylePersona;
 let standaloneA: { bookDir: string };
 let standaloneB: { bookDir: string };
@@ -146,14 +147,20 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf, hasClonedSlotAmongMatches: hcsam } =
-    await import('./voices.js');
+  const {
+    voicesRouter,
+    applyTierToCastFiles: atcf,
+    applyOverrideToCastFiles: aotcf,
+    hasClonedSlotAmongMatches: hcsam,
+    findClonedVoiceIdsAmongMatches: fcvim,
+  } = await import('./voices.js');
   const paths = await import('../workspace/paths.js');
   const baseVoices = await import('../tts/base-voices.js');
   const castDesign = await import('./cast-design.js');
   applyTierToCastFiles = atcf;
   applyOverrideToCastFiles = aotcf;
   hasClonedSlotAmongMatches = hcsam;
+  findClonedVoiceIdsAmongMatches = fcvim;
   writeVoiceStylePersona = castDesign.writeVoiceStylePersona;
   invalidateBaseVoiceCache = baseVoices.invalidateBaseVoiceCache;
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
@@ -2218,6 +2225,50 @@ describe('hasClonedSlotAmongMatches — onlyBookDir scope (found under review)',
   it('with no seriesFilter but an onlyBookDir, scopes the scan to that one book — a clone in an unrelated standalone book sharing the same bare id must not cause a false refusal', async () => {
     const result = await hasClonedSlotAmongMatches('narrator', undefined, undefined, bookOneDir);
     expect(result).toBe(false);
+  });
+});
+
+describe('findClonedVoiceIdsAmongMatches', () => {
+  /* Own dedicated fixture, same reasoning as Task 2's describe: this file's
+     shared AUTHOR/SERIES/BOOK_ONE/BOOK_TWO fixture can't mint new voiceIds
+     and is consumed by other describes. Mint via writeBookOnDisk
+     (voices.test.ts:70-102) instead. */
+  const SCAN_AUTHOR = 'Odalys Marchetti';
+  const SCAN_SERIES = 'The Winter Ferry';
+  let bookOneDir: string;
+
+  beforeEach(() => {
+    bookOneDir = writeBookOnDisk(
+      workspaceRoot, SCAN_AUTHOR, SCAN_SERIES, 'Departure', 'book-scan-one',
+      [
+        {
+          id: 'shared', name: 'Shared', voiceId: 'shared-voice-id',
+          overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+        },
+        { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
+      ],
+    );
+    writeBookOnDisk(
+      workspaceRoot, SCAN_AUTHOR, SCAN_SERIES, 'Arrival', 'book-scan-two',
+      [
+        { id: 'shared', name: 'Shared', voiceId: 'shared-voice-id' }, // uncloned here
+        { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
+      ],
+    );
+  });
+
+  it('returns the set of voiceIds cloned anywhere in the series scan, in one pass', async () => {
+    const ids = await findClonedVoiceIdsAmongMatches({ author: SCAN_AUTHOR, series: SCAN_SERIES });
+    expect(ids.has('shared-voice-id')).toBe(true);
+    expect(ids.has('uncloned-voice-id')).toBe(false);
+  });
+
+  it('excludes a clone on the given excludeBookDir', async () => {
+    // 'shared-voice-id' is cloned only on bookOneDir's own copy (seeded
+    // above; 'Arrival' carries no clone at all). Excluding bookOneDir must
+    // make the returned set NOT include it.
+    const ids = await findClonedVoiceIdsAmongMatches({ author: SCAN_AUTHOR, series: SCAN_SERIES }, bookOneDir);
+    expect(ids.has('shared-voice-id')).toBe(false);
   });
 });
 
