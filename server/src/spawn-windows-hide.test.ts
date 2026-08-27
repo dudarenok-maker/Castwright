@@ -45,93 +45,112 @@ const CALL_RE = new RegExp(String.raw`(?<![.\w])(${SPAWN_NAMES.join('|')})\s*\(`
    any `spawnFn(` (bare OR member, e.g. `this.spawnFn(`) and demand the flag. */
 const INDIRECT_RE = /\bspawnFn\s*\(/g;
 
-/* Prod-reachable and test-only spawn sites OUTSIDE server/src that the tree
-   scan can't reach: the versioned-dir launcher (launch.mjs), the prod start/stop
-   scripts, the upgrade restarter, the model installer scripts (which spawn
-   pip), test runners (which spawn python/pip/pytest), and a python-discovery
-   helper (ensure-python312.mjs, which spawns python/winget — neither pip nor
-   pytest). A hidden parent does NOT stop a grandchild from popping its own
-   console on Windows, so each grandchild needs the flag too.
-
-   This floor is a HARDCODED list, not derived from anything — `launch.mjs`
-   itself spawns no pip, so it can never be picked up by pipSpawners() below.
-   Replacing the floor with a glob would silently drop it and the guard would
-   get WEAKER while appearing to get stronger. Keep it as-is; only ADD to it. */
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
-const EXTERNAL_FILES_FLOOR = [
-  'launch.mjs',
-  'scripts/start-app-prod.mjs',
-  'scripts/restart-after-upgrade.mjs',
-  'scripts/stop-app.mjs',
-  'scripts/run-sidecar-tests.mjs',
-  'server/tts-sidecar/scripts/install-whisper.mjs',
-  'server/tts-sidecar/scripts/install-qwen3.mjs',
-  'server/tts-sidecar/scripts/install-coqui.mjs',
-  'server/tts-sidecar/scripts/ensure-python312.mjs',
-  // #2567: verify-pipeline tooling that flashed a console window on every
-  // `npm run verify*`/`test:scripts` invocation — the same class of bug this
-  // guard exists to catch, just outside the floor list until now.
-  'scripts/run-powershell.mjs',
-  'scripts/verify-cache.mjs',
-  'scripts/check-import-cycles.mjs',
-  // #2567 review round 2: the rest of scripts/** (outside scripts/tests/)
-  // that had the same missing-windowsHide defect, fixed in the same round —
-  // added to the floor so a REGRESSION on any of them (someone re-adding a
-  // spawn without the flag, or a new spawn dropped into one of these files)
-  // is caught, not just the fix itself proven once.
-  'scripts/audit-branches-worktrees.mjs',
-  'scripts/backlog-sync.mjs',
-  'scripts/build-companion-apk.mjs',
-  'scripts/bump-version.mjs',
-  'scripts/capture-companion.mjs',
-  'scripts/check-onbox-register.mjs',
-  'scripts/code-stats.mjs',
-  'scripts/fix-archived-plan-pointers.mjs',
-  'scripts/flake-repro.mjs',
-  'scripts/gen-parser-fixtures.mjs',
-  'scripts/gh.mjs',
-  'scripts/guard-commit-subjects.mjs',
-  'scripts/guard-protected-push.mjs',
-  'scripts/is-docs-only-push.mjs',
-  'scripts/launch-sidecar.mjs',
-  'scripts/lib/module-graph.mjs',
-  'scripts/lib/run-command.mjs',
-  'scripts/monitor-generation.mjs',
-  'scripts/preflight-ffmpeg.cjs',
-  'scripts/quarantine-health.mjs',
-  'scripts/release-body.mjs',
-  'scripts/relufs-existing.mjs',
-  'scripts/rexing-existing.mjs',
-  'scripts/run-attribution-eval.mjs',
-  'scripts/run-golden-audio.mjs',
-  'scripts/run-hooks-tests.mjs',
-  'scripts/run-pinokio-tests.mjs',
-  'scripts/slim-epub-cover.mjs',
-  'scripts/stage-marketing-screenshots.mjs',
-  'scripts/start-app.mjs',
-  'scripts/sync-wiki.mjs',
-  'scripts/wt-list.mjs',
-  'scripts/wt-merge.mjs',
-  'scripts/wt-new.mjs',
-  // #2567 review round 2: prod-reachable (ships inside server/tts-sidecar/**,
-  // which the release-zip MANIFEST includes) and genuinely spawns — a
-  // `execSync('powershell … Win32_VideoController …')` GPU-vendor probe on
-  // every Windows install/upgrade from a console-less parent. Not caught by
-  // pipSpawners() below because it spawns no pip; the comment on that
-  // function used to (wrongly) cite this file as having "no spawn call at
-  // all" as the reason a plain glob would over-select it — see that
-  // comment's own correction just below.
-  'server/tts-sidecar/scripts/accelerator-profile.mjs',
-  // #2567 review round 2: three unguarded `git` spawns on BOTH the Pinokio
-  // install and update paths (an Electron parent, no console) — outside
-  // every existing scan (pipSpawners() is `.mjs`-only over two other dirs;
-  // this file is `.js` under pinokio-scripts/lib/).
-  'pinokio-scripts/lib/resolve-release.js',
-  // #2567 review round 2: dev-only but the same output-discarded, unguarded
-  // `powershell` shape as the PR's own "worst offender" example — a
-  // console-less Playwright teardown run would flash one per e2e batch.
-  'e2e/global-teardown.ts',
-].map((rel) => join(REPO_ROOT, rel));
+
+/* Helper: recursively list files matching given extensions under a directory.
+   Skips node_modules, dist, and .git subtrees. */
+function listFilesRecursive(dir: string, extensions: string[]): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') continue;
+      out.push(...listFilesRecursive(full, extensions));
+      continue;
+    }
+    if (entry.isFile() && extensions.some(ext => entry.name.endsWith(ext))) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/* Files that must stay as named manual entries — they cannot be auto-discovered
+   by the glob+content-filter because they live outside the scanned directory
+   trees. e2e/global-teardown.ts is the only current entry: other files under
+   e2e/ are Playwright specs, not prod/dev-tooling spawners, and a blanket
+   e2e/** glob risks sweeping in spec-authoring helpers that spawn for
+   legitimately different reasons (test fixtures, browser launches). */
+const EXTERNAL_FILES_MANUAL: string[] = [
+  join(REPO_ROOT, 'e2e', 'global-teardown.ts'),
+];
+
+/* Repo-relative paths to subtract from the glob+content-filter result — files
+   that the scan legitimately sweeps in but that should NOT be checked.
+   Add entries here only when the glob genuinely picks up something that
+   shouldn't be guarded, and name the file + reasoning in the completion comment. */
+const EXTERNAL_FILES_EXCLUSIONS: string[] = [];
+
+/* Build the EXTERNAL_FILES_FLOOR by scanning candidate directories for files
+   that actually contain spawn calls (content-filtered via CALL_RE), then
+   concatenating manual entries and subtracting exclusions.
+
+   Directory scope (derived from the old 49-entry hand list):
+   - REPO_ROOT non-recursive, .mjs only (covers launch.mjs)
+   - scripts/ recursive, .mjs/.cjs/.js, EXCLUDING scripts/tests/
+   - server/tts-sidecar/scripts/ recursive, .mjs
+   - pinokio-scripts/lib/ recursive, .js/.mjs
+
+   The content filter reuses blankCommentsAndStrings() + CALL_RE — the same
+   pair pipSpawners() already demonstrates — so a file that doesn't actually
+   spawn anything is never swept in. This mirrors the pip-specific filter's
+   shape but tests "spawns anything" instead of "spawns pip". */
+function externalFilesFloor(): string[] {
+  // Repo root: non-recursive, .mjs only (covers launch.mjs)
+  const rootFiles: string[] = [];
+  for (const entry of readdirSync(REPO_ROOT, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.mjs')) {
+      rootFiles.push(join(REPO_ROOT, entry.name));
+    }
+  }
+
+  // scripts/ recursive, .mjs/.cjs/.js, EXCLUDING scripts/tests/
+  const scriptsDir = join(REPO_ROOT, 'scripts');
+  const scriptsFiles = listFilesRecursive(scriptsDir, ['.mjs', '.cjs', '.js'])
+    .filter(f => {
+      const rel = f.slice(scriptsDir.length + 1).replace(/\\/g, '/');
+      return !rel.startsWith('tests/');
+    });
+
+  // server/tts-sidecar/scripts/ recursive, .mjs
+  const ttsDir = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
+  const ttsFiles = listFilesRecursive(ttsDir, ['.mjs']);
+
+  // pinokio-scripts/lib/ recursive, .js/.mjs
+  const pinokioDir = join(REPO_ROOT, 'pinokio-scripts', 'lib');
+  const pinokioFiles = listFilesRecursive(pinokioDir, ['.js', '.mjs']);
+
+  // Combine all candidates
+  const candidates = [...rootFiles, ...scriptsFiles, ...ttsFiles, ...pinokioFiles];
+
+  // Content-filter: keep only files that actually contain spawn calls.
+  // blankCommentsAndStrings blanks out comments AND string literals so prose
+  // that merely mentions a spawn name is never matched. CALL_RE is global,
+  // so reset lastIndex before each test to avoid stale state across calls.
+  const filtered = candidates.filter(f => {
+    try {
+      const src = blankCommentsAndStrings(readFileSync(f, 'utf8'));
+      CALL_RE.lastIndex = 0;
+      return CALL_RE.test(src);
+    } catch {
+      return false;
+    }
+  });
+
+  // Concatenate manual entries
+  const withManual = [...filtered, ...EXTERNAL_FILES_MANUAL];
+
+  // Subtract exclusions (match by repo-relative path)
+  if (EXTERNAL_FILES_EXCLUSIONS.length === 0) return [...new Set(withManual)];
+  const excluded = withManual.filter(f => {
+    const rel = f.slice(REPO_ROOT.length + 1).replace(/\\/g, '/');
+    return !EXTERNAL_FILES_EXCLUSIONS.includes(rel);
+  });
+
+  return [...new Set(excluded)];
+}
+
+const EXTERNAL_FILES_FLOOR = externalFilesFloor();
 
 /* install-ort.mjs (#2192) made the ONNX-runtime swap load-bearing on the boot,
    bootstrap AND upgrade paths, but it's just one file — the next pip-spawning
@@ -392,6 +411,86 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
     expect(
       offenders,
       `spawns outside server/src missing windowsHide (launcher/installer flash):\n${offenders.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  /* Acceptance #4 (issue #2687): pinokio-scripts/lib/resolve-release.js
+     had unguarded `git` spawns on both the Pinokio install and update
+     paths (Electron parent, no console) — a real user-visible flash that
+     the old hand list never covered. The glob MUST pick it up. */
+  it('resolve-release.js appears in the external-files floor (proves glob caught it)', () => {
+    const resolveRelease = EXTERNAL_FILES_FLOOR.filter((f) =>
+      f.endsWith(join('pinokio-scripts', 'lib', 'resolve-release.js')),
+    );
+    expect(
+      resolveRelease,
+      `resolve-release.js missing from EXTERNAL_FILES_FLOOR — glob regression`,
+    ).toHaveLength(1);
+  });
+
+  /* Acceptance #2 (issue #2687): the old 49-entry hardcoded list must be
+     fully covered by the new function output. This prevents future rewrites
+     from silently dropping coverage on any previously-guarded file. */
+  it('EXTERNAL_FILES_FLOOR from function covers the old hardcoded list', () => {
+    const oldHardcoded = [
+      'launch.mjs',
+      'scripts/start-app-prod.mjs',
+      'scripts/restart-after-upgrade.mjs',
+      'scripts/stop-app.mjs',
+      'scripts/run-sidecar-tests.mjs',
+      'server/tts-sidecar/scripts/install-whisper.mjs',
+      'server/tts-sidecar/scripts/install-qwen3.mjs',
+      'server/tts-sidecar/scripts/install-coqui.mjs',
+      'server/tts-sidecar/scripts/ensure-python312.mjs',
+      'scripts/run-powershell.mjs',
+      'scripts/verify-cache.mjs',
+      'scripts/check-import-cycles.mjs',
+      'scripts/audit-branches-worktrees.mjs',
+      'scripts/backlog-sync.mjs',
+      'scripts/build-companion-apk.mjs',
+      'scripts/bump-version.mjs',
+      'scripts/capture-companion.mjs',
+      'scripts/check-onbox-register.mjs',
+      'scripts/code-stats.mjs',
+      'scripts/fix-archived-plan-pointers.mjs',
+      'scripts/flake-repro.mjs',
+      'scripts/gen-parser-fixtures.mjs',
+      'scripts/gh.mjs',
+      'scripts/guard-commit-subjects.mjs',
+      'scripts/guard-protected-push.mjs',
+      'scripts/is-docs-only-push.mjs',
+      'scripts/launch-sidecar.mjs',
+      'scripts/lib/module-graph.mjs',
+      'scripts/lib/run-command.mjs',
+      'scripts/monitor-generation.mjs',
+      'scripts/preflight-ffmpeg.cjs',
+      'scripts/quarantine-health.mjs',
+      'scripts/release-body.mjs',
+      'scripts/relufs-existing.mjs',
+      'scripts/rexing-existing.mjs',
+      'scripts/run-attribution-eval.mjs',
+      'scripts/run-golden-audio.mjs',
+      'scripts/run-hooks-tests.mjs',
+      'scripts/run-pinokio-tests.mjs',
+      'scripts/slim-epub-cover.mjs',
+      'scripts/stage-marketing-screenshots.mjs',
+      'scripts/start-app.mjs',
+      'scripts/sync-wiki.mjs',
+      'scripts/wt-list.mjs',
+      'scripts/wt-merge.mjs',
+      'scripts/wt-new.mjs',
+      'server/tts-sidecar/scripts/accelerator-profile.mjs',
+      'pinokio-scripts/lib/resolve-release.js',
+      'e2e/global-teardown.ts',
+    ];
+    const floorRelPaths = EXTERNAL_FILES_FLOOR.map((f) => {
+      const rel = f.slice(REPO_ROOT.length + 1).replace(/\\/g, '/');
+      return rel;
+    });
+    const missing = oldHardcoded.filter((rel) => !floorRelPaths.includes(rel));
+    expect(
+      missing,
+      `old hardcoded entries missing from EXTERNAL_FILES_FLOOR (coverage regression):\n${missing.join('\n')}`,
     ).toEqual([]);
   });
 });
