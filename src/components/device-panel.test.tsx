@@ -99,4 +99,46 @@ describe('DevicePanel', () => {
     expect(screen.queryByText(/Currently running on:/)).not.toBeInTheDocument();
     expect(screen.getByText('Kokoro')).toBeInTheDocument();
   });
+
+  it('warns when CUDA reported available but Kokoro silently fell back to CPU', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cpu', coqui: 'cpu', qwen: 'cpu' },
+      devicesState: 'ready',
+      activeEngine: 'kokoro',
+      cudaVerified: false,
+      cudaVerificationDetail: 'CUDA build reports available, self-test forced CPU.',
+    };
+    render(<DevicePanel />);
+    const warning = screen.getByTestId('cuda-fallback-warning');
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toContain('GPU reported available, but Kokoro is running on CPU.');
+    expect(warning.textContent).toContain('CUDA build reports available, self-test forced CPU.');
+  });
+
+  it('renders no warning and no layout shift when cudaVerified is true', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+      devicesState: 'ready',
+      activeEngine: 'kokoro',
+      cudaVerified: true,
+      cudaVerificationDetail: null,
+    };
+    render(<DevicePanel />);
+    expect(screen.queryByTestId('cuda-fallback-warning')).not.toBeInTheDocument();
+  });
+
+  it('renders no warning and no layout shift when cudaVerified is null (not yet checked)', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+      devicesState: 'ready',
+      activeEngine: 'kokoro',
+      cudaVerified: null,
+      cudaVerificationDetail: null,
+    };
+    render(<DevicePanel />);
+    expect(screen.queryByTestId('cuda-fallback-warning')).not.toBeInTheDocument();
+  });
 });

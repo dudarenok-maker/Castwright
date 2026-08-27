@@ -242,6 +242,12 @@ export interface AppInfo {
   } | null;
   devicesState?: 'pending' | 'ready' | 'error' | null;
   activeEngine?: string;
+  /* side-14 child — real-session CUDA self-test result for Kokoro's first
+     load. null means "not yet checked" (sidecar down, predates the field, or
+     hasn't run the self-test yet) — not a warning state. false means CUDA
+     reported available but Kokoro actually ran on CPU. */
+  cudaVerified?: boolean | null;
+  cudaVerificationDetail?: string | null;
   /* fe-27 — in-app update notifier. Server-sourced (cached GitHub-Releases
      check, non-blocking). updateAvailable is null while the check is cold or
      the source is unreachable; absent on an older server. */
