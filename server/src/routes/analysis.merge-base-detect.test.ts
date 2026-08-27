@@ -835,17 +835,34 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
           requestedModel: undefined,
         });
 
-        /* Fix round 1 reasoning applied here too — a zero-warnings assertion
-           is vacuous unless the fixture actually reached the dropped-
-           self-loop write. Confirm the self-loop rejectedPair really was
-           dropped (proves `recordRetirements` -> `retireCharacterId` ->
-           `clearNotLinkedEdgesForDroppedRejections` all fired), THEN assert
-           on the outcome that matters. */
+        /* Fixture-integrity checks, and an HONEST account of what they do and
+           do not pin — because both were first written claiming more than
+           they deliver, which is the same defect class as the bug under test.
+
+           `rejectedPairs` empty proves the self-loop rejectedPair really was
+           dropped. That is `repointRejectedPairs`' output, reachable from the
+           seeded pair plus the retirement ALONE — it does NOT prove
+           `clearNotLinkedEdgesForDroppedRejections` wrote cast.json, which
+           needs one further link (`deadIds` matching a character's
+           `notLinkedTo`). Measured: neutralise `noteExternalWrite` AND drift
+           the fixture's edge to an id `deadIds` cannot match, and this
+           assertion still passes.
+
+           Olga's edge being cleared is strictly stronger but is STILL not a
+           pin on the job-start write: `reconcileRejectEdgesOnDisk` clears the
+           same edge at persist, so under that same double mutation this also
+           passes. Measured, not reasoned.
+
+           So neither line is a guard against future fixture rot, and neither
+           is labelled as one. What actually catches the bug is
+           `warningCodes` below, verified by mutation: neutralise
+           `noteExternalWrite` with the fixture INTACT and this test goes red
+           on the phantom advisory. These two lines are cheap corroboration
+           that the run did the work, not a substitute for that. A real pin
+           on the job-start write would have to assert the write happened at
+           the moment it happened, which nothing observable from out here
+           can do — see #2694's PR discussion. */
         expect(readCastIdHistoryRejectedPairs(bookDir)).toEqual([]);
-        /* Further anti-vacuity: the notLinkedTo edge must have actually been
-           cleared from disk. If the write never happened, olga's notLinkedTo
-           would still contain the rejected edge. This pins that
-           `clearNotLinkedEdgesForDroppedRejections` was wired and executed. */
         const cast = readCast(bookDir);
         const olga = cast.characters.find((c) => c.id === 'olga');
         expect(olga?.notLinkedTo ?? []).toEqual([]);
@@ -907,9 +924,11 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
 
         expect(readCastIdHistoryRejectedPairs(bookDir)).toEqual([]);
-        /* Same anti-vacuity check as control 8: the notLinkedTo edge must have
-           been cleared despite the genuine foreign write. This proves the run
-           wired the write despite the injection injection. */
+        /* Same two corroborating checks as control 8, carrying the same
+           caveat — see that test for why neither is a pin on the job-start
+           write. The load-bearing assertion here is `warningCodes` below:
+           EXACTLY one advisory, so a fix that silenced detection outright
+           would fail this even though it satisfies control 8. */
         const cast = readCast(bookDir);
         const olga = cast.characters.find((c) => c.id === 'olga');
         expect(olga?.notLinkedTo ?? []).toEqual([]);
