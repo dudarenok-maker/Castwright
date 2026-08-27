@@ -6,6 +6,14 @@
 // 7 rows, and `31 owed` against a body totalling 35 — under-reporting
 // outstanding debt by four rows for weeks. See the register's own header
 // and CLAUDE.md Before-shipping checklist step 3.
+//
+// Any tightening of `checkRegister` is retro-applied to `origin/main`'s copy of
+// the register, because `resolveBaselineGroups` runs the CURRENT checker over
+// the FETCHED baseline and rejects it outright on any error. A new rule
+// therefore cannot land in the same PR as the data it requires: ship the data
+// first, merge it, then ship the rule. Landing both at once makes every
+// `--against-published` run fail with CANNOT_VERIFY_BASELINE_ERROR, which the
+// register's runbook says can only be fixed from `main`.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -43,10 +51,14 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 //
 // Residual limitation, deliberately not fixed here: two *balanced* stray
 // fences bracketing a real row still hide that row without leaving anything
-// open at EOF, so this check can't catch it — and the contiguity check (4)
-// only surfaces it when the hidden row isn't the group's highest-numbered
-// one (a hidden top row just looks like a smaller-but-still-contiguous
-// group).
+// open at EOF, so this check can't catch it. Under the old contiguity check,
+// a hidden row surfaced only when it wasn't the group's highest-numbered one
+// (a hidden top row just looked like a smaller-but-still-contiguous group) —
+// under check 4a's whole-document ID uniqueness, a balanced-fence-hidden row
+// is invisible to EVERY check, full stop, since there is no visible row for
+// its ID to collide with. This is a widening of the limitation, not a
+// narrowing one, and is worth saying plainly rather than leaving the old,
+// narrower caveat standing.
 function stripFences(text) {
   const lines = text.split('\n');
   let openFence = null;
@@ -169,16 +181,19 @@ function parseBodyGroups(sections) {
 }
 
 // Formats a group's found row numbers for an error message: a single row is
-// just "E1"; "E1–E7" when contiguous from 1 with more than one row (the
-// common case); otherwise a plain list — a gap or duplicate is already named
-// explicitly by the contiguity check below.
+// just "E1"; a contiguous run collapses to "E1–E7" — under stable IDs that
+// run no longer has to start at 1, so "E3–E5" collapses too; otherwise a
+// plain, comma-joined list. A gap is not an error under stable IDs (rows are
+// allocated once and never reused, so gaps are the expected shape after a
+// discharge), and a duplicate ID is already named explicitly by check 4a.
 function formatRowList(letter, numbers) {
   if (numbers.length === 0) return 'no rows';
   const sorted = [...numbers].sort((a, b) => a - b);
   if (sorted.length === 1) return `${letter}${sorted[0]}`;
-  const isContiguousFromOne =
-    new Set(sorted).size === sorted.length && sorted.every((n, i) => n === i + 1);
-  if (isContiguousFromOne) return `${letter}${sorted[0]}–${letter}${sorted[sorted.length - 1]}`;
+  const isContiguous =
+    new Set(sorted).size === sorted.length &&
+    sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1);
+  if (isContiguous) return `${letter}${sorted[0]}–${letter}${sorted[sorted.length - 1]}`;
   return sorted.map((n) => `${letter}${n}`).join(', ');
 }
 
@@ -255,10 +270,10 @@ export function checkRegister(text) {
   const malformedLetterSet = new Set(malformedLetters);
   // Mirrors malformedLetterSet: a letter with an invalid row heading (e.g.
   // `### A2a`/`### A2b` from splitting a row instead of annotating its
-  // title) already gets the rejection message above — suppressing checks 1
-  // and 4 for it avoids also reporting a count/contiguity mismatch that's
-  // just an artifact of the same rejected heading (ops-44, issue #1913
-  // review finding).
+  // title) already gets the rejection message above — suppressing check 1
+  // and 4b's per-row comparison for it avoids also reporting a count
+  // mismatch or an at-or-above-next-id violation that's just an artifact of
+  // the same rejected heading (ops-44, issue #1913 review finding).
   const invalidRowHeadingLetterSet = new Set(invalidRowHeadings.map((r) => r.letter));
   const errors = [];
 
@@ -278,7 +293,7 @@ export function checkRegister(text) {
   // (ops-44, issue #1913).
   for (const { letter, headingText } of invalidRowHeadings) {
     errors.push(
-      `Row heading "### ${headingText}" is not a valid row number. Rows are numbered contiguously (${letter}1, ${letter}2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
+      `Row heading "### ${headingText}" is not a valid row number. Row numbers are plain integers (${letter}1, ${letter}2, …), allocated once from the group's next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
     );
   }
 
@@ -370,7 +385,8 @@ export function checkRegister(text) {
     // NOTE the suppression is deliberately NOT applied to the marker-presence
     // and floor checks below — only to the per-row comparison. `:222-228`
     // suppresses checks on a letter with an invalid row heading because its
-    // count and contiguity were artifacts of that same rejected heading.
+    // count and its at-or-above-next-id verdicts were artifacts of that same
+    // rejected heading.
     // Whether a group carries an allocation marker is independent of every row
     // heading in it, so suppressing it here would let one `### A19b` anywhere
     // in Group A make Group A's MISSING marker unreportable — widening a
@@ -549,7 +565,8 @@ function parseLiveViewSections(html) {
 // #2199 review round 3 (A2): that narrower test was too weak. Every OTHER
 // kind of malformed baseline — a glance-table row with no matching body
 // section, a body section with no glance-table row, a count mismatch, a
-// contiguity gap, a duplicate letter, a sub-lettered row heading, ... —
+// duplicate row ID, a row at or above its group's next-id, a missing
+// next-id marker, a duplicate letter, a sub-lettered row heading, ... —
 // used to fall through it and produce a non-null result with an EMPTY (or
 // merely incomplete) `bodyGroups` for the broken group. Since an empty
 // baseline group makes every live-page row for that group read as
@@ -646,9 +663,9 @@ export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 //     at all, so they fire in both modes.
 //
 //     #2199: "the live page has X, the register doesn't" is ALSO the normal
-//     shape of a deliberate row discharge — removing a row (and, since rows
-//     renumber contiguously, often renumbering the survivors) always makes
-//     the still-live page look "ahead". `extraOnly` therefore disambiguates
+//     shape of a deliberate row discharge — removing a row always makes the
+//     still-live page look "ahead" by that row's own ID, since under stable
+//     row IDs nothing else shifts. `extraOnly` therefore disambiguates
 //     each such X against `options.baselineText` — a second register text,
 //     meant to be `origin/main`'s copy fetched by the CLI layer (this
 //     function never shells out itself, so it stays unit-testable without
@@ -696,11 +713,9 @@ export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 //     not a silent no-op — see the check at the end of this function — so a
 //     typo can't degenerate the flag into a blanket mute.
 //
-//     Renumbering wrinkle: rows renumber contiguously within a group, so
-//     discharging a MIDDLE row (say E5) does not make E5 the live-only
-//     one — every row after it shifts down to fill the gap, so the group's
-//     HIGHEST id (e.g. E10) is the one that vanishes. Name the ID that
-//     actually disappeared, not the row you conceptually discharged.
+//     Name the ID of the row you discharged. Under stable row IDs that is
+//     exactly the ID that disappears from the live page — IDs are never
+//     reused, so nothing shifts.
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
@@ -1033,9 +1048,9 @@ export function checkLiveView(
         errors.push(
           `${DISCHARGE_NAME_ERROR_PREFIX}${id}, but it never accounts for a live-only row ` +
             '(present on the published page, absent from this register) — there is nothing ' +
-            'to suppress. If you discharged a middle row, remember rows renumber ' +
-            "contiguously: the ID that actually vanished from the live page is the group's " +
-            'HIGHEST id, not the row you conceptually discharged. Name that one instead.',
+            'to suppress. Under stable row IDs the ID you discharged is exactly the ID that ' +
+            'disappears — check for a typo, or that the row is genuinely absent from both ' +
+            'the register and the origin/main baseline.',
         );
       }
     }
@@ -1430,7 +1445,8 @@ function runCheckOnboxRegisterCli() {
     // framing below is actively wrong: that framing's remedy ("Merge the
     // rows named above — already live, not yet in this register") is false
     // for a name like an already-registered row, and an agent following it
-    // literally would add a duplicate and trip the contiguity check.
+    // literally would add a duplicate and trip check 4a's document-wide ID
+    // uniqueness check.
     // Partitioned by the shared `DISCHARGE_NAME_ERROR_PREFIX` — see that
     // constant's own comment for why a prefix, not an identity match, is the
     // right tool here. Skipped entirely when `cannotVerify` — in that case
@@ -1455,8 +1471,7 @@ function runCheckOnboxRegisterCli() {
           ) || publishedFailed;
         console.error(
           'Fix the --discharging value(s) named above — each error explains why that ID ' +
-            "didn't match, including the renumbering wrinkle — then re-run this command " +
-            'against the SAME saved copy from step 1.',
+            "didn't match — then re-run this command against the SAME saved copy from step 1.",
         );
       }
       if (behindErrors.length > 0) {

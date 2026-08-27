@@ -434,7 +434,7 @@ Body text.
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A19b" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A19b" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the sub-lettered-row error, got: ${JSON.stringify(errors)}`,
   );
@@ -737,7 +737,7 @@ Body text.
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A2.1 · thing 2 part 1" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A2.1 · thing 2 part 1" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the A2.1 rejection, got: ${JSON.stringify(errors)}`,
   );
@@ -745,7 +745,7 @@ Body text.
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A2.2 · thing 2 part 2" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A2.2 · thing 2 part 2" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the A2.2 rejection, got: ${JSON.stringify(errors)}`,
   );
@@ -800,8 +800,8 @@ Body text.
 `;
   const errors = checkRegister(text);
   assert.deepEqual(errors, [
-    'Row heading "### A2a · thing 2 part a" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
-    'Row heading "### A2b · thing 2 part b" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    'Row heading "### A2a · thing 2 part a" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    'Row heading "### A2b · thing 2 part b" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     'Group A has no "<!-- next-id: AN -->" allocation marker. Add one directly under the group heading — without it there is nothing to allocate new row IDs from.',
   ]);
 });
@@ -838,7 +838,7 @@ test('review fix 4: CRLF line endings do not leak a raw \\r into the invalid-row
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A19b · sub" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A19b · sub" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the sub-lettered-row error with no trailing \\r, got: ${JSON.stringify(errors)}`,
   );
