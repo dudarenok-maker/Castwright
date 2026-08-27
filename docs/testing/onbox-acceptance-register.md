@@ -182,8 +182,8 @@ comparison, see the edge list above). The merge step that closes this, run
          N ids this way (the shifted id can change each time you re-run);
          never name an (N+1)th id just because the check is still red after N.
        - **A whole group with NO survivors left** — e.g. discharging a
-         single-row group's only row (Group F's sole row, F1, is a real,
-         live example of exactly this shape). There is nothing left to
+         single-row group's only row, or the last surviving row of a group
+         that once had more. There is nothing left to
          renumber, so every row the group's live-page section still lists
          reads as live-only. Name exactly the rows you discharged — for a
          one-row group, that's one ID, not "every ID the error currently
@@ -356,20 +356,26 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **Last change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A38** (Qwen duration
 > golden baseline bless, #1994).
 >
-> **Previous change: 2026-08-27, 60 → 60 (no row count change).** The **Blocked**
-> section's two ffmpeg rows no longer carry row IDs (previously borrowed **E6** and
-> **E8** from the live Group E sequence, creating silent drift during renumbering).
-> Both Blocked headings now carry title alone (`ops-35 ffmpeg floor`, `ops-36
-> golden-assembly`), matching other Blocked rows, and the live view renders `num`
-> cells as `—`. Also added: per-group allocation markers (`<!-- next-id: ... -->`) for
-> future row allocation, inert until the contiguity check is replaced (#2629).
+> **Previous change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
+> two ffmpeg rows no longer carry row IDs. They had borrowed **E6** and **E8** from
+> the live Group E sequence, so each of those IDs named *two* rows — one live Group
+> E row and one Blocked row — and Group E renumbers underneath the Blocked section
+> whenever a row is discharged, so the pairing drifted silently. Both Blocked
+> headings now carry their title alone (`ops-35 ffmpeg floor`, `ops-36
+> golden-assembly`), matching the section's other three rows, and the live view
+> renders their `num` cells as `—`. **Cite them by title from now on** — one
+> features-doc citation was re-pointed in the same change. Nothing was renumbered,
+> renamed or discharged. Also added: a per-group `<!-- next-id: <Letter>101 -->`
+> allocation marker, inert until the contiguity check is replaced
+> ([#2629](https://github.com/dudarenok-maker/Castwright/issues/2629)) — do not
+> allocate from it yet; Group A's marker carries the same caveat inline.
 > ([#2634](https://github.com/dudarenok-maker/Castwright/issues/2634),
 > [#2653](https://github.com/dudarenok-maker/Castwright/issues/2653))
 >
-> **Prior change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+> **Previous change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
 > audible effect, not yet run).
 >
-> **Previous change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
+> **Prior change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
 > **Old A34** (voice reassignment vs. persisted audition centroid, #1969/PR #2402)
 > had two criteria: (1) a reassignment discards the stale old-voice reference
 > rather than silently reusing it; (2) a rebuilt reference — not a failed-to-build
@@ -544,6 +550,13 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 ---
 
 ## Group A — the GPU box
+
+<!-- Allocation marker (#2599/#2629). A row ID is allocated once and never
+     reused: take this value for a new row, then bump it. DO NOT allocate from
+     this yet — until the contiguity check is removed from
+     scripts/check-onbox-register.mjs, an ID from this range fails the build.
+     Until then, keep following the existing numbering. -->
+<!-- next-id: A101 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2963,6 +2976,8 @@ This closes the #1994 A-grade visibility gap the scaffold was written for.
 
 ## Group B — local Ollama analyzer only
 
+<!-- next-id: B101 -->
+
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
 ### B1 · Analysing view honesty for local analyzers (plan 216)
@@ -3050,6 +3065,8 @@ chapter.
 ---
 
 ## Group C — one *Ночной дозор* re-analysis session
+
+<!-- next-id: C101 -->
 
 **Four rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
@@ -3379,6 +3396,8 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 
 ## Group D — multi-language TTS render + ASR
 
+<!-- next-id: D101 -->
+
 ### D1 · Non-English ASR content-QA calibration ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
 
 Render real audio in es/ru (then fr/de), run the ASR content-QA gate against it,
@@ -3431,6 +3450,8 @@ to real output, not about VRAM or a specific card.
 ---
 
 ## Group E — not the GPU box
+
+<!-- next-id: E101 -->
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -3523,7 +3544,8 @@ real hardware. The plan names its own fallback if it turns out false: soften
 CPU-only sub-cases.
 
 > **Correction, 2026-08-21.** The owner ruled E4 is runnable, not
-> hardware-blocked like E6/E8/B2-step-7 — `tts.qwen.device` is a real
+> hardware-blocked like the ops-35 ffmpeg floor / ops-36 golden-assembly
+> Blocked rows or B2-step-7 — `tts.qwen.device` is a real
 > user-facing registry knob (`server/src/config/registry.ts:676-682`), not a
 > machine-level hardware constraint. **Wave-4 step 5f attempt, STILL OWED:**
 > port `:9000` was already held by another lane's live sidecar process for
@@ -3954,6 +3976,8 @@ module-level comment for the exact fallback order being exercised.
 
 ## Group G — GitHub Actions itself
 
+<!-- next-id: G101 -->
+
 Not physical hardware — the prerequisite is a real dispatch of a specific workflow
 on the real GitHub Actions runner, which local execution cannot substitute for
 (a fresh `ubuntu-latest` image, real `GH_TOKEN`/`gh` wiring, real `apt-get`).
@@ -4162,6 +4186,8 @@ and the observations above are recorded here.
 
 ## Group H — no hardware, needs a real CJK manuscript this corpus lacks
 
+<!-- next-id: H101 -->
+
 Not a hardware prerequisite at all — the blocker is a real-book fixture this
 repo's corpus doesn't currently have. `detectManuscriptLanguageFromChapters`
 needs no GPU, sidecar, or analyzer; it is a pure function over chapter text,
@@ -4302,7 +4328,7 @@ risking other lanes' concurrent work — not attempted. This box is
 dual-NVIDIA; this will not move until a CPU-only box exists, or one where
 GPU visibility can safely be disabled.
 
-### E8 · ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
+### ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
 
 **1. What is dormant.** The cross-build half of the ops-36 design — whether
 L1/L2/L3's hard assertions survive a genuinely different ffmpeg build, and
@@ -4336,7 +4362,7 @@ not satisfy the row's intent** — the row means a different environment, not
 a different binary on the same one. Recorded here as a neutral decision so a
 future reader can reverse it deliberately rather than stumble into it.
 
-### E6 · ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
+### ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
 
 **1. What is dormant.** The below-floor preflight exit (`npm run test:server`
 must exit 1 against ffmpeg 4.4, printing the host OS's upgrade command); the
@@ -4351,8 +4377,9 @@ and update.
 
 **2. Why this box cannot reach it.** Every unit test drives the floor through
 a **mocked** `spawnSync`, so nothing has been exercised against a real old
-ffmpeg binary — and per wave-3 step 7's verification (shared with E8, above),
-this box has no ffmpeg swap available and no container runtime of any kind,
+ffmpeg binary — and per wave-3 step 7's verification (shared with the
+ops-36 golden-assembly blocked row, above), this box has no ffmpeg swap
+available and no container runtime of any kind,
 so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 
 **3. What would change that.** A box or container where ffmpeg can be

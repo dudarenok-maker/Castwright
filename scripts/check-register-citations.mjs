@@ -577,11 +577,19 @@ function extractRunSheetMentions(rowBody) {
 
 /**
  * Parses the register's `## Group <Letter>` sections into a Map keyed by row
- * ID. Row headings that appear OUTSIDE a `Group <Letter>` section (e.g. the
- * real register's "Blocked" section, which deliberately re-uses a live row's
- * ID heading for cross-reference, per this file's own comment above) are
- * NOT collected — mirrors check-onbox-register.mjs's own group-section
- * restriction, and for the same reason.
+ * ID. Row headings that appear OUTSIDE a `Group <Letter>` section are NOT
+ * collected — mirrors check-onbox-register.mjs's own group-section
+ * restriction, and for the same reason: only a group section's headings are
+ * real rows.
+ *
+ * The "Blocked" section USED TO borrow live row IDs (`E6`/`E8`) for
+ * cross-reference, and this comment cited that as the restriction's reason.
+ * It no longer does: #2634/#2653 removed those IDs because one ID naming two
+ * rows broke every citation to either, so a Blocked heading now carries its
+ * title alone and check-onbox-register renders its `num` cell as `—`.
+ * The restriction stays regardless — it is structural, not a workaround for
+ * that one shape, and nothing stops a future non-group section from carrying
+ * an ID-shaped heading.
  *
  * @returns {{ rows: Map<string, { title: string, issues: Set<number>,
  *   runSheetPaths: Set<string>, mentionedRunSheetPaths: Set<string> }> }}
