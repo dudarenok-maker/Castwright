@@ -351,15 +351,16 @@ Design rationale:
   loudnorm; **Suite A** (`:sidecar`, real Kokoro) asserts each fixture line's
   length vs `kokoro-baseline.json` within tolerance, AND (since #1911) that a
   fresh Whisper transcript of the line matches the baseline's recorded
-  `transcript` at tolerance 0, while real Qwen carries a duration-only golden baseline (#1994) — its fixture line's length vs `qwen-duration-baseline.json` within tolerance — triple-gated (venv / pytest / Kokoro weights),
+  `transcript` at tolerance 0, while real Qwen carries a duration-only golden baseline (#1994) — its fixture line's length vs `qwen-duration-baseline.json` within tolerance — triple-gated (venv / pytest / Kokoro OR Qwen OR Coqui weights),
   SKIP+exit-0 when absent. Partials: `npm run test:golden-audio:assembly`
   (Node-side audio changes, runs anywhere) and `npm run test:golden-audio:sidecar`
   (engine changes, box with weights). Flags via the full runner: `--assembly-only`,
   `--sidecar-only`, `--engine=<kokoro|coqui|qwen>`, and `--bless` (re-records the
   baselines of the **selected** suites — bare `--bless` does both,
   `--assembly-only --bless` records Suite B's `golden-chapter.baseline.json` +
-  `.decoded.pcm`, `--sidecar-only --bless` records **both** `kokoro-baseline.json`
-  and `instruct-baseline.json`; note `npm run test:golden-audio:assembly` bypasses
+  `.decoded.pcm`, `--sidecar-only --bless` records `kokoro-baseline.json` and
+  `instruct-baseline.json` (Qwen duration requires explicit `--engine=qwen`);
+  note `npm run test:golden-audio:assembly` bypasses
   the runner and so can never bless). Cross-engine sanity needs `GOLDEN_COQUI=1` /
   `GOLDEN_QWEN_VOICE=<id>`. The content-drift check adds `ASR_MODEL=base`'s ~145 MB
   Whisper weights as a **network prerequisite** on first run (fetched from

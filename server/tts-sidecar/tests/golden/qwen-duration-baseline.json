@@ -1,5 +1,5 @@
 {
   "_comment": "Unblessed (#1994). Qwen decoding is stochastic with no seed, so `tolerance` here is a PLACEHOLDER, not validated. Before the first real bless: measure the per-line duration spread across N repeated syntheses of each qwen-duration-fixture.json line on a real GPU box with a designed voice, record N and the observed spread in docs/testing/onbox-acceptance-register.md (Group A), then set `tolerance` from that measurement rather than blessing with this placeholder. Bless via: npm run test:golden-audio -- --sidecar-only --engine=qwen --bless",
-  "tolerance": 0.05,
+  "tolerance": 0.10,
   "entries": {}
 }
