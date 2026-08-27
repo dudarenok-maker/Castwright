@@ -182,6 +182,40 @@ function formatRowList(letter, numbers) {
   return sorted.map((n) => `${letter}${n}`).join(', ');
 }
 
+// The allocation floor. Every group's `next-id` must be at or above this, and
+// every row ID strictly below its group's own `next-id`. 101 is provably above
+// all history: full git log of the register and its live view gives all-time
+// high-waters of A=48, B=5, C=4, D=3, E=11, F=1, G=2, H=2, and the highest ID
+// A99 is the citation checker's own nonexistent-ID sentinel, and allocation
+// counts UPWARD, so a floor near 50 would eventually pass through it. Never
+// lower this — if a fixture breaks
+// against it, the fixture is what is wrong.
+export const ALLOCATION_FLOOR = 101;
+
+// Parses a group section's `<!-- next-id: <Letter><N> -->` allocation marker.
+// Returns null when absent, which callers report as an error rather than
+// treating as "no floor to enforce" — a missing marker silently disabling the
+// check is the guard-evaporates-on-missing-input shape this file already
+// fails closed against elsewhere.
+export function parseNextIdMarker(sectionBody, letter) {
+  const match = sectionBody.match(
+    new RegExp(`^<!--\\s*next-id:\\s*${letter}(\\d+)\\s*-->\\s*\\r?$`, 'm'),
+  );
+  return match ? Number(match[1]) : null;
+}
+
+// Every `### <Letter><N>` row heading in the WHOLE document, including
+// sections `parseBodyGroups` never visits (Blocked, and anything added later).
+// Uniqueness is a document-wide property: #2634/#2653 were exactly a Blocked
+// heading reusing a live Group E ID, which a group-scoped scan cannot see.
+export function parseAllRowHeadings(strippedText) {
+  const found = [];
+  for (const match of strippedText.matchAll(/^### ([A-Z])(\d+)(?=\s|\r?$)/gm)) {
+    found.push({ id: `${match[1]}${match[2]}`, letter: match[1], number: Number(match[2]) });
+  }
+  return found;
+}
+
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
@@ -310,19 +344,56 @@ export function checkRegister(text) {
     }
   }
 
-  // Check 4: row numbers within a group are contiguous from 1, no gaps or
-  // duplicates. A letter with an invalid row heading is skipped — see
-  // invalidRowHeadingLetterSet above.
-  for (const [letter, numbers] of bodyGroups) {
-    if (numbers.length === 0) continue;
-    if (invalidRowHeadingLetterSet.has(letter)) continue;
-    const sorted = [...numbers].sort((a, b) => a - b);
-    const isContiguous =
-      new Set(sorted).size === sorted.length && sorted.every((n, i) => n === i + 1);
-    if (!isContiguous) {
+  // Check 4a: row IDs are unique across the WHOLE document, not just within a
+  // group section. Replaces the old contiguity check, which required every
+  // discharge to renumber the survivors and so rotted every citation into the
+  // group (#2599/#2603/#2629/#2634/#2653).
+  const seenRowIds = new Map();
+  for (const { id } of parseAllRowHeadings(fenceStrippedText)) {
+    seenRowIds.set(id, (seenRowIds.get(id) ?? 0) + 1);
+  }
+  for (const [id, count] of seenRowIds) {
+    if (count > 1) {
       errors.push(
-        `Group ${letter} row numbers are not contiguous from 1: found ${sorted.map((n) => `${letter}${n}`).join(', ')}. Fix a gap or duplicate in the ${letter} row headings.`,
+        `Row ID ${id} appears more than once (${count} headings). Row IDs are allocated once and never reused — give the newer row its group's next-id instead.`,
       );
+    }
+  }
+
+  // Check 4b: every row ID sits strictly below its group's allocation marker,
+  // and the marker is at or above the floor. Together these stop a new row
+  // being given an ID that a discharged row already used.
+  for (const section of sections) {
+    const titleMatch = section.title.match(/^Group ([A-Z])\b/);
+    if (!titleMatch) continue;
+    const letter = titleMatch[1];
+    // NOTE the suppression is deliberately NOT applied to the marker-presence
+    // and floor checks below — only to the per-row comparison. `:222-228`
+    // suppresses checks on a letter with an invalid row heading because its
+    // count and contiguity were artifacts of that same rejected heading.
+    // Whether a group carries an allocation marker is independent of every row
+    // heading in it, so suppressing it here would let one `### A19b` anywhere
+    // in Group A make Group A's MISSING marker unreportable — widening a
+    // narrow suppression into a hole in the new check.
+    const nextId = parseNextIdMarker(section.body, letter);
+    if (nextId === null) {
+      errors.push(
+        `Group ${letter} has no "<!-- next-id: ${letter}N -->" allocation marker. Add one directly under the group heading — without it there is nothing to allocate new row IDs from.`,
+      );
+      continue;
+    }
+    if (nextId < ALLOCATION_FLOOR) {
+      errors.push(
+        `Group ${letter}'s next-id (${letter}${nextId}) is below the allocation floor ${letter}${ALLOCATION_FLOOR}. IDs below the floor have been used before; reusing one silently re-points every existing citation.`,
+      );
+    }
+    if (invalidRowHeadingLetterSet.has(letter)) continue;
+    for (const n of bodyGroups.get(letter) ?? []) {
+      if (n >= nextId) {
+        errors.push(
+          `Group ${letter}: ${letter}${n} is at or above the group's next-id (${letter}${nextId}). Bump next-id past every allocated ID.`,
+        );
+      }
     }
   }
 
