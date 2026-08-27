@@ -887,7 +887,7 @@ Routing: `'local'` → the already-selected analyzer instance; `'cloud'` → con
 ### Task 14: PR + review gate + acceptance handoff
 
 - [ ] Push branch; open PR titled `feat(server): dialogue-structure attribution engine (plan 247)`, body: mini release notes + `Closes #<srv-59 issue number>` (literal, not backticked) + link spec + plan + regression plan.
-- [ ] Mandatory independent `code-review` pass (effort `high` — multi-scope feat: server + skills + docs) once fully staged; triage and fold findings before merge.
+- [ ] Mandatory independent `pr-review-gate` pass (effort `high` — multi-scope feat: server + skills + docs) once fully staged; triage and fold findings before merge.
 - [ ] Cloud `verify.yml` green (required check).
 - [ ] Merge (merge commit; auto-delete branch). **Owed after merge (record in the issue before closing):** on-box acceptance per regression plan §acceptance — re-analyze _Ночной дозор_ on the default pipeline and compare against the baseline numbers.
 

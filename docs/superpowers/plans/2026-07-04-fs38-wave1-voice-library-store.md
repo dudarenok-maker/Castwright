@@ -484,7 +484,7 @@ if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`
 - [ ] **Step 1: Make the doc edits** (PR body will carry `Refs #624` — partial delivery; fs-12's #419 is already closed into #624).
 - [ ] **Step 2: Run `npm run verify`** — full battery green.
 - [ ] **Step 3: Commit** — `docs(docs): fs-38 wave-1 ship notes + release notes`
-- [ ] **Step 4:** Push branch, open PR titled `feat(frontend,server): fs-38 wave 1 — voice-library store, #/voices restructure, designed authoring` with `Refs #624`, run the mandatory code-review gate (`high` effort — multi-scope PR), fold findings, merge per repo flow.
+- [ ] **Step 4:** Push branch, open PR titled `feat(frontend,server): fs-38 wave 1 — voice-library store, #/voices restructure, designed authoring` with `Refs #624`, run the mandatory `pr-review-gate` gate (`high` effort — multi-scope PR), fold findings, merge per repo flow.
 
 ---
 

@@ -525,4 +525,4 @@ git commit -m "docs: release notes for mock script-review dedup (#1496)"
 
 ## Execution Handoff
 
-Plan complete. This will be executed via subagent-driven-development per the controlling thread's mandate (fresh implementer per task + two-stage review), then the ship task (verify, PR, code-review gate).
+Plan complete. This will be executed via subagent-driven-development per the controlling thread's mandate (fresh implementer per task + two-stage review), then the ship task (verify, PR, pr-review-gate pass).

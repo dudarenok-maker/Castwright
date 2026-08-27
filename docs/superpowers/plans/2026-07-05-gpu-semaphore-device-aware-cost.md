@@ -1012,17 +1012,11 @@ EOF
 
 - [ ] **Step 8: Mandatory independent review**
 
-Per `CLAUDE.md`'s model-routing skill: this PR is a single-scope `fix` touching only `server` (the sidecar lives under `server/tts-sidecar/`, same scope) — **medium** effort. Run:
-
-```
-/code-review medium
-```
-
-(without `--fix`). Triage findings by hand per the skill's rules: clear-cut correctness bugs get fixed, committed, and pushed (re-triggering a review pass); cleanup-only findings can be fixed without a mandatory re-review; genuinely ambiguous findings route through a judgment call with the user rather than being auto-resolved.
+Per `CLAUDE.md`'s model-routing skill: this PR is a single-scope `fix` touching only `server` (the sidecar lives under `server/tts-sidecar/`, same scope) — **medium** effort. Run the mandatory `pr-review-gate` pass at medium effort (without `--fix`). Triage findings by hand per the skill's rules: clear-cut correctness bugs get fixed, committed, and pushed (re-triggering a review pass); cleanup-only findings can be fixed without a mandatory re-review; genuinely ambiguous findings route through a judgment call with the user rather than being auto-resolved.
 
 - [ ] **Step 9: Confirm mergeable state**
 
-Once `npm run verify` is green, the PR is open with a linked issue, and the code-review pass has come back clean (or its findings are resolved), the branch is in mergeable state. Report the PR URL and a one-paragraph summary back to the user — do not merge without their go-ahead.
+Once `npm run verify` is green, the PR is open with a linked issue, and the `pr-review-gate` pass has come back clean (or its findings are resolved), the branch is in mergeable state. Report the PR URL and a one-paragraph summary back to the user — do not merge without their go-ahead.
 
 ---
 

@@ -558,7 +558,7 @@ git commit -m "docs(server): regression plan + release notes for narrator identi
 - [ ] `npm run typecheck` — clean.
 - [ ] `npm run verify:fast:branch` — branch-scoped battery green.
 - [ ] Open the PR with `Closes #NNNN` (file/link a GitHub issue — `type:feature` + `area:server` — at PR time per the PR-gate), fill Summary + Test plan, link the spec and regression plan.
-- [ ] Mandatory `code-review` pass (medium — single-scope `feat`) before merge.
+- [ ] Mandatory `pr-review-gate` pass (medium — single-scope `feat`) before merge.
 
 ## Self-Review
 

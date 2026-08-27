@@ -723,4 +723,4 @@ git commit -m "docs(server): regression plan + local-llm sweep + release notes f
 - [ ] `npm run config:check` → PASS (no `.env.example` drift)
 - [ ] `git grep -n 'RESIDENT_MODELS\|resolveAnalyzerKeepAlive\|analyzer.ollama.keepAlive' -- server/src src` → only archived-doc matches, no live code
 - [ ] `npm run verify:fast:branch` → PASS (only when no GPU generation is active — check `nvidia-smi`)
-- [ ] Open the PR with `Closes #NN`; run the mandatory `code-review` gate before merge.
+- [ ] Open the PR with `Closes #NN`; run the mandatory gate via the `pr-review-gate` skill before merge.

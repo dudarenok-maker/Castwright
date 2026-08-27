@@ -1016,7 +1016,7 @@ git commit -m "test(e2e): 7-step wizard order + Ollama pull path"
 - **Regression plan:** create `docs/features/<n>-fe49-analyzer-wizard-split.md` from `TEMPLATE.md` (frontmatter `status: active`), documenting the tri-state gate invariant + the two regression guards; add its `docs/features/INDEX.md` entry.
 - **Release notes (both):** append a technical entry to `docs/release-notes-next.md` (PR-refed) AND a brand-voice user line to the in-progress version at the top of `RELEASE_NOTES.md`.
 - **Admin follow-up (spec §7):** file a Backlog-item issue — "Mirror fe-49 analyzer/voice split + tri-state badge in `model-settings-form.tsx`/`model-manager.tsx`" (labels `area:fe`, `type:chore`, `moscow:should`) — and add the thin `docs/BACKLOG.md` row linking it.
-- **PR:** title `feat(frontend): split setup analyzer/voice steps + primary-backup analyzer signal`; body `Closes #1610`; link the regression plan. Run `npm run verify:fast:branch` locally; cloud `verify.yml` + the mandatory `code-review` pass gate the merge.
+- **PR:** title `feat(frontend): split setup analyzer/voice steps + primary-backup analyzer signal`; body `Closes #1610`; link the regression plan. Run `npm run verify:fast:branch` locally; cloud `verify.yml` + the mandatory `pr-review-gate` pass gate the merge.
 
 ## Self-review
 

@@ -543,7 +543,7 @@ git commit -m "docs(server): release notes + cast-view comment for Tier-3 alias 
 
 1. Push the branch and open a PR titled `fix(server): merge same-character-different-name cast rows (Tier-3 alias coreference)` with `Closes #1662` in the body, linking the spec `docs/superpowers/specs/2026-07-16-character-coreference-alias-merge-design.md`.
 2. Run `npm run verify:fast:branch` locally.
-3. Mandatory `code-review` gate — single-scope `fix` ⇒ **medium** effort (per model-routing). Triage and fold findings before merge.
+3. Mandatory `pr-review-gate` pass — single-scope `fix` ⇒ **medium** effort (per model-routing). Triage and fold findings before merge.
 4. This is a localized change (one source file + tests); per the Before-shipping checklist, the spec + paired tests are the regression record — no separate `docs/features/` plan doc is required. Note that explicitly in the PR body.
 
 ---

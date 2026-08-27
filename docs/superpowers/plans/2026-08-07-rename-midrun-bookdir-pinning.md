@@ -1562,7 +1562,7 @@ readable sentence in the existing error toast.
     pre-rename path, disabling the analysis↔bulk-design exclusion for that book
     until the run ends; the run's own disk writes are unaffected). A reviewer
     must not have to find that in the plan.
-  - **Review gate:** a `code-review` pass at `medium` effort (single-scope
+  - **Review gate:** a `pr-review-gate` pass at `medium` effort (single-scope
     `fix` semantics, multi-scope diff → treat as `high` if the reviewer's
     routing table says so), dispatched to the Premium tier, before merge.
   - **Merge:** "Create a merge commit" only.

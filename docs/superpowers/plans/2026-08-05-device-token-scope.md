@@ -699,7 +699,7 @@ PR body must also state: *"On-box acceptance: F2 added. PR B (server
 enforcement) follows and must not merge until an APK built from this branch is
 installed on the acceptance phone."*
 
-- [ ] **Step 7: The mandatory `code-review` gate**
+- [ ] **Step 7: The mandatory `pr-review-gate` gate**
 
 Not a docs-only PR, single-scope `fix` ⇒ **medium** effort, Premium tier. Fold
 findings before merge.
@@ -1455,7 +1455,7 @@ Before pushing, run
 the only issue trailers are the ones you intend — a `Closes` in a commit fires
 regardless of the PR body.
 
-- [ ] **Step 7: The mandatory `code-review` gate**
+- [ ] **Step 7: The mandatory `pr-review-gate` gate**
 
 Not docs-only, single-scope `feat` ⇒ **medium** effort, Premium tier. Triage and
 fold findings before merge.

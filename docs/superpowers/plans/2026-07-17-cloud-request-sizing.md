@@ -846,4 +846,4 @@ git commit -m "docs(docs): analyzer cloud request-sizing regression plan + relea
 - [ ] **Knob-parity check:** every new env var (`ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST`, `ANALYZER_STAGE1_LOCAL_INPUT_FRACTION`, `ANALYZER_STAGE2_LOCAL_INPUT_FRACTION`, `GEMINI_RPM_GEMMA_4_26B_A4B_IT`, `GEMINI_TPM_GEMMA_4_26B_A4B_IT`, `GEMINI_RPD_GEMMA_4_26B_A4B_IT`) appears in BOTH `registry.ts` (as a knob) AND `server/.env.example`. Grep each name in both files; no env-only reads. (The 26b now has full RPM/TPM/RPD parity with the 31b.)
 - [ ] `npm run verify:fast:branch` — the pre-push battery.
 - [ ] Manual (on-box, owner): free-tier Gemma re-analysis of *Ночной дозор* completes without dropped chapters or hang; calibrate `analyzer.stage2.localInputFraction` against a Qwen local truncation trace.
-- [ ] Open PR: `fix/server-cloud-request-sizing` → `main`, body `Closes #1682`, link this plan + the spec; run the mandatory `code-review` gate.
+- [ ] Open PR: `fix/server-cloud-request-sizing` → `main`, body `Closes #1682`, link this plan + the spec; run the mandatory gate via the `pr-review-gate` skill.

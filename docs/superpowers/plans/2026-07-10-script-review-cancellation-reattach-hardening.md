@@ -1787,5 +1787,5 @@ Once all 7 tasks are committed on the implementation branch (cut per CLAUDE.md's
 2. Append an entry to `docs/release-notes-next.md` and a matching user-facing line to the in-progress version section of `RELEASE_NOTES.md`.
 3. Open the PR with `Closes #1481` in the body.
 4. Run `npm run verify:fast:branch` locally.
-5. Once pushed and `verify.yml` is green, run the mandatory `code-review` pass (this PR is multi-scope — server + frontend + e2e + docs — so `high` effort per the model-routing table's PR-review-effort rule).
+5. Once pushed and `verify.yml` is green, run the mandatory `pr-review-gate` pass (this PR is multi-scope — server + frontend + e2e + docs — so `high` effort per the model-routing table's PR-review-effort rule).
 6. Merge.

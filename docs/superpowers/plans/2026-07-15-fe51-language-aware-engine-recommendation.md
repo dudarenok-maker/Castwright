@@ -898,7 +898,7 @@ git commit -m "test(frontend): e2e for wizard engine recommendation + regression
 - [ ] **Step 6: Full branch verification**
 
 Run: `npm run verify:fast:branch`
-Expected: PASS. Then open the PR (`Closes #1614`), let cloud `verify.yml` + the mandatory Premium `code-review` (single-scope `feat` → `medium` effort) run, triage findings, merge.
+Expected: PASS. Then open the PR (`Closes #1614`), let cloud `verify.yml` + the mandatory Premium `pr-review-gate` pass (single-scope `feat` → `medium` effort) run, triage findings, merge.
 
 ---
 

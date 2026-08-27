@@ -816,7 +816,7 @@ git commit -m "docs(docs): fs-35 regression plan + release notes"
 
 - [ ] **V1:** `npm run verify:fast:branch` (same battery pre-push runs) — lint, typecheck, config:check, test:hooks, test, test:server, build, each scope-gated to the branch diff. Expected: green.
 - [ ] **V2:** Confirm `manuscript.tsx` is unchanged in the diff (`git diff main --stat -- src/views/manuscript.tsx` → empty) — the store-selector design means it must not appear.
-- [ ] **V3:** Open the PR with `Closes #592`, fill Summary + Test plan, link the regression plan. Then run the mandatory `code-review` pass (medium effort — multi-scope `feat`) and fold findings before merge.
+- [ ] **V3:** Open the PR with `Closes #592`, fill Summary + Test plan, link the regression plan. Then run the mandatory `pr-review-gate` pass (medium effort — multi-scope `feat`) and fold findings before merge.
 
 ## Self-review notes (author)
 

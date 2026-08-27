@@ -1357,6 +1357,6 @@ git commit -m "docs(docs): record the cast.json lock convention and release note
       four failed staleness mechanisms; auto-closing them discards the brief the
       next attempt starts from. Declare Task 8's `library-cast-override` same-book fix and
       Task 3's #2001 fix under "Also fixed, found in passing".
-- [ ] Mandatory `code-review` pass at `high` effort — multi-scope, 17 modules.
+- [ ] Mandatory `pr-review-gate` pass at `high` effort — multi-scope, 17 modules.
 
 ---

@@ -1126,9 +1126,9 @@ EOF
 
 (Replace `#NN` with the real issue number.)
 
-- [ ] **Step 4: Request the mandatory code-review gate**
+- [ ] **Step 4: Request the mandatory `pr-review-gate` pass**
 
-Per this plan's Global Constraints and `.claude/skills/model-routing/SKILL.md`: this PR is multi-scope (`e2e`, `mocks`, `scripts`, `frontend`), not docs-only — run the `code-review` skill at **`high`** effort before merge. Triage and fix any correctness findings; a fix commit re-triggers one re-review round, per the skill's own re-review rule.
+Per this plan's Global Constraints and `.claude/skills/model-routing/SKILL.md`: this PR is multi-scope (`e2e`, `mocks`, `scripts`, `frontend`), not docs-only — run the mandatory gate via the `pr-review-gate` skill at **`high`** effort before merge. Triage and fix any correctness findings; a fix commit re-triggers one re-review round, per the skill's own re-review rule.
 
 - [ ] **Step 5: Surface the result**
 

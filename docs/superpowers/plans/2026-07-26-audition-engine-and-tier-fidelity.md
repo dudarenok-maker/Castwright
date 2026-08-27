@@ -1655,7 +1655,7 @@ follow on its own branch.
 
 - [ ] **Step 4: Mandatory independent review**
 
-Run the `code-review` gate (no `--fix`) per CLAUDE.md's Before-shipping checklist step 9, effort `medium` (single-concern `fix`, but multi-scope). Ask it specifically to re-check the one-cache-key invariant across all nine call sites — that is this change's failure mode.
+Run the mandatory `pr-review-gate` pass per CLAUDE.md's Before-shipping checklist step 9, effort `medium` (single-concern `fix`, but multi-scope). Ask it specifically to re-check the one-cache-key invariant across all nine call sites — that is this change's failure mode.
 
 ---
 

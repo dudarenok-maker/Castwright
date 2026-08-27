@@ -25,6 +25,19 @@ Each plan's frontmatter `status:` is one of:
 
 When a plan reaches **stable** AND has a filled **Ship notes** section, move it to [`archive/`](archive/README.md) in the same PR — the top-level index is the working set, not a changelog. See `archive/README.md` for the move checklist.
 
+### `docs/superpowers/plans/` and `specs/`
+
+These directories hold the design-thread artifacts (implementation plans from
+`writing-plans` and specs from `brainstorming`), not the regression plans
+above — they carry no `status:` frontmatter, so their lifecycle is tracked at
+the **checkbox level**, not the file level. An unchecked `- [ ]` step is still
+actionable and must never point at a retired mechanism; a checked step, or
+narrative/decision-record prose describing what was already decided or done,
+is historical and is never rewritten to "fix" it — that would falsify the
+record (see CLAUDE.md's "Surgical changes"). Anyone sweeping a retired
+mechanism across these directories (e.g. the `code-review`→`pr-review-gate`
+rename) fixes unchecked steps only.
+
 ## How to run a plan
 
 1. Pick a plan from the index.

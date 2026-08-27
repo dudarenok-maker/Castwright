@@ -1196,7 +1196,7 @@ File/confirm a GitHub issue for this feature (title `fs-58 — script-review who
 - [ ] `npx vitest run src/store/script-review-slice.test.ts src/lib/apply-proposed.test.ts src/components/script-review-diff.test.tsx` — all green.
 - [ ] `npm run verify:fast:branch` from the worktree root — lint + typecheck + scoped tests + build.
 - [ ] Manual: at phone width (<640px) the accordion is single-column, chapter/type controls are ≥44px, and expanding works by tap.
-- [ ] Open the mandatory `code-review` pass (medium effort — single-scope `feat`) once pushed.
+- [ ] Open the mandatory `pr-review-gate` pass (medium effort — single-scope `feat`) once pushed.
 
 ---
 
