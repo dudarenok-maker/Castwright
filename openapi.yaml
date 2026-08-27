@@ -2138,8 +2138,50 @@ paths:
           description: Override written (or cleared) on every matching cast.json entry
         '400':
           description: Body is missing or malformed (override must be a BaseVoice or null)
+        '200':
+          description: >-
+            Applied to at least one linked character, but at least one other
+            linked character was skipped (a residual-window clone, or —
+            pre-existing — a same-book conflict). See `skipped`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated, skipped]
+                properties:
+                  updated: { type: integer }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      required: [bookDir, characterId, reason]
+                      properties:
+                        bookDir: { type: string }
+                        characterId: { type: string }
+                        reason: { type: string }
         '404':
           description: No character with that voiceId exists in any confirmed cast
+        '409':
+          description: >-
+            Refused entirely — a consented cloned voice exists on this
+            linked character somewhere in the series (or, for a SET, on a
+            different clone-capable engine). No book was written.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      required: [bookDir, characterId, reason]
+                      properties:
+                        bookDir: { type: string }
+                        characterId: { type: string }
+                        reason: { type: string }
 
   # --- Voice library (fs-38 Wave 1) --------------------------------
   /api/voice-library:

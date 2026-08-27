@@ -1999,6 +1999,24 @@ async function realGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
   return res.json();
 }
 
+/* Shape of the 409 Conflict body returned by PUT /api/voices/:voiceId/override
+   when a cloned slot blocks propagation. Exported so the UI can render the
+   refusal (e.g. a toast listing the affected books). */
+export interface VoiceOverrideRefusedError {
+  error: 'already_cloned';
+  skipped: Array<{ bookDir: string; characterId: string; reason: string }>;
+}
+
+export class VoiceOverrideRefused extends Error {
+  readonly status = 409;
+  readonly body: VoiceOverrideRefusedError;
+  constructor(body: VoiceOverrideRefusedError) {
+    super('Voice override refused: a cloned slot already occupies this voice.');
+    this.name = 'VoiceOverrideRefused';
+    this.body = body;
+  }
+}
+
 async function realSetVoiceOverride(
   voiceId: string,
   override: BaseVoice | null,
@@ -2012,6 +2030,10 @@ async function realSetVoiceOverride(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  if (res.status === 409) {
+    const refused = (await res.json()) as VoiceOverrideRefusedError;
+    throw new VoiceOverrideRefused(refused);
+  }
   if (!res.ok)
     throw new Error(
       `Voice override update failed (${res.status}): ${(await res.text()) || res.statusText}`,
