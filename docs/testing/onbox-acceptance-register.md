@@ -339,7 +339,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -349,12 +349,15 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
-> audible effect, not yet run).
+> **Last change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A38** (Qwen duration
+> golden baseline bless, #1994).
+>
+> > **Previous change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+> > audible effect, not yet run).
 
 > **Previous change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
 > **Old A34** (voice reassignment vs. persisted audition centroid, #1969/PR #2402)
@@ -2934,6 +2937,19 @@ clone needed — the stock catalogue voice `Damien Black` reproduces this
 shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
 itself has only this one dialogue shape and no separate run sheet (unlike
 A31's). *Cost:* short — one or two renders of a Russian test sentence.
+
+---
+
+### A38 · Qwen duration golden baseline needs its real per-line spread measured before blessing ([#1994](https://github.com/dudarenok-maker/Castwright/issues/1994)) · **single 8 GB card, a designed Qwen voice already present**
+
+`server/tts-sidecar/tests/golden/qwen-duration-baseline.json` ships UNBLESSED —
+the test file (`test_qwen_duration_golden.py`) is real, but the baseline has
+empty `entries` and a placeholder `tolerance`, so the opt-in golden gate SKIPs
+until it is blessed. Qwen decoding is stochastic with no seed, so the true
+per-line `duration_sec` spread across repeated syntheses of each
+`qwen-duration-fixture.json` line is the missing number: `tolerance` must be
+**derived from that measured spread** (with headroom), not picked, then blessed.
+This closes the #1994 A-grade visibility gap the scaffold was written for.
 
 ## Group B — local Ollama analyzer only
 

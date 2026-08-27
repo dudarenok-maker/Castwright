@@ -351,7 +351,7 @@ Design rationale:
   loudnorm; **Suite A** (`:sidecar`, real Kokoro) asserts each fixture line's
   length vs `kokoro-baseline.json` within tolerance, AND (since #1911) that a
   fresh Whisper transcript of the line matches the baseline's recorded
-  `transcript` at tolerance 0 — triple-gated (venv / pytest / Kokoro weights),
+  `transcript` at tolerance 0, while real Qwen carries a duration-only golden baseline (#1994) — its fixture line's length vs `qwen-duration-baseline.json` within tolerance — triple-gated (venv / pytest / Kokoro weights),
   SKIP+exit-0 when absent. Partials: `npm run test:golden-audio:assembly`
   (Node-side audio changes, runs anywhere) and `npm run test:golden-audio:sidecar`
   (engine changes, box with weights). Flags via the full runner: `--assembly-only`,

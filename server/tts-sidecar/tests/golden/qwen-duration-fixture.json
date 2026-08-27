@@ -1,0 +1,26 @@
+{
+  "_comment": "Qwen golden-audio duration fixture (#1994); same text-normalization-class coverage as fixture.json; run against whichever designed Qwen voice this box has (see pick_designed_voice in tests/golden/prereq.py — Qwen voices are per-workspace bespoke, not a fixed catalog like Kokoro's, so no voice id is hardcoded here); re-bless qwen-duration-baseline.json (npm run test:golden-audio -- --sidecar-only --engine=qwen --bless) whenever this file is edited.",
+  "model": "0.6b",
+  "lines": [
+    {
+      "id": "narrator-plain",
+      "text": "The lighthouse keeper watched the grey sea roll in."
+    },
+    {
+      "id": "numbers-and-year",
+      "text": "In 1999, all 7 of them boarded the 4:15 train to Dover."
+    },
+    {
+      "id": "abbreviations",
+      "text": "Dr. Hollis and Mr. Vane arrived at St. Aldric's before noon."
+    },
+    {
+      "id": "quotes-and-punctuation",
+      "text": "\"Wait,\" she said, \"did you really mean it — all of it?\""
+    },
+    {
+      "id": "multi-sentence-group",
+      "text": "He paused at the door. The hallway was silent. Then he stepped through."
+    }
+  ]
+}
