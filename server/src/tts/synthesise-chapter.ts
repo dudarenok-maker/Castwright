@@ -1037,7 +1037,15 @@ async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
    (below) to hand off from "coqui derive phase" back to "qwen phase" — see
    the pre-pass's own Task 22 comment for why this fires only when a qwen
    load is about to happen afterward (evicting XTTS unconditionally would
-   unload it right before every Coqui-only chapter's groups reload it). */
+   unload it right before every Coqui-only chapter's groups reload it).
+
+   COQUI-RESIDENCY-POLICY — this is mechanism A (Node, plan-driven,
+   proactive). A second, independent mechanism can also free XTTS VRAM:
+   the sidecar's admission ladder (`_idle_evict_steps` in
+   `server/tts-sidecar/main.py`), which reclaims idle Coqui when an
+   unrelated op is VRAM-starved. Neither mechanism knows the other exists;
+   the keep-both ruling and the full cross-reference are in
+   `docs/features/264-vram-aware-gpu-placement.md`. */
 async function evictCoquiForQwenPhase(signal?: AbortSignal): Promise<void> {
   return evictEngineForPhase('coqui', signal);
 }
