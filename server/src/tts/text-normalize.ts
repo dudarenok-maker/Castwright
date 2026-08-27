@@ -123,7 +123,10 @@ export function denormaliseAllCaps(text: string): string {
     that use a leading dash for dialogue — so a leading dash becomes "... "
     instead of ", ". Order matters: this runs BEFORE the general `DASH_RUN`
     pass below, and the ellipsis it inserts contains no dash character, so
-    the two passes can't double-process the same dash. */
+    the two passes can't double-process the same dash. Finally, this function
+    collapses any run of two or more commas (with or without intervening
+    whitespace) into a single comma -- this fires independent of dashes, so
+    it also mutates comma-only input with no dash present at all (#2059). */
 export function softenDashes(text: string): string {
   return text
     .replace(LEADING_DASH, '... ')
