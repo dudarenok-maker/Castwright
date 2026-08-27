@@ -44,7 +44,7 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../tts/synthesise-chapter.js';
-import { forEachMatchingCastCharacter } from './voices.js';
+import { forEachMatchingCastCharacter, hasClonedSlotAmongMatches } from './voices.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import {
   buildSampleText,
@@ -185,10 +185,32 @@ export async function persistEmotionVariant(
        key). Cross-book propagation staleness is tracked on #2006, not fixed
        here. */
     const baseVoiceId = qwenStorageKey(character, characterId);
-    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) =>
-      addVariant(c, baseVoiceId),
-    );
-    return 'applied'; // temporary — Task 6 replaces this whole branch with the real series-wide check
+
+    /* Fresh, series-wide re-check immediately before the walk — replaces the
+       caller's stale pre-GPU snapshot. A hit refuses the WHOLE propagation:
+       no book is written. See the qwen-voice spec's "Series-wide check,
+       reused, not reimplemented". */
+    const stillCloned = await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter);
+    if (stillCloned) return 'skippedClone';
+
+    /* Residual-window backstop: the walk still takes nonzero time after the
+       scan above passed. Threading the walk's own returned count through
+       (rather than discarding it, as an earlier revision did) is what lets
+       'applied' and 'notFound' be told apart below. */
+    let residualSkip = false;
+    const updated = await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) => {
+      if (characterHasClonedSlot(c)) {
+        residualSkip = true;
+        return c; // unchanged — this book's own write correctly declined
+      }
+      return addVariant(c, baseVoiceId);
+    });
+    if (residualSkip) {
+      console.warn(
+        `[persistEmotionVariant] residual-window skip: a clone appeared on a linked book for ${characterId} between the series-wide scan and this walk reaching it (${updated} book(s) still received the variant).`,
+      );
+    }
+    return updated > 0 ? 'applied' : 'notFound';
   }
 
   /* Book-scoped write — this function carries no other lock, so the read

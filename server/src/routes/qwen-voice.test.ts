@@ -1696,6 +1696,173 @@ describe('persistEmotionVariant', () => {
     expect(variants.angry).toEqual({ name: 'qwen-wren__angry' });
     expect(variants.sad).toEqual({ name: 'qwen-wren__sad' });
   });
+
+  describe('series-scoped:', () => {
+    /* Unlike the book-scoped tests above (isolated temp dirs), the series
+       branch's fresh check + walk scan the shared workspace by author/series,
+       so these books must live under the module's own workspaceRoot/books
+       tree — same wiring #2088's series test and the srv-43 collision test
+       above use, adapted from writeBookOnDisk/writeStandaloneBook for a
+       SECOND linked (non-standalone) book in AUTHOR/SERIES. */
+    const seriesFilter = { author: AUTHOR, series: SERIES };
+    const createdDirs: string[] = [];
+
+    function makeSeriesBook(title: string, chars: object[]): string {
+      const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+      mkdirSync(join(dir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(dir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: `series-${title}`,
+          manuscriptId: `m-series-${title}`,
+          title,
+          author: AUTHOR,
+          series: SERIES,
+          seriesPosition: 2,
+          isStandalone: false,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+      writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: chars }));
+      createdDirs.push(dir);
+      return dir;
+    }
+
+    afterEach(() => {
+      while (createdDirs.length) {
+        const dir = createdDirs.pop()!;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('two linked books, no clones anywhere — both get the variant, returns applied', async () => {
+      const wrenChar = { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+      const book1 = makeSeriesBook('Series Book One', [wrenChar]);
+      const book2 = makeSeriesBook('Series Book Two', [wrenChar]);
+
+      const outcome = await persistEmotionVariantFn(
+        book1,
+        'wren',
+        'angry',
+        'qwen-wren__angry',
+        seriesFilter,
+      );
+      expect(outcome).toBe('applied');
+
+      const cast1 = JSON.parse(readFileSync(join(book1, '.audiobook', 'cast.json'), 'utf8'));
+      const cast2 = JSON.parse(readFileSync(join(book2, '.audiobook', 'cast.json'), 'utf8'));
+      expect(cast1.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({
+        name: 'qwen-wren__angry',
+      });
+      expect(cast2.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({
+        name: 'qwen-wren__angry',
+      });
+    });
+
+    it('clone on a DIFFERENT linked book — skippedClone, and NO book (including uncloned ones) gets the variant', async () => {
+      const wrenChar = { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+      const clonedWrenChar = {
+        id: 'wren',
+        voiceId: 'wren',
+        overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+      };
+      const book1 = makeSeriesBook('Series Clone One', [wrenChar]);
+      const book2 = makeSeriesBook('Series Clone Two', [clonedWrenChar]);
+
+      const outcome = await persistEmotionVariantFn(
+        book1,
+        'wren',
+        'angry',
+        'qwen-wren__angry',
+        seriesFilter,
+      );
+      expect(outcome).toBe('skippedClone');
+
+      const cast1 = JSON.parse(readFileSync(join(book1, '.audiobook', 'cast.json'), 'utf8'));
+      const cast2 = JSON.parse(readFileSync(join(book2, '.audiobook', 'cast.json'), 'utf8'));
+      /* book1 pre-seeds a qwen base slot (mirrors the book-scoped fixture above) —
+         the veto must refuse the whole propagation, so no book gains the NEW
+         variant, but book1's pre-existing base slot is untouched either way. */
+      expect(cast1.characters[0].overrideTtsVoices.qwen.variants).toBeUndefined();
+      expect(cast2.characters[0].overrideTtsVoices.qwen).toBeUndefined();
+    });
+
+    it('no confirmed-cast book matches at all — returns notFound, distinct from applied', async () => {
+      const wrenChar = { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+      const book1 = makeSeriesBook('Series NotFound Book', [wrenChar]);
+
+      const outcome = await persistEmotionVariantFn(book1, 'wren', 'angry', 'qwen-wren__angry', {
+        author: 'nonexistent-author',
+        series: 'nonexistent-series',
+      });
+      expect(outcome).toBe('notFound');
+    });
+
+    it('residual-window skip on one linked book still returns applied (other books updated) and logs a warning', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const wrenChar = { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+      const book1 = makeSeriesBook('Series Residual One', [wrenChar]);
+      const book2 = makeSeriesBook('Series Residual Two', [wrenChar]);
+
+      const stateIo = await import('../workspace/state-io.js');
+      const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+        '../workspace/state-io.js',
+      );
+      const { castJsonPath } = await import('../workspace/paths.js');
+      const residualCastPath = castJsonPath(book2);
+
+      let callsForResidualPath = 0;
+      const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+        if (path !== residualCastPath) return actual.readJson(path);
+        callsForResidualPath += 1;
+        /* Call #1 is hasClonedSlotAmongMatches's pre-walk scan of this book —
+           let it through clean, so the series-wide check passes. Call #2 is
+           forEachMatchingCastCharacter's own read once its walk reaches this
+           book — return data with a clone injected, simulating one appearing
+           in the window between the scan and the walk. */
+        if (callsForResidualPath === 2) {
+          return {
+            characters: [
+              {
+                id: 'wren',
+                voiceId: 'wren',
+                overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+              },
+            ],
+          };
+        }
+        return actual.readJson(path);
+      });
+
+      try {
+        const outcome = await persistEmotionVariantFn(
+          book1,
+          'wren',
+          'angry',
+          'qwen-wren__angry',
+          seriesFilter,
+        );
+        expect(outcome).toBe('applied'); // the OTHER matched book still got it
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('residual-window skip'));
+
+        const cast1 = JSON.parse(readFileSync(join(book1, '.audiobook', 'cast.json'), 'utf8'));
+        const cast2 = JSON.parse(readFileSync(join(book2, '.audiobook', 'cast.json'), 'utf8'));
+        expect(cast1.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({
+          name: 'qwen-wren__angry',
+        });
+        expect(cast2.characters[0].overrideTtsVoices?.qwen).toBeUndefined();
+      } finally {
+        spy.mockImplementation(actual.readJson);
+        warnSpy.mockRestore();
+      }
+    });
+  });
 });
 
 describe('evaluateDesignLiveness', () => {
