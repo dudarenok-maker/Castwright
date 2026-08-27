@@ -653,7 +653,7 @@ without `.unwrap()`. That last one meant the gate failed **closed** — reportin
 `missing-entry` for every cloned character whenever `GET /api/voice-library`
 failed. Found by the `code-review` gate, not by the suite.
 
-**Owed on-box acceptance:** register row **A31** and
+**Owed on-box acceptance:** register row **A21** and
 [`docs/testing/clone-readiness-gate-onbox-acceptance.md`](../../testing/clone-readiness-gate-onbox-acceptance.md).
 No automated layer proves that pressing the CTAs repairs the render — they all
 stop at the API response — and `derive-failed` / "Retry derive" is unreachable

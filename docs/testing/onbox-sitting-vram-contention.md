@@ -1,7 +1,7 @@
-# On-box sitting pack — VRAM contention + eviction (A5, A14, A18, A20, A25, A26)
+# On-box sitting pack — VRAM contention + eviction (A5, A13, A17, A19, A24, A25)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A5, A14, A18, A20, A25, A26** — the rows that
+> register rows **A5, A13, A17, A19, A24, A25** — the rows that
 > only mean something when the single 8 GB card is genuinely full — and nothing
 > else. (Three rows this sitting pack originally covered — A19/A16/A31 in
 > their pre-2026-08-26 numbering — are discharged and removed from the
@@ -123,7 +123,7 @@ up.
    not after the 10-minute ceiling (register `:922-923`).
    - Result:
 
-### A14 · Idle Coqui is reclaimed under VRAM pressure (#1894) — steps 3–5
+### A13 · Idle Coqui is reclaimed under VRAM pressure (#1894) — steps 3–5
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:934-976`;
 > the spec at `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` §6;
@@ -205,7 +205,7 @@ up.
    - **Separately, flag for the operator:** plan 165 frontmatter says `active`,
      body says `stable` — needs reconciliation, not resolved by this pack.
 
-### A18 · `/health` stays live through a contended eviction (#1919) — step 8
+### A17 · `/health` stays live through a contended eviction (#1919) — step 8
 
 > **Criteria source:** run sheet
 > [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md)
@@ -222,7 +222,7 @@ up.
    fields here.
    - Result: _(filled in `sidecar-evict-latency-onbox-acceptance.md` §5, not here)_
 
-### A20 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
+### A19 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:1321-1355`
 > (PR #1993's description + the C1/M3 review findings it quotes). Re-resolved:
@@ -271,7 +271,7 @@ up.
     cleanly and is resumable.
     - Result:
 
-### A25 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
+### A24 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2057-2086`;
 > `unload_design`'s docstring and the `_DESIGN_CONTENTION_WAIT_S_DEFAULT`
@@ -292,7 +292,7 @@ up.
     neighbourhood, not immediately and not never.
     - Result:
 
-### A26 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
+### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2088-2127`;
 > the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB` and `_device_free_mb`'s

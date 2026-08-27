@@ -174,7 +174,7 @@ def _preload_ort_cuda_dlls() -> str:
     components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
     `site-packages/nvidia/...` is never even looked at; on this box that path
     resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
-    same "torch/lib, not the installed cuDNN" shape register row A36 already
+    same "torch/lib, not the installed cuDNN" shape register row A28 already
     recorded as not fixing the bug. Passing `directory=""` (falsy, but not
     `None`) skips the `torch/lib` branch and, per the same source, joins the
     FULL relative path under site-packages instead — i.e. it looks under
@@ -252,14 +252,14 @@ def _preload_ort_cuda_dlls() -> str:
         # `directory`. If it ever fires here, preload_dlls() looked at
         # nothing at all and torch's own bundled DLLs are what the CUDA
         # execution provider will find -- the exact "torch/lib, not the
-        # installed cuDNN" shape register row A36 recorded as NOT fixing the
+        # installed cuDNN" shape register row A28 recorded as NOT fixing the
         # bug. That is a distinct, worse outcome than a genuine preload and
         # must not be folded into "preloaded".
         log.warning(
             "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
             "torch was already imported (see lines above) -- it fell back to torch's "
             "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
-            "nvidia/<pkg>/bin, which register row A36 already recorded as not fixing the "
+            "nvidia/<pkg>/bin, which register row A28 already recorded as not fixing the "
             "CUDA-fallback bug."
         )
         return "torch-skip"
@@ -307,7 +307,7 @@ def _preload_ort_cuda_dlls() -> str:
                 "DLLs, but only %d of %d expected files were found under nvidia/<pkg>/bin -- "
                 "the rest resolved via preload_dlls()'s bare-name PATH fallback (e.g. a "
                 "system CUDA toolkit or torch's own bundled DLLs), not the installer's own "
-                "runtime -- see register row A36's Named assumption.",
+                "runtime -- see register row A28's Named assumption.",
                 found,
                 total,
             )

@@ -438,8 +438,15 @@ number by being unable to check is worse than no instrument at all.
 
 ### A8 · GPU residency safety + coexistence (plan 222)
 
-- **Verdict:** STILL OWED
-- **Evidence:** `docs/features/222-gpu-residency-and-analysing-honesty.md`
+> **Superseded 2026-08-27 (on-box wave 9b)** — this row was discharged and
+> removed from the register (owner-confirmed); plan 222 is now `stable` at
+> `docs/features/archive/222-gpu-residency-and-analysing-honesty.md`. This
+> audit entry predates the discharge; kept for historical context only.
+
+- **Verdict:** STILL OWED (as of this 2026-08-audit snapshot, quoting text
+  that has since changed; superseded 2026-08-27, see above — do not treat
+  the quotes below as current)
+- **Evidence (historical, at time of this audit):** `docs/features/222-gpu-residency-and-analysing-honesty.md`
   frontmatter `status: active`, `shipped: 2026-06-16` (`:2-3`); header
   (`:9`): "**on-box GPU acceptance owed** (real 8 GB eviction + 409 refusal +
   12/16 GB coexistence)." Manual walkthrough (`:54-59`) is titled

@@ -324,7 +324,7 @@ segment byte-identical.
 **It cannot speak to the `'normalised-id'` tier at all.** That tier has no history
 entry; its hazard is "the render predates the resolver existing at all" —
 pre-Wave-1, `resolveGroup` did a bare `castById.get()` and substituted the
-narrator. Per register row A29 that is `the-torment` (67 segments) and
+narrator. Per register row A22 that is `the-torment` (67 segments) and
 `lightning-dave` (1) — **68 of the 188 known damaged segments**.
 
 So the lane adds **one** field and leaves `synthesizedAt` untouched:

@@ -572,7 +572,7 @@ export const KNOBS: ConfigKnob[] = [
         + 'transcript, no outsized deletion run), it is treated as drift instead: a '
         + 'wrong-language Coqui collapse forced through the book’s decode language '
         + 'looks low-confidence too, and a mismatch this severe is compounding evidence '
-        + '(#2055). Owed on-box acceptance (register row A34) — retune here if it under- '
+        + '(#2055). Owed on-box acceptance (register row A26) — retune here if it under- '
         + 'or over-fires; no release needed.',
     type: 'number', min: 0, max: 2, step: 0.05,
     default: 0.85, // ← DEFAULT_ASR_THRESHOLDS.catastrophicWer in tts/segment-asr-qa.ts
