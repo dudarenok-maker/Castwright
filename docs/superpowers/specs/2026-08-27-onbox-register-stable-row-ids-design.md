@@ -82,7 +82,7 @@ visible nonexistent-ID error into a silent wrong-row resolution.
 **Rejected: re-key every group into a never-used range (`A101`…`A137`), then
 freeze.** This closes reuse completely and is blocked three independent ways:
 
-1. **Blast radius.** It rewrites the 226 citation occurrences above — the #2626
+1. **Blast radius.** It rewrites the ~210-225 citation occurrences above — the #2626
    incident at ~6× scale, in one commit, in the same PR that would stand the
    citation checker up as a workflow.
 2. **It cannot be published.** In `extraOnly`, `extra = found − expected`
@@ -95,7 +95,7 @@ freeze.** This closes reuse completely and is blocked three independent ways:
    exists to catch."*
 3. **It launders wrong citations.** The register states at `:3015-3021` that "a
    given ID has named several different rows over this group's life", so an
-   unknown share of the 226 citations are already wrong but still resolve. A
+   unknown share of those citations are already wrong but still resolve. A
    positional old→new map rewrites each into a **permanently frozen** wrong ID,
    and stable IDs remove the only mechanism that would ever have exposed them.
 
@@ -107,7 +107,7 @@ freeze.** This closes reuse completely and is blocked three independent ways:
 leaves a gap.**
 
 - **Existing rows keep their IDs.** `A1`…`A37`, `B1`…`B2`, and so on are
-  untouched. None of the 226 citations moves.
+  untouched. None of those citations moves.
 - **Each group carries `<!-- next-id: A101 -->`** immediately after its
   `## Group A — …` heading. New rows are allocated from that value, which is
   bumped on each allocation.
@@ -116,14 +116,20 @@ leaves a gap.**
   heading and `<span class="num">` ever added or removed — gives all-time
   high-waters of **`A`=48, `B`=5, `C`=4, `D`=3, `E`=11, `F`=1, `G`=2, `H`=2**
   (independently recomputed during the assumption-checker pass; figures agree).
-  **The highest ID appearing anywhere in the tree is `A99`** — not `A46`, as an
-  earlier draft claimed. `A99` is the *citation checker's own* sentinel for a
-  definitely-nonexistent ID (`check-register-citations.mjs:733`, `:759`, `:785`,
-  and sixteen occurrences in its tests). It is not a register row and never was,
-  but it occupies the `row <ID>` idiom, so a floor derived from real rows alone
-  would collide with the sibling checker's corpus. The floor clears it — by two,
-  not by the ~50 the earlier figure implied. Stated precisely because the next
-  person to re-derive this floor will re-derive it from this sentence.
+  **Real rows top out at `A48`, but `A99` is occupied** — it is the *citation
+  checker's own* sentinel for a definitely-nonexistent ID
+  (`check-register-citations.mjs:733`, `:759`, `:785`, plus **65** occurrences in
+  `scripts/tests/check-register-citations.test.mjs`; an earlier draft said
+  sixteen, which was a fresh wrong number introduced in the sentence correcting a
+  wrong number). It is not a register row and never was, but it occupies the
+  `row <ID>` idiom.
+
+  **The argument for `101` is about the sequence, not the maximum.** A floor of
+  ~50 would clear every real row *today* and still be wrong: allocation counts
+  upward, so a group seeded near 49 eventually **passes through** 99 and collides
+  with the sentinel. `101` is chosen to sit above it permanently. Stated this way
+  because the next person to re-derive this floor will re-derive it from this
+  sentence, and "highest ID in the tree" is the wrong quantity to derive it from.
 - Historical citations to `A38`, `A43`, `A45`, `B3`, `B4`, `F2`, `F3` **stay
   dangling** and keep reporting as nonexistent. That is the point: they are
   wrong, and they stay visibly wrong.
@@ -150,7 +156,14 @@ option 3). `parseRegisterRows`' own docstring (`check-register-citations.mjs:578
 states that headings outside a `## Group <Letter>` section are **not collected**,
 so a blocked row's ID was never resolvable by the citation checker anyway.
 Dropping them needs no parser widening, makes all five blocked rows consistent
-with the three that already carry none, and removes the ambiguity at source.
+with the three that already carry none, and removes the ambiguity from the data.
+
+**What 4a does not cover.** 4a scans the register markdown only. The live view's
+`BLK` section is unreachable by *any* check — `parseGlanceTable` needs `^[A-Z]$`
+and `parseLiveViewSections` filters on `gtag` — so the regression pin guards the
+half of the surface where the collision was already visible, and the blind half
+stays blind. That is why the fix has to land as **data on both sides** (see
+Delivery) rather than being left to the guard.
 
 **Residual limitation.** 4b prevents allocation *forward* into a used ID and the
 `101` floor prevents collision with the historical overflow. Neither stops an
@@ -218,92 +231,144 @@ accepting the interval `baseline ≤ published ≤ working` — and that interva
 exactly where a competing lane's publish lands. **A counter cannot distinguish my
 earlier publish from yours**, because the two are the same number.
 
-**The design: a publish token that carries who, not just how many.**
+**Rejected: a branch name as the identity.** The fifth design, and the second
+killed by an assumption-checker pass. The counter's repair was to make the token
+carry *who* as well as *how many* — `data-published-by="chore/ops-…"`. The axis
+was right and the value was wrong, on three independent grounds:
 
-The spec was right that content comparison lacks per-branch publish state. What
-the counter missed is that *we control the token*, so the state can be **put
-there** rather than inferred:
+1. **It is inherited by default.** `who` arrives on every fresh branch as
+   whatever `main` last held — *the previous lane's name* — and updating it is a
+   second manual action, separate from bumping the counter. When it goes stale
+   the mechanism silently degenerates into the bare counter it was invented to
+   replace, and fails in the **green** direction: a competing lane whose stale
+   `who` happens to match yours reads as your own earlier publish.
+2. **This repo mandates the mutation that breaks it.** CLAUDE.md requires an
+   auto-generated worktree branch to be renamed to `<type>/<scope>-<slug>`
+   immediately, and makes `integration/<date>` the default disposition for a
+   round of parallel agent work. Publish, rename, re-publish → the token names a
+   branch that no longer exists → a STOP that **cannot be cleared**, in a design
+   whose own principle is that an unclearable STOP is a guard that gets bypassed.
+3. **Detached HEAD collapses it.** `git rev-parse --abbrev-ref HEAD` prints the
+   literal `HEAD`, so two unrelated lanes both publish as `HEAD` and each reads
+   the other as itself.
+
+**The design: a publish nonce, verified against git history.**
+
+The token needs to answer *"did the state now live come out of my history?"* —
+which is a question git can answer, and which no hand-maintained name can. The
+counter stays, for ordering; identity moves to a short random nonce minted at
+each bump:
 
 ```html
-data-published-as="48" data-published-by="chore/ops-register-stable-row-ids"
+data-published-as="48" data-publish-id="k7f2a9"
 ```
 
-Before publishing, `--against-published` compares both fields across the three
-copies:
+`git log -S '<nonce>' -- <live view path>` on `HEAD` decides it: **found** → that
+page came out of this branch's history (your own publish, or one already merged
+into your baseline) → proceed; **not found** → someone else published → stop.
+
+**The nonce is load-bearing; the counter cannot substitute for it.** Searching
+history for the *counter* fails, because two lanes both bumping `47 → 48` each
+find their own commit. Only a value unique per publish distinguishes them.
+
+Before publishing, `--against-published` evaluates, in order:
 
 | State | Verdict |
 |---|---|
-| `published.n == baseline.n`, `working.n > baseline.n` | **OK** — nobody published since your baseline |
-| `published.who == this branch`, `published.n >= baseline.n`, `working.n > published.n` | **OK** — your own earlier publish this review cycle |
-| `published.who != this branch`, `published.n != baseline.n` | **STOP** — another lane published; rebase and re-read the live page |
-| `published.n < baseline.n` | **STOP** — the live page is *behind* `main`: a bump merged without publishing, or a publish was reverted |
-| `published` token absent, `baseline` present | **STOP** — the wrong file was published, or the page was clobbered |
-| `working.n <= baseline.n` | **STOP** — bump the token; an unbumped publish is untracked |
-| **either baseline unresolvable** | **STOP** — its own fail-closed error, matched by identity, never folded into any case above |
+| any of the three copies unresolvable, or its token malformed | **STOP** — its own fail-closed error, matched by identity, never folded into a case below |
+| `published.nonce` **not** in `HEAD`'s history for that path | **STOP** — another lane published; rebase and re-read the live page |
+| `working.n < baseline.n` | **STOP** — **your branch predates `main`. Rebase.** Publishing from here overwrites whatever landed in between |
+| `working.n == baseline.n` | **STOP** — bump the counter and mint a new nonce; an unbumped publish is untracked |
+| `published.n < baseline.n` | **STOP** — the live page is *behind* `main`: a bump merged without publishing, or a publish was reverted. Clearable, see below |
+| otherwise | **OK** |
+
+**`working.n < baseline.n` and `working.n == baseline.n` are different failures
+and get different advice.** An earlier draft collapsed both into "bump it", and
+that was the more dangerous of the two Criticals this design has produced: with
+`baseline 48` (a competing lane merged), `published 48` (their page) and
+`working 48` (yours, branched at 47), no guard fired, the remedy said "bump", and
+bumping to 49 turned the check **green** over an un-rebased file. The row-level
+check does not backstop that — what is lost is the summary strip, the callouts
+and the footer, which is precisely the class this token exists to protect. That
+is #1931's original incident, reproduced by obeying the guard's own remedy.
+
+The nonce closes it independently of the message split: an un-rebased branch
+cannot find the competing lane's nonce in its own history, so the state stops
+being "bump it" and becomes "another lane published". Both are implemented; the
+ordering above puts the ancestry check first so the diagnosis is right even when
+the counters happen to agree.
 
 **The carrier is an attribute, not an HTML comment.** `checkLiveView`'s first
 action is `stripHtmlComments(rawLiveViewHtml)` (`:641`), and that blanking is
 load-bearing — its own header records that without it "a commented-out row was
 counted as a real one." A comment token is invisible to the very function that
-must read it. An attribute is immune by construction. Whether either carrier
-survives the publish → fetch round trip is settled empirically before any code
-depends on it (implementation plan, Task 1).
+must read it. An attribute is immune by construction. **Whether the exact
+two-attribute pair the parser matches survives the publish → fetch round trip is
+settled empirically before any code depends on it** (implementation plan, Task 1)
+— the probe must carry what the parser matches, not an approximation of it, or it
+is the instrument-that-cannot-fail trap it was written to avoid.
 
 What this buys over every rejected rule:
 
-- **No normaliser.** An integer and a branch name, compared as strings. The
+- **No normaliser.** An integer and an opaque token, compared as strings. The
   rejected content designs all needed a normaliser over prose dense with
   `&ldquo;`, `&nbsp;`, inline `<code>` and `<a href>` — and none of the three
   ever defined one, which is its own warning.
 - **No per-row parser, no keys.** The `<details class="item">` / `<span
   class="num">` scheme is not needed, and neither is the heading-text fallback
   for the `BLK` and `?` sections that had no IDs to key on.
-- **No intent guessing.** Editing, re-publishing, rebasing and reverting are all
-  answered by the token's own two fields rather than inferred from prose.
+- **Nothing hand-maintained is trusted.** The nonce is not compared to a value
+  someone had to remember to update; it is looked up in history. That is what
+  removes all three branch-name failures at once, rather than patching them.
 - **It covers what per-row rules could not**: a dropped row, a wrong summary
   strip, the stale callouts, and publishing the `.md` by mistake — the failure
-  the register records happening four times — all present as a changed, absent
-  or foreign-owned token.
+  the register records happening four times.
 
-**The token line is also a merge canary.** Two lanes that both bump `47 → 48`
-conflict in git on that one line, surfacing the race before either can publish.
+**The token line is a *merge* canary, not a publish-time one.** Two lanes that
+both bump `47 → 48` conflict in git on that one line. That surfaces at merge —
+and publishing runs *before* merge, so it is a second net under the ancestry
+check, not a substitute for it. An earlier draft claimed it surfaced the race
+"before either can publish", which is simply the wrong order of operations.
 
-**No bootstrap case.** An earlier draft carried one, for the first change to
-publish to a tokenless page. It is unreachable by construction: PR 1 seeds the
-token as *data*, and PR 2 ships the code that reads it, so by the time
-`comparePublishTokens` runs at all, `origin/main` already carries a token. A
-branch that can never be entered is a branch that can only ever be wrong — it is
-not written, and a test pins that a tokenless page against a tokened baseline is
-**reported**, not bootstrapped.
+**No bootstrap case reached through a tokenless baseline.** PR 1 seeds the token
+as *data* and PR 2 ships the code that reads it, so `origin/main` carries one by
+the time this code runs at all. A branch for "baseline has no token" is therefore
+**written as an explicit error, not as a pass** — reachable only through a revert,
+a deleted token line, or PRs merging out of order, all of which are defects rather
+than a first run. An earlier draft said the branch was "not written"; it is
+written, it just never returns green.
 
-**A baseline that cannot be resolved is never a pass.** `resolveBaselineText`
-returns `{ text: null }` on a git failure, and `null` is not "a baseline with no
-token" — it is "no baseline". Everywhere else in this file that distinction is
-already load-bearing: it has its own exported constant, matched by identity
-(`CANNOT_VERIFY_BASELINE_ERROR`, `:529`), and its own CLI remedy branch. The
-token check uses the same vocabulary. Collapsing the two is the
-guard-evaporates-on-missing-input shape `resolveBaselineGroups`' own header
-exists to fail closed against.
+**Nothing unresolvable is ever a pass.** `resolveBaselineText` returns
+`{ text: null }` on a git failure, and `null` is not "a copy with no token" — it
+is "no copy". Everywhere else in this file that distinction is load-bearing, with
+its own exported constant matched by identity (`CANNOT_VERIFY_BASELINE_ERROR`,
+`:529`) and its own CLI remedy branch. The token check uses the same vocabulary,
+**with a distinct constant for the baseline and for the saved published page** —
+they fail for different reasons and the operator does different things about them.
 
-**Stated boundaries — two, not one.**
+**Stated boundary — one, not two.** The token proves the live page came out of
+your history and that nobody else published since your baseline. It does **not**
+prove the bytes you are about to publish are the bytes you intended: a stale local
+build of your own file, correctly bumped and correctly nonced, still publishes.
+That is what git review covers, and it goes in #2599's close comment rather than
+being implied.
 
-1. The token proves nobody *else* published since your baseline. It does **not**
-   prove the bytes you are about to publish are the bytes you intended — a stale
-   local build of your own file, correctly bumped, still publishes. That is what
-   git review covers.
-2. The `who` field is trusted, not proven. A lane that publishes under another
-   branch's name defeats the check. Nothing here authenticates a publisher, and
-   nothing should: this is a two-person-at-most repo and the failure being
-   detected is *accident*, not *forgery*.
+*(The previous draft carried a second boundary — that the publisher field was
+"trusted, not proven", justified as detecting accident rather than forgery. That
+was a rationalisation of an avoidable weakness, not a property of the problem.
+Verifying identity against history costs one `git log -S` through the runner this
+file already uses, and the boundary disappears.)*
 
-Both go in #2599's close comment rather than being implied.
-
-**A stalemate needs an escape hatch.** `published.n < baseline.n` is legitimately
-reachable — a PR can bump and merge without publishing — and the operator cannot
-clear it by rebasing or re-reading. It gets a named flag on the same footing as
-`--discharging` (which exists because #2272 found the identical shape), and a
-section in the register's own "If it fails" tree. A guard with an unclearable
-STOP is a guard that gets bypassed.
+**A stalemate needs an escape hatch, and the hatch needs its own guard.**
+`published.n < baseline.n` is legitimately reachable — a PR can bump and merge
+without publishing — and the operator cannot clear it by rebasing or re-reading.
+It gets a named flag on the same footing as `--discharging` (which exists because
+#2272 found the identical shape). **Like `--discharging`, passing it when the page
+is not actually behind is an error, not a silent no-op** — that flag refuses an
+unconsumed name precisely so it cannot "degenerate into a blanket mute"
+(`:953-971`), and a flag that is inert-but-accepted in every other state is one
+copied runbook line away from permanently disarming the check. The register's "If
+it fails" tree gains a section for the whole class.
 
 **Mechanics.**
 
@@ -422,7 +487,9 @@ IDs **in both the register and the live view**, introduces the `published-as`
 token, fixes the Group F sentence, moves the one blocked-row citation to cite by
 title, and repairs the stale callouts described below. All green under *today's*
 checker: markers are inert, contiguity is untouched, the Blocked section is
-unscanned on both sides. It publishes under design 2's bootstrap case.
+unscanned on both sides. It publishes under the **old** comparator — design 2's
+code ships in PR 2, which is why `origin/main` already carries a token by the
+time anything reads one.
 
 **Both sides, or #2634/#2653 are only half closed.** Dropping the blocked IDs
 from the markdown alone leaves `<span class="num">E8</span>` and `E6` in the live
@@ -435,8 +502,10 @@ Verified: the `BLK` section carries exactly 5 `details.item` blocks, two bearing
 those IDs.
 
 **Incidental fix, same PR — real rot, found in passing.** The live view carries
-four `<div class="callout warn">` blocks narrating counts `66 → 69` and
-describing `A41`/`A44`/`A45`/`A46`. None of those exists; the register tops out
+**six** `<div class="callout warn">` blocks narrating counts `65 → 69` and
+describing `A44`/`A45`/`A46`/`E10` — verified in the file; an earlier draft said
+four, and named an `A41` that appears nowhere on the page. Of those IDs none
+exists; the register tops out
 at `A37` with 60 owed. Wave 8 updated the strip, the rows and the footer and left
 the callout stack behind, and `check:onbox-register` is green over it because
 callouts are not parsed. This is the most drift-prone prose on the page and it
@@ -480,7 +549,7 @@ real file's numbering.
 
 | Issue | Outcome |
 |---|---|
-| **#2599** | Closed by design 2 — but **not** by the row-content diff the issue asked for. The issue's own option 2 named a decision as owed; the answer is that per-row content comparison cannot be made correct here. The close comment records **all four** rejected rules — the three content rules and the bare counter — and why each failed, plus **both** stated boundaries (it proves nobody *else* published, not that you published what you meant to; and `who` is trusted, not authenticated). |
+| **#2599** | Closed by design 2 — but **not** by the row-content diff the issue asked for. The issue's own option 2 named a decision as owed; the answer is that per-row content comparison cannot be made correct here. The close comment records **all five** rejected designs — three content rules, the bare counter, and the branch name as identity — and why each failed, plus the one stated boundary (it proves the live page came out of your history and nobody else published, not that you published the bytes you meant to). |
 | **#2603** | Closed by design 3 — **without** its title-match option and **without** self-reference detection. The latter is structurally impossible in the shipped checker: the register's own path is in `FROZEN_EXACT` (`:386`), so its body is never scanned. Its non-renumbering damage (the "five states vs eight states" drift) is untouched by this work. All three omissions go in the close comment. |
 | **#2629** | Closed by design 1 + design 3. Not its "option 2" — that is a per-row slug field, which this declines. Stable positional IDs are a fourth option; the close comment says so rather than claiming an option the issue did not offer. |
 | **#2634** | Closed as a **duplicate of #2653**, honouring its "add a uniqueness check" instruction via 4a. |
@@ -498,25 +567,40 @@ real file's numbering.
   disable 4b;
 - **`published.n == baseline.n`, `working.n > baseline.n` is green** — the
   ordinary first publish;
-- **a same-branch re-publish is green** (`baseline 47`, `published 48` owned by
-  this branch, `working 49`) — **the assertion that kills a bare counter**, and
-  the one the rejected design's own test contradicted its own implementation
-  over. These are two separate tests: in a re-publish `published != baseline`, so
-  one assertion cannot cover both cases;
-- a `published` token owned by **another** branch, with `published.n != baseline.n`,
-  is reported — the #2599 repro, red before;
-- `published.n < baseline.n` is reported **with its own message and its escape
-  hatch named** — the live-page-behind-`main` stalemate;
+- **a re-publish from the same branch is green** (`baseline 47`, `published 48`
+  whose nonce IS in this branch's history, `working 49`) — **the assertion that
+  kills a bare counter**, and the one the counter design's own test contradicted
+  its own implementation over. It is a *separate* test from the first publish: in
+  a re-publish `published != baseline`, so one assertion cannot cover both;
+- **a competing publish with byte-identical counters is reported** — same numbers
+  as the test above, nonce NOT in history. If these two ever agree, ancestry is
+  being ignored and the design has silently reverted to a bare counter;
+- **`working.n < baseline.n` is reported as NOT REBASED, not as "bump it"** — the
+  regression test for the second Critical: `baseline 48`, `published 48` from a
+  merged competing lane, `working 48`. Assert on the *message*, because the whole
+  defect was that the right verdict carried the wrong remedy;
+- `working.n == baseline.n` is reported as an unbumped publish — a different
+  message from the one above;
+- `published.n < baseline.n` is reported with its own message, and the escape
+  hatch clears **only** that state;
+- **the escape hatch is an error when the page is not behind** — the
+  `--discharging` unconsumed-name property (`:953-971`), so it cannot become a
+  blanket mute. The counter design's version of this test could not fail: the
+  flag was never read on the path the test exercised;
 - a `published` page with no token, against a `baseline` that has one, is
   reported — the wrong-file-published case the register records happening four
-  times. **This is also the test that pins the absence of a bootstrap branch**;
-- `working.n <= baseline.n` is reported — an unbumped publish;
-- **an unresolvable baseline is reported, not bootstrapped and not passed** —
-  `null` and "tokenless" must not collapse, asserted by identity against the
-  fail-closed constant;
-- a non-integer counter, an empty `who`, and **two tokens in one file** are each
+  times;
+- **a tokenless baseline is an explicit error, never a pass** — the branch is
+  written, and it returns an error rather than bootstrapping;
+- **an unresolvable baseline and an unresolvable published page get DIFFERENT
+  fail-closed constants** — `null` and "tokenless" must not collapse, and the two
+  copies fail for different reasons with different operator actions;
+- a non-integer counter, an empty nonce, and **two tokens in one file** are each
   an error rather than a skip or a first-match win;
-- the second baseline read uses the **same** SHA as the first.
+- the second baseline read uses the **same** SHA as the first;
+- **the ancestry lookup runs through `runGitCommand`**, not a raw `spawnSync` —
+  that wrapper carries `scrubGitEnv()` (#2216) and the timeout, and bypassing it
+  reopens the inherited-`GIT_DIR` hole it exists to close.
 
 **Five existing real-tree CLI tests must move.** `computeMaxRowNumber` and
 `buildAheadBaselineText`, consumed at `:2209`, `:2333`, `:2360`, `:2517`,
