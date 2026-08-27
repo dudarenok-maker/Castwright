@@ -2967,13 +2967,16 @@ export async function synthesiseChapter(
        Task 11 clears on unload) once per mixed dispatch — and is accepted
        deliberately: 3.5 GB held across an entire book is the worse trade.
 
-       Fail-SOFT, deliberately and unlike the leading evict: every group is
-       already synthesised by the time this runs, so letting a sidecar
-       recycle window (502/ECONNREFUSED on `/unload`) throw here would
+       Fail-SOFT, same as the leading evict (see lines 2919-2943 above):
+       every group is already synthesised by the time this runs, so letting a
+       sidecar recycle window (502/ECONNREFUSED on `/unload`) throw would
        destroy a chapter's completed work purely to free VRAM — the exact
-       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. The
-       leading evict's own bare `await` is untouched here; it is a separate
-       finding with its own reconciliation against main. */
+       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. Both
+       evicts catch non-abort errors and log warnings, preserving chapter
+       completion over VRAM reclamation. The main addition this trailing evict
+       brings is the `withCallTimeout` bounded ceiling that matches the leading
+       one: previously unbounded, it could stall a chapter whose groups are
+       all already synthesised. */
     try {
       /* #1893 reconciliation (main merge) — bounded + cancellable, matching
          the leading `qwen-evict-for-coqui` call above. The fail-soft policy

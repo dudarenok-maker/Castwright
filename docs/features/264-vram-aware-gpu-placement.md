@@ -361,10 +361,12 @@ phase; the trailing evict fires at `:2976` at its end.
 It is driven by the **generation plan** — Node knows which engine each
 remaining chapter needs, so it can free the VRAM at a boundary where "no
 further Coqui work is queued" is a *fact* rather than a prediction. Each call
-is bounded by `withCallTimeout` and carries the chapter's abort signal. The
-trailing evict is deliberately **fail-soft** — every group is already
-synthesised by then, so throwing would destroy completed work purely to free
-VRAM. The leading one is not fail-soft.
+is bounded by `withCallTimeout` and carries the chapter's abort signal. Both
+evicts are deliberately **fail-soft** — only abort signals are rethrown; other
+failures (socket errors, timeouts) are logged as warnings and execution
+continues. This is correct for both the leading and trailing positions: the
+trailing evict destroys synthesised work if it throws, and the leading evict
+should not break a whole chapter if a transient sidecar hiccup occurs.
 
 ### Mechanism B — sidecar, demand-driven, reactive
 
@@ -416,11 +418,13 @@ outside the current book's render.
 ### Lock caveats — invariants any future change must preserve
 
 1. **Mechanism A's timeout and abort.** Each `/unload` call is bounded by
-   `withCallTimeout` and carries the chapter's abort signal. The trailing
-   evict must remain fail-soft: every group is already synthesised when it
-   runs, so an exception there destroys completed work purely to free VRAM.
-   The leading evict must remain fail-hard: the Coqui phase has not started
-   yet, so a failure there is a genuine precondition not met.
+   `withCallTimeout` and carries the chapter's abort signal. Both evicts must
+   remain fail-soft (aborting only on genuine abort signals, not transient
+   errors): only abort signals rethrow; other failures are logged as warnings
+   and execution continues. The trailing evict is already-synthesised work
+   that would be lost on exception. The leading evict must not break the
+   chapter if a transient sidecar hiccup (socket error, timeout) occurs
+   mid-evict.
 
 2. **Mechanism B's lock-guarded idle check.** `maybe_free_idle`
    (`server/tts-sidecar/main.py:2273`) re-validates the idle condition under
