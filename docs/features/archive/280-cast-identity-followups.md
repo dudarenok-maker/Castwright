@@ -1470,7 +1470,7 @@ export function isAudioCurrent(
   /* `'normalised-id'` has no history entry, so there is no marker to compare
      against. Its hazard is different in kind: the render may predate the
      four-tier resolver EXISTING (pre-Wave-1 `resolveGroup` did a bare
-     `castById.get()` and substituted the narrator). Per register row A32 that
+     `castById.get()` and substituted the narrator). Per register row A22 that
      is `the-torment` (67 segments) and `lightning-dave` (1) — 68 of the 188
      known damaged segments. The presence of `castHistorySeq` is itself the
      proof the resolver ran, which is the only distinction this tier needs. */
@@ -2694,7 +2694,7 @@ and `30456c71` deleted, one level down.
 Note that a *current alias* id never reaches this branch at all — `planBookRepairs`'s
 "already-recorded" skip (`:885-895`) fires first for the `'history'` / `'normalised-history'`
 tiers. The reachable new case is a **`'normalised-id'`-tier id that is current**, which is
-precisely register row A32's `the-torment` / `lightning-dave` shape.
+precisely register row A22's `the-torment` / `lightning-dave` shape.
 
 - [ ] **Step 1: Write the failing tests**
 

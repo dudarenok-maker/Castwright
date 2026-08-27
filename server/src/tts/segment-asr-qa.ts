@@ -93,7 +93,7 @@ export interface AsrThresholds {
       untrustworthy signal and the catastrophic mismatch are compounding
       evidence rather than a reason to skip. A REGISTRY KNOB, unlike the
       fluent-collapse shape constants below: this is the number an on-box
-      false-positive-rate run (register row A34) is expected to retune, and a
+      false-positive-rate run (register row A26) is expected to retune, and a
       judgement call already written into an acceptance row must be tunable
       without a release (#2055 review R4). Always effectively at least
       `maxWer` — `classifyTranscript` takes `Math.max(catastrophicWer,

@@ -364,15 +364,25 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > correctly-shaped candidate: thin on in-book anchors, one line long enough to clear
 > `MIN_DURATION_SEC`) from his designed voice to a cloned one on the real *The Coalfall
 > Commission* book, then re-rendered chapter 4. All 8 of Ivo's lines came back
-> `qa.status: 'ok'`, `reasons: []` — **zero `voice-mismatch` flags**, the row's stated
-> acceptance criterion. Confirmed this wasn't a vacuous pass by checking the persisted
-> reference directly: before reassignment `render-integrity.centroids.json` held a full
-> `audition` reference built from the OLD voice (`cleanMean≈0.873`, `pSevere≈0.673`,
-> `pBand≈0.737`); after, that entry reads `referenceKind: "too-short"` — the stale
-> old-voice reference is gone, not silently reused, which is the actual safety property
-> PR #2402 exists to guarantee (a cloned voice apparently doesn't get a synthesized
-> `audition` reference the way a designed voice does, so the fallback is `too-short`
-> rather than a fresh `audition` build, but either way nothing stale survives). Group A
+> `qa.status: 'ok'`, `reasons: []` — zero `voice-mismatch` flags. Traced this against
+> `resolveCharacterReference` (`server/src/audio/render-integrity/aggregate.ts`)
+> rather than trusting the output shape alone: before reassignment, `persisted`
+> read `referenceKind: "audition"` built from the OLD voice
+> (`cleanMean≈0.873`, `pSevere≈0.673`, `pBand≈0.737`); `matchesCurrentVoice(persisted,
+> voiceInfo)` against the NEW voice correctly returned false, so the stale reference
+> was **not** reused — it fell to a genuine `auditionCentroid()` rebuild attempt using
+> the new voice, which is the exact code path PR #2402 added. **What this confirms:**
+> reassignment is detected and the stale old-voice reference is discarded rather than
+> silently scored against, which is the row's headline safety property. **What this
+> does NOT confirm:** whether a *successful* rebuilt centroid for the new voice would
+> itself correctly flag or clear real mismatched audio — Ivo's cloned-voice sample was
+> too short for `auditionCentroid()` to produce one (`referenceKind: "too-short"` is
+> the persisted result, not a stale carryover), so the rebuild path was exercised but
+> never reached a scored comparison. That narrower question — a reassignment landing
+> on a voice with enough anchor-eligible audio to actually build and score a fresh
+> `audition` centroid — is tracked separately in
+> [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700); it is net-new
+> follow-up work, not a defect in this fix, and doesn't reopen this row. Group A
 > renumbered contiguously (old A35–A37 → A34–A36).
 >
 > **Prior change: 2026-08-27 (on-box wave 8), 61 → 60.** One row fully discharged and

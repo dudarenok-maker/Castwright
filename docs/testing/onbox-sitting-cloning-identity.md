@@ -170,11 +170,15 @@ last, alone, since it deliberately crashes the sidecar twice.
 > tracked (`onbox-acceptance-register.md`, formerly A34, before that old A42)
 > is removed from the register. Reassigned Ivo's voice on the real *The
 > Coalfall Commission* book and re-rendered; all 8 of his lines came back
-> `qa.status: 'ok'`, zero `voice-mismatch` flags, and the persisted centroid's
-> old-voice `audition` reference was confirmed gone (not silently reused)
-> rather than rebuilt. See the register's own wave-9 changelog entry for the
-> full account. Kept below for historical context only — not re-runnable
-> against a current row number.
+> `qa.status: 'ok'`, zero `voice-mismatch` flags, and tracing
+> `resolveCharacterReference` confirmed the old-voice `audition` reference was
+> discarded (not silently reused) rather than rebuilt into a scored centroid —
+> Ivo's cloned-voice sample was too short for `auditionCentroid()` to produce
+> one, so the discard-on-reassign path was proven but a successful rebuilt
+> centroid's own scoring accuracy wasn't; that narrower question is tracked at
+> [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700). See the
+> register's own wave-9 changelog entry for the full account. Kept below for
+> historical context only — not re-runnable against a current row number.
 
 10. Assign a character thin enough on in-book anchors to take the
     audition-reference path to one voice; render once so

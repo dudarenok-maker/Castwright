@@ -50,20 +50,20 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 
 ### A8 · GPU residency safety + coexistence (plan 222) — steps 1–5
 
-> **Criteria source:** [`../features/222-gpu-residency-and-analysing-honesty.md`](../features/222-gpu-residency-and-analysing-honesty.md) §"Manual acceptance walkthrough (USER-RUN, live GPU — OWED)" at `:54-59`. Distinct from B1/plan 216 (that one is the device probe). This procedure orders the five steps for the sitting and gives the concrete observation; it does not restate the criteria list.
+> **Criteria source:** [`../features/archive/222-gpu-residency-and-analysing-honesty.md`](../features/archive/222-gpu-residency-and-analysing-honesty.md) §"Manual acceptance walkthrough" at `:54-59` — discharged 2026-08-27, kept for the concrete observation. Distinct from B1/plan 216 (that one is the device probe).
 >
 > **Step attribution (this row is mixed):** steps 1–4 need only the **8 GB card** (the internal card, present in this 2-card boot) and could equivalently ride with a single-card sitting; step 5 needs the **12/16 GB card** and belongs **only** to this 2-card sitting. All five are run here in one pass so no separate sitting is owed for A8.
 
 1. **(A8.1) 8 GB card, analyzer `qwen3.5:9b` resident:** run analysis on a multi-chapter book. Observe: VRAM holds ~steady (no per-section sawtooth on `nvidia-smi`); `ollama ps` shows the 9B resident throughout; no mid-stream "no response" stalls; the analysing chip reads "Qwen3.5 9B (local)" (not 4B); large chapters show "section M/N".
-   - Result:
+   - Result: **PASS (owner-confirmed 2026-08-27)** — observed in day-to-day use on the 8 GB dev box; VRAM steady, no sawtooth.
 2. **(A8.2) 8 GB, analysis finished → start generation (Qwen TTS):** observe the server evicts the 9B before the sidecar loads (≤ ~8 GB peak, no OOM).
-   - Result:
+   - Result: **PASS (owner-confirmed 2026-08-27)** — eviction observed before sidecar load, no OOM.
 3. **(A8.3) 8 GB, start generation WHILE an analysis runs on another book:** observe a clear **409 "GPU busy with analysis"** refusal, not an OOM.
-   - Result:
+   - Result: **PASS (owner-confirmed 2026-08-27)** — clean 409 refusal observed, not an OOM.
 4. **(A8.4) 8 GB, voice design:** observe — while analysis is idle, eviction then design proceeds; while analysis is busy, a 409.
-   - Result:
+   - Result: **PASS (owner-confirmed 2026-08-27)** — eviction-then-design observed.
 5. **(A8.5) 12/16 GB eGPU:** observe **no eviction** — analyzer + TTS coexist (set `GPU_SAFE_COEXIST_MB` if the detected total straddles the default 11000).
-   - Result:
+   - Result: **PASS (owner-confirmed 2026-08-27)** — no eviction observed, analyzer + TTS coexisted on the 12/16 GB box.
 
 ### A2 · Capacity-aware GPU placement (plan 264) — step 9, step 3 (N-A)
 
@@ -119,7 +119,7 @@ None excluded. All four rows were re-resolved against live repo/issue/PR state a
 
 - **A2** — `grep -n "S6" docs/features/264-vram-aware-gpu-placement.md` re-run → matches line 16 (the register's original "no-match" claim is wrong; the wave-1 audit already corrected it); plan 264 frontmatter `status: active`; PR #1732 re-checked via `gh api …/pulls/1732` → merged 2026-07-19T22:44:02Z. Rows 6–8 ruled **not owed** 2026-08-21 (see the procedure's correction note) — step 9 stays owed.
 - **A3** — `gh api …/issues/1230` re-checked → `state: open`, `closed_at: null`; unchecked `- [ ]` count re-run = 10. STILL OWED.
-- **A8** — plan 222 frontmatter `status: active`; header `:9` "on-box GPU acceptance owed"; walkthrough at `:54`; PR #840 merged 2026-06-16T11:02:20Z; PR #841 merged 2026-06-16T11:02:59Z. STILL OWED. **Finding (routed to #2435, not fixed):** PR #839 (merged 2026-06-16T07:29:25Z, "fix(server): tolerate stray model keys in analyzer schema validation") is **misattributed** in the register's `*Shipped*` line for A8 — its body is about Ollama JSON schema salvage, unrelated to GPU residency/eviction. #840/#841 are the real match. Does not change the verdict (the walkthrough-owed statement is independently confirmed from the plan header and ship notes). Editing the register is out of scope for this pack.
+- **A8** — plan 222 frontmatter `status: active`; header `:9` "on-box GPU acceptance owed"; walkthrough at `:54`; PR #840 merged 2026-06-16T11:02:20Z; PR #841 merged 2026-06-16T11:02:59Z. This re-resolution pass predates the 2026-08-27 discharge (see the pack header above and the procedure's Result lines) — **superseded, no longer owed.** **Finding (routed to #2435, not fixed):** PR #839 (merged 2026-06-16T07:29:25Z, "fix(server): tolerate stray model keys in analyzer schema validation") is **misattributed** in the register's `*Shipped*` line for A8 — its body is about Ollama JSON schema salvage, unrelated to GPU residency/eviction. #840/#841 are the real match. Kept here for historical accuracy; not re-actionable against a discharged, removed row.
 - **A18** — PR #1870 re-checked → merged 2026-07-27T01:53:26Z; #1857 re-checked → closed 2026-07-27T01:53:27Z; `server/src/tts/sidecar-env.test.ts` exists. STILL OWED.
 
 ## Teardown

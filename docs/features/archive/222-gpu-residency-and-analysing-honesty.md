@@ -1,12 +1,12 @@
 ---
-status: active
+status: stable
 shipped: 2026-06-16
 owner: null
 ---
 
 # 222 — GPU residency safety + analysing-view honesty
 
-> Status: active — merged to `main` (Wave 0 #839, Wave 1 #840, W2+W3 #841); **on-box GPU acceptance owed** (real 8 GB eviction + 409 refusal + 12/16 GB coexistence).
+> Status: stable — merged to `main` (Wave 0 #839, Wave 1 #840, W2+W3 #841); on-box GPU acceptance discharged 2026-08-27 (owner-confirmed, see Ship notes).
 > Key files: `server/src/gpu/{vram-state,residency,gpu-load,load-mutex}.ts`, `server/src/analyzer/ollama.ts` (`keepAliveFor`/`RESIDENT_MODELS`), `server/src/routes/ollama-health.ts` (`unloadResidentOllama`/`verifyOllamaEvicted`), `server/src/tts/ensure-sidecar-loaded.ts`, `server/src/routes/qwen-voice.ts`, `server/src/routes/analysis.ts` (phase `model` + section counts), `src/components/analysing/{phase-model-chip,phase-card}.tsx`, `src/views/analysing.tsx`, `src/lib/api.ts`.
 > URL surface: `#/analysing` (chip + section progress); server eviction is runtime-only.
 > OpenAPI ops: none (SSE/internal).
@@ -74,4 +74,12 @@ Tracked for the beta because real testers run 12/16 GB cards; not required for t
 - **W2 + W3** (model honesty + section progress) — issue #844, PR #841, merged `dc163972`, 2026-06-16.
 - **Wave 4** (MB-accounting + split UI) tracked open as issue #845 (beta-relevant; see Out of scope).
 - Design hardened across three adversarial-review passes (correctness/safety, scope/YAGNI, subagent-executability) before any code — see spec §11 + the plan "review fixes baked in" sections.
-- **Remaining before `stable`:** the live-GPU acceptance walkthrough above (5 steps), then flip `status: stable` + archive. Wave 4 (above) is a separate follow-up.
+- **On-box GPU acceptance — owner-confirmed 2026-08-27** (register row A8,
+  `docs/testing/onbox-acceptance-register.md`): all 5 steps of the walkthrough
+  above observed in day-to-day use of the app on the dev 8 GB box — VRAM
+  steady during analysis (no per-section sawtooth), eviction before sidecar
+  load at generation start, a clean 409 "GPU busy" refusal instead of an OOM,
+  eviction before voice design, and no eviction on a 12/16 GB box. Recorded
+  per owner confirmation rather than a freshly-run walkthrough transcript.
+  Wave 4 (above) remains a separate open follow-up (issue #845), not blocking
+  `stable`.
