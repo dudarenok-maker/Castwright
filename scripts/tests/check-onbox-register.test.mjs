@@ -247,9 +247,57 @@ test('4b: a group with no next-id marker is an error, not a skip', () => {
 test('4b: a next-id below the allocation floor is reported', () => {
   const text = registerFixture({
     glance: [['A', 1]],
-    groups: [{ letter: 'A', nextId: 38, rows: [1] }],
+    groups: [{ letter: 'A', nextId: ALLOCATION_FLOOR - 1, rows: [1] }],
   });
   assert.ok(checkRegister(text).some((e) => e.includes('below the allocation floor')));
+});
+
+test('4b: an invalid row heading suppresses the per-row next-id comparison but not the sub-lettering rejection or the marker/floor checks', () => {
+  // The "review fix 3" fixture above (A2a/A2b, no marker) can't reach the 4b
+  // suppression line: it carries no next-id marker at all, so 4b `continue`s
+  // at the nextId === null branch before the per-row loop runs. This fixture
+  // adds a next-id marker AND a valid row at-or-above it (A101 against
+  // next-id A101), so the per-row "is at or above" comparison would fire if
+  // the suppression were removed.
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 2 |
+
+**2 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+<!-- next-id: A101 -->
+
+### A2a · thing 2 part a
+
+Body text.
+
+### A101 · thing 101
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some((e) => e.includes('is not a valid row number')),
+    `expected the sub-lettering rejection to still fire, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('is at or above')),
+    `the per-row next-id comparison must be suppressed for a letter with an invalid row heading, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('parseNextIdMarker does not match a marker for a different group letter', () => {
+  assert.equal(parseNextIdMarker('<!-- next-id: G101 -->\n', 'H'), null);
 });
 
 test('fix 1: a body-only group heading with an ASCII hyphen still counts as a group (not silently dropped)', () => {
