@@ -212,7 +212,8 @@ merge commit `c7ceee9b`.
 
 `status:` stays **`active`**, not `stable` — the plan does **not** move to
 `archive/` yet, because its on-box acceptance
-([register row E6](../testing/onbox-acceptance-register.md)) is still owed.
+(the [ops-35 ffmpeg-floor blocked row](../testing/onbox-acceptance-register.md))
+is still owed.
 Every assertion this plan ships drives a **mocked `spawnSync`**; no test has
 met a real ffmpeg binary of any version. Per the Before-shipping checklist, a
 row comes out only when the acceptance was actually run on the box, or the repo

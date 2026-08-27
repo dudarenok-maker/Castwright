@@ -182,8 +182,8 @@ comparison, see the edge list above). The merge step that closes this, run
          N ids this way (the shifted id can change each time you re-run);
          never name an (N+1)th id just because the check is still red after N.
        - **A whole group with NO survivors left** — e.g. discharging a
-         single-row group's only row (Group F's sole row, F1, is a real,
-         live example of exactly this shape). There is nothing left to
+         single-row group's only row, or the last surviving row of a group
+         that once had more. There is nothing left to
          renumber, so every row the group's live-page section still lists
          reads as live-only. Name exactly the rows you discharged — for a
          one-row group, that's one ID, not "every ID the error currently
