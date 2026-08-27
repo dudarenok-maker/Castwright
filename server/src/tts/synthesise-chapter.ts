@@ -1033,11 +1033,12 @@ async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
 /* fs-38 Wave 3c, Task 22 [FAB-I2] — the mirror of `evictQwenForCoquiPhase`
    above: evicts Coqui so a subsequent Qwen derive/render doesn't run with
    XTTS (~3.5 GB) still resident, the same co-residency hazard mirrored the
-   other direction. Used ONLY by the cloned/designed-voice resolver pre-pass
-   (below) to hand off from "coqui derive phase" back to "qwen phase" — see
-   the pre-pass's own Task 22 comment for why this fires only when a qwen
-   load is about to happen afterward (evicting XTTS unconditionally would
-   unload it right before every Coqui-only chapter's groups reload it).
+   other direction. Used by the cloned/designed-voice resolver pre-pass (below)
+   to hand off from "coqui derive phase" back to "qwen phase", and also by the
+   render-phase trailing evict (line ~2988) to reclaim VRAM after all groups
+   have been synthesised. See the pre-pass's own Task 22 comment for the
+   pre-pass semantics (evicting XTTS unconditionally would unload it right
+   before every Coqui-only chapter's groups reload it).
 
    COQUI-RESIDENCY-POLICY — this is mechanism A (Node, plan-driven,
    proactive). A second, independent mechanism can also free XTTS VRAM:

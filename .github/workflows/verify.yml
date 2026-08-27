@@ -290,18 +290,17 @@ jobs:
       # `--changed <base>` narrows both server configs to diff-affected tests
       # (CI cost round 2). The slow config still serial-runs ONLY the hot files
       # the diff actually touched. Run from server/ so the per-dir vitest
-      # config loads. A sidecar-only PR touches no server TS graph → 0 tests
-      # run here, which is correct (server tests mock the Python sidecar).
-      # See docs/features/118-ci-cost-round-2.md.
+      # config loads. A typical sidecar-only diff (touching only .py files
+      # outside main.py) touches no server TS graph → 0 tests run here, which
+      # is correct (server tests mock the Python sidecar). See
+      # docs/features/118-ci-cost-round-2.md. EXCEPTION: a
+      # server/tts-sidecar/main.py-only diff DOES schedule test:server now (via
+      # extraFiles in verify-cache.mjs + forceRerunTriggers in vitest.config.ts,
+      # since coqui-residency-policy.guard.test.ts reads it at runtime as part
+      # of the Coqui eviction cross-reference guard, #1932).
       # test:server AND test:server-slow share this one step, so the
       # condition is the union of both steps' keys. Drops the old `sidecar`
-      # disjunct deliberately: a typical sidecar-only diff (touching only
-      # .py files outside main.py) used to run this job for zero tests —
-      # but EXCEPTION: a server/tts-sidecar/main.py-only diff DOES schedule
-      # test:server now (via extraFiles in verify-cache.mjs + forceRerunTriggers
-      # in vitest.config.ts, since coqui-residency-policy.guard.test.ts reads
-      # it at runtime as part of the Coqui eviction cross-reference guard,
-      # #1932), so behaviour is mostly behaviour-neutral for the general case.
+      # disjunct deliberately.
       # (was: server || sidecar || shared).
       # leg: test:server
       - name: Server tests (fast + slow)

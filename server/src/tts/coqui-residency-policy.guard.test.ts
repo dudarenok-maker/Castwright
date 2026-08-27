@@ -24,8 +24,12 @@ const SIDECAR_MAIN_PATH = join(process.cwd(), 'tts-sidecar', 'main.py');
 /* NOTE: When plan 264 is archived (status → stable), this path will move to
    docs/features/archive/264-vram-aware-gpu-placement.md. Keep the path
    hardcoded so the guard fails-closed if archival forgets to update it.
-   On archival, update all FIVE of these in the same commit (two code comments
-   fail loudly on archival when forgotten; three CI entries fail silently):
+   On archival, update all FIVE of these in the same commit. ITEMS 1-5 all fail
+   SILENTLY when archival forgets them (stale comments stay stale, CI entries
+   stay stale, the guard just keeps checking the old path). The ONE exception
+   that fails LOUDLY is this file's own POLICY_DOC_PATH constant below — if
+   this path is wrong or missing, the readFileSync call in this test's "keeps
+   the policy section" spec will throw immediately.
    1. The cross-reference comment in synthesise-chapter.ts (search for the TOKEN)
    2. The cross-reference comments in main.py (search for the TOKEN)
    3. server/vitest.config.ts forceRerunTriggers entry (will miss config-only diffs)

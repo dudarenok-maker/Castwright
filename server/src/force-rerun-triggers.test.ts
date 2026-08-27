@@ -135,10 +135,11 @@ const MAIN_COVERED = [
   },
   /* #1932 (side-18) — coqui-residency-policy.guard.test.ts reads these three
      files at RUNTIME to catch cross-reference rot across the two eviction
-     mechanisms and their policy doc. No module-graph edges, so a diff confined
-     to any of them selected zero tests under `vitest run --changed` before these
-     entries existed — the same consequence spelled out above for openapi.yaml/
-     scripts/**. */
+     mechanisms and their policy doc. The sidecar main.py and docs file have no
+     module-graph edges (same #1847 runtime-read trap); synthesise-chapter.ts
+     IS importable but is included here for consistency with the guard's uniform
+     readFileSync approach rather than being split into two separate tracking
+     mechanisms. */
   { rel: 'src/tts/synthesise-chapter.ts', file: 'the Node Coqui eviction mechanism', base: SERVER_ROOT },
   {
     rel: 'server/tts-sidecar/main.py',
