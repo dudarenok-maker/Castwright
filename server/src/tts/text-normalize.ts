@@ -30,7 +30,11 @@
    point used by `synthesiseChapter`. Each transform is exported so a future
    refactor can pin which half regressed.
 
-   All transforms are idempotent and order-independent.
+   All transforms are individually idempotent. They are NOT order-independent
+   as a set: `normaliseForTts` composes them in a specific, load-bearing order
+   (see its own doc comment) -- `stripAudioTags` must run before `softenDashes`
+   so the comma-collapse can fire across a tag, and swapping that order changes
+   output for tag-adjacent-to-dash input (#2059/#2688).
 
    Audio tags (plan 70d). Inline bracketed tags like `[empathic]` /
    `[shouting]` ride along inside sentence.text from the analyzer. No
@@ -123,9 +127,15 @@ export function denormaliseAllCaps(text: string): string {
     that use a leading dash for dialogue — so a leading dash becomes "... "
     instead of ", ". Order matters: this runs BEFORE the general `DASH_RUN`
     pass below, and the ellipsis it inserts contains no dash character, so
-    the two passes can't double-process the same dash. */
+    the two passes can't double-process the same dash. Finally, this function
+    collapses any run of two or more commas (with or without intervening
+    whitespace) into a single comma -- this fires independent of dashes, so
+    it also mutates comma-only input with no dash present at all (#2059). */
 export function softenDashes(text: string): string {
-  return text.replace(LEADING_DASH, '... ').replace(DASH_RUN, ', ');
+  return text
+    .replace(LEADING_DASH, '... ')
+    .replace(DASH_RUN, ', ')
+    .replace(/,(\s*,)+\s*/g, ', ');
 }
 
 /** Strip every codepoint that can poison the XTTS tokenizer with no defensible
@@ -159,20 +169,27 @@ export function stripAudioTags(text: string): string {
 /** Compose the TTS-bound transforms. Apply this immediately before handing
     text to a TTS provider — do NOT mutate the underlying SentenceOutput,
     since the original text still drives UI segment captions, manuscript
-    diffing, and quote audit. Order matters: strip first (so all-caps + dash
-    transforms operate on clean ASCII), then humanise the casing/dashes,
-    then drop audio tags (last so the bracket characters are still present
-    while the all-caps detector runs — `[SHOUTING]` is excluded from the
-    all-caps fold by the closed-vocabulary check, so order is academic,
-    but keeping the strip last keeps the contract obvious).
+    diffing, and quote audit. Order matters: strip unsafe bytes first (so
+    all-caps + dash transforms operate on clean ASCII), then humanise the
+    casing, then strip audio tags BEFORE softening dashes (so the
+    doubled-comma collapse regex can match even when a tag sits between the
+    commas), then expand language-specific forms last.
 
     fs-53: when `langCode` is supplied, run `expandForSpeech` LAST so numbers,
     dates, currency, symbols, and the curated abbreviation set are read in spoken
     form. The one-arg form stays byte-identical to today (no expansion) — every
     diagnostic / length-only caller keeps the neutral text. `expandForSpeech`
     self-gates: it no-ops unless the language is supported and has a registered
-    engine, so an unsupported/dormant code is also a pass-through. */
+    engine, so an unsupported/dormant code is also a pass-through.
+
+    `stripAudioTags` no longer runs last, so its own whitespace-collapse-and-trim
+    isn't the final step either -- `softenDashes`'s trailing-dash conversion
+    (e.g. "paused—" -> "paused, ") can leave trailing whitespace behind it. Redo
+    that collapse-and-trim here, after `softenDashes`, so the composed result
+    stays idempotent regardless of where a dash falls in the string. */
 export function normaliseForTts(text: string, langCode?: string): string {
-  const base = stripAudioTags(softenDashes(denormaliseAllCaps(stripUnsafeForTts(text))));
+  const base = softenDashes(stripAudioTags(denormaliseAllCaps(stripUnsafeForTts(text))))
+    .replace(/\s+/g, ' ')
+    .trim();
   return langCode ? expandForSpeech(base, langCode) : base;
 }
