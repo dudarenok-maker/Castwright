@@ -100,17 +100,22 @@ def test_qwen_golden_lengths_match_baseline():
 
     failures: list[str] = []
     for i, line in enumerate(fixture["lines"]):
-        base = entries.get(line["id"])
-        if base is None:
-            failures.append(f"{line['id']}: no baseline entry (re-bless after editing the fixture).")
-            continue
-
-        # Use synthesise_or_skip only for the first line (warm-up) — if that fails,
-        # the engine is absent and we skip. Any later failure is a real regression.
+        # Use synthesise_or_skip only for the first line (warm-up) — if that
+        # fails, the engine is absent and we skip. Any later failure is a
+        # real regression. This must run BEFORE the missing-baseline-entry
+        # check below: skipping the warm-up because line 0's entry happens
+        # to be missing would leave line 1's direct engine.synthesize() call
+        # with no SKIP protection, turning an absent engine into an uncaught
+        # exception instead of a clean SKIP.
         if i == 0:
             res = synthesise_or_skip(engine, QWEN_MODEL, voice, line["text"])
         else:
             res = engine.synthesize(QWEN_MODEL, voice, line["text"])
+
+        base = entries.get(line["id"])
+        if base is None:
+            failures.append(f"{line['id']}: no baseline entry (re-bless after editing the fixture).")
+            continue
 
         # No silent fallback — the requested voice must be honoured.
         if res.substituted_from is not None:

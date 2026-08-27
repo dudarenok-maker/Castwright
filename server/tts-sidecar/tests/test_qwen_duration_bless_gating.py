@@ -13,6 +13,10 @@ This file tests:
 - Only the first synthesis uses `synthesise_or_skip` (verified structurally
   via the function's expected behavior)
 - Tolerance remains at static placeholder (0.10) from the committed baseline
+- The assertion loop's warm-up runs even when the FIRST fixture line's
+  baseline entry happens to be missing (a missing-entries check must not
+  short-circuit past the warm-up, or a later line's direct engine call loses
+  its SKIP protection — see `test_assertion_loop_warms_up_before_missing_entry_check`)
 """
 from __future__ import annotations
 
@@ -154,5 +158,74 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     # Check that all entries were recorded
     assert len(written["entries"]) == 3
     assert all(f"line{i}" in written["entries"] for i in range(1, 4))
+
+
+def test_assertion_loop_warms_up_before_missing_entry_check(monkeypatch) -> None:
+    """The main assertion test (`test_qwen_golden_lengths_match_baseline`) must
+    run its first-line warm-up (`synthesise_or_skip`) BEFORE checking whether
+    that line has a baseline entry — not after.
+
+    If a fixture edit drops/renames the first line's id so its baseline entry
+    goes missing, a "missing entry -> continue" check placed BEFORE the
+    warm-up branch would skip the warm-up entirely for line 0, leaving line 1's
+    direct `engine.synthesize()` call with no SKIP protection: an absent
+    engine would surface as a raw uncaught exception instead of a clean SKIP.
+    Reproduces the exact bug pass-3 review found still present after the
+    `_bless`-only warm-up fix (the assertion loop was never restructured to
+    match)."""
+    fixture = {
+        "lines": [
+            {"id": "line1", "text": "Test one."},
+            {"id": "line2", "text": "Test two."},
+        ]
+    }
+    baseline = {
+        "tolerance": 0.10,
+        # line1 deliberately missing — simulates a fixture edit that dropped
+        # or renamed the first line's id without a re-bless.
+        "entries": {
+            "line2": {"sample_rate": 24000, "sample_count": 24000, "duration_sec": 1.0},
+        },
+    }
+
+    def mock_load(p):
+        return fixture if p == qwen.FIXTURE_PATH else baseline
+
+    monkeypatch.setattr(qwen, "_load_json", mock_load)
+    monkeypatch.setattr(qwen, "_resolve_voice", lambda engine: "test_voice")
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+
+    results = [_make_mock_synthesize_result(24000), _make_mock_synthesize_result(24000)]
+    skip_calls = []
+    synth_calls = []
+
+    def mock_synthesize(model, voice, text):
+        synth_calls.append((model, voice, text))
+        return results[len(synth_calls) - 1]
+
+    mock_engine = MagicMock()
+    mock_engine.synthesize = mock_synthesize
+    monkeypatch.setattr(qwen, "_make_qwen", lambda: mock_engine)
+
+    def mock_skip_impl(*args, **kwargs):
+        skip_calls.append(args)
+        return results[0]
+
+    with patch.object(qwen, "synthesise_or_skip") as mock_skip:
+        mock_skip.side_effect = mock_skip_impl
+        # line1 has no baseline entry, so this always fails the "no baseline
+        # entry" check regardless of warm-up ordering — the assertion here is
+        # a red herring for the actual thing under test, which is the CALL
+        # ORDERING captured below.
+        with pytest.raises(AssertionError):
+            qwen.test_qwen_golden_lengths_match_baseline()
+
+    assert len(skip_calls) == 1, (
+        "synthesise_or_skip (warm-up) must run for the first line even though "
+        f"its baseline entry is missing, got {len(skip_calls)} calls — a "
+        "missing-entry check placed before the warm-up branch would skip it "
+        "entirely, leaving the next line's direct engine call unprotected."
+    )
+    assert len(synth_calls) == 1, f"engine.synthesize should be called exactly once (line 2), was {len(synth_calls)}"
 
 
