@@ -354,9 +354,9 @@ single statement of that ruling so the question is not reopened.
 
 `evictEngineForPhase` (`server/src/tts/synthesise-chapter.ts:1015`) POSTs
 `/unload` to the sidecar for a named engine. The Coqui-facing wrappers are
-`evictCoquiForQwenPhase` (`:1041`) and the symmetric `evictQwenForCoquiPhase`
-(`:1029`). The leading evict fires at `:2912` before a mixed chapter's Coqui
-phase; the trailing evict fires at `:2976` at its end.
+`evictCoquiForQwenPhase` (`:1049`) and the symmetric `evictQwenForCoquiPhase`
+(`:1029`). The leading evict fires at `:2920` before a mixed chapter's Coqui
+phase; the trailing evict fires at `:2987` at its end.
 
 It is driven by the **generation plan** — Node knows which engine each
 remaining chapter needs, so it can free the VRAM at a boundary where "no
@@ -370,10 +370,10 @@ should not break a whole chapter if a transient sidecar hiccup occurs.
 
 ### Mechanism B — sidecar, demand-driven, reactive
 
-`_idle_evict_steps` (`server/tts-sidecar/main.py:5019-5048`) is a
+`_idle_evict_steps` (`server/tts-sidecar/main.py:4989-5064`) is a
 **five-step, cross-engine ladder** — `spk`, `asr`, `qwen.design`,
 `qwen.base17`, `coqui` — run by `PlacementController` on the admission path
-when an op is VRAM-starved. Coqui is *one step of it* (`:5047`), calling
+when an op is VRAM-starved. Coqui is *one step of it* (`:5063`), calling
 `CoquiEngine.maybe_free_idle` (`:2273`). This is **not** a Coqui-specific
 idle evict: it is one entry in a generic ladder that every engine has a step
 in.
@@ -381,11 +381,11 @@ in.
 Two Coqui-specific qualifications distinguish the Coqui step from the others:
 
 1. **Self-admission skip.** The step is omitted entirely when the admitting
-   op is itself Coqui (`server/tts-sidecar/main.py:5044`, `if engine !=
+   op is itself Coqui (`server/tts-sidecar/main.py:5053`, `if engine !=
    "coqui"`) — evicting would unload the model that op is about to reload.
 2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
-   `_coqui_idle_ttl()` (`:8272`, 30 s default, env `COQUI_IDLE_TTL`,
-   registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:849`)
+   `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
+   registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)
    — rather than the `0.0` the transient models (SPK, ASR, Qwen design,
    Qwen base17) take. Coqui deliberately has **no** background watchdog,
    unlike Qwen/ASR/ECAPA, so this only ever runs under genuine VRAM

@@ -5,7 +5,7 @@
    sidecar's `_idle_evict_steps` `coqui` step) without noticing the other
    side, or the policy doc, still exists. This guard fails loudly if that
    happens: it is a literal marker-presence check, not a source-text
-   scanner — it does not parse anything, it greps four files for one token
+   scanner — it does not parse anything, it greps three files for one token
    and one heading.
 
    Line numbers are asserted NOWHERE here on purpose: they rot (this repo's
@@ -21,6 +21,11 @@ const REPO_ROOT = join(process.cwd(), '..');
 
 const SYNTHESISE_CHAPTER_PATH = join(process.cwd(), 'src', 'tts', 'synthesise-chapter.ts');
 const SIDECAR_MAIN_PATH = join(process.cwd(), 'tts-sidecar', 'main.py');
+/* NOTE: When plan 264 is archived (status → stable), this path will move to
+   docs/features/archive/264-vram-aware-gpu-placement.md. Keep the path
+   hardcoded so the guard fails-closed if archival forgets to update it;
+   also update the cross-reference comments in synthesise-chapter.ts and
+   main.py that point at this doc in the same commit. */
 const POLICY_DOC_PATH = join(REPO_ROOT, 'docs', 'features', '264-vram-aware-gpu-placement.md');
 
 function occurrences(haystack: string, needle: string): number {
