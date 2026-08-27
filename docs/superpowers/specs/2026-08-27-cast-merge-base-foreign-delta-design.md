@@ -4,9 +4,11 @@
 **Status:** **FALSIFIED at review round 2 — do not implement.** Its central
 premise does not hold (§13). Kept, and kept in detail, because five predecessor
 designs died undocumented enough to be re-proposed; this one records exactly
-where it broke so attempt 8 starts from here. A decision is owed before any
-further work — see §13.3.
-**Issues:** #2015 (srv-82) — the rebuild half.
+where it broke so attempt 8 starts from here. The decision §13.3 said was owed
+has since been made: **#2015's repair half is withdrawn and the detector is the
+terminal answer** — see §14 for the call, the measurement that could not be
+made, and what reopens it.
+**Issues:** #2015 (srv-82) — the rebuild half, closed 2026-08-27 as withdrawn.
 **Builds on:** `docs/superpowers/specs/2026-08-06-cast-merge-base-serialise-and-detect-design.md`
 (the detection half, shipped as PR #2185) and
 `docs/superpowers/specs/2026-07-31-cast-json-write-lock-design.md` §6, §12.2, §13.
@@ -582,3 +584,60 @@ whether #2015's repair half is withdrawn and the detector's honest wording is
 accepted as the terminal answer. Attempt 8 should not begin before that is
 settled, because the field-set question in §13.1 has a different answer depending
 on it.
+
+## 14. The decision, made — #2015's repair half is withdrawn
+
+**2026-08-27, the repo owner's call.** §13.3 named two branches. Both halves of
+the prerequisite were then discharged, in order:
+
+**The self-inflicted conflict source was fixed first** — #2694, PR #2699,
+merged `c25a751b`. `noteExternalWrite` closes the two run-internal writers that
+desynced the baseline. The writer set is now provably closed, not merely
+patched: of the modules holding a raw `writeJsonAtomic(castJsonPath(`,
+`store/reject-edge-reconcile.ts` is pure and writes through
+`routes/analysis.ts:451`, and `workspace/voice-library-usage.ts` is reachable
+only from the `voice-library` route — a genuine foreign writer, correctly
+detected. The two #2694 fixed were the only run-internal ones.
+
+**Then the frequency measurement was attempted, and it could not be made.**
+The advisory has always logged (`analysis.ts:3483`, `:6511`), and
+`logs/server.log` covers 2026-08-12 onward — entirely after the detector
+shipped 2026-08-06 (`86fc4ff0`). It contains **zero** `cast_merge_base_stale`
+hits. **That zero is not a measurement**, and the reason is recorded here
+because this document's own §7/§8 made the same class of error twice:
+
+- The denominator is **one analysis run**, started 2026-08-12 10:05:03 on a
+  103,751-word/9-chapter manuscript with a ~65 min estimate. The log ends at
+  10:29, mid-phase-1. It never completed. The only other session in the file
+  (2026-08-27) ran a generation and no analysis at all.
+- `logs/server.log` is written **only** by `scripts/start-app-prod.mjs:314`,
+  i.e. `npm start`. `npm run dev` logs to the terminal, unpersisted. So
+  development-time analysis runs leave no record at all. The file opens `'a'`,
+  so nothing is lost to rotation — **the gap is capture, not retention.**
+
+The logic that an over-reporting detector observing nothing bounds the true
+rate at zero is sound, and inapplicable: it needs a denominator this window
+does not have.
+
+**The call: withdraw, and let the detector be the tripwire.** #2015 closes with
+detection as the terminal answer. This is not a claim that the race is
+harmless — B4 (PR #2190) measured a real, silent alias loss under deliberate
+contention, and that finding stands. It is a judgement that the natural
+exposure is bounded by how rarely a full analysis is run, that eight designs
+have now died against a repair whose §13.1 obstacle is structural rather than
+incidental, and that #2185 already ships the thing that would tell us
+otherwise: a logged, SSE-surfaced advisory that fires when it recurs.
+
+**What reopens this.** A `cast_merge_base_stale` line in `logs/server.log`, or
+the toast on a real run. At that point the frequency question has an answer and
+the design question is worth reopening — from §13.1's constraint, not a blank
+page. Field-level re-application is dead; the shapes still standing are the
+ones that never re-apply a field. Two are named in §11 and one is newly
+available: #2015's own Acceptance offers "a scoped ownership protocol with a
+bounded, diagnosable wait", and design 1 was rejected because the mutex had "no
+timeout, no queue cap and no diagnostic" — **#2260 has since shipped exactly
+that** (`withKeyLock` bounds acquisition at 10s and throws a named
+`LockAcquisitionTimeoutError`). That retires one of design 1's two rejection
+reasons. The other — that holding the lock for a minutes-long run converts a
+lost mutation into a failed request — is untouched, and is a decision, not a
+fact.
