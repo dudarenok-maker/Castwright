@@ -339,7 +339,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -349,7 +349,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped this wave; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A12**.
 
@@ -2822,6 +2822,27 @@ Qwen 1.7B-Base, Whisper), and the ability to force explicit `/unload` + TTL laps
 mid-session. *Criteria:* [#2656](https://github.com/dudarenok-maker/Castwright/issues/2656)
 — extend `docs/testing/1996-stranded-vram-measurement.md`, don't replace it. *Cost:*
 short — one idle render, explicit unloads for all three models, one reading.
+
+### A39 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
+
+PR #2688 fixed `softenDashes` (`server/src/tts/text-normalize.ts`) producing a
+doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g.
+`"— Привет, — сказал Антон."` previously carried a `,,` in the TTS wire text.
+The collapse to a single comma is pinned only as a wire-text transform
+(`text-normalize.test.ts`); never confirmed whether removing the doubled
+comma changes the audible pause/prosody on real synthesized speech — same
+open shape as A32's leading-dash-to-ellipsis case.
+
+- **Doubled-comma collapse pause, by ear.** Render a dash-attributed line
+  (e.g. `"— Привет, — сказал Антон."`) and confirm collapsing the doubled
+  comma to one doesn't shorten or eliminate an audible pause the doubled
+  comma was incidentally providing, and doesn't introduce a new artifact.
+
+*Needs:* a Coqui-capable sidecar with XTTS resident, a Russian line (no
+clone needed — the stock catalogue voice `Damien Black` reproduces this
+shape). *Criteria:* see [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
+for the dialogue shapes to test. *Cost:* short — one or two renders of a
+Russian test sentence.
 
 ## Group B — local Ollama analyzer only
 
