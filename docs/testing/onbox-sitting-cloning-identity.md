@@ -161,7 +161,7 @@ last, alone, since it deliberately crashes the sidecar twice.
    render, not something to engineer.
    - Result:
 
-### A35 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)
+### A34 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402)
 
 > **Criteria source:** `onbox-acceptance-register.md` A42. Re-resolved
 > 2026-08-20: `gh pr view 2402` → merged 2026-08-16T03:56:05Z, title matches.

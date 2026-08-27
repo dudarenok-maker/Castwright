@@ -339,7 +339,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -349,11 +349,40 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
-were owner-confirmed and dropped this wave; the sole surviving 2026-06-01 row is plan
-161's A/B audition check, now **A12**.
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
+161's A/B audition check, still **A12**.
 
-> **Last change: 2026-08-26 (on-box wave 7), 69 → 61.** Referring to the pre-this-change
+> **Last change: 2026-08-27 (on-box wave 8), 61 → 60.** One row fully discharged and
+> dropped: **old A34** (respawn-budget deadline timer, Scenario 2) — with a chapter's
+> sidecar killed and a manually-started, unowned bare sidecar left listening on the
+> TTS port, restarting the server with `SIDECAR_NEVER_ADOPT=1` produced the exact
+> expected sequence: `[sidecar] UNFIT sidecar on :9180 (prod policy: spawning a fresh
+> owned sidecar instead of adopting a pre-existing one) — replacing it...` followed by
+> `replaced stale sidecar (killed pid=...); spawning current build.` The new sidecar
+> came up owned (`.run/tts.pid` recorded its PID) and ready, with no deadline-timeout
+> message (resolved in ~3.4s, well under the 5000ms ceiling) — combined with Scenario 1
+> already confirmed in wave 7, both scenarios are now done. Group A renumbered
+> contiguously (old A35–A38 → A34–A37). Three rows advanced without discharging (new
+> numbers): **A34** (voice reassignment) — root-caused wave 7's non-scoring failure to
+> `MIN_DURATION_SEC` (3.0s per-group floor), found a correctly-shaped test character
+> (Ivo) but the reassignment call itself was refused by a permission gate, still owed;
+> **A35** (Kokoro fallback alarm) — 3 of 5 checks confirmed (genuine fallback, API-drift
+> simulation, the #2643 real-`/synthesize`-path bullet), 2 checks (contended-admission
+> vs. idle-GPU-placement) not testable on this box since Kokoro's CUDA path is
+> structurally broken here regardless of contention; **A37** (stranded VRAM) — a real
+> post-unload diff was taken (Qwen Base 0.6B: ~1974 MB → ~137 MB allocated after
+> explicit unload, consistent with CUDA-context baseline, not a leak) but only for one
+> of the row's three models (Whisper/Qwen 1.7B-Base weren't concurrently resident in
+> this run), so the full three-model scenario stays owed. **A36** (cast-id drift,
+> renumbered from old A37) — ran a real full re-analysis of *Заказ Коалфолла*; the
+> book's `cast.json` id still comes back Cyrillic, but root-caused why: the fix only
+> guards a *future* corruption of an established-ASCII id, and this book's corruption
+> predates the fix, so there was never a fresh retirement event for the guard to
+> intercept. Did not hand-edit the real `cast.json` to force the guarded precondition —
+> correctly blocked by a permission classifier, not worked around.
+>
+> **Prior change: 2026-08-26 (on-box wave 7), 69 → 61.** Referring to the pre-that-change
 > (old) row numbers throughout — eight rows fully discharged and dropped this wave.
 > Three via real on-box measurement: **old A19** (mixed Qwen+Coqui evict fails soft,
 > #1893) — the outstanding pause-during-a-stalled-evict sub-bullet was exercised: a real
@@ -2549,46 +2578,7 @@ its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
 two bullets above. *Cost:* short — one import + one chapter-title listen, plus
 one body-line listen if a suitable entity-laden EPUB is available.
 
-### A34 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398) · **single 8 GB card, live sidecar**
-
-When the sidecar exits and respawning runs into a refused spawn (a foreign process occupying `:9000`), the supervisor's crash-loop cap must still accrete monotonically toward exhaustion, and the deadline timer must actually kill a hung listener-enumeration probe. Unit tests (`server/src/tts/sidecar-supervisor.test.ts`, `server/src/tts/spawn-sidecar.test.ts`) fully verify the refusal→cap accounting logic: a slow attempt (one that outlives `QUICK_DEATH_MS`) no longer masquerades as a long-lived child and resets the counter — instead the budget accrues regardless of attempt latency, and a cap on `consecutiveFailures` prevents infinite refusal loops. What no unit test can reach is the *real* race on a contended box: whether `LISTENER_PID_DEADLINE_MS = 5000` milliseconds is actually enough headroom for the listener-enumeration probe (`lsof` on POSIX, Windows PowerShell `Get-NetTCPConnection` query) to complete before the deadline fires on real hardware under contention, and whether the deadline timer truly kills a hung probe so the supervisor can proceed to the next backoff instead of blocking forever. Two scenarios test these separately: a foreign listener for the budget-exhaustion half (exercises the not-ours refusal path), and a manually-started sidecar under prod policy for the deadline-timer half (exercises the stale-replace path where the deadline callback is active).
-
-**Scenario 1: Supervisor crash-loop cap (foreign listener, not-ours refusal path)**
-
-- With a chapter actively rendering, kill the sidecar's OS process directly (e.g. `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the process from Task Manager) — **not** via `POST /api/sidecar/restart`, which restarts the sidecar itself rather than passively observing it, the same operational trap that produced the #2037 outage.
-- Immediately after kill, start a foreign listener on `:9000` that does NOT respond like a valid sidecar (e.g. `nc -l 9000` on POSIX, which accepts TCP but doesn't answer HTTP; or an HTTP server that returns a non-200 status or malformed body). This ensures the spawn attempt fails the identity check and enters the not-ours refusal path (`spawn-sidecar.ts:681`).
-- Grep the running server's own log for the supervisor counter monotonically advancing across multiple refused attempts. Expected log format: `[sidecar] supervisor: spawn refused: <reason>; respawning in <delayMs>ms (attempt <K>/<max>).` Confirm the attempt counter increases (1, 2, 3, 4, 5) and that no single slow probe resets it back to 1.
-- Confirm the respawned sidecar eventually surfaces as `'crashed'` on `GET /api/setup/models-status` once the counter exhausts. Expect the exhaustion log: `[sidecar] supervisor: <N> rapid spawn refusals (<reason>) in a row — giving up respawn. TTS is DOWN; restart the server to recover.` (Backoff schedule: `DEFAULT_BACKOFFS_MS = [2s, 5s, 15s]` with last repeating, cap `DEFAULT_MAX_CONSECUTIVE_FAILURES = 5`, total ≈52s across 5 attempts per `server/src/tts/sidecar-supervisor.ts:45-46`.)
-- **Recovery from exhaustion:** Once exhausted, `scheduleRespawnAttempt` returns without scheduling a respawn (see `server/src/tts/sidecar-supervisor.ts:265-271`). Recovery paths differ:
-  - *Before exhaustion:* If the foreign listener is stopped BEFORE the counter reaches 5, the next scheduled backoff delay will elapse and the next spawn attempt will succeed (listener is now gone). Confirm the sidecar starts and surfaces as ready within the backoff window for the current attempt count.
-  - *After exhaustion:* If the foreign listener is stopped AFTER the counter exhausts and the `giving up respawn` log appears, stopping the listener alone does **not** trigger a respawn — the counter is locked at 5+ and `scheduleRespawnAttempt` returns immediately. Recovery requires one of: (1) `POST /api/sidecar/restart` via the UI or API (resets `consecutiveFailures` to 0 and calls `spawnOnce()`), or (2) a server restart, which resets all state. Test recovery by calling `POST /api/sidecar/restart` after stopping the listener and confirm the sidecar respawns and surfaces as ready.
-
-**Scenario 2: Deadline timer for hung PID probe (manually-started sidecar, stale-replace path)**
-
-- In a fresh or parallel session (or after restarting the server), start a fresh sidecar manually — e.g. `cd server/tts-sidecar && python main.py` in a separate terminal — so the server process does not own its PID. Before running the server, set the environment variable `SIDECAR_NEVER_ADOPT=1` (in PowerShell: `$env:SIDECAR_NEVER_ADOPT = '1'`) to trigger the prod-policy path (`spawn-sidecar.ts:685-686`).
-- With a chapter actively rendering on the server with `SIDECAR_NEVER_ADOPT=1`, the health probe will detect the already-listening sidecar. Because prod policy is active and the sidecar is healthy (fresh protocol version, no leak), the server will treat it as unfit to adopt and attempt to replace it via the stale-replace path (`spawn-sidecar.ts:694`).
-- Grep the server log for the UNFIT message. Expected log: `[sidecar] UNFIT sidecar on :9000 (prod policy: spawning a fresh owned sidecar instead of adopting a pre-existing one) — replacing it with a fresh process to avoid inheriting…` On a responsive box, verify the PID lookup completes well under the 5000ms deadline. The log should show the new sidecar spawning without a deadline-timeout message.
-- If the deadline does fire (rare, indicates system contention or slow enumeration), confirm it appears in logs as: `[sidecar] probe for the PID on :9000 timed out — the supervisor will retry on backoff. Monitor logs if this persists.` Verify that the supervisor does NOT hang indefinitely; instead it proceeds to the next backoff attempt.
-- Confirm the newly-spawned sidecar becomes owned (PID recorded in `.run/tts.pid`) and surfaces as ready on `GET /api/setup/models-status`.
-- Cleanup: the manually-started sidecar was already killed by the server as part of the replace above, so its terminal should show it exited on its own — there is nothing left to stop. Restore `SIDECAR_NEVER_ADOPT` to its prior state (unset, or `'0'`) and restart the server, so the next run adopts a healthy pre-existing sidecar normally instead of replacing it.
-
-*Needs:* a live sidecar, a book mid-render, OS-level process-kill access, ability to bind a foreign listener on `:9000`, ability to start a fresh sidecar manually, and ability to set environment variables on the server. *Criteria:* the bullets above; the code-level contracts are `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` (budget exhaustion) and the deadline timer in `server/src/tts/spawn-sidecar.ts` at line 694 (`findListenerPid`'s `deadlineMs` parameter). *Cost:* ~2 minutes — Scenario 1 takes ~1 minute (one sidecar kill, one foreign listener binding, supervisor observation); Scenario 2 takes ~1 minute (one manual sidecar start, one SIDECAR_NEVER_ADOPT run, deadline observation). Can run sequentially or in separate sessions.
-
-> **PARTIALLY run 2026-08-26 (wave 7) — Scenario 1 fully confirmed; Scenario 2 (deadline
-> timer) not exercised.** With a real chapter mid-render, killed the sidecar's OS process
-> directly, then raced a non-conforming HTTP listener (always answers `503`) onto the
-> same port — won the bind on the first retry, ~370ms after the kill. Server log shows
-> the monotonic counter advancing cleanly with no reset on a slow attempt: `attempt 2/5`
-> (5000ms backoff) → `3/5` (15000ms) → `4/5` (15000ms) → `5/5` (15000ms) → `6 rapid spawn
-> refusals ... giving up respawn` — matching the documented `[2s,5s,15s]`-repeating
-> schedule. `GET /api/setup/models-status` read `runtime.process: "crashed"` throughout —
-> never falsely healthy. Stopped the foreign listener, called `POST
-> /api/sidecar/restart`, and the sidecar came back `runtime.process: "ready"` cleanly —
-> confirms the exhaustion→recovery path documented in the bullets above. **Scenario 2
-> (the deadline-timer / `SIDECAR_NEVER_ADOPT` stale-replace path) was not attempted this
-> round** — still owed.
-
-### A35 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
+### A34 · Reassigning a character's voice no longer scores it against the old speaker's persisted audition centroid ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR #2402) · **single 8 GB GPU + qwen or coqui resident + a cloneable voice**
 
 PR #2402 fixes the #1969 `voice-mismatch` false-positive: the render-integrity
 gate now rebuilds a character's persisted audition centroid reference when its
@@ -2625,9 +2615,33 @@ reassignment, one re-render. Records A17's final sub-check ("no
 > reference path (thin on in-book anchors but still scored), then run the
 > reassign-and-re-render sequence this row asks for.
 
+> **ATTEMPTED AGAIN 2026-08-27 (wave 8) — root cause of wave 7's non-scoring
+> found; still inconclusive, blocked on a permission gate.** Root-caused why a
+> thin character can go unscored: `collectGroupEmbeddings`
+> (`server/src/tts/synthesise-chapter.ts:555`) drops any group whose PCM is
+> under `MIN_DURATION_SEC` (3.0s, `render-integrity/constants.ts`) — confirmed
+> by rendering "Hart" (4 lines, each individually 1.2–1.92s) on the real *The
+> Coalfall Commission* and finding zero embedding rows for him in
+> `04-chapter-two-the-pour.embeddings.json`, exactly wave 7's failure shape.
+> Found a better candidate from the SAME chapter's real embeddings file:
+> **Ivo** (1 embedding row, `referenceKind: "audition"`) — thin enough to take
+> the audition path but with at least one line that clears the 3s floor. The
+> `POST /api/voice-library/{voiceUuid}/assign` call to reassign Ivo's voice
+> was refused twice by the session's own permission classifier (unrelated to
+> the app — the identical call succeeded earlier in this same session for a
+> different character on the same book), so the reassign-and-re-render
+> sequence could not complete this round. **Still owed:** re-run the
+> Ivo reassignment (manually, or with the classifier permission granted) and
+> the chapter-4 re-render; confirm no `voice-mismatch`/severe flag on his
+> lines and that his `render-integrity.centroids.json` entry's `cleanMean`/
+> `pSevere`/`pBand` actually change from their pre-reassignment values (a
+> genuine rebuild, not a stale carry-over — Hart's stale entry in the earlier
+> attempt showed byte-identical metrics before and after, which is what a
+> non-rebuild looks like and is the actual failure mode to rule out).
+
 ---
 
-### A36 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
+### A35 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
 
 `_engine_actual_card`'s `fell_back` flag (#2631 review B3, the silent-CPU-fallback
 badge behind `/health`'s `stale_reason: 'cpu_fallback'`) compared this load's
@@ -2729,9 +2743,34 @@ neighbouring ORT-marker/GPU-provider mechanism (A29–A31) but not this
 bookkeeping. *Cost:* short — one genuine-fallback load, one contended-admission
 load, one drift simulation, one unpinned-auto load with its negative control.
 
+> **PARTIALLY run 2026-08-27 (wave 8) — bullets 1, 3 (API-drift) and the #2643
+> real-generation bullet confirmed; bullets 2/3's contended-vs-idle admission
+> pair is not testable on this box.** With `KOKORO_DEVICE=cuda` and this box's
+> real missing-`nvidia-cudnn-cu12` gap, loaded Kokoro and confirmed the exact
+> shape: `/health`'s `gpus[idx:-1].resident[]` carried
+> `{"engine":"kokoro","actual_card":null,"stale_reason":"cpu_fallback"}` —
+> bullet 1 confirmed. Forced the kokoro-onnx API-drift branch by temporarily
+> making `_kokoro_session_device` return `None` unconditionally (reverted
+> immediately after, `git diff` confirmed clean): the resident entry then
+> carried `actual_card: null` and **no** `stale_reason` key at all — the alarm
+> declines to claim a confident-but-wrong `cpu_fallback` when session
+> introspection is unavailable, matching the safety property this bullet
+> asks for. Confirmed the **#2643 real-generation-path bullet** directly via
+> a genuine `POST /synthesize` call (not just `/load`) with `KOKORO_DEVICE`
+> unset: `stale_reason: 'cpu_fallback'` correctly appeared afterward. **Not
+> testable on this box:** bullets 2 and 3 (deliberate VRAM-ledger admission
+> onto CPU under contention vs. the positive-control genuine-GPU-placement
+> case) and the #2643 negative control both need a box where Kokoro's CUDA
+> execution provider can actually construct a session at least sometimes —
+> on this hardware it cannot, ever, regardless of contention or idle state
+> (same missing-DLL condition as bullet 1/A29), so "admission chose CPU
+> deliberately" and "the engine can never place on GPU here" are
+> indistinguishable. **Still owed:** bullets 2/3 and the negative control,
+> on a box with a working `nvidia-cudnn-cu12` install.
+
 ---
 
-### A37 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
+### A36 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
 
 Wave 2's re-analysis (§7 rerun, A23/A24's sibling campaign) surfaced a
 defect PR #2640 fixed at the code level across five rounds of review:
@@ -2774,9 +2813,32 @@ defect. *Criteria:*
 [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §10.
 *Cost:* short — one full re-analysis of an already-imported book.
 
+> **RUN 2026-08-27 (wave 8) — real re-analysis performed; criterion NOT met,
+> root cause understood.** Ran a genuine full re-analysis of *Заказ Коалфолла*
+> against its existing `cast-id-history.json` (confirmed real via `.audiobook/
+> *.json` mtimes, all rewritten together). Result: `cast.json` still resolves
+> the smith character to `одуван` (Cyrillic), not `oduvan` (ASCII) — bullet 2
+> not met. This is not a regression of PR #2640's fix: `stripEstablishedAsciiRewrites`
+> only strips a rewrite that would retire an *established ASCII* id in favour
+> of a fresh non-ASCII one — it has no path to repair a book whose established
+> id was *already* Cyrillic before the fix shipped (this book's corruption
+> dates to 2026-08-21, per the unchanged `oduvan`→`одуван` `supersededBy` entry
+> and its untouched `recordedAtIso`/`recordedAtSeq`). The fresh analyzer run
+> also proposed `одуван` again (matching the already-established id), so no
+> retirement event ever fired for the fix's guard to intercept — bullet 3
+> doesn't apply either (no *different* fresh id was minted this run). Did
+> **not** attempt to hand-repair the real `cast.json`'s id to force the
+> guarded precondition — a permission classifier correctly declined that
+> real-workspace edit, and it wasn't worked around. **Still owed:** either
+> re-run against a book whose established id is currently ASCII (to test the
+> fix's actual guarantee — that a *future* corruption is stopped) or accept
+> that this row's criterion, as worded, cannot be satisfied by an
+> already-corrupted book and needs re-scoping to "does the fix stop a *new*
+> corruption" rather than "does it repair an old one."
+
 ---
 
-### A38 · Stranded VRAM after a chapter render — resident-model floor or genuine leak? ([#2656](https://github.com/dudarenok-maker/Castwright/issues/2656), successor to closed [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976)/[#1996](https://github.com/dudarenok-maker/Castwright/issues/1996)) · **single or dual GPU box, real render**
+### A37 · Stranded VRAM after a chapter render — resident-model floor or genuine leak? ([#2656](https://github.com/dudarenok-maker/Castwright/issues/2656), successor to closed [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976)/[#1996](https://github.com/dudarenok-maker/Castwright/issues/1996)) · **single or dual GPU box, real render**
 
 The 2026-08-25 idle-gated measurement
 (`docs/testing/1996-stranded-vram-measurement.md` @ `45b913ce`, on
@@ -2823,7 +2885,29 @@ mid-session. *Criteria:* [#2656](https://github.com/dudarenok-maker/Castwright/i
 — extend `docs/testing/1996-stranded-vram-measurement.md`, don't replace it. *Cost:*
 short — one idle render, explicit unloads for all three models, one reading.
 
-### A39 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
+> **PARTIALLY run 2026-08-27 (wave 8) — the post-unload diff this row asks
+> for was taken, but only for one of the three models; still owed for the
+> full three-way scenario.** In an isolated worktree workspace (not the real
+> book — this row's mechanism is engine-agnostic), rendered a full 3-chapter
+> fixture book via Qwen Base 0.6B with the box otherwise idle. Confirmed via
+> `/debug/memory` a real resident footprint (`cuda:1` `allocated≈1974 MB`,
+> `reserved≈2024 MB`, `qwen.base_loaded=true`) — but in THIS run only Qwen
+> Base 0.6B was actually resident: `whisper.model_loaded=false` throughout
+> (ASR is off by default, `SEG_ASR_ENABLED` unset in this worktree) and
+> `qwen.base17_loaded=false` (the transient 1.7B-Base model used during
+> voice design had already idled out before the render). Issued
+> `POST /api/sidecar/unload {engine: qwen}` and re-read `/debug/memory`:
+> `cuda:1` `allocated` dropped to **≈137 MB**, `reserved` to **≈192 MB** — a
+> ~93% reduction, landing in the range of ordinary CUDA-context baseline
+> overhead, not a multi-GB residual. **This is real evidence against a
+> genuine per-model leak in the unload path itself** — explicit unload of the
+> only thing that was loaded reclaims almost everything. **Still owed:** the
+> row's actual scenario (Qwen Base 0.6B + Qwen 1.7B-Base + Whisper all
+> resident together, as in the original #1976 report) — this run's simplified
+> single-model case is suggestive but doesn't rule out a leak that only shows
+> up with all three models' allocators interacting.
+
+### A38 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
 
 PR #2688 fixed `softenDashes` (`server/src/tts/text-normalize.ts`) producing a
 doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g.
