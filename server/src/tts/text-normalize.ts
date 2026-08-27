@@ -162,12 +162,11 @@ export function stripAudioTags(text: string): string {
 /** Compose the TTS-bound transforms. Apply this immediately before handing
     text to a TTS provider — do NOT mutate the underlying SentenceOutput,
     since the original text still drives UI segment captions, manuscript
-    diffing, and quote audit. Order matters: strip first (so all-caps + dash
-    transforms operate on clean ASCII), then humanise the casing/dashes,
-    then drop audio tags (last so the bracket characters are still present
-    while the all-caps detector runs — `[SHOUTING]` is excluded from the
-    all-caps fold by the closed-vocabulary check, so order is academic,
-    but keeping the strip last keeps the contract obvious).
+    diffing, and quote audit. Order matters: strip unsafe bytes first (so
+    all-caps + dash transforms operate on clean ASCII), then humanise the
+    casing, then strip audio tags BEFORE softening dashes (so the
+    doubled-comma collapse regex can match even when a tag sits between the
+    commas), then expand language-specific forms last.
 
     fs-53: when `langCode` is supplied, run `expandForSpeech` LAST so numbers,
     dates, currency, symbols, and the curated abbreviation set are read in spoken
@@ -176,6 +175,6 @@ export function stripAudioTags(text: string): string {
     self-gates: it no-ops unless the language is supported and has a registered
     engine, so an unsupported/dormant code is also a pass-through. */
 export function normaliseForTts(text: string, langCode?: string): string {
-  const base = stripAudioTags(softenDashes(denormaliseAllCaps(stripUnsafeForTts(text))));
+  const base = softenDashes(stripAudioTags(denormaliseAllCaps(stripUnsafeForTts(text))));
   return langCode ? expandForSpeech(base, langCode) : base;
 }

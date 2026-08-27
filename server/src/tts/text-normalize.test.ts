@@ -142,6 +142,28 @@ describe('softenDashes', () => {
   });
 });
 
+describe('normaliseForTts with audio tags and dash-adjacent commas', () => {
+  it('collapses a doubled comma that results from a dash after a comma, even when an audio tag precedes the dash', () => {
+    /* Reproduces the bug from #2688: when softenDashes runs before stripAudioTags,
+       and a dash immediately follows a comma but an audio tag sits in between,
+       the doubled-comma-collapse regex fails to match because the tag breaks the sequence.
+       Example: "Привет, [shouting] — сказал" becomes "Привет, [shouting] , сказал"
+       after softenDashes, but the doubled comma is not collapsed because the
+       regex doesn't match across the tag. After stripAudioTags, the tag is removed
+       but the doubled comma remains. The fix reorders passes so stripAudioTags
+       runs before softenDashes, allowing the collapse to work. */
+    expect(normaliseForTts('Привет, [shouting] — сказал.')).toBe('Привет, сказал.');
+  });
+
+  it('collapses doubled comma with audio tag in English dialogue', () => {
+    expect(normaliseForTts('Stop, [whispers] — he said.')).toBe('Stop, he said.');
+  });
+
+  it('collapses doubled comma with multiple audio tags in a sequence', () => {
+    expect(normaliseForTts('Wait, [emphatic] [shouting] — she exclaimed.')).toBe('Wait, she exclaimed.');
+  });
+});
+
 describe('stripUnsafeForTts', () => {
   /* Each of these cases corresponds to a class of byte that has, end-to-end,
      produced a `CUDA error: device-side assert triggered` from XTTS v2's
