@@ -356,7 +356,17 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **Last change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A38** (Qwen duration
 > golden baseline bless, #1994).
 >
-> **Previous change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+> **Previous change: 2026-08-27, 60 → 60 (no row count change).** The **Blocked**
+> section's two ffmpeg rows no longer carry row IDs (previously borrowed **E6** and
+> **E8** from the live Group E sequence, creating silent drift during renumbering).
+> Both Blocked headings now carry title alone (`ops-35 ffmpeg floor`, `ops-36
+> golden-assembly`), matching other Blocked rows, and the live view renders `num`
+> cells as `—`. Also added: per-group allocation markers (`<!-- next-id: ... -->`) for
+> future row allocation, inert until the contiguity check is replaced (#2629).
+> ([#2634](https://github.com/dudarenok-maker/Castwright/issues/2634),
+> [#2653](https://github.com/dudarenok-maker/Castwright/issues/2653))
+>
+> **Prior change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
 > audible effect, not yet run).
 >
 > **Previous change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
