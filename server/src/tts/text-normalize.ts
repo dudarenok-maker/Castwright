@@ -176,8 +176,16 @@ export function stripAudioTags(text: string): string {
     form. The one-arg form stays byte-identical to today (no expansion) — every
     diagnostic / length-only caller keeps the neutral text. `expandForSpeech`
     self-gates: it no-ops unless the language is supported and has a registered
-    engine, so an unsupported/dormant code is also a pass-through. */
+    engine, so an unsupported/dormant code is also a pass-through.
+
+    `stripAudioTags` no longer runs last, so its own whitespace-collapse-and-trim
+    isn't the final step either -- `softenDashes`'s trailing-dash conversion
+    (e.g. "paused—" -> "paused, ") can leave trailing whitespace behind it. Redo
+    that collapse-and-trim here, after `softenDashes`, so the composed result
+    stays idempotent regardless of where a dash falls in the string. */
 export function normaliseForTts(text: string, langCode?: string): string {
-  const base = softenDashes(stripAudioTags(denormaliseAllCaps(stripUnsafeForTts(text))));
+  const base = softenDashes(stripAudioTags(denormaliseAllCaps(stripUnsafeForTts(text))))
+    .replace(/\s+/g, ' ')
+    .trim();
   return langCode ? expandForSpeech(base, langCode) : base;
 }

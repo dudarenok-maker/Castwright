@@ -292,6 +292,16 @@ describe('normaliseForTts (composed)', () => {
     expect(normaliseForTts(once)).toBe(once);
   });
 
+  it('is idempotent for a TRAILING dash, which leaves no word after the converted comma to trim (#2688 regression)', () => {
+    /* softenDashes runs last in normaliseForTts (moved there so audio tags
+       strip before dash-softening, #2688). A trailing dash converts to a
+       trailing ", " with nothing after it, and stripAudioTags' own
+       whitespace-collapse-and-trim no longer runs after it to clean that up. */
+    const once = normaliseForTts('He paused—');
+    expect(once).toBe('He paused,');
+    expect(normaliseForTts(once)).toBe(once);
+  });
+
   it('#2026 defect 2 — the leading dash of a Russian dialogue line survives the FULL wire-text pipeline as an ellipsis, not a leading comma', () => {
     /* This is the actual call shape synthesiseChapter uses at the wire
        boundary (normaliseForTts(group.text, langCode)) — the acceptance
