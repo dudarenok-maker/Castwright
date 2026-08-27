@@ -386,6 +386,108 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(zara?.overrideTtsVoices?.qwen).toBeUndefined();
   });
 
+  describe('base-voice path: series-wide clone veto (#2006 Task 4)', () => {
+    const SIBLING_BOOK = 'The Salt Line';
+    let siblingBookDir: string;
+
+    function writeSiblingBookOnDisk(chars: object[]) {
+      siblingBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, SIBLING_BOOK);
+      mkdirSync(join(siblingBookDir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(siblingBookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: `sibling_${bookId}`,
+          manuscriptId: `m_sibling_${bookId}`,
+          title: SIBLING_BOOK,
+          author: AUTHOR,
+          series: SERIES,
+          seriesPosition: 2,
+          isStandalone: false,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(join(siblingBookDir, 'manuscript.txt'), 'placeholder');
+      writeFileSync(join(siblingBookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: chars }));
+    }
+
+    beforeEach(() => {
+      writeBookOnDisk([
+        ...characters,
+        {
+          id: 'linked',
+          name: 'Linked',
+          role: 'supporting',
+          color: 'blue',
+          voiceId: 'v_linked',
+          voiceUuid: 'v_linked',
+          voiceStyle: 'a measured, patient older man',
+          evidence: [{ quote: '”We wait for the tide.”' }],
+        },
+      ]);
+      writeSiblingBookOnDisk([
+        {
+          id: 'linked-sibling',
+          name: 'Linked Sibling',
+          voiceId: 'v_linked',
+          ttsEngine: 'coqui',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-linked-uuid', libraryUuid: 'linked-uuid', provenance: 'cloned' },
+          },
+        },
+      ]);
+    });
+
+    afterEach(() => {
+      if (siblingBookDir) rmSync(siblingBookDir, { recursive: true, force: true });
+    });
+
+    it('a series-wide clone (sibling book) is reported through clonedSkips instead of silently "designed"', async () => {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['linked'], modelKey: QWEN_KEY });
+
+      expect(res.status).toBe(200);
+      const events = parseSse(res.text);
+      expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'linked')).toBe(
+        false,
+      );
+      expect(
+        events.some(
+          (e) =>
+            e.type === 'character_skipped' &&
+            e.characterId === 'linked' &&
+            e.reason === 'already_cloned',
+        ),
+      ).toBe(true);
+      const idle = events.find((e) => e.type === 'idle');
+      expect(idle?.clonedSkips).toContainEqual({ characterId: 'linked', name: 'Linked' });
+      expect(charById('linked')?.overrideTtsVoices?.qwen).toBeUndefined();
+    });
+
+    it('upfront: a series-wide clone (sibling book) is reported before any sidecar call, not after', async () => {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['linked'], modelKey: QWEN_KEY });
+
+      expect(res.status).toBe(200);
+      const events = parseSse(res.text);
+      expect(
+        events.some(
+          (e) =>
+            e.type === 'character_skipped' &&
+            e.characterId === 'linked' &&
+            e.reason === 'already_cloned',
+        ),
+      ).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('a per-character failure is recorded and the loop continues', async () => {
     fetchMock.mockReset();
     fetchMock.mockResolvedValueOnce(badSidecarResponse()); // aria fails

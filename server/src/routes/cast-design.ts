@@ -47,7 +47,7 @@ import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
-import { applyOverrideToCastFiles } from './voices.js';
+import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
@@ -399,7 +399,10 @@ async function runDesignJob(
          character and report it — refusing the whole sweep would let one
          cloned character block designing the rest; retargeting is the
          defect itself. */
-      if (characterHasClonedSlot(character)) {
+      if (
+        characterHasClonedSlot(character) ||
+        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir))
+      ) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -541,22 +544,31 @@ async function runDesignJob(
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            const overrideResult = await applyOverrideToCastFiles(
+            const { updated, skipped } = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
               seriesFilter,
               job.bookDir,
             );
-            /* Series-wide veto: a cloned slot exists somewhere in the scope.
-               Refuse the propagation and report this character as failed —
-               the UI will surface the refusal. */
-            if (overrideResult.skipped.length > 0) {
-              throw new Error(
-                `Propagation refused: a cloned slot already occupies this voice (${overrideResult.skipped.length} book(s) skipped).`,
-              );
+            /* Series-wide veto, mirroring the variant branch's own clone-skip
+               reporting below: a cloned slot exists somewhere in the scope,
+               caught fresh at write time (residual window after the upfront
+               check above). Report it through the same clonedSkips channel
+               the UI already renders, rather than discarding the outcome or
+               failing the whole character. */
+            if (updated === 0 && skipped.length > 0) {
+              job.skipped += 1;
+              job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+              broadcast(job, {
+                type: 'character_skipped',
+                characterId,
+                name: character.name ?? characterId,
+                reason: 'already_cloned',
+              });
+            } else {
+              job.done += 1;
+              broadcast(job, { type: 'character_designed', characterId, voiceId });
             }
-            job.done += 1;
-            broadcast(job, { type: 'character_designed', characterId, voiceId });
           } else {
             /* Variant path — record the slot and propagate it across the
                series (linked cast), the same scope the base voice uses. */
