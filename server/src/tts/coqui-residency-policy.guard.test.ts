@@ -36,11 +36,11 @@ describe('Coqui residency policy cross-references (side-18, #1932)', () => {
   it('keeps the cross-reference in synthesise-chapter.ts (mechanism A)', () => {
     const source = readFileSync(SYNTHESISE_CHAPTER_PATH, 'utf8');
     expect(
-      source.includes(TOKEN),
-      `the ${TOKEN} cross-reference at synthesise-chapter.ts is gone; the two Coqui ` +
-        'eviction mechanisms are documented in docs/features/264-vram-aware-gpu-placement.md ' +
+      occurrences(source, TOKEN),
+      `expected 1 occurrence of ${TOKEN} in synthesise-chapter.ts (the Coqui residency policy cross-reference); ` +
+        'the two Coqui eviction mechanisms are documented in docs/features/264-vram-aware-gpu-placement.md ' +
         '— restore the pointer or update the policy',
-    ).toBe(true);
+    ).toBe(1);
   });
 
   it('keeps both cross-references in main.py (mechanism B)', () => {
