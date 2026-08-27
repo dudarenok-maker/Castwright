@@ -128,7 +128,7 @@ export function softenDashes(text: string): string {
   return text
     .replace(LEADING_DASH, '... ')
     .replace(DASH_RUN, ', ')
-    .replace(/,\s*,\s*/g, ', ');
+    .replace(/,(\s*,)+\s*/g, ', ');
 }
 
 /** Strip every codepoint that can poison the XTTS tokenizer with no defensible

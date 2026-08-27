@@ -139,6 +139,40 @@ describe('softenDashes', () => {
          the output — the collapse step must not fire on a single `,`. */
       expect(softenDashes('a, — b')).toBe('a, b');
     });
+
+    it('collapses 3 consecutive commas to a single comma in one pass (#2688 regression)', () => {
+      /* The original collapse regex only matched pairs of commas, so 3+ commas
+         needed multiple passes to fully collapse. The fix uses a regex that
+         matches arbitrary runs of commas in a single pass. */
+      expect(softenDashes('a,,,b')).toBe('a, b');
+    });
+
+    it('collapses 4 consecutive commas to a single comma in one pass', () => {
+      expect(softenDashes('a,,,,b')).toBe('a, b');
+    });
+
+    it('collapses a multi-dash Russian-style line with 3+ commas from dash conversions', () => {
+      /* The multi-dash case like "— Привет, — — сказал." (with two em-dashes
+         in the attribution) would produce 3 commas after DASH_RUN replaces
+         each dash with a comma. This should collapse to a single comma in one pass. */
+      const russianMultiDash = '— Привет, — — сказал.';
+      const result = softenDashes(russianMultiDash);
+      expect(result).toBe('... Привет, сказал.');
+      /* Verify idempotency: running again should not change the result. */
+      expect(softenDashes(result)).toBe(result);
+    });
+
+    it('is idempotent for 3-comma input — running twice produces same output as once', () => {
+      const once = softenDashes('a,,,b');
+      expect(softenDashes(once)).toBe(once);
+      expect(once).toBe('a, b');
+    });
+
+    it('is idempotent for 4-comma input — running twice produces same output as once', () => {
+      const once = softenDashes('a,,,,b');
+      expect(softenDashes(once)).toBe(once);
+      expect(once).toBe('a, b');
+    });
   });
 });
 
