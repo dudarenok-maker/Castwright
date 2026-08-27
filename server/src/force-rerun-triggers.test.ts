@@ -133,6 +133,23 @@ const MAIN_COVERED = [
     file: 'a server/tts-sidecar/requirements/** file',
     base: REPO_ROOT,
   },
+  /* #1932 (side-18) — coqui-residency-policy.guard.test.ts reads these three
+     files at RUNTIME to catch cross-reference rot across the two eviction
+     mechanisms and their policy doc. No module-graph edges, so a diff confined
+     to any of them selected zero tests under `vitest run --changed` before these
+     entries existed — the same consequence spelled out above for openapi.yaml/
+     scripts/**. */
+  { rel: 'src/tts/synthesise-chapter.ts', file: 'the Node Coqui eviction mechanism', base: SERVER_ROOT },
+  {
+    rel: 'server/tts-sidecar/main.py',
+    file: 'the sidecar Coqui eviction mechanism (via the server/tts-sidecar/main.py trigger)',
+    base: REPO_ROOT,
+  },
+  {
+    rel: 'docs/features/264-vram-aware-gpu-placement.md',
+    file: 'the Coqui residency policy doc',
+    base: REPO_ROOT,
+  },
 ];
 
 const SLOW_COVERED = [
