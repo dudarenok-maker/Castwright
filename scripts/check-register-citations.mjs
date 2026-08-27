@@ -1,9 +1,11 @@
 // Mechanical checker for docs/testing/onbox-acceptance-register.md ROW-ID
 // CITATIONS scattered across the repo (#2629 option 3).
 //
-// Register row IDs (A29, B2, E1...) are POSITIONAL: discharging a row
-// deletes it and renumbers every later row in that group. A citation
-// elsewhere in the repo ("register row A29") rots on every discharge. Four
+// Register row IDs (A29, B2, E1...) are allocated once and never renumbered
+// or reused: discharging a row deletes it PERMANENTLY, so a citation
+// elsewhere in the repo ("register row A29") that pointed at it goes
+// permanently dangling on discharge, rather than silently re-pointing to
+// whatever now occupies that slot (nothing ever does). Four
 // rounds of manual sweeping (docs/docs-register-row-refs) converged too
 // slowly and too incompletely to trust — every miss was the same shape: one
 // claim living on several surfaces, with only some of them corrected. This
@@ -404,9 +406,11 @@ const FROZEN_EXACT = new Set([
 // the *plan document*, not every claim inside it. An "on-box acceptance
 // owed (register row <ID>)" pointer in an archived plan is exactly as live
 // as one in a `docs/superpowers/` spec (see isFrozenPath's `status: stable`
-// history below) — it stays owed, and its ID stays subject to renumbering,
-// until the plan's own "Ship notes" section (or an equivalent annotation)
-// records the discharge. Measured directly: unfreezing the prefix and
+// history below) — it stays owed, and its citation stays live (IDs are
+// allocated once and never renumbered or reused), until the plan's own "Ship
+// notes" section (or an equivalent annotation) records the discharge, at
+// which point the citation goes permanently dangling rather than silently
+// re-pointed. Measured directly: unfreezing the prefix and
 // running Check A over all 193 archived files found exactly two real,
 // unannotated nonexistent-ID citations —
 // `docs/features/archive/283-castwright-local-rebind.md:9` and `:193`,
