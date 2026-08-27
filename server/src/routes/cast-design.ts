@@ -541,12 +541,20 @@ async function runDesignJob(
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            await applyOverrideToCastFiles(
+            const overrideResult = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
               seriesFilter,
               job.bookDir,
             );
+            /* Series-wide veto: a cloned slot exists somewhere in the scope.
+               Refuse the propagation and report this character as failed —
+               the UI will surface the refusal. */
+            if (overrideResult.skipped.length > 0) {
+              throw new Error(
+                `Propagation refused: a cloned slot already occupies this voice (${overrideResult.skipped.length} book(s) skipped).`,
+              );
+            }
             job.done += 1;
             broadcast(job, { type: 'character_designed', characterId, voiceId });
           } else {

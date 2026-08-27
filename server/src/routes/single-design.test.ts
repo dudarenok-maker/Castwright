@@ -28,7 +28,7 @@ vi.mock('./qwen-voice.js', async (orig) => ({
   }),
 }));
 
-const applyOverrideStub = vi.fn(async () => 1);
+const applyOverrideStub = vi.fn(async () => ({ updated: 1, skipped: [] }));
 vi.mock('./voices.js', async (orig) => {
   const real = await orig<typeof import('./voices.js')>();
   return {
@@ -125,7 +125,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   applyOverrideStub.mockReset();
-  applyOverrideStub.mockResolvedValue(1);
+  applyOverrideStub.mockResolvedValue({ updated: 1, skipped: [] });
   writeBookOnDisk(bookDir, BOOK_ID);
 });
 
