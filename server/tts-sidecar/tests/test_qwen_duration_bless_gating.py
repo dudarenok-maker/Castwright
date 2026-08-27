@@ -74,29 +74,33 @@ def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path
 
     results = [_make_mock_synthesize_result(24000) for _ in range(3)]
 
-    # Track which method is called for each synthesis
-    synthesize_calls = []
-    skip_calls = []
+    # A single ORDERED call log, tagged by which path was used — not two
+    # separate counters. Two counters can't tell "warm-up first, direct
+    # after" from "direct first, warm-up in the middle": swap which index
+    # uses which path and the counts (1 skip, 2 direct) stay identical, so a
+    # count-only assertion can't catch an `i == 0` -> `i == 1` mutation. The
+    # order captured here can.
+    call_log = []
 
     def mock_synthesize(model, voice, text):
-        synthesize_calls.append((model, voice, text))
-        return results[len(synthesize_calls) - 1]
+        call_log.append("direct")
+        return results[len(call_log) - 1]
 
     mock_engine = MagicMock()
     mock_engine.synthesize = mock_synthesize
 
     with patch.object(qwen, "synthesise_or_skip") as mock_skip:
         def mock_skip_impl(*args, **kwargs):
-            skip_calls.append(args)
-            return results[0]
+            call_log.append("skip")
+            return results[len(call_log) - 1]
 
         mock_skip.side_effect = mock_skip_impl
         qwen._bless(mock_engine, "test_voice", fixture)
 
-    # First call should use synthesise_or_skip (1 call)
-    assert len(skip_calls) == 1, f"synthesise_or_skip should be called exactly once (warm-up), was {len(skip_calls)}"
-    # Remaining 2 calls should use engine.synthesize directly
-    assert len(synthesize_calls) == 2, f"engine.synthesize should be called exactly 2 times (lines 2-3), was {len(synthesize_calls)}"
+    assert call_log == ["skip", "direct", "direct"], (
+        f"expected warm-up (skip) for line 1 only, then direct calls for "
+        f"lines 2-3, got {call_log}"
+    )
 
 
 def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
@@ -160,6 +164,44 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     assert all(f"line{i}" in written["entries"] for i in range(1, 4))
 
 
+def test_assertion_loop_flags_voice_mismatch_against_baseline(monkeypatch) -> None:
+    """A baseline entry recorded against a different Qwen voice must not be
+    silently compared against — Qwen voices are runtime-resolved
+    (`pick_designed_voice`: sorted, first wins, absent an override), unlike
+    Kokoro's fixed per-line-pinned catalog, so a voice change between bless
+    and this run means the recorded duration belongs to a different speaker
+    entirely. This is this file's substitute for Kokoro's `substituted_from`
+    check, which can never fire on Qwen (QwenEngine.synthesize never sets
+    that field — see the comment in the assertion loop)."""
+    fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
+    baseline = {
+        "tolerance": 0.10,
+        "entries": {
+            "line1": {
+                "voice": "voice_a",
+                "sample_rate": 24000,
+                "sample_count": 24000,
+                "duration_sec": 1.0,
+            },
+        },
+    }
+
+    def mock_load(p):
+        return fixture if p == qwen.FIXTURE_PATH else baseline
+
+    monkeypatch.setattr(qwen, "_load_json", mock_load)
+    # Runtime resolves a DIFFERENT voice than the baseline was recorded against.
+    monkeypatch.setattr(qwen, "_resolve_voice", lambda engine: "voice_b")
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+
+    result = _make_mock_synthesize_result(24000)
+    monkeypatch.setattr(qwen, "_make_qwen", lambda: MagicMock())
+
+    with patch.object(qwen, "synthesise_or_skip", return_value=result):
+        with pytest.raises(AssertionError, match="voice_a.*voice_b|voice mismatch|re-bless after a voice change"):
+            qwen.test_qwen_golden_lengths_match_baseline()
+
+
 def test_assertion_loop_warms_up_before_missing_entry_check(monkeypatch) -> None:
     """The main assertion test (`test_qwen_golden_lengths_match_baseline`) must
     run its first-line warm-up (`synthesise_or_skip`) BEFORE checking whether
@@ -196,20 +238,21 @@ def test_assertion_loop_warms_up_before_missing_entry_check(monkeypatch) -> None
     monkeypatch.delenv("GOLDEN_BLESS", raising=False)
 
     results = [_make_mock_synthesize_result(24000), _make_mock_synthesize_result(24000)]
-    skip_calls = []
-    synth_calls = []
+    # A single ORDERED call log (see the sibling bless test above for why
+    # counts alone can't catch an `i == 0` -> `i == 1` mutation).
+    call_log = []
 
     def mock_synthesize(model, voice, text):
-        synth_calls.append((model, voice, text))
-        return results[len(synth_calls) - 1]
+        call_log.append("direct")
+        return results[len(call_log) - 1]
 
     mock_engine = MagicMock()
     mock_engine.synthesize = mock_synthesize
     monkeypatch.setattr(qwen, "_make_qwen", lambda: mock_engine)
 
     def mock_skip_impl(*args, **kwargs):
-        skip_calls.append(args)
-        return results[0]
+        call_log.append("skip")
+        return results[len(call_log) - 1]
 
     with patch.object(qwen, "synthesise_or_skip") as mock_skip:
         mock_skip.side_effect = mock_skip_impl
@@ -220,12 +263,11 @@ def test_assertion_loop_warms_up_before_missing_entry_check(monkeypatch) -> None
         with pytest.raises(AssertionError):
             qwen.test_qwen_golden_lengths_match_baseline()
 
-    assert len(skip_calls) == 1, (
+    assert call_log == ["skip", "direct"], (
         "synthesise_or_skip (warm-up) must run for the first line even though "
-        f"its baseline entry is missing, got {len(skip_calls)} calls — a "
-        "missing-entry check placed before the warm-up branch would skip it "
-        "entirely, leaving the next line's direct engine call unprotected."
+        f"its baseline entry is missing, got {call_log} — a missing-entry "
+        "check placed before the warm-up branch would skip it entirely, "
+        "leaving the next line's direct engine call unprotected."
     )
-    assert len(synth_calls) == 1, f"engine.synthesize should be called exactly once (line 2), was {len(synth_calls)}"
 
 

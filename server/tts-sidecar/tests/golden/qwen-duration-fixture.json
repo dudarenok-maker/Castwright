@@ -1,6 +1,5 @@
 {
-  "_comment": "Qwen golden-audio duration fixture (#1994); same text-normalization-class coverage as fixture.json; run against whichever designed Qwen voice this box has (see pick_designed_voice in tests/golden/prereq.py — Qwen voices are per-workspace bespoke, not a fixed catalog like Kokoro's, so no voice id is hardcoded here); re-bless qwen-duration-baseline.json (npm run test:golden-audio -- --sidecar-only --engine=qwen --bless) whenever this file is edited.",
-  "model": "0.6b",
+  "_comment": "Qwen golden-audio duration fixture (#1994); same text-normalization-class coverage as fixture.json; run against whichever designed Qwen voice this box has (see pick_designed_voice in tests/golden/prereq.py — Qwen voices are per-workspace bespoke, not a fixed catalog like Kokoro's, so no voice id is hardcoded here). The Qwen model itself is pinned by test_qwen_duration_golden.py's own QWEN_MODEL constant, not by this fixture. Re-bless qwen-duration-baseline.json (npm run test:golden-audio -- --sidecar-only --engine=qwen --bless) whenever this file is edited.",
   "lines": [
     {
       "id": "narrator-plain",

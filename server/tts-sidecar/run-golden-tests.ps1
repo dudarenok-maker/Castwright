@@ -40,6 +40,8 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvPython = Join-Path $here ".venv\Scripts\python.exe"
 $testsDir = Join-Path $here "tests\golden"
 
+. (Join-Path $here "..\..\scripts\lib\golden-bless-pytest-args.ps1")
+
 if (-not (Test-Path $venvPython)) {
     Write-Host ""
     Write-Host "SKIP: golden-audio -- sidecar venv not found at $venvPython"
@@ -143,11 +145,12 @@ if (-not $kokoroPresent -and -not $qwenPresent -and -not $coquiPresent) {
 # (`npm run test:golden-audio:sidecar`, CLAUDE.md), bypassing that wrapper --
 # so the same default lives here too, applied only when the caller hasn't
 # already passed their own `-k` (which a deliberate `-k qwen_duration` bless
-# needs to keep working).
-$pytestArgs = @($testsDir, '-m', 'golden', '--tb=short', '-q', '-rs') + $args
-if ($env:GOLDEN_BLESS -and -not ($args -contains '-k')) {
-    $pytestArgs += @('-k', 'not qwen_duration')
-}
+# needs to keep working). Logic + the two shapes review found wrong (a
+# '0'-is-truthy trap, an attached `-kEXPR` miss) are extracted into
+# scripts\lib\golden-bless-pytest-args.ps1 (dot-sourced above) so they're
+# unit-testable -- this script's own gates (venv / pytest / weights) stop a
+# stub-module test harness before reaching this point.
+$pytestArgs = Get-GoldenBlessPytestArgs -TestsDir $testsDir -CallerArgs @($args) -GoldenBlessEnvValue $env:GOLDEN_BLESS
 
 Push-Location $here
 try {

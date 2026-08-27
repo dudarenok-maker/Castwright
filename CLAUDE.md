@@ -352,7 +352,7 @@ Design rationale:
   length vs `kokoro-baseline.json` within tolerance, AND (since #1911) that a
   fresh Whisper transcript of the line matches the baseline's recorded
   `transcript` at tolerance 0. Real Qwen carries a duration-only golden
-  baseline (#1994) — its fixture line's length vs `qwen-duration-baseline.json`
+  baseline (#1994) — each fixture line's length vs `qwen-duration-baseline.json`
   within tolerance, no Whisper check. Triple-gated (venv / pytest / Kokoro OR
   Qwen OR Coqui weights), SKIP+exit-0 when absent. Partials:
   `npm run test:golden-audio:assembly` (Node-side audio changes, runs

@@ -27,6 +27,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -117,12 +118,31 @@ def test_qwen_golden_lengths_match_baseline():
             failures.append(f"{line['id']}: no baseline entry (re-bless after editing the fixture).")
             continue
 
-        # No silent fallback — the requested voice must be honoured.
-        if res.substituted_from is not None:
+        # The baseline must have been recorded against the SAME voice this run
+        # is using. Unlike Kokoro's fixed, per-line-pinned voice catalog, a
+        # Qwen voice is `pick_designed_voice`'s runtime choice among whatever
+        # designed voices exist on this box (sorted, first wins, absent an
+        # override) — so a comparison across a voice change is silently
+        # comparing two different speakers' timing, not detecting a real
+        # regression. `_bless` records the voice it used per entry; check it
+        # here instead of trusting it stayed the same.
+        recorded_voice = base.get("voice")
+        if recorded_voice is not None and recorded_voice != voice:
             failures.append(
-                f"{line['id']}: voice '{voice}' was substituted "
-                f"from '{res.substituted_from}' (silent fallback)"
+                f"{line['id']}: baseline was recorded against voice "
+                f"'{recorded_voice}', this run resolved '{voice}' — re-bless "
+                "after a voice change; comparing across voices is meaningless."
             )
+            continue
+
+        # No `substituted_from` check here (unlike Kokoro's mirror): that
+        # field only ever gets set by CoquiEngine/KokoroEngine's own
+        # fallback-substitution paths (main.py) — QwenEngine.synthesize never
+        # constructs a SynthResult with it, so the check could never fire for
+        # this engine. The voice-mismatch check above is this file's actual
+        # equivalent safeguard, catching the failure mode Qwen can have
+        # instead (a runtime-resolved voice that drifted from the one the
+        # baseline was recorded against).
 
         # Not silent.
         line_rms = rms(res.pcm)
@@ -135,6 +155,24 @@ def test_qwen_golden_lengths_match_baseline():
             failures.append(f"{line['id']}: {reason}")
 
     assert not failures, "Golden-audio mismatches:\n  " + "\n  ".join(failures)
+
+
+def _qwen_tts_version() -> Optional[str]:
+    try:
+        import importlib.metadata as md
+
+        return md.version("qwen-tts")
+    except Exception:  # pragma: no cover
+        return None
+
+
+def _torch_version() -> Optional[str]:
+    try:
+        import torch
+
+        return torch.__version__
+    except Exception:  # pragma: no cover
+        return None
 
 
 def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
@@ -175,6 +213,17 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
     # (whether the committed placeholder 0.10 or a hand-set measured value from
     # on-box acceptance work). Real tolerance derivation remains register row A38.
     baseline["entries"] = entries
+    # #2004 precedent: kokoro-baseline.json stamps its engine/ASR package
+    # versions "so a model bump is legible" — mirrored here for Qwen so a
+    # `qwen-tts`/torch bump that shifts synthesis timing shows up as a
+    # version change next to the baseline, not a silent mystery.
+    baseline["metadata"] = {
+        "qwen_tts_version": _qwen_tts_version(),
+        "torch_version": _torch_version(),
+        # blessed_at intentionally left for the committer to stamp — the
+        # harness has no clock and must stay reproducible.
+        "blessed_at": baseline.get("metadata", {}).get("blessed_at"),
+    }
     with open(BASELINE_PATH, "w", encoding="utf-8") as f:
         json.dump(baseline, f, indent=2)
         f.write("\n")
