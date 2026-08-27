@@ -354,30 +354,33 @@ single statement of that ruling so the question is not reopened.
 
 `evictEngineForPhase` (`server/src/tts/synthesise-chapter.ts:1015`) POSTs
 `/unload` to the sidecar for a named engine. The Coqui-facing wrappers are
-`evictCoquiForQwenPhase` (`:1049`) and the symmetric `evictQwenForCoquiPhase`
+`evictCoquiForQwenPhase` (`:1050`) and the symmetric `evictQwenForCoquiPhase`
 (`:1029`). 
 
 The eviction wrappers have **four call sites**, not two:
 
 1. **Pre-pass invocations (memoised, resolver-mediated):** `beforeFirstCoquiDerive`
-   (`:1882-1899`) evicts `evictQwenForCoquiPhase` before the first Coqui derive
-   in the chapter; `beforeFirstQwenDerive` (`:1943-1953`) evicts
+   (`:1883-1900`) evicts `evictQwenForCoquiPhase` before the first Coqui derive
+   in the chapter; `beforeFirstQwenDerive` (`:1944-1954`) evicts
    `evictCoquiForQwenPhase` before the first Qwen derive (when Coqui is present).
    **Two of the three pre-pass sites are called from *inside* voice-resolver
    try/catch blocks (`clone-voice-resolver.ts`), inheriting the resolver's own
    fail-loud (cloned voices) / fail-soft (designed voices) semantics — no local
    try/catch wraps them at those call sites.** However, **a third pre-pass site**
-   exists at `:2114-2122`, also in `synthesise-chapter.ts`, which primes
-   `beforeFirstQwenDerive` before any Qwen render-phase work when only Qwen
-   voices with no derive are present (no resolver call to hang the hook off).
-   This third site **is wrapped in a local try/catch** (lines 2114-2122) that
+   exists at `:2115-2123`, also in `synthesise-chapter.ts`, which primes
+   `beforeFirstQwenDerive` before any Qwen render-phase work when Coqui is present
+   AND any Qwen work is present (either groups or derives). This third site shares
+   the memoised promise with the resolver-mediated call sites, so while it fires in
+   more cases than "no derive needed", the resolver calls still apply their own
+   fail-loud (cloned) / fail-soft (designed) policy on top.
+   This third site **is wrapped in a local try/catch** (lines 2115-2123) that
    unconditionally swallows the error and logs a warning — deliberately best-effort
-   fail-soft, covering the "Qwen render with no derive needed" case where a
-   sidecar recycle window at this priming call cannot abort the chapter.
+   fail-soft, covering cases where a sidecar recycle window at this priming call
+   cannot abort the chapter.
 
 2. **Render-phase pair (top-level, plan-driven):** The leading evict fires at
-   `:2920` before a mixed chapter's Coqui phase; the trailing evict fires at
-   `:2988` at its end. Each call is bounded by `withCallTimeout` and carries
+   `:2921` before a mixed chapter's Coqui phase; the trailing evict fires at
+   `:2989` at its end. Each call is bounded by `withCallTimeout` and carries
    the chapter's abort signal.
 
 The render-phase pair is driven by the **generation plan** — Node knows which
@@ -457,18 +460,20 @@ outside the current book's render.
      signal a pause through its abort path if the generation is cancelled
      mid-evict.
    
-   - **Pre-pass pair — two resolver-mediated, one render-prep best-effort:**
-     `beforeFirstCoquiDerive` and `beforeFirstQwenDerive` have **three distinct
-     invocation patterns**, each with different failure semantics that must be
-     preserved independently:
+   - **Pre-pass pair — four resolver-mediated, one render-prep best-effort:**
+     `beforeFirstCoquiDerive` and `beforeFirstQwenDerive` have **five distinct
+     invocation sites across three failure-semantics patterns**, each with different
+     failure semantics that must be preserved independently:
      
-     - **Two resolver-mediated sites (voice-type-dependent):** Called from
+     - **Four resolver-mediated sites (voice-type-dependent):** Called from
        *inside* voice-resolver try/catch blocks in `clone-voice-resolver.ts`,
-       with no separate local try/catch wrapping them. A failure is reported
-       through the resolver's own existing, already-differentiated policy: the
-       cloned resolver's catch treats it as an ordinary derive failure (fail-loud —
-       `broken` accumulates, `UnresolvableClonedVoiceError` still throws), while
-       the designed resolver's catch treats it as an ordinary self-heal failure
+       with no separate local try/catch wrapping them. The cloned resolver calls
+       both hooks (coqui arm at ~line 547, qwen arm at ~line 548); the designed
+       resolver also calls both (coqui arm at ~line 996, qwen arm at ~line 1073).
+       A failure is reported through the resolver's own existing, already-differentiated
+       policy: the cloned resolver's catch treats it as an ordinary derive failure
+       (fail-loud — `broken` accumulates, `UnresolvableClonedVoiceError` still throws),
+       while the designed resolver's catch treats it as an ordinary self-heal failure
        (fail-soft — `softFailedUuids`/keep-stale, never rethrown). This voice-type-dependent
        semantics is intentional: a pre-pass evict failure on a cloned voice is
        unrecoverable (the cloned resolver's own identity depends on that model
@@ -476,14 +481,18 @@ outside the current book's render.
        the stale version.
      
      - **One render-prep best-effort site (unconditional fail-soft):** A third
-       pre-pass invocation at `:2114-2122` in `synthesise-chapter.ts` primes
-       `beforeFirstQwenDerive` before any Qwen render-phase work when only
-       healthy/catalogue Qwen voices are present (no resolver call to hang the
-       hook off). This site **is deliberately wrapped in a local try/catch**
-       that unconditionally swallows errors and logs warnings, covering the case
-       where a sidecar recycle window at this priming call cannot abort the
-       chapter (fix for a §2.3 chapter-abort regression). This best-effort wrapper
-       is distinct from the resolver-mediated invocations and correct by design.
+       pre-pass invocation at `:2115-2123` in `synthesise-chapter.ts` primes
+       `beforeFirstQwenDerive` before any Qwen render-phase work when Coqui is
+       present AND any Qwen work is pending (either groups or derives; no resolver
+       call to hang the hook off for the render-only case). This site shares the
+       memoised promise with the four resolver-mediated calls, so when they later
+       await the same hook, they get the already-settled result and apply their own
+       fail-loud/fail-soft policy on top.
+       This site **is deliberately wrapped in a local try/catch** that unconditionally
+       swallows errors and logs warnings, covering the case where a sidecar recycle
+       window at this priming call cannot abort the chapter (fix for a §2.3
+       chapter-abort regression). This best-effort wrapper is distinct from the
+       resolver-mediated invocations and correct by design.
      
      Any future change to the pre-pass evicts must **preserve all three
      invocation patterns independently**: the two resolver-mediated sites must
