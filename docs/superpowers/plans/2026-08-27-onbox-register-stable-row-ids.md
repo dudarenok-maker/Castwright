@@ -42,10 +42,15 @@ Every task's requirements implicitly include this section.
    rebase time. The `101` floor is safe regardless, because wave 9 only
    renumbers downward.
 
-3. **The allocation floor is `101` for every group**, verified against full git
-   history of both files (all-time high-waters: `A`=48, `B`=5, `C`=4, `D`=3,
-   `E`=11, `F`=1, `G`=2, `H`=2; highest ID cited anywhere in the tree is `A46`).
-   Never lower it. If a fixture breaks against it, fix the fixture, not the floor.
+3. **The allocation floor is `101` for every group.** All-time high-waters from
+   full git history of both files: `A`=48, `B`=5, `C`=4, `D`=3, `E`=11, `F`=1,
+   `G`=2, `H`=2 (independently recomputed and confirmed). **The highest ID
+   appearing anywhere in the tree is `A99`, not `A46`** — it is the citation
+   checker's own sentinel for a definitely-nonexistent ID
+   (`check-register-citations.mjs:733`, `:759`, `:785`, plus sixteen occurrences
+   in its tests), and it occupies the `row <ID>` idiom. **The floor clears it by
+   two, not by ~50.** Never lower it. If a fixture breaks against it, fix the
+   fixture, not the floor.
 
 4. **Existing row IDs are not renamed, re-keyed or renumbered by this work.**
    Roughly 210-225 `row <ID>` citations across ~65 files depend on them,
@@ -84,7 +89,10 @@ Every task's requirements implicitly include this section.
 
 ---
 
-## Deviation from the spec, decided here
+## Why the token carrier is settled empirically
+
+> **Both points below are now folded into the spec** (§2, after the
+> assumption-checker pass). Kept here because they are what Task 1 executes.
 
 The spec specifies the publish token as an HTML comment:
 
@@ -335,10 +343,13 @@ Leave the link targets and the bodies untouched.
 <summary><span class="num">E8</span><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span>…
 ```
 
-to — matching the three sibling rows that already carry no `num` span:
+to — matching the three sibling rows, which **do** carry a `num` span holding an
+em dash (verified at `:1430`). An earlier draft of this plan said they carry none;
+that was wrong, and following it would have produced markup inconsistent with the
+very siblings it cited:
 
 ```html
-<summary><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span>…
+<summary><span class="num">—</span><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span>…
 ```
 
 Same shape at `:1446` for the ops-35 row.
@@ -393,16 +404,23 @@ Immediately after the `<h1>On-box acceptance register</h1>` line, using the
 carrier Task 1 chose. For `attribute`:
 
 ```html
-<p class="eyebrow" data-published-as="1">Publish token 1 — bump this by one in
-  any change that publishes this page. It is how <code>--against-published</code>
-  detects that another lane published between your baseline and now.</p>
+<p class="eyebrow" data-published-as="1" data-published-by="chore/ops-register-stable-row-ids">
+  Publish token 1 — bump the number by one in any change that publishes this page,
+  and set <code>data-published-by</code> to your own branch. It is how
+  <code>--against-published</code> tells <em>your</em> earlier publish this review
+  cycle apart from <em>another lane's</em>.</p>
 ```
 
-For `comment`, the same value carried as `<!-- published-as: 1 -->` on its own
-line, plus the explanatory `<p>` without the attribute.
+**Both fields, always.** A bare counter cannot distinguish your own round-two
+publish from a competing lane's — both land on the same number. That is the
+fourth rejected design in spec §2, and `data-published-by` is what closes it.
 
-Start at `1`: this is the bootstrap publish, and the value only has to be
-monotonic, not historically meaningful.
+Start the counter at `1`. The value only has to be monotonic, not historically
+meaningful.
+
+For the `comment` carrier, the same two fields as
+`<!-- published-as: 1 by chore/ops-register-stable-row-ids -->`, plus the
+explanatory `<p>` without the attributes.
 
 - [ ] **Step 2: Confirm exactly one occurrence**
 
@@ -449,12 +467,16 @@ current count, not how it got here — see this file's git log for the full
 history"* (`:265-266`) — and the shipped "register tracks state, not history"
 ruling collapsed the register's correction log to one line for the same reason.
 
-- [ ] **Step 1: Delete all six `callout warn` blocks at `:200-267`**
+- [ ] **Step 1: Delete the six changelog callouts at `:200-267`**
 
-These are the blocks beginning `<b>Last change:` and `<b>Prior change:` and
-`<b>Before that:`. **Keep** the two evergreen callouts — `:174-180` ("Owed
-acceptance never blocks a merge") and `:182-189` ("How this register goes
-stale"). Neither carries a count or a row ID.
+Identify them by their **opening text**, not by their CSS class: they are the six
+blocks beginning `<b>Last change:`, `<b>Prior change:` (×4) and `<b>Before that:`.
+
+**Do not grep for `callout warn` and delete every hit.** `:182-189` ("How this
+register goes stale") is *also* a `callout warn` and must be **kept** — it is
+evergreen and carries no count or row ID. So must `:174-180` ("Owed acceptance
+never blocks a merge"), which is a plain `callout`. There are seven `callout warn`
+blocks in the file; exactly six are being deleted.
 
 - [ ] **Step 2: Insert one current-state callout in their place**
 
@@ -619,8 +641,17 @@ cut **after PR 1 merges**. Verify hooks (`ls -d .husky/_`) before the first comm
 - [ ] **Step 1: Write the failing tests**
 
 Add to `scripts/tests/check-onbox-register.test.mjs`. Each fixtures its own
-register (constraint 2) — use the file's existing fixture helper if one exists,
-otherwise a local template string.
+register (constraint 2).
+
+**There is no helper with the shape these tests need — write one first.** The
+file's only builders are `buildRegister({tableA, tableB, total, bodyARows, bodyBRows})`
+(`:43-86`) and `buildSingleGroupRegister(...)` (`:1240-1259`); neither takes a
+`nextId` or an extra section, so `registerFixture` below is **new code this step
+creates**, not an existing API. Give it the signature the tests use
+(`{ glance, groups: [{letter, nextId, rows}], extraSections }`) and have it emit a
+`<!-- next-id: … -->` line per group unless `nextId` is `null`. Also add the new
+imports (`ALLOCATION_FLOOR`, and Task 10's exports when you get there) to the
+import block at `:11-18`.
 
 ```js
 test('4: a group with gaps passes — IDs are allocated once, never reused', () => {
@@ -749,7 +780,14 @@ Delete `:313-327` entirely and put in its place:
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!titleMatch) continue;
     const letter = titleMatch[1];
-    if (invalidRowHeadingLetterSet.has(letter)) continue;
+    // NOTE the suppression is deliberately NOT applied to the marker-presence
+    // and floor checks below — only to the per-row comparison. `:222-228`
+    // suppresses checks on a letter with an invalid row heading because its
+    // count and contiguity were artifacts of that same rejected heading.
+    // Whether a group carries an allocation marker is independent of every row
+    // heading in it, so suppressing it here would let one `### A19b` anywhere
+    // in Group A make Group A's MISSING marker unreportable — widening a
+    // narrow suppression into a hole in the new check.
     const nextId = parseNextIdMarker(section.body, letter);
     if (nextId === null) {
       errors.push(
@@ -762,6 +800,7 @@ Delete `:313-327` entirely and put in its place:
         `Group ${letter}'s next-id (${letter}${nextId}) is below the allocation floor ${letter}${ALLOCATION_FLOOR}. IDs below the floor have been used before; reusing one silently re-points every existing citation.`,
       );
     }
+    if (invalidRowHeadingLetterSet.has(letter)) continue;
     for (const n of bodyGroups.get(letter) ?? []) {
       if (n >= nextId) {
         errors.push(
@@ -792,8 +831,15 @@ git commit -m "feat(scripts): replace register row contiguity with uniqueness an
 ### Task 9: Sweep the checker's own contiguity-shaped strings
 
 **Files:**
-- Modify: `scripts/check-onbox-register.mjs:44-49`, `:171-183`, `:247`, `:577-579`,
-  `:628-632`, `:811`, `:963-967`, `:1385-1389`
+- Modify: `scripts/check-onbox-register.mjs:44-49`, `:171-183`, `:247`, **`:481`**,
+  `:577-579`, `:628-632`, `:811`, `:963-967`, **`:1362`**, `:1385-1389`
+
+> **`:481` and `:1362` were dropped from an earlier draft of this list.** `:481`
+> is `resolveBaselineGroups`' header, which enumerates *"a contiguity gap"* as a
+> malformed-baseline shape that will no longer exist. `:1362` warns that *"an
+> agent following it literally would add a duplicate and trip the contiguity
+> check"* — the spec named it explicitly and the plan lost it. Neither is
+> optional: both are operator- or agent-facing text asserting a deleted rule.
 
 **Interfaces:**
 - Consumes: Task 8.
@@ -862,110 +908,120 @@ git commit -m "chore(scripts): sweep contiguity-era guidance out of the register
 **Files:**
 - Modify: `scripts/check-onbox-register.mjs` — `resolveBaselineText` (`:1060-1075`),
   `checkLiveView` (`:633+`), the CLI's `extraOnly` block (`:1268-1420`)
+- Modify: `docs/testing/onbox-acceptance-register.md` — the "If it fails" tree
 - Test: `scripts/tests/check-onbox-register.test.mjs`
 
 **Interfaces:**
-- Consumes: Task 1's `PUBLISH_TOKEN_CARRIER`, Task 4's token in the tracked HTML.
+- Consumes: Task 1's `PUBLISH_TOKEN_CARRIER`, Task 4's two-field token.
 - Produces:
-  - `parsePublishToken(rawHtml) -> { value: number } | { malformed: string } | null`
-  - `comparePublishTokens({ working, published, baseline }) -> string[]`
+  - `parsePublishToken(rawHtml) -> { n: number, who: string } | { malformed: string } | null`
+  - `comparePublishTokens({ working, published, baseline, branch, allowBehind }) -> string[]`
+  - `PUBLISH_TOKEN_BASELINE_ERROR` (exported constant, matched by identity)
   - `resolveBaselineText` additionally returns `sha`
   - `resolveBaselineLiveView(repoRoot, liveViewPath, sha, gitRunner) -> { text, failedStep }`
   - env seam `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE`
+  - CLI flag `--live-page-behind-main`
 
-**Three facts this task must not get wrong:**
+**Five facts this task must not get wrong:**
 
-1. `checkLiveView`'s **first** action is `stripHtmlComments(rawLiveViewHtml)`
-   (`:641`), and that blanking is load-bearing (PR #2080 review round 2). If
-   Task 1 chose the `comment` carrier, the token MUST be parsed from
-   `rawLiveViewHtml` before that line, and Step 1 below has a dedicated test for
-   it. If Task 1 chose `attribute`, this hazard does not apply — which is why
-   `attribute` is preferred.
-2. `--against-published` **never reads the tracked live-view HTML today**:
+1. **A bare counter does not work.** It cannot distinguish your own round-two
+   publish from a competing lane's — both occupy the interval
+   `baseline ≤ published ≤ working`. This is the fourth rejected design in spec
+   §2. **Both token fields are load-bearing**; an implementation that compares
+   only `n` reintroduces the failure that killed it.
+2. `checkLiveView`'s **first** action is `stripHtmlComments(rawLiveViewHtml)`
+   (`:641`), and that blanking is load-bearing (PR #2080 review round 2). Under
+   the `comment` carrier the token MUST be read off `rawLiveViewHtml` before that
+   line. Under `attribute` the hazard does not exist — which is why it is preferred.
+3. `--against-published` **never reads the tracked live-view HTML today**:
    `const liveViewHtml = read(LIVE_VIEW)` sits at `:1423`, *after* that mode's
    `return` at `:1420`. Reading it in `extraOnly` is new.
-3. Both baselines must come from **one** commit. `resolveBaselineText` already
-   freezes the SHA in a local (`:1069`) after deliberately reading `FETCH_HEAD`
-   rather than `origin/main` (#2199 round 3 — a narrowed refspec can leave
-   `origin/main` stale while the fetch exits 0). Return that SHA rather than
-   re-resolving; a second `rev-parse` reopens the race the freeze closed.
+4. Both baselines must come from **one** commit. `resolveBaselineText` already
+   freezes the SHA in a local (`:1069`, already `.trim()`ed) after deliberately
+   reading `FETCH_HEAD` rather than `origin/main` (#2199 round 3). Return **that
+   frozen string**; a second `rev-parse` reopens the race the freeze closed.
+5. **`null` is not "tokenless".** A git failure on either baseline half must
+   reach its own fail-closed error, never the same branch as a page that simply
+   has no token. Collapsing them is the guard-evaporates-on-missing-input shape
+   `resolveBaselineGroups`' own header (`:483-494`) exists to prevent.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```js
-const TOKEN = (n) => `<p class="eyebrow" data-published-as="${n}">x</p>`; // Task 1's literal
+const BRANCH = 'chore/scripts-register-stable-id-guards';
+const OTHER = 'chore/ops-onbox-wave9';
+const T = (n, who) => `<p data-published-as="${n}" data-published-by="${who}">x</p>`;
+const cmp = (o) => comparePublishTokens({ branch: BRANCH, ...o });
 
-test('token: ordinary publish — published == baseline, working ahead — is green', () => {
-  assert.deepEqual(
-    comparePublishTokens({ working: TOKEN(48), published: TOKEN(47), baseline: TOKEN(47) }),
-    [],
-  );
+test('token: the ordinary first publish is green', () => {
+  assert.deepEqual(cmp({ working: T(48, BRANCH), published: T(47, OTHER), baseline: T(47, OTHER) }), []);
 });
 
-test('token: re-publishing from the same branch is green', () => {
-  // The regression test that would have caught all three rejected content rules:
-  // baseline 47, this branch already published 48, now publishing 49.
-  assert.deepEqual(
-    comparePublishTokens({ working: TOKEN(49), published: TOKEN(48), baseline: TOKEN(47) }),
-    [],
-  );
+test('token: a SAME-BRANCH re-publish is green', () => {
+  // THE test that kills a bare counter. baseline 47, this branch already
+  // published 48, review feedback lands, now publishing 49. Under a counter-only
+  // rule `published(48) != baseline(47)` reports a competing lane that does not
+  // exist — and this register's normal review cycle is multi-publish-per-branch
+  // (PR #2578 published across rounds 13-21).
+  assert.deepEqual(cmp({ working: T(49, BRANCH), published: T(48, BRANCH), baseline: T(47, OTHER) }), []);
 });
 
-test('token: another lane published first is reported', () => {
-  const errors = comparePublishTokens({
-    working: TOKEN(48), published: TOKEN(52), baseline: TOKEN(47),
-  });
+test('token: ANOTHER lane publishing into the same interval is reported', () => {
+  // Byte-identical counters to the test above; only `who` differs. If this
+  // passes while the previous one also passes, the `who` field is being ignored.
+  const errors = cmp({ working: T(49, BRANCH), published: T(48, OTHER), baseline: T(47, OTHER) });
   assert.ok(errors.some((e) => e.includes('published since your baseline')));
 });
 
+test('token: a live page BEHIND main is reported with its own message', () => {
+  const errors = cmp({ working: T(49, BRANCH), published: T(46, OTHER), baseline: T(47, OTHER) });
+  assert.ok(errors.some((e) => e.includes('behind')), 'must not reuse the competing-lane message');
+});
+
+test('token: --live-page-behind-main clears the stalemate, and ONLY that state', () => {
+  assert.deepEqual(
+    cmp({ working: T(49, BRANCH), published: T(46, OTHER), baseline: T(47, OTHER), allowBehind: true }),
+    [],
+  );
+  // The flag must not become a blanket mute — same shape as --discharging's own
+  // unconsumed-name guard.
+  assert.ok(
+    cmp({ working: T(49, BRANCH), published: T(48, OTHER), baseline: T(47, OTHER), allowBehind: true }).length > 0,
+    '--live-page-behind-main must not suppress a genuine competing publish',
+  );
+});
+
 test('token: a tokenless published page against a tokened baseline is reported', () => {
-  const errors = comparePublishTokens({
-    working: TOKEN(48), published: '<p>no token here</p>', baseline: TOKEN(47),
-  });
+  // Also pins the ABSENCE of a bootstrap branch: this must never return [].
+  const errors = cmp({ working: T(48, BRANCH), published: '<p>no token</p>', baseline: T(47, OTHER) });
   assert.ok(errors.some((e) => e.includes('no publish token')));
 });
 
 test('token: an unbumped working file is reported', () => {
-  const errors = comparePublishTokens({
-    working: TOKEN(47), published: TOKEN(47), baseline: TOKEN(47),
-  });
+  const errors = cmp({ working: T(47, BRANCH), published: T(47, OTHER), baseline: T(47, OTHER) });
   assert.ok(errors.some((e) => e.includes('bump')));
 });
 
-test('token: bootstrap — baseline and published both tokenless — passes on working alone', () => {
-  assert.deepEqual(
-    comparePublishTokens({ working: TOKEN(1), published: '<p>x</p>', baseline: '<p>x</p>' }),
-    [],
-  );
+test('token: an UNRESOLVABLE baseline fails closed, and is not mistaken for tokenless', () => {
+  // resolveBaselineText returns { text: null } on a git failure. null must reach
+  // its own error by IDENTITY — never the tokenless path, and never green.
+  const errors = cmp({ working: T(48, BRANCH), published: '<p>no token</p>', baseline: null });
+  assert.deepEqual(errors, [PUBLISH_TOKEN_BASELINE_ERROR]);
 });
 
-test('token: bootstrap is unreachable once the baseline carries a token', () => {
-  // Pins the bootstrap as self-limiting — it must not silently re-arm.
-  const errors = comparePublishTokens({
-    working: TOKEN(2), published: '<p>x</p>', baseline: TOKEN(1),
-  });
-  assert.ok(errors.length > 0, 'a tokenless page against a tokened baseline must not bootstrap');
+test('token: a non-integer counter is an error, not a skip', () => {
+  assert.ok(cmp({ working: `<p data-published-as="abc" data-published-by="${BRANCH}">x</p>`,
+    published: T(1, OTHER), baseline: T(1, OTHER) }).some((e) => e.includes('not a bare integer')));
 });
 
-test('token: a tokened published page against a tokenless baseline is reported', () => {
-  const errors = comparePublishTokens({
-    working: TOKEN(1), published: TOKEN(9), baseline: '<p>x</p>',
-  });
-  assert.ok(errors.length > 0);
-});
-
-test('token: a non-integer token is an error, not a skip', () => {
-  const errors = comparePublishTokens({
-    working: '<p data-published-as="abc">x</p>', published: TOKEN(1), baseline: TOKEN(1),
-  });
-  assert.ok(errors.some((e) => e.includes('not a bare integer')));
+test('token: an empty publisher is an error, not a skip', () => {
+  assert.ok(cmp({ working: T(2, ''), published: T(1, OTHER), baseline: T(1, OTHER) })
+    .some((e) => e.includes('publisher')));
 });
 
 test('token: two tokens in one file is an error, not a first-match win', () => {
-  const errors = comparePublishTokens({
-    working: TOKEN(2) + TOKEN(3), published: TOKEN(1), baseline: TOKEN(1),
-  });
-  assert.ok(errors.some((e) => e.includes('more than once')));
+  assert.ok(cmp({ working: T(2, BRANCH) + T(3, BRANCH), published: T(1, OTHER), baseline: T(1, OTHER) })
+    .some((e) => e.includes('more than once')));
 });
 
 test('resolveBaselineLiveView uses the SAME sha resolveBaselineText froze', () => {
@@ -987,10 +1043,10 @@ If Task 1 chose the `comment` carrier, add:
 
 ```js
 test('token: a comment-carried token survives stripHtmlComments ordering', () => {
-  // Regression pin for the ordering hazard: checkLiveView blanks comments as its
-  // FIRST action, so the token must be read off the raw html before that.
-  const raw = '<!-- published-as: 5 -->\n<p>body</p>';
-  assert.equal(parsePublishToken(raw).value, 5);
+  // Regression pin: checkLiveView blanks comments as its FIRST action, so the
+  // token must be read off the raw html before that line.
+  const raw = '<!-- published-as: 5 by some-branch -->\n<p>body</p>';
+  assert.equal(parsePublishToken(raw).n, 5);
   assert.equal(parsePublishToken(stripHtmlComments(raw)), null);
 });
 ```
@@ -1001,19 +1057,30 @@ test('token: a comment-carried token survives stripHtmlComments ordering', () =>
 node --test scripts/tests/check-onbox-register.test.mjs
 ```
 
-Expected: all fail with "comparePublishTokens is not defined" / "not exported".
+Expected: all fail with "comparePublishTokens is not defined". **Confirm the
+same-branch-re-publish test and the competing-lane test fail for *different*
+reasons than each other once the code exists** — they differ only in `who`, so if
+they ever agree, `who` is being ignored and the design has silently reverted to a
+bare counter.
 
 - [ ] **Step 3: Implement the parser and the comparator**
 
 ```js
 // The publish token. See docs/superpowers/specs/2026-08-27-onbox-register-
-// stable-row-ids-design.md §2 for why content comparison was abandoned: three
-// per-row rules were designed and all three failed, because `working != baseline`
-// means "edited OR stale" and no amount of rule-shaping separates those without
-// per-branch publish state. This compares a monotonic integer instead, which
-// answers the only question that matters — did someone publish between my
-// baseline and now — exactly.
-const PUBLISH_TOKEN_REGEX = /data-published-as="([^"]*)"/g;
+// stable-row-ids-design.md §2: FOUR designs were rejected before this one —
+// three per-row content rules, then a bare monotonic counter. The counter failed
+// because a same-branch re-publish and a competing lane's publish occupy the
+// same interval [baseline, working] and are the same number. `who` is what
+// separates them. Compare BOTH fields or the failure returns.
+const PUBLISH_TOKEN_REGEX = /data-published-as="([^"]*)"\s+data-published-by="([^"]*)"/g;
+
+// Distinct from a page that merely has no token — a git failure is "no
+// baseline", and everywhere else in this file that distinction is load-bearing
+// and matched by identity (see CANNOT_VERIFY_BASELINE_ERROR, :529).
+export const PUBLISH_TOKEN_BASELINE_ERROR =
+  'Cannot verify the publish token: the origin/main baseline live view is ' +
+  'unavailable or unreadable, so a competing publish cannot be told apart from ' +
+  'an ordinary one. Do not publish until this passes.';
 
 export function parsePublishToken(rawHtml) {
   if (typeof rawHtml !== 'string') return null;
@@ -1022,15 +1089,21 @@ export function parsePublishToken(rawHtml) {
   if (matches.length > 1) {
     return { malformed: `the publish token appears more than once (${matches.length} times)` };
   }
-  const raw = matches[0][1];
-  if (!/^\d+$/.test(raw)) {
-    return { malformed: `the publish token "${raw}" is not a bare integer` };
-  }
-  return { value: Number(raw) };
+  const [, n, who] = matches[0];
+  if (!/^\d+$/.test(n)) return { malformed: `the counter "${n}" is not a bare integer` };
+  if (who.trim() === '') return { malformed: 'the publisher (data-published-by) is empty' };
+  return { n: Number(n), who };
 }
 
-export function comparePublishTokens({ working, published, baseline }) {
+export function comparePublishTokens({ working, published, baseline, branch, allowBehind = false }) {
   const errors = [];
+
+  // Fail closed on an unresolvable baseline BEFORE anything else, and by
+  // identity. `null` here means "no baseline", not "a baseline with no token";
+  // folding the two would let a git failure return green.
+  if (baseline === null || baseline === undefined) return [PUBLISH_TOKEN_BASELINE_ERROR];
+  if (published === null || published === undefined) return [PUBLISH_TOKEN_BASELINE_ERROR];
+
   const w = parsePublishToken(working);
   const p = parsePublishToken(published);
   const b = parsePublishToken(baseline);
@@ -1042,46 +1115,48 @@ export function comparePublishTokens({ working, published, baseline }) {
   }
   if (errors.length > 0) return errors;
 
-  // Bootstrap: the first change to carry a token publishes to a page that has
-  // none. Written as an explicit case rather than a fallthrough so it cannot
-  // silently re-arm once `origin/main` carries a token.
-  if (!b && !p) {
-    if (!w) {
-      errors.push('Publish token: the tracked live view has none. Add one before publishing.');
-    }
-    return errors;
+  // There is deliberately NO bootstrap branch. PR 1 seeds the token as data and
+  // PR 2 ships this code, so origin/main always carries one by the time this
+  // runs. A branch that cannot be entered can only ever be wrong.
+  if (!b) {
+    return ['Publish token: origin/main carries none. It should have been seeded before this check shipped — do not publish; investigate.'];
   }
   if (!w) {
-    errors.push('Publish token: the tracked live view has none, but origin/main or the published page does. Do not publish until it is restored.');
-    return errors;
-  }
-  if (!b && p) {
-    errors.push('Publish token: a token-bearing page is already live but origin/main has none. Another lane published a token first — rebase and re-read the live page.');
-    return errors;
+    return ['Publish token: the tracked live view has none. Restore it before publishing.'];
   }
   if (!p) {
-    errors.push('Publish token: the published page carries no publish token, but origin/main does. Either the wrong file was published to this URL, or the page was clobbered. Do not publish over it until you know which.');
-    return errors;
+    return ['Publish token: the published page carries no publish token, but origin/main does. Either the wrong file was published to this URL, or the page was clobbered. Do not publish over it until you know which.'];
   }
-  if (p.value !== b.value) {
-    errors.push(`Publish token: the live page is at ${p.value} but origin/main is at ${b.value} — someone published since your baseline. Rebase, re-read the live page, and re-run this check. Do not publish.`);
-    return errors;
+
+  if (p.n < b.n) {
+    if (!allowBehind) {
+      errors.push(`Publish token: the live page is at ${p.n} but origin/main is at ${b.n} — the page is BEHIND main. A bump merged without publishing, or a publish was reverted. Re-publishing from here is correct, but confirm that first, then re-run with --live-page-behind-main.`);
+    }
+  } else if (p.n !== b.n && p.who !== branch) {
+    errors.push(`Publish token: the live page is at ${p.n}, published by "${p.who}", but origin/main is at ${b.n} — someone else published since your baseline. Rebase, re-read the live page, and re-run. Do not publish.`);
   }
-  if (w.value <= b.value) {
-    errors.push(`Publish token: the tracked live view is at ${w.value}, not ahead of origin/main's ${b.value}. Bump it — an unbumped publish is untracked and the next lane cannot tell it happened.`);
+  if (errors.length > 0) return errors;
+
+  const floor = p.who === branch ? Math.max(b.n, p.n) : b.n;
+  if (w.n <= floor) {
+    errors.push(`Publish token: the tracked live view is at ${w.n}, not ahead of ${floor}. Bump it — an unbumped publish is untracked and the next lane cannot tell it happened.`);
   }
   return errors;
 }
 ```
 
-*(If Task 1 chose the `comment` carrier, change `PUBLISH_TOKEN_REGEX` to
-`/<!--\s*published-as:\s*([^\s-]*)\s*-->/g` and nothing else; the comparator is
-carrier-agnostic by construction.)*
+*(Under the `comment` carrier, change `PUBLISH_TOKEN_REGEX` to
+`/<!--\s*published-as:\s*(\S*)\s+by\s+(\S*)\s*-->/g` and nothing else; the
+comparator is carrier-agnostic by construction.)*
 
 - [ ] **Step 4: Thread the second baseline through**
 
-`resolveBaselineText` gains `sha` in its return (**additive** — the seven
-existing tests assert on `text`/`failedStep` and keep passing). Add alongside it:
+`resolveBaselineText` gains `sha` in its return — returning the **frozen
+`fetchedSha` string**, not raw stdout. **This is NOT additive: it breaks five
+existing assertions** (`:1821`, `:1879`, `:1897`, `:1911`, `:1935` all use
+`assert.deepEqual(result, { text, failedStep })`, which fails on an extra own
+property under strict mode). The spec said these tests move in the same diff and
+it was right. Task 11 Step 1 handles them.
 
 ```js
 // The live view's baseline, read from the SAME frozen sha as the register's —
@@ -1097,108 +1172,153 @@ export function resolveBaselineLiveView(repoRoot, liveViewPath, sha, gitRunner =
 - [ ] **Step 5: Add the second test seam**
 
 `ONBOX_TEST_BASELINE_FILE` substitutes **only** the register baseline
-(`:1252-1267`), and its own comment warns that a CLI test deriving its verdict
-from live git state is a latent bug. Add `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE`
-with the identical shape **and the identical unconditional banner print** — a
-silent bypass here is the same guard-evaporates-on-substituted-input shape #2199
-exists to fix. Without it, every hermetic `--against-published` test silently
-reaches real git for the HTML half.
+(`:1252-1267`). Add `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE` with the identical shape
+**and the identical unconditional banner print** — a silent bypass here is the
+same guard-evaporates-on-substituted-input shape #2199 exists to fix.
+
+**Without this, roughly a dozen existing CLI tests break**: `ONBOX_TEST_BASELINE_FILE`
+appears 24 times between `:1976` and `:2616`, and none of those tests sets the
+new seam, so each would reach real git for the live-view half. Task 11 Step 4
+migrates them.
 
 - [ ] **Step 6: Wire it into the `extraOnly` CLI block**
 
-Read the tracked live view (new in this mode — see fact 2 above), resolve the
-live-view baseline, run `comparePublishTokens`, and `report()` its errors
-alongside the existing behind-row errors so one run surfaces both. Fold the
-result into `publishedFailed`.
+Read the tracked live view (new in this mode — fact 3), resolve the live-view
+baseline from the frozen SHA, pass the current branch
+(`git rev-parse --abbrev-ref HEAD`) and `--live-page-behind-main`, run
+`comparePublishTokens`, and `report()` its errors alongside the existing
+behind-row errors so one run surfaces both. Fold into `publishedFailed`.
 
-- [ ] **Step 7: Run the tests and confirm they pass**
+- [ ] **Step 7: Document the new failure class in the runbook**
+
+The register's "If it fails" tree (`docs/testing/onbox-acceptance-register.md:129-220`)
+gains a publish-token section: what each message means, that a competing publish
+is cleared by rebasing, and that a behind-`main` page is cleared by
+`--live-page-behind-main` **after confirming the cause**. A guard whose STOP has
+no documented clearing procedure is a guard that gets bypassed — which is exactly
+why `--discharging` exists (#2272).
+
+- [ ] **Step 8: Run the tests and confirm they pass**
 
 ```bash
 node --test scripts/tests/check-onbox-register.test.mjs
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add scripts/check-onbox-register.mjs scripts/tests/check-onbox-register.test.mjs
-git commit -m "feat(scripts): detect a competing publish via a publish-token compare-and-swap"
+git add scripts/check-onbox-register.mjs scripts/tests/check-onbox-register.test.mjs docs/testing/onbox-acceptance-register.md
+git commit -m "feat(scripts): detect a competing publish via an identity-carrying publish token"
 ```
 
 ---
 
-### Task 11: Migrate the tests that encode contiguity
+### Task 11: Migrate the existing test suite
 
 **Files:**
-- Modify: `scripts/tests/check-onbox-register.test.mjs:166-190`, `:371`, `:668-681`,
-  `:724-725`, `:761`, `:1225`, `:1289-1294`, `:2058-2071`, `:2102`
+- Modify: `scripts/tests/check-onbox-register.test.mjs` (2785 lines, 107 tests)
 
 **Interfaces:**
 - Consumes: Tasks 8-10.
 - Produces: a green suite.
 
-- [ ] **Step 1: Replace the two direct check-4 tests (`:166-190`)**
+> **Do not work from a line list.** An earlier draft of this task carried nine
+> line references and missed most of the breakage, because the damage runs
+> through two *shared fixture builders* rather than through individual tests.
+> **Step 1 is to run the suite and let the real failure list drive the work.**
 
-`'check 4: non-contiguous row numbers (a duplicate) are reported independently
-of check 1'` asserts `'Group A row numbers are not contiguous from 1: found A1,
-A1'`. The duplicate half is now 4a's job (`Row ID A1 appears more than once`);
-the gap half (`found A1, A3`) must now **pass**. Task 8 already added the
-passing gap test — delete these two rather than leaving a renamed shell.
+- [ ] **Step 1: Get the actual failure list**
 
-- [ ] **Step 2: Update the six verbatim message assertions**
+```bash
+node --test scripts/tests/check-onbox-register.test.mjs 2>&1 | tee <scratchpad>/failures.txt
+```
 
-`:371`, `:668`, `:676`, `:724`, `:725`, `:761` all assert the `:247` string
-verbatim. Update each to Task 9's new wording. **Do not soften them to
+Expect on the order of **70+ failing tests**, not nine. The four clusters below
+are known; treat anything else the run reports as equally in scope.
+
+- [ ] **Step 2: Teach both fixture builders the allocation marker**
+
+This is the bulk of the work and neither builder was in the earlier draft's list.
+
+- **`buildRegister()` (`:43-86`), used 51 times** — emits `## Group A` and
+  `## Group B` with no marker, so every call gains two check-4b errors. Hard
+  equality assertions that break at once: `:89`, `:99`, `:382`, `:410`, `:440`,
+  `:469`, `:723-726`.
+- **`buildSingleGroupRegister()` (`:1240-1259`), used 17 times** — same defect,
+  but worse: it supplies `baselineText` for every `extraOnly` test, so
+  `resolveBaselineGroups` → `checkRegister` → non-empty → **every `#2199` and
+  `#2272` scenario collapses to `CANNOT_VERIFY_BASELINE_ERROR`** instead of its
+  intended verdict (`:1307`, `:1512`, `:1690` and the surrounding blocks).
+
+Emit a `<!-- next-id: <Letter>101 -->` line per group by default, with an opt-out
+parameter so Task 8's missing-marker test can still build a register without one.
+
+- [ ] **Step 3: Fix the five `resolveBaselineText` assertions**
+
+`:1821`, `:1879`, `:1897`, `:1911`, `:1935` are `assert.deepEqual(result, {...})`
+and break on the new `sha` property. Add `sha` to each expectation (`null` on the
+failure paths) rather than loosening to a property-by-property check — the whole
+value of `deepEqual` here is that it catches an unintended extra field.
+
+- [ ] **Step 4: Give every `ONBOX_TEST_BASELINE_FILE` test the live-view seam**
+
+24 occurrences between `:1976` and `:2616`. Each must also set
+`ONBOX_TEST_BASELINE_LIVE_VIEW_FILE` and supply a tokened live-view baseline, or
+it (a) reaches real git — the exact hermeticity loss the seam exists to prevent —
+and (b) fails on `w == b` → "bump it". A shared helper that sets both together is
+better than 24 pairs, because the next test to be added will otherwise set only one.
+
+- [ ] **Step 5: Replace the two direct check-4 tests (`:166-190`)**
+
+The duplicate half is now 4a's job (`Row ID A1 appears more than once`); the gap
+half (`found A1, A3`) must now **pass**, and Task 8 already added that test.
+Delete these two rather than leaving renamed shells.
+
+- [ ] **Step 6: Update the six verbatim message assertions**
+
+`:371`, `:668`, `:676`, `:724`, `:725`, `:761` assert the `:247` string verbatim.
+Update each to Task 9's new wording. **Do not soften them to
 `includes('not a valid row number')`** — the verbatim assertion is what makes a
-message reword visible, and this suite already relies on that property.
+message reword visible.
 
-- [ ] **Step 3: Fix the assertion that goes vacuous (`:681`)**
+- [ ] **Step 7: Fix the assertion that goes vacuous (`:681`)**
 
 `assert.ok(!errors.some((e) => e.includes('are not contiguous')))` can no longer
-fail, since nothing emits that string. Re-point it at what it was actually
-protecting: that a rejected sub-lettered heading suppresses the *other*
-per-group checks for that letter, which is now 4b — assert no `is at or above`
-or `has no "<!-- next-id:` error for that letter.
+fail. Re-point it at what it protected: that a rejected sub-lettered heading
+suppresses the other per-group checks for that letter. **Assert on 4b's per-row
+message only** — per Task 8, marker-presence and floor are deliberately *not*
+suppressed, so asserting their absence would pin the hole this plan just closed.
 
-- [ ] **Step 4: Update the #2199 discharge-and-renumber scenario (`:1289-1294`)**
+- [ ] **Step 8: Update the #2199 discharge scenario (`:1225`, `:1289-1294`)**
 
 Its comment says "C3 renumbered to C1". Under stable IDs a discharge leaves a
-gap: `C1` and `C2` are discharged, `C3` stays `C3`. Rewrite the fixture and the
-comment. **This test's value is unchanged and must be preserved** — it pins that
-a live-page row `origin/main` also lacks is a discharge, not a defect.
+gap: `C1` and `C2` go, `C3` stays `C3`. Rewrite the fixture and both comments.
+**Preserve what the test pins** — that a live-page row `origin/main` also lacks
+is a discharge, not a defect.
 
-- [ ] **Step 5: Teach `computeMaxRowNumber` / `buildAheadBaselineText` the floor**
+- [ ] **Step 9: Teach `computeMaxRowNumber` / `buildAheadBaselineText` the floor**
 
 Five real-tree CLI tests (`:2209`, `:2333`, `:2360`, `:2517`, `:2600`) derive
-`high-water + 1` as "an ID that does not exist yet" and append it to a baseline
-that must pass `checkRegister`. Under 4b that ID must sit **strictly below**
-`next-id`. With rows at `A1`…`A37` and the floor at `A101`, `high-water + 1`
-already satisfies it — **but make the helper say so deliberately**, with a
-comment and an assertion that the derived number is below the group's marker:
+`high-water + 1` as "an ID that does not exist yet". Under 4b it must sit
+**strictly below** `next-id`. It does today by a wide margin — assert it anyway:
 
 ```js
-// Must stay strictly below the group's next-id marker (check 4b). It does today
-// by a wide margin, but assert it rather than relying on the margin: when this
-// eventually breaks, the tempting repair is to loosen the fixture, and that is
-// exactly how the allocation floor gets quietly weakened.
+// When this eventually breaks, the tempting repair is to loosen the fixture,
+// and that is exactly how the allocation floor gets quietly weakened.
 assert.ok(candidate < nextId, `fixture ID ${letter}${candidate} must be below next-id`);
 ```
 
-The fixture register these helpers build must itself carry `next-id` markers, or
-every one of the five tests fails on "has no allocation marker".
-
-- [ ] **Step 6: Run the whole suite**
+- [ ] **Step 10: Re-run until green**
 
 ```bash
 npm run test:hooks
 ```
 
-Expected: all green.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add scripts/tests/check-onbox-register.test.mjs
-git commit -m "test(scripts): migrate register checker tests off the contiguity invariant"
+git commit -m "test(scripts): migrate the register checker suite onto stable row IDs"
 ```
 
 ---
@@ -1207,7 +1327,15 @@ git commit -m "test(scripts): migrate register checker tests off the contiguity 
 
 **Files:**
 - Create: `.github/workflows/register-citations-check.yml`
-- Modify: `scripts/tests/workflow-wiring.test.mjs`, `scripts/verify-cache.mjs:116`
+- Create: `scripts/tests/register-citations-workflow.test.mjs`
+
+> **Neither file an earlier draft named actually needs editing, and that would
+> have shipped a CI workflow with zero automated coverage.** `verify-cache.mjs:116`
+> is the literal glob `'.github/workflows/**'` — a wildcard, so a new workflow
+> file is already covered. `workflow-wiring.test.mjs` resolves exactly one path,
+> `verify.yml` (`:22`), and contains no workflow enumeration at all. The plan
+> inherited "both move in the same diff" from the spec and did not check it.
+> Verified: both claims are false. The coverage below is what replaces them.
 
 **Interfaces:**
 - Consumes: nothing.
@@ -1239,17 +1367,48 @@ Model it on `.github/workflows/onbox-register-check.yml` — same runner, same N
 # promoting it is a separate decision after a few waves — see the follow-up issue.
 ```
 
-- [ ] **Step 3: Update the two files that enumerate workflows**
+- [ ] **Step 3: Write the workflow's contract test**
 
-`scripts/tests/workflow-wiring.test.mjs` and `verify-cache.mjs`'s
-`.github/workflows/**` glob (`:116`). Run `npm run test:hooks` to find out which
-assertions move — do not guess.
+Create `scripts/tests/register-citations-workflow.test.mjs` and wire it into
+`npm run test:hooks` the way its siblings are.
+
+```js
+test('the citation-check workflow exists and runs the checker', () => {
+  const yml = readFileSync(WORKFLOW_PATH, 'utf8');
+  assert.match(yml, /check-register-citations/);
+});
+
+test('the citation-check workflow has NO paths: filter', () => {
+  // The assertion worth having. This checker reads essentially every tracked
+  // file, so no path filter can be correct — a filter is the obvious-looking
+  // "optimisation" a future reader adds, and it is exactly what makes the
+  // workflow useless. Its sibling onbox-register-check.yml IS path-filtered,
+  // which is what makes copying that file the likely mistake.
+  const yml = readFileSync(WORKFLOW_PATH, 'utf8');
+  assert.ok(!/^\s*paths:/m.test(yml), 'a paths: filter defeats a whole-tree checker');
+});
+
+test('the citation-check workflow is not claimed as a required check', () => {
+  const yml = readFileSync(WORKFLOW_PATH, 'utf8');
+  assert.match(yml, /NOT in main's required status checks/i);
+});
+```
+
+- [ ] **Step 3b: Confirm nothing else needs updating**
+
+```bash
+npm run test:hooks
+```
+
+Expected: green, with **no** edits to `workflow-wiring.test.mjs` or
+`verify-cache.mjs`. If either does go red, that falsifies the note above — read
+why before changing anything.
 
 - [ ] **Step 4: Verify and commit**
 
 ```bash
 npm run test:hooks
-git add .github/workflows/register-citations-check.yml scripts/tests/workflow-wiring.test.mjs scripts/verify-cache.mjs
+git add .github/workflows/register-citations-check.yml scripts/tests/register-citations-workflow.test.mjs package.json
 git commit -m "ci(scripts): run the register citation checker on every PR"
 ```
 
@@ -1262,6 +1421,8 @@ git commit -m "ci(scripts): run the register citation checker on every PR"
 | File | Lines | What it asserts |
 |---|---|---|
 | `docs/testing/onbox-acceptance-register.md` | `:110-111`, `:175`, `:187` | the `--against-published` / `--discharging` arithmetic, whose "how the IDs will be spelled" branch is entirely renumbering |
+| " | **`:212`** | "a contiguity gap" in the cannot-verify explanation — **named by the spec, dropped by an earlier draft of this plan** |
+| " | **`:277-284`** | the symmetric-comparison incident, whose framing assumes positional IDs — same omission |
 | " | `:3018` | "Row IDs are positional and renumber on discharge" |
 | " | `:3047` | "The cloud row remains (renumbered **C1** …)" |
 | " | `:365-366`, `:378`, `:410`, `:473` | **changelog — historical record, DO NOT rewrite** |
@@ -1286,9 +1447,19 @@ git commit -m "ci(scripts): run the register citation checker on every PR"
 
 - [ ] **Step 1: Rewrite the register's own "Live view" procedure**
 
-`:110-111`, `:175`, `:187`. Under stable IDs the `--discharging`
-counter-instruction is deleted outright: the ID that vanishes **is** the row
-discharged. The flag keeps working unchanged.
+`:110-111`, `:175`, `:187`, `:212`, `:277-284`. Under stable IDs the
+`--discharging` counter-instruction is deleted outright: the ID that vanishes
+**is** the row discharged. The flag keeps working unchanged.
+
+**Watch the enclosing structure, not just the sentence.** `:172-173` introduces
+**two** shapes, and the renumbering bullet at `:174-183` is one of them —
+deleting it collapses "Two shapes" to one, so the lead-in has to move too.
+`:184-186`'s Group F example (Task 6) sits inside that same bullet, so the two
+edits interact; do Task 6's fix first and re-read the paragraph before cutting.
+
+This step also **adds** the publish-token failure class to the same "If it fails"
+tree — Task 10 Step 7 owns the content; this step makes sure it lands in the
+right place in a section this task is otherwise rewriting.
 
 - [ ] **Step 2: Rewrite `:3018` and `:3047`**
 
@@ -1417,16 +1588,44 @@ and merge SHAs.
 | Testing (all eleven bullets) | 8 (5 tests), 10 (11 tests), 11 (migration) |
 | Shipping notes (no on-box row, no release notes) | 7 (step 4), 14 (step 3) |
 
-**One spec claim this plan corrects:** the spec says the token is an HTML
-comment. `stripHtmlComments` at `:641` blanks comments as `checkLiveView`'s first
-action, and the round trip through the artifact platform is unverified — so the
-carrier is settled empirically in Task 1, with `data-published-as` as the
-recommended default. See "Deviation from the spec, decided here".
+## What the assumption-checker pass changed
 
-**One spec figure this plan corrects:** the spec says *four* stale live-view
-callouts describing `A41`/`A44`/`A45`/`A46`. There are **six**, at `:200-267`,
-describing `A44`/`A45`/`A46` and `E10` across counts `65 → 69`. Task 5 uses the
-verified figure.
+The mandatory Premium-tier pass ran against the first draft of this plan and
+found a Critical defect plus six lesser ones. All are folded in above; recorded
+here so a reader knows which parts were *earned* rather than merely written.
+
+| Finding | Disposition |
+|---|---|
+| **The bare counter is fatally wrong** — this plan's own test (`{49,48,47}` → `[]`) contradicted its own implementation (`p != b` → error), reproducing verbatim the multi-publish-per-branch failure that killed the third content rule. | **Spec §2 rewritten.** The counter is now the *fourth* recorded rejected design. The token carries `data-published-by`; `who` is what separates my round-two publish from your competing one. Task 10 rebuilt around it. |
+| `resolveBaselineText` returning `sha` is **not** additive — `:1821`/`:1879`/`:1897`/`:1911`/`:1935` are `assert.deepEqual` on the whole object. **The spec said these move; the plan overrode it wrongly.** | Task 10 Step 4 now says so explicitly; Task 11 Step 3 fixes them. |
+| Task 11 was under-scoped ~10×: `buildRegister` (51 uses) and `buildSingleGroupRegister` (17 uses) both break, the latter collapsing every `#2199`/`#2272` scenario to `CANNOT_VERIFY_BASELINE_ERROR`. | Task 11 rewritten to be **driven by a real test run**, not a line list. |
+| A `null` baseline fell into the bootstrap branch and returned **green**. | `PUBLISH_TOKEN_BASELINE_ERROR`, checked first, matched by identity. |
+| The bootstrap branch is unreachable — PR 1 seeds the token before PR 2 ships the reader. | **Deleted**, and a test pins that a tokenless page against a tokened baseline is *reported*. |
+| Task 12 shipped a workflow with **zero** coverage — `verify-cache.mjs:116` is a glob, `workflow-wiring.test.mjs:22` resolves only `verify.yml`. | Task 12 now creates a contract test; the no-`paths:`-filter assertion is the one worth having. |
+| 4b's suppression on `invalidRowHeadingLetterSet` made a *missing* marker unreportable. | Suppression narrowed to the per-row check only. |
+| `:481`, `:1362` (Task 9) and `:212`, `:277-284` (Task 13) were dropped — the spec named two of them. | Restored. |
+| A behind-`main` live page had a STOP with no clearing procedure. | `--live-page-behind-main`, plus a runbook section (Task 10 Step 7). |
+| "Highest ID cited anywhere is `A46`" — false; `A99` is the citation checker's own sentinel. Floor clears by 2, not ~50. | Corrected in both documents. |
+| Task 3 Step 2's "siblings carry no `num` span" — false; `:1430` is `<span class="num">—</span>`. | Corrected. |
+| Task 5 Step 1 said "delete all six `callout warn` blocks" while keeping one that *is* a `callout warn`. | Re-anchored on opening text, with the trap called out. |
+| Task 8's tests used a `registerFixture` helper that does not exist. | Step 1 now creates it. |
+
+**Confirmed correct under the pass, and worth recording as such:** the
+`parseAllRowHeadings` regex (all 60 group rows plus both Blocked collisions
+matched; `### AMD GPU support Phase 2`, `### A19b`, `### A2.1`, `### Notes`
+correctly rejected; CRLF handled); the `next-id` marker's inertness under today's
+parsers; the all-time high-water figures; the two-PR ordering against the
+retro-application rule; the six-callout count; the Group set `A B C D E G H`; the
+`E6`/`E8` collision table; and `:1420`/`:1423`/`:1069`.
+
+**One spec figure this plan corrected before the pass:** the spec said *four*
+stale live-view callouts. There are **six**, at `:200-267`, describing
+`A44`/`A45`/`A46`/`E10` across counts `65 → 69`. Task 5 uses the verified figure.
+
+**One residual the pass named and the design now owns:** the token's `who` field
+is *trusted, not authenticated*. A lane publishing under another branch's name
+defeats the check. That is accident-detection, not forgery-detection, and it is
+stated in spec §2 as the second boundary rather than left implied.
 
 **Type consistency:** `parseNextIdMarker`, `parseAllRowHeadings`,
 `ALLOCATION_FLOOR`, `parsePublishToken`, `comparePublishTokens`,
