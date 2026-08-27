@@ -20,20 +20,20 @@ Closes the design passes owed by
 
 ## Problem
 
-Four of those five tickets describe one mechanism from four angles, and the
+Four of the five tickets describe one mechanism from four angles, and the
 mechanism is not an accident — it is enforced by a check.
 
 `scripts/check-onbox-register.mjs` check 4 (`:313-327`) fails the build unless
 each group's row numbers are "contiguous from 1". Discharging a row therefore
 cannot leave a gap: every later row in the group must shift down. The register
 holds 60 owed rows across seven groups (`A`=37, `B`=2, `C`=4, `D`=3, `E`=10,
-`G`=2, `H`=2) and discharges several per wave, so each wave rewrites a large
-fraction of the ID space.
+`G`=2, `H`=2) and discharges several per wave.
 
-Row IDs are the register's public interface. They are cited from code comments,
-run sheets, plan docs, `server/.env.example` and GitHub issue bodies. Every one
-of those is a positional reference into a sequence the checker *requires* to be
-rewritten on every discharge.
+Row IDs are the register's public interface. The `row <ID>` idiom alone occurs
+**226 times across 66 files** — code comments, run sheets, plan docs,
+`server/.env.example`, and GitHub issue bodies that no tool in this repo can
+reach. Every one is a positional reference into a sequence the checker
+*requires* to be rewritten on every discharge.
 
 The observed damage:
 
@@ -41,326 +41,358 @@ The observed damage:
   rotted 38 citations across 11 files. Two comments about the catastrophic-WER
   override cited `A37`, which by then named an unrelated ORT-marker row.
 - **#2603** — PR #2578's review loop hit two `origin/main` renumberings inside
-  one PR. Round 21 alone found 26 stale row-number occurrences in a single run
-  sheet, a register-authored "recompute" note written entirely in
-  pre-renumbering IDs, and a row whose own body cited itself.
+  one PR. Round 21 alone found 26 stale row-number occurrences in one run sheet
+  and a row whose own body cited itself.
 - **#2634 / #2653** — the same finding filed twice, three weeks apart. `E6` and
   `E8` each name two rows, because the Blocked section borrows IDs from the
-  Group E sequence that renumbers underneath it. `check-onbox-register.mjs`
-  cannot see it: its duplicate detection covers group *letters*, never row IDs,
-  and the Blocked section's `###` headings are not scanned at all.
-- **#2599** — `--against-published`, the comparator the "Live view" procedure
-  mandates immediately before every publish, compares only the owed total,
-  per-group counts and row IDs. During PR #2578 round 18 the published artifact
-  had been reverted by another session to a stale version of `A41`'s body; the
-  comparator returned `OK` because the count and the ID still matched. The
-  manual byte-diffs in rounds 13-18 did the real verification work.
+  Group E sequence that renumbers underneath it. The checker cannot see it: its
+  duplicate detection covers group *letters*, never row IDs, and the Blocked
+  section's `###` headings are not scanned at all.
+- **#2599** — `--against-published` compares only the owed total, per-group
+  counts and row IDs. During PR #2578 round 18 the published artifact had been
+  reverted by another session to a stale version of `A41`'s body; the comparator
+  returned `OK` because the count and the ID still matched.
 
-**The rot is measurable in the tree today.** `npm run check:register-citations`
-currently reports 16 citations to IDs that no longer exist — `A43`, `A45`, `B3`,
-`F2`, `F3` — across `docs/features/INDEX.md`, four plan/spec documents and the
-`cast-id-drift` run sheet. Each is downgraded to a non-fatal note because a
-discharge annotation sits nearby. They are the visible residue of past waves.
+**The rot is measurable today.** `npm run check:register-citations` reports 16
+citations to IDs that no longer exist — seven distinct IDs (`A38`, `A43`, `A45`,
+`B3`, `B4`, `F2`, `F3`) across eight files, including `docs/features/INDEX.md`,
+four plan/spec documents, and the `cast-id-drift`, `language-recurrence` and
+`onbox-sitting-plan` run sheets. Each is downgraded to a non-fatal note because
+a discharge annotation sits nearby. They are the visible residue of past waves.
 
-**And it is live right now.** The `wt-onbox-wave9` lane holds uncommitted
-register edits discharging `A8`/`A9` and renumbering every Group A row from `A9`
-through `A37` — ~29 rows, `60 owed` → `58 owed`. That lane is doing nothing
-wrong; it is following the rule the checker enforces.
+**And it is live.** The `wt-onbox-wave9` lane holds uncommitted register edits
+discharging `A8`/`A9` and renumbering every Group A row from `A9` through `A37`.
+That lane is doing nothing wrong; it is following the rule the checker enforces.
 
-## What this does not attempt
+## Two designs this spec rejected
 
-- **Generating the live view from the markdown.** The two are deliberately
-  separate authored artifacts — the HTML condenses and rewrites each row's prose
-  rather than mirroring it. Generation is a larger design; nothing here assumes
-  or approaches it.
-- **#2603's title-match check** and **self-reference detection**. See "Ticket
-  disposition" — both are named honestly as not built.
-- **A retired-ID ledger.** The design achieves never-reuse structurally instead;
-  see design 1.
+Recorded because both looked right and both are traps, and a future reader
+will otherwise re-propose them.
+
+**Rejected: freeze in place, seed the next ID at each group's current
+high-water.** Group A's live high-water is `A37`, but Group A has historically
+run to `A48`. Seeding at `A38` re-issues an ID that `onbox-sitting-plan.md:74`
+already uses to mean something else — and *degrades* detection, converting a
+visible nonexistent-ID error into a silent wrong-row resolution.
+
+**Rejected: re-key every group into a never-used range (`A101`…`A137`), then
+freeze.** This closes reuse completely and is blocked three independent ways:
+
+1. **Blast radius.** It rewrites the 226 citation occurrences above — the #2626
+   incident at ~6× scale, in one commit, in the same PR that would stand the
+   citation checker up as a workflow.
+2. **It cannot be published.** In `extraOnly`, `extra = found − expected`
+   (`:844-847`). At the re-key's publish, `found` is the live page's `A1`…`A37`
+   and `expected` is `A101`…`A137`, so **all 60 rows report as BEHIND**, and the
+   `origin/main` filter removes none because `main` still holds the old IDs. The
+   only mechanical escape is `--discharging` naming all 60 — which the
+   register's own runbook (`:155-170`) names as the cardinal sin: *"Padding
+   `--discharging` until the check passes is the exact failure mode this check
+   exists to catch."*
+3. **It launders wrong citations.** The register states at `:3015-3021` that "a
+   given ID has named several different rows over this group's life", so an
+   unknown share of the 226 citations are already wrong but still resolve. A
+   positional old→new map rewrites each into a **permanently frozen** wrong ID,
+   and stable IDs remove the only mechanism that would ever have exposed them.
 
 ## Design
 
-### 1. Stable row IDs, seeded above all history
+### 1. Stable row IDs, with new rows allocated above all history
 
 **A row ID is allocated once and never reused. Discharging deletes the row and
 leaves a gap.**
 
-The naïve version of this — freeze in place, seed the next ID at each group's
-current high-water — is **wrong, and the first draft of this spec got it wrong**.
-Group A's live high-water is `A37`, but Group A has previously run well past it:
-`A38`, `A43` and `A45` are all historically-used IDs that documents in this tree
-still cite. Seeding at `A38` would re-issue an ID that
-`docs/testing/onbox-sitting-plan.md:74` already uses to mean something else —
-and would *degrade detection*, because that citation currently reports as a
-nonexistent ID and would instead resolve silently to the wrong row. Freezing at
-the wrong floor is worse than renumbering.
-
-So: **one final re-key into a range no group has ever used, then frozen
-forever.**
-
-- Every group's rows are renumbered once, in their current order, starting at
-  `101`: Group A becomes `A101`…`A137`, Group B `B101`…`B102`, and so on.
-- Each group carries `<!-- next-id: A138 -->` immediately after its
-  `## Group A — …` heading. Adding a row takes that value and bumps it.
-- **Every ID below 101 is retired by construction** — one documented sentence,
-  no ledger, no archaeology. The all-time high-water of any group is far below
-  100 (Group A's is around `A48`), so the range is provably unused.
-- Historical citations to `A43`, `A45`, `B3`, `F2`, `F3` **stay dangling** and
-  keep reporting as nonexistent IDs. That is the point: they are wrong, and they
-  remain visibly wrong rather than silently resolving to an unrelated row.
+- **Existing rows keep their IDs.** `A1`…`A37`, `B1`…`B2`, and so on are
+  untouched. None of the 226 citations moves.
+- **Each group carries `<!-- next-id: A101 -->`** immediately after its
+  `## Group A — …` heading. New rows are allocated from that value, which is
+  bumped on each allocation.
+- **The floor is `101` for every group**, which is provably above all history.
+  Full git history of the register and its live view — every `### <Letter><N>`
+  heading and `<span class="num">` ever added or removed — gives all-time
+  high-waters of **`A`=48, `B`=5, `C`=4, `D`=3, `E`=11, `F`=1, `G`=2, `H`=2**.
+  The highest ID cited anywhere in the tree is `A46`. Nothing approaches 100.
+- Historical citations to `A38`, `A43`, `A45`, `B3`, `B4`, `F2`, `F3` **stay
+  dangling** and keep reporting as nonexistent. That is the point: they are
+  wrong, and they stay visibly wrong.
 
 Check 4 (contiguity) is deleted. Two checks replace it:
 
 - **4a — uniqueness.** Every `### <Letter><N>` heading in the whole file appears
-  exactly once. This scans outside the `## Group` sections too, which is what
-  would have caught the `E6`/`E8` collision. It changes scan scope only — the
-  Blocked and Unconfirmed sections stay excluded from the owed total and the
-  glance table exactly as today. (The Unconfirmed section is a bullet list, not
-  `###` headings, so it contributes nothing; noted so the scope claim is
-  accurate rather than aspirational.)
+  exactly once, scanning outside the `## Group` sections too. The Unconfirmed
+  section is a bullet list, not `###` headings, so it contributes nothing —
+  stated so the scope claim is accurate rather than aspirational. Blocked and
+  Unconfirmed stay excluded from the owed total and the glance table exactly as
+  today; this changes scan scope only.
 - **4b — allocation floor.** Every row ID in a group must be strictly below that
   group's `next-id`. A group with no marker is an error, not a skip.
 
-The marker is an HTML comment: invisible in rendered markdown, and it needs no
-glance-table column (`parseGlanceTable` requires exactly three cells). It is
-authoring metadata, so the live view does not mirror it and `checkLiveView`
-ignores it — `stripHtmlComments` already runs on the HTML side.
+The marker is an HTML comment. Verified inert against every parser in the file:
+`splitSections` matches `^## `, `parseBodyGroups` matches `^### <Letter>\d`,
+`parseGlanceTable` reads only the glance section, and `stripFences` touches only
+fences. It needs no glance-table column (`parseGlanceTable` requires exactly
+three cells). The live view does not mirror it and `checkLiveView` ignores it.
 
 **Blocked-section rows lose their IDs entirely** (#2653's option 3, #2634's
-option 3). This reverses an earlier draft that continued Group E's sequence into
-the Blocked section. Two independent reasons that was wrong: `E11` is the
-historical ID of what is now `E9` and is cited in several files, so it would
-have been a reuse collision of exactly the kind design 1 exists to prevent; and
-`parseRegisterRows`' own docstring (`check-register-citations.mjs:578-585`)
+option 3). `parseRegisterRows`' own docstring (`check-register-citations.mjs:578-588`)
 states that headings outside a `## Group <Letter>` section are **not collected**,
 so a blocked row's ID was never resolvable by the citation checker anyway.
-Dropping the IDs needs no parser widening, makes all five blocked rows
-consistent with the three that already carry none, and removes the ambiguity at
-source. The two citation sites that reference blocked rows move to citing by
-title in the same diff.
+Dropping them needs no parser widening, makes all five blocked rows consistent
+with the three that already carry none, and removes the ambiguity at source.
+
+**Residual limitation.** 4b prevents allocation *forward* into a used ID and the
+`101` floor prevents collision with the historical overflow. Neither stops an
+author hand-typing a **discharged** `A1`…`A37` ID into a new row: it is below
+`next-id`, and the original row is gone, so uniqueness has nothing to compare
+against. Closing that needs a retired-ID ledger, which contradicts the shipped
+ruling that the register tracks **state, not history**. Documented in the
+checker header alongside its other envelope edges. It is strictly narrower than
+the rejected designs' hole, which covered `A38`…`A48` from day one.
+
+**What 4a is worth, honestly.** Once the Blocked-section IDs are dropped, the
+`E6`/`E8` collision is gone as data, and design 1 removes the convention that
+produced it. 4a is therefore a regression pin against reintroduction, not a
+check that will find something on merge day. It is worth having; it is not
+worth overselling.
 
 ### 2. `--against-published` sees row content (#2599)
 
-An earlier draft proposed comparing the working `.html` against the saved
-published `.html` and reporting a difference in **either** direction. **That is
-wrong and the register already records why**, at `:277-284`:
+Two rules were tried and rejected before this one. **Symmetric comparison**
+(report any difference between the working file and the published page) is what
+the register already records failing, at `:277-284`: *"An early version of this
+check compared both directions symmetrically, which inverted the diagnosis
+(failed on every ordinary publish…)."* A **three-way rule** (silent when
+`published` equals either `baseline` or `working`, report otherwise) fails on
+the second publish from one branch — `baseline = X`, first publish sets
+`published = Y`, review feedback edits `working = Z`, and `Y` equals neither.
+Multi-publish-per-branch is this register's normal review cycle; PR #2578
+published across rounds 13-21.
 
-> An early version of this check compared both directions symmetrically, which
-> inverted the diagnosis (failed on every ordinary publish and told the operator
-> to delete the rows they were about to ship) — fixed before this landed. A
-> later version still fired on every legitimate row discharge…
+**The rule that holds.** For each row, compare normalised body text across three
+texts — `working` (this branch's live-view `.html`), `published` (the saved copy
+of the live page), and `baseline` (`origin/main`'s live-view `.html`):
 
-Editing a row body and then publishing is the single most common thing this
-register does. A symmetric content diff fires on all of it.
+> **Report iff `working == baseline` and `published != baseline`.**
 
-**The fix is a three-way comparison**, reusing the baseline machinery #2199
-already built for exactly this shape of ambiguity. Three texts:
+In words: *a row this branch does not touch has changed on the live page.* That
+is unambiguously someone else's edit or a revert, and it is the only shape that
+is unambiguous without keeping per-branch publish state.
 
-| | |
-|---|---|
-| `working` | the live-view `.html` in this branch |
-| `published` | the saved copy of the page currently at the artifact URL |
-| `baseline` | `origin/main`'s copy of the live-view `.html`, fetched fresh |
+- Every ordinary publish is silent: rows you edited have `working != baseline`,
+  so they are never examined; rows nobody touched have `published == baseline`.
+- Re-publishing from the same branch any number of times is silent, for the same
+  reason.
+- PR #2578's incident reports: the fix had merged, so `baseline` carried it and
+  `working` matched it, while `published` had been reverted.
 
-For each row present in all three, compare normalised body text:
+**Stated boundary, not closed here.** A row this branch *is* editing is not
+covered while under edit — with `working != baseline`, a concurrent revert by
+another session is indistinguishable from this branch's own earlier publish
+without state design 2 does not have. Also uncovered: a published page that
+dropped a **whole row**, which `extraOnly` skips by design and this rule skips
+too. Both are recorded in #2599's close comment rather than implied to be
+covered.
 
-- `published == baseline` → the live page simply has not received your edit yet.
-  **Silent.** This is every ordinary publish.
-- `published == working` → already up to date. **Silent.**
-- `published != baseline` **and** `published != working` → the live page diverges
-  from both the shipped state and your intended state. Something published or
-  reverted it outside this branch. **Report**, naming the row and showing all
-  three texts.
+**Mechanics — this is not "reuse", and an earlier draft wrongly said it was.**
 
-PR #2578's incident lands in the third case: `baseline` carried the merged fix,
-`published` had been reverted to the pre-fix body, `working` had the fix. It is
-reported. An ordinary publish lands in the first case and stays silent.
-
-Mechanics:
-
+- `--against-published` **never reads the tracked live-view HTML today**:
+  `const liveViewHtml = read(LIVE_VIEW)` sits at `:1423`, *after* that mode's
+  `return` at `:1420`. The "working" side of the comparison does not exist in
+  that code path.
+- So `checkLiveView` gains two new inputs (`workingHtml`, `baselineHtml`), and
+  the CLI layer gains a baseline-HTML read.
+- **One fetch, two reads.** The existing baseline resolution deliberately reads
+  `FETCH_HEAD`, not `origin/main` (`:1023-1040`, per #2199 round 3 — a narrowed
+  refspec can leave `origin/main` stale while the fetch still exits 0). The
+  live-view baseline is read from **the same `FETCH_HEAD`**, in the same
+  invocation, so the register baseline and the HTML baseline cannot come from
+  different commits. Two independent fetches would allow exactly that.
+- `resolveBaselineGroups` gates the register baseline through `checkRegister`.
+  There is no equivalent trust gate for an HTML baseline, so design 2 defines
+  one: the baseline HTML must parse into rows at all, and fail closed —
+  `CANNOT_VERIFY` — if it does not.
 - Rows are keyed by `<span class="num">` **within each `<details class="item">`
   block**. `parseLiveViewSections` collects `num` spans with a flat
   section-level regex and never associates one with a body, so this needs a new
-  per-`<details>` parser rather than reuse of that function — an earlier draft
-  claimed reuse and was wrong.
+  per-`<details>` parser.
 - The parser must cover the `BLK` and `?` sections, which `parseLiveViewSections`
-  skips via its `gtag` filter. Without that, the content check would silently
-  cover 60 of 67 rows. Since blocked rows lose their IDs under design 1, those
-  sections are keyed by heading text instead.
-- Normalise before comparing: decode entities, strip tags, collapse whitespace.
-  Formatting-only differences are not findings.
-- The summary strip rides the same three-way rule. A count-changing publish moves
-  the strip in `working` but leaves `published == baseline`, so it stays silent;
-  a strip that diverges from both is reported.
-- Extraction failure is an error, never a skip — the rule the rest of
-  `checkLiveView` already follows.
-
-**Stated hole, not closed here.** A published page that *dropped a row entirely*
-is still invisible: tracked-only rows are the normal pre-publish state and are
-skipped by design in `extraOnly`, and "present in all three" skips them too.
-Design 2 catches body-text divergence, which is the PR #2578 shape; a whole-row
-revert remains uncovered. Closing it needs the same three-way rule applied to
-row *presence*, which interacts with `--discharging` in ways this design has not
-worked through. It is recorded here rather than implied to be covered.
+  skips via its `gtag` filter; without that the check would silently cover 60 of
+  the live view's 67 rows. Since blocked rows lose their IDs under design 1,
+  those sections are keyed by **heading text** — which is prose and changes on a
+  retitle, silently dropping the row from comparison. Named as a known
+  fragility, confined to the five blocked rows and two unconfirmed entries.
+- The summary strip follows the same rule and the same normalisation.
+- Extraction failure is an error, never a skip.
 
 ### 3. Wire the citation checker (#2603)
 
 `check-register-citations.mjs` shipped in #2630, and its own header (`:12-36`)
 states the gap: `check:register-citations` is invoked from exactly one place —
-its own CLI tests under `npm run test:hooks`, a step scope-gated to
-`docs/testing/**`, the register, `CLAUDE.md` and `scripts/**`. Rot in
-`docs/features/**`, `src/**`, `server/**` or `e2e/**` is caught only when some
-in-scope file happens to change too. The header also rules out widening
-`test:hooks`' inputs: the checker reads essentially every tracked file, so
-declaring that would make the step un-cacheable for everyone.
+its own CLI tests under `npm run test:hooks`, scope-gated to `docs/testing/**`,
+the register, `CLAUDE.md` and `scripts/**`. Rot in `docs/features/**`, `src/**`,
+`server/**` or `e2e/**` is caught only when some in-scope file happens to change
+too. The header rules out widening `test:hooks`' inputs: the checker reads
+essentially every tracked file, which would make the step un-cacheable.
 
 A dedicated `.github/workflows/register-citations-check.yml`, **no path filter**
 — the checker's inputs are the whole tree, so no path filter can be correct.
 
-**It is added to `main`'s required status checks.** #2629's option 3 is "catches
-rot at PR time", and the model this mirrors,
-`.github/workflows/onbox-register-check.yml`, says in its own comment (`:5-8`)
-that it is *not* required — which is exactly why it can afford a path filter. A
-non-required always-run check is visible, not enforcing. The tree is green on
-this checker today (16 annotated notes, zero fatal findings), so requiring it
-does not block anything currently open. **This is a repository ruleset change
-that cannot be made from a PR** — it is an explicit hand-off step, listed in the
-implementation plan, not something the merge accomplishes on its own.
+**It is NOT added to `main`'s required status checks.** An earlier draft said it
+should be; that was wrong, for a reason specific to stable IDs. The checker's
+verdict is a property of the **whole tree**, not of the PR under test. Under
+stable IDs every discharge permanently deletes an ID, so a wave PR that
+discharges a row cited from a dozen files and misses an annotation would turn
+the check red **for every open PR in the repo**, on files none of them touched.
+Today that same miss is silent — which is the rot, but it does not stop the
+world. Always-run and visible is the right first step; promoting it to required
+is a separate decision to take once the tree has lived under stable IDs for a
+few waves, and it belongs in its own issue rather than being smuggled in here.
 
 Adding a workflow also touches `scripts/tests/workflow-wiring.test.mjs` and
-`verify-cache.mjs`'s `.github/workflows/**` glob; both move in the same diff.
+`verify-cache.mjs`'s `.github/workflows/**` glob (`:116`); both move in the same
+diff.
 
 ### 4. The update mechanics
 
-The register's own procedural prose is part of the deliverable. The
-renumbering invariant is asserted in far more places than an earlier draft
-claimed, and the implementation plan carries the full inventory rather than a
-sample. It spans, at minimum:
+The register's own procedural prose is part of the deliverable. The renumbering
+invariant is asserted in more places than a first draft assumed. The
+implementation plan carries the full inventory, generated mechanically rather
+than sampled; it spans at minimum:
 
 - `check-onbox-register.mjs` — `formatRowList`'s contiguous-range collapse
-  (`:171-183`); the `stripFences` residual-limitation comment, which is phrased
-  *in terms of* check 4 (`:44-49`); operator-facing error strings at `:247` and
-  `:811`; four further comment/error sites at `:577-579`, `:963-967`, `:1362`,
-  `:1385-1389`, including the `--discharging` unconsumed-name error that
-  instructs the operator to name the group's highest ID.
+  (`:171-183`); the `stripFences` residual-limitation comment, phrased *in terms
+  of* check 4 (`:44-49`); operator-facing error strings at `:247` and `:811`;
+  four further sites at `:577-579`, `:963-967`, `:1362`, `:1385-1389`, including
+  the `--discharging` unconsumed-name error that instructs the operator to name
+  the group's highest ID.
 - `scripts/tests/check-onbox-register.test.mjs` — two direct check-4 tests, six
-  verbatim assertions of the "numbered contiguously" string, one assertion that
-  goes vacuous, the #2199 discharge-and-renumber scenario, and
-  `buildAheadBaselineText`/`computeMaxRowNumber` (see "Testing").
-- `check-register-citations.mjs` — its entire stated premise (`:1-10`,
-  "…renumbers every later row"), plus `:40-52`, `:355-372`, `:392-417`,
-  `:621-630`, `:1742-1747`.
+  verbatim "numbered contiguously" assertions, one assertion that goes vacuous,
+  the #2199 discharge-and-renumber scenario, and `computeMaxRowNumber`
+  (`:2058-2071`) / `buildAheadBaselineText` (`:2102`).
+- `check-register-citations.mjs` — its stated premise (`:1-10`, "…renumbers every
+  later row"), plus `:40-52`, `:355-372`, `:392-417`, `:621-630`, `:1742-1747`.
 - `docs/testing/onbox-acceptance-register.md` — "Live view" step 2's
-  `--discharging` guidance, the ~45 lines of two-shape arithmetic at `:152-198`
-  whose "how the IDs will be spelled" branch is entirely renumbering, `:212`,
-  `:277-284`, the changelog at `:356-477`, and `:3015-3021`, `:3047-3049`.
+  `--discharging` guidance, the two-shape arithmetic at `:152-198` whose "how the
+  IDs will be spelled" branch is entirely renumbering, `:212`, `:277-284`, the
+  changelog at `:356-477`, `:3015-3021`, `:3047-3049`.
 - `CLAUDE.md:745` — Before-shipping step 3 states the wrinkle inline.
 - Nine run sheets / sitting packs and five feature docs narrate the invariant.
 
 Under stable IDs the `--discharging` counter-instruction ("the ID that vanishes
-is the group's highest, not the row you conceptually removed") is simply
-deleted: the ID that vanishes *is* the row that was discharged. The flag keeps
-working.
+is the group's highest, not the row you conceptually removed") is deleted: the
+ID that vanishes *is* the row discharged. The flag keeps working.
 
 **Incidental fix, same diff:** `:184-186` cites "Group F's sole row, F1" as "a
-real, live example of exactly this shape". There is no Group F in the glance
-table. The passage is being rewritten anyway.
+real, live example of exactly this shape". Group F was discharged; there is no
+Group F in the glance table.
+
+**Surface this design cannot reach:** GitHub issue bodies. `:3047-3049` records
+a live instance — the Group C cloud row "was C3 before 2026-08-06 and is
+referenced under that ID in #1685". Issue bodies are not in `git ls-files`, so
+no checker sees them. Stable IDs stop *new* rot there; existing rot stays.
 
 ## Delivery: two PRs, and the rule that forces it
 
-`resolveBaselineGroups` (`check-onbox-register.mjs:501-516`) rejects the baseline
-outright if `checkRegister(baselineText)` reports **anything** — and the baseline
-is `origin/main`'s register, read through the *new* checker. So:
+`resolveBaselineGroups` (`:501-516`) rejects the baseline outright if
+`checkRegister(baselineText)` reports **anything** — and the baseline is
+`origin/main`'s register, read through the *new* checker. So:
 
 > **Any tightening of `checkRegister` is retro-applied to `origin/main`'s copy.
-> A guard therefore cannot land in the same PR as the data it requires**, or
-> `--against-published` fails with `CANNOT_VERIFY_BASELINE_ERROR` and the
-> register's own runbook (`:210-220`) says that can only be fixed from `main`.
+> A guard cannot land in the same PR as the data it requires**, or
+> `--against-published` fails with `CANNOT_VERIFY_BASELINE_ERROR`, and the
+> runbook (`:210-220`) says that can only be fixed from `main`.
 
 This is a general rule about this codebase, not a quirk of this change, and it
 belongs in the checker's header comment.
 
-The re-key cannot land under today's checker either — `A101`…`A137` is not
-contiguous from 1. So the split is data-then-guard, with the data chosen so each
-half is green under the checker in force at the time:
+**PR 1 — data only.** Adds the `next-id` markers, drops the Blocked-section row
+IDs, fixes the Group F sentence, and moves the one blocked-row citation to cite
+by title. All green under *today's* checker: markers are inert, contiguity is
+untouched, the Blocked section is unscanned. Publishes normally.
 
-**PR 1 — data only.** Adds the `next-id` markers (seeded at their post-re-key
-values, e.g. `A138`), drops the Blocked-section row IDs, fixes the Group F
-sentence, moves the two blocked-row citations to cite by title. Every one of
-these passes *today's* checker: markers are inert comments, contiguity is
-untouched, and the Blocked section is unscanned. Publishes normally.
+The marker's comment text carries its own caveat — *allocate from this value
+only once the contiguity check is gone* — because between PR 1 and PR 2 the
+marker names an ID today's check 4 would reject. That is a knob landing ahead of
+its wiring; the caveat is what keeps it from being a trap if PR 2 slips.
 
-**PR 2 — the re-key and the guards.** Renumbers every group to `101`+, deletes
-check 4, adds 4a/4b, adds design 2's three-way content check, adds the workflow,
-and sweeps the prose inventory in design 4. Its baseline is PR 1's `main`, which
-under the *new* checker passes: no duplicate IDs, markers present,
-`A1`…`A37` all below `A138`, and no contiguity requirement left to fail.
+**The one-line hazard in PR 1.** Two textually identical citations exist:
+`docs/features/269-ffmpeg-version-floor.md:215` means the **blocked** ffmpeg row
+and must change; `docs/features/270-openapi-setup-surface.md:166` means the
+**live** `E6` (venv-bootstrap, plan 270) and must not. Only the surrounding plan
+number disambiguates them, and **nothing mechanical verifies either way** — `E6`
+exists regardless, so Check A stays silent and a features-doc prose citation is
+outside Check C's fatal surface. Both lines are named here so the plan can call
+for a human read rather than a grep-and-replace.
+
+**PR 2 — the guards.** Deletes check 4, adds 4a/4b, adds design 2's rule and its
+parser, adds the workflow, sweeps the design-4 inventory. Its baseline is PR 1's
+`main`, which under the new checker passes: no duplicate IDs, markers present,
+every ID below `A101`, no contiguity requirement left to fail.
 
 ## Sequencing against wave 9
 
 Wave 9 merges first; this design assumes it. That lane's diff is written and
 this one has a plan, a review gate and two publishes ahead of it. Wave 9 sweeps
-its own ~29 rows of rot under the current rules, as any wave PR does today — and
-is the last wave that ever pays that cost.
+its own rot under the current rules, as any wave PR does today — and is the last
+wave that ever pays that cost.
 
 **No row number in this branch may be hardcoded from today's register.** Group
-sizes, the re-key ranges and every `next-id` value are computed at rebase time
-from the register as it then stands. The `101` floor is fixed; what maps into it
-is not. Tests fixture their own registers rather than asserting against the real
-file's numbering.
+sizes and any ID named in a test fixture are computed at rebase time. The `101`
+floor is fixed and safe regardless of what wave 9 does, since it renumbers
+downward. Tests fixture their own registers rather than asserting against the
+real file's numbering.
 
 ## Ticket disposition
 
 | Issue | Outcome |
 |---|---|
-| **#2599** | Closed by design 2, with the whole-row-revert hole stated in the issue's close comment rather than left implied. |
-| **#2603** | Closed by design 3 — **without** its title-match option and **without** self-reference detection. The latter is structurally impossible in the shipped checker: the register's own path is in `FROZEN_EXACT` (`check-register-citations.mjs:386`), so its body is never scanned. Both omissions go in the close comment. Its non-renumbering damage (the "five states vs eight states" drift) is untouched by this work; an earlier draft claimed its "entire why-this-matters is renumbering damage", which was not accurate. |
-| **#2629** | Closed by design 1 + design 3. Not "option 2" — that is a per-row slug field, which this declines. Stable positional IDs are a fourth option; the close comment says so rather than claiming an option the issue did not offer. |
+| **#2599** | Closed by design 2. The close comment names both uncovered shapes: a row under edit by this branch, and a whole-row drop on the published page. |
+| **#2603** | Closed by design 3 — **without** its title-match option and **without** self-reference detection. The latter is structurally impossible in the shipped checker: the register's own path is in `FROZEN_EXACT` (`:386`), so its body is never scanned. Its non-renumbering damage (the "five states vs eight states" drift) is untouched by this work. All three omissions go in the close comment. |
+| **#2629** | Closed by design 1 + design 3. Not its "option 2" — that is a per-row slug field, which this declines. Stable positional IDs are a fourth option; the close comment says so rather than claiming an option the issue did not offer. |
 | **#2634** | Closed as a **duplicate of #2653**, honouring its "add a uniqueness check" instruction via 4a. |
 | **#2653** | Closed by design 1 via its **option 3** (drop blocked IDs), plus the paired uniqueness check. |
+| *new* | An issue for "promote `register-citations-check` to a required status check", to be decided after a few waves under stable IDs. |
 
 ## Testing
 
 `scripts/tests/check-onbox-register.test.mjs`:
 
-- a group with gaps (`A104, A106, A107`) passes — regression test for the deleted
-  check 4, red before the change;
+- a group with gaps passes — regression test for the deleted check 4, red before;
 - a row ID duplicated across sections fails — the #2634/#2653 repro, red before;
 - a row ID at or above its group's `next-id` fails;
 - a group with **no** `next-id` marker fails, so a missing marker cannot silently
   disable 4b;
-- the three-way content check: `published == baseline` with a differing `working`
-  stays **green** (the ordinary-publish regression test — this is the assertion
-  that would have caught the symmetric-comparison mistake);
-- `published` differing from both `working` and `baseline` is reported — the
-  #2599 repro, red before;
-- a formatting-only difference (whitespace, entity encoding) stays green;
-- a strip divergent from both is reported.
+- **`working != baseline` with any `published` stays green** — the
+  ordinary-publish and the re-publish regression tests, and the assertions that
+  would have caught both rejected rules;
+- `working == baseline` with `published != baseline` is reported — the #2599
+  repro, red before;
+- a formatting-only difference stays green;
+- a strip difference follows the same rule;
+- an unparseable baseline HTML fails closed rather than passing vacuously.
 
-**Five existing real-tree CLI tests must move.** `computeMaxRowNumber`
-(`:2058-2071`) and `buildAheadBaselineText` (`:2092-2101`), consumed at `:2209`,
-`:2333`, `:2360`, `:2517`, `:2600`, each derive `high-water + 1` as "an ID that
-does not exist yet" and append it to a baseline that must pass `checkRegister`.
-Under 4b that synthesised ID must sit **below** `next-id`, not above the
-high-water — otherwise all five flip to `CANNOT_VERIFY`. The re-key leaves a
-wide unused band inside each group's range, so the helper picks from there. This
-is named explicitly because the tempting repair — loosening the fixture — is how
-the floor gets quietly weakened.
+**Five existing real-tree CLI tests must move.** `computeMaxRowNumber` and
+`buildAheadBaselineText`, consumed at `:2209`, `:2333`, `:2360`, `:2517`,
+`:2600`, each derive `high-water + 1` as "an ID that does not exist yet" and
+append it to a baseline that must pass `checkRegister`. Under 4b that ID must
+sit **below** `next-id`. With existing rows at `A1`…`A37` and the floor at
+`A101`, `high-water + 1` = `A38` already satisfies that — but the helper must
+say so deliberately rather than by luck, because the tempting repair when it
+does break is to loosen the fixture, which is how the floor gets quietly
+weakened.
 
 `scripts/tests/check-register-citations.test.mjs`: a citation to a gapped
-(discharged) ID still follows Check A's annotated/unannotated split. Gaps are now
-the normal state, so this pins that the shipped behaviour survives.
+(discharged) ID still follows Check A's annotated/unannotated split.
 
-Real-tree verification: `npm run check:onbox-register` and
-`npm run check:register-citations` both green (the latter meaning zero fatal
-findings; the 16 pre-existing annotated notes are expected and unchanged).
+Real-tree: `npm run check:onbox-register` and `npm run check:register-citations`
+both green — the latter meaning zero fatal findings, with the 16 pre-existing
+annotated notes expected and unchanged.
 
 ## Shipping notes
 
-- **No new on-box acceptance row.** This ships no behaviour only real hardware
-  can prove. Both PRs move register surfaces and must publish per the standing
-  procedure — PR 2's publish is the first exercise of design 2.
+- **No new on-box acceptance row.** No behaviour here needs real hardware. Both
+  PRs move register surfaces and publish per the standing procedure; PR 2's
+  publish is the first real exercise of design 2 (real, not vacuous — the row
+  IDs on both sides match).
 - **No release-notes entry.** CI/tooling and process only, no user- or
   operator-visible delta. Stated rather than silently skipped.
-- **One manual hand-off:** adding `register-citations-check` to `main`'s required
-  status checks is a ruleset change no PR can make.
