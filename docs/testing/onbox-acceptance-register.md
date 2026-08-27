@@ -353,7 +353,8 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, still **A12**.
 
-> **Last change: 2026-08-27 (on-box wave 8), 61 → 60.** One row fully discharged and
+> **Last change: 2026-08-27 (on-box wave 8), 61 → 60; then 60 → 61 via PR #2688,
+> adding row A38 (#2059's audible effect, not yet run).** One row fully discharged and
 > dropped: **old A34** (respawn-budget deadline timer, Scenario 2) — with a chapter's
 > sidecar killed and a manually-started, unowned bare sidecar left listening on the
 > TTS port, restarting the server with `SIDECAR_NEVER_ADOPT=1` produced the exact
@@ -2924,9 +2925,9 @@ open shape as A32's leading-dash-to-ellipsis case.
 
 *Needs:* a Coqui-capable sidecar with XTTS resident, a Russian line (no
 clone needed — the stock catalogue voice `Damien Black` reproduces this
-shape). *Criteria:* see [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
-for the dialogue shapes to test. *Cost:* short — one or two renders of a
-Russian test sentence.
+shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
+itself has only this one dialogue shape and no separate run sheet (unlike
+A32's). *Cost:* short — one or two renders of a Russian test sentence.
 
 ## Group B — local Ollama analyzer only
 
