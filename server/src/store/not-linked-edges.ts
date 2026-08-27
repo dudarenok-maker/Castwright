@@ -80,20 +80,37 @@ export function clearNotLinkedEdgesForDroppedRejectionsLocked(
 
 /** Locked half — takes its own `withCastLock` for `bookDir`. See the file
  *  header's MODULE CONTRACT for the precondition this exists to satisfy: the
- *  caller must NOT already hold the cast lock for `bookDir`. */
+ *  caller must NOT already hold the cast lock for `bookDir`.
+ *
+ *  #2694 — returns the payload actually written (so the caller can advance
+ *  its `CastMergeBase` via `noteExternalWrite`), or `null` when nothing was
+ *  written (unchanged, or the empty-cast early return). This is a FRESH-READ
+ *  read-through-write — see the `#2694 residual` comment on the read below —
+ *  so the returned payload is this call's own view of the file, not
+ *  necessarily a merge of every write since the run started; the caller
+ *  advances its baseline to match exactly what landed on disk here. */
 export async function clearNotLinkedEdgesForDroppedRejections(
   bookDir: string,
   bookId: string,
   dropped: ReadonlyArray<{ from: string; to: string }>,
-): Promise<void> {
+): Promise<{ characters: CharacterOutput[] } | null> {
   try {
-    await withCastLock(bookDir, async () => {
+    return await withCastLock(bookDir, async () => {
+      /* #2694 residual — this is a FRESH read, not a continuation of any
+         earlier read in this run. A genuine foreign write landing after this
+         run's last `noteExternalWrite`/`writeChecked` advance but BEFORE this
+         read is absorbed into the read rather than detected: no data is
+         lost (the fresh read preserves whatever that write left), but that
+         one foreign write goes unreported. Strictly better than the false
+         positive this ticket fixes, and not worth widening scope to close —
+         see #2694's "Known residual" for the accepted trade. */
       const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
-      if (!cast?.characters?.length) return;
+      if (!cast?.characters?.length) return null;
       const changed = clearNotLinkedEdgesForDroppedRejectionsLocked(cast.characters, bookId, dropped);
-      if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: cast.characters });
-      }
+      if (!changed) return null;
+      const payload = { ...cast, characters: cast.characters };
+      await writeJsonAtomic(castJsonPath(bookDir), payload);
+      return payload;
     });
   } catch (err) {
     /* #2260 round 2 — the file header's "best-effort" contract is scoped to a
@@ -109,5 +126,6 @@ export async function clearNotLinkedEdgesForDroppedRejections(
       '[not-linked-edges] failed to clear a dropped-rejection notLinkedTo edge (non-fatal)',
       err,
     );
+    return null;
   }
 }

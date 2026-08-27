@@ -7,7 +7,21 @@
    write, so every multi-chapter book would report a conflict from chapter 2
    onward with zero concurrent writers — a detector firing on ~100% of runs,
    which destroys both deliverables at once (the frequency data becomes noise,
-   and the user learns to ignore the advisory). See design §3a. */
+   and the user learns to ignore the advisory). See design §3a.
+
+   #2694 — THE INVARIANT: any write by THIS run, through ANY path, must
+   advance this baseline. `writeChecked` is not the only writer a run has —
+   `clearNotLinkedEdgesForDroppedRejections` (store/not-linked-edges.ts) and
+   `reconcileRejectEdgesOnDisk` (routes/analysis.ts) both do their own
+   read-through-write against cast.json, outside `writeChecked`, because they
+   already hold the cast lock themselves and routing them through
+   `writeChecked`'s own `withCastLock` would violate cast-lock rule 1 (a
+   locked function calling another locked function on the same book). Left
+   unadvanced, the run's own out-of-band write desyncs the baseline from disk,
+   and the next `writeChecked` reports a foreign conflict that never
+   happened. `noteExternalWrite` is the seam these two writers call after
+   their own write lands — see its own doc comment above, and the call sites
+   in analysis.ts's `recordRetirements` / `reconcileRejectEdgesOnDisk`. */
 import { withCastLock } from './cast-lock.js';
 import { castJsonPath } from './paths.js';
 import { writeJsonAtomic } from './state-io.js';
@@ -35,6 +49,15 @@ export interface CastMergeBase {
       INSIDE the same hold as the delete. No-op when detection is disabled — a
       null baseline is never advanced. */
   markDeleted(): void;
+  /** #2694 — advance the baseline for a write THIS RUN made through a path
+      other than `writeChecked` (e.g. `clearNotLinkedEdgesForDroppedRejections`'s
+      own read-through-write). Only ever call this for the run's OWN write —
+      never to record a third party's write, which is exactly the conflict
+      this baseline exists to detect. Takes no lock and does no I/O: it only
+      mutates run state, so it's safe to call after the caller's own
+      `withCastLock` hold has already released. No-op when the baseline is
+      `null` — same rule as every other advance in this file. */
+  noteExternalWrite(payload: unknown): void;
   /** Compare-and-set write. Takes the cast lock itself, so it must NOT be
       called from inside one (cast-lock rule 1). The read, the comparison, the
       write and the baseline advance all happen in ONE hold (rule 2). */
@@ -71,6 +94,10 @@ export function createCastMergeBase(
     markDeleted() {
       if (baseline === null) return;
       baseline = ABSENT;
+    },
+    noteExternalWrite(payload) {
+      if (baseline === null) return;
+      baseline = fingerprintOfWrite(payload);
     },
     async writeChecked(payload, onConflict) {
       /* #2165 — resolved ONCE per call, before the lock is taken, so the lock

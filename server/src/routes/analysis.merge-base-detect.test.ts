@@ -37,6 +37,7 @@ import type {
 import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, castReuseCarryoverJsonPath } from '../workspace/paths.js';
+import { rejectOrphanedPair, castIdHistoryPath } from '../store/cast-id-history.js';
 
 /* Same three hoisted mocks analysis.test.ts / analysis.fresh-cast-lock.test.ts
    need — runMainAnalyzerJob/runSubsetAnalyzerJob must never touch a real
@@ -224,7 +225,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
     ];
   }
 
-  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+  function registerManuscript(manuscriptId: string, bookDir: string, bookId?: string): ChapterHint[] {
     const chapterHints = buildStubChapters();
     putManuscript({
       manuscriptId,
@@ -236,6 +237,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
       sourceText: chapterHints.map((c) => c.body).join('\n\n'),
       chapterHints,
       bookDir,
+      ...(bookId ? { bookId } : {}),
     });
     return chapterHints;
   }
@@ -742,6 +744,162 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
           false,
         );
 
+        expect(warningCodes(events)).toEqual(['cast_merge_base_stale']);
+      } finally {
+        await teardown(manuscriptId, bookDir, originalRetries);
+      }
+    },
+    30_000,
+  );
+
+  /* #2694 — the run's OWN out-of-band writers (`clearNotLinkedEdgesForDroppedRejections`
+     via `recordRetirements`, `reconcileRejectEdgesOnDisk`) desynchronise the
+     baseline when they write cast.json without advancing it, and the NEXT
+     `writeChecked` then reports a foreign conflict that never happened.
+     #2185's existing negative controls above (1/2/4/6) pass VACUOUSLY against
+     this bug — none of their fixtures ever drives a dropped-self-loop
+     rejection, so none of them ever reaches `clearNotLinkedEdgesForDroppedRejections`'s
+     write at all. This fixture is built specifically to reach it:
+
+       - 'anton' and 'anton_dup' share a name, so `dedupePriorCastByName`
+         folds 'anton_dup' into 'anton' and reports retirement
+         {from:'anton_dup', to:'anton'} — recorded by the INTERIM
+         `recordRetirements` call, well before any `writeChecked` runs.
+       - cast-id-history.json is pre-seeded (via `rejectOrphanedPair`) with
+         rejectedPair {from:'anton', to:'anton_dup'} — a prior "anton is not
+         anton_dup" decision. Repointing THAT pair through the retirement
+         above collides `to` back onto `from` ('anton' -> 'anton'), a dropped
+         self-loop (mirrors cast-id-history.test.ts's M2 test).
+       - 'olga' carries a `notLinkedTo` edge naming 'anton' for this book, so
+         `clearNotLinkedEdgesForDroppedRejections` has a real edge to clear —
+         a genuine read-modify-write of cast.json, entirely this run's own,
+         through a path that (pre-fix) never told the baseline about it. */
+  function seedSelfLoopDropFixture(bookDir: string, bookId: string): void {
+    seedCastJson(bookDir, [
+      { id: 'anton', name: 'Anton', role: 'lead', color: '#111111' },
+      { id: 'anton_dup', name: 'Anton', role: 'lead', color: '#222222' },
+      {
+        id: 'olga',
+        name: 'Olga',
+        role: 'lead',
+        color: '#333333',
+        notLinkedTo: [{ bookId, characterId: 'anton' }],
+      },
+    ]);
+  }
+
+  function readCastIdHistoryRejectedPairs(
+    bookDir: string,
+  ): Array<{ from: string; to: string }> {
+    const history = JSON.parse(readFileSync(castIdHistoryPath(bookDir), 'utf8')) as {
+      rejectedPairs?: Array<{ from: string; to: string }>;
+    };
+    return history.rejectedPairs ?? [];
+  }
+
+  it(
+    /* The regression test proper. Red before tasks 1-4 (recorded verbatim in
+       the PR body): the interim `recordRetirements` call folds 'anton_dup'
+       into 'anton', drops the self-loop rejectedPair, and
+       `clearNotLinkedEdgesForDroppedRejections` clears olga's stale edge —
+       a real write the pre-fix baseline never learns about, so the next
+       `writeChecked` (the 'stage1' write) reports a phantom
+       `cast_merge_base_stale`. Green after: `noteExternalWrite` advances the
+       baseline to match, so nothing downstream reports a conflict. */
+    "control 8 — an uncontended run whose OWN dropped-self-loop cleanup emits ZERO stale warnings (route-level, main)",
+    async () => {
+      const manuscriptId = `test-merge-base-selfloop-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const bookId = 'b_merge_base_detect_test';
+      const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedSelfLoopDropFixture(bookDir, bookId);
+        await rejectOrphanedPair(bookDir, 'anton', 'anton_dup');
+        registerManuscript(manuscriptId, bookDir, bookId);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        /* Fix round 1 reasoning applied here too — a zero-warnings assertion
+           is vacuous unless the fixture actually reached the dropped-
+           self-loop write. Confirm the self-loop rejectedPair really was
+           dropped (proves `recordRetirements` -> `retireCharacterId` ->
+           `clearNotLinkedEdgesForDroppedRejections` all fired), THEN assert
+           on the outcome that matters. */
+        expect(readCastIdHistoryRejectedPairs(bookDir)).toEqual([]);
+        expect(warningCodes(events)).toEqual([]);
+        assertRunWroteRoster(bookDir);
+      } finally {
+        await teardown(manuscriptId, bookDir, originalRetries);
+      }
+    },
+    30_000,
+  );
+
+  it(
+    /* The symmetric positive control the brief requires: without it, "zero
+       advisories" from control 8 would be equally satisfiable by a fix that
+       broke detection outright (e.g. `noteExternalWrite` unconditionally
+       swallowing every write regardless of provenance). A GENUINE foreign
+       write, injected the same way control 3 does, must still be reported —
+       exactly once — even in a run that ALSO takes the self-loop-drop path
+       above. */
+    "control 9 — a genuine foreign write alongside a self-loop-drop cleanup still reports EXACTLY one stale warning (route-level, main)",
+    async () => {
+      const manuscriptId = `test-merge-base-selfloop-foreign-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const bookId = 'b_merge_base_detect_test';
+      const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedSelfLoopDropFixture(bookDir, bookId);
+        await rejectOrphanedPair(bookDir, 'anton', 'anton_dup');
+        registerManuscript(manuscriptId, bookDir, bookId);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        // Same injection point + reasoning as control 3: lands strictly
+        // between this run's own 'stage1' write and its 'final' write.
+        let injected = false;
+        const phase1Selection = buildSelection(
+          buildPhase1Analyzer(() => {
+            if (!injected) {
+              injected = true;
+              seedCastJson(bookDir, [{ id: 'foreign' }]);
+            }
+          }),
+          'phase1-model',
+        );
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        expect(readCastIdHistoryRejectedPairs(bookDir)).toEqual([]);
         expect(warningCodes(events)).toEqual(['cast_merge_base_stale']);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
