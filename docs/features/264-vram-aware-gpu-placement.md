@@ -355,21 +355,37 @@ single statement of that ruling so the question is not reopened.
 `evictEngineForPhase` (`server/src/tts/synthesise-chapter.ts:1015`) POSTs
 `/unload` to the sidecar for a named engine. The Coqui-facing wrappers are
 `evictCoquiForQwenPhase` (`:1049`) and the symmetric `evictQwenForCoquiPhase`
-(`:1029`). The leading evict fires at `:2920` before a mixed chapter's Coqui
-phase; the trailing evict fires at `:2987` at its end.
+(`:1029`). 
 
-It is driven by the **generation plan** — Node knows which engine each
-remaining chapter needs, so it can free the VRAM at a boundary where "no
-further Coqui work is queued" is a *fact* rather than a prediction. Each call
-is bounded by `withCallTimeout` and carries the chapter's abort signal. Both
-evicts are deliberately **fail-soft** on non-abort errors: socket errors and
-timeouts are logged as warnings and execution continues. The leading evict
-additionally rethrows abort signals for pause detection (`routes/generation.ts`
-names its own `AbortError`); the trailing evict swallows aborts too, since by
-the time it fires the chapter's synthesis work is already complete. This
-asymmetry is correct: the trailing evict's abort swallow does not lose
-synthesised work (all groups are done), while the leading evict's abort rethrow
-ensures a paused generation is visible to the pause-detection path.
+The eviction wrappers have **four call sites**, not two:
+
+1. **Pre-pass pair (memoised, demand-driven):** `beforeFirstCoquiDerive`
+   (`:1882-1899`) evicts `evictQwenForCoquiPhase` before the first Coqui derive
+   in the chapter; `beforeFirstQwenDerive` (`:1943-1953`) evicts
+   `evictCoquiForQwenPhase` before the first Qwen derive (when Coqui is present).
+   These are called from *inside* voice-resolver try/catch blocks
+   (`clone-voice-resolver.ts`), so they inherit the resolver's own fail-loud
+   (cloned voices) / fail-soft (designed voices) semantics — **no local
+   try/catch wraps them, by design.**
+
+2. **Render-phase pair (top-level, plan-driven):** The leading evict fires at
+   `:2920` before a mixed chapter's Coqui phase; the trailing evict fires at
+   `:2988` at its end. Each call is bounded by `withCallTimeout` and carries
+   the chapter's abort signal.
+
+The render-phase pair is driven by the **generation plan** — Node knows which
+engine each remaining chapter needs, so it can free the VRAM at a boundary
+where "no further Coqui work is queued" is a *fact* rather than a prediction
+(this scope applies to the **render-phase pair only**, not the pre-pass pair,
+which is memoised and runs *before* any derive). The render-phase evicts are
+deliberately **fail-soft** on non-abort errors: socket errors and timeouts are
+logged as warnings and execution continues. The leading evict additionally
+rethrows abort signals for pause detection (`routes/generation.ts` names its
+own `AbortError`); the trailing evict swallows aborts too, since by the time it
+fires the chapter's synthesis work is already complete. This asymmetry is
+correct: the trailing evict's abort swallow does not lose synthesised work (all
+groups are done), while the leading evict's abort rethrow ensures a paused
+generation is visible to the pause-detection path.
 
 ### Mechanism B — sidecar, demand-driven, reactive
 
@@ -420,15 +436,33 @@ outside the current book's render.
 
 ### Lock caveats — invariants any future change must preserve
 
-1. **Mechanism A's timeout and abort.** Each `/unload` call is bounded by
-   `withCallTimeout` and carries the chapter's abort signal. Both evicts must
-   remain fail-soft on transient errors (socket errors, timeouts are logged as
-   warnings and execution continues), but they differ on aborts: the leading
-   evict rethrows `AbortError` for pause detection (`routes/generation.ts`
-   names its own `AbortError`), while the trailing evict swallows abort signals
-   too since by that point all synthesis work is done. The trailing evict
-   cannot lose synthesised audio by failing, and the leading evict must signal
-   a pause through its abort path if the generation is cancelled mid-evict.
+1. **Mechanism A's failure semantics differ by call site.**
+   
+   - **Render-phase pair (bounded by `withCallTimeout`, fail-soft):** Each
+     `/unload` call carries the chapter's abort signal. Both evicts must remain
+     fail-soft on transient errors (socket errors, timeouts are logged as
+     warnings and execution continues). They differ on aborts: the leading
+     evict rethrows `AbortError` for pause detection (`routes/generation.ts`
+     names its own `AbortError`), while the trailing evict swallows abort
+     signals too since by that point all synthesis work is done. The trailing
+     evict cannot lose synthesised audio by failing, and the leading evict must
+     signal a pause through its abort path if the generation is cancelled
+     mid-evict.
+   
+   - **Pre-pass pair (memoised, resolver-dependent):** `beforeFirstCoquiDerive`
+     and `beforeFirstQwenDerive` are called from *inside* voice-resolver
+     try/catch blocks in `clone-voice-resolver.ts`, with no separate local
+     try/catch wrapping them. A failure is therefore reported through the
+     resolver's own existing, already-differentiated policy: the cloned
+     resolver's catch treats it as an ordinary derive failure (fail-loud —
+     `broken` accumulates, `UnresolvableClonedVoiceError` still throws), while
+     the designed resolver's catch treats it as an ordinary self-heal failure
+     (fail-soft — `softFailedUuids`/keep-stale, never rethrown). This
+     voice-type-dependent semantics is intentional and must be preserved: a
+     pre-pass evict failure on a cloned voice is unrecoverable (the cloned
+     resolver's own identity depends on that model running), while a failure
+     on a designed voice can be healed by keeping the stale version. Any future
+     change to the pre-pass evicts must maintain this asymmetry.
 
 2. **Mechanism B's lock-guarded idle check.** `maybe_free_idle`
    (`server/tts-sidecar/main.py:2273`) re-validates the idle condition under
@@ -444,8 +478,15 @@ outside the current book's render.
    `server/tts-sidecar/main.py:2273`) acquire the lock, call
    `_drop_model_locked()` inside it, then release the lock and call
    `_reclaim_after_drop()` afterwards. This sequence is critical: releasing
-   the lock BEFORE reclaim allows a concurrent forward to complete its own
-   reference-drop, which is essential for the actual VRAM reclamation to work.
+   the lock BEFORE reclaim is necessary for throughput — holding `_synth_lock`
+   across the multi-second `gc.collect()` + `torch.cuda.empty_cache()` in
+   `_reclaim_after_drop()` would unnecessarily block concurrent synth calls that
+   only need the lock briefly, for no correctness benefit (the reference-drop
+   whose safety depends on the lock is guaranteed by ACQUIRING it, not
+   releasing it — `_synth_lock` waits for any in-flight forward to finish and
+   release its own reference before `_drop_model_locked()` runs). See
+   `_reclaim_after_drop()`'s docstring at `server/tts-sidecar/main.py:2127-2134`
+   for the full rationale.
    Any future internal caller must follow the same acquire-drop-release-reclaim
    sequence; any future code that nulls or reassigns a model field must mirror
    `_drop_model_locked()`'s full teardown (including the device restoration
