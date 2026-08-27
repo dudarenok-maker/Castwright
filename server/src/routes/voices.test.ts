@@ -2236,7 +2236,6 @@ describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
   const VETO_SERIES = 'The Amber Coast';
   const VETO_BOOK_ONE = 'First Light';
   const VETO_BOOK_TWO = 'Second Light';
-  let bookOneDir: string;
   let bookTwoDir: string;
 
   function seedVetoBooks(bookOneCloned: boolean, bookTwoCloned: boolean) {
@@ -2249,7 +2248,7 @@ describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
       },
       { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
     ];
-    bookOneDir = writeBookOnDisk(
+    writeBookOnDisk(
       workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_ONE, 'book-veto-one',
       charFor(bookOneCloned),
     );
