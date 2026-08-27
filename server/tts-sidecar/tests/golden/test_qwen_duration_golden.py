@@ -133,8 +133,7 @@ def test_qwen_golden_lengths_match_baseline():
 
 
 def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
-    """Record each fixture line's fresh duration into qwen-duration-baseline.json,
-    and derive a real tolerance from the observed spread.
+    """Record each fixture line's fresh duration into qwen-duration-baseline.json.
 
     No `bless_guard` here — that guard is specific to the transcript-content
     check Kokoro's `_bless` also does, which this file does not have. Qwen
@@ -145,12 +144,11 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
     The placeholder `tolerance` in the committed baseline (0.10) is a safe interim
     — measured real-world spread is 6.7% — widened to stay comfortably above that
     with headroom for run-to-run variance until the on-box measurement (#1994)
-    is complete. On first bless, `_compute_tolerance` derives a real measurement-
-    based tolerance from the recorded entries.
+    is complete. Real tolerance derivation from an actual N-repeat on-box measurement
+    remains register row A38's owed acceptance work.
     """
     baseline = _load_json(BASELINE_PATH)
     entries: dict = {}
-    sample_counts: list[int] = []
 
     # Use synthesise_or_skip only for the first line (warm-up) — if that fails,
     # the engine is absent and we skip. Any later failure is a real regression.
@@ -161,7 +159,6 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
             res = engine.synthesize(QWEN_MODEL, voice, line["text"])
 
         m = measure_pcm(res.pcm, res.sample_rate)
-        sample_counts.append(m["sample_count"])
         entries[line["id"]] = {
             "voice": voice,
             "sample_rate": m["sample_rate"],
@@ -169,25 +166,12 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
             "duration_sec": round(m["duration_sec"], 4),
         }
 
-    # Derive a tolerance from the observed spread: max % deviation from mean.
+    # Record entries with static placeholder tolerance — do not auto-compute.
     baseline["entries"] = entries
-    baseline["tolerance"] = round(_compute_tolerance(sample_counts), 4)
+    baseline["tolerance"] = 0.10
     with open(BASELINE_PATH, "w", encoding="utf-8") as f:
         json.dump(baseline, f, indent=2)
         f.write("\n")
-
-
-def _compute_tolerance(sample_counts: list[int]) -> float:
-    """Derive a relative tolerance from observed sample-count spread.
-
-    Returns the maximum % deviation from the mean, with 25% headroom for
-    run-to-run variance not captured by this single blessing run."""
-    if not sample_counts or len(sample_counts) < 2:
-        return 0.10  # placeholder when N=1 or empty (should not happen)
-    mean = sum(sample_counts) / len(sample_counts)
-    max_deviation = max(abs(sc - mean) / mean for sc in sample_counts)
-    # Add 25% headroom to the observed spread for future run-to-run variance.
-    return min(0.25, max_deviation * 1.25)
 
 
 # #2696: there used to be a `test_qwen_is_deterministic_in_length` here,
