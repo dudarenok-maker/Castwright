@@ -3229,6 +3229,62 @@ class KokoroEngine(Engine):
             pass
         return kokoro
 
+    def _cuda_selftest_or_warn(self, session: Any, build_providers: list[str]) -> None:
+        """Castwright#2709: real-session CUDA self-test, modeled on
+        `_directml_selftest_or_fallback` above -- same "inspect the session
+        that's already been built" idiom, warn-and-continue severity (never
+        raise, never rebuild). Rides the load `_ensure_loaded` is already
+        doing; does not trigger any additional load of its own, and must
+        never be called from `_run_device_probe`/`_start_device_probe` (that
+        would force every box to eagerly load Kokoro's weights even with
+        PRELOAD_KOKORO=0, the documented default).
+
+        `build_providers` is the exact provider list THIS load just built the
+        session with (reused, not re-derived, matching `_ensure_loaded`'s own
+        "no second decision" discipline elsewhere in this method)."""
+        global _cuda_verification_state
+        if "CUDAExecutionProvider" not in build_providers:
+            # CUDA wasn't requested for this load -- not applicable, not a
+            # failure. Leave verified=None rather than manufacturing a
+            # confident answer to a question that wasn't asked.
+            _cuda_verification_state = {
+                "checked": True,
+                "verified": None,
+                "detail": "CUDA was not requested for this load.",
+            }
+            return
+        try:
+            actual_providers = list(session.get_providers())
+        except Exception as e:
+            _cuda_verification_state = {
+                "checked": True,
+                "verified": None,
+                "detail": f"Could not read the real session's providers ({e}).",
+            }
+            return
+        landed_on_cpu = (
+            actual_providers[:1] == ["CPUExecutionProvider"]
+        )
+        if landed_on_cpu:
+            detail = (
+                "Kokoro CUDA self-test: CUDAExecutionProvider was requested "
+                "and reported available, but the real session landed on "
+                "CPUExecutionProvider -- Kokoro is running on CPU. "
+                "See Castwright#2582."
+            )
+            log.warning(detail)
+            _cuda_verification_state = {
+                "checked": True,
+                "verified": False,
+                "detail": detail,
+            }
+        else:
+            _cuda_verification_state = {
+                "checked": True,
+                "verified": True,
+                "detail": None,
+            }
+
     def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
         if self._kokoro is not None:
             return
@@ -3387,6 +3443,7 @@ class KokoroEngine(Engine):
                 session_kwargs["provider_options"] = provider_options
             session = rt.InferenceSession(self._model_path, **session_kwargs)
             kokoro = Kokoro.from_session(session, self._voices_path)
+            self._cuda_selftest_or_warn(session, build_providers)
             if provider_options is not None:
                 log.info(
                     "Kokoro pinned to %s via provider device_id (session built once).",
@@ -9573,6 +9630,20 @@ def _qwen_install_state(qwen_loaded: bool) -> str:
 _device_probe: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen": None}
 _device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
 
+# Castwright#2709: real-session CUDA self-test result, distinct from
+# `_device_probe` (an availability-only prediction made at startup, before
+# any real session exists). Populated the first time `_ensure_loaded`
+# actually constructs a Kokoro session that requested CUDA (first real synth
+# call, or PRELOAD_KOKORO=1's eager preload) -- never by the background
+# device probe, which must not force an eager load. `checked=False`/
+# `verified=None` is the expected, honest steady-state on a box that never
+# triggers a Kokoro load.
+_cuda_verification_state: dict[str, Any] = {
+    "checked": False,
+    "verified": None,
+    "detail": None,
+}
+
 
 def _torch_is_hip(torch_module: Any) -> bool:
     """True when torch is a ROCm/HIP build (torch.version.hip set). On AMD the
@@ -10005,6 +10076,12 @@ def health() -> dict[str, Any]:
         "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
+        # Castwright#2709: real-session CUDA self-test result (distinct from
+        # `devices`/`gpus`, which are availability predictions or per-request
+        # `stale_reason` badges) -- None/None until the first real Kokoro
+        # load actually requests CUDA.
+        "cuda_verified": _cuda_verification_state["verified"],
+        "cuda_verification_detail": _cuda_verification_state["detail"],
         # `poison_reason` (raw exception text) is deliberately NOT surfaced here —
         # it would leak a stack-trace fragment to any /health caller (CodeQL
         # py/stack-trace-exposure). The trigger lives in the server-side log +

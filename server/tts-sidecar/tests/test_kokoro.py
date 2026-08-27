@@ -598,6 +598,129 @@ def test_kokoro_default_config_admitted_cuda_landing_on_cpu_flags_fell_back(
         assert card["fell_back"] is True
 
 
+def test_cuda_selftest_flags_silent_fallback_and_warns(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """Castwright#2709: the real-session CUDA self-test that rides
+    `_ensure_loaded`'s own session construction. Modeled directly on
+    `test_kokoro_default_config_admitted_cuda_landing_on_cpu_flags_fell_back`
+    above (same fake session/kokoro shapes) — CUDA was requested and reported
+    available, but the real session's `get_providers()` comes back CPU-only.
+    `_cuda_verification_state` must record verified=False and a real
+    `log.warning` must fire (not just "no exception was raised")."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)  # the shipped default
+
+    class _CpuOnlySession:
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    class _SilentFallbackKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CpuOnlySession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _SilentFallbackKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is False
+        assert "CUDAExecutionProvider was requested" in main._cuda_verification_state["detail"]
+        assert any(
+            "CUDAExecutionProvider was requested" in rec.message
+            for rec in caplog.records
+        ), f"expected a CUDA self-test warning, got: {[r.message for r in caplog.records]}"
+
+
+def test_cuda_selftest_verified_true_when_cuda_actually_lands_no_warning(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """Success path counterpart: the real session's first provider IS
+    CUDAExecutionProvider, so the self-test must record verified=True and
+    must NOT log a warning."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _CudaSession:
+        def get_providers(self):
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    class _CudaLandingKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CudaSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _CudaLandingKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is True
+        assert main._cuda_verification_state["detail"] is None
+        assert not any(
+            "CUDA self-test" in rec.message for rec in caplog.records
+        )
+
+
 def test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back(
     fake_weight_files, monkeypatch
 ) -> None:
