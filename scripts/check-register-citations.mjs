@@ -34,7 +34,7 @@
 // CI step (mirroring `onbox-register-check.yml`) that always runs this
 // checker regardless of diff scope — a genuine design decision (schedule,
 // gating, whether it belongs in `verify.yml` or its own workflow), not
-// something to wire in blind here; tracked at `#2629`.
+// something to wire in blind here; tracked at `#2721`.
 //
 // Three checks, ordered by precision (least to most likely to need
 // judgment):
@@ -207,7 +207,7 @@
 //      `wrongId`, because the discriminator between the two branches is
 //      "does the register still know this subject at all", and a discharge
 //      answers no. Widening `wrongId` to that class is deliberately deferred
-//      (see #2629) rather than attempted here, since the two live
+//      (see #2721) rather than attempted here, since the two live
 //      `unknownSubject` residuals on this corpus are legitimately benign and
 //      a naive widening would false-positive on them.
 //

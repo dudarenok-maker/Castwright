@@ -320,17 +320,25 @@ setup rather than repeatedly loading and evicting models.
 > been used before, even one whose row is long gone** — a discharged or
 > removed row's ID stays retired forever. Re-minting a retired ID silently
 > re-points every existing citation to it at the *old* row, which is exactly
-> the failure this stable-ID design exists to end. **No check fails on it.**
-> This register's own checker only verifies uniqueness and the allocation
+> the failure this stable-ID design exists to end. **This register's own
+> checker never catches it** — it only verifies uniqueness and the allocation
 > floor, not history, so a re-minted ID looks identical to a fresh one. And
-> `check-register-citations.mjs` does not close the gap either: a citation
-> whose subject has left the register entirely lands in Check C's
-> `unknownSubject` bucket, which is opt-in behind `--strict` and never fatal
-> — deliberately, and deferred under #2629. The discriminator is whether the
-> register still knows the citation's original subject at all: if it does,
-> under some other ID, Check C's fatal half fires — that is the renumbering
-> class this design abolishes; if the subject is gone entirely, which is what
-> a discharge means, nothing fatal fires. The rule above is the only guard.
+> `check-register-citations.mjs` does not close the gap reliably either, and
+> can make things worse when it fires: Check C's fatal `wrongId` half only
+> triggers when the stale citation sits on one of its two surfaces (an
+> anchored `### <ID> · …` heading or a `Criteria source:` line) with the
+> subject on that *same* line, **and** the subject still owns at least one
+> other live row — a subject can span several rows (e.g. `#2040` →
+> A22/A23/A34), so discharging just one of them leaves the subject in the
+> map, and re-minting that row's old ID trips `wrongId` on the survivors'
+> citations. Discharge a subject's *last* row and nothing fatal fires; a
+> prose-idiom `row A22` citation fires nothing either way, since Check C
+> doesn't read that surface at all. Widening `wrongId` to catch the
+> last-row-discharge case too is deliberately deferred (see #2721). **You
+> cannot rely on a check to stop you.** If `wrongId` does fire after a
+> re-mint, the fix is to undo the re-mint — never to edit the cited heading
+> to match the new ID, which is exactly the corruption this design exists to
+> prevent. The rule above is the only guard.
 
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were
