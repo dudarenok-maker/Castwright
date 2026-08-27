@@ -151,6 +151,12 @@ function externalFilesFloor(): string[] {
 }
 
 const EXTERNAL_FILES_FLOOR = externalFilesFloor();
+/* Belt-and-suspenders: externalFilesFloor()'s content filter runs CALL_RE.test()
+   in a loop, which parks lastIndex at a nonzero offset after the last match.
+   Reset here so no later caller of CALL_RE inherits leftover state from the
+   floor-building phase — scanFile() resets on entry too, but a shared g-flagged
+   regex must never be trusted to arrive clean. */
+CALL_RE.lastIndex = 0;
 
 /* install-ort.mjs (#2192) made the ONNX-runtime swap load-bearing on the boot,
    bootstrap AND upgrade paths, but it's just one file — the next pip-spawning
@@ -356,6 +362,11 @@ function extractCallArgs(src: string, openParenIdx: number): string {
    `windowsHide: true`. Returns repo-relative `path:line — name(...)` offenders. */
 function scanFile(file: string, re: RegExp): string[] {
   const offenders: string[] = [];
+  /* Reset lastIndex before matchAll — a g-flagged regex shared across calls
+     may carry leftover state from an earlier .test() or .exec() (e.g. from
+     externalFilesFloor()'s content-filter), which would make matchAll start
+     scanning partway through the source and silently miss real violations. */
+  re.lastIndex = 0;
   const src = blankCommentsAndStrings(readFileSync(file, 'utf8'));
   for (const match of src.matchAll(re)) {
     const name = match[0].replace(/\s*\($/, '').trim();
