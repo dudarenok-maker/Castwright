@@ -1102,10 +1102,11 @@ export function ProfileDrawer({
     if (
       !isRedesign &&
       (character.overrideTtsVoices?.qwen?.provenance === 'cloned' ||
-        character.overrideTtsVoices?.coqui?.provenance === 'cloned')
+        character.overrideTtsVoices?.coqui?.provenance === 'cloned' ||
+        character.clonedElsewhereInSeries === true)
     ) {
       setEngineError(
-        `"${character.name}" already has a cloned voice and cannot be designed on Qwen without silently retargeting it off that clone.`,
+        `"${character.name}" is linked to a cloned voice somewhere in this series and cannot be designed on Qwen without silently retargeting it off that clone.`,
       );
       return;
     }

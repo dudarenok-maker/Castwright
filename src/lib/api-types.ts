@@ -4466,23 +4466,6 @@ export interface components {
                 };
             } | null;
             /**
-             * @description True when a consented cloned voice exists on some OTHER linked
-             *     character in this book's series — false or absent when the only
-             *     clone (if any) is this book's own copy (already exposed via
-             *     overrideTtsVoices.*.provenance) or there is none. Excludes the
-             *     caller's own book deliberately, to avoid a redundant "double
-             *     true" when both this book and a sibling are independently
-             *     cloned. A UX convenience for the two frontend clone gates
-             *     (profile-drawer.tsx, emotion-variant-designer.tsx) — the
-             *     backend's own series-wide checks (#2006) are what actually
-             *     enforce consent; a stale value here degrades to "the button is
-             *     offered when it shouldn't be," never to "the write happens when
-             *     it shouldn't." Computed fresh on every GET — see book-state.ts's
-             *     write-path normalisers for why it must never be accepted back
-             *     from a client PUT.
-             */
-            clonedElsewhereInSeries?: boolean;
-            /**
              * @deprecated
              * @description DEPRECATED: superseded by `overrideTtsVoices` (plural) for
              *     multi-engine support. Server-side reads still accept this
@@ -5049,6 +5032,23 @@ export interface components {
                     };
                 };
             } | null;
+            /**
+             * @description True when a consented cloned voice exists on some OTHER linked
+             *     character in this book's series — false or absent when the only
+             *     clone (if any) is this book's own copy (already exposed via
+             *     overrideTtsVoices.*.provenance) or there is none. Excludes the
+             *     caller's own book deliberately, to avoid a redundant "double
+             *     true" when both this book and a sibling are independently
+             *     cloned. A UX convenience for the two frontend clone gates
+             *     (profile-drawer.tsx, emotion-variant-designer.tsx) — the
+             *     backend's own series-wide checks (#2006) are what actually
+             *     enforce consent; a stale value here degrades to "the button is
+             *     offered when it shouldn't be," never to "the write happens when
+             *     it shouldn't." Computed fresh on every GET — see book-state.ts's
+             *     write-path normalisers for why it must never be accepted back
+             *     from a client PUT.
+             */
+            clonedElsewhereInSeries?: boolean;
             evidence?: {
                 quote?: string;
                 note?: string;

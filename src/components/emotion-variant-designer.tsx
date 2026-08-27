@@ -124,12 +124,14 @@ export function EmotionVariantDesigner({
      which is why the old `!baseDesigned`-only gate let them through. */
   const cloned =
     character.overrideTtsVoices?.qwen?.provenance === 'cloned' ||
-    character.overrideTtsVoices?.coqui?.provenance === 'cloned';
+    character.overrideTtsVoices?.coqui?.provenance === 'cloned' ||
+    character.clonedElsewhereInSeries === true;
   if (cloned) {
     return (
       <p data-testid="variant-cloned-hint" className="text-xs text-ink/50 mt-2">
-        {character.name} uses a cloned voice, so emotion variants are unavailable — they are
-        only offered for a designed voice. Assign a designed voice to add them.
+        {character.name} is linked to a cloned voice somewhere in this series, so emotion
+        variants are unavailable — they are only offered for a designed voice. Remove the clone
+        from every linked book to add them.
       </p>
     );
   }

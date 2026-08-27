@@ -176,6 +176,26 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       expect(screen.queryByTestId('variant-cloned-hint')).toBeNull();
       expect(screen.getByTestId('variant-designer')).toBeTruthy();
     });
+
+    it('replaces the designer with an actionable hint when clonedElsewhereInSeries is true, even with no book-local clone', () => {
+      const clonedElsewhere = { id: 'lyra', name: 'Lyra', attributes: [], clonedElsewhereInSeries: true };
+      const store = makeStore([clonedElsewhere]);
+      render(
+        <Provider store={store}>
+          <EmotionVariantDesigner
+            bookId="b1"
+            character={clonedElsewhere as never}
+            sampleVoiceId="v1"
+            modelKey="qwen3-tts-0.6b"
+            baseDesigned
+            variants={undefined}
+          />
+        </Provider>,
+      );
+      const hint = screen.getByTestId('variant-cloned-hint');
+      expect(hint.textContent).toMatch(/cloned voice/i);
+      expect(screen.queryByTestId('variant-designer')).toBeNull();
+    });
   });
 
   it('shows "Designed" (not a Design button) for an already-designed variant', () => {
