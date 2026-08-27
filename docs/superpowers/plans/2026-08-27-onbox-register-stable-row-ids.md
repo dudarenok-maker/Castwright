@@ -6,6 +6,15 @@
 
 **Architecture:** Row IDs become allocate-once/never-reuse: existing rows keep their IDs, each group gains a `next-id` allocation marker with a floor of `101`, the contiguity check that *forced* renumbering is deleted, and uniqueness + allocation-floor checks replace it. Separately, `--against-published` stops trying to diff row content and instead carries a publish token — a counter for ordering, plus a **per-publish nonce whose presence in git history** decides whether the live page came out of your branch. Five designs were rejected on the way here (three content rules, a bare counter, and a branch name as identity); §2 of the spec records each and why it failed, and **none of them should be re-proposed**. Delivered as **two PRs**, data before guards, because of the retro-application rule in "Global Constraints".
 
+> **Delivery split (decided 2026-08-27).** The two halves are independent and
+> ship separately. **Track A — stable row IDs** (Tasks 2, 3, 5, 6, 7 as PR 1;
+> Tasks 8, 9, 11, 13 as PR 2) closes #2629, #2634 and #2653, and is unaffected
+> by all four assumption-checker passes. **Track B — the publish token and the
+> citation workflow** (Tasks 1, 4, 10, 10b, 12, 14) covers #2599 and #2603 and
+> is held until its comparator survives a review pass against *executed* code.
+> Track A does not depend on Track B at any point: PR 1 publishes with the
+> pre-existing comparator, exactly as every publish does today.
+
 **Tech Stack:** Node 24 ESM (`scripts/*.mjs`), `node:test` + `node:assert` (`scripts/tests/*.test.mjs`, run via `npm run test:hooks`), GitHub Actions, hand-authored HTML.
 
 **Spec:** [`docs/superpowers/specs/2026-08-27-onbox-register-stable-row-ids-design.md`](../specs/2026-08-27-onbox-register-stable-row-ids-design.md)
@@ -80,7 +89,7 @@ Every task's requirements implicitly include this section.
 | File | Responsibility | PR |
 |---|---|---|
 | `docs/testing/onbox-acceptance-register.md` | The register. Gains 7 `next-id` markers; Blocked headings lose their IDs; Group F sentence fixed; renumbering prose swept. | 1 (data), 2 (prose) |
-| `docs/testing/onbox-acceptance-register-live-view.html` | The published twin. Gains the publish token; `BLK` section loses its two IDs; six stale changelog callouts collapse to one. | 1 |
+| `docs/testing/onbox-acceptance-register-live-view.html` | The published twin. `BLK` section loses its two IDs; six stale changelog callouts collapse to one. (The publish token is Track B, Task 4 — **not** PR 1.) | 1 |
 | `scripts/check-onbox-register.mjs` | The checker. Loses check 4; gains 4a/4b and the publish-token compare-and-swap. | 2 |
 | `scripts/tests/check-onbox-register.test.mjs` | Its tests. Check-4 tests replaced; fixture helpers taught the floor. | 2 |
 | `scripts/check-register-citations.mjs` | Citation checker. Header premise corrected. | 2 |
@@ -138,7 +147,7 @@ with `npm run check:onbox-register` after every task.
 
 ---
 
-### Task 1: Settle the publish-token carrier
+### Task 1 (TRACK B — held): Settle the publish-token carrier
 
 **Files:**
 - Create: `<scratchpad>/token-carrier-probe.html` (throwaway, never committed)
@@ -403,7 +412,7 @@ git commit -m "fix(docs): drop Blocked-section row IDs that collided with live G
 
 ---
 
-### Task 4: Add the publish token to the live view
+### Task 4 (TRACK B — held): Add the publish token to the live view
 
 **Files:**
 - Modify: `docs/testing/onbox-acceptance-register-live-view.html`
@@ -585,7 +594,7 @@ git commit -m "fix(docs): correct the discharged-Group-F example and the blocked
 **Files:** none modified.
 
 **Interfaces:**
-- Consumes: Tasks 2-6.
+- Consumes: Tasks 2, 3, 5, 6. (**Not** Task 4 — the publish token is Track B.)
 - Produces: a merged `main` whose register passes the *new* checker, which is
   PR 2's baseline precondition (constraint 1).
 
@@ -941,7 +950,7 @@ git commit -m "chore(scripts): sweep contiguity-era guidance out of the register
 
 ---
 
-### Task 10: Publish-nonce ancestry check in `--against-published`
+### Task 10 (TRACK B — held): Publish-nonce ancestry check in `--against-published`
 
 **Files:**
 - Modify: `scripts/check-onbox-register.mjs` — `resolveBaselineText` (`:1060-1075`),
@@ -1348,7 +1357,7 @@ git commit -m "feat(scripts): detect a competing publish via a git-verified publ
 
 ---
 
-### Task 10b: `stamp-publish-token.mjs` — stop hand-maintaining the identity
+### Task 10b (TRACK B — held): `stamp-publish-token.mjs` — stop hand-maintaining the identity
 
 **Files:**
 - Create: `scripts/stamp-publish-token.mjs`
@@ -1579,7 +1588,7 @@ git commit -m "test(scripts): migrate the register checker suite onto stable row
 
 ---
 
-### Task 12: Stand the citation checker up as a workflow
+### Task 12 (TRACK B — held): Stand the citation checker up as a workflow
 
 **Files:**
 - Create: `.github/workflows/register-citations-check.yml`
@@ -1771,6 +1780,14 @@ git commit -m "docs(docs): retire the register renumbering invariant from the pr
 ### Task 14: Ship PR 2 and close the tickets
 
 **Files:** none modified.
+
+> **Scoping under the Track A/B split.** This task was written when one PR 2
+> shipped both halves. For **Track A's** PR 2 (Tasks 8, 9, 11, 13): skip Step 2
+> entirely (the live view is untouched and there is no token), the Step 3 body
+> carries `Closes #2629` with `Refs #2599` and `Refs #2603`, Step 4 drops to
+> depth `medium` (single-scope `scripts`), and Step 5 uses only the **#2629**
+> row of the table. Steps 6, 7 and 8 apply as written. The **#2599** and
+> **#2603** rows, and Step 2, belong to Track B and travel with it.
 
 - [ ] **Step 1: Run the branch battery**
 
