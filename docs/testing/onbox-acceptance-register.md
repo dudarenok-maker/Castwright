@@ -353,10 +353,26 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+> **Last change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
+> two ffmpeg rows no longer carry row IDs. They had borrowed **E6** and **E8** from
+> the live Group E sequence, so each of those IDs named *two* rows — one live Group
+> E row and one Blocked row — and Group E renumbers underneath the Blocked section
+> whenever a row is discharged, so the pairing drifted silently. Both Blocked
+> headings now carry their title alone (`ops-35 ffmpeg floor`, `ops-36
+> golden-assembly`), matching the section's other three rows, and the live view
+> renders their `num` cells as `—`. **Cite them by title from now on** — one
+> features-doc citation was re-pointed in the same change. Nothing was renumbered,
+> renamed or discharged. Also added: a per-group `<!-- next-id: <Letter>101 -->`
+> allocation marker, inert until the contiguity check is replaced
+> ([#2629](https://github.com/dudarenok-maker/Castwright/issues/2629)) — do not
+> allocate from it yet; Group A's marker carries the same caveat inline.
+> ([#2634](https://github.com/dudarenok-maker/Castwright/issues/2634),
+> [#2653](https://github.com/dudarenok-maker/Castwright/issues/2653))
+
+> **Previous change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
 > audible effect, not yet run).
 
-> **Previous change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
+> **Prior change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
 > **Old A34** (voice reassignment vs. persisted audition centroid, #1969/PR #2402)
 > had two criteria: (1) a reassignment discards the stale old-voice reference
 > rather than silently reusing it; (2) a rebuilt reference — not a failed-to-build
