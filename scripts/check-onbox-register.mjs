@@ -388,8 +388,11 @@ export function checkRegister(text) {
   }
 
   // Check 4b: every row ID sits strictly below its group's allocation marker,
-  // and the marker is at or above the floor. Together these stop a new row
-  // being given an ID that a discharged row already used.
+  // and the marker is at or above the floor. Together these keep FORWARD
+  // allocation honest — an ID minted from the marker is one no row has held.
+  // They do NOT stop someone hand-typing a discharged row's old ID back in:
+  // that ID is below the marker, so it passes. See the residual limitation in
+  // this file's header for why that is deliberate.
   for (const section of sections) {
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!titleMatch) continue;
