@@ -134,10 +134,22 @@ describe('softenDashes', () => {
       expect(softenDashes('— Привет, — сказал Антон.')).toBe('... Привет, сказал Антон.');
     });
 
-    it('does not over-collapse a single comma adjacent to a dash run', () => {
-      /* A lone comma before a dash run must produce exactly one comma in
-         the output — the collapse step must not fire on a single `,`. */
+    it('collapses the doubled comma when a single comma precedes a dash run', () => {
+      /* When a single comma sits immediately before a dash run, the DASH_RUN
+         substitution produces a doubled comma: "a, — b" → "a,, b". The collapse
+         step must fire to fold the doubled comma into a single ", ". This is a
+         positive test of the collapse mechanism, not a guard against over-collapse. */
       expect(softenDashes('a, — b')).toBe('a, b');
+    });
+
+    it('collapses any doubled comma, even when no dash is involved', () => {
+      /* The comma-collapse regex has no dash-awareness — it simply replaces any
+         run of commas (with optional whitespace between them) with a single
+         comma-space. This documents the actual behavior: doubled commas from
+         ANY source (dash-produced or literal) are collapsed the same way. */
+      expect(softenDashes('a,, b')).toBe('a, b');
+      expect(softenDashes('a,,b')).toBe('a, b');
+      expect(softenDashes('a, ,b')).toBe('a, b');
     });
 
     it('collapses 3 consecutive commas to a single comma in one pass (#2688 regression)', () => {
