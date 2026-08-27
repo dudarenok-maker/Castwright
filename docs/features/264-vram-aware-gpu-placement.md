@@ -340,6 +340,103 @@ cold-load, Coqui load-steer) are tracked together in **#1730**.
 > acceptance (with `SEG_CAPACITY_ADMISSION=1`) still owed before the
 > concurrent-multi-card flag flip.
 
+## Coqui residency policy (side-18)
+
+<!-- COQUI-RESIDENCY-POLICY -->
+
+Two independent mechanisms free VRAM held by a resident Coqui XTTS model (~3.5 GB).
+Both are correct, both are tested, and neither knows the other exists. The fork
+#1932 offered — collapse to one, or keep both with explicit cross-references —
+is **closed: both are kept**, for the two reasons below. This section is the
+single statement of that ruling so the question is not reopened.
+
+### Mechanism A — Node, plan-driven, proactive
+
+`evictEngineForPhase` (`server/src/tts/synthesise-chapter.ts:1015`) POSTs
+`/unload` to the sidecar for a named engine. The Coqui-facing wrappers are
+`evictCoquiForQwenPhase` (`:1041`) and the symmetric `evictQwenForCoquiPhase`
+(`:1029`). The leading evict fires at `:2912` before a mixed chapter's Coqui
+phase; the trailing evict fires at `:2976` at its end.
+
+It is driven by the **generation plan** — Node knows which engine each
+remaining chapter needs, so it can free the VRAM at a boundary where "no
+further Coqui work is queued" is a *fact* rather than a prediction. Each call
+is bounded by `withCallTimeout` and carries the chapter's abort signal. The
+trailing evict is deliberately **fail-soft** — every group is already
+synthesised by then, so throwing would destroy completed work purely to free
+VRAM. The leading one is not fail-soft.
+
+### Mechanism B — sidecar, demand-driven, reactive
+
+`_idle_evict_steps` (`server/tts-sidecar/main.py:5019-5048`) is a
+**five-step, cross-engine ladder** — `spk`, `asr`, `qwen.design`,
+`qwen.base17`, `coqui` — run by `PlacementController` on the admission path
+when an op is VRAM-starved. Coqui is *one step of it* (`:5047`), calling
+`CoquiEngine.maybe_free_idle` (`:2273`). This is **not** a Coqui-specific
+idle evict: it is one entry in a generic ladder that every engine has a step
+in.
+
+Two Coqui-specific qualifications distinguish the Coqui step from the others:
+
+1. **Self-admission skip.** The step is omitted entirely when the admitting
+   op is itself Coqui (`server/tts-sidecar/main.py:5044`, `if engine !=
+   "coqui"`) — evicting would unload the model that op is about to reload.
+2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
+   `_coqui_idle_ttl()` (`:8272`, 30 s default, env `COQUI_IDLE_TTL`,
+   registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:849`)
+   — rather than the `0.0` the transient models (SPK, ASR, Qwen design,
+   Qwen base17) take. Coqui deliberately has **no** background watchdog,
+   unlike Qwen/ASR/ECAPA, so this only ever runs under genuine VRAM
+   pressure.
+
+### Ownership
+
+**A owns known plan boundaries; B owns unpredicted demand pressure. Neither
+is a superset of the other.**
+
+A fires at the exact points where Node's generation plan guarantees no
+further Coqui work remains in the current dispatch. B fires whenever an
+unrelated admission is VRAM-starved and Coqui happens to be idle long enough
+to reclaim — a situation Node's plan cannot predict because it arrives from
+outside the current book's render.
+
+### Why both are kept
+
+1. **Removing B** would delete one step from a five-step cross-engine ladder
+   that stays regardless. The only effect is that a starved *non-Coqui*
+   admission can no longer reclaim XTTS's ~3.5 GB on an 8 GB card. That is a
+   regression, not a consolidation.
+
+2. **Removing A** would require the sidecar to know Node's generation plan
+   across a process boundary, which it cannot. And B cannot substitute for
+   A: B fires only *after* an admission is already starved, and only past a
+   30 s TTL — so a Qwen load arriving 5 s after the Coqui phase ends finds
+   Coqui resident, the step returns `False`, and nothing is reclaimed.
+
+### Lock caveats — invariants any future change must preserve
+
+1. **Mechanism A's timeout and abort.** Each `/unload` call is bounded by
+   `withCallTimeout` and carries the chapter's abort signal. The trailing
+   evict must remain fail-soft: every group is already synthesised when it
+   runs, so an exception there destroys completed work purely to free VRAM.
+   The leading evict must remain fail-hard: the Coqui phase has not started
+   yet, so a failure there is a genuine precondition not met.
+
+2. **Mechanism B's lock-guarded idle check.** `maybe_free_idle`
+   (`server/tts-sidecar/main.py:2273`) re-validates the idle condition under
+   `_synth_lock` and skips while a synth is in flight, so admission can
+   never free the model out from under an active forward. Any change to
+   `maybe_free_idle` must preserve this re-validation-under-lock.
+
+3. **Mechanism B's non-reentrant lock.** `_drop_model_locked()` must not be
+   called while already holding `_synth_lock` (it is a non-reentrant
+   `threading.Lock`) — only the `/unload` route calls `unload()` without
+   the lock. Internal holders that need the same teardown call
+   `_drop_model_locked()` and then `_reclaim_after_drop()` after releasing
+   the lock; `maybe_free_idle` is the one such caller
+   (`server/tts-sidecar/main.py:2051-2055`). Any future caller must follow
+   the same release-then-reclaim sequence.
+
 ## Ship notes
 
 (Filled when status flips to `stable` after the on-box acceptance above passes and
