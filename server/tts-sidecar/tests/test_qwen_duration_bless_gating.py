@@ -95,11 +95,16 @@ def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path
     assert len(synthesize_calls) == 2, f"engine.synthesize should be called exactly 2 times (lines 2-3), was {len(synthesize_calls)}"
 
 
-def test_bless_tolerance_always_placeholder(monkeypatch, tmp_path) -> None:
-    """Tolerance is always written as the static placeholder (0.10).
+def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
+    """_bless does NOT overwrite tolerance — it preserves whatever is already
+    in the baseline file.
 
     Real tolerance derivation from an actual N-repeat on-box measurement
-    remains register row A38's owed acceptance work, not this scaffold's job."""
+    remains register row A38's owed acceptance work, not this scaffold's job.
+
+    When an operator hand-sets a real tolerance (e.g., 0.15 from on-box
+    measurement), a subsequent `--bless` (e.g., to refresh entries after a
+    code change) must NOT silently clobber it back to the placeholder."""
     path = _write_baseline(tmp_path)
     monkeypatch.setattr(qwen, "BASELINE_PATH", path)
     monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
@@ -111,7 +116,22 @@ def test_bless_tolerance_always_placeholder(monkeypatch, tmp_path) -> None:
             {"id": "line3", "text": "Test three."},
         ]
     }
-    monkeypatch.setattr(qwen, "_load_json", lambda p: fixture if p == qwen.FIXTURE_PATH else {})
+
+    # Seed the baseline with a hand-measured real tolerance (not the placeholder)
+    # to simulate an operator who ran on-box acceptance and set a real value.
+    real_baseline = json.loads(path.read_text(encoding="utf-8"))
+    real_baseline["tolerance"] = 0.15  # hand-set, not the default placeholder
+    path.write_text(json.dumps(real_baseline, indent=2) + "\n", encoding="utf-8")
+
+    # Mock _load_json to return the fixture when requested, or the baseline
+    def mock_load(p):
+        if p == qwen.FIXTURE_PATH:
+            return fixture
+        elif p == qwen.BASELINE_PATH:
+            return json.loads(p.read_text(encoding="utf-8"))
+        return {}
+
+    monkeypatch.setattr(qwen, "_load_json", mock_load)
 
     mock_engine = MagicMock()
     results = [_make_mock_synthesize_result(24000) for _ in range(3)]
@@ -129,9 +149,9 @@ def test_bless_tolerance_always_placeholder(monkeypatch, tmp_path) -> None:
         qwen._bless(mock_engine, "test_voice", fixture)
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    # Tolerance must always be the static placeholder 0.10
-    assert written["tolerance"] == 0.10, f"tolerance must be static 0.10, got {written['tolerance']}"
-    # Check that all entries were recorded despite tolerance being static
+    # Tolerance must remain at the hand-set value (0.15), NOT be clobbered to 0.10
+    assert written["tolerance"] == 0.15, f"tolerance should remain at hand-set value 0.15, but got {written['tolerance']}"
+    # Check that all entries were recorded
     assert len(written["entries"]) == 3
     assert all(f"line{i}" in written["entries"] for i in range(1, 4))
 

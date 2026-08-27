@@ -166,9 +166,10 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
             "duration_sec": round(m["duration_sec"], 4),
         }
 
-    # Record entries with static placeholder tolerance — do not auto-compute.
+    # Record entries only — preserve whatever tolerance is already in baseline
+    # (whether the committed placeholder 0.10 or a hand-set measured value from
+    # on-box acceptance work). Real tolerance derivation remains register row A38.
     baseline["entries"] = entries
-    baseline["tolerance"] = 0.10
     with open(BASELINE_PATH, "w", encoding="utf-8") as f:
         json.dump(baseline, f, indent=2)
         f.write("\n")
