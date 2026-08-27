@@ -900,6 +900,22 @@ row IDs that is exactly the ID that disappears from the live page — IDs are
 never reused, so nothing shifts."* Mirror the same deletion at `:963-967` and
 `:1385-1389`.
 
+- [ ] **Step 4b: The four sites that had no step**
+
+An earlier draft listed ten sites in this task's header and wrote steps for six.
+These four were named — two of them in the callout above saying they are *"not
+optional"* — and then had no step. Each is verified present and contiguity-shaped:
+
+- **`:481`** — `resolveBaselineGroups`' header enumerates *"a contiguity gap"* as
+  a malformed-baseline shape. That shape no longer exists; replace it with the
+  shapes that do (a duplicate ID, a row at or above `next-id`, a missing marker).
+- **`:577-579`** — the `direction: 'both'` narration, which explains discharge in
+  terms of *"rows renumber contiguously, often renumbering the survivors."*
+- **`:811`** — an operator-facing string carrying the same premise.
+- **`:1362`** — *"an agent following it literally would add a duplicate and trip
+  the contiguity check."* The duplicate is now caught by 4a, so the sentence needs
+  the new check's name, not deletion.
+
 - [ ] **Step 5: Add the retro-application rule to the file header**
 
 It is a general fact about this codebase, not a quirk of this change, and it is
@@ -934,51 +950,48 @@ git commit -m "chore(scripts): sweep contiguity-era guidance out of the register
 - Test: `scripts/tests/check-onbox-register.test.mjs`
 
 **Interfaces:**
-- Consumes: Task 1's `PUBLISH_TOKEN_CARRIER`, Task 4's two-field token.
+- Consumes: Task 1's `PUBLISH_TOKEN_CARRIER`, Task 4's two-field token, **Task 10b's
+  stamping script** (which is what makes the freshness check satisfiable).
 - Produces:
-  - `parsePublishToken(rawHtml) -> { n: number, nonce: string } | { malformed: string } | null`
+  - `parsePublishToken(rawHtml) -> { n, nonce } | { malformed } | null`
   - `comparePublishTokens({ working, published, baseline, isAncestor, allowBehind }) -> string[]`
-  - `PUBLISH_TOKEN_BASELINE_ERROR`, `PUBLISH_TOKEN_PUBLISHED_ERROR` (exported, matched by identity)
+  - `PUBLISH_TOKEN_BASELINE_ERROR`, `PUBLISH_TOKEN_PUBLISHED_ERROR`
   - `nonceInHistory(repoRoot, liveViewPath, nonce, gitRunner) -> boolean | null`
   - `resolveBaselineText` additionally returns `sha`
-  - `resolveBaselineLiveView(repoRoot, liveViewPath, sha, gitRunner) -> { text, failedStep }`
-  - env seam `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE`
-  - CLI flag `--live-page-behind-main`
+  - `resolveBaselineLiveView(repoRoot, liveViewPath, sha, gitRunner)`
+  - env seam `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE`; CLI flag `--live-page-behind-main`
 
-**Six facts this task must not get wrong:**
+**Seven facts this task must not get wrong:**
 
-1. **Identity is a nonce looked up in git history, not a branch name.** Two
-   earlier designs died here: a bare counter (cannot tell your re-publish from a
-   competing lane's — same number), then a branch name (inherited by default,
-   mutated by the rename CLAUDE.md mandates, degenerate under detached HEAD).
-   **Never compare a publisher name.** `git log -S '<nonce>' -- <live view>`
-   answers the real question, and the nonce must be per-publish random — the
-   *counter* cannot be searched for, because two lanes both bumping `47 → 48`
-   each find their own commit.
-2. **`working.n < baseline.n` and `working.n == baseline.n` are different
-   failures.** The first is "your branch predates `main` — rebase"; the second is
-   "bump the counter". Collapsing them into "bump it" is the second Critical this
-   design produced: bumping past a merged competing lane's counter turns the check
-   green over an un-rebased file, and the row check does not backstop a changed
-   summary strip, callout or footer.
-3. `checkLiveView`'s **first** action is `stripHtmlComments(rawLiveViewHtml)`
-   (`:641`), and that blanking is load-bearing (PR #2080 review round 2). Under
-   the `comment` carrier the token MUST be read off `rawLiveViewHtml` before that
-   line. Under `attribute` the hazard does not exist.
-4. `--against-published` **never reads the tracked live-view HTML today**:
-   `read(LIVE_VIEW)` sits at `:1423`, *after* that mode's `return` at `:1420`.
-5. Both baselines must come from **one** commit — return the frozen `fetchedSha`
-   string from `:1069`; a second `rev-parse` reopens the race #2199 round 5 closed.
-6. **`null` is never "tokenless".** An unresolvable *baseline* and an unresolvable
-   *published page* get **two different** fail-closed constants: one is
-   `origin/main`, the other is the operator's local save, and the operator does
-   different things about them.
+1. **Three designs have died on a hand-maintained identity field** — a bare
+   counter, a branch name, and a nonce that the operator had to remember to
+   re-mint. The third died the same way as the second: *"when it goes stale the
+   mechanism silently degenerates into the bare counter it was invented to
+   replace, and fails in the **green** direction."* Two things fix that, and both
+   are required: **Task 10b mints it mechanically**, and **this task checks
+   freshness on both sides**. A comparator that reads only `p` and `b` and never
+   `w.nonce` reproduces the hole.
+2. **Ordering is load-bearing, and the code must match the spec's table.** An
+   earlier draft evaluated the behind-check third; the spec's table puts it
+   fifth. In the overlap state (behind **and** un-rebased) the earlier order
+   handed the operator the mute flag *while un-rebased*. Rebase outranks behind.
+3. **`working.n < baseline.n` and `working.n == baseline.n` are different
+   failures** — rebase vs bump. Collapsing them turned an un-rebased publish green
+   over a competing lane's merged page.
+4. `checkLiveView`'s first action is `stripHtmlComments(rawLiveViewHtml)`
+   (`:641`), and that blanking is load-bearing (PR #2080 review round 2).
+5. `--against-published` never reads the tracked live view today: `read(LIVE_VIEW)`
+   at `:1423` sits *after* that mode's `return` at `:1420`.
+6. Both baselines come from **one** commit — return the frozen `fetchedSha` from
+   `:1069`; a second `rev-parse` reopens the race #2199 round 5 closed.
+7. **`null` is never "tokenless"**, and the baseline and the saved published page
+   get different fail-closed constants.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```js
 const T = (n, nonce) => `<p data-published-as="${n}" data-publish-id="${nonce}">x</p>`;
-// isAncestor models the git lookup: true = this nonce is in HEAD's history.
+// isAncestor models the git lookup: true = nonce is in HEAD's history.
 const cmp = (o) => comparePublishTokens({ isAncestor: true, ...o });
 
 test('token: the ordinary first publish is green', () => {
@@ -986,38 +999,67 @@ test('token: the ordinary first publish is green', () => {
 });
 
 test('token: a re-publish from the same branch is green', () => {
-  // THE test that kills a bare counter: baseline 47, this branch already
-  // published 48, now publishing 49. Multi-publish-per-branch is this register's
-  // normal review cycle (PR #2578 published across rounds 13-21).
+  // Kills a bare counter: baseline 47, this branch published 48, now 49.
   assert.deepEqual(cmp({ working: T(49, 'bbb'), published: T(48, 'aaa'), baseline: T(47, 'zzz') }), []);
 });
 
 test('token: a competing publish with IDENTICAL counters is reported', () => {
-  // Byte-identical numbers to the test above; only ancestry differs. If these two
-  // ever agree, the nonce is being ignored and this is a bare counter again.
+  // Same numbers as above; only ancestry differs. If these ever agree, the
+  // nonce is being ignored and this is a bare counter again.
   const errors = cmp({ working: T(49, 'bbb'), published: T(48, 'ccc'), baseline: T(47, 'zzz'), isAncestor: false });
   assert.ok(errors.some((e) => e.includes('another lane published')));
 });
 
+test('token: a STALE nonce on the published page is reported, not passed', () => {
+  // THE hole that killed design 6's first draft. Lane Z bumped the counter and
+  // forgot to re-mint, so the live page carries MAIN's nonce at a HIGHER count.
+  // Ancestry passes (main's nonce is in everyone's history) and every counter
+  // comparison misses, so the old code returned [] and published over Z.
+  // p.nonce === b.nonce IMPLIES p.n === b.n; violating that is malformed data.
+  const errors = cmp({ working: T(49, 'yyy'), published: T(49, 'zzz'), baseline: T(48, 'zzz') });
+  assert.ok(errors.some((e) => e.includes('same nonce')), 'must not return green');
+});
+
+test('token: an un-minted WORKING file is reported before it can be published', () => {
+  // The same omission caught at the production end: counter bumped, nonce still
+  // origin/main's. Task 10b exists so this is never hand-work.
+  const errors = cmp({ working: T(49, 'zzz'), published: T(48, 'zzz'), baseline: T(48, 'zzz') });
+  assert.ok(errors.some((e) => e.includes('mint')), 'a reused nonce must be refused');
+});
+
 test('token: an UN-REBASED branch is told to rebase, NOT to bump', () => {
-  // The second Critical. baseline 48 (lane Z merged), published 48 (Z's page),
-  // working 48 (branched at 47). The old advice was "bump it" -- and bumping to
-  // 49 turned the check GREEN over an un-rebased file, silently discarding Z's
-  // summary strip, callouts and footer. Assert on the MESSAGE: the verdict was
-  // never the bug, the remedy was.
-  const errors = cmp({ working: T(48, 'bbb'), published: T(48, 'zzz'), baseline: T(49, 'zzz') });
-  assert.ok(errors.some((e) => e.includes('rebase')), 'must say rebase');
-  assert.ok(!errors.some((e) => e.includes('Bump')), 'must NOT say bump');
+  // Regression test for the Critical pass 2 found. baseline 49 (lane Z merged),
+  // working 48 (branched at 47). Assert on the MESSAGE -- the verdict was never
+  // the bug, the remedy was. Note published is 49 with main's own nonce, so the
+  // page is NOT behind: this must reach the rebase branch, not the behind one.
+  const errors = cmp({ working: T(48, 'bbb'), published: T(49, 'zzz'), baseline: T(49, 'zzz') });
+  assert.ok(errors.some((e) => e.toUpperCase().includes('REBASE')), 'must say rebase');
+  assert.ok(!errors.some((e) => e.toLowerCase().includes('bump the counter')), 'must NOT say bump');
+});
+
+test('token: rebase outranks behind when BOTH apply', () => {
+  // b=50, p=46, w=47: the page is behind AND your branch predates main. The
+  // earlier order handed over the mute flag while un-rebased.
+  const errors = cmp({ working: T(47, 'bbb'), published: T(46, 'yyy'), baseline: T(50, 'zzz') });
+  assert.ok(errors.some((e) => e.toUpperCase().includes('REBASE')));
+  assert.ok(!errors.some((e) => e.includes('--live-page-behind-main')));
 });
 
 test('token: an unbumped working file is told to bump', () => {
   const errors = cmp({ working: T(47, 'zzz'), published: T(47, 'zzz'), baseline: T(47, 'zzz') });
-  assert.ok(errors.some((e) => e.includes('Bump')));
+  assert.ok(errors.some((e) => e.includes('bump the counter')));
+});
+
+test('token: forgetting to bump for round two of your OWN cycle is reported', () => {
+  // The seventh verdict, absent from an earlier draft's tests entirely:
+  // b=47, p=48 (your own publish), w=48. No other branch fires.
+  const errors = cmp({ working: T(48, 'aaa'), published: T(48, 'aaa'), baseline: T(47, 'zzz') });
+  assert.ok(errors.some((e) => e.includes('your own last publish')));
 });
 
 test('token: a live page BEHIND main is reported with its own message', () => {
   const errors = cmp({ working: T(49, 'bbb'), published: T(46, 'yyy'), baseline: T(47, 'zzz') });
-  assert.ok(errors.some((e) => e.includes('behind')), 'must not reuse the competing-lane message');
+  assert.ok(errors.some((e) => e.includes('BEHIND')));
 });
 
 test('token: --live-page-behind-main clears ONLY the behind state', () => {
@@ -1028,23 +1070,35 @@ test('token: --live-page-behind-main clears ONLY the behind state', () => {
 });
 
 test('token: --live-page-behind-main is an ERROR when the page is not behind', () => {
-  // The blanket-mute guard, mirroring --discharging's unconsumed-name refusal
-  // (:953-971). The counter design's version of this test could not fail: with
-  // published > baseline the flag was never read on that path, so the assertion
-  // passed by construction whatever the flag did.
+  // Blanket-mute guard, mirroring --discharging's unconsumed-name refusal
+  // (:953-971). Delete the guard and this falls through to [] and the assertion
+  // fails -- confirmed non-vacuous, unlike the counter design's version.
   const errors = cmp({ working: T(49, 'bbb'), published: T(48, 'zzz'), baseline: T(48, 'zzz'), allowBehind: true });
-  assert.ok(errors.some((e) => e.includes('--live-page-behind-main')),
-    'passing the flag in a state it cannot apply to must be refused, not ignored');
+  assert.ok(errors.some((e) => e.includes('--live-page-behind-main')));
 });
 
-test('token: a tokenless published page against a tokened baseline is reported', () => {
+test('token: your OWN uncommitted publish is diagnosed as such, not as a rival', () => {
+  // New failure the branch name did not have: the lookup only finds a COMMITTED
+  // nonce. If the page's nonce is the one in your working file, the remedy is
+  // "commit it", and telling the operator to rebase is inert advice -- the shape
+  // this design's own principle says gets a guard bypassed.
+  const errors = cmp({ working: T(49, 'bbb'), published: T(49, 'bbb'), baseline: T(48, 'zzz'), isAncestor: false });
+  assert.ok(errors.some((e) => e.includes('commit')));
+  assert.ok(!errors.some((e) => e.includes('another lane published')));
+});
+
+test('token: a tokenless published page names the transition case', () => {
+  // Guaranteed to happen once: a lane that branched BEFORE PR 1 merged publishes
+  // a tokenless page. "The wrong file was published, or the page was clobbered"
+  // is the wrong diagnosis for a legitimate cause, and it is the first STOP most
+  // operators will meet.
   const errors = cmp({ working: T(48, 'bbb'), published: '<p>no token</p>', baseline: T(47, 'zzz') });
   assert.ok(errors.some((e) => e.includes('no publish token')));
+  assert.ok(errors.some((e) => e.includes('predates')), 'must name the transition cause');
 });
 
 test('token: a tokenless BASELINE is an explicit error, never a pass', () => {
-  const errors = cmp({ working: T(48, 'bbb'), published: T(47, 'zzz'), baseline: '<p>no token</p>' });
-  assert.ok(errors.length > 0, 'the branch is written, and it does not return green');
+  assert.ok(cmp({ working: T(48, 'b'), published: T(47, 'z'), baseline: '<p>x</p>' }).length > 0);
 });
 
 test('token: baseline and published unresolvable get DIFFERENT constants', () => {
@@ -1056,9 +1110,7 @@ test('token: baseline and published unresolvable get DIFFERENT constants', () =>
 });
 
 test('token: an unresolvable ancestry lookup fails closed', () => {
-  // nonceInHistory returns null when git itself failed. null is not "false".
-  const errors = cmp({ working: T(49, 'b'), published: T(48, 'a'), baseline: T(47, 'z'), isAncestor: null });
-  assert.ok(errors.length > 0, 'a failed lookup must not read as "in history"');
+  assert.ok(cmp({ working: T(49, 'b'), published: T(48, 'a'), baseline: T(47, 'z'), isAncestor: null }).length > 0);
 });
 
 test('token: a non-integer counter, an empty nonce, and two tokens are each errors', () => {
@@ -1069,17 +1121,17 @@ test('token: a non-integer counter, an empty nonce, and two tokens are each erro
 });
 
 test('nonceInHistory routes through runGitCommand, not a raw spawn', () => {
-  // scrubGitEnv() (#2216) and the timeout live in that wrapper; bypassing it
-  // reopens the inherited-GIT_DIR hole its comment exists to close.
+  // scrubGitEnv() (#2216) and the timeout live in that wrapper.
   const calls = [];
   const runner = (args) => { calls.push(args.join(' ')); return { status: 0, stdout: 'commit abc\n' }; };
   assert.equal(nonceInHistory('/repo', 'live.html', 'k7f2a9', runner), true);
-  assert.ok(calls.some((c) => c.includes('log') && c.includes('k7f2a9') && c.includes('live.html')));
+  const call = calls.find((c) => c.includes('log'));
+  assert.ok(call.includes('k7f2a9') && call.includes('live.html'));
+  assert.ok(!call.includes('--all'), 'HEAD only: --all would find a fetched rival commit and pass');
 });
 
 test('nonceInHistory returns null on a git failure, not false', () => {
-  const runner = () => ({ status: 128, stdout: '', error: new Error('boom') });
-  assert.equal(nonceInHistory('/repo', 'live.html', 'k7f2a9', runner), null);
+  assert.equal(nonceInHistory('/repo', 'live.html', 'k', () => ({ status: 128, stdout: '', error: new Error('x') })), null);
 });
 
 test('resolveBaselineLiveView uses the SAME sha resolveBaselineText froze', () => {
@@ -1091,45 +1143,43 @@ test('resolveBaselineLiveView uses the SAME sha resolveBaselineText froze', () =
   };
   const { sha } = resolveBaselineText('/repo', 'reg.md', runner);
   resolveBaselineLiveView('/repo', 'live.html', sha, runner);
-  assert.equal(calls.filter((c) => c.startsWith('rev-parse')).length, 1,
-    'the sha must be frozen once, not re-resolved');
+  assert.equal(calls.filter((c) => c.startsWith('rev-parse')).length, 1);
   assert.ok(calls.some((c) => c === 'show deadbeef:live.html'));
 });
 ```
 
-If Task 1 chose the `comment` carrier, add the `stripHtmlComments`-ordering pin
-from Task 1's decision note.
-
-- [ ] **Step 2: Run and confirm they fail**
+- [ ] **Step 2: Run and confirm they fail — and that each fails for ITS OWN reason**
 
 ```bash
 node --test scripts/tests/check-onbox-register.test.mjs
 ```
 
-**Confirm the re-publish test and the competing-publish test fail for different
-reasons once the code exists.** They differ only in `isAncestor`; if they ever
-agree, ancestry is being ignored.
+**This step has teeth now.** Two prior designs shipped a plan whose flagship test
+was red against its own implementation, and in one case the test could not have
+failed at all. For each of the four discriminating pairs — re-publish vs
+competing, rebase vs bump, rebase vs behind, own-uncommitted vs rival — confirm
+the two tests exercise **different branches**, by asserting on messages rather
+than on `length`.
 
-- [ ] **Step 3: Implement the parser, the lookup and the comparator**
+- [ ] **Step 3: Implement**
 
 ```js
-// The publish token. See the design spec §2: FIVE designs were rejected before
-// this one -- three per-row content rules, a bare monotonic counter, and a
-// branch name as identity. The counter failed because a same-branch re-publish
-// and a competing publish occupy the same interval and are the same number. The
-// branch name failed because it is inherited by default, mutated by the rename
-// CLAUDE.md mandates, and degenerate under detached HEAD. Identity is therefore
-// a per-publish nonce LOOKED UP in git history, never a name compared as a
-// string. Do not "simplify" this back to comparing a publisher.
+// The publish token. See the design spec §2: SIX designs preceded this one --
+// three per-row content rules, a bare counter, a branch name, and a nonce with
+// no freshness check. The last three all died the same death: a hand-maintained
+// identity field goes stale and the check degenerates, silently, in the GREEN
+// direction. Two mechanisms keep that closed and BOTH are required: scripts/
+// stamp-publish-token.mjs mints mechanically, and the freshness checks below
+// refuse a reused nonce on either side. Do not remove either half.
 const PUBLISH_TOKEN_REGEX = /data-published-as="([^"]*)"\s+data-publish-id="([^"]*)"/g;
 
 export const PUBLISH_TOKEN_BASELINE_ERROR =
-  'Cannot verify the publish token: origin/main\'s live view is unavailable or ' +
+  "Cannot verify the publish token: origin/main's live view is unavailable or " +
   'unreadable. Do not publish until this passes.';
 
-// Deliberately distinct from the baseline constant. This one is the operator's
-// own locally-saved copy of the live page, and the remedy is "re-save it", not
-// "fix git". Both are matched by identity, so they must not share a value.
+// Distinct from the baseline constant: this is the operator's own saved copy of
+// the live page, and the remedy is "re-save it", not "fix git". Both are matched
+// by identity, so they must not share a value.
 export const PUBLISH_TOKEN_PUBLISHED_ERROR =
   'Cannot verify the publish token: the saved copy of the published page could ' +
   'not be read. Re-save it from the artifact URL and re-run.';
@@ -1147,10 +1197,13 @@ export function parsePublishToken(rawHtml) {
   return { n: Number(n), nonce };
 }
 
-// true = this nonce appears somewhere in HEAD's history for that path (your own
-// publish, or one already merged into your baseline). false = it does not.
-// null = the lookup itself failed, which is NOT the same as false and must not
-// be read as one.
+// true  = this nonce is in HEAD's history for that path (your own committed
+//         publish, or one already merged into your baseline).
+// false = it is not.
+// null  = the lookup itself failed, which is NOT the same as false.
+//
+// HEAD, never --all: resolveBaselineText runs `git fetch origin main` moments
+// before, so --all would see a competing lane's freshly-fetched commit and pass.
 export function nonceInHistory(repoRoot, liveViewPath, nonce, gitRunner = runGitCommand) {
   const result = gitRunner(['log', '--oneline', '-S', nonce, '--', liveViewPath], repoRoot);
   if (result.error || result.status !== 0) return null;
@@ -1158,7 +1211,6 @@ export function nonceInHistory(repoRoot, liveViewPath, nonce, gitRunner = runGit
 }
 
 export function comparePublishTokens({ working, published, baseline, isAncestor, allowBehind = false }) {
-  // Fail closed FIRST, by identity, and with the two copies distinguished.
   if (baseline === null || baseline === undefined) return [PUBLISH_TOKEN_BASELINE_ERROR];
   if (published === null || published === undefined) return [PUBLISH_TOKEN_PUBLISHED_ERROR];
 
@@ -1166,74 +1218,84 @@ export function comparePublishTokens({ working, published, baseline, isAncestor,
   const p = parsePublishToken(published);
   const b = parsePublishToken(baseline);
 
-  const errors = [];
+  const malformed = [];
   for (const [label, parsed] of [['tracked', w], ['published', p], ['origin/main', b]]) {
     if (parsed && parsed.malformed) {
-      errors.push(`Publish token (${label}): ${parsed.malformed}. Fix it before publishing.`);
+      malformed.push(`Publish token (${label}): ${parsed.malformed}. Fix it before publishing.`);
     }
   }
-  if (errors.length > 0) return errors;
+  if (malformed.length > 0) return malformed;
 
-  // Written, and never green. PR 1 seeds the token before PR 2 ships this code,
-  // so a tokenless baseline means a revert, a deleted line, or PRs merged out of
-  // order -- all defects, none a first run.
+  // Written, and never green.
   if (!b) return ['Publish token: origin/main carries none. It was seeded before this check shipped, so this is a revert or a deletion — do not publish; investigate.'];
   if (!w) return ['Publish token: the tracked live view has none. Restore it before publishing.'];
-  if (!p) return ['Publish token: the published page carries no publish token, but origin/main does. Either the wrong file was published to this URL, or the page was clobbered. Do not publish over it until you know which.'];
-
-  // Ancestry decides identity, and runs BEFORE any counter comparison so the
-  // diagnosis is right even when the numbers happen to agree.
-  if (isAncestor === null || isAncestor === undefined) {
-    return ['Publish token: could not search history for the published page\'s nonce. Do not publish until this passes.'];
-  }
-  if (!isAncestor) {
-    return [`Publish token: the live page's nonce "${p.nonce}" is not in this branch's history — another lane published since your baseline. Rebase, re-read the live page, and re-run. Do not publish.`];
+  if (!p) {
+    return ['Publish token: the published page carries no publish token, but origin/main does. Most likely it was published from a branch that predates the token — check whether a lane branched before it landed. Otherwise the wrong file was published to this URL, or the page was clobbered. Do not publish over it until you know which.'];
   }
 
-  // The escape hatch refuses when it cannot apply, mirroring --discharging's
-  // unconsumed-name refusal (:953-971): a flag that is inert-but-accepted in
-  // every other state is one copied runbook line away from a blanket mute.
+  // Flag misuse is an invocation error, answered before any state verdict, and
+  // refused rather than ignored -- the --discharging unconsumed-name property
+  // (:953-971), without which a copied runbook line is a permanent blanket mute.
   const behind = p.n < b.n;
   if (allowBehind && !behind) {
     return [`Publish token: --live-page-behind-main was passed, but the live page (${p.n}) is not behind origin/main (${b.n}). Remove the flag.`];
   }
-  if (behind && !allowBehind) {
-    return [`Publish token: the live page is at ${p.n} but origin/main is at ${b.n} — the page is BEHIND main. A bump merged without publishing, or a publish was reverted. Confirm which, then re-run with --live-page-behind-main.`];
+
+  // INTEGRITY: the same nonce means the same publish, so it must carry the same
+  // counter. A higher count on origin/main's own nonce means a lane bumped
+  // without re-minting -- the state that returned GREEN and published over them.
+  if (p.nonce === b.nonce && p.n !== b.n) {
+    return [`Publish token: the live page and origin/main share the same nonce ("${p.nonce}") but different counters (${p.n} vs ${b.n}). A lane published without minting a new id. Do not publish over it — find that publish first.`];
+  }
+  if (w.nonce === b.nonce && w.n !== b.n) {
+    return [`Publish token: the tracked live view bumped the counter to ${w.n} but kept origin/main's nonce ("${w.nonce}"). Re-run \`node scripts/stamp-publish-token.mjs\` to mint a fresh id — a reused nonce makes this check blind to a competing publish.`];
   }
 
-  // These two are DIFFERENT failures with opposite remedies. Collapsing them
-  // into "bump it" is what turned an un-rebased publish green over a competing
-  // lane's page.
-  if (w.n < b.n) {
-    errors.push(`Publish token: the tracked live view is at ${w.n} but origin/main is at ${b.n} — your branch predates main. REBASE; do not bump. Publishing from here would overwrite whatever landed in between.`);
-  } else if (w.n === b.n) {
-    errors.push(`Publish token: the tracked live view is at ${w.n}, the same as origin/main. Bump the counter and mint a new nonce — an unbumped publish is untracked.`);
-  } else if (p.nonce !== b.nonce && w.n <= p.n) {
-    errors.push(`Publish token: the tracked live view is at ${w.n}, not ahead of your own last publish (${p.n}). Bump the counter and mint a new nonce.`);
+  if (isAncestor === null || isAncestor === undefined) {
+    return ["Publish token: could not search history for the published page's nonce. Do not publish until this passes."];
   }
-  return errors;
+  if (!isAncestor) {
+    // Discriminate YOUR uncommitted publish from a rival's. The lookup only
+    // finds committed nonces, so an uncommitted bump you already published reads
+    // as foreign -- and "rebase" is inert advice for it.
+    if (p.nonce === w.nonce) {
+      return [`Publish token: the live page carries this branch's nonce ("${p.nonce}") but it is not committed yet, so it cannot be found in history. Commit the bump, then re-run.`];
+    }
+    return [`Publish token: the live page's nonce ("${p.nonce}") is not in this branch's history — another lane published since your baseline. Rebase, re-read the live page, and re-run. Do not publish.`];
+  }
+
+  // Rebase OUTRANKS behind: in the overlap state an earlier order handed the
+  // operator the mute flag while un-rebased.
+  if (w.n < b.n) {
+    return [`Publish token: the tracked live view is at ${w.n} but origin/main is at ${b.n} — your branch predates main. REBASE; do not bump. Publishing from here would overwrite whatever landed in between.`];
+  }
+  if (w.n === b.n) {
+    return [`Publish token: the tracked live view is at ${w.n}, the same as origin/main. Run \`node scripts/stamp-publish-token.mjs\` to bump the counter and mint a new id — an unbumped publish is untracked.`];
+  }
+  if (behind) {
+    return [`Publish token: the live page is at ${p.n} but origin/main is at ${b.n} — the page is BEHIND main. A bump merged without publishing, or a publish was reverted. Confirm which, then re-run with --live-page-behind-main.`];
+  }
+  if (w.n <= p.n) {
+    return [`Publish token: the tracked live view is at ${w.n}, not ahead of your own last publish (${p.n}). Run \`node scripts/stamp-publish-token.mjs\` again.`];
+  }
+  return [];
 }
 ```
 
-*(Under the `comment` carrier, change `PUBLISH_TOKEN_REGEX` only; everything else
-is carrier-agnostic.)*
-
-**Do not document the token by example in the live view itself.** The regex is
-unanchored, so a literal attribute pair inside Task 5's replacement callout or
-Task 10 Step 7's runbook prose would trip "appears more than once". Describe the
-fields in words, or break the pair across markup.
+**Do not document the token by example inside the live view.** The regex is
+unanchored, so a second literal pair anywhere in that file — a callout, the
+runbook prose — trips "appears more than once".
 
 - [ ] **Step 4: Thread the second baseline through**
 
 `resolveBaselineText` gains `sha`, returning the **frozen `fetchedSha` string**.
-**This is NOT additive: it breaks five existing assertions** (`:1821`, `:1879`,
-`:1897`, `:1911`, `:1935` are `assert.deepEqual(result, { text, failedStep })`,
-which fails on an extra own property). The spec said these move in the same diff
-and it was right; Task 11 Step 3 handles them.
+**NOT additive: it breaks five existing assertions** (`:1821`, `:1879`, `:1897`,
+`:1911`, `:1935` are `assert.deepEqual(result, { text, failedStep })`). Task 11
+Step 3 handles them.
 
 ```js
-// The live view's baseline, read from the SAME frozen sha as the register's —
-// not a second rev-parse, which would reopen the race #2199 round 5 closed.
+// Read from the SAME frozen sha as the register's baseline -- not a second
+// rev-parse, which would reopen the race #2199 round 5 closed.
 export function resolveBaselineLiveView(repoRoot, liveViewPath, sha, gitRunner = runGitCommand) {
   if (!sha) return { text: null, failedStep: 'show' };
   const showResult = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
@@ -1245,47 +1307,155 @@ export function resolveBaselineLiveView(repoRoot, liveViewPath, sha, gitRunner =
 - [ ] **Step 5: Add the second test seam, and give the override path a SHA**
 
 Add `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE` mirroring `ONBOX_TEST_BASELINE_FILE`
-(`:1252-1267`), **including its unconditional banner print** — a silent bypass is
-the same guard-evaporates-on-substituted-input shape #2199 exists to fix.
+(`:1252-1267`), **including its unconditional banner print**.
 
-**The override path currently produces no SHA.** The CLI's override branch
-(`:1291-1306`) builds `baseline` directly and never calls `resolveBaselineText`,
-so there is nothing to hand `resolveBaselineLiveView`, and `if (!sha)` would fail
-every overridden test closed. Decide explicitly how the override supplies its
-live-view baseline — read it straight from the new env var, bypassing
-`resolveBaselineLiveView` entirely — and say so here rather than leaving the
-implementer to discover it.
+**The override path produces no SHA** — the branch at `:1291-1306` never calls
+`resolveBaselineText`. Read the live-view baseline straight from the new env var,
+bypassing `resolveBaselineLiveView` entirely, and say so in the code comment.
 
 - [ ] **Step 6: Wire it into the `extraOnly` CLI block**
 
-Read the tracked live view (new in this mode — fact 4), resolve the live-view
-baseline from the frozen SHA, call `nonceInHistory` **through `runGitCommand`**
-for the published page's nonce, pass `--live-page-behind-main`, and `report()`
-the result alongside the existing behind-row errors so one run surfaces both.
-Fold into `publishedFailed`.
+Read the tracked live view (fact 5), resolve the live-view baseline from the
+frozen SHA, call `nonceInHistory` through `runGitCommand`, pass
+`--live-page-behind-main`, and `report()` the result alongside the behind-row
+errors.
 
-- [ ] **Step 7: Document the new failure class in the runbook**
+**Mind the `cannotVerify` predicate at `:1353-1373`.** It is
+`publishedErrors.length === 1 && publishedErrors[0] === CANNOT_VERIFY_BASELINE_ERROR`.
+Returning token errors into that same array makes `length === 2` whenever the
+baseline is unresolvable — **both constants fire on the same cause** — which
+flips `cannotVerify` false and routes the output into the BEHIND framing that
+`:1355-1362` warns is *"actively wrong: an agent following it literally would add
+a duplicate."* Keep the token errors in their own array, or suppress
+`PUBLISH_TOKEN_BASELINE_ERROR` when `CANNOT_VERIFY_BASELINE_ERROR` is already
+present. Decide which here; do not leave it to the implementer.
 
-The register's "If it fails" tree (`docs/testing/onbox-acceptance-register.md:129-220`)
-gains a publish-token section covering every message: competing publish (rebase),
-not-rebased (rebase, do **not** bump), unbumped (bump and re-nonce), behind-main
-(confirm, then the flag), and the two fail-closed constants. A guard whose STOP
-has no documented clearing procedure is a guard that gets bypassed — which is why
-`--discharging` exists (#2272).
+- [ ] **Step 7: Document the failure class in the runbook**
 
-- [ ] **Step 8: Run the tests and confirm they pass**
+The "If it fails" tree (`docs/testing/onbox-acceptance-register.md:129-220`) gains
+a publish-token section covering **every** message: competing publish, your own
+uncommitted publish, not-rebased, unbumped, round-two-unbumped, behind-main,
+stale nonce on either side, the tokenless-page transition case, and the two
+fail-closed constants. A STOP with no documented remedy gets bypassed.
+
+- [ ] **Step 8: Run the tests, then Step 9: Commit**
 
 ```bash
 node --test scripts/tests/check-onbox-register.test.mjs
-```
-
-- [ ] **Step 9: Commit**
-
-```bash
 git add scripts/check-onbox-register.mjs scripts/tests/check-onbox-register.test.mjs docs/testing/onbox-acceptance-register.md
 git commit -m "feat(scripts): detect a competing publish via a git-verified publish nonce"
 ```
 
+---
+
+### Task 10b: `stamp-publish-token.mjs` — stop hand-maintaining the identity
+
+**Files:**
+- Create: `scripts/stamp-publish-token.mjs`
+- Test: `scripts/tests/stamp-publish-token.test.mjs`
+
+**Interfaces:**
+- Consumes: Task 4's token literal.
+- Produces: `bumpToken(html) -> { html, n, nonce }` (pure, testable) and a CLI
+  that rewrites the tracked live view in place.
+
+> **This task is numbered 10b deliberately** so Tasks 11-14 and every
+> cross-reference to them keep their numbers.
+
+**Why this exists.** Three consecutive designs died on a hand-maintained identity
+field — a branch name, then a nonce — and each died the same way: a second manual
+step, separate from bumping the counter, that goes stale and turns the check
+green. Task 10's freshness checks *detect* that; this *prevents* it. The spec's
+claim that "nothing hand-maintained is trusted" is only true once minting is
+mechanical. Detection without prevention is what the last three passes kept
+finding.
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+test('bumpToken increments the counter and mints a NEW nonce', () => {
+  const before = '<p data-published-as="47" data-publish-id="zzz">x</p>';
+  const { html, n, nonce } = bumpToken(before);
+  assert.equal(n, 48);
+  assert.notEqual(nonce, 'zzz');
+  assert.match(html, /data-published-as="48"/);
+  assert.ok(html.includes(nonce));
+});
+
+test('bumpToken mints a different nonce each call', () => {
+  const before = '<p data-published-as="47" data-publish-id="zzz">x</p>';
+  const a = bumpToken(before).nonce;
+  const b = bumpToken(before).nonce;
+  assert.notEqual(a, b, 'a repeated nonce defeats the ancestry lookup');
+});
+
+test('bumpToken refuses a file with no token, or with two', () => {
+  assert.throws(() => bumpToken('<p>nothing</p>'), /no publish token/);
+  const two = '<p data-published-as="1" data-publish-id="a">x</p>'
+    + '<p data-published-as="2" data-publish-id="b">y</p>';
+  assert.throws(() => bumpToken(two), /more than once/);
+});
+
+test('bumpToken changes exactly the token, nothing else', () => {
+  const before = '<h1>Register</h1>\n<p data-published-as="47" data-publish-id="zzz">x</p>\n<p>47</p>';
+  const { html } = bumpToken(before);
+  // The bare "47" in the trailing paragraph must survive: a naive string replace
+  // of the counter value would eat it.
+  assert.ok(html.includes('<p>47</p>'));
+  assert.ok(html.includes('<h1>Register</h1>'));
+});
+```
+
+- [ ] **Step 2: Run and confirm they fail**
+
+```bash
+node --test scripts/tests/stamp-publish-token.test.mjs
+```
+
+- [ ] **Step 3: Implement**
+
+```js
+// Bumps the counter and mints a fresh nonce in one operation, because doing them
+// as two manual steps is what killed three consecutive designs of this check.
+// Reuses check-onbox-register.mjs's parser rather than a second regex -- two
+// definitions of "the token" would drift, and the drift would be invisible.
+export function bumpToken(html) {
+  const parsed = parsePublishToken(html);
+  if (parsed === null) throw new Error('stamp-publish-token: no publish token found in the live view.');
+  if (parsed.malformed) throw new Error(`stamp-publish-token: ${parsed.malformed}`);
+  const n = parsed.n + 1;
+  const nonce = randomBytes(4).toString('hex');
+  const next = html.replace(
+    PUBLISH_TOKEN_REGEX,
+    `data-published-as="${n}" data-publish-id="${nonce}"`,
+  );
+  return { html: next, n, nonce };
+}
+```
+
+Export `PUBLISH_TOKEN_REGEX` from the checker for this, or move both it and
+`parsePublishToken` into a tiny shared module — **one definition, not two**.
+Note `String.replace` with a `/g` regex replaces every match, which is safe here
+only because `parsePublishToken` has already refused a file with two.
+
+- [ ] **Step 4: Add the CLI and the npm script**
+
+Writes the file back in place and prints the new counter and nonce, so the
+operator can see what will be published. Wire as `npm run stamp:publish-token`.
+
+- [ ] **Step 5: Point every publishing step at it**
+
+Task 7 Step 3, Task 14 Step 2, and the runbook section Task 10 Step 7 adds all
+say *run this command*, never *edit these two attributes*. The instruction that
+was wrong twice must not survive anywhere.
+
+- [ ] **Step 6: Run the tests, then Step 7: Commit**
+
+```bash
+node --test scripts/tests/stamp-publish-token.test.mjs
+git add scripts/stamp-publish-token.mjs scripts/tests/stamp-publish-token.test.mjs package.json
+git commit -m "feat(scripts): mint the publish token mechanically instead of by hand"
+```
 ---
 
 ### Task 11: Migrate the existing test suite
@@ -1338,7 +1508,10 @@ value of `deepEqual` here is that it catches an unintended extra field.
 
 - [ ] **Step 4: Give every `ONBOX_TEST_BASELINE_FILE` test the live-view seam**
 
-24 occurrences between `:1976` and `:2616`. Each must also set
+**21 real settings** among 24 grep hits — `:1976`, `:2018` and `:2158` are prose
+comments, not env-var assignments. (An earlier draft said 24, repeating the
+raw-count-includes-prose error corrected two steps earlier for `buildRegister`.)
+Each real one must also set
 `ONBOX_TEST_BASELINE_LIVE_VIEW_FILE` and supply a tokened live-view baseline.
 
 **Expect `PUBLISH_TOKEN_BASELINE_ERROR`, not a git call.** An earlier draft said
@@ -1468,7 +1641,11 @@ test('the citation-check workflow has NO paths: filter', () => {
   // workflow useless. Its sibling onbox-register-check.yml IS path-filtered,
   // which is what makes copying that file the likely mistake.
   const yml = readFileSync(WORKFLOW_PATH, 'utf8');
-  assert.ok(!/^\s*paths:/m.test(yml), 'a paths: filter defeats a whole-tree checker');
+  // BOTH spellings. `paths-ignore:` defeats a whole-tree checker identically,
+  // and CLAUDE.md records that it was DELIBERATELY REMOVED from verify.yml --
+  // i.e. it is a construct this repo's authors actually reach for. A guard that
+  // only knows one spelling has a hole the size of the alternative.
+  assert.ok(!/^\s*paths(-ignore)?:/m.test(yml), 'a paths: or paths-ignore: filter defeats a whole-tree checker');
 });
 
 test('the citation-check workflow is not claimed as a required check', () => {
@@ -1633,7 +1810,7 @@ something this design declined:
 
 | Issue | The close comment must say |
 |---|---|
-| **#2599** | Closed by the publish token, **not** by the row-content diff the issue asked for. Record all three attempted content rules and why each failed, and the token's own boundary: it proves nobody else published since your baseline, **not** that the bytes you are publishing are the bytes you intended (a stale local build of your own file, correctly bumped, still publishes — that is what git review covers). |
+| **#2599** | Closed by the publish token, **not** by the row-content diff the issue asked for. Record **all six** rejected designs — three content rules, a bare counter, a branch name as identity, and a nonce with no freshness check — and why each failed. **Match the spec's ticket table on that number**; an earlier draft had the two documents saying three and five. Plus the one remaining boundary: it proves the live page came out of your history and that nobody else published since your baseline, **not** that the bytes you are publishing are the bytes you intended (a stale local build of your own file, correctly stamped, still publishes — that is what git review covers). |
 | **#2603** | Closed by the workflow, **without** its title-match option and **without** self-reference detection. The latter is structurally impossible in the shipped checker: the register's own path is in `FROZEN_EXACT` (`:386`), so its body is never scanned. Its non-renumbering damage (the "five states vs eight states" drift) is untouched. |
 | **#2629** | Closed by stable IDs + the workflow. **Not** its "option 2" (a per-row slug field), which this declines. Stable positional IDs are a fourth option the issue did not offer — say so rather than claiming one it did. |
 
@@ -1682,11 +1859,45 @@ and merge SHAs.
 
 ## What the assumption-checker passes changed
 
-**Two passes have run. Each killed a design.** Pass 1 killed the bare counter;
-pass 2 killed the branch name that replaced it, plus a second Critical of its
-own. The mechanism now shipping — a nonce verified against git history — is the
-sixth design, and the first that no pass has yet falsified. A third pass is
-running against it; **do not treat this section as final until that lands.**
+**Three passes have run. Each killed a design.** Pass 1 killed the bare counter;
+pass 2 killed the branch name that replaced it; pass 3 killed the nonce that had
+no freshness check. All three died the *same* death — **a hand-maintained
+identity field going stale and failing GREEN** — which is why the fix in pass 3
+is not a seventh comparison rule but **Task 10b**, which removes the hand-step.
+
+**The recurring meta-defect, recorded because it recurred three times:** a
+correction applied to one document and then claimed for both. Pass 2 caught
+`A46` corrected in the spec and not in plan `:726`; pass 3 caught
+`buildAheadBaselineText` corrected in the plan and not in the spec — *on the very
+table row that recorded the first instance*. **Before writing "corrected" in any
+table below, grep both documents.**
+
+### Pass 3
+
+| Finding | Disposition |
+|---|---|
+| **Critical: a stale nonce returned GREEN.** A lane that bumped the counter and forgot to re-mint publishes `(49,'zzz')` over a baseline of `(48,'zzz')`. Ancestry passes — `'zzz'` is *main's* nonce, in everyone's history — every counter comparison misses, and `p.nonce !== b.nonce` is false, so the final branch is skipped. The check caught a competing lane **only if that lane followed the procedure correctly**. | **Task 10b** mints mechanically; the comparator gains **two integrity checks** (`p.nonce === b.nonce ⟹ p.n === b.n`, and the same on `w`), and reads `w.nonce`, which it previously never did. |
+| **Critical: the regression test for pass 2's Critical was red** — its fixture made `p.n < b.n`, so the behind branch returned before the rebase branch was reached, and the assertion was `.includes('rebase')` against a message spelling it `REBASE`. Its comment also contradicted its own arguments. **This is the defect pass 1 killed design 4 for, recurring on the test guarding the previous fix.** | Fixture, comment and case fixed; Step 2 now requires confirming each discriminating pair fails for *its own* reason. |
+| Evaluation order did not match the spec's own table: behind was checked third, so in the overlap state (behind **and** un-rebased) the operator was handed the mute flag while un-rebased. | Reordered — **rebase outranks behind** — with a paired test. |
+| The seventh verdict (`w.n <= p.n`, forgetting to bump for round two) appeared in no table and no test; its `p.nonce !== b.nonce` conjunct was dead weight in well-formed states and *actively suppressed the error* in the stale-nonce state. | Conjunct dropped, verdict tested. |
+| Your own **uncommitted** publish read as a rival, with "rebase" as the remedy — inert advice. A new failure the branch name did not have. | Discriminated via `p.nonce === w.nonce` → "commit the bump". |
+| A lane that branched **before PR 1** publishes a legitimately tokenless page; the message accused it of clobbering. Guaranteed to happen, and it is the first STOP most operators meet. | Message names the transition cause first. |
+| The CLI's `cannotVerify` predicate is `length === 1 && [0] === CANNOT_VERIFY_BASELINE_ERROR`; both baseline constants fire on the same cause, so returning them together flips it false and routes into the BEHIND framing the code itself calls "actively wrong". | Named in Task 10 Step 6 as a decision to make there, not discover. |
+| Task 9 listed ten sites and wrote steps for six — including two its own callout called "not optional". | Step 4b covers `:481`, `:577-579`, `:811`, `:1362`. |
+| The workflow test's `!/^\s*paths:/m` misses `paths-ignore:`, which defeats a whole-tree checker identically and which CLAUDE.md records this repo deliberately removing from `verify.yml`. | Both spellings. |
+| Spec claimed the six stale callouts' IDs "none exists" — **`E10` exists** (register `:3818`, live view `:1324`) and its callout describes that row; and `A41`, claimed to appear nowhere, is at live view `:1271`. | Both corrected. |
+| Spec still said `buildAheadBaselineText` is consumed at five sites including `:2333`; it is four, and `:2333` is `computeMaxRowNumber` only. | Corrected **in the spec** this time. |
+| Plan self-review said `resolveBaselineText`'s change "is additive", contradicting Task 10 Step 4 in the same document; and still carried a paragraph about the `who` field. | Both corrected. |
+| Plan and spec disagreed on how many rejected designs #2599's close comment records (three vs five). | Both now say six, with a note to keep them matched. |
+| "24 occurrences" of `ONBOX_TEST_BASELINE_FILE` — three are prose comments. | 21. |
+
+**Pass 3 also confirmed** `git log -S` is the right instrument: the pickaxe finds
+a nonce that was added and later changed (correct answer), `git log` exits 0 with
+empty output on no match so `false` and `null` stay distinct, and omitting
+`--all` is *required* — `resolveBaselineText` fetches `origin/main` moments
+before, so `--all` would find a rival's fetched commit and pass. Unmentioned
+residuals, both fail-closed and both `Minor`: a shallow clone, and a live-view
+rename without `--follow`.
 
 ### Pass 2
 
@@ -1718,7 +1929,7 @@ here so a reader knows which parts were *earned* rather than merely written.
 
 | Finding | Disposition |
 |---|---|
-| **The bare counter is fatally wrong** — this plan's own test (`{49,48,47}` → `[]`) contradicted its own implementation (`p != b` → error), reproducing verbatim the multi-publish-per-branch failure that killed the third content rule. | **Spec §2 rewritten.** The counter is now the *fourth* recorded rejected design. The token carries `data-published-by`; `who` is what separates my round-two publish from your competing one. Task 10 rebuilt around it. |
+| **The bare counter is fatally wrong** — this plan's own test (`{49,48,47}` → `[]`) contradicted its own implementation (`p != b` → error), reproducing verbatim the multi-publish-per-branch failure that killed the third content rule. | **Spec §2 rewritten.** The counter became the *fourth* rejected design. Pass 1's repair — a branch name — was itself killed by pass 2; see the Pass 2 table above for what replaced it. |
 | `resolveBaselineText` returning `sha` is **not** additive — `:1821`/`:1879`/`:1897`/`:1911`/`:1935` are `assert.deepEqual` on the whole object. **The spec said these move; the plan overrode it wrongly.** | Task 10 Step 4 now says so explicitly; Task 11 Step 3 fixes them. |
 | Task 11 was under-scoped ~10×: `buildRegister` (51 uses) and `buildSingleGroupRegister` (17 uses) both break, the latter collapsing every `#2199`/`#2272` scenario to `CANNOT_VERIFY_BASELINE_ERROR`. | Task 11 rewritten to be **driven by a real test run**, not a line list. |
 | A `null` baseline fell into the bootstrap branch and returned **green**. | `PUBLISH_TOKEN_BASELINE_ERROR`, checked first, matched by identity. |
@@ -1744,15 +1955,17 @@ retro-application rule; the six-callout count; the Group set `A B C D E G H`; th
 stale live-view callouts. There are **six**, at `:200-267`, describing
 `A44`/`A45`/`A46`/`E10` across counts `65 → 69`. Task 5 uses the verified figure.
 
-**One residual the pass named and the design now owns:** the token's `who` field
-is *trusted, not authenticated*. A lane publishing under another branch's name
-defeats the check. That is accident-detection, not forgery-detection, and it is
-stated in spec §2 as the second boundary rather than left implied.
-
 **Type consistency:** `parseNextIdMarker`, `parseAllRowHeadings`,
 `ALLOCATION_FLOOR`, `parsePublishToken`, `comparePublishTokens`,
-`resolveBaselineLiveView` are each defined once (Tasks 8, 10) and referenced by
-those exact names in Tasks 9, 11, 12. `resolveBaselineText`'s change is additive.
+`nonceInHistory`, `resolveBaselineLiveView` and `bumpToken` are each defined once
+(Tasks 8, 10, 10b) and referenced by those exact names elsewhere.
+**`resolveBaselineText`'s change is NOT additive** — it breaks five
+`assert.deepEqual` assertions, which Task 11 Step 3 moves. An earlier draft of
+this line said "additive", contradicting Task 10 Step 4 in the same document.
+
+*(There is no `who` field. An earlier draft of this section carried a paragraph
+about the publisher name being "trusted, not authenticated" — that was design 5,
+killed by pass 2, and the boundary disappeared with it.)*
 
 **Placeholder scan:** no TBD/TODO. The one deliberately-unresolved value is
 `PUBLISH_TOKEN_CARRIER`, which has an explicit decision procedure, an explicit

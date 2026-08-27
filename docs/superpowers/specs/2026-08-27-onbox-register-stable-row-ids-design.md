@@ -504,8 +504,11 @@ those IDs.
 **Incidental fix, same PR — real rot, found in passing.** The live view carries
 **six** `<div class="callout warn">` blocks narrating counts `65 → 69` and
 describing `A44`/`A45`/`A46`/`E10` — verified in the file; an earlier draft said
-four, and named an `A41` that appears nowhere on the page. Of those IDs none
-exists; the register tops out
+four. **`A44`, `A45` and `A46` do not exist**; `E10` **does** (register `:3818`,
+live view `:1324`), and its callout describes that very row, so that one is stale
+only in its *count*, not its ID. An earlier draft asserted none of the four
+existed and also named an `A41` that it claimed appeared nowhere — `A41` is at
+live view `:1271`. Both were wrong. The register tops out
 at `A37` with 60 owed. Wave 8 updated the strip, the rows and the footer and left
 the callout stack behind, and `check:onbox-register` is green over it because
 callouts are not parsed. This is the most drift-prone prose on the page and it
@@ -549,7 +552,7 @@ real file's numbering.
 
 | Issue | Outcome |
 |---|---|
-| **#2599** | Closed by design 2 — but **not** by the row-content diff the issue asked for. The issue's own option 2 named a decision as owed; the answer is that per-row content comparison cannot be made correct here. The close comment records **all five** rejected designs — three content rules, the bare counter, and the branch name as identity — and why each failed, plus the one stated boundary (it proves the live page came out of your history and nobody else published, not that you published the bytes you meant to). |
+| **#2599** | Closed by design 2 — but **not** by the row-content diff the issue asked for. The issue's own option 2 named a decision as owed; the answer is that per-row content comparison cannot be made correct here. The close comment records **all six** rejected designs — three content rules, the bare counter, the branch name as identity, and a nonce with no freshness check — and why each failed, plus the one stated boundary (it proves the live page came out of your history and nobody else published, not that you published the bytes you meant to). |
 | **#2603** | Closed by design 3 — **without** its title-match option and **without** self-reference detection. The latter is structurally impossible in the shipped checker: the register's own path is in `FROZEN_EXACT` (`:386`), so its body is never scanned. Its non-renumbering damage (the "five states vs eight states" drift) is untouched by this work. All three omissions go in the close comment. |
 | **#2629** | Closed by design 1 + design 3. Not its "option 2" — that is a per-row slug field, which this declines. Stable positional IDs are a fourth option; the close comment says so rather than claiming an option the issue did not offer. |
 | **#2634** | Closed as a **duplicate of #2653**, honouring its "add a uniqueness check" instruction via 4a. |
@@ -602,8 +605,8 @@ real file's numbering.
   that wrapper carries `scrubGitEnv()` (#2216) and the timeout, and bypassing it
   reopens the inherited-`GIT_DIR` hole it exists to close.
 
-**Five existing real-tree CLI tests must move.** `computeMaxRowNumber` and
-`buildAheadBaselineText`, consumed at `:2209`, `:2333`, `:2360`, `:2517`,
+**Real-tree CLI tests must move.** `computeMaxRowNumber` and
+`buildAheadBaselineText` — the latter consumed at four sites, `:2212`, `:2363`, `:2520`,
 `:2600`, each derive `high-water + 1` as "an ID that does not exist yet" and
 append it to a baseline that must pass `checkRegister`. Under 4b that ID must
 sit **below** `next-id`. With existing rows at `A1`…`A37` and the floor at
