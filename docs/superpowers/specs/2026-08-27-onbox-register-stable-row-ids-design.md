@@ -30,7 +30,11 @@ holds 60 owed rows across seven groups (`A`=37, `B`=2, `C`=4, `D`=3, `E`=10,
 `G`=2, `H`=2) and discharges several per wave.
 
 Row IDs are the register's public interface. The `row <ID>` idiom alone occurs
-**226 times across 66 files** — code comments, run sheets, plan docs,
+**roughly 210-225 times across ~65 files** — the exact count depends on how the
+idiom is matched, and two independent sweeps gave 212 and 226; the figure is
+motivational, not load-bearing, and is deliberately given as a range rather than
+a false precision in a document arguing that unre-derived numbers rot. It spans
+code comments, run sheets, plan docs,
 `server/.env.example`, and GitHub issue bodies that no tool in this repo can
 reach. Every one is a positional reference into a sequence the checker
 *requires* to be rewritten on every discharge.
@@ -155,9 +159,13 @@ produced it. 4a is therefore a regression pin against reintroduction, not a
 check that will find something on merge day. It is worth having; it is not
 worth overselling.
 
-### 2. `--against-published` sees row content (#2599)
+### 2. `--against-published` detects a competing publish (#2599)
 
-Two rules were tried and rejected before this one. **Symmetric comparison**
+**Three per-row content rules were designed and all three failed.** They are
+recorded here because each looked correct, and the reason they failed is
+structural rather than a detail any fourth attempt would dodge.
+
+**Symmetric comparison**
 (report any difference between the working file and the published page) is what
 the register already records failing, at `:277-284`: *"An early version of this
 check compared both directions symmetrically, which inverted the diagnosis
@@ -168,61 +176,91 @@ the second publish from one branch — `baseline = X`, first publish sets
 Multi-publish-per-branch is this register's normal review cycle; PR #2578
 published across rounds 13-21.
 
-**The rule that holds.** For each row, compare normalised body text across three
-texts — `working` (this branch's live-view `.html`), `published` (the saved copy
-of the live page), and `baseline` (`origin/main`'s live-view `.html`):
+**Why a fourth rule was not attempted.** Each rule is a guess at *why* two texts
+differ, and the information needed to answer that is not in the texts. The third
+rule's failure makes it plain: `working != baseline` was read as "this branch
+edited the row", but it actually means *edited **or** stale*, and those need
+opposite treatment. Content comparison cannot separate them without per-branch
+publish state, which no amount of rule-shaping supplies.
 
-> **Report iff `working == baseline` and `published != baseline`.**
+**So stop comparing content.** The thing worth detecting is not "these bodies
+differ" — it is **"someone published between my baseline and now"**, which is the
+*cause* of every foreign divergence, including the ones no per-row rule reached
+(a dropped row, a moved summary strip, and the stale callout blocks described
+below). That is a compare-and-swap, and it is exact.
 
-In words: *a row this branch does not touch has changed on the live page.* That
-is unambiguously someone else's edit or a revert, and it is the only shape that
-is unambiguous without keeping per-branch publish state.
+**The design: a publish token.**
 
-- Every ordinary publish is silent: rows you edited have `working != baseline`,
-  so they are never examined; rows nobody touched have `published == baseline`.
-- Re-publishing from the same branch any number of times is silent, for the same
-  reason.
-- PR #2578's incident reports: the fix had merged, so `baseline` carried it and
-  `working` matched it, while `published` had been reverted.
+The tracked live-view HTML carries a monotonic marker near the top:
 
-**Stated boundary, not closed here.** A row this branch *is* editing is not
-covered while under edit — with `working != baseline`, a concurrent revert by
-another session is indistinguishable from this branch's own earlier publish
-without state design 2 does not have. Also uncovered: a published page that
-dropped a **whole row**, which `extraOnly` skips by design and this rule skips
-too. Both are recorded in #2599's close comment rather than implied to be
-covered.
+```html
+<!-- published-as: 47 -->
+```
 
-**Mechanics — this is not "reuse", and an earlier draft wrongly said it was.**
+A change that publishes bumps it. The token travels into the published page,
+because the page *is* this file. Before publishing, `--against-published`
+compares three token values — `working` (this branch's file), `published` (the
+saved live page), `baseline` (`origin/main`'s file):
+
+| State | Verdict |
+|---|---|
+| `published == baseline`, `working > baseline` | **OK** — nobody published since your baseline; proceed |
+| `published != baseline` | **STOP** — another lane published; rebase and re-read the live page |
+| `published` token absent, `baseline` present | **STOP** — the wrong file was published, or the page was clobbered |
+| `working <= baseline` | **STOP** — bump the token; an unbumped publish is untracked |
+| `baseline` and `published` both absent | **bootstrap** — OK if `working` has a token (see below) |
+| `baseline` absent, `published` present | **STOP** — a token-bearing page is already live |
+
+What this buys over every rejected rule:
+
+- **No normaliser.** An integer inside an HTML comment is compared as a string.
+  The rejected designs all needed a normaliser over prose dense with `&ldquo;`,
+  `&nbsp;`, inline `<code>` and `<a href>` — and none of the three ever defined
+  one, which is its own warning.
+- **No per-row parser, no keys.** The `<details class="item">` / `<span
+  class="num">` scheme is not needed, and neither is the heading-text fallback
+  for the `BLK` and `?` sections that had no IDs to key on.
+- **No intent guessing.** Editing, re-publishing, rebasing and reverting all
+  behave correctly because none of them is asked about.
+- **It covers what per-row rules could not**: a dropped row, a wrong summary
+  strip, the stale callouts, and publishing the `.md` by mistake — the failure
+  the register records happening four times — all present as either a changed or
+  an absent token.
+
+**The token line is also a merge canary.** Two lanes that both bump `47 → 48`
+conflict in git on that one line, surfacing the race before either can publish.
+
+**Bootstrap.** The first change to carry a token publishes to a page that has
+none, so `baseline` and `published` are both absent and the check passes on
+`working` alone. The condition is self-limiting: once that change merges,
+`baseline` has a token and the bootstrap branch is unreachable. It is written as
+an explicit case rather than a fallthrough, so it cannot silently re-arm.
+
+**Stated boundary.** The token proves *nobody else published since your
+baseline*. It does not prove the bytes you are about to publish are the bytes you
+intended — a stale local build of your own file, correctly bumped, still
+publishes. That is what git review covers, and it is recorded in #2599's close
+comment rather than implied.
+
+**Mechanics.**
 
 - `--against-published` **never reads the tracked live-view HTML today**:
   `const liveViewHtml = read(LIVE_VIEW)` sits at `:1423`, *after* that mode's
-  `return` at `:1420`. The "working" side of the comparison does not exist in
-  that code path.
-- So `checkLiveView` gains two new inputs (`workingHtml`, `baselineHtml`), and
-  the CLI layer gains a baseline-HTML read.
-- **One fetch, two reads.** The existing baseline resolution deliberately reads
-  `FETCH_HEAD`, not `origin/main` (`:1023-1040`, per #2199 round 3 — a narrowed
-  refspec can leave `origin/main` stale while the fetch still exits 0). The
-  live-view baseline is read from **the same `FETCH_HEAD`**, in the same
-  invocation, so the register baseline and the HTML baseline cannot come from
-  different commits. Two independent fetches would allow exactly that.
-- `resolveBaselineGroups` gates the register baseline through `checkRegister`.
-  There is no equivalent trust gate for an HTML baseline, so design 2 defines
-  one: the baseline HTML must parse into rows at all, and fail closed —
-  `CANNOT_VERIFY` — if it does not.
-- Rows are keyed by `<span class="num">` **within each `<details class="item">`
-  block**. `parseLiveViewSections` collects `num` spans with a flat
-  section-level regex and never associates one with a body, so this needs a new
-  per-`<details>` parser.
-- The parser must cover the `BLK` and `?` sections, which `parseLiveViewSections`
-  skips via its `gtag` filter; without that the check would silently cover 60 of
-  the live view's 67 rows. Since blocked rows lose their IDs under design 1,
-  those sections are keyed by **heading text** — which is prose and changes on a
-  retitle, silently dropping the row from comparison. Named as a known
-  fragility, confined to the five blocked rows and two unconfirmed entries.
-- The summary strip follows the same rule and the same normalisation.
-- Extraction failure is an error, never a skip.
+  `return` at `:1420`. Reading it in `extraOnly` is new.
+- **One fetch, one extra read.** `resolveBaselineText` already freezes the SHA
+  in a local (`:1060-1075`) after deliberately reading `FETCH_HEAD` rather than
+  `origin/main` (#2199 round 3 — a narrowed refspec can leave `origin/main`
+  stale while the fetch still exits 0). The live-view baseline is a second
+  `git show <that same sha>:<live view>`, so both baselines are from one commit.
+  The SHA must be returned rather than kept local, and **seven existing tests
+  pin `resolveBaselineText`'s call sequence** (`:1785`-`:1934`), at least two by
+  recording the call list; they move in the same diff.
+- `ONBOX_TEST_BASELINE_FILE` substitutes **only** the register baseline, and its
+  own comment (`:1252-1267`) warns that a CLI test deriving its verdict from
+  live git state is a latent bug. The second baseline needs its own equivalent
+  seam, or every hermetic `--against-published` test silently reaches real git
+  for the HTML half.
+- A token that is present but not a bare integer is an error, not a skip.
 
 ### 3. Wire the citation checker (#2603)
 
@@ -306,9 +344,31 @@ This is a general rule about this codebase, not a quirk of this change, and it
 belongs in the checker's header comment.
 
 **PR 1 — data only.** Adds the `next-id` markers, drops the Blocked-section row
-IDs, fixes the Group F sentence, and moves the one blocked-row citation to cite
-by title. All green under *today's* checker: markers are inert, contiguity is
-untouched, the Blocked section is unscanned. Publishes normally.
+IDs **in both the register and the live view**, introduces the `published-as`
+token, fixes the Group F sentence, moves the one blocked-row citation to cite by
+title, and repairs the stale callouts described below. All green under *today's*
+checker: markers are inert, contiguity is untouched, the Blocked section is
+unscanned on both sides. It publishes under design 2's bootstrap case.
+
+**Both sides, or #2634/#2653 are only half closed.** Dropping the blocked IDs
+from the markdown alone leaves `<span class="num">E8</span>` and `E6` in the live
+view's `BLK` section, where *nothing mechanical looks* — `parseGlanceTable`
+needs `^[A-Z]$` and `parseLiveViewSections` filters on `gtag`, so both sides skip
+that section entirely. The two files would disagree, silently, in violation of
+the live view's own footer rule ("update both, in the PR that changes either"),
+and the collision the tickets are about would survive in the published artifact.
+Verified: the `BLK` section carries exactly 5 `details.item` blocks, two bearing
+those IDs.
+
+**Incidental fix, same PR — real rot, found in passing.** The live view carries
+four `<div class="callout warn">` blocks narrating counts `66 → 69` and
+describing `A41`/`A44`/`A45`/`A46`. None of those exists; the register tops out
+at `A37` with 60 owed. Wave 8 updated the strip, the rows and the footer and left
+the callout stack behind, and `check:onbox-register` is green over it because
+callouts are not parsed. This is the most drift-prone prose on the page and it
+sat outside every rejected per-row design's scope — design 2's token covers the
+*cause* of this class going forward, and the existing damage is repaired here per
+CLAUDE.md's fix-don't-file rule.
 
 The marker's comment text carries its own caveat — *allocate from this value
 only once the contiguity check is gone* — because between PR 1 and PR 2 the
@@ -346,7 +406,7 @@ real file's numbering.
 
 | Issue | Outcome |
 |---|---|
-| **#2599** | Closed by design 2. The close comment names both uncovered shapes: a row under edit by this branch, and a whole-row drop on the published page. |
+| **#2599** | Closed by design 2 — but **not** by the row-content diff the issue asked for. The issue's own option 2 named a decision as owed; the answer is that per-row content comparison cannot be made correct here, and the close comment records all three attempted rules and why each failed, plus the token's own boundary (it proves nobody else published, not that you published what you meant to). |
 | **#2603** | Closed by design 3 — **without** its title-match option and **without** self-reference detection. The latter is structurally impossible in the shipped checker: the register's own path is in `FROZEN_EXACT` (`:386`), so its body is never scanned. Its non-renumbering damage (the "five states vs eight states" drift) is untouched by this work. All three omissions go in the close comment. |
 | **#2629** | Closed by design 1 + design 3. Not its "option 2" — that is a per-row slug field, which this declines. Stable positional IDs are a fourth option; the close comment says so rather than claiming an option the issue did not offer. |
 | **#2634** | Closed as a **duplicate of #2653**, honouring its "add a uniqueness check" instruction via 4a. |
@@ -362,14 +422,20 @@ real file's numbering.
 - a row ID at or above its group's `next-id` fails;
 - a group with **no** `next-id` marker fails, so a missing marker cannot silently
   disable 4b;
-- **`working != baseline` with any `published` stays green** — the
-  ordinary-publish and the re-publish regression tests, and the assertions that
-  would have caught both rejected rules;
-- `working == baseline` with `published != baseline` is reported — the #2599
-  repro, red before;
-- a formatting-only difference stays green;
-- a strip difference follows the same rule;
-- an unparseable baseline HTML fails closed rather than passing vacuously.
+- **`published == baseline` and `working > baseline` is green** — the
+  ordinary-publish and re-publish regression test, and the assertion that would
+  have caught all three rejected rules;
+- `published != baseline` is reported — the #2599 repro (another lane published
+  first), red before;
+- a `published` page with no token, against a `baseline` that has one, is
+  reported — the wrong-file-published case the register records happening four
+  times;
+- `working <= baseline` is reported — an unbumped publish;
+- the bootstrap case (`baseline` and `published` both tokenless) passes on
+  `working` alone, and **the case immediately after it does not** — a test that
+  pins the bootstrap as unreachable once `baseline` carries a token;
+- a non-integer token is an error, not a skip;
+- the second baseline read uses the **same** SHA as the first.
 
 **Five existing real-tree CLI tests must move.** `computeMaxRowNumber` and
 `buildAheadBaselineText`, consumed at `:2209`, `:2333`, `:2360`, `:2517`,
@@ -390,9 +456,9 @@ annotated notes expected and unchanged.
 
 ## Shipping notes
 
-- **No new on-box acceptance row.** No behaviour here needs real hardware. Both
-  PRs move register surfaces and publish per the standing procedure; PR 2's
-  publish is the first real exercise of design 2 (real, not vacuous — the row
-  IDs on both sides match).
+- **No new on-box acceptance row.** No behaviour here needs real hardware. PR 1
+  moves register surfaces and publishes under design 2's bootstrap case, which is
+  also the only time that case is ever exercised for real. PR 2 publishes only if
+  it touches the live view; if it does, it bumps the token like any other change.
 - **No release-notes entry.** CI/tooling and process only, no user- or
   operator-visible delta. Stated rather than silently skipped.
