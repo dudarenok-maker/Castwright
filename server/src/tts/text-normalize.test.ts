@@ -152,6 +152,15 @@ describe('softenDashes', () => {
       expect(softenDashes('a, ,b')).toBe('a, b');
     });
 
+    it('leaves a single, un-doubled comma untouched', () => {
+      /* The collapse regex requires TWO OR MORE commas -- a lone comma must
+         not be touched. Distinguishes the shipped regex from a broader
+         one-or-more variant that would also normalize (and add a trailing
+         space to) a single trailing comma. */
+      expect(softenDashes('a,b')).toBe('a,b');
+      expect(softenDashes('He paused,')).toBe('He paused,');
+    });
+
     it('collapses 3 consecutive commas to a single comma in one pass (#2688 regression)', () => {
       /* The original collapse regex only matched pairs of commas, so 3+ commas
          needed multiple passes to fully collapse. The fix uses a regex that

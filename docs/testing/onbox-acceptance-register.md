@@ -2922,7 +2922,7 @@ doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g.
 The collapse to a single comma is pinned only as a wire-text transform
 (`text-normalize.test.ts`); never confirmed whether removing the doubled
 comma changes the audible pause/prosody on real synthesized speech — same
-open shape as A32's leading-dash-to-ellipsis case.
+open shape as A31's leading-dash-to-ellipsis case.
 
 - **Doubled-comma collapse pause, by ear.** Render a dash-attributed line
   (e.g. `"— Привет, — сказал Антон."`) and confirm collapsing the doubled
@@ -2933,7 +2933,7 @@ open shape as A32's leading-dash-to-ellipsis case.
 clone needed — the stock catalogue voice `Damien Black` reproduces this
 shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
 itself has only this one dialogue shape and no separate run sheet (unlike
-A32's). *Cost:* short — one or two renders of a Russian test sentence.
+A31's). *Cost:* short — one or two renders of a Russian test sentence.
 
 ## Group B — local Ollama analyzer only
 

@@ -828,7 +828,7 @@ threads is more design than one round should carry.
   *Benefit (user):* today a whole book renders before the QA gate discovers it
   cannot run.
 - **#2059** — **SHIPPED PR #2688.** Doubled commas from dash-to-comma conversion
-  collapse to a single comma (50 unit tests). The design was decided and shipped
+  collapse to a single comma (51 unit tests). The design was decided and shipped
   via PR #2688, closing #2059. *Benefit (user):* Russian dialogue text no longer
   carries doubled-comma artifacts.
 - **#1309** — ops-24: the LAN port-443 forwarder collapses per-client identity,

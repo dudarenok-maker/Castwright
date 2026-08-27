@@ -198,7 +198,9 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
+    <b>Last change: 2026-08-27, 59 → 60 via PR #2688</b>, adding row A37 (#2059's
+    audible effect, not yet run).
+    <br><b>Previous change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
     Old A34 (voice reassignment vs. persisted audition centroid, #1969/PR
     #2402) had two criteria; the on-box run proved only the first (stale
     reference discarded on reassignment, not silently reused). The second
@@ -846,11 +848,11 @@
     <details class="item">
       <summary><span class="num">A37</span><span class="iname">Russian dash-attributed dialogue — doubled-comma collapse pause by ear</span><span class="risk">Coqui/XTTS resident, Russian text; no clone needed</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>PR #2688 fixed <code>softenDashes</code> (<code>server/src/tts/text-normalize.ts</code>) producing a doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g. <code>"— Привет, — сказал Антон."</code> previously carried a <code>,,</code> in the TTS wire text. The collapse to a single comma is pinned only as a wire-text transform (<code>text-normalize.test.ts</code>); never confirmed whether removing the doubled comma changes the audible pause/prosody on real synthesized speech — same open shape as <a href="#ga">A32</a>'s leading-dash-to-ellipsis case.</p>
+        <p>PR #2688 fixed <code>softenDashes</code> (<code>server/src/tts/text-normalize.ts</code>) producing a doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g. <code>"— Привет, — сказал Антон."</code> previously carried a <code>,,</code> in the TTS wire text. The collapse to a single comma is pinned only as a wire-text transform (<code>text-normalize.test.ts</code>); never confirmed whether removing the doubled comma changes the audible pause/prosody on real synthesized speech — same open shape as <a href="#ga">A31</a>'s leading-dash-to-ellipsis case.</p>
         <ul>
           <li><b>Doubled-comma collapse pause, by ear.</b> Render a dash-attributed line (e.g. <code>"— Привет, — сказал Антон."</code>) and confirm collapsing the doubled comma to one doesn't shorten or eliminate an audible pause the doubled comma was incidentally providing, and doesn't introduce a new artifact.</li>
         </ul>
-        <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A32's) · short — one or two renders of a Russian test sentence</p>
+        <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A31's) · short — one or two renders of a Russian test sentence</p>
       </div>
     </details>
 

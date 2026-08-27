@@ -30,7 +30,11 @@
    point used by `synthesiseChapter`. Each transform is exported so a future
    refactor can pin which half regressed.
 
-   All transforms are idempotent and order-independent.
+   All transforms are individually idempotent. They are NOT order-independent
+   as a set: `normaliseForTts` composes them in a specific, load-bearing order
+   (see its own doc comment) -- `stripAudioTags` must run before `softenDashes`
+   so the comma-collapse can fire across a tag, and swapping that order changes
+   output for tag-adjacent-to-dash input (#2059/#2688).
 
    Audio tags (plan 70d). Inline bracketed tags like `[empathic]` /
    `[shouting]` ride along inside sentence.text from the analyzer. No
