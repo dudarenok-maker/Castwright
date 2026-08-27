@@ -1261,7 +1261,7 @@
         <p>The wizard's CPU caveat claims a low/no-VRAM user can force Qwen onto CPU via the voice-engine device setting and still render — slow, not crashing. <b>Never confirmed on real hardware.</b></p>
         <p>The plan names its own fallback if it turns out false: soften <code>CAVEAT_VRAM</code> at <code>server/src/tts/engine-recommendation.ts:34</code>.</p>
         <p class="src">Needs a real box but specifically the <b>CPU</b> path — pairs naturally with Group B's CPU-only sub-cases · <code>plan 259:183-191</code></p>
-        <div class="flag"><b>Correction, 2026-08-21.</b> The owner ruled E4 is runnable, not hardware-blocked like E6/E8/B2-step-7 — <code>tts.qwen.device</code> is a real user-facing registry knob, not a machine-level hardware constraint. <b>Wave-4 attempt, STILL OWED:</b> port <code>:9000</code> was already held by another lane's live sidecar process for the whole session, so this row could not be safely isolated this run without restarting a sidecar this worktree does not own.</div>
+        <div class="flag"><b>Correction, 2026-08-21.</b> The owner ruled E4 is runnable, not hardware-blocked like the ops-35 ffmpeg floor / ops-36 golden-assembly Blocked rows or B2-step-7 — <code>tts.qwen.device</code> is a real user-facing registry knob, not a machine-level hardware constraint. <b>Wave-4 attempt, STILL OWED:</b> port <code>:9000</code> was already held by another lane's live sidecar process for the whole session, so this row could not be safely isolated this run without restarting a sidecar this worktree does not own.</div>
       </div>
     </details>
     <details class="item">
@@ -1465,7 +1465,7 @@
       <summary><span class="num">—</span><span class="iname">ops-35 ffmpeg floor — below-floor + Re-check walkthrough</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p><b>What is dormant.</b> The below-floor preflight exit, the amber outdated Setup Wizard card, the Admin diagnostics <code>warn</code> row and amber health dot, and the Re-check-without-restart flip back to green (plan 269 invariant 6). Also owed: the Pinokio <code>ffmpeg&gt;=6</code> constraint, install and update.</p>
-        <p><b>Why this box cannot reach it.</b> Every unit test drives the floor through a mocked <code>spawnSync</code>. Per wave-3 step 7's verification (shared with E8, above), this box has no ffmpeg swap available and no container runtime, so there is no way to put a genuinely-below-floor ffmpeg on PATH here.</p>
+        <p><b>Why this box cannot reach it.</b> Every unit test drives the floor through a mocked <code>spawnSync</code>. Per wave-3 step 7's verification (shared with the ops-36 golden-assembly blocked row, above), this box has no ffmpeg swap available and no container runtime, so there is no way to put a genuinely-below-floor ffmpeg on PATH here.</p>
         <p><b>What would change that.</b> A box or container where ffmpeg can be downgraded to a real pre-floor build — a 22.04 container with archive ffmpeg 4.4 is the cheapest route.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1877">#1877</a> · plan 269</p>
       </div>

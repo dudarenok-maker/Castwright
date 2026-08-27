@@ -3512,7 +3512,8 @@ real hardware. The plan names its own fallback if it turns out false: soften
 CPU-only sub-cases.
 
 > **Correction, 2026-08-21.** The owner ruled E4 is runnable, not
-> hardware-blocked like E6/E8/B2-step-7 — `tts.qwen.device` is a real
+> hardware-blocked like the ops-35 ffmpeg floor / ops-36 golden-assembly
+> Blocked rows or B2-step-7 — `tts.qwen.device` is a real
 > user-facing registry knob (`server/src/config/registry.ts:676-682`), not a
 > machine-level hardware constraint. **Wave-4 step 5f attempt, STILL OWED:**
 > port `:9000` was already held by another lane's live sidecar process for
@@ -4344,8 +4345,9 @@ and update.
 
 **2. Why this box cannot reach it.** Every unit test drives the floor through
 a **mocked** `spawnSync`, so nothing has been exercised against a real old
-ffmpeg binary — and per wave-3 step 7's verification (shared with E8, above),
-this box has no ffmpeg swap available and no container runtime of any kind,
+ffmpeg binary — and per wave-3 step 7's verification (shared with the
+ops-36 golden-assembly blocked row, above), this box has no ffmpeg swap
+available and no container runtime of any kind,
 so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 
 **3. What would change that.** A box or container where ffmpeg can be
