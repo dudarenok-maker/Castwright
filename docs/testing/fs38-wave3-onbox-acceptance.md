@@ -2640,18 +2640,18 @@ surface does that) is also gone.
 
 #### #1967 — additional acceptance criteria, on top of the nine E-tests above
 
-Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A25. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
+Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A18. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
 
 **Preconditions — the hot patch was REVERTED on 2026-07-31.** The 25 copied FFmpeg DLLs are gone from `site-packages/torchcodec/` and the box is a genuine static-FFmpeg box again (`ffmpeg 8.1.1-full_build-www.gyan.dev`). Reverting no longer costs you Section E: #1967 is merged, so the fix — not the hot patch — is what makes a derive work. **The revert is not "delete every non-hash-suffixed `*.dll`"**: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's own extensions and must stay. The copied set is exactly the non-hash-suffixed files that also have a hash-suffixed twin.
 
-1. **Static-FFmpeg derive — DISCHARGED 2026-07-31.** The derive **completed** through the full `CoquiEngine.clone_voice` path on the reverted box and wrote `xtts-0abceba4-….pt` (135,509 B) + `.json` into a directory that was **empty** beforehand — so no cached `.pt` could short-circuit it. Log: `Cloned + cached Coqui voice 'xtts-0abceba4-…' from caller clip.` No `derive-failed`. Audio is the clone, not a substitute: **0.229** cosine vs the source clip against a **0.014** different-speaker floor, measured through `/synthesize` → `/embed` rather than read off `resolvedVoiceName`. Preconditions verified rather than assumed: `import torchcodec` still fails (plus the 25 stray hash-suffixed DLLs the first revert left behind are now gone, 62.6 MB); the sidecar was **orphaned** (`/restart` → **409**, i.e. unsupervised and of unknown vintage) so the stack was restarted until `/restart` → **200**; and `voices/xtts/` was empty. **Deviation:** used a full chapter generation, not E-01's splice — [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) makes the splice unsafe on that book (13 of 21 segments divergent), which is exactly what invalidated E-01's original identity claim. **Does NOT discharge E-01**: the chapter failed *after* the derive with `vram-spill` (mixed Qwen+Coqui on the 8 GB card — recorded on register row A19), so "the chapter renders" and the by-ear check are still owed. Side finding: cross-language costs most of the identity on XTTS — 0.600 (EN) → 0.229 (RU), same derive — filed as [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998).
+1. **Static-FFmpeg derive — DISCHARGED 2026-07-31.** The derive **completed** through the full `CoquiEngine.clone_voice` path on the reverted box and wrote `xtts-0abceba4-….pt` (135,509 B) + `.json` into a directory that was **empty** beforehand — so no cached `.pt` could short-circuit it. Log: `Cloned + cached Coqui voice 'xtts-0abceba4-…' from caller clip.` No `derive-failed`. Audio is the clone, not a substitute: **0.229** cosine vs the source clip against a **0.014** different-speaker floor, measured through `/synthesize` → `/embed` rather than read off `resolvedVoiceName`. Preconditions verified rather than assumed: `import torchcodec` still fails (plus the 25 stray hash-suffixed DLLs the first revert left behind are now gone, 62.6 MB); the sidecar was **orphaned** (`/restart` → **409**, i.e. unsupervised and of unknown vintage) so the stack was restarted until `/restart` → **200**; and `voices/xtts/` was empty. **Deviation:** used a full chapter generation, not E-01's splice — [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) makes the splice unsafe on that book (13 of 21 segments divergent), which is exactly what invalidated E-01's original identity claim. **Does NOT discharge E-01**: the chapter failed *after* the derive with `vram-spill` (mixed Qwen+Coqui on the 8 GB card — no longer its own register row; folded into A18's own text), so "the chapter renders" and the by-ear check are still owed. Side finding: cross-language costs most of the identity on XTTS — 0.600 (EN) → 0.229 (RU), same derive — filed as [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998).
 
 2. **Latent equivalence — PARTIALLY DISCHARGED.** Decode equivalence was measured during PR #1978's review, both decoders run side by side on the same WAV: **max difference 0.0**, mono and stereo-downmix. Bit-identical, not merely similar. Still owed is the audible half — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the renders match.
 3. **Install-time verification — DISCHARGED 2026-07-31.** Both failure directions run on a real install and produce **different** messages. Control (healthy): exit **0**, marker present, no failure branch. **Loader drift** (a `sitecustomize.py` rebinding `TTS.tts.models.xtts.load_audio` to a wrong signature): exit **1**, marker **present** → **MSG-1**, `RuntimeError: XTTS reference-audio patch cannot be applied: unexpected load_audio signature ('some_other_name', 'and_another', 'extra') (coqui-tts 0.27.5)` — names the version as required. **Unrelated crash** (a shadow `TTS/__init__.py` raising `ImportError`, so it fails *before* the marker prints): exit **1**, marker **absent** → **MSG-2**, the neutral "could not run". Getting MSG-1 for the second case was the specific defect this item existed to rule out, and it did not happen. Driven through the real `COQUI_VERIFY_CODE` and the real branch predicate (`install-coqui.mjs:222-232`); perturbations injected via `PYTHONPATH` only, so the shared venv was never mutated. The guard's other drift shape (attribute missing) is already unit-covered by `test_raises_when_load_audio_missing`.
 
 4. **Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` `pinokio/install.js` provisions and record whether it succeeds or fails, either way — see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. #1967's fix makes the answer moot for behaviour either way; this is a recorded fact, not a pass/fail gate.
 
-**Result:** **items 1 and 3 → P** (2026-07-31) · **item 2 → partial** (decode equivalence measured at max difference 0.0; the audible half needs a shared-FFmpeg box) · **item 4 → owed** (needs a real Pinokio install).  **Notes:** items 1 and 3 are recorded in full on register row **A25**; the mixed-engine `vram-spill` seen during item 1 is recorded on **A19**.
+**Result:** **items 1 and 3 → P** (2026-07-31) · **item 2 → partial** (decode equivalence measured at max difference 0.0; the audible half needs a shared-FFmpeg box) · **item 4 → owed** (needs a real Pinokio install).  **Notes:** items 1 and 3 are recorded in full on register row **A18**; the mixed-engine `vram-spill` seen during item 1 is no longer its own register row (folded into A18's own text).
 
 ---
 
@@ -2890,9 +2890,9 @@ groups → zero PCM for that slot, so the splice would have written **silence**
 over it — audio deletion, not merely re-voicing. That strengthens the case for
 refusing the whole splice rather than reconciling silently.
 
-Run 2 also touched register row **A23** (a cloned voice renders a non-English
+Run 2 also touched register row **A16** (a cloned voice renders a non-English
 book in the book's language) — not one of the 60, tracked separately on the
-register. **A23 is NOT discharged**, for the same reason as above: its chapter
+register. **A16 is NOT discharged**, for the same reason as above: its chapter
 render used the same splice re-record, so most of what it measured was
 narrator audio, not the clone (0.949 against the chapter's own narrator). What
 survives is the direct-`/synthesize` evidence, which never touches the splice
@@ -3020,7 +3020,9 @@ hash-suffixed originals so their internal imports still resolve.
 **What:** reassigning a character's voice keeps scoring it against the **old**
 voice's persisted audition centroid, so every line of the new voice is flagged
 `voice-mismatch` / `severity: severe` on audio that is correct.
-**Test ID:** register row A23, final bullet ("no `voice-mismatch` rows").
+**Test ID:** register row A35 (later renumbered A34), final bullet ("no
+`voice-mismatch` rows") — **discharged and removed 2026-08-27, on-box wave 9**;
+see `onbox-acceptance-register.md`'s wave-9 changelog entry.
 **Repro:** 1. A character thin enough on in-book anchors to take the audition
 reference path, rendered once so `render-integrity.centroids.json` holds an
 `audition` row. 2. Reassign it to a clearly different voice. 3. Re-render.
@@ -3047,7 +3049,9 @@ render-integrity gate now rebuilds a character's persisted `audition` centroid
 reference when its voice is reassigned, so correct new-voice lines are no
 longer falsely scored `voice-mismatch`/`severity: severe` against the old
 speaker's stale reference. A23's final sub-check ("no `voice-mismatch` rows")
-is therefore re-runnable — register row **A35** records that owed run.
+is therefore re-runnable — register row **A35** (later renumbered A34, then
+**discharged and removed 2026-08-27, on-box wave 9** — see
+`onbox-acceptance-register.md`'s wave-9 changelog entry) recorded that run.
 
 **DEF-F · HIGH · #1972 · open · invalidates three run-2 results**
 **What:** a per-character re-record (splice) picks its target segments from the

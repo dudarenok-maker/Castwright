@@ -1051,6 +1051,6 @@ new risk row) still shipped as designed and is unaffected by the above: a
 raises a loud `RuntimeError` instead of being silently absorbed, on both
 `QwenEngine` (the `synthesize` path only — see point 1) and `WhisperEngine`.
 
-On-box acceptance row A25 recorded in
+On-box acceptance row A17 recorded in
 `docs/testing/onbox-acceptance-register.md` (Group A) — does not block this
 merge; run sheet at `docs/testing/sidecar-evict-latency-onbox-acceptance.md`.

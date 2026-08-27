@@ -217,7 +217,7 @@ def test_preload_torch_skip_is_not_reported_as_preloaded(monkeypatch, caplog) ->
     neither `nvidia/<pkg>/bin` nor anywhere else: it prints exactly one line
     ("Skip loading CUDA and cuDNN DLLs since torch is imported.") and returns,
     leaving torch's own bundled DLLs as whatever the CUDA execution provider
-    finds -- the same torch/lib-only outcome register row A36 already
+    finds -- the same torch/lib-only outcome register row A28 already
     recorded as not fixing the bug. That must be reported distinctly, not
     folded into "preloaded" just because no "Failed to load" line appeared."""
 

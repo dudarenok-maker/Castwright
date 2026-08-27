@@ -30,7 +30,10 @@ the rebuild-on-conflict path, which is where designs 3 and 4 actually died.
 
 **Out of scope, explicitly**
 
-- The rebuild-on-conflict path. #2015 stays open.
+- The rebuild-on-conflict path. #2015 stayed open on it at the time. **That is
+  no longer true: the rebuild half was withdrawn and #2015 closed 2026-08-27,
+  with the detection this design ships accepted as the terminal answer.** See
+  `2026-08-27-cast-merge-base-foreign-delta-design.md` §14.
 - #2014, #2149, #2131. Independent `srv` work; they must not ride a
   concurrency design.
 

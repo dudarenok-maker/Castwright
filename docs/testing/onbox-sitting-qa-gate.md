@@ -20,6 +20,23 @@
 > 15 (A13) + 10 (A21) + 10 (A22) + 40 (A34) = **145 minutes** (was 155 —
 > the former A22, real-corpus true-peak distribution, was retired 2026-08-21;
 > see the correction note below).
+>
+> **Renumbering note, 2026-08-27.** The row numbers above (and used throughout
+> this pack's headings) are as of 2026-08-21 and have drifted across several
+> later register waves. Current mapping, re-resolved against
+> `onbox-acceptance-register.md`: **A9→A8** (Batch QA RTF, plan 228),
+> **A10→A9** (per-character splice, plan 176), **A11→A10** (structured failure
+> taxonomy, plan 173), **A21→A14** (suspect/Listen dBTP agreement, plan 274 §6
+> row 1), **A22→A15** (measurement-failure renders untrusted, plan 274 §6 row
+> 3), **A34→A26** (catastrophic-WER override, #2055). **A12** (post-synthesis
+> QA gate, plan 174) and **A13** (resource-trends admin panel, plan 175) were
+> both **discharged and removed** from the register in a prior wave (see
+> `onbox-acceptance-register.md`'s changelog, "old A12"/"old A13") — their
+> sections below stay for historical context only, not re-runnable against a
+> current row number. Not re-derived: whether the still-owed rows below (A9,
+> A10, A11 in this pack's own numbering) were run in the interim; that needs
+> its own re-resolution pass against the current row text, not just a number
+> remap.
 
 ---
 
@@ -210,7 +227,8 @@ Result: _(fill in — healthy-content pass false-positive count, vs. pre-#2055 b
 - Leave the admin "Resource trends" panel as-is (read-only view, nothing to
   restore).
 
-_(Once every row above is actually run, mark the corresponding rows A9, A10,
-A11, A12, A13, A21, A22, A34 discharged in `onbox-acceptance-register.md` with
-a summary of each result, and remove them from the "owed" count. This pack
-does not do that.)_
+_(Once every row above is actually run, mark the corresponding rows — current
+numbers A8, A9, A10, A14, A15, A26 per the renumbering note above; A12/A13's
+former subjects are already discharged — discharged in
+`onbox-acceptance-register.md` with a summary of each result, and remove them
+from the "owed" count. This pack does not do that.)_

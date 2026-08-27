@@ -265,13 +265,25 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    `notLinkedTo` edge on `cast.json` — that edge is keyed by `(bookId,
    characterId)`, not `bookDir`. `null`/undefined is tolerated (mirrors
    `bookDir`): the retirement itself still records, just without the
-   notLinkedTo cleanup, since there is no book to look one up on. */
+   notLinkedTo cleanup, since there is no book to look one up on.
+
+   `castBase` (#2694) is the run's `CastMergeBase`, nullable exactly like the
+   two callers' own `const castBase: CastMergeBase | null` bindings — `null`
+   for a run with no book dir (mirrors `bookDir`/`bookId` above), and
+   `enabled: false` on a real instance is already a no-op inside
+   `noteExternalWrite` itself. When `clearNotLinkedEdgesForDroppedRejections`
+   actually writes cast.json (a write outside `writeChecked`, taken under its
+   OWN lock — see cast-merge-base.ts's file-header invariant for why that
+   can't route through `writeChecked`), this advances the baseline to match,
+   so the next `writeChecked` doesn't report this run's own write as a
+   foreign conflict. */
 export async function recordRetirements(
   bookDir: string | null | undefined,
   bookId: string | null | undefined,
   retirements: ReadonlyArray<Retirement>,
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
+  castBase: CastMergeBase | null,
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
   const { keep, refused } = liveIds
@@ -291,7 +303,12 @@ export async function recordRetirements(
   for (const { from, to } of keep) {
     const result = await retireCharacterId(bookDir, from, to);
     if (result.droppedSelfLoopRejections.length && bookId) {
-      await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
+      const written = await clearNotLinkedEdgesForDroppedRejections(
+        bookDir,
+        bookId,
+        result.droppedSelfLoopRejections,
+      );
+      if (written) castBase?.noteExternalWrite(written);
     }
   }
 }
@@ -324,6 +341,14 @@ export async function recordRetirements(
    rejected", which is exactly the evidence the removal pass acts on. It now
    reads the history through `loadCastIdHistoryWithStatus` and refuses to act
    at all on `degraded`. See the comment at that call below.
+
+   `castBase` (#2694, optional/nullable) is the run's `CastMergeBase`. This
+   function's write is textually locked in this file (see above) rather than
+   routed through `writeChecked` — for the same cast-lock-rule-1 reason
+   `clearNotLinkedEdgesForDroppedRejections` isn't — so it must advance the
+   baseline itself when it writes, or the next `writeChecked` reports this
+   run's own reconciliation as a foreign conflict. See cast-merge-base.ts's
+   file-header invariant.
 
    `statusBeforePersist` exists because that local read is NOT sufficient on
    its own at the two persist call sites (PR #2202 gate review, Critical). The
@@ -376,6 +401,7 @@ export async function reconcileRejectEdgesOnDisk(
   bookId: string | undefined,
   log: (phaseId: number, message: string) => void,
   statusBeforePersist?: CastIdHistoryStatus,
+  castBase?: CastMergeBase | null,
 ): Promise<void> {
   /* No bookId means no way to tell this book's edges from a cross-book one —
      see bookIdForRetirementCleanup, which already warns for this run. */
@@ -421,7 +447,12 @@ export async function reconcileRejectEdgesOnDisk(
       }
       const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
       if (!adds.length && !removes.length) return;
-      await writeJsonAtomic(castJsonPath(bookDir), { characters: next });
+      const payload = { characters: next };
+      await writeJsonAtomic(castJsonPath(bookDir), payload);
+      // #2694 — this write bypasses `writeChecked` (see this function's own
+      // doc comment); advance the baseline to match so it isn't reported as
+      // a foreign conflict at the next `writeChecked` call.
+      castBase?.noteExternalWrite(payload);
       if (removes.length) {
         log(
           1,
@@ -3576,6 +3607,7 @@ export async function runMainAnalyzerJob(
               reconciled.retirements,
               null,
               log,
+              castBase,
             );
           },
         );
@@ -5904,8 +5936,8 @@ export async function runMainAnalyzerJob(
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
               writeDir,
             );
-            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log);
-            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log, castBase);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -5915,7 +5947,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -5970,7 +6002,7 @@ export async function runMainAnalyzerJob(
                pre-rewrite verdict captured at the top of this block — without
                it the helper's own read sees the file the steps above just
                rewrote, not the one the persist started with. */
-            await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist);
+            await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist, castBase);
           } catch (historyErr) {
             /* #2260 round 2 — see the dedup site near the top of this job for
                why a lock-acquisition timeout must NOT be swallowed here.
@@ -6587,6 +6619,7 @@ export async function runSubsetAnalyzerJob(
             dedupRetirements,
             null,
             log,
+            castBase,
           );
         },
       );
@@ -7516,8 +7549,8 @@ export async function runSubsetAnalyzerJob(
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
               writeDir,
             );
-            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log);
-            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log, castBase);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -7527,7 +7560,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
@@ -7565,7 +7598,7 @@ export async function runSubsetAnalyzerJob(
             }
             // #2166 — mirrors the main path's same-named call above, including
             // the pre-rewrite verdict captured at the top of this block.
-            await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist);
+            await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist, castBase);
           } catch (historyErr) {
             /* #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
                lock-acquisition timeout must NOT be swallowed here.

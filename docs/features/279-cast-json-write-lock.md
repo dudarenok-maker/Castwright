@@ -197,7 +197,9 @@ slip through, as would a future writer routed through
 ## Deliberately NOT covered
 
 Two things a per-book RMW lock cannot reach, both carrying real design
-history on open tickets rather than being silently dropped:
+history on tickets rather than being silently dropped. (#2006 is still open;
+**#2015 was closed 2026-08-27** — its detection half shipped as PR #2185 and
+its rebuild half was withdrawn.)
 
 - **`analysis.ts`'s five writes** (`Refs #2015`) replay a merge base
   (`priorCastForMerge`) read once at the top of a run and reconciled against
@@ -479,7 +481,9 @@ equivalent).
 
 - `analysis.ts`'s five merge-base writes and the three remaining
   clone-consent gates — see "Deliberately NOT covered" above; both carried
-  on open tickets (`#2015`, `#2006`) with their design history attached.
+  on tickets (`#2015`, `#2006`) with their design history attached. `#2006`
+  is still open; `#2015` closed 2026-08-27 (detection shipped, rebuild
+  withdrawn).
 - `PUT /:bookId/state`'s last-writer-wins contract — a wire-protocol change
   (an `If-Match`-style token), not a locking change.
 - Any second server process or worker-thread topology — the lock is

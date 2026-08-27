@@ -1,7 +1,7 @@
-# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A12, A21)
+# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A11, A20)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A4, A6, A7, A12, A21** — the rows a human has to
+> register rows **A4, A6, A7, A11, A20** — the rows a human has to
 > **listen to**: Qwen VoiceDesign persona/A/B audition, bulk cast design, the
 > emotion-chip manuscript preview, cross-engine audition fidelity, and the
 > golden-audio bless guards. (Two rows this sitting pack originally covered —
@@ -166,7 +166,7 @@ runs last, after everything else is evicted.
    drift in an existing book's cast just from this rewrite being live.
    - Result:
 
-### A12 · A/B "current vs proposed" voice audition (plan 161) — steps 7–9
+### A11 · A/B "current vs proposed" voice audition (plan 161) — steps 7–9
 
 > **Criteria source:** `docs/features/161-voice-design-compare.md` `:100-109`
 > (manual acceptance walkthrough), `:9` (Status line), `:117-121` (Ship
@@ -268,7 +268,7 @@ runs last, after everything else is evicted.
     its Stop button is — not a generic "free VRAM" message.
     - Result:
 
-### A21 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
+### A20 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
 > `:1412-1518` (full procedure already spelled out there — cited, not

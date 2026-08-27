@@ -350,10 +350,10 @@ describe('reconcileRejectEdgesOnDisk', () => {
       'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3',
     ).toHaveLength(2);
     expect(src).toContain(
-      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist)',
+      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist, castBase)',
     );
     expect(src).toContain(
-      'await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist)',
+      'await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist, castBase)',
     );
   });
 
@@ -384,7 +384,7 @@ describe('reconcileRejectEdgesOnDisk', () => {
         blockStart,
       );
       const reconcileIdx = src.indexOf(
-        `await reconcileRejectEdgesOnDisk(writeDir, ${bookIdBinding}, log, historyStatusBeforePersist)`,
+        `await reconcileRejectEdgesOnDisk(writeDir, ${bookIdBinding}, log, historyStatusBeforePersist, castBase)`,
         blockStart,
       );
 

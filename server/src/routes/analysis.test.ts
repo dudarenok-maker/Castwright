@@ -2449,7 +2449,7 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
       const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
       await rejectOrphanedPair(dir, 'mayrin', 'mairin');
 
-      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {});
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {}, null);
 
       const history = await loadCastIdHistory(dir);
       expect(history.rejectedPairs ?? []).toEqual([]);
@@ -2488,7 +2488,7 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
       const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
       await rejectOrphanedPair(dir, 'mayrin', 'mairin');
 
-      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {});
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {}, null);
 
       const cast = JSON.parse(
         readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'),
