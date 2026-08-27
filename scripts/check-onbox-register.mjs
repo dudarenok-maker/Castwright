@@ -223,10 +223,12 @@ export function parseNextIdMarker(sectionBody, letter) {
 // sections `parseBodyGroups` never visits (Blocked, and anything added later).
 // Uniqueness is a document-wide property: #2634/#2653 were exactly a Blocked
 // heading reusing a live Group E ID, which a group-scoped scan cannot see.
+// Returns just the composed `id` — the only field check 4a below (or any
+// other caller) actually reads; a `letter`/`number` split was dead weight.
 export function parseAllRowHeadings(strippedText) {
   const found = [];
   for (const match of strippedText.matchAll(/^### ([A-Z])(\d+)(?=\s|\r?$)/gm)) {
-    found.push({ id: `${match[1]}${match[2]}`, letter: match[1], number: Number(match[2]) });
+    found.push({ id: `${match[1]}${match[2]}` });
   }
   return found;
 }
@@ -1048,9 +1050,11 @@ export function checkLiveView(
         errors.push(
           `${DISCHARGE_NAME_ERROR_PREFIX}${id}, but it never accounts for a live-only row ` +
             '(present on the published page, absent from this register) — there is nothing ' +
-            'to suppress. Under stable row IDs the ID you discharged is exactly the ID that ' +
-            'disappears — check for a typo, or that the row is genuinely absent from both ' +
-            'the register and the origin/main baseline.',
+            'to suppress. That means the ID is either not on the live page at all, or is ' +
+            "still IN this register — check for a typo, or that you actually removed the " +
+            'row from the register before running this: --discharging only has something to ' +
+            'suppress once the row is genuinely absent from the register you are about to ' +
+            'publish.',
         );
       }
     }

@@ -152,6 +152,28 @@ test('check 1: per-group count mismatch is reported with a fix-naming message', 
   );
 });
 
+// Every OTHER formatRowList-exercising assertion in this file (the two-row
+// A1-A2 case above, the seven-row E1-E7 regression below) happens to use a
+// run starting at 1 — the exact shape formatRowList's OLD `n === i + 1` form
+// also handled. Under stable row IDs a contiguous run no longer has to start
+// at 1 (e.g. after A1-A4 are discharged, A5-A7 is still "contiguous" for
+// display purposes even though it doesn't start at 1), so this pins that
+// general case specifically.
+test('check 1: a contiguous run NOT starting at 1 still collapses to a range in the mismatch message', () => {
+  const text = registerFixture({
+    glance: [['E', 2]],
+    groups: [{ letter: 'E', nextId: 101, rows: [5, 6, 7] }],
+  });
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e === 'Group E: glance table says 2, body has 3 rows (E5–E7). Update the table or the body.',
+    ),
+    `expected the range to collapse to E5–E7, got: ${JSON.stringify(errors)}`,
+  );
+});
+
 test('check 2: total mismatch against the glance table sum is reported', () => {
   const errors = checkRegister(buildRegister({ total: 5 }));
   assert.ok(
@@ -225,6 +247,21 @@ test('4a: the same row ID in two sections is reported', () => {
   );
 });
 
+// The migration to stable IDs deleted the pre-existing within-group duplicate
+// test with no replacement — the case above only covers two IDs colliding
+// ACROSS sections. This pins the narrower, same-section case: two identical
+// `### E6` headings inside one Group E section.
+test('4a: the same row ID twice in the SAME section is reported', () => {
+  const text = registerFixture({
+    glance: [['E', 1]],
+    groups: [{ letter: 'E', nextId: 101, rows: [6, 6] }],
+  });
+  assert.ok(
+    checkRegister(text).some((e) => e.includes('Row ID E6 appears more than once')),
+    'a duplicate row ID within the same group section must be reported',
+  );
+});
+
 test('4b: a row ID at or above its group next-id is reported', () => {
   const text = registerFixture({
     glance: [['A', 1]],
@@ -250,6 +287,22 @@ test('4b: a next-id below the allocation floor is reported', () => {
     groups: [{ letter: 'A', nextId: ALLOCATION_FLOOR - 1, rows: [1] }],
   });
   assert.ok(checkRegister(text).some((e) => e.includes('below the allocation floor')));
+});
+
+// The test above builds its fixture from `ALLOCATION_FLOOR - 1`, so it moves
+// with the constant and can never catch the constant itself being lowered.
+// This pins the LITERAL value: `ALLOCATION_FLOOR` must never drop below 101
+// (see its own comment — allocation counts upward, and A99 is
+// check-register-citations.mjs's own nonexistent-ID sentinel).
+test('ALLOCATION_FLOOR is pinned at 101 and must never be lowered', () => {
+  assert.equal(
+    ALLOCATION_FLOOR,
+    101,
+    'ALLOCATION_FLOOR must never be lowered — a floor at or below 99 would ' +
+      "eventually walk allocation through A99, check-register-citations.mjs's " +
+      'own nonexistent-ID sentinel. If a fixture breaks against 101, the ' +
+      'fixture is what is wrong, not this constant.',
+  );
 });
 
 test('4b: an invalid row heading suppresses the per-row next-id comparison but not the sub-lettering rejection or the marker/floor checks', () => {
@@ -298,6 +351,18 @@ Body text.
 
 test('parseNextIdMarker does not match a marker for a different group letter', () => {
   assert.equal(parseNextIdMarker('<!-- next-id: G101 -->\n', 'H'), null);
+});
+
+// Pins the regex's trailing `\s*\r?$` anchor: a line that merely STARTS like
+// a valid marker but has non-whitespace trailing content after the closing
+// `-->` is not a marker at all and must not match. Without the anchor the
+// regex has nothing requiring it to reach end-of-line, so it would happily
+// match the `A101` prefix and silently ignore everything after it.
+test('parseNextIdMarker rejects a line with trailing content after the closing `-->`', () => {
+  assert.equal(
+    parseNextIdMarker('<!-- next-id: A101 --> this is not a valid marker line\n', 'A'),
+    null,
+  );
 });
 
 test('fix 1: a body-only group heading with an ASCII hyphen still counts as a group (not silently dropped)', () => {
