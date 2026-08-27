@@ -602,11 +602,11 @@
           <div class="n"><b>Take this round.</b> Today a whole book renders before the QA gate discovers it cannot run.</div></div>
           <div class="tags"><span class="tag">server</span><span class="tag">05 Aug</span></div>
         </li>
-        <li class="item" data-id="2059" data-disp="design" data-area="srv">
+        <li class="item shipped" data-id="2059" data-disp="design" data-area="srv">
           <input type="checkbox" aria-label="Mark 2059 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a></div>
           <div class="body"><div class="t">Attribution-dialogue leading + interior dash produces a doubled comma</div>
-          <div class="n">Defer. Genuinely a question — "should it collapse?" — so it needs a decision, not a fix. A visible text artifact in Russian dialogue.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">01 Aug</span></div>
+          <div class="n"><b>Shipped PR #2688.</b> Doubled commas from dash-to-comma conversion collapse to a single comma (50 unit tests). The design was decided and shipped, closing #2059.</div></div>
+          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">01 Aug</span></div>
         </li>
         <li class="item" data-id="1309" data-disp="design" data-area="ops">
           <input type="checkbox" aria-label="Mark 1309 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1309">#1309</a></div>
@@ -954,7 +954,7 @@
     g6: { branch: "feat/server-898-device-token-scope",
           note: "EXECUTE ONLY — phase 1 is complete. Brief a fresh implementation thread from issue #898 plus plan #2151 and nothing else; do NOT fork this session. Two PRs, load-bearing order. Serves a LAN browser running the full desktop UI, so scoping every token to `companion` would 403 the web app." },
     g7: { branch: "(design threads — no code branch)",
-          note: "Phase 1 only: spec + plan doc + handover brief. Mandatory Premium-tier assumption-checker pass before approval, then a cold-brief handoff. Take #1996, #2015, #1932, #2131 this round; defer #2059, #1309, #485, #1393." },
+          note: "Phase 1 only: spec + plan doc + handover brief. Mandatory Premium-tier assumption-checker pass before approval, then a cold-brief handoff. Take #1996, #2015, #1932, #2131 this round; defer #1309, #485, #1393." },
     g8: { branch: "(on-box session — measurement, not a diff)",
           note: "Record every outcome in docs/testing/onbox-acceptance-register.md, the per-feature run sheet, AND the live view HTML. For #2187 force fresh:true and do NOT re-measure alignment." },
     g9: { branch: "(disposition decision — no code)",
