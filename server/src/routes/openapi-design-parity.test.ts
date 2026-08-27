@@ -188,23 +188,30 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     expect(castDesignSrc).toContain("reason: 'already_cloned'");
   });
 
-  it('SingleDesignEvent error codes (not_found, design_failed, unsupported_language, lock-contention) match the route', () => {
-    /* Scoped to `type: 'error', code: '...'` pairs on the SAME literal — NOT
-       every `code: '...'` in the file, which also matches the unrelated
-       plain-JSON 409 `{ error, code: 'clone_protected' }` response (asserted
-       separately below). Class widened `[a-z_]` → `[a-z0-9_-]` for the same
-       finding-F3 reason as `extractEventTypes` above — see that function's
-       header for the full rationale (hyphenated is this surface's
-       established style, and every `code:` literal here is already a
-       genuine error code, so the widening can't newly sweep in something
-       unrelated). #2260 FINAL ROUND (B2) nit — `lock-contention` is emitted
-       from an explicit if/else with two literal `endJob` calls rather than a
-       ternary assigned to a `code` variable, precisely so it stays visible to
-       this regex (see the route's own comment on that choice). */
+  it('SingleDesignEvent error codes (not_found, design_failed, unsupported_language, lock-contention, clone_protected) match the route', () => {
+    /* Scoped to `type: 'error', code: '...'` pairs on the SAME literal.
+       `clone_protected` now genuinely appears via TWO distinct response
+       shapes: the pre-existing plain-JSON 409 upfront refusal
+       (`{ error, code: 'clone_protected' }`, asserted separately below,
+       NOT matched by this regex — it isn't an SSE `endJob` event) and the
+       write-time SSE refusal added for #2006 (`endJob(job, { type: 'error',
+       code: 'clone_protected', ... })`, which IS matched here). Both are
+       correct; they are not a contradiction. Class widened `[a-z_]` →
+       `[a-z0-9_-]` for the same finding-F3 reason as `extractEventTypes`
+       above — see that function's header for the full rationale
+       (hyphenated is this surface's established style, and every `code:`
+       literal here is already a genuine error code, so the widening can't
+       newly sweep in something unrelated). #2260 FINAL ROUND (B2) nit —
+       `lock-contention` is emitted from an explicit if/else with two
+       literal `endJob` calls rather than a ternary assigned to a `code`
+       variable, precisely so it stays visible to this regex (see the
+       route's own comment on that choice). */
     const codes = [
       ...new Set([...singleDesignSrc.matchAll(/type:\s*'error',\s*code:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1])),
     ].sort();
-    expect(codes).toEqual(['design_failed', 'lock-contention', 'not_found', 'unsupported_language']);
+    expect(codes).toEqual(
+      ['clone_protected', 'design_failed', 'lock-contention', 'not_found', 'unsupported_language'].sort(),
+    );
     const block = schemaBlock(yaml, 'SingleDesignEvent');
     const codeEnumMatch = /code:\r?\n\s*type: string\r?\n\s*enum: \[([^\]]+)\]/.exec(block);
     expect(codeEnumMatch, 'SingleDesignEvent.code enum not found').not.toBeNull();

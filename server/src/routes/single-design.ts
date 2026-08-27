@@ -27,7 +27,7 @@ import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
-import { applyOverrideToCastFiles } from './voices.js';
+import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
 import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
@@ -176,19 +176,19 @@ async function runSingleDesign(
        book instead of sweeping every book in the workspace sharing the
        same bare character id (e.g. "narrator"). */
     const matchKey = character.voiceId ?? character.id;
-    const overrideResult = await applyOverrideToCastFiles(
+    const { updated, skipped } = await applyOverrideToCastFiles(
       matchKey,
       { engine: 'qwen', name: voiceId },
       seriesFilter,
       job.bookDir,
     );
-    /* Series-wide veto: a cloned slot exists somewhere in the scope.
-       Refuse the propagation and report this character as failed —
-       the UI will surface the refusal. */
-    if (overrideResult.skipped.length > 0) {
-      throw new Error(
-        `Propagation refused: a cloned slot already occupies this voice (${overrideResult.skipped.length} book(s) skipped).`,
-      );
+    if (updated === 0 && skipped.length > 0) {
+      endJob(job, {
+        type: 'error',
+        code: 'clone_protected',
+        message: `"${job.characterName}" has a consented cloned voice on a linked character somewhere in this series — the design was not persisted.`,
+      });
+      return;
     }
     endJob(job, {
       type: 'designed',
@@ -263,6 +263,9 @@ singleDesignRouter.post(
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!character) return res.status(404).json({ error: `Character "${characterId}" not found.` });
 
+    const isStandalone = located.state?.isStandalone === true;
+    const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
+
     /* GATE 2 fix-lane-1b — a design sweep must not retarget a cloned
        character off its clone. The non-preview ("first design") branch of
        runSingleDesign below persists via applyOverrideToCastFiles, which
@@ -277,10 +280,18 @@ singleDesignRouter.post(
        the SSE stream starts and before any GPU work runs, so the response
        is an honest 409 rather than a hollow "designed" event for a design
        that was never actually persisted. The preview ("redesign") branch
-       never calls applyOverrideToCastFiles, so it is not gated here. */
-    if (!preview && characterHasClonedSlot(character)) {
+       never calls applyOverrideToCastFiles, so it is not gated here.
+       #2006 series-wide veto: a clone anywhere in the linked series is as
+       routine and deterministic a refusal as a clone on this exact book —
+       checked here too, so the request 409s before any GPU round rather
+       than failing at the write-time check below. */
+    if (
+      !preview &&
+      (characterHasClonedSlot(character) ||
+        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
+    ) {
       return res.status(409).json({
-        error: `"${character.name ?? characterId}" already has a cloned voice and cannot be designed on Qwen without silently retargeting it off that clone.`,
+        error: `"${character.name ?? characterId}" has a consented cloned voice on a linked character somewhere in this series and cannot be designed on Qwen without silently retargeting it off that clone.`,
         code: 'clone_protected',
       });
     }
@@ -315,8 +326,6 @@ singleDesignRouter.post(
       clearInterval(keepAlive);
       return res.end();
     }
-    const isStandalone = located.state?.isStandalone === true;
-    const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
 
     const job: SingleJob = {
       bookId,

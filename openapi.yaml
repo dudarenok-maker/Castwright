@@ -4326,9 +4326,12 @@ components:
             design) run — the result is already persisted by the time this
             fires. `error` is the terminal event for a failed run: `code`
             `not_found` (character deleted mid-run), `design_failed` (the
-            design call itself threw), `unsupported_language`, or
+            design call itself threw), `unsupported_language`,
             `lock-contention` (a cast-lock acquisition on this route's own
-            path timed out — #2260).
+            path timed out — #2260), or `clone_protected` (the write-time
+            series-wide clone-consent veto refused the persist — #2006; a
+            distinct occurrence from the plain-JSON 409 upfront refusal
+            below, which shares the same code string for the same reason).
         characterId: { type: string }
         name: { type: string, description: 'resume_from / preview_ready / designed only.' }
         mode: { type: string, enum: [first, redesign], description: resume_from only. }
@@ -4344,7 +4347,7 @@ components:
         url: { type: string, description: designed only. }
         code:
           type: string
-          enum: [not_found, design_failed, unsupported_language, lock-contention]
+          enum: [not_found, design_failed, unsupported_language, lock-contention, clone_protected]
           description: error only.
         message: { type: string, description: error only. }
 
