@@ -320,11 +320,15 @@ setup rather than repeatedly loading and evicting models.
 > been used before, even one whose row is long gone** — a discharged or
 > removed row's ID stays retired forever. Re-minting a retired ID silently
 > re-points every existing citation to it at the *old* row, which is exactly
-> the failure this stable-ID design exists to end. This register's own
-> checker cannot catch it after the fact (it only verifies uniqueness and the
-> allocation floor, not history); `check-register-citations.mjs`'s Check C
-> fatal half does catch this shape, but only on its measured coverage — 22
-> anchored-heading lines across 5 files, not the whole corpus.
+> the failure this stable-ID design exists to end. **No check fails on it.**
+> This register's own checker only verifies uniqueness and the allocation
+> floor, not history, so a re-minted ID looks identical to a fresh one. And
+> `check-register-citations.mjs` does not close the gap either: a citation
+> whose subject has left the register entirely lands in Check C's
+> `unknownSubject` bucket, which is opt-in behind `--strict` and never fatal
+> — deliberately, and deferred under #2629; Check C's fatal half fires only
+> when the cited ID still exists for a *different* subject, which is the
+> renumbering class this design abolishes. The rule above is the only guard.
 
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were
