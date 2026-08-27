@@ -171,6 +171,25 @@ const characters = [
       qwen: { name: 'qwen-lyra-lib-uuid', libraryUuid: 'lyra-lib-uuid', provenance: 'cloned' },
     },
   },
+  /* Task 7 (#2006) — clean on THIS book, no override at all. Used by the
+     series-wide upfront/write-time tests below, which link them to a
+     SIBLING book via a matching voiceId. */
+  {
+    id: 'linked-char',
+    name: 'Linked Char',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'linked-char',
+    voiceStyle: 'a dry, understated young man',
+  },
+  {
+    id: 'c1',
+    name: 'C One',
+    role: 'supporting',
+    color: 'sage',
+    voiceId: 'c1',
+    voiceStyle: 'a bright, quick-talking young woman',
+  },
 ];
 
 /** Write a designed-voice JSON sidecar under the workspace's voices/qwen dir. */
@@ -729,6 +748,122 @@ describe('#1954 — emotion variants for a CLONED voice', () => {
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9000/qwen/design-voice');
+  });
+
+  describe('series-wide (Task 7, v5 upfront fix + write-time integration)', () => {
+    const siblingDirs: string[] = [];
+
+    /* Sibling book in THIS suite's own AUTHOR/SERIES, confirmed-cast so both
+       the upfront hasClonedSlotAmongMatches scan and persistEmotionVariant's
+       own fresh scan see it. */
+    function makeSiblingBook(title: string, chars: object[]): string {
+      const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+      mkdirSync(join(dir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(dir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: `sibling-${title}`,
+          manuscriptId: `m-sibling-${title}`,
+          title,
+          author: AUTHOR,
+          series: SERIES,
+          seriesPosition: 2,
+          isStandalone: false,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+      writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: chars }));
+      siblingDirs.push(dir);
+      return dir;
+    }
+
+    afterEach(() => {
+      while (siblingDirs.length) {
+        rmSync(siblingDirs.pop()!, { recursive: true, force: true });
+      }
+    });
+
+    it('409s before any GPU design call when the character is cloned on a SIBLING book, not this one (v5 upfront fix)', async () => {
+      makeSiblingBook('Sibling Cloned One', [
+        {
+          id: 'linked-char',
+          voiceId: 'linked-char',
+          overrideTtsVoices: { coqui: { name: 'clone-linked', provenance: 'cloned' } },
+        },
+      ]);
+
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/linked-char/design-voice`)
+        .send({ persona: 'x', sampleVoiceId: 'char-linked', modelKey: QWEN_KEY, emotion: 'angry' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('clone_protected');
+      /* No GPU work at all — the series-wide upfront check runs before the
+         sidecar is ever touched, matching the book-local guard it replaces. */
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      const linked = readCast().characters.find((c) => c.id === 'linked-char') as Record<
+        string,
+        any
+      >;
+      expect(linked.overrideTtsVoices).toBeUndefined();
+    });
+
+    it('write-time: a clone appearing on a linked book between the upfront check and the write reports 409 clone_protected', async () => {
+      /* Clean at first read (the route's own upfront hasClonedSlotAmongMatches
+         scan) — then, by the time persistEmotionVariant runs its own fresh
+         series-wide re-check, a clone has appeared on the sibling. Same
+         residual-window shape as Task 6's persistEmotionVariant test, applied
+         here at the route's write-time integration instead. */
+      const siblingBookDir = makeSiblingBook('Sibling Residual One', [{ id: 'c1', voiceId: 'c1' }]);
+
+      const stateIo = await import('../workspace/state-io.js');
+      const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+        '../workspace/state-io.js',
+      );
+      const { castJsonPath } = await import('../workspace/paths.js');
+      const siblingCastPath = castJsonPath(siblingBookDir);
+
+      let callsForSiblingPath = 0;
+      const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+        if (path !== siblingCastPath) return actual.readJson(path);
+        callsForSiblingPath += 1;
+        // Call #1: the route's upfront hasClonedSlotAmongMatches scan — clean.
+        if (callsForSiblingPath === 1) return actual.readJson(path);
+        // Call #2+: persistEmotionVariant's own fresh re-check — clone appears.
+        return {
+          characters: [
+            {
+              id: 'c1',
+              voiceId: 'c1',
+              overrideTtsVoices: { coqui: { name: 'clone-c1', provenance: 'cloned' } },
+            },
+          ],
+        };
+      });
+
+      try {
+        const res = await request(app)
+          .post(`/api/books/${bookId}/cast/c1/design-voice`)
+          .send({ persona: 'x', sampleVoiceId: 'char-c1', modelKey: QWEN_KEY, emotion: 'angry' });
+
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('clone_protected');
+
+        /* The design DID happen (it's the write-time check that refused), but
+           nothing was persisted onto c1's cast entry. */
+        const c1 = readCast().characters.find((c) => c.id === 'c1') as Record<string, any>;
+        expect(c1.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+      } finally {
+        spy.mockImplementation(actual.readJson);
+      }
+    });
   });
 });
 
