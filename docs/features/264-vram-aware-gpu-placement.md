@@ -359,14 +359,21 @@ single statement of that ruling so the question is not reopened.
 
 The eviction wrappers have **four call sites**, not two:
 
-1. **Pre-pass pair (memoised, demand-driven):** `beforeFirstCoquiDerive`
+1. **Pre-pass invocations (memoised, resolver-mediated):** `beforeFirstCoquiDerive`
    (`:1882-1899`) evicts `evictQwenForCoquiPhase` before the first Coqui derive
    in the chapter; `beforeFirstQwenDerive` (`:1943-1953`) evicts
    `evictCoquiForQwenPhase` before the first Qwen derive (when Coqui is present).
-   These are called from *inside* voice-resolver try/catch blocks
-   (`clone-voice-resolver.ts`), so they inherit the resolver's own fail-loud
-   (cloned voices) / fail-soft (designed voices) semantics — **no local
-   try/catch wraps them, by design.**
+   **Two of the three pre-pass sites are called from *inside* voice-resolver
+   try/catch blocks (`clone-voice-resolver.ts`), inheriting the resolver's own
+   fail-loud (cloned voices) / fail-soft (designed voices) semantics — no local
+   try/catch wraps them at those call sites.** However, **a third pre-pass site**
+   exists at `:2114-2122`, also in `synthesise-chapter.ts`, which primes
+   `beforeFirstQwenDerive` before any Qwen render-phase work when only Qwen
+   voices with no derive are present (no resolver call to hang the hook off).
+   This third site **is wrapped in a local try/catch** (lines 2114-2122) that
+   unconditionally swallows the error and logs a warning — deliberately best-effort
+   fail-soft, covering the "Qwen render with no derive needed" case where a
+   sidecar recycle window at this priming call cannot abort the chapter.
 
 2. **Render-phase pair (top-level, plan-driven):** The leading evict fires at
    `:2920` before a mixed chapter's Coqui phase; the trailing evict fires at
@@ -374,18 +381,19 @@ The eviction wrappers have **four call sites**, not two:
    the chapter's abort signal.
 
 The render-phase pair is driven by the **generation plan** — Node knows which
-engine each remaining chapter needs, so it can free the VRAM at a boundary
+engine the **current dispatch** needs, so it can free the VRAM at a boundary
 where "no further Coqui work is queued" is a *fact* rather than a prediction
-(this scope applies to the **render-phase pair only**, not the pre-pass pair,
-which is memoised and runs *before* any derive). The render-phase evicts are
-deliberately **fail-soft** on non-abort errors: socket errors and timeouts are
-logged as warnings and execution continues. The leading evict additionally
-rethrows abort signals for pause detection (`routes/generation.ts` names its
-own `AbortError`); the trailing evict swallows aborts too, since by the time it
-fires the chapter's synthesis work is already complete. This asymmetry is
-correct: the trailing evict's abort swallow does not lose synthesised work (all
-groups are done), while the leading evict's abort rethrow ensures a paused
-generation is visible to the pause-detection path.
+(this scope applies to the **render-phase pair only** and the current dispatch,
+not future chapters or the pre-pass pair, which is memoised and runs *before*
+any derive). The render-phase evicts are deliberately **fail-soft** on non-abort
+errors: socket errors and timeouts are logged as warnings and execution
+continues. The leading evict additionally rethrows abort signals for pause
+detection (`routes/generation.ts` names its own `AbortError`); the trailing
+evict swallows aborts too, since by the time it fires the chapter's synthesis
+work is already complete. This asymmetry is correct: the trailing evict's abort
+swallow does not lose synthesised work (all groups are done), while the leading
+evict's abort rethrow ensures a paused generation is visible to the pause-detection
+path.
 
 ### Mechanism B — sidecar, demand-driven, reactive
 
@@ -449,20 +457,39 @@ outside the current book's render.
      signal a pause through its abort path if the generation is cancelled
      mid-evict.
    
-   - **Pre-pass pair (memoised, resolver-dependent):** `beforeFirstCoquiDerive`
-     and `beforeFirstQwenDerive` are called from *inside* voice-resolver
-     try/catch blocks in `clone-voice-resolver.ts`, with no separate local
-     try/catch wrapping them. A failure is therefore reported through the
-     resolver's own existing, already-differentiated policy: the cloned
-     resolver's catch treats it as an ordinary derive failure (fail-loud —
-     `broken` accumulates, `UnresolvableClonedVoiceError` still throws), while
-     the designed resolver's catch treats it as an ordinary self-heal failure
-     (fail-soft — `softFailedUuids`/keep-stale, never rethrown). This
-     voice-type-dependent semantics is intentional and must be preserved: a
-     pre-pass evict failure on a cloned voice is unrecoverable (the cloned
-     resolver's own identity depends on that model running), while a failure
-     on a designed voice can be healed by keeping the stale version. Any future
-     change to the pre-pass evicts must maintain this asymmetry.
+   - **Pre-pass pair — two resolver-mediated, one render-prep best-effort:**
+     `beforeFirstCoquiDerive` and `beforeFirstQwenDerive` have **three distinct
+     invocation patterns**, each with different failure semantics that must be
+     preserved independently:
+     
+     - **Two resolver-mediated sites (voice-type-dependent):** Called from
+       *inside* voice-resolver try/catch blocks in `clone-voice-resolver.ts`,
+       with no separate local try/catch wrapping them. A failure is reported
+       through the resolver's own existing, already-differentiated policy: the
+       cloned resolver's catch treats it as an ordinary derive failure (fail-loud —
+       `broken` accumulates, `UnresolvableClonedVoiceError` still throws), while
+       the designed resolver's catch treats it as an ordinary self-heal failure
+       (fail-soft — `softFailedUuids`/keep-stale, never rethrown). This voice-type-dependent
+       semantics is intentional: a pre-pass evict failure on a cloned voice is
+       unrecoverable (the cloned resolver's own identity depends on that model
+       running), while a failure on a designed voice can be healed by keeping
+       the stale version.
+     
+     - **One render-prep best-effort site (unconditional fail-soft):** A third
+       pre-pass invocation at `:2114-2122` in `synthesise-chapter.ts` primes
+       `beforeFirstQwenDerive` before any Qwen render-phase work when only
+       healthy/catalogue Qwen voices are present (no resolver call to hang the
+       hook off). This site **is deliberately wrapped in a local try/catch**
+       that unconditionally swallows errors and logs warnings, covering the case
+       where a sidecar recycle window at this priming call cannot abort the
+       chapter (fix for a §2.3 chapter-abort regression). This best-effort wrapper
+       is distinct from the resolver-mediated invocations and correct by design.
+     
+     Any future change to the pre-pass evicts must **preserve all three
+     invocation patterns independently**: the two resolver-mediated sites must
+     remain unwrapped at those call sites (inheriting resolver semantics), and
+     the render-prep site must retain its local fail-soft wrapper to prevent
+     chapter aborts on transient sidecar errors.
 
 2. **Mechanism B's lock-guarded idle check.** `maybe_free_idle`
    (`server/tts-sidecar/main.py:2273`) re-validates the idle condition under
