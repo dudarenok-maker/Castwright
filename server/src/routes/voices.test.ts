@@ -51,6 +51,7 @@ const BETA_AUTHOR = 'Beta Author';
 const BETA_TITLE = 'Beta Book';
 const ALPHA_QWEN_OVERRIDE_NAME = 'qwen-ALPHAUUID1';
 const BETA_QWEN_OVERRIDE_NAME = 'qwen-BETAUUID1';
+const SCOPE_TEST_AUTHOR = 'Ines Halvorsen';
 
 let workspaceRoot: string;
 let app: Express;
@@ -63,6 +64,8 @@ let applyTierToCastFiles: (
   seriesFilter?: { author: string; series: string },
 ) => Promise<number>;
 let applyOverrideToCastFiles: typeof import('./voices.js').applyOverrideToCastFiles;
+let hasClonedSlotAmongMatches: typeof import('./voices.js').hasClonedSlotAmongMatches;
+let findClonedVoiceIdsAmongMatches: typeof import('./voices.js').findClonedVoiceIdsAmongMatches;
 let writeVoiceStylePersona: typeof import('./cast-design.js').writeVoiceStylePersona;
 let standaloneA: { bookDir: string };
 let standaloneB: { bookDir: string };
@@ -144,13 +147,20 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf } =
-    await import('./voices.js');
+  const {
+    voicesRouter,
+    applyTierToCastFiles: atcf,
+    applyOverrideToCastFiles: aotcf,
+    hasClonedSlotAmongMatches: hcsam,
+    findClonedVoiceIdsAmongMatches: fcvim,
+  } = await import('./voices.js');
   const paths = await import('../workspace/paths.js');
   const baseVoices = await import('../tts/base-voices.js');
   const castDesign = await import('./cast-design.js');
   applyTierToCastFiles = atcf;
   applyOverrideToCastFiles = aotcf;
+  hasClonedSlotAmongMatches = hcsam;
+  findClonedVoiceIdsAmongMatches = fcvim;
   writeVoiceStylePersona = castDesign.writeVoiceStylePersona;
   invalidateBaseVoiceCache = baseVoices.invalidateBaseVoiceCache;
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
@@ -1787,13 +1797,13 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
   });
 
   it('with no seriesFilter but an onlyBookDir, touches only that book', async () => {
-    const n = await applyOverrideToCastFiles(
+    const { updated } = await applyOverrideToCastFiles(
       'narrator',
       { engine: 'qwen', name: 'qwen-standalone-a-voice' },
       undefined,
       standaloneA.bookDir,
     );
-    expect(n).toBe(1);
+    expect(updated).toBe(1);
 
     const a = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone A');
     expect(
@@ -1808,7 +1818,7 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
   });
 
   it('with neither seriesFilter nor onlyBookDir, still sweeps the whole workspace (unchanged default)', async () => {
-    const n = await applyOverrideToCastFiles('narrator', {
+    const { updated } = await applyOverrideToCastFiles('narrator', {
       engine: 'qwen',
       name: 'qwen-workspace-wide',
     });
@@ -1816,9 +1826,9 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
        genuinely-global scope (only used by PUT /:voiceId/override's
        'workspace' scope) still matches every one, deliberately. (Other
        unrelated fixtures elsewhere in this file also use the bare id
-       "narrator" and share this workspace, so `n` counts more than just
+       "narrator" and share this workspace, so `updated` counts more than just
        our two — assert our two specifically, not the total.) */
-    expect(n).toBeGreaterThanOrEqual(2);
+    expect(updated).toBeGreaterThanOrEqual(2);
     const a = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone A');
     const b = readCastFromDisk(workspaceRoot, 'Castwright', 'Standalones', 'Standalone B');
     expect(
@@ -1917,7 +1927,7 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
     let wrote: boolean;
     // Hoisted so the `finally` below can await them on the failure path
     // instead of leaving them orphaned and still running past the test.
-    let overridePromise: Promise<number> | undefined;
+    let overridePromise: Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> | undefined;
     let personaPromise: Promise<boolean> | undefined;
     try {
       overridePromise = applyOverrideToCastFiles(
@@ -1944,7 +1954,9 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       await new Promise((r) => setTimeout(r, 50));
 
       released();
-      [n, wrote] = await Promise.all([overridePromise, personaPromise]);
+      const [overrideResult, wroteResult] = await Promise.all([overridePromise, personaPromise]);
+      n = overrideResult.updated;
+      wrote = wroteResult;
     } finally {
       // Idempotent: also fires here so a throw ANYWHERE above (before the
       // happy-path call) still releases a held `readJson` rather than
@@ -2006,7 +2018,7 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
     let wrote: boolean;
     // Hoisted so the `finally` below can await them on the failure path
     // instead of leaving them orphaned and still running past the test.
-    let walkPromise: Promise<number> | undefined;
+    let walkPromise: Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> | undefined;
     let personaPromise: Promise<boolean> | undefined;
     try {
       walkPromise = applyOverrideToCastFiles('narrator', {
@@ -2028,7 +2040,9 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       await new Promise((r) => setTimeout(r, 50));
 
       released();
-      [n, wrote] = await Promise.all([walkPromise, personaPromise]);
+      const [walkResult, wroteResult] = await Promise.all([walkPromise, personaPromise]);
+      n = walkResult.updated;
+      wrote = wroteResult;
     } finally {
       // Idempotent: also fires here so a throw ANYWHERE above (before the
       // happy-path call) still releases a held `readJson` rather than
@@ -2114,7 +2128,7 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
     let writerSettled = false;
     // Hoisted so the `finally` below can await them on the failure path
     // instead of leaving them orphaned and still running past the test.
-    let walkPromise: Promise<number> | undefined;
+    let walkPromise: Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> | undefined;
     let writerPromise: Promise<boolean> | undefined;
     try {
       walkPromise = applyOverrideToCastFiles('narrator', {
@@ -2149,7 +2163,8 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       expect(writerSettled).toBe(true);
 
       released();
-      n = await walkPromise;
+      const walkResult = await walkPromise;
+      n = walkResult.updated;
       await writerPromise;
     } finally {
       // Idempotent — see the finally block above for why.
@@ -2183,5 +2198,272 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
         ?.name,
     ).toBe('qwen-hoist-check');
     expect(targetNarrator.voiceStyle).toBe('a hoist-check persona');
+  });
+});
+
+it('hasClonedSlotAmongMatches is exported for reuse by qwen-voice.ts and single-design.ts', async () => {
+  const mod = await import('./voices.js');
+  expect(typeof mod.hasClonedSlotAmongMatches).toBe('function');
+});
+
+describe('hasClonedSlotAmongMatches — onlyBookDir scope (found under review)', () => {
+  let bookOneDir: string;
+
+  beforeEach(() => {
+    bookOneDir = writeBookOnDisk(
+      workspaceRoot, SCOPE_TEST_AUTHOR, 'Standalones', 'Onyx Reach', 'book-onyx',
+      [{ id: 'narrator', name: 'Narrator' }], // no clone
+      true,
+    );
+    writeBookOnDisk(
+      workspaceRoot, SCOPE_TEST_AUTHOR, 'Standalones', 'Salt Line', 'book-salt',
+      [{ id: 'narrator', name: 'Narrator', overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } } }],
+      true,
+    );
+  });
+
+  it('with no seriesFilter but an onlyBookDir, scopes the scan to that one book — a clone in an unrelated standalone book sharing the same bare id must not cause a false refusal', async () => {
+    const result = await hasClonedSlotAmongMatches('narrator', undefined, undefined, bookOneDir);
+    expect(result).toBe(false);
+  });
+});
+
+describe('findClonedVoiceIdsAmongMatches', () => {
+  /* Own dedicated fixture, same reasoning as Task 2's describe: this file's
+     shared AUTHOR/SERIES/BOOK_ONE/BOOK_TWO fixture can't mint new voiceIds
+     and is consumed by other describes. Mint via writeBookOnDisk
+     (voices.test.ts:70-102) instead. */
+  const SCAN_AUTHOR = 'Odalys Marchetti';
+  const SCAN_SERIES = 'The Winter Ferry';
+  let bookOneDir: string;
+
+  beforeEach(() => {
+    bookOneDir = writeBookOnDisk(
+      workspaceRoot, SCAN_AUTHOR, SCAN_SERIES, 'Departure', 'book-scan-one',
+      [
+        {
+          id: 'shared', name: 'Shared', voiceId: 'shared-voice-id',
+          overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+        },
+        { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
+      ],
+    );
+    writeBookOnDisk(
+      workspaceRoot, SCAN_AUTHOR, SCAN_SERIES, 'Arrival', 'book-scan-two',
+      [
+        { id: 'shared', name: 'Shared', voiceId: 'shared-voice-id' }, // uncloned here
+        { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
+      ],
+    );
+  });
+
+  it('returns the set of voiceIds cloned anywhere in the series scan, in one pass', async () => {
+    const ids = await findClonedVoiceIdsAmongMatches({ author: SCAN_AUTHOR, series: SCAN_SERIES });
+    expect(ids.has('shared-voice-id')).toBe(true);
+    expect(ids.has('uncloned-voice-id')).toBe(false);
+  });
+
+  it('excludes a clone on the given excludeBookDir', async () => {
+    // 'shared-voice-id' is cloned only on bookOneDir's own copy (seeded
+    // above; 'Arrival' carries no clone at all). Excluding bookOneDir must
+    // make the returned set NOT include it.
+    const ids = await findClonedVoiceIdsAmongMatches({ author: SCAN_AUTHOR, series: SCAN_SERIES }, bookOneDir);
+    expect(ids.has('shared-voice-id')).toBe(false);
+  });
+});
+
+describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
+  /* Fresh, dedicated fixture — do NOT reuse AUTHOR/SERIES/BOOK_ONE/BOOK_TWO
+     (voices.test.ts:30-33): those books' cast.json already has fixed
+     characters (char-brann / v_brann) seeded once in this file's top-level
+     beforeAll and read by ~8 other describes; `setOverrideOnDisk` can only
+     rewrite an EXISTING character's override, it cannot mint a character
+     with a NEW voiceId like 'shared-voice-id'. This describe mints its own
+     two books via this file's `writeBookOnDisk` helper (:70-102), each
+     seeded with two characters whose ids/voiceIds this describe controls
+     directly, and rewrites both books fresh in `beforeEach` so no test can
+     leak state into another. */
+  const VETO_AUTHOR = 'Petra Solberg';
+  const VETO_SERIES = 'The Amber Coast';
+  const VETO_BOOK_ONE = 'First Light';
+  const VETO_BOOK_TWO = 'Second Light';
+  let bookOneDir: string;
+  let bookTwoDir: string;
+
+  function seedVetoBooks(bookOneCloned: boolean, bookTwoCloned: boolean) {
+    const charFor = (cloned: boolean) => [
+      {
+        id: 'shared',
+        name: 'Shared',
+        voiceId: 'shared-voice-id',
+        ...(cloned ? { overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } } } : {}),
+      },
+      { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
+    ];
+    bookOneDir = writeBookOnDisk(
+      workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_ONE, 'book-veto-one',
+      charFor(bookOneCloned),
+    );
+    bookTwoDir = writeBookOnDisk(
+      workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_TWO, 'book-veto-two',
+      charFor(bookTwoCloned),
+    );
+  }
+
+  beforeEach(() => {
+    seedVetoBooks(false, false);
+  });
+
+  it('refuses the ENTIRE propagation when a clone exists on a sibling book, not just that book', async () => {
+    seedVetoBooks(true, false); // book one's 'shared' is cloned; book two's is not
+    const result = await applyOverrideToCastFiles(
+      'shared-voice-id',
+      { engine: 'qwen', name: 'qwen-shared' },
+      { author: VETO_AUTHOR, series: VETO_SERIES },
+    );
+    expect(result.updated).toBe(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toBe('already_cloned');
+    expect(result.skipped[0].bookDir).toBe('(series-wide)');
+
+    // CRITICAL: book two was NOT written either — the whole propagation was refused
+    const two = readCastFromDisk(workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_TWO);
+    expect(two.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+
+  it('propagates normally when no clone exists anywhere in the series', async () => {
+    seedVetoBooks(false, false);
+    const result = await applyOverrideToCastFiles(
+      'shared-voice-id',
+      { engine: 'qwen', name: 'qwen-shared' },
+      { author: VETO_AUTHOR, series: VETO_SERIES },
+    );
+    expect(result.updated).toBe(2);
+    expect(result.skipped).toHaveLength(0);
+
+    const one = readCastFromDisk(workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_ONE);
+    const two = readCastFromDisk(workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_TWO);
+    expect(
+      (one.characters[0].overrideTtsVoices as Record<string, { name?: string }>)?.qwen?.name,
+    ).toBe('qwen-shared');
+    expect(
+      (two.characters[0].overrideTtsVoices as Record<string, { name?: string }>)?.qwen?.name,
+    ).toBe('qwen-shared');
+  });
+
+  it('reports the refusal with a workspace-wide sentinel when no seriesFilter is given', async () => {
+    seedVetoBooks(true, false);
+    const result = await applyOverrideToCastFiles(
+      'shared-voice-id',
+      { engine: 'qwen', name: 'qwen-shared' },
+    );
+    expect(result.updated).toBe(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].bookDir).toBe('(workspace-wide)');
+  });
+
+  it('catches a clone injected during the walk (residual-window backstop)', async () => {
+    /* Seeds NEITHER book cloned. `hasClonedSlotAmongMatches` (the upfront
+       scan) and forEachMatchingCastCharacter (the walk) each read book two's
+       cast.json ONCE, in that order — the upfront scan first, the walk
+       second. Injecting on any earlier read (e.g. book one's state, as an
+       earlier version of this test did) races the UPFRONT scan itself: if
+       the clone lands before that scan reaches book two, the whole request
+       is refused upfront and the walk never runs at all, which is a
+       different code path than the one this test claims to exercise.
+       Keying strictly on book two's SECOND cast.json read pins the
+       injection to the walk's own read, after the upfront scan has already
+       passed cleanly on the pre-injection state. */
+    seedVetoBooks(false, false);
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const bookTwoCastPath = join(bookTwoDir, '.audiobook', 'cast.json');
+    let bookTwoCastReads = 0;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path === bookTwoCastPath) {
+        bookTwoCastReads += 1;
+        if (bookTwoCastReads === 2) {
+          const cast = JSON.parse(readFileSync(bookTwoCastPath, 'utf8'));
+          cast.characters[0].overrideTtsVoices = {
+            coqui: { name: 'clone-x', provenance: 'cloned' },
+          };
+          writeFileSync(bookTwoCastPath, JSON.stringify(cast));
+        }
+      }
+      return actual.readJson(path);
+    });
+
+    try {
+      const result = await applyOverrideToCastFiles(
+        'shared-voice-id',
+        { engine: 'qwen', name: 'qwen-shared' },
+        { author: VETO_AUTHOR, series: VETO_SERIES },
+      );
+      expect(bookTwoCastReads).toBe(2);
+      // The upfront scan passed (nothing cloned yet), but the residual
+      // backstop inside the walk caught the injection on book two
+      expect(result.skipped.length).toBeGreaterThanOrEqual(1);
+      /* Book one still had no clone at write time, so it IS a genuine
+         update — only book two was declined. A `mutate` that declines a
+         match returns the SAME object by reference (see
+         forEachMatchingCastCharacter's contract); `updated` must reflect
+         only the genuine write, not every character the walk merely
+         visited. Before that reference-equality fix, this returned 2
+         (both "touched" books counted, including the declined one). */
+      expect(result.updated).toBe(1);
+    } finally {
+      spy.mockImplementation(actual.readJson);
+    }
+  });
+
+  it('refuses the entire propagation when EVERY matched character is residual-clone-skipped', async () => {
+    /* Both books' cast.json is read twice each (upfront scan, then walk) —
+       same reasoning as the test above. Injecting on each book's SECOND cast
+       read means the upfront scan still passes cleanly on both (so this
+       exercises the residual backstop declining every book, not the upfront
+       refusal — a materially different path already covered by 'reports the
+       refusal with a workspace-wide sentinel...' above). `updated` must land
+       at exactly 0 so the two callers gating on `updated === 0 &&
+       skipped.length > 0` (single-design.ts, cast-design.ts) see a genuine
+       full refusal instead of a false "designed". */
+    seedVetoBooks(false, false);
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const bookOneCastPath = join(bookOneDir, '.audiobook', 'cast.json');
+    const bookTwoCastPath = join(bookTwoDir, '.audiobook', 'cast.json');
+    const castReads: Record<string, number> = { [bookOneCastPath]: 0, [bookTwoCastPath]: 0 };
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path in castReads) {
+        castReads[path] += 1;
+        if (castReads[path] === 2) {
+          const cast = JSON.parse(readFileSync(path, 'utf8'));
+          cast.characters[0].overrideTtsVoices = {
+            coqui: { name: 'clone-x', provenance: 'cloned' },
+          };
+          writeFileSync(path, JSON.stringify(cast));
+        }
+      }
+      return actual.readJson(path);
+    });
+
+    try {
+      const result = await applyOverrideToCastFiles(
+        'shared-voice-id',
+        { engine: 'qwen', name: 'qwen-shared' },
+        { author: VETO_AUTHOR, series: VETO_SERIES },
+      );
+      expect(castReads[bookOneCastPath]).toBe(2);
+      expect(castReads[bookTwoCastPath]).toBe(2);
+      expect(result.updated).toBe(0);
+      expect(result.skipped.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      spy.mockImplementation(actual.readJson);
+    }
   });
 });

@@ -1703,11 +1703,27 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
 
     expect(screen.getByTestId('qwen-design-error')).toHaveTextContent(
-      'already has a cloned voice',
+      'cloned voice',
     );
     /* THE discriminator: pre-fix nothing stops the dispatch — the mock
        cast-design layer has no cast state to refuse it against, so the
        character would be silently "designed" onto Qwen, off its clone. */
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: castDesignActions.designSingleRequested.type }),
+    );
+  });
+
+  it('[C-6b] refuses a FIRST design when clonedElsewhereInSeries is true, even with no book-local clone', async () => {
+    const { dispatchSpy } = renderWithBook({
+      ...baseChar,
+      voiceStyle: 'a steady adult voice',
+      clonedElsewhereInSeries: true,
+    });
+    dispatchSpy.mockClear();
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+
+    expect(screen.getByTestId('qwen-design-error')).toHaveTextContent('cloned voice');
     expect(dispatchSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: castDesignActions.designSingleRequested.type }),
     );
