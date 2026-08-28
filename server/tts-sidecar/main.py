@@ -6804,7 +6804,7 @@ class QwenEngine(Engine):
         # entirely; the only real ordering requirement — evict-before-load —
         # still holds, since the 1.7B-Base load happens later in this same
         # function, still inside the block below.
-        if self._design is not None:
+        if self._design is not None or self._design_in_flight.busy:
             log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
             self.unload_design()
         with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()), self._base17_activity(), _VD_KOKORO.design():
@@ -7241,7 +7241,7 @@ class QwenEngine(Engine):
         # (not synthesize), so the design→refine loop stays warm. No-op once
         # freed. Must precede any _synth_lock acquire (unload_design takes that
         # lock; it is non-reentrant).
-        if self._design is not None:
+        if self._design is not None or self._design_in_flight.busy:
             self.unload_design()
 
         if model == "1.7b":
@@ -7354,7 +7354,7 @@ class QwenEngine(Engine):
         # See synthesize(): a real batch synth means generation, so free the
         # transient VoiceDesign model first (no-op once freed). Before any
         # _synth_lock acquire — the lock is non-reentrant.
-        if self._design is not None:
+        if self._design is not None or self._design_in_flight.busy:
             self.unload_design()
         if not items:
             raise RuntimeError("synthesize_batch called with no items.")

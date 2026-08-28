@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from unittest import mock
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
@@ -37,6 +38,12 @@ import main  # noqa: E402
 class _FakeDesignModel:
     """Stand-in for the loaded VoiceDesign model — identity only matters for
     `is`/`is None` checks in these tests."""
+
+
+class _StoppedAfterGuard(Exception):
+    """Raised by a mocked `unload_design()` so a guard test can prove the
+    call happened without running the rest of `synthesize()` (which imports
+    `torch` and needs a real cached voice prompt — neither available here)."""
 
 
 def test_unload_design_waits_for_in_flight_design_then_unloads() -> None:
@@ -139,3 +146,84 @@ def test_unload_design_is_a_noop_when_no_design_resident() -> None:
     engine.unload_design(wait_seconds=5.0, poll_seconds=0.05)
     assert time.monotonic() - start < 0.5, "unload_design() should not wait when nothing is in flight"
     assert engine._design is None
+
+
+def test_synthesize_widens_guard_to_design_still_loading() -> None:
+    """#2678 — `synthesize()`'s render guard must not skip `unload_design()`
+    while `design_voice()` has claimed `_design_in_flight` but has not yet
+    assigned `self._design` (the heavy VoiceDesign weights are still
+    loading). The pre-fix guard (`self._design is not None` alone) is
+    `False` in exactly this window, so a render proceeding here loaded its
+    own model concurrently with the design's still-loading one — the
+    `Castwright#2678` vram-spill.
+
+    Mutation that must fail this (verified per this ticket's acceptance
+    criteria): revert the guard to `self._design is not None`. `_design` is
+    still `None` in this test's setup, so the reverted guard is `False` and
+    `unload_design` is never called — `mocked_unload.assert_called_once()`
+    below then fails. (The reverted guard also lets execution fall through
+    into `_load_voice_prompt`, which may raise its own — environment
+    dependent — error first; either way the call is caught below and the
+    `assert_called_once()` is what actually pins the guard's behavior,
+    independent of what that fallthrough raises.)
+    """
+    engine = main.QwenEngine()
+    engine._design = None  # design_voice() has claimed in-flight but not assigned yet
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_design_in_flight() -> None:
+        with engine._design_in_flight.claim():
+            entered.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_design_in_flight, daemon=True)
+    holder.start()
+    try:
+        assert entered.wait(2), "claim() never entered — test bug"
+        # The exact gap this fix closes: not-None is False, busy is True.
+        assert engine._design is None
+        assert engine._design_in_flight.busy is True
+
+        with mock.patch.object(
+            engine, "unload_design", side_effect=_StoppedAfterGuard
+        ) as mocked_unload:
+            with pytest.raises(Exception):  # noqa: B017 — see docstring: any raise ends the probe
+                engine.synthesize("0.6b", "__nonexistent_voice_for_test__", "hello")
+        mocked_unload.assert_called_once()
+    finally:
+        release.set()
+        holder.join(5)
+
+
+def test_synthesize_batch_widens_guard_to_design_still_loading() -> None:
+    """Same gap as `test_synthesize_widens_guard_to_design_still_loading`,
+    for the batch path — `Castwright#2678`'s actual repro hit
+    `synthesize_batch()`, which is what the chapter-render endpoint drives.
+    """
+    engine = main.QwenEngine()
+    engine._design = None
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_design_in_flight() -> None:
+        with engine._design_in_flight.claim():
+            entered.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_design_in_flight, daemon=True)
+    holder.start()
+    try:
+        assert entered.wait(2), "claim() never entered — test bug"
+        assert engine._design is None
+        assert engine._design_in_flight.busy is True
+
+        with mock.patch.object(engine, "unload_design") as mocked_unload:
+            with pytest.raises(RuntimeError, match="no items"):
+                engine.synthesize_batch("0.6b", [])
+        mocked_unload.assert_called_once()
+    finally:
+        release.set()
+        holder.join(5)
