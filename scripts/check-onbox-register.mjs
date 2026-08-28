@@ -449,8 +449,11 @@ export function checkRegister(text) {
 // directions matter and both were wrong without it (PR #2080 review round 2):
 // a commented-out row was counted as a real one, and commenting out a whole
 // group section — which removes it from the published page — was invisible.
-// Blanking rather than deleting keeps the comment's own `<section>`/`<span>`
-// text from being read while leaving the surrounding structure intact.
+// Removing the comment entirely keeps its own `<section>`/`<span>` text from
+// being read while leaving the surrounding structure intact. (This said
+// "blanking rather than deleting" and the code has always done the latter —
+// `.replace(..., '')` removes the span rather than substituting whitespace.
+// Corrected because the distinction is the kind a reader would reason from.)
 export function stripHtmlComments(html) {
   let out = html;
   for (;;) {

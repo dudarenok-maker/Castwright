@@ -79,6 +79,8 @@ import {
   type OrphanedCharacterFallback,
 } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
+import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { findClonedVoiceIdsAmongMatches } from './voices.js';
 
 export const bookStateRouter = Router();
 
@@ -150,6 +152,25 @@ async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<
     existingChars,
     preserveDesignedVoicesOnCastWrite(existingChars, restored),
   );
+  return { ...cast, characters };
+}
+
+/* Strip fields the GET response computes fresh (currently just
+   clonedElsewhereInSeries, #2006) before any cast write — a client that
+   echoes back a just-fetched character (the autosave path does this) must
+   never freeze a derived, point-in-time value into cast.json, where
+   nothing would ever invalidate it. Tolerates a non-cast-shaped patch
+   (returns it untouched), matching denormaliseCastReusedVoices and
+   preserveDesignedVoices above. */
+function stripDerivedCharacterFields(patch: unknown): unknown {
+  if (!patch || typeof patch !== 'object' || !Array.isArray((patch as { characters?: unknown }).characters)) {
+    return patch;
+  }
+  const cast = patch as { characters: Array<Record<string, unknown>> };
+  const characters = cast.characters.map((c) => {
+    const { clonedElsewhereInSeries: _derived, ...rest } = c;
+    return rest;
+  });
   return { ...cast, characters };
 }
 
@@ -383,6 +404,38 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       for (const c of cast.characters as Array<{ id?: unknown; lines?: unknown }>) {
         if (typeof c?.id !== 'string') continue;
         c.lines = lineCountById.get(c.id) ?? 0;
+      }
+    }
+
+    /* clonedElsewhereInSeries (#2006) — computed fresh on every GET, ONE
+       batched scan for the whole cast rather than one per character (see
+       findClonedVoiceIdsAmongMatches's own comment for why: a per-character
+       scan turns this into a C×B walk on a hot read path). Excludes this
+       book's own copy so a character isn't flagged true purely because it
+       is cloned locally — that's already surfaced via overrideTtsVoices. */
+    const isStandalone = state.isStandalone === true;
+    const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(req.params.bookId);
+    /* #2718 review round 1 — this scan walks every OTHER linked book's own
+       cast.json too; a corrupt sibling must not 500 an otherwise-healthy GET
+       of THIS book's state. Advisory-only (never write-gating — the field is
+       stripped again on PUT), so failing open to "nothing found" is the
+       correct degrade: the badge just doesn't show until the sibling is
+       fixed, same as any other book briefly missing from the scan. */
+    const clonedVoiceIds = seriesInfo
+      ? await findClonedVoiceIdsAmongMatches(seriesInfo, bookDir).catch((err) => {
+          console.warn(
+            `[book-state] clonedElsewhereInSeries scan failed for ${req.params.bookId}:`,
+            (err as Error).message,
+          );
+          return new Set<string>();
+        })
+      : new Set<string>();
+    if (cast?.characters && Array.isArray(cast.characters)) {
+      for (const c of cast.characters as Array<{ id?: unknown; voiceId?: unknown } & Record<string, unknown>>) {
+        if (!c || typeof c !== 'object') continue;
+        const linkId = (typeof c.voiceId === 'string' ? c.voiceId : undefined)
+          ?? (typeof c.id === 'string' ? c.id : undefined);
+        c.clonedElsewhereInSeries = linkId ? clonedVoiceIds.has(linkId) : false;
       }
     }
 
@@ -708,7 +761,8 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            read and this write, silently erasing whatever it just planted. */
         await withCastLock(bookDir, async () => {
           const guarded = await preserveDesignedVoices(bookDir, body.patch);
-          await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(guarded));
+          const denormalised = await denormaliseCastReusedVoices(guarded);
+          await writeJsonAtomic(castJsonPath(bookDir), stripDerivedCharacterFields(denormalised));
         });
         break;
       }

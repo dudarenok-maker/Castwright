@@ -62,6 +62,19 @@ export function DevicePanel() {
         </p>
       )}
 
+      {info?.cudaVerified === false && (
+        <p
+          className="mt-2 inline-flex items-start gap-2 text-xs text-amber-700"
+          data-testid="cuda-fallback-warning"
+        >
+          <span className="w-1.5 h-1.5 mt-1 rounded-full bg-amber-500 shrink-0" />
+          <span>
+            GPU acceleration was configured for Kokoro, but it's running on CPU instead.
+            {info.cudaVerificationDetail ? ` ${info.cudaVerificationDetail}` : ''}
+          </span>
+        </p>
+      )}
+
       {devices && (
         <ul className="mt-2 space-y-0.5 text-xs text-ink/60">
           {ENGINE_ORDER.filter((e) => devices[e] !== null).map((e) => (

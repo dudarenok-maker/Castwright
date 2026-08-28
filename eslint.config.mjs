@@ -42,6 +42,7 @@ export default tseslint.config(
       '.worktrees/',
       'server/dist/',
       'server/tts-sidecar/.venv/',
+      'server/src/__wire-fixtures__/',
       'server/handoff/',
       'playwright-report/',
       'test-results/',

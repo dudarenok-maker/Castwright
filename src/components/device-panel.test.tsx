@@ -99,4 +99,46 @@ describe('DevicePanel', () => {
     expect(screen.queryByText(/Currently running on:/)).not.toBeInTheDocument();
     expect(screen.getByText('Kokoro')).toBeInTheDocument();
   });
+
+  it('warns when CUDA was configured but Kokoro ran on CPU instead', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cpu', coqui: 'cpu', qwen: 'cpu' },
+      devicesState: 'ready',
+      activeEngine: 'kokoro',
+      cudaVerified: false,
+      cudaVerificationDetail: 'CUDAExecutionProvider was requested but did not land in the real session (may be running on CPU or another accelerator).',
+    };
+    render(<DevicePanel />);
+    const warning = screen.getByTestId('cuda-fallback-warning');
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toContain('GPU acceleration was configured for Kokoro, but it\'s running on CPU instead.');
+    expect(warning.textContent).toContain('CUDAExecutionProvider was requested but did not land in the real session (may be running on CPU or another accelerator).');
+  });
+
+  it('renders no warning and no layout shift when cudaVerified is true', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+      devicesState: 'ready',
+      activeEngine: 'kokoro',
+      cudaVerified: true,
+      cudaVerificationDetail: null,
+    };
+    render(<DevicePanel />);
+    expect(screen.queryByTestId('cuda-fallback-warning')).not.toBeInTheDocument();
+  });
+
+  it('renders no warning and no layout shift when cudaVerified is null (not yet checked)', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+      devicesState: 'ready',
+      activeEngine: 'kokoro',
+      cudaVerified: null,
+      cudaVerificationDetail: null,
+    };
+    render(<DevicePanel />);
+    expect(screen.queryByTestId('cuda-fallback-warning')).not.toBeInTheDocument();
+  });
 });

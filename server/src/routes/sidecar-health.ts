@@ -184,6 +184,12 @@ interface SidecarHealthBody {
      because torch's current device wasn't 0). `{}` / absent on an older
      sidecar or a CUDA-unavailable box. */
   vram_reserved_mb_by_device?: Record<string, { reserved_mb: number; total_mb: number }>;
+  /* Castwright#2709/#2710 — real-session CUDA self-test result from Kokoro's
+     first load. `null` until the sidecar has attempted the self-test (mirrors
+     the coqui_import_ok/kokoro_import_ok tri-state convention above). Absent
+     on an older sidecar → treated the same as null. */
+  cuda_verified?: boolean | null;
+  cuda_verification_detail?: string | null;
 }
 
 /* side-14 — per-engine device ground-truth. Sidecar values are normalised
@@ -228,6 +234,18 @@ export function normaliseDevicesState(raw: unknown): SidecarDevicesState | null 
   return DEVICES_STATES.includes(raw as SidecarDevicesState)
     ? (raw as SidecarDevicesState)
     : null;
+}
+
+/* Normalise cudaVerified field from sidecar /health response. Should be a
+   boolean or null/undefined; any other shape is coerced to null. */
+export function normaliseCudaVerified(raw: unknown): boolean | null {
+  return typeof raw === 'boolean' ? raw : null;
+}
+
+/* Normalise cudaVerificationDetail field from sidecar /health response. Should
+   be a string or null/undefined; any other shape is coerced to null. */
+export function normaliseCudaVerificationDetail(raw: unknown): string | null {
+  return typeof raw === 'string' ? raw : null;
 }
 
 const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
@@ -394,6 +412,14 @@ export interface SidecarHealthResult {
   /* side-14 — per-engine device map + probe state, forwarded from the sidecar. */
   devices?: SidecarDeviceMap | null;
   devicesState?: SidecarDevicesState | null;
+  /* Castwright#2709/#2710 — forwarded verbatim from the sidecar body's
+     cuda_verified/cuda_verification_detail (see SidecarHealthBody above).
+     KOKORO-ONLY: measures whether Kokoro's ORT session landed on CUDA.
+     Does NOT indicate CUDA placement for other engines (Qwen, Coqui, Whisper).
+     A caller verifying overall box GPU health should NOT treat cudaVerified: true
+     as proof every engine is on GPU. */
+  cudaVerified?: boolean | null;
+  cudaVerificationDetail?: string | null;
   error?: string;
 }
 
@@ -503,6 +529,8 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
           : undefined,
       devices,
       devicesState: normaliseDevicesState(body.devices_state),
+      cudaVerified: normaliseCudaVerified(body.cuda_verified),
+      cudaVerificationDetail: normaliseCudaVerificationDetail(body.cuda_verification_detail),
     };
   } catch (e) {
     clearTimeout(timer);

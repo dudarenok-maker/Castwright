@@ -2511,3 +2511,126 @@ describe('book-state router — prosodyEnabled flag (fs-65 Phase-3)', () => {
     expect(onDisk.prosodyEnabled).toBe(true);
   });
 });
+
+/* #2006 Task 9 — clonedElsewhereInSeries: computed fresh on GET (batched
+   series scan, excluding the caller's own book), stripped explicitly on the
+   PUT write path so a client echoing back a just-fetched character (the
+   autosave path does this) can never freeze it into cast.json. Own dedicated
+   fixture (writeSeriesBookOnDisk below), same reasoning as the plan's other
+   two-book-series describes (Tasks 2/4/8 in voices.test.ts): this file's
+   shared AUTHOR/SERIES/TITLE book (top-level beforeAll) is a single
+   standalone book and can't exercise a series-sibling clone. */
+describe('book-state router — clonedElsewhereInSeries (#2006 Task 9)', () => {
+  const CES_AUTHOR = 'Imre Balthazar';
+  const CES_SERIES = 'The Glass Armada';
+
+  function writeSeriesBookOnDisk(
+    title: string,
+    id: string,
+    characters: Array<Record<string, unknown>>,
+  ): string {
+    const dir = join(workspaceRoot, 'books', CES_AUTHOR, CES_SERIES, title);
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: `m_${id}`,
+        title,
+        author: CES_AUTHOR,
+        series: CES_SERIES,
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+    return dir;
+  }
+
+  it('GET marks a character true when a linked character on a DIFFERENT confirmed-cast series book is cloned, false when not', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const bookOneId = makeBookId(CES_AUTHOR, CES_SERIES, 'Departure');
+    const bookTwoId = makeBookId(CES_AUTHOR, CES_SERIES, 'Arrival');
+    writeSeriesBookOnDisk('Departure', bookOneId, [
+      { id: 'shared', name: 'Shared', voiceId: 'ces-shared-voice-id' },
+      { id: 'lone', name: 'Lone', voiceId: 'ces-lone-voice-id' },
+    ]);
+    writeSeriesBookOnDisk('Arrival', bookTwoId, [
+      {
+        id: 'shared', name: 'Shared', voiceId: 'ces-shared-voice-id',
+        overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+      },
+    ]);
+
+    const resOne = await request(app).get(`/api/books/${bookOneId}/state`);
+    expect(resOne.status).toBe(200);
+    const sharedOnBookOne = resOne.body.cast.characters.find((c: { id: string }) => c.id === 'shared');
+    const loneOnBookOne = resOne.body.cast.characters.find((c: { id: string }) => c.id === 'lone');
+    expect(sharedOnBookOne.clonedElsewhereInSeries).toBe(true);
+    expect(loneOnBookOne.clonedElsewhereInSeries).toBe(false);
+
+    // The clone's own book excludes itself — cloned only on its own copy reads false.
+    const resTwo = await request(app).get(`/api/books/${bookTwoId}/state`);
+    expect(resTwo.status).toBe(200);
+    const sharedOnBookTwo = resTwo.body.cast.characters.find((c: { id: string }) => c.id === 'shared');
+    expect(sharedOnBookTwo.clonedElsewhereInSeries).toBe(false);
+  });
+
+  it('#2718 review round 1 — a corrupt SIBLING cast.json does not 500 this book\'s own GET', async () => {
+    /* findClonedVoiceIdsAmongMatches walks every OTHER linked book's own
+       cast.json too. Before the fix, a JSON.parse failure on a sibling
+       propagated straight through this advisory-only scan and 500'd the
+       whole request for an otherwise perfectly healthy book. */
+    const { makeBookId } = await import('../workspace/paths.js');
+    const healthyId = makeBookId(CES_AUTHOR, CES_SERIES, 'Healthy Book');
+    const corruptId = makeBookId(CES_AUTHOR, CES_SERIES, 'Corrupt Sibling');
+    writeSeriesBookOnDisk('Healthy Book', healthyId, [
+      { id: 'shared', name: 'Shared', voiceId: 'ces-corrupt-shared-voice-id' },
+    ]);
+    const corruptDir = writeSeriesBookOnDisk('Corrupt Sibling', corruptId, [
+      { id: 'shared', name: 'Shared', voiceId: 'ces-corrupt-shared-voice-id' },
+    ]);
+    writeFileSync(join(corruptDir, '.audiobook', 'cast.json'), '{not valid json');
+
+    const res = await request(app).get(`/api/books/${healthyId}/state`);
+    expect(res.status).toBe(200);
+    const shared = res.body.cast.characters.find((c: { id: string }) => c.id === 'shared');
+    // Fails open: the corrupt sibling can't be scanned, so this reads false
+    // rather than blocking the response.
+    expect(shared.clonedElsewhereInSeries).toBe(false);
+  });
+
+  it('PUT slice=cast strips clonedElsewhereInSeries so it never freezes into cast.json', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const stripBookId = makeBookId(CES_AUTHOR, CES_SERIES, 'Strip Test Book');
+    const stripBookDir = writeSeriesBookOnDisk('Strip Test Book', stripBookId, [
+      { id: 'echoed', name: 'Echoed', voiceId: 'ces-echoed-voice-id' },
+    ]);
+
+    const put = await request(app)
+      .put(`/api/books/${stripBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            { id: 'echoed', name: 'Echoed', voiceId: 'ces-echoed-voice-id', clonedElsewhereInSeries: true },
+          ],
+        },
+      });
+    expect(put.status).toBe(204);
+
+    const onDisk = JSON.parse(readFileSync(join(stripBookDir, '.audiobook', 'cast.json'), 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    expect(onDisk.characters[0].clonedElsewhereInSeries).toBeUndefined();
+    expect('clonedElsewhereInSeries' in onDisk.characters[0]).toBe(false);
+  });
+});
