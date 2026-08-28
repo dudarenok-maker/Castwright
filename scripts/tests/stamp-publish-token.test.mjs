@@ -183,3 +183,19 @@ test('bumpToken refuses to exceed the parser\'s 15-digit counter cap', () => {
   assert.equal(parsePublishToken(atCap).n, 999999999999999, 'precondition: the cap parses');
   assert.throws(() => bumpToken(atCap, () => 'abc124'), /15-digit counter cap/);
 });
+
+test('seedToken distinguishes MALFORMED from absent (the F7 mirror)', () => {
+  // `parsePublishToken` has three outcomes and `{ malformed } !== null`, so a
+  // binary `!== null` test reported "this file already has a token" for a file
+  // with none — the same misattribution the comparator fix closes, mirrored at
+  // the parser's only other caller.
+  const noToken = Buffer.from('<h1>Register</h1>\n<p>no token at all</p>\n');
+  assert.throws(() => seedToken(noToken, () => 'abc123'), (err) => {
+    assert.ok(!/already has a token/.test(err.message), `misattributed: ${err.message}`);
+    assert.match(err.message, /Buffer|encoding/);
+    return true;
+  });
+  // A real, already-tokened string still gets the right refusal.
+  const seeded = seedToken('<h1>T</h1>', () => 'seed01').html;
+  assert.throws(() => seedToken(seeded, () => 'seed02'), /already has a token/);
+});

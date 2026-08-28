@@ -47,7 +47,17 @@ export const mintNonce = () => randomBytes(6).toString('hex');
 const SEED_AFTER = /(<h1[^>]*>[\s\S]*?<\/h1>)/;
 
 export function seedToken(html, mint = mintNonce) {
-  if (parsePublishToken(html) !== null) {
+  // THREE outcomes, not two. `parsePublishToken` returns null (no token),
+  // `{ malformed }` (a token, or a value, this reader will not accept), or a
+  // parsed token — and `{ malformed } !== null`, so a binary `!== null` test
+  // reports "this file already has a token" for a file with NO token in it.
+  // Reading the parser as a binary is precisely the defect this PR fixes in
+  // the comparator; it was mirrored here, at the parser's only other caller.
+  const existing = parsePublishToken(html);
+  if (existing && existing.malformed) {
+    throw new Error(`stamp-publish-token: ${existing.malformed}`);
+  }
+  if (existing !== null) {
     throw new Error('stamp-publish-token: this file already has a token; stamp it, do not seed it.');
   }
   if (!SEED_AFTER.test(html)) {

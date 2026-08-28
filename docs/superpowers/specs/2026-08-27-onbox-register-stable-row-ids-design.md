@@ -447,13 +447,23 @@ rather than being implied.
 
 **Second: `baselineInMine` proves your branch HELD main's live view, not that
 your working file still reflects it.** The lookup asks whether main's nonce
-appears anywhere in `HEAD`'s history for that path — and a commit that *removes*
-that nonce satisfies it just as well as one that adds it. Your own stamp is
-exactly such a commit, which is not incidental: it is what lets a correctly
-rebased lane clear the staleness STOP after one stamp, and it is why the STOP is
-self-clearing rather than a dead end. The cost is that a revert, or a wholesale
-"take mine" conflict resolution *after* a clean rebase, also satisfies it and
-goes green.
+appears anywhere in `HEAD`'s history for that path, and it is **the rebase
+alone that satisfies it** — measured in a real repository: before rebasing the
+query selects 0 commits, after rebasing and *before any stamp* it selects 1.
+So the staleness STOP is cleared by rebasing, which is exactly what its message
+instructs. The cost of asking a history question rather than a content one is
+that a revert, or a wholesale "take mine" conflict resolution *after* a clean
+rebase, also satisfies it and goes green.
+
+*(An earlier draft of this paragraph said the removal-match was "what lets a
+correctly rebased lane clear the STOP after one stamp". That inverts the
+causation. `-S` does match a removal — your own stamp removes main's nonce and
+the query then selects 2 commits rather than 1 — but that second match is
+**redundant**: the commit that ADDED main's nonce is already in your history
+once you have rebased. The stamp answers a different gate, `w.n === b.n`. The
+claim was written from the previous draft rather than from a probe, which is
+the failure mode this document has recorded four times and is the reason the
+correction is left visible here rather than quietly edited out.)*
 
 That residue is adjudicated, not overlooked. Detecting it means comparing
 *content* between the working file and the baseline — which is precisely the

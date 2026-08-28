@@ -381,8 +381,37 @@ test('18j the ENTIRE green region requires baselineInMine (enumeration)', () => 
 });
 
 test('18m a counter bumped WITHOUT minting is caught with no history lookup', () => {
-  const e = cmp({ working: T(49, 'same'), published: T(48, 'same'), baseline: T(47, 'aaa') });
-  assert.ok(e.some((x) => x.includes('without minting')), e.join('|'));
+  // The default lookups put inBaseline=true, which makes the HISTORY-backed
+  // guard fire first — and its message also contains "without minting", so an
+  // earlier version of this test passed while the guard it is named for could
+  // be deleted outright. inBaseline=false is what actually reaches it.
+  const e = cmp({
+    working: T(48, 'same'),
+    published: T(47, 'same'),
+    baseline: T(47, 'aaa'),
+    ...L({ inBaseline: false }),
+  });
+  // Assert on the half of the message that is UNIQUE to this guard, not on the
+  // phrase both guards share.
+  assert.ok(
+    e.some((x) => x.includes("kept the published page's nonce")),
+    e.join('|'),
+  );
+  assert.ok(!e.some((x) => x.includes("already in origin/main's history")), e.join('|'));
+});
+
+test('18m2 the two un-minted guards are distinguishable, not interchangeable', () => {
+  // 170 is history-backed and speaks about the LIVE PAGE vs origin/main; 243
+  // needs no lookup and speaks about the WORKING file vs the live page. Both
+  // say "without minting", which is why one could stand in for the other.
+  const historyBacked = cmp({
+    working: T(49, 'mine'),
+    published: T(48, 'same'),
+    baseline: T(47, 'same'),
+    ...L({ inBaseline: true }),
+  });
+  assert.ok(historyBacked.some((x) => x.includes("already in origin/main's history")));
+  assert.ok(!historyBacked.some((x) => x.includes("kept the published page's nonce")));
 });
 
 test('18n lookups: null fails closed instead of throwing', () => {
@@ -423,6 +452,14 @@ test('18l bumpToken REFUSES a nonce its own parser would reject', () => {
   // permanently, so the round trip is the real assertion.
   const { html } = bumpToken(src, () => 'abc123');
   assert.deepEqual(parsePublishToken(html), { n: 48, nonce: 'abc123' });
+});
+
+test('18p a tokenless WORKING file is reported (the guard-sweep survivor)', () => {
+  // The other guard a deletion sweep found unprotected: nothing asserted the
+  // tokenless-working STOP positively, so it could be removed with the suite
+  // still green. Distinct from 18o, which is about a non-string value.
+  const e = cmp({ working: '<p>no token here</p>', published: T(48, 'bbb'), baseline: T(47, 'aaa') });
+  assert.ok(e.some((x) => x.includes('the tracked live view has none')), e.join('|'));
 });
 
 test('18o a non-string copy names the CALLER\'s fault, not a missing token', () => {
