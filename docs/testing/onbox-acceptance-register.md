@@ -383,11 +383,11 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 > **Last change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
 > golden baseline bless, #1994) — minted from the `next-id` floor per this
-> file's own allocate-once convention (below), NOT the old high-water+1 slot
+> file's own allocate-once convention (above), NOT the old high-water+1 slot
 > (`A38`) this row was originally cut against before that convention shipped.
 > `A38` is deliberately left dangling: `onbox-sitting-plan.md` already uses
 > that citation to mean something else, and re-issuing it here is exactly the
-> silent-wrong-row-resolution failure mode the stable-ID design (below) was
+> silent-wrong-row-resolution failure mode the stable-ID design (above) was
 > built to prevent. `next-id: A101` bumped to `A102` in the same change.
 >
 > **Previous change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's

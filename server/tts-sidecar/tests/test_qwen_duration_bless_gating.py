@@ -10,13 +10,26 @@ ordinary Python call, not a pytest collection, so the module-level `pytestmark`
 never attaches to these test items.
 
 This file tests:
-- Only the first synthesis uses `synthesise_or_skip` (verified structurally
-  via the function's expected behavior)
-- Tolerance remains at static placeholder (0.10) from the committed baseline
+- `_bless` uses `synthesise_or_skip` only for line 1 (warm-up); every later
+  line calls the engine directly — an ORDERED call log, not a count, so an
+  `i == 0` -> `i == 1` swap can't survive with matching counts
+  (`test_bless_uses_synthesise_or_skip_only_for_first_line`)
+- `_bless` never touches `tolerance` — it preserves whatever's already in
+  the baseline file (placeholder or a hand-set real value), and stamps
+  `entries[*]["voice"]` + a `metadata` block on every bless
+  (`test_bless_tolerance_never_touched`)
+- The assertion loop flags a baseline entry recorded against a DIFFERENT
+  Qwen voice than this run resolved — Qwen voices are runtime-resolved, not
+  a fixed per-line catalog like Kokoro's
+  (`test_assertion_loop_flags_voice_mismatch_against_baseline`)
+- …but does NOT flag a baseline entry with no recorded `voice` key at all
+  (backward-compatible with a pre-#1994-review baseline shape) — the
+  guard's `is not None` half, deliberately untested by the mismatch case
+  above (`test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry`)
 - The assertion loop's warm-up runs even when the FIRST fixture line's
   baseline entry happens to be missing (a missing-entries check must not
   short-circuit past the warm-up, or a later line's direct engine call loses
-  its SKIP protection — see `test_assertion_loop_warms_up_before_missing_entry_check`)
+  its SKIP protection — `test_assertion_loop_warms_up_before_missing_entry_check`)
 """
 from __future__ import annotations
 

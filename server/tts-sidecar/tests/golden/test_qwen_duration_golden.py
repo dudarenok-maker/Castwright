@@ -12,7 +12,7 @@ Marked `@pytest.mark.golden` so the normal fast `test:sidecar` tier (run with
 `-m "not golden"`) never loads the model. Run it via
 `npm run test:golden-audio -- --sidecar-only --engine=qwen` on a box with the
 Qwen 0.6B-Base weights AND a designed Qwen voice (Qwen voices are per-workspace
-bespoke — no fixed catalog like Kokoro's — so `list_voices()` discovers whicher
+bespoke — no fixed catalog like Kokoro's — so `list_voices()` discovers whichever
 voices already exist on the box).
 
 The baseline ships UNBLESSED (empty `entries`, placeholder `tolerance`) — the
