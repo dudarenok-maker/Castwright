@@ -340,6 +340,196 @@ cold-load, Coqui load-steer) are tracked together in **#1730**.
 > acceptance (with `SEG_CAPACITY_ADMISSION=1`) still owed before the
 > concurrent-multi-card flag flip.
 
+## Coqui residency policy (side-18)
+
+<!-- COQUI-RESIDENCY-POLICY -->
+
+Two independent mechanisms free VRAM held by a resident Coqui XTTS model (~3.5 GB).
+Both are correct, both are tested, and neither knows the other exists. The fork
+#1932 offered — collapse to one, or keep both with explicit cross-references —
+is **closed: both are kept**, for the two reasons below. This section is the
+single statement of that ruling so the question is not reopened.
+
+### Mechanism A — Node, plan-driven, proactive
+
+`evictEngineForPhase` (`server/src/tts/synthesise-chapter.ts:1015`) POSTs
+`/unload` to the sidecar for a named engine. The Coqui-facing wrappers are
+`evictCoquiForQwenPhase` (`:1050`) and the symmetric `evictQwenForCoquiPhase`
+(`:1029`). 
+
+The eviction wrappers have **four call sites**, not two:
+
+1. **Pre-pass invocations (memoised, resolver-mediated):** `beforeFirstCoquiDerive`
+   (`:1883-1900`) evicts `evictQwenForCoquiPhase` before the first Coqui derive
+   in the chapter; `beforeFirstQwenDerive` (`:1944-1954`) evicts
+   `evictCoquiForQwenPhase` before the first Qwen derive (when Coqui is present).
+   **Two of the three pre-pass sites are called from *inside* voice-resolver
+   try/catch blocks (`clone-voice-resolver.ts`), inheriting the resolver's own
+   fail-loud (cloned voices) / fail-soft (designed voices) semantics — no local
+   try/catch wraps them at those call sites.** However, **a third pre-pass site**
+   exists at `:2115-2123`, also in `synthesise-chapter.ts`, which primes
+   `beforeFirstQwenDerive` before any Qwen render-phase work when Coqui is present
+   AND any Qwen work is present (either groups or derives). This third site shares
+   the memoised promise with the resolver-mediated call sites, so while it fires in
+   more cases than "no derive needed", the resolver calls still apply their own
+   fail-loud (cloned) / fail-soft (designed) policy on top.
+   This third site **is wrapped in a local try/catch** (lines 2115-2123) that
+   unconditionally swallows the error and logs a warning — deliberately best-effort
+   fail-soft, covering cases where a sidecar recycle window at this priming call
+   cannot abort the chapter.
+
+2. **Render-phase pair (top-level, plan-driven):** The leading evict fires at
+   `:2921` before a mixed chapter's Coqui phase; the trailing evict fires at
+   `:2989` at its end. Each call is bounded by `withCallTimeout` and carries
+   the chapter's abort signal.
+
+The render-phase pair is driven by the **generation plan** — Node knows which
+engine the **current dispatch** needs, so it can free the VRAM at a boundary
+where "no further Coqui work is queued" is a *fact* rather than a prediction
+(this scope applies to the **render-phase pair only** and the current dispatch,
+not future chapters or the pre-pass pair, which is memoised and runs *before*
+any derive). The render-phase evicts are deliberately **fail-soft** on non-abort
+errors: socket errors and timeouts are logged as warnings and execution
+continues. The leading evict additionally rethrows abort signals for pause
+detection (`routes/generation.ts` names its own `AbortError`); the trailing
+evict swallows aborts too, since by the time it fires the chapter's synthesis
+work is already complete. This asymmetry is correct: the trailing evict's abort
+swallow does not lose synthesised work (all groups are done), while the leading
+evict's abort rethrow ensures a paused generation is visible to the pause-detection
+path.
+
+### Mechanism B — sidecar, demand-driven, reactive
+
+`_idle_evict_steps` (`server/tts-sidecar/main.py:4989-5064`) is a
+**five-step, cross-engine ladder** — `spk`, `asr`, `qwen.design`,
+`qwen.base17`, `coqui` — run by `PlacementController` on the admission path
+when an op is VRAM-starved. Coqui is *one step of it* (`:5063`), calling
+`CoquiEngine.maybe_free_idle` (`:2273`). This is **not** a Coqui-specific
+idle evict: it is one entry in a generic ladder that every engine has a step
+in.
+
+Two Coqui-specific qualifications distinguish the Coqui step from the others:
+
+1. **Self-admission skip.** The step is omitted entirely when the admitting
+   op is itself Coqui (`server/tts-sidecar/main.py:5053`, `if engine !=
+   "coqui"`) — evicting would unload the model that op is about to reload.
+2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
+   `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
+   registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)
+   — rather than the `0.0` the transient models (SPK, ASR, Qwen design,
+   Qwen base17) take. Coqui deliberately has **no** background watchdog,
+   unlike Qwen/ASR/ECAPA, so this only ever runs under genuine VRAM
+   pressure.
+
+### Ownership
+
+**A owns known plan boundaries; B owns unpredicted demand pressure. Neither
+is a superset of the other.**
+
+A fires at the exact points where Node's generation plan guarantees no
+further Coqui work remains in the current dispatch. B fires whenever an
+unrelated admission is VRAM-starved and Coqui happens to be idle long enough
+to reclaim — a situation Node's plan cannot predict because it arrives from
+outside the current book's render.
+
+### Why both are kept
+
+1. **Removing B** would delete one step from a five-step cross-engine ladder
+   that stays regardless. The only effect is that a starved *non-Coqui*
+   admission can no longer reclaim XTTS's ~3.5 GB on an 8 GB card. That is a
+   regression, not a consolidation.
+
+2. **Removing A** would require the sidecar to know Node's generation plan
+   across a process boundary, which it cannot. And B cannot substitute for
+   A: B fires only *after* an admission is already starved, and only past a
+   30 s TTL — so a Qwen load arriving 5 s after the Coqui phase ends finds
+   Coqui resident, the step returns `False`, and nothing is reclaimed.
+
+### Lock caveats — invariants any future change must preserve
+
+1. **Mechanism A's failure semantics differ by call site.**
+   
+   - **Render-phase pair (bounded by `withCallTimeout`, fail-soft):** Each
+     `/unload` call carries the chapter's abort signal. Both evicts must remain
+     fail-soft on transient errors (socket errors, timeouts are logged as
+     warnings and execution continues). They differ on aborts: the leading
+     evict rethrows `AbortError` for pause detection (`routes/generation.ts`
+     names its own `AbortError`), while the trailing evict swallows abort
+     signals too since by that point all synthesis work is done. The trailing
+     evict cannot lose synthesised audio by failing, and the leading evict must
+     signal a pause through its abort path if the generation is cancelled
+     mid-evict.
+   
+   - **Pre-pass pair — four resolver-mediated, one render-prep best-effort:**
+     `beforeFirstCoquiDerive` and `beforeFirstQwenDerive` have **five distinct
+     invocation sites across three failure-semantics patterns**, each with different
+     failure semantics that must be preserved independently:
+     
+     - **Four resolver-mediated sites (voice-type-dependent):** Called from
+       *inside* voice-resolver try/catch blocks in `clone-voice-resolver.ts`,
+       with no separate local try/catch wrapping them. The cloned resolver calls
+       both hooks (coqui arm at ~line 547, qwen arm at ~line 548); the designed
+       resolver also calls both (coqui arm at ~line 996, qwen arm at ~line 1073).
+       A failure is reported through the resolver's own existing, already-differentiated
+       policy: the cloned resolver's catch treats it as an ordinary derive failure
+       (fail-loud — `broken` accumulates, `UnresolvableClonedVoiceError` still throws),
+       while the designed resolver's catch treats it as an ordinary self-heal failure
+       (fail-soft — `softFailedUuids`/keep-stale, never rethrown). This voice-type-dependent
+       semantics is intentional: a pre-pass evict failure on a cloned voice is
+       unrecoverable (the cloned resolver's own identity depends on that model
+       running), while a failure on a designed voice can be healed by keeping
+       the stale version.
+     
+     - **One render-prep best-effort site (unconditional fail-soft):** A third
+       pre-pass invocation at `:2115-2123` in `synthesise-chapter.ts` primes
+       `beforeFirstQwenDerive` before any Qwen render-phase work when Coqui is
+       present AND any Qwen work is pending (either groups or derives; no resolver
+       call to hang the hook off for the render-only case). This site shares the
+       memoised promise with the four resolver-mediated calls, so when they later
+       await the same hook, they get the already-settled result and apply their own
+       fail-loud/fail-soft policy on top.
+       This site **is deliberately wrapped in a local try/catch** that unconditionally
+       swallows errors and logs warnings, covering the case where a sidecar recycle
+       window at this priming call cannot abort the chapter (fix for a §2.3
+       chapter-abort regression). This best-effort wrapper is distinct from the
+       resolver-mediated invocations and correct by design.
+     
+     Any future change to the pre-pass evicts must **preserve all three
+     invocation patterns independently**: the two resolver-mediated sites must
+     remain unwrapped at those call sites (inheriting resolver semantics), and
+     the render-prep site must retain its local fail-soft wrapper to prevent
+     chapter aborts on transient sidecar errors.
+
+2. **Mechanism B's lock-guarded idle check.** `maybe_free_idle`
+   (`server/tts-sidecar/main.py:2273`) re-validates the idle condition under
+   `_synth_lock` and skips while a synth is in flight, so admission can
+   never free the model out from under an active forward. Any change to
+   `maybe_free_idle` must preserve this re-validation-under-lock.
+
+3. **Mechanism B's non-reentrant lock.** `_drop_model_locked()` MUST be
+   called while already holding `_synth_lock` (it is a non-reentrant
+   `threading.Lock`); by contrast, the public `unload()` method MUST NOT be
+   called while holding the lock — it acquires the lock itself. Internal
+   callers that need the same teardown (e.g., `maybe_free_idle` at
+   `server/tts-sidecar/main.py:2273`) acquire the lock, call
+   `_drop_model_locked()` inside it, then release the lock and call
+   `_reclaim_after_drop()` afterwards. This sequence is critical: releasing
+   the lock BEFORE reclaim is necessary for throughput — holding `_synth_lock`
+   across the multi-second `gc.collect()` + `torch.cuda.empty_cache()` in
+   `_reclaim_after_drop()` would unnecessarily block concurrent synth calls that
+   only need the lock briefly, for no correctness benefit (the reference-drop
+   whose safety depends on the lock is guaranteed by ACQUIRING it, not
+   releasing it — `_synth_lock` waits for any in-flight forward to finish and
+   release its own reference before `_drop_model_locked()` runs). See
+   `_reclaim_after_drop()`'s docstring at `server/tts-sidecar/main.py:2127-2134`
+   for the full rationale.
+   Any future internal caller must follow the same acquire-drop-release-reclaim
+   sequence; any future code that nulls or reassigns a model field must mirror
+   `_drop_model_locked()`'s full teardown (including the device restoration
+   that `_drop_model_locked()` already handles) to avoid the double-allocation
+   race documented in `unload()`'s own docstring
+   (`server/tts-sidecar/main.py:2040-2049`).
+
 ## Ship notes
 
 (Filled when status flips to `stable` after the on-box acceptance above passes and

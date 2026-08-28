@@ -351,16 +351,26 @@ Design rationale:
   loudnorm; **Suite A** (`:sidecar`, real Kokoro) asserts each fixture line's
   length vs `kokoro-baseline.json` within tolerance, AND (since #1911) that a
   fresh Whisper transcript of the line matches the baseline's recorded
-  `transcript` at tolerance 0 — triple-gated (venv / pytest / Kokoro weights),
-  SKIP+exit-0 when absent. Partials: `npm run test:golden-audio:assembly`
-  (Node-side audio changes, runs anywhere) and `npm run test:golden-audio:sidecar`
-  (engine changes, box with weights). Flags via the full runner: `--assembly-only`,
-  `--sidecar-only`, `--engine=<kokoro|coqui|qwen>`, and `--bless` (re-records the
-  baselines of the **selected** suites — bare `--bless` does both,
-  `--assembly-only --bless` records Suite B's `golden-chapter.baseline.json` +
-  `.decoded.pcm`, `--sidecar-only --bless` records **both** `kokoro-baseline.json`
-  and `instruct-baseline.json`; note `npm run test:golden-audio:assembly` bypasses
-  the runner and so can never bless). Cross-engine sanity needs `GOLDEN_COQUI=1` /
+  `transcript` at tolerance 0. Real Qwen carries a duration-only golden
+  baseline (#1994) — each fixture line's length vs `qwen-duration-baseline.json`
+  within tolerance, no Whisper check. Triple-gated (venv / pytest / Kokoro OR
+  Qwen OR Coqui weights), SKIP+exit-0 when absent. Partials:
+  `npm run test:golden-audio:assembly` (Node-side audio changes, runs
+  anywhere) and `npm run test:golden-audio:sidecar` (engine changes, box with
+  weights). Flags via the full runner: `--assembly-only`, `--sidecar-only`,
+  `--engine=<kokoro|coqui|qwen>`, and `--bless` (re-records the baselines of
+  the **selected** suites — bare `--bless` does both, `--assembly-only
+  --bless` records Suite B's `golden-chapter.baseline.json` + `.decoded.pcm`,
+  `--sidecar-only --bless` records `kokoro-baseline.json` and
+  `instruct-baseline.json`; Qwen duration requires explicit `--engine=qwen`,
+  since a bare `--sidecar-only --bless` passes `-k 'not qwen_duration'` to
+  exclude it. `npm run test:golden-audio:sidecar` run directly (bypassing
+  this runner, e.g. with `GOLDEN_BLESS=1` set by hand) carries the same
+  `-k 'not qwen_duration'` default baked into `run-golden-tests.ps1` itself
+  when no `-k` is already supplied, so it can't silently re-bless Qwen
+  duration either — an explicit `-k qwen_duration` overrides it. Note
+  `npm run test:golden-audio:assembly` bypasses the runner and so can never
+  bless). Cross-engine sanity needs `GOLDEN_COQUI=1` /
   `GOLDEN_QWEN_VOICE=<id>`. The content-drift check adds `ASR_MODEL=base`'s ~145 MB
   Whisper weights as a **network prerequisite** on first run (fetched from
   HuggingFace, not by the bootstrap) and ~+9–10s of wall-clock to a Suite A run
@@ -742,7 +752,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact, but ONE-DIRECTIONAL: it fails only when the live page has a row your register lacks (your register having rows the live page doesn't yet is the normal reason you're publishing, not a defect) — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted, and discharging a middle row renumbers the survivors, so the ID that vanishes is the group's highest, not the row you conceptually removed — see the register's "Live view" step 3 for the full mechanics) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact, but ONE-DIRECTIONAL: it fails only when the live page has a row your register lacks (your register having rows the live page doesn't yet is the normal reason you're publishing, not a defect) — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 

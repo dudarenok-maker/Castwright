@@ -2746,4 +2746,4 @@ git commit -m "docs(docs): add regression plan and release notes for the setup c
 
 - [ ] **Step 6: Push and open the PR**
 
-Per CLAUDE.md's PR-gate: title matches the commit convention, body links `Closes #NN`, and — since this is a multi-scope (`fe`+`srv`) feature PR — the mandatory `code-review` pass runs at `high` effort once everything above is pushed, before merge.
+Per CLAUDE.md's PR-gate: title matches the commit convention, body links `Closes #NN`, and — since this is a multi-scope (`fe`+`srv`) feature PR — the mandatory `pr-review-gate` pass runs at `high` effort once everything above is pushed, before merge.

@@ -18,8 +18,11 @@
 //                          `--sidecar-only --bless` records Suite A's
 //                          kokoro-baseline.json AND instruct-baseline.json
 //                          (test_instruct_golden.py honours the same
-//                          GOLDEN_BLESS env) — there is no narrowing to bless
-//                          ONE of the two without `--engine=` below (#1995).
+//                          GOLDEN_BLESS env) — the Qwen duration baseline
+//                          (qwen-duration-baseline.json) requires explicit
+//                          `--engine=qwen` to bless, so a bare `--sidecar-only
+//                          --bless` excludes it (#1994). To bless Qwen duration
+//                          specifically: `--sidecar-only --engine=qwen --bless`.
 //                          instruct-baseline.json's `tolerances` block is a
 //                          THRESHOLD, not a measurement: a bless that would
 //                          move it (e.g. `rtf_max`) is REFUSED unless
@@ -225,7 +228,12 @@ if (isDirectInvocation) {
 
   if (!assemblyOnly) {
     // Suite A — real-model golden (SKIP+exit0 without venv/weights).
-    const pytestArgs = engine ? ['-k', engine] : [];
+    // When blessing without an explicit engine, exclude qwen-duration (which requires
+    // an explicit --engine=qwen) so a bare --bless blesses only kokoro and instruct.
+    // When an engine IS specified (e.g. --engine=qwen), run only that engine's tests.
+    const pytestArgs = engine
+      ? ['-k', engine]
+      : bless ? ['-k', 'not qwen_duration'] : [];
     run(
       'sidecar (Suite A)',
       process.execPath,

@@ -415,11 +415,16 @@ test('stepName participates in the hash (different steps with same inputs differ
 
 const stepByName = Object.fromEntries(STEPS.map((s) => [s.name, s]));
 
-test('stepTouchedByDiff: a sidecar-only diff leaves the fast legs out of scope', () => {
+test("stepTouchedByDiff: server/tts-sidecar/main.py diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715), but not frontend/hooks", () => {
   const diff = ['server/tts-sidecar/main.py'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), false); // frontend
-  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), false);
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), false);
+});
+
+test("stepTouchedByDiff: docs/features/264-vram-aware-gpu-placement.md diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715)", () => {
+  const diff = ['docs/features/264-vram-aware-gpu-placement.md'];
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
 });
 
 test('stepTouchedByDiff: a frontend diff is in scope for test, not test:server', () => {

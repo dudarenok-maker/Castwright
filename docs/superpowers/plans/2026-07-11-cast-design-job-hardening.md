@@ -934,8 +934,8 @@ scoped (as done above) while the PR title itself picks the dominant scope — us
 cast design job against GPU contention` as the PR title, with the frontend/sidecar detail in the PR
 body's Summary section.
 
-- [ ] **Step 5: Mandatory independent code-review pass**
+- [ ] **Step 5: Mandatory independent pr-review-gate pass**
 
 Per CLAUDE.md's Model routing → Mandatory independent review gate: this is a multi-scope PR (sidecar +
-server + frontend), so it gets **high** effort. Run the `code-review` skill (no `--fix`) once the branch
+server + frontend), so it gets **high** effort. Run the mandatory gate via the `pr-review-gate` skill (findings only, never auto-applied) once the branch
 is pushed, before merge. Triage and fold findings.

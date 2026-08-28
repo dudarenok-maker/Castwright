@@ -107,8 +107,7 @@ comparison, see the edge list above). The merge step that closes this, run
    still has it too — the signature of another lane having already
    published ahead of you. When `origin/main` also lacks it, the row was a
    deliberate discharge (by this change or an already-merged one), not a
-   race, and is not reported: discharging a row (and, since rows renumber
-   contiguously, often renumbering the survivors) always makes the
+   race, and is not reported: discharging a row always makes the
    still-live page look "ahead" of your working copy in this exact shape,
    and that is expected. **The command fetches `origin/main` itself, fresh,
    every run — you do not need to `git fetch` by hand first.** It then reads
@@ -169,33 +168,21 @@ comparison, see the edge list above). The merge step that closes this, run
        the doc and the tool disagree, trust the tool, not the instinct to
        make it stop complaining.
 
-       Two shapes, both governed by that same count rule — knowing which one
-       you're in tells you how the IDs will be spelled, not how many to name:
-       - **A middle row of a group that still has survivors (the
-         renumbering wrinkle).** Rows renumber contiguously within a group,
-         so discharging a MIDDLE row does NOT make that row the one
-         reported — every row after it shifts down to fill the gap, so it's
-         the group's HIGHEST id that vanishes from the live page instead. If
-         your true count for this group is 1, the single ID the error names
-         is correct — but it's correct *because your true count is 1*, not
-         because the error said so. If your true count is N, expect to name
-         N ids this way (the shifted id can change each time you re-run);
-         never name an (N+1)th id just because the check is still red after N.
-       - **A whole group with NO survivors left** — e.g. discharging a
-         single-row group's only row, or the last surviving row of a group
-         that once had more. There is nothing left to
-         renumber, so every row the group's live-page section still lists
-         reads as live-only. Name exactly the rows you discharged — for a
-         one-row group, that's one ID, not "every ID the error currently
-         lists for this group." A second live-only ID surviving after you've
-         named your one is proof another lane independently published into
-         the same now-otherwise-empty group, not evidence you actually
-         discharged two rows.
+       Under stable IDs there is one shape, not two: nothing renumbers, so
+       the ID(s) that vanish from the live page are always exactly the ones
+       you discharged — never a shifted survivor. This holds whether or not
+       the group has survivors left, whether you discharged a single-row
+       group's only row or a middle row of a group with plenty still in it.
+       Name exactly the rows you discharged: for a true count of 1, name
+       that one ID; for N, name those N IDs. A live-only ID surviving after
+       you've named your true count is proof another lane independently
+       published into that same group, not evidence you discharged more
+       rows than you did.
 
-       Either way, naming an ID that turns out not to be live-only at all (a
-       typo, or copied from the wrong discharge) is itself a refusal, not a
-       silent no-op — the point is to keep a genuinely competing-lane row
-       from slipping through unreported, not to mute the check wholesale.
+       Naming an ID that turns out not to be live-only at all (a typo, or
+       copied from the wrong discharge) is itself a refusal, not a silent
+       no-op — the point is to keep a genuinely competing-lane row from
+       slipping through unreported, not to mute the check wholesale.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine
@@ -209,8 +196,9 @@ comparison, see the edge list above). The merge step that closes this, run
        re-run step 2.
      - **No git call failed, but the baseline is malformed** — `origin/main`'s
        OWN copy of this register is internally inconsistent (a count
-       mismatch, a contiguity gap, a duplicate group letter, a sub-lettered
-       row heading, a glance-table row with no matching body section, ...),
+       mismatch, a reused row ID, a group missing its allocation marker, a
+       duplicate group letter, a sub-lettered row heading, a glance-table row
+       with no matching body section, ...),
        so the fetch and the read both succeeded but the content they got
        back can't be trusted. The error names no `fetch`/`show` failure in
        this shape — that absence is itself the signal. Run
@@ -312,6 +300,46 @@ Rows are grouped by **hardware prerequisite**, not by feature, because the point
 is to batch: one uncontested session should discharge everything that shares a
 setup rather than repeatedly loading and evicting models.
 
+> **Adding a new `## Group <Letter>` section? Give it a `next-id` marker in
+> the same commit.** Every group heading is immediately followed by
+> `<!-- next-id: <Letter>101 -->` (101 is the shared allocation floor —
+> see Global Constraints in the design plan if you're wondering why). A
+> group with no marker fails `npm run check:onbox-register` outright — but
+> the consequence reaches further than your own branch: `--against-published`
+> resolves its baseline by running the checker over `origin/main`'s own copy
+> of this register, so a markerless new group that merges to `main` breaks
+> `--against-published` for every lane, everywhere, with
+> `CANNOT_VERIFY_BASELINE_ERROR`, until a follow-up PR adds the marker on
+> `main`. Copy an existing group's bare `<!-- next-id: X101 -->` line — no
+> extra caveat comment needed.
+
+> **Adding a new row to an existing group? Allocate from its `next-id`
+> marker.** Take the marker's current value as the new row's ID, then bump
+> the marker by one in the same commit (e.g. `<!-- next-id: A101 -->` becomes
+> `<!-- next-id: A102 -->` after you mint `A101`). **Never reuse an ID that has
+> been used before, even one whose row is long gone** — a discharged or
+> removed row's ID stays retired forever. Re-minting a retired ID silently
+> re-points every existing citation to it at the *old* row, which is exactly
+> the failure this stable-ID design exists to end. **This register's own
+> checker never catches it** — it only verifies uniqueness and the allocation
+> floor, not history, so a re-minted ID looks identical to a fresh one. And
+> `check-register-citations.mjs` does not close the gap reliably either, and
+> can make things worse when it fires: Check C's fatal `wrongId` half only
+> triggers when the stale citation sits on one of its two surfaces (an
+> anchored `### <ID> · …` heading or a `Criteria source:` line) with the
+> subject on that *same* line, **and** the subject still owns at least one
+> other live row — a subject can span several rows (e.g. `#2040` →
+> A22/A23/A34), so discharging just one of them leaves the subject in the
+> map, and re-minting that row's old ID trips `wrongId` on the survivors'
+> citations. Discharge a subject's *last* row and nothing fatal fires; a
+> prose-idiom `row A22` citation fires nothing either way, since Check C
+> doesn't read that surface at all. Widening `wrongId` to catch the
+> last-row-discharge case too is deliberately deferred (see #2721). **You
+> cannot rely on a check to stop you.** If `wrongId` does fire after a
+> re-mint, the fix is to undo the re-mint — never to edit the cited heading
+> to match the new ID, which is exactly the corruption this design exists to
+> prevent. The rule above is the only guard.
+
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were
 > wrong within a day — a prerequisite named as a blocker that was already
@@ -339,7 +367,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -349,14 +377,27 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-28, 60 → 61 via PR #2719**, adding row **A102** (CUDA fallback self-test #2582) — minted from the next-id floor; an earlier commit on this branch briefly mis-minted this as A38, a dangling ID reserved by `onbox-sitting-plan.md`, corrected before merge.
+> **Last change: 2026-08-28, 61 → 62 via PR #2719**, adding row **A102** (CUDA
+> fallback self-test #2582) — minted from the next-id floor; an earlier commit on
+> this branch briefly mis-minted this as A38, a dangling ID reserved by
+> `onbox-sitting-plan.md`, corrected before merge. `next-id: A102` bumped to
+> `A103` in the same change.
 > ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
-
-> **Prior change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
+>
+> **Prior change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
+> golden baseline bless, #1994) — minted from the `next-id` floor per this
+> file's own allocate-once convention (above), NOT the old high-water+1 slot
+> (`A38`) this row was originally cut against before that convention shipped.
+> `A38` is deliberately left dangling: `onbox-sitting-plan.md` already uses
+> that citation to mean something else, and re-issuing it here is exactly the
+> silent-wrong-row-resolution failure mode the stable-ID design (above) was
+> built to prevent. `next-id: A101` bumped to `A102` in the same change.
+>
+> **Previous change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
 > two ffmpeg rows no longer carry row IDs. They had borrowed **E6** and **E8** from
 > the live Group E sequence, so each of those IDs named *two* rows — one live Group
 > E row and one Blocked row — and Group E renumbers underneath the Blocked section
@@ -371,10 +412,14 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > allocate from it yet; Group A's marker carries the same caveat inline.
 > ([#2634](https://github.com/dudarenok-maker/Castwright/issues/2634),
 > [#2653](https://github.com/dudarenok-maker/Castwright/issues/2653))
-
-> **Previous change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+>
+> **(#2629 has since shipped: the contiguity check is gone, replaced by
+> allocation-floor checks, and Group A's inline caveat comment was removed —
+> every group's `next-id` marker allocates normally now.)**
+>
+> **Prior change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
 > audible effect, not yet run).
-
+>
 > **Prior change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
 > **Old A34** (voice reassignment vs. persisted audition centroid, #1969/PR #2402)
 > had two criteria: (1) a reassignment discards the stale old-voice reference
@@ -551,11 +596,6 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- Allocation marker (#2599/#2629). A row ID is allocated once and never
-     reused: take this value for a new row, then bump it. DO NOT allocate from
-     this yet — until the contiguity check is removed from
-     scripts/check-onbox-register.mjs, an ID from this range fails the build.
-     Until then, keep following the existing numbering. -->
 <!-- next-id: A103 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
@@ -2963,6 +3003,19 @@ A31's). *Cost:* short — one or two renders of a Russian test sentence.
 
 ---
 
+### A101 · Qwen duration golden baseline needs its real per-line spread measured before blessing ([#1994](https://github.com/dudarenok-maker/Castwright/issues/1994)) · **single 8 GB card, a designed Qwen voice already present**
+
+`server/tts-sidecar/tests/golden/qwen-duration-baseline.json` ships UNBLESSED —
+the test file (`test_qwen_duration_golden.py`) is real, but the baseline has
+empty `entries` and a placeholder `tolerance`, so the opt-in golden gate SKIPs
+until it is blessed. Qwen decoding is stochastic with no seed, so the true
+per-line `duration_sec` spread across repeated syntheses of each
+`qwen-duration-fixture.json` line is the missing number: `tolerance` must be
+**derived from that measured spread** (with headroom), not picked, then blessed.
+This closes the #1994 A-grade visibility gap the scaffold was written for.
+
+---
+
 ### A102 · CUDA self-test on real ORT session detects Kokoro CPU fallback ([#2582](https://github.com/dudarenok-maker/Castwright/issues/2582), PR [#2719](https://github.com/dudarenok-maker/Castwright/pull/2719)) · **single 8 GB card, live Kokoro sidecar with real ORT session**
 
 PR #2719's `_cuda_selftest_or_warn` method (`server/tts-sidecar/main.py`) inspects
@@ -3107,10 +3160,13 @@ flagged=**488, under target**. The aligner — not the engine — is the bottlen
 Since then the #2187 aligner fix landed, adding a **new C2** — one more local
 re-analysis to confirm plan 247's targets end to end — and #2253's convention
 invariant added a third row. **Both ran 2026-08-12/13 and are discharged**; see
-below. (Row IDs are positional and renumber on discharge, so a given ID has
-named several different rows over this group's life. The C2 discharged in the
-paragraph above was the srv-59 attribution row; the C2 discharged in the
-paragraph below is the post-#2187 one; the C2 that remains is what was C3.)
+below. (Under the pre-#2599 positional-ID rule, row IDs renumbered on
+discharge, so a given ID named several different rows over this group's life.
+The C2 discharged in the paragraph above was the srv-59 attribution row; the
+C2 discharged in the paragraph below is the post-#2187 one; the C2 that
+remains is what was C3. IDs have been stable and never reused since
+2026-08-27 — this paragraph is a record of the group's history under the old
+rule, not current behaviour.)
 
 **The 2026-08-12/13 run — 9/9 chapters, and it discharged two rows at once.**
 Throwaway `mns_rKjCHx0vrS`, build `52a8fb97`, local Ollama `qwen36-cw-iq4-32k`,
@@ -3136,9 +3192,12 @@ exposed are in
   filed as [#2306](https://github.com/dudarenok-maker/Castwright/issues/2306).
   That is why the row below survives with narrowed scope instead of discharging.
 
-The cloud row remains (renumbered **C1** now that the other two are discharged;
-it was C3 before 2026-08-06 and is referenced under that ID in
-[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)). It needs the
+The cloud row remains (**C1** since the other two were discharged and the
+survivors renumbered under the pre-#2599 rule; it was C3 before 2026-08-06 and
+is referenced under that ID in
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685) — GitHub
+issue bodies are not in `git ls-files`, so no checker here sees them, and
+stable IDs stop *new* rot without reaching that existing one). It needs the
 separate **cloud** pass, which the local run did not exercise. No TTS or GPU
 synthesis.
 

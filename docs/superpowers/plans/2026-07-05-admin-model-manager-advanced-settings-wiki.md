@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - No changes to real (non-mock) application behavior. Touched source is limited to `e2e/marketing/scenes.ts`, `e2e/marketing/capture.spec.ts`, `src/mocks/marketing/hollow-tide.ts`, `src/lib/api.ts`'s `mockGetModelInventory` (Task 12) and `mockGetListenProgress` (Task 11 — adds a `DEMO_CAPTURE` branch following the exact pattern already used by ~8 other mock functions in that file), and `e2e/model-manager-health.spec.ts` (Task 12, fixing assertions the mock flip breaks).
-- This PR is **not docs-only** (it edits `e2e/marketing/scenes.ts`, outside the `docs/**` glob) — the full `npm run verify` battery is required before merge, and it's a **high**-effort `code-review` gate (multi-scope: docs + test/fixture code + one shared-mock change).
+- This PR is **not docs-only** (it edits `e2e/marketing/scenes.ts`, outside the `docs/**` glob) — the full `npm run verify` battery is required before merge, and it's a **high**-effort `pr-review-gate` gate (multi-scope: docs + test/fixture code + one shared-mock change).
 - No new knobs, no changed defaults/behavior in `server/src/config/registry.ts` or `model-settings-form.tsx` — this is descriptive documentation of what already ships.
 - No product-code change to add a Model Manager pill for Qwen VoiceDesign — #1318's "Qwen's row" means the Qwen3-TTS Base row only.
 - PR body: `Closes #1319` and `Closes #1318`.
@@ -2003,6 +2003,6 @@ EOF
 )"
 ```
 
-- [ ] **Step 8: Run the mandatory high-effort `code-review` pass**
+- [ ] **Step 8: Run the mandatory high-effort `pr-review-gate` pass**
 
 Per CLAUDE.md's model-routing skill (multi-scope PR: docs + test/fixture code + one shared-mock change → `high` effort), once the PR is fully staged and pushed.

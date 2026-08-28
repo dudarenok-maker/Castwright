@@ -874,4 +874,4 @@ Expected: PASS — typecheck + all tests + e2e + build.
   1. This plan file itself + the spec under `docs/superpowers/specs/` already serve as the regression documentation for this change — no separate `docs/features/*.md` entry is needed (this is a small, localized reliability fix, not a new feature surface).
   2. Append an entry to `docs/release-notes-next.md` (technical register) and a matching brand-voice line to `RELEASE_NOTES.md`'s in-progress version section.
   3. Confirm the PR body includes `Closes #1243`.
-  4. Run the mandatory `code-review` pass (medium effort — single-scope `feat`, per this repo's model-routing table) before merge.
+  4. Run the mandatory `pr-review-gate` pass (medium effort — single-scope `feat`, per this repo's model-routing table) before merge.

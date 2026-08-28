@@ -60,6 +60,35 @@ test('GOLDEN_BLESS is cleared (not left ambient) on the non-bless path for BOTH 
   }
 });
 
+// #1994 — a bare `--sidecar-only --bless` (no `--engine`) must not silently
+// re-bless qwen-duration-baseline.json alongside kokoro-baseline.json /
+// instruct-baseline.json: Qwen duration requires an explicit `--engine=qwen`
+// selector. `pytestArgs` is built inline (not an exported function, unlike
+// this file's other testable pieces), so this pins the exact ternary shape
+// via source-text anchoring, the same technique `BLESS_ENV_SHAPE` above
+// uses — a reordered branch, a dropped `not`, or a swapped condition all
+// fail this regex even though `pytestArgs` itself can't be called directly.
+// (The companion logic on the PowerShell side — run-golden-tests.ps1's own
+// bare-bless guard for a DIRECT `npm run test:golden-audio:sidecar`
+// invocation, bypassing this script entirely — has its own unit-testable
+// coverage in scripts/lib/golden-bless-pytest-args.ps1 +
+// scripts/tests/golden-bless-pytest-args.Tests.ps1; this test covers only
+// the Node-side wrapper's own selection logic.)
+const PYTEST_ARGS_SHAPE =
+  /const pytestArgs = engine\s*\?\s*\[\s*'-k',\s*engine\s*\]\s*:\s*bless\s*\?\s*\[\s*'-k',\s*'not qwen_duration'\s*\]\s*:\s*\[\s*\]/;
+
+test('a bare bless (no --engine) excludes qwen_duration; an explicit --engine runs only that engine', () => {
+  assert.match(
+    src,
+    PYTEST_ARGS_SHAPE,
+    'expected pytestArgs to: run only the named engine when --engine is set; ' +
+      "otherwise exclude qwen_duration when blessing (bare --bless mustn't touch " +
+      'the Qwen duration baseline); otherwise pass no -k filter at all. Any other ' +
+      'shape (e.g. always excluding qwen_duration regardless of --engine, or never ' +
+      'excluding it on a bare bless) fails this pattern.',
+  );
+});
+
 // #2193 — run()'s spawned children used to inherit `process.env` verbatim,
 // so an ambient GIT_DIR/GIT_WORK_TREE (e.g. exported by a parent git hook,
 // or left behind in an operator's shell) would pass straight through to the

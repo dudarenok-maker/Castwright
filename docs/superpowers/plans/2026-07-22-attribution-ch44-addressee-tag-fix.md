@@ -515,7 +515,7 @@ perception-verb frame survive the treatment replay; record outcomes (do not fix 
   being *spoken to* instead of the speaker").
 - [ ] File the GitHub issue (`srv-…`, `bug` label — a real wrong-voice defect); PR body
   `Closes #NN`.
-- [ ] `npm run verify:fast:branch`; open PR; mandatory `code-review` (medium — single-
+- [ ] `npm run verify:fast:branch`; open PR; mandatory `pr-review-gate` pass (medium — single-
   scope `fix`) before merge.
 
 ## Self-Review

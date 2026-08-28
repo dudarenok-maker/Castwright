@@ -814,9 +814,9 @@ BODY
 Run: `gh pr view --json title,body,url`
 Expected: body contains `Closes #1615` and `Closes #1616`; `verify.yml` starts on the push.
 
-- [ ] **Step 5: Run the mandatory independent code-review gate**
+- [ ] **Step 5: Run the mandatory independent pr-review-gate pass**
 
-Per CLAUDE.md, a single-scope `feat` PR gets a **`low`-effort** `code-review` pass (no `--fix`) once fully staged. Triage and fold findings before merge.
+Per CLAUDE.md, a single-scope `feat` PR gets a **`low`-effort** `pr-review-gate` pass (no `--fix`) once fully staged. Triage and fold findings before merge.
 
 ---
 

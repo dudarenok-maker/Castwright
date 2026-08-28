@@ -1057,7 +1057,7 @@ Expected: green (or, if the GPU is pinned and local legs contend, push and let c
 
 - [ ] **Step 3: File issues + open PR**
 
-File a `type:feature` + `area:frontend` issue for the Troubleshooting reorg and (if not folded into one) a second for the wiki-link surface; add thin rows to `docs/BACKLOG.md` if they represent net-new backlog items. Open the PR with `Closes #NN` for each, title `feat(frontend): reorganize troubleshooting help and add wiki links`, filling `## Summary` + `## Test plan` and linking the plan. Then run the mandatory `code-review` pass (medium effort — single-scope `feat`) before merge.
+File a `type:feature` + `area:frontend` issue for the Troubleshooting reorg and (if not folded into one) a second for the wiki-link surface; add thin rows to `docs/BACKLOG.md` if they represent net-new backlog items. Open the PR with `Closes #NN` for each, title `feat(frontend): reorganize troubleshooting help and add wiki links`, filling `## Summary` + `## Test plan` and linking the plan. Then run the mandatory `pr-review-gate` pass (medium effort — single-scope `feat`) before merge.
 
 ---
 
