@@ -41,15 +41,26 @@ beforeEach(() => {
 
 describe('parseComputeAppsCsv', () => {
   it('parses gpu_uuid,pid,process_name,used_memory rows', () => {
-    const rows = parseComputeAppsCsv('GPU-aaa, 123, ollama.exe, 5000\nGPU-bbb, 456, chrome.exe, 200\n');
-    expect(rows).toEqual([
+    const result = parseComputeAppsCsv('GPU-aaa, 123, ollama.exe, 5000\nGPU-bbb, 456, chrome.exe, 200\n');
+    expect(result.rows).toEqual([
       { gpuUuid: 'GPU-aaa', pid: '123', processName: 'ollama.exe', usedMemoryMb: 5000 },
       { gpuUuid: 'GPU-bbb', pid: '456', processName: 'chrome.exe', usedMemoryMb: 200 },
     ]);
+    expect(result.hadUnparseableMemory).toBe(false);
   });
 
-  it('skips unparseable rows', () => {
-    expect(parseComputeAppsCsv('garbage\n')).toEqual([]);
+  it('skips structurally invalid rows (field count < 4)', () => {
+    const result = parseComputeAppsCsv('garbage\n');
+    expect(result.rows).toEqual([]);
+    expect(result.hadUnparseableMemory).toBe(false);
+  });
+
+  it('skips rows with structurally valid format but unparseable used_memory ([N/A], [Not Supported])', () => {
+    const result = parseComputeAppsCsv('GPU-aaa, 123, ollama.exe, [N/A]\nGPU-bbb, 456, ollama_llama_server, [Not Supported]\nGPU-ccc, 789, chrome.exe, 200\n');
+    expect(result.rows).toEqual([
+      { gpuUuid: 'GPU-ccc', pid: '789', processName: 'chrome.exe', usedMemoryMb: 200 },
+    ]);
+    expect(result.hadUnparseableMemory).toBe(true);
   });
 });
 
@@ -86,6 +97,7 @@ describe('detectOllamaGpuSplit', () => {
       deviceIndices: [],
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
   });
 
@@ -105,6 +117,7 @@ describe('detectOllamaGpuSplit', () => {
       deviceIndices: [],
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
   });
 
@@ -125,6 +138,7 @@ describe('detectOllamaGpuSplit', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 8000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
   });
 
@@ -144,6 +158,7 @@ describe('detectOllamaGpuSplit', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 16000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
   });
 
@@ -157,6 +172,7 @@ describe('detectOllamaGpuSplit', () => {
       deviceIndices: [],
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
   });
 
@@ -174,6 +190,26 @@ describe('detectOllamaGpuSplit', () => {
       deviceIndices: [],
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+  });
+
+  it('Ollama processes detected but used_memory unreadable ([N/A] under WDDM) -> dataUnavailable: true', async () => {
+    mockNvidiaSmi({
+      // Ollama rows present but used_memory is [N/A] (WDDM driver limitation)
+      computeApps: 'GPU-aaa, 1, ollama.exe, [N/A]\nGPU-bbb, 1, ollama_llama_server, [Not Supported]\n',
+      indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
+      free: '0, 3000\n1, 500\n',
+    });
+
+    const result = await detectOllamaGpuSplit();
+    expect(result).toEqual({
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,
     });
   });
 });

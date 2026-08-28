@@ -8583,7 +8583,14 @@ export async function mockGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
    ticket's own acceptance fixture. */
 export async function mockGetAnalyzerGpuSplit(): Promise<AnalyzerGpuSplitResponse> {
   await wait(20);
-  return { reachable: true, split: false, deviceIndices: [0], totalUsedMb: 4200, wouldFitSingleDevice: false };
+  return {
+    reachable: true,
+    split: false,
+    deviceIndices: [0],
+    totalUsedMb: 4200,
+    wouldFitSingleDevice: false,
+    dataUnavailable: false,
+  };
 }
 
 export async function mockGetConfig(): Promise<ConfigResponse> {

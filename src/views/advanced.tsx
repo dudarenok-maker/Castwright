@@ -279,6 +279,7 @@ export function AdvancedView() {
           deviceIndices: [],
           totalUsedMb: 0,
           wouldFitSingleDevice: false,
+          dataUnavailable: false,
         }),
       );
   }, [dispatch]);
@@ -562,7 +563,18 @@ export function AdvancedView() {
                         — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
                         daemon.
                       </p>
+                      {gpuSplit && gpuSplit.dataUnavailable && (
+                        <p className="text-xs text-slate-600 mb-1">
+                          Can't determine GPU split status — your driver doesn't expose per-process GPU
+                          memory. Run{' '}
+                          <code className="text-slate-700 font-mono">nvidia-smi --query-compute-apps</code> to
+                          check if <code className="text-slate-700 font-mono">used_memory</code> shows
+                          <code className="text-slate-700 font-mono">[N/A]</code> or{' '}
+                          <code className="text-slate-700 font-mono">[Not Supported]</code>.
+                        </p>
+                      )}
                       {gpuSplit &&
+                        !gpuSplit.dataUnavailable &&
                         ((gpuSplit.split && gpuSplit.wouldFitSingleDevice) ||
                           expectedDeviceMismatch) && (
                           <p className="text-xs text-amber-800 mb-1">

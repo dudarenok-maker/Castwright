@@ -981,13 +981,17 @@ export interface AnalyzerDeviceResponse {
 /** Response from GET /api/ollama/gpu-split (#2367 Task 3) — mirrors the
     server's OllamaGpuSplitResult verbatim. Feeds the Advanced Configuration
     warning line for an avoidable multi-GPU split; the config-knob
-    comparison (declared vs. detected) is Task 4's job, not this response's. */
+    comparison (declared vs. detected) is Task 4's job, not this response's.
+
+    Use `dataUnavailable` to distinguish "Ollama processes detected but VRAM
+    unreadable" (driver limitation) from "genuinely no split found". */
 export interface AnalyzerGpuSplitResponse {
   reachable: boolean;
   split: boolean;
   deviceIndices: number[];
   totalUsedMb: number;
   wouldFitSingleDevice: boolean;
+  dataUnavailable: boolean;
 }
 
 /** Prompt state from GET/PUT /api/config/prompts/:id. */

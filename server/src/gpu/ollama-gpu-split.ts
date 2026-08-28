@@ -18,6 +18,12 @@ export interface OllamaGpuSplitResult {
   deviceIndices: number[];
   totalUsedMb: number;
   wouldFitSingleDevice: boolean;
+  /** Ollama processes exist but their per-process used_memory was unreadable
+      (e.g. [N/A] under WDDM driver model) — probe is inconclusive. Split between
+      `false` (no split found) is crucial: dataUnavailable: true + deviceIndices: []
+      means "can't determine", while split: false + dataUnavailable: false means
+      "genuinely no split". */
+  dataUnavailable: boolean;
 }
 
 interface ComputeAppRow {
@@ -44,6 +50,7 @@ function emptyResult(): OllamaGpuSplitResult {
     deviceIndices: [],
     totalUsedMb: 0,
     wouldFitSingleDevice: false,
+    dataUnavailable: false,
   };
 }
 
@@ -56,19 +63,32 @@ function execFileAsync(cmd: string, args: string[]): Promise<string> {
   });
 }
 
+interface ParseComputeAppsResult {
+  rows: ComputeAppRow[];
+  /** True if at least one structurally-valid row (correct field count, non-empty fields)
+      was skipped due to non-finite usedMemoryMb (e.g., [N/A] under WDDM driver). */
+  hadUnparseableMemory: boolean;
+}
+
 /** Parse `nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory
     --format=csv,noheader,nounits` — one row per (GPU, process) pair. */
-export function parseComputeAppsCsv(raw: string): ComputeAppRow[] {
+export function parseComputeAppsCsv(raw: string): ParseComputeAppsResult {
   const rows: ComputeAppRow[] = [];
+  let hadUnparseableMemory = false;
   for (const line of raw.split('\n')) {
     const parts = line.split(',').map((p) => p.trim());
     if (parts.length < 4) continue;
     const [gpuUuid, pid, processName, usedMemoryRaw] = parts;
     const usedMemoryMb = Number(usedMemoryRaw);
-    if (!gpuUuid || !pid || !processName || !Number.isFinite(usedMemoryMb)) continue;
+    if (!gpuUuid || !pid || !processName) continue;
+    // Row is structurally valid but memory parse failed
+    if (!Number.isFinite(usedMemoryMb)) {
+      hadUnparseableMemory = true;
+      continue;
+    }
     rows.push({ gpuUuid, pid, processName, usedMemoryMb });
   }
-  return rows;
+  return { rows, hadUnparseableMemory };
 }
 
 /** Parse `nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits` —
@@ -129,9 +149,23 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
   if (uuidToIndex.size === 0) return emptyResult();
   const freeByIndex = new Map(parseGpuFreeCsv(freeRaw).map((r) => [r.index, r.freeMb]));
 
-  const ollamaRows = parseComputeAppsCsv(computeAppsRaw).filter((r) => /ollama/i.test(r.processName));
+  const parsed = parseComputeAppsCsv(computeAppsRaw);
+  const ollamaRows = parsed.rows.filter((r) => /ollama/i.test(r.processName));
+
+  // If we saw unparseable VRAM data and Ollama processes in the raw output,
+  // the data is inconclusive (driver doesn't expose per-process VRAM).
+  const hadOllamaProcessInRaw = /ollama/i.test(computeAppsRaw);
+  const dataUnavailable = parsed.hadUnparseableMemory && hadOllamaProcessInRaw;
+
   if (ollamaRows.length === 0) {
-    return { reachable: true, split: false, deviceIndices: [], totalUsedMb: 0, wouldFitSingleDevice: false };
+    return {
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable,
+    };
   }
 
   // Group rows by PID to detect whether any single Ollama model's VRAM is split
@@ -158,7 +192,14 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
   // Collect all GPUs and VRAM from split PIDs (PIDs that span 2+ GPUs)
   const splitPids = Array.from(byPid.entries()).filter(([, entry]) => entry.indices.size >= 2);
   if (splitPids.length === 0) {
-    return { reachable: true, split: false, deviceIndices: [], totalUsedMb: 0, wouldFitSingleDevice: false };
+    return {
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    };
   }
 
   // Aggregate all device indices and VRAM from split PIDs
@@ -183,5 +224,5 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
     return freeMb + ownShareMb >= totalUsedMb;
   });
 
-  return { reachable: true, split, deviceIndices, totalUsedMb, wouldFitSingleDevice };
+  return { reachable: true, split, deviceIndices, totalUsedMb, wouldFitSingleDevice, dataUnavailable: false };
 }

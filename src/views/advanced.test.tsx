@@ -189,6 +189,7 @@ beforeEach(() => {
     deviceIndices: [0],
     totalUsedMb: 4200,
     wouldFitSingleDevice: false,
+    dataUnavailable: false,
   });
 });
 
@@ -584,6 +585,7 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
 
     renderView();
@@ -600,6 +602,7 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 20000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
 
     renderView();
@@ -616,6 +619,7 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
       deviceIndices: [0],
       totalUsedMb: 4200,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
 
     renderView();
@@ -644,6 +648,7 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
 
     renderView();
@@ -713,6 +718,7 @@ describe('AdvancedView — analyzer GPU-split warning, expected-device mismatch 
       deviceIndices: [0, 1],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
 
     renderView();
@@ -729,6 +735,7 @@ describe('AdvancedView — analyzer GPU-split warning, expected-device mismatch 
       deviceIndices: [0, 1],
       totalUsedMb: 20000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
 
     renderView();
@@ -747,6 +754,7 @@ describe('AdvancedView — analyzer GPU-split warning, expected-device mismatch 
       deviceIndices: [0],
       totalUsedMb: 4200,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
 
     renderView();
