@@ -98,6 +98,13 @@ export function sidecarOwnerPath(runDir: string, port: number): string {
   return join(runDir, `tts.owner.${port}.json`);
 }
 
+/** Legacy fixed-name path (pre-#2641): `.run/tts.owner.json`. Used for
+    cross-version conflict detection — when upgrading from an old version to
+    a port-keyed one, the legacy note must not be missed. */
+function legacySidecarOwnerPath(runDir: string): string {
+  return join(runDir, 'tts.owner.json');
+}
+
 /** Read + parse the owner note, or null when absent / unreadable / malformed.
     A note without a valid positive pid is treated as absent. */
 export function readSidecarOwner(runDir: string, port: number): SidecarOwnerNote | null {
@@ -114,6 +121,29 @@ export function readSidecarOwner(runDir: string, port: number): SidecarOwnerNote
       pid: p.pid,
       ppid: typeof p.ppid === 'number' ? p.ppid : -1,
       port: typeof p.port === 'number' ? p.port : port,
+      startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
+    };
+  } catch {
+    return null; // corrupt JSON
+  }
+}
+
+/** Read the legacy fixed-name owner note (pre-#2641), or null when absent /
+    unreadable / malformed. Used for cross-version conflict detection. */
+function readLegacySidecarOwner(runDir: string): SidecarOwnerNote | null {
+  let raw: string;
+  try {
+    raw = readFileSync(legacySidecarOwnerPath(runDir), 'utf8');
+  } catch {
+    return null; // absent
+  }
+  try {
+    const p = JSON.parse(raw) as Partial<SidecarOwnerNote>;
+    if (typeof p.pid !== 'number' || !Number.isInteger(p.pid) || p.pid <= 0) return null;
+    return {
+      pid: p.pid,
+      ppid: typeof p.ppid === 'number' ? p.ppid : -1,
+      port: typeof p.port === 'number' ? p.port : 9000,
       startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
     };
   } catch {
@@ -186,7 +216,11 @@ export interface ConflictCheckOpts {
 
 /** A LIVE, FOREIGN owner, or null. Not a conflict when: there is no note; the
     note is our own pid; the note shares our lineage (a `tsx watch` reload — same
-    ppid, new pid); or the recorded owner is dead (stale note). */
+    ppid, new pid); or the recorded owner is dead (stale note).
+
+    Checks both the port-keyed note and the legacy fixed-name note (pre-#2641)
+    to detect conflicts across version upgrades. A legacy note is only a conflict
+    if its recorded port matches the current port. */
 export function findConflictingOwner(opts: ConflictCheckOpts): SidecarOwnerNote | null {
   const {
     runDir,
@@ -195,11 +229,27 @@ export function findConflictingOwner(opts: ConflictCheckOpts): SidecarOwnerNote 
     port = sidecarPort(),
     aliveFn = isProcessAlive,
   } = opts;
+
+  // Check the port-keyed note (current version)
   const owner = readSidecarOwner(runDir, port);
-  if (!owner) return null;
-  if (owner.pid === pid) return null; // our own note
-  if (owner.ppid > 0 && owner.ppid === ppid) return null; // same stack reloading (tsx watch)
-  return aliveFn(owner.pid) ? owner : null;
+  if (owner) {
+    if (owner.pid === pid) return null; // our own note
+    if (owner.ppid > 0 && owner.ppid === ppid) return null; // same stack reloading (tsx watch)
+    if (aliveFn(owner.pid)) return owner;
+  }
+
+  // Check the legacy fixed-name note (pre-#2641 versions) for cross-version conflict detection.
+  // A legacy note is only a conflict if (a) its port field matches our port, and (b) it names
+  // a live process. This handles the upgrade scenario: old server running on port 9000 with
+  // legacy .run/tts.owner.json, new server starting on port 9000 with port-keyed filename.
+  const legacyOwner = readLegacySidecarOwner(runDir);
+  if (legacyOwner && legacyOwner.port === port) {
+    if (legacyOwner.pid === pid) return null; // our own legacy note
+    if (legacyOwner.ppid > 0 && legacyOwner.ppid === ppid) return null; // same stack reloading
+    if (aliveFn(legacyOwner.pid)) return legacyOwner;
+  }
+
+  return null;
 }
 
 export interface EnforceOwnerOpts {

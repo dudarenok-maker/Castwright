@@ -343,6 +343,60 @@ describe('findConflictingOwner', () => {
     });
     expect(conflict).toBeNull();
   });
+
+  it('detects a live legacy owner (pre-#2641) with matching port as conflicting — cross-version scenario', () => {
+    // PR #2754 review finding (real defect found in code review):
+    // Upgrade scenario: old server (pre-#2641) running on port 9000 with
+    // legacy .run/tts.owner.json note. New server (post-#2641, this code)
+    // starts up on port 9000 and looks only for .run/tts.owner.9000.json.
+    // It should detect the legacy note as a conflict to prevent a dual-supervisor
+    // recycle storm (#1030). Without this fix, it claims ownership and both
+    // servers end up managing the sidecar.
+    const legacyPath = join(runDir, 'tts.owner.json');
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        pid: 100,
+        ppid: 7,
+        port: 9000, // legacy note also records the port
+        startedAt: '2026-06-23T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    // New server checking for conflicts on the same port must find the legacy note
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 200, // different pid
+      ppid: 8, // different ppid
+      port: 9000, // same port as legacy note
+      aliveFn: () => true, // legacy owner is alive
+    });
+    expect(conflict?.pid).toBe(100);
+  });
+
+  it('ignores a legacy owner whose recorded port does not match — legacy note is port-agnostic safety valve', () => {
+    // A legacy note recorded port 9000, but we are checking port 9010.
+    // No conflict — each port is independent.
+    const legacyPath = join(runDir, 'tts.owner.json');
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        pid: 100,
+        ppid: 7,
+        port: 9000, // legacy note is for port 9000
+        startedAt: '2026-06-23T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9010, // checking a different port
+      aliveFn: () => true,
+    });
+    expect(conflict).toBeNull();
+  });
 });
 
 describe('enforceSingleSidecarOwner', () => {
