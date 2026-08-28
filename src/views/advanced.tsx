@@ -291,6 +291,30 @@ export function AdvancedView() {
      the same fact. */
   const analyzerEngine = values['analyzer.engine']?.effective;
 
+  /* #2367 Task 4 — expectedDevice is a declared, advisory expectation (see
+     the knob's help text: this app cannot pin the Ollama daemon's device).
+     A non-empty declaration that the detected split contradicts sharpens
+     Task 3's warning into a named mismatch, independent of whether the
+     split would fit on one device — the operator said "GPU N only", so a
+     split onto any other combination is worth calling out even when it's
+     unavoidable. */
+  const expectedDeviceRaw = values['analyzer.ollama.expectedDevice']?.effective as
+    | string
+    | undefined;
+  const expectedDevice = expectedDeviceRaw?.trim() ?? '';
+  const expectedDeviceNum = expectedDevice === '' ? NaN : Number(expectedDevice);
+  // Mismatch means "running on anything other than the declared device" —
+  // not just "declared device absent" — so a genuine split onto [0, 1] when
+  // only GPU 0 was declared still counts, even though 0 is one of the two
+  // indices. An empty deviceIndices (unreachable/checking) vacuously passes
+  // .every() and correctly reports no mismatch rather than a false one.
+  const expectedDeviceMismatch =
+    expectedDevice !== '' &&
+    !Number.isNaN(expectedDeviceNum) &&
+    !!gpuSplit &&
+    gpuSplit.deviceIndices.length > 0 &&
+    !gpuSplit.deviceIndices.every((idx) => idx === expectedDeviceNum);
+
   const handleResetAll = () => {
     if (!window.confirm('Reset all advanced settings to their defaults?')) return;
     // #2209 — "Reset all" has no single row to attribute a rejection to
@@ -538,16 +562,31 @@ export function AdvancedView() {
                         — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
                         daemon.
                       </p>
-                      {gpuSplit?.split && gpuSplit.wouldFitSingleDevice && (
-                        <p className="text-xs text-amber-800 mb-1">
-                          Model split across GPUs {gpuSplit.deviceIndices.join(', ')} despite
-                          fitting on one device — see{' '}
-                          <a href="/docs/local-llm.md" className="underline">
-                            docs/local-llm.md
-                          </a>
-                          .
-                        </p>
-                      )}
+                      {gpuSplit &&
+                        ((gpuSplit.split && gpuSplit.wouldFitSingleDevice) ||
+                          expectedDeviceMismatch) && (
+                          <p className="text-xs text-amber-800 mb-1">
+                            {expectedDeviceMismatch ? (
+                              <>
+                                Model split across GPUs {gpuSplit.deviceIndices.join(', ')} —
+                                expected GPU {expectedDevice} only. See{' '}
+                                <a href="/docs/local-llm.md" className="underline">
+                                  docs/local-llm.md
+                                </a>
+                                .
+                              </>
+                            ) : (
+                              <>
+                                Model split across GPUs {gpuSplit.deviceIndices.join(', ')} despite
+                                fitting on one device — see{' '}
+                                <a href="/docs/local-llm.md" className="underline">
+                                  docs/local-llm.md
+                                </a>
+                                .
+                              </>
+                            )}
+                          </p>
+                        )}
                       <a
                         href="/docs/local-llm.md"
                         className="text-xs text-magenta hover:underline"

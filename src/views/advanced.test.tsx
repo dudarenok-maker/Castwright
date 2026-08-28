@@ -653,6 +653,139 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
   });
 });
 
+/* ── Analyzer GPU-split warning: expected-device mismatch (#2367 Task 4) ─── */
+
+/* Adds the analyzer-models group + the expectedDevice knob's descriptor on
+   top of CONFIG_WITH_TTS_ENGINE_GROUP — 'analyzer-models' is risk:'medium'
+   in the real registry (see server/src/config/registry.ts's GROUPS), so
+   unlike 'tts-engine' it starts OPEN and needs no openVoiceEngineSection()
+   call of its own. */
+const CONFIG_WITH_EXPECTED_DEVICE_KNOB: ConfigResponse = {
+  ...CONFIG_WITH_TTS_ENGINE_GROUP,
+  groups: [
+    ...CONFIG_WITH_TTS_ENGINE_GROUP.groups,
+    {
+      id: 'analyzer-models',
+      label: 'Analyzer models & endpoints',
+      help: 'Which model/endpoint runs the analysis.',
+      risk: 'medium',
+      collapsedByDefault: false,
+    },
+  ],
+  descriptors: [
+    ...CONFIG_WITH_TTS_ENGINE_GROUP.descriptors,
+    {
+      key: 'analyzer.ollama.expectedDevice',
+      group: 'analyzer-models',
+      label: 'Expected analyzer GPU',
+      help: "Informational only — this app cannot pin an external Ollama daemon's device.",
+      type: 'string',
+      apply: 'live',
+      risk: 'low',
+      isPrompt: false,
+      default: '',
+    },
+  ],
+};
+
+function withExpectedDevice(effective: string): ConfigResponse {
+  return {
+    ...CONFIG_WITH_EXPECTED_DEVICE_KNOB,
+    values: {
+      ...CONFIG_WITH_EXPECTED_DEVICE_KNOB.values,
+      'analyzer.ollama.expectedDevice': {
+        key: 'analyzer.ollama.expectedDevice',
+        effective,
+        source: effective ? 'override' : 'default',
+        locked: false,
+        overridden: Boolean(effective),
+      },
+    },
+  };
+}
+
+describe('AdvancedView — analyzer GPU-split warning, expected-device mismatch (#2367 Task 4)', () => {
+  it('knob empty + an avoidable split -> Task 3\'s original unqualified warning', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_EXPECTED_DEVICE_KNOB);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    expect(await screen.findByText(/despite fitting on one device/)).toBeInTheDocument();
+    expect(screen.queryByText(/expected GPU/)).not.toBeInTheDocument();
+  });
+
+  it('knob "0" + deviceIndices [0, 1] (mismatch) -> the sharpened mismatch text, naming both', async () => {
+    mockGetConfig.mockResolvedValue(withExpectedDevice('0'));
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 20000,
+      wouldFitSingleDevice: false,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    const warning = await screen.findByText(/Model split across GPUs 0, 1/);
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toMatch(/expected GPU 0 only/);
+    expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
+  });
+
+  it('knob "0" + deviceIndices [0] (no split, matches expectation) -> no warning at all', async () => {
+    mockGetConfig.mockResolvedValue(withExpectedDevice('0'));
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [0],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('renders the knob as an editable text row in analyzer-models and round-trips a saved value', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_EXPECTED_DEVICE_KNOB);
+    mockPutConfig.mockResolvedValue({
+      ok: true,
+      applied: ['analyzer.ollama.expectedDevice'],
+      values: {
+        ...CONFIG_WITH_EXPECTED_DEVICE_KNOB.values,
+        'analyzer.ollama.expectedDevice': {
+          key: 'analyzer.ollama.expectedDevice',
+          effective: '0',
+          source: 'override',
+          locked: false,
+          overridden: true,
+        },
+      },
+    });
+
+    renderView();
+    const input = (await screen.findByRole('textbox', {
+      name: 'Expected analyzer GPU',
+    })) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(mockPutConfig).toHaveBeenCalledWith({ 'analyzer.ollama.expectedDevice': '0' }),
+    );
+  });
+});
+
 describe('AdvancedView — CUDA env-shadow banner (Plan 2 §2.5)', () => {
   it('shows a banner when cudaEnvShadow is true', async () => {
     mockGetConfig.mockResolvedValue({ ...FIXTURE_CONFIG, cudaEnvShadow: true });

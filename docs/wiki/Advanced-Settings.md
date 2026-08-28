@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 115 knobs across 12 groups in total. High-risk groups (marked
+attribution — 116 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -140,6 +140,7 @@ your own on-disk copy; nothing here changes until you explicitly edit.
 | Phase-1 model override | Drives sentence attribution with a distinct model | (blank) | string | live | medium |
 | Phase-1 minimum lag (chapters) | Min completed Phase-0 chapters before Phase-1 dispatch starts; 0 releases lag | 10 | integer, min 0 | live | medium |
 | Analyzer keep-alive | How long Ollama holds the resident analyzer model warm | `5m` | string (Ollama keep_alive syntax) | live | medium |
+| Expected analyzer GPU | Informational only — declares the GPU you've pinned Ollama to via the OS-level steps, so a detected split that contradicts it is called out by name in Advanced Configuration | (blank) | string | live | low |
 
 ## 5. Voice engine & device
 

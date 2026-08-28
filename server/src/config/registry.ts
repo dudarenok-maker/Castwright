@@ -1187,6 +1187,20 @@ export const KNOBS: ConfigKnob[] = [
     default: 10, // ← DEFAULT_PHASE1_MIN_LAG_CHAPTERS in analyzer/select-analyzer.ts (line 111)
     apply: 'live', risk: 'medium',
   },
+  {
+    key: 'analyzer.ollama.expectedDevice',
+    env: 'ANALYZER_EXPECTED_DEVICE',
+    group: 'analyzer-models',
+    label: 'Expected analyzer GPU',
+    help: 'Informational only — this app cannot pin an external Ollama daemon\'s '
+        + 'device (see docs/local-llm.md "Pinning the analyzer to 100% GPU"). '
+        + 'Declare the GPU index you\'ve pinned Ollama to via the OS-level steps '
+        + '(e.g. "0"), and a detected split that contradicts this is called out '
+        + 'explicitly in the Advanced Configuration warning below.',
+    type: 'string',
+    default: '', // no coded default — empty string means "no declared expectation"
+    apply: 'live', risk: 'low',
+  },
 
   // ── analyzer-prompts ──────────────────────────────────────────────────────
   {
