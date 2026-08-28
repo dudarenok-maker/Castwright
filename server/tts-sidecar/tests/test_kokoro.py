@@ -34,6 +34,27 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
+@pytest.fixture
+def isolated_cuda_verification_state(monkeypatch):
+    """Isolate _cuda_verification_state mutations between tests by saving and
+    restoring the module-level global. Without this, a test that calls
+    _ensure_loaded (which mutates the global) leaves the state altered for
+    subsequent tests in the same pytest session, leading to test-order
+    dependencies and false positives/negatives. The fixture ensures each
+    test starts with the clean initial state and leaves the global unchanged
+    for the next test, regardless of pass/fail.
+
+    Usage: include `isolated_cuda_verification_state` as a parameter in any
+    test that calls _ensure_loaded or directly asserts on
+    main._cuda_verification_state."""
+    # Save the pre-test state
+    saved_state = dict(main._cuda_verification_state)
+    yield  # Test runs here
+    # Restore the state after the test, even if it failed
+    main._cuda_verification_state.clear()
+    main._cuda_verification_state.update(saved_state)
+
+
 # Representative multilingual catalog spanning every language prefix
 # Kokoro v1 ships with — used to verify the English filter drops the rest.
 # The English subset (af_*, am_*, bf_*, bm_*) here matches the curated
@@ -596,6 +617,408 @@ def test_kokoro_default_config_admitted_cuda_landing_on_cpu_flags_fell_back(
         assert card is not None
         assert card["family"] == "cpu"
         assert card["fell_back"] is True
+
+
+def test_cuda_selftest_flags_silent_fallback_and_warns(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """Castwright#2709: the real-session CUDA self-test that rides
+    `_ensure_loaded`'s own session construction. Modeled directly on
+    `test_kokoro_default_config_admitted_cuda_landing_on_cpu_flags_fell_back`
+    above (same fake session/kokoro shapes) — CUDA was requested and reported
+    available, but the real session's `get_providers()` comes back CPU-only.
+    `_cuda_verification_state` must record verified=False and a real
+    `log.warning` must fire (not just "no exception was raised")."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)  # the shipped default
+
+    class _CpuOnlySession:
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    class _SilentFallbackKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CpuOnlySession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _SilentFallbackKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        assert main._cuda_verification_state["verified"] is False
+        assert "CUDAExecutionProvider was requested" in main._cuda_verification_state["detail"]
+        assert any(
+            "CUDAExecutionProvider was requested" in rec.message
+            for rec in caplog.records
+        ), f"expected a CUDA self-test warning, got: {[r.message for r in caplog.records]}"
+
+
+def test_cuda_selftest_verified_true_when_cuda_actually_lands_no_warning(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """Success path counterpart: the real session's first provider IS
+    CUDAExecutionProvider, so the self-test must record verified=True and
+    must NOT log a warning."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _CudaSession:
+        def get_providers(self):
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    class _CudaLandingKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CudaSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _CudaLandingKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        assert main._cuda_verification_state["verified"] is True
+        assert main._cuda_verification_state["detail"] is None
+        assert not any(
+            "CUDA self-test" in rec.message for rec in caplog.records
+        )
+
+
+def test_cuda_selftest_exception_reading_providers_does_not_leak_raw_exception(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """PR #2719 regression: when session.get_providers() raises an exception,
+    the detail field in _cuda_verification_state must NOT contain the raw
+    exception text, which could leak stack-trace fragments or file paths to
+    /health callers (CodeQL py/stack-trace-exposure). The raw exception must
+    be logged for diagnosability, but the detail field must be curated."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _BrokenKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _BrokenKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    # Make get_providers() raise an exception to simulate API drift
+    mock_session.get_providers.side_effect = RuntimeError(
+        "API drift: get_providers() removed from onnxruntime.InferenceSession"
+    )
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # Verify the state is recorded
+        assert main._cuda_verification_state["verified"] is None
+        detail = main._cuda_verification_state["detail"]
+        assert detail is not None
+
+        # SECURITY CHECK: detail must NOT contain the raw exception text
+        # or any trace of the specific error message
+        assert "API drift" not in detail, \
+            f"Detail leaks raw exception: {detail}"
+        assert "get_providers" not in detail, \
+            f"Detail leaks method name from exception: {detail}"
+        assert "onnxruntime" not in detail.lower(), \
+            f"Detail leaks module name from exception: {detail}"
+
+        # DIAGNOSABILITY CHECK: detail must still be informative
+        assert "Could not read" in detail, \
+            f"Detail is not informative enough: {detail}"
+        assert len(detail) > 0, "Detail must be non-empty"
+
+        # RAW EXCEPTION LOG CHECK: the raw exception must be logged
+        # for operators to diagnose, just not in the HTTP response
+        assert any(
+            "Failed to read the real session's providers" in rec.message
+            for rec in caplog.records
+        ), f"Expected exception log, got: {[r.message for r in caplog.records]}"
+
+
+def test_cuda_selftest_empty_providers_list_verified_false(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """Castwright#2709 regression: when session.get_providers() returns an
+    empty list (API drift or unusual edge case), the self-test must record
+    verified=False, not verified=True. Before the fix, the buggy check
+    `actual_providers[:1] == ["CPUExecutionProvider"]` would evaluate to
+    `[] == ["CPUExecutionProvider"]` (False), and the `else` branch would
+    wrongly report verified=True."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _EmptyProvidersKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _EmptyProvidersSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    class _EmptyProvidersSession:
+        """Simulates API drift or unusual case: get_providers() returns empty."""
+        def get_providers(self):
+            return []
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _EmptyProvidersKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = []
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # Empty provider list means CUDA did not land
+        assert main._cuda_verification_state["verified"] is False
+        assert main._cuda_verification_state["detail"] is not None
+        # Verify a warning was logged
+        assert any(
+            "CUDA" in rec.message for rec in caplog.records
+        ), "Expected a CUDA self-test warning"
+
+
+def test_cuda_selftest_directml_without_cuda_verified_false(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """Castwright#2709 regression: when session.get_providers() reports
+    DirectML and CPU (CUDA absent), the self-test must record verified=False.
+    Before the fix, the buggy check `actual_providers[:1] == ["CPUExecutionProvider"]`
+    would evaluate to `["DmlExecutionProvider", "CPUExecutionProvider"][:1] ==
+    ["CPUExecutionProvider"]` (False), and the `else` branch would wrongly
+    report verified=True even though CUDA never landed."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _DirectmlOnlyKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _DirectmlSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    class _DirectmlSession:
+        """ORT session that landed on DirectML (e.g. AMD Windows), not CUDA."""
+        def get_providers(self):
+            return ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _DirectmlOnlyKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # DirectML without CUDA means CUDA did not land
+        assert main._cuda_verification_state["verified"] is False
+        assert main._cuda_verification_state["detail"] is not None
+        # Verify a warning was logged
+        assert any(
+            "CUDA" in rec.message for rec in caplog.records
+        ), "Expected a CUDA self-test warning"
+
+
+def test_cuda_selftest_fires_on_shipped_auto_path_not_just_explicit_device_pin(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """#2719 regression: the CUDA self-test must fire on the shipped default
+    `auto` path, not just when device= is explicitly pinned. The existing
+    `test_cuda_selftest_flags_silent_fallback_and_warns` and
+    `test_cuda_selftest_verified_true_when_cuda_actually_lands_no_warning` both
+    pass device="cuda:0" explicitly, bypassing the auto-resolution path that
+    EVERY real generation uses (KokoroEngine.synthesize, PRELOAD_KOKORO warm-up,
+    admission-off /load all use _ensure_loaded("v1") without device=).
+
+    This test exercises the real shipped path: KOKORO_DEVICE unset, device=
+    argument absent, CUDA available per onnxruntime but session lands on CPU
+    only (silent fallback). The self-test must detect this and set
+    verified=False with a warning, not silently pass because the explicit
+    device= override was missing."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)  # the shipped default
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+
+    class _CpuOnlySession:
+        """Silent fallback shape: session built with CUDA in the provider list
+        but actually only carries CPU providers."""
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    class _AutoPathKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CpuOnlySession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _AutoPathKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            # The shipped default path: no device= argument, auto-resolution
+            # resolves to "cuda" (CUDA available) but session lands on CPU only.
+            engine._ensure_loaded("v1")
+
+        # Self-test must have run and detected the fallback
+        assert main._cuda_verification_state["verified"] is False
+        assert "CUDAExecutionProvider was requested" in main._cuda_verification_state["detail"]
+        # Verify a warning was logged
+        assert any(
+            "CUDAExecutionProvider was requested" in rec.message
+            for rec in caplog.records
+        ), f"expected a CUDA self-test warning on the auto path, got: {[r.message for r in caplog.records]}"
 
 
 def test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back(
@@ -1536,6 +1959,68 @@ def test_kokoro_unload_drops_state(fake_kokoro_module, fake_weight_files) -> Non
     assert "af_heart" in engine._voices
 
 
+def test_kokoro_unload_clears_cuda_verification_state(
+    fake_weight_files, monkeypatch, isolated_cuda_verification_state
+) -> None:
+    """unload() must reset _cuda_verification_state to clean defaults to avoid
+    stale CUDA verification results leaking across unload/reload cycles
+    (issue #2719). After unload, /health should not report a prior load's
+    verification result until a fresh load's self-test runs."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _CudaLandingKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = session
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    class _CudaSession:
+        def get_providers(self):
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _CudaLandingKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+
+        engine = main.KokoroEngine()
+        # Load with CUDA, which runs the self-test and sets _cuda_verification_state.
+        engine._ensure_loaded("v1", device="cuda:0")
+        assert engine._kokoro is not None
+        # Verify self-test ran and set the state to verified=True.
+        assert main._cuda_verification_state["verified"] is True
+        assert main._cuda_verification_state["detail"] is None
+
+        # Unload and verify the state is reset to clean defaults.
+        engine.unload()
+        assert main._cuda_verification_state["verified"] is None
+        assert main._cuda_verification_state["detail"] is None
+
+
 # ── HTTP integration ─────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -1953,3 +2438,172 @@ def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
             "positionally and would raise TypeError (latent on the disabled "
             "DirectML path, but still shipped code)"
         )
+
+
+def test_cuda_fallback_recorded_when_api_drift_forces_cpu(
+    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+) -> None:
+    """#2582 regression: when kokoro-onnx lacks Kokoro.from_session (API drift),
+    the `else` branch falls back to Kokoro(...), which ALWAYS forces CPU
+    regardless of the resolved providers. When CUDA was requested
+    (build_providers contains CUDAExecutionProvider), this is a confirmed
+    fallback that must be recorded in _cuda_verification_state, not left
+    silent. The detail message must distinguish this cause (API drift) from
+    the self-test's own "session inspection revealed CPU" cause."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    # Kokoro stub WITHOUT from_session classmethod -- simulates API drift
+    class _ApiDriftKokoro:
+        """kokoro-onnx without from_session: the else branch path."""
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _ApiDriftKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # The load succeeded (Kokoro is resident) despite the API drift
+        assert engine._kokoro is not None
+
+        # _cuda_verification_state must record the confirmed fallback
+        assert main._cuda_verification_state["verified"] is False
+        detail = main._cuda_verification_state["detail"]
+        assert detail is not None
+
+        # Detail must mention API drift as the reason for the fallback
+        assert "API drift" in detail, \
+            f"Detail must mention API drift, got: {detail}"
+        assert "from_session" in detail, \
+            f"Detail must mention from_session, got: {detail}"
+        assert "always forces CPU" in detail, \
+            f"Detail must explain why it forces CPU, got: {detail}"
+
+        # A warning about the API drift must be logged
+        assert any(
+            "kokoro-onnx has no Kokoro.from_session" in rec.message
+            for rec in caplog.records
+        ), f"Expected API drift warning, got: {[r.message for r in caplog.records]}"
+
+
+# ── Test isolation verification ──────────────────────────────────────────
+
+@pytest.fixture
+def cuda_state_with_sentinel():
+    """Fixture that sets _cuda_verification_state to a non-standard sentinel
+    value and verifies the isolation fixture restores it. This fixture MUST be
+    listed before isolated_cuda_verification_state in test parameters so its
+    cleanup runs AFTER the isolation fixture's cleanup (pytest uses LIFO for
+    fixture teardown).
+
+    This proves isolation actually works by requiring the isolated_cuda_verification_state
+    fixture to restore a value that production code would never naturally produce.
+    Without proper isolation, the sentinel won't be restored and the assertion
+    in this fixture's cleanup will fail."""
+    sentinel_state = {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}
+    main._cuda_verification_state.clear()
+    main._cuda_verification_state.update(sentinel_state)
+    yield
+    # After the test AND the isolated_cuda_verification_state cleanup,
+    # assert the sentinel was restored. This assertion runs AFTER the
+    # isolation fixture's restore, proving it actually restored this state.
+    restored_state = dict(main._cuda_verification_state)
+    assert restored_state == sentinel_state, \
+        f"Isolation fixture failed to restore state. Expected {sentinel_state}, got {restored_state}"
+
+
+def test_cuda_verification_state_isolation_across_tests(
+    fake_weight_files, monkeypatch, caplog,
+    cuda_state_with_sentinel,
+    isolated_cuda_verification_state
+) -> None:
+    """Regression test proving the isolated_cuda_verification_state fixture
+    actually restores the pre-test state, even when the state is set to a
+    non-standard value that production code would never naturally produce.
+
+    This test:
+    1. Starts with a sentinel state set by cuda_state_with_sentinel
+    2. Runs _ensure_loaded, which mutates _cuda_verification_state to a
+       production-standard value
+    3. Lets the isolation fixture restore the sentinel
+    4. Verifies in cuda_state_with_sentinel's cleanup that the sentinel
+       was actually restored
+
+    If the isolated_cuda_verification_state fixture is gutted (reduced to
+    a bare yield), this test will fail because the sentinel won't be restored
+    and cuda_state_with_sentinel's cleanup assertion will catch it."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    # Verify we start with the sentinel, not a production-standard value
+    initial_state = dict(main._cuda_verification_state)
+    assert initial_state == {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}, \
+        f"Expected to start with sentinel state, got {initial_state}"
+
+    class _TestKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = []
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = []
+            return instance
+
+        def get_voices(self):
+            return []
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _TestKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1", device="cuda:0")
+
+        # After _ensure_loaded, the state is mutated to a production-standard value
+        mutated_state = dict(main._cuda_verification_state)
+        assert mutated_state != initial_state, \
+            f"_ensure_loaded should mutate the state from the sentinel"
+        # Verify production code set it to a standard value, not our sentinel
+        assert mutated_state["verified"] in (True, False), \
+            f"Production code should set 'verified' to bool, got {mutated_state['verified']}"
+
+    # At this point, the isolation fixture's cleanup runs and restores
+    # the sentinel. Then cuda_state_with_sentinel's cleanup runs and
+    # asserts the sentinel was restored. If isolation is broken, that
+    # assertion will fail.

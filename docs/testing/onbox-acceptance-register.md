@@ -418,7 +418,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -428,11 +428,27 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-28 (PR #2739), 61 → 60.** Row **A101** (Qwen duration golden baseline
+> **Last change: 2026-08-28, merging `origin/main` into `fix/sidecar-cuda-fallback-detection`.**
+> Two independent branch tips reconciled: this branch had added row **A102** (CUDA
+> fallback self-test #2582, PR #2719, 61 → 62); `main` had since discharged row
+> **A101** (PR #2739, 61 → 60) — the two changes started from the same post-#2704
+> state and never saw each other. Combined: 60 (post-A101-discharge) + 1 (A102,
+> still live) = **61**. Group A likewise nets to 38 (37 + A102). `next-id: A102`
+> bumped to `A103` in the same change (unaffected by A101's discharge, since IDs
+> are allocated once and never reused).
+> ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
+>
+> **Prior change: 2026-08-28, 61 → 62 via PR #2719**, adding row **A102** (CUDA
+> fallback self-test #2582) — minted from the next-id floor; an earlier commit on
+> this branch briefly mis-minted this as A38, a dangling ID reserved by
+> `onbox-sitting-plan.md`, corrected before merge.
+> ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
+>
+> **Prior change: 2026-08-28 (PR #2739), 61 → 60.** Row **A101** (Qwen duration golden baseline
 > bless, #1994) fully discharged and dropped: measured the real per-line duration
 > spread on this box (RTX 5070 Ti, `QWEN_DEVICE=cuda:1`) via a new ad-hoc script
 > (`server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py`), voice
@@ -681,7 +697,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A102 -->
+<!-- next-id: A103 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -3085,6 +3101,46 @@ clone needed — the stock catalogue voice `Damien Black` reproduces this
 shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
 itself has only this one dialogue shape and no separate run sheet (unlike
 A31's). *Cost:* short — one or two renders of a Russian test sentence.
+
+---
+
+### A102 · CUDA self-test on real ORT session detects Kokoro CPU fallback ([#2582](https://github.com/dudarenok-maker/Castwright/issues/2582), PR [#2719](https://github.com/dudarenok-maker/Castwright/pull/2719)) · **single 8 GB card, live Kokoro sidecar with real ORT session**
+
+PR #2719's `_cuda_selftest_or_warn` method (`server/tts-sidecar/main.py`) inspects
+the real ORT `InferenceSession` returned by Kokoro's first load and checks whether
+CUDA was requested but the session landed on CPU instead. The verification result
+(`cuda_verified`, `cuda_verification_detail`) rides the existing `_ensure_loaded`
+load at the `from_session` code path and is surfaced through `/health` →
+`/api/info` → the device-panel amber warning in the UI. Unit tests mock
+`InferenceSession` and cannot prove the mechanism against a genuine CUDA→CPU
+degradation on real hardware.
+
+- **Self-test fires at the real load boundary.** On first Kokoro load via the
+  real `_ensure_loaded`/`from_session` path (during a chapter render or
+  `PRELOAD_KOKORO` warm-up), confirm `/health`'s top-level `cuda_verified`
+  field is populated with one of three values: `true` (CUDA was requested and
+  landed), `false` (CUDA was requested but landed on CPU), or `null` (CUDA was
+  not requested for this load).
+- **CUDA fallback detection on real CUDA unavailability.** Force a real CUDA→CPU
+  fallback using the same missing-`nvidia-cudnn-cu12` gap A33 and A28 already use
+  to force CPU-only providers. Load Kokoro and confirm `/health`'s
+  `cuda_verified === false` (CUDA was requested but did not land), the log shows
+  the warning *"Kokoro CUDA self-test: CUDAExecutionProvider was requested but did
+  not land …"* (Castwright#2709), and `/api/info`'s `cudaVerified` field reads
+  `false`. Confirm the device-panel UI renders the amber warning *"GPU
+  acceleration was configured for Kokoro, but it's running on CPU instead."*
+- **Silent verification when CUDA genuinely succeeds.** On a box with working
+  CUDA support, load Kokoro and confirm `/health`'s `cuda_verified === true`
+  (CUDA was requested and landed), that the log contains NO CUDA self-test
+  warning message, and the device-panel warning stays absent. When CUDA was not
+  requested for the load, `/health`'s `cuda_verified === null`; this is not a
+  failure state and no warning should appear.
+
+*Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT
+session accessible during `_ensure_loaded`. *Criteria:* the three bullets above —
+no separate run sheet; mechanism is integrated into Kokoro's existing health
+reporting. *Cost:* short — one Kokoro load with CPU-forced providers, one with
+CUDA working (or default unforced), and UI verification.
 
 ## Group B — local Ollama analyzer only
 

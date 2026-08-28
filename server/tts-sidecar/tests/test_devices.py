@@ -171,6 +171,28 @@ def test_health_gpus_field_additive(monkeypatch):
     assert "spk_device" in body
 
 
+def test_health_cuda_verified_fields_additive(monkeypatch):
+    """Castwright#2709: /health exposes cuda_verified/cuda_verification_detail
+    alongside the existing devices/gpus keys, without disturbing them. On a
+    box that never triggered a real Kokoro load these read None/None -- the
+    honest steady-state, not a bug."""
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(main, "_build_gpus_payload", lambda torch_module=None: [])
+    monkeypatch.setattr(
+        main, "_cuda_verification_state",
+        {"verified": None, "detail": None},
+    )
+    client = TestClient(main.app)
+    body = client.get("/health").json()
+    assert "cuda_verified" in body
+    assert "cuda_verification_detail" in body
+    assert body["cuda_verified"] is None
+    assert body["cuda_verification_detail"] is None
+    # Additive contract: pre-existing keys untouched
+    assert "devices" in body
+    assert "gpus" in body
+
+
 # ── final-review fixes: loaded Coqui visibility + unindexed cpu_fallback ──
 
 def test_engine_actual_card_detects_loaded_coqui_via_tts():
