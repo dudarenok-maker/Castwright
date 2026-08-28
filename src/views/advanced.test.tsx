@@ -763,6 +763,25 @@ describe('AdvancedView — analyzer GPU-split warning, expected-device mismatch 
     expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
   });
 
+  it('knob "0" + deviceIndices [1] (no split, wrong single device) -> model on wrong GPU message', async () => {
+    mockGetConfig.mockResolvedValue(withExpectedDevice('0'));
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    const warning = await screen.findByText(/Analyzer model is on GPU 1/);
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toMatch(/expected GPU 0 only/);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
   it('renders the knob as an editable text row in analyzer-models and round-trips a saved value', async () => {
     mockGetConfig.mockResolvedValue(CONFIG_WITH_EXPECTED_DEVICE_KNOB);
     mockPutConfig.mockResolvedValue({

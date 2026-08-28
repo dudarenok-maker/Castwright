@@ -298,23 +298,33 @@ export function AdvancedView() {
      Task 3's warning into a named mismatch, independent of whether the
      split would fit on one device — the operator said "GPU N only", so a
      split onto any other combination is worth calling out even when it's
-     unavoidable. */
+     unavoidable. Distinguish between two distinct cases: (1) a genuine split
+     onto devices that include one outside expectedDevice, and (2) no split,
+     but the single resident device is the wrong one — they need different
+     wording. */
   const expectedDeviceRaw = values['analyzer.ollama.expectedDevice']?.effective as
     | string
     | undefined;
   const expectedDevice = expectedDeviceRaw?.trim() ?? '';
   const expectedDeviceNum = expectedDevice === '' ? NaN : Number(expectedDevice);
-  // Mismatch means "running on anything other than the declared device" —
-  // not just "declared device absent" — so a genuine split onto [0, 1] when
-  // only GPU 0 was declared still counts, even though 0 is one of the two
-  // indices. An empty deviceIndices (unreachable/checking) vacuously passes
-  // .every() and correctly reports no mismatch rather than a false one.
-  const expectedDeviceMismatch =
+
+  // Case 1: Genuine split (split=true) with at least one device not matching
+  const expectedDeviceSplitMismatch =
     expectedDevice !== '' &&
     !Number.isNaN(expectedDeviceNum) &&
     !!gpuSplit &&
+    gpuSplit.split &&
     gpuSplit.deviceIndices.length > 0 &&
     !gpuSplit.deviceIndices.every((idx) => idx === expectedDeviceNum);
+
+  // Case 2: No split (split=false), but the single device is wrong
+  const expectedDeviceWrongSingle =
+    expectedDevice !== '' &&
+    !Number.isNaN(expectedDeviceNum) &&
+    !!gpuSplit &&
+    !gpuSplit.split &&
+    gpuSplit.deviceIndices.length === 1 &&
+    gpuSplit.deviceIndices[0] !== expectedDeviceNum;
 
   const handleResetAll = () => {
     if (!window.confirm('Reset all advanced settings to their defaults?')) return;
@@ -576,11 +586,21 @@ export function AdvancedView() {
                       {gpuSplit &&
                         !gpuSplit.dataUnavailable &&
                         ((gpuSplit.split && gpuSplit.wouldFitSingleDevice) ||
-                          expectedDeviceMismatch) && (
+                          expectedDeviceSplitMismatch ||
+                          expectedDeviceWrongSingle) && (
                           <p className="text-xs text-amber-800 mb-1">
-                            {expectedDeviceMismatch ? (
+                            {expectedDeviceSplitMismatch ? (
                               <>
                                 Model split across GPUs {gpuSplit.deviceIndices.join(', ')} —
+                                expected GPU {expectedDevice} only. See{' '}
+                                <a href="/docs/local-llm.md" className="underline">
+                                  docs/local-llm.md
+                                </a>
+                                .
+                              </>
+                            ) : expectedDeviceWrongSingle ? (
+                              <>
+                                Analyzer model is on GPU {gpuSplit.deviceIndices[0]} —
                                 expected GPU {expectedDevice} only. See{' '}
                                 <a href="/docs/local-llm.md" className="underline">
                                   docs/local-llm.md
