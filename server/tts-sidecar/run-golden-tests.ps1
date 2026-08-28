@@ -154,7 +154,8 @@ $pytestArgs = Get-GoldenBlessPytestArgs -TestsDir $testsDir -CallerArgs @($args)
 
 Push-Location $here
 try {
-    # -rs (ops-45 / #1911 s5): print the reason for every SKIP. Without it a
+    # $pytestArgs (built above by Get-GoldenBlessPytestArgs) includes -rs
+    # (ops-45 / #1911 s5): print the reason for every SKIP. Without it a
     # skip is a single "s" and GOLDEN_ASR=0 (or an unblessed baseline) is an
     # invisible off-switch -- addopts in pytest.ini is just `-q`, with no
     # -rs/-ra of its own.

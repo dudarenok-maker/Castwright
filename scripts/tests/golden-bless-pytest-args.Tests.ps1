@@ -7,12 +7,16 @@
 # reach the pytest-invocation code this file's logic controls. This tests
 # the extracted, pure logic directly instead.
 #
-# Two real bugs review found in the naive first version, both regression-
+# Three real bugs review found across two naive versions, all regression-
 # tested here:
 #   - GOLDEN_BLESS='0' is PowerShell-truthy but must NOT be treated as
 #     "blessing" (Python's own predicate is `in ("1", "true", "TRUE")`) --
 #     a plain truthiness check would wrongly deselect Qwen duration from an
 #     ordinary, non-bless assertion run.
+#   - GOLDEN_BLESS='True' (PowerShell's own `[string]$true` cast) must NOT
+#     match either -- `-in` is case-INsensitive by default, so a naive
+#     `-in @('1','true','TRUE')` matches "True" even though Python's exact
+#     tuple-membership test does not. Needs `-cin`.
 #   - a caller's attached `-kEXPR` (pytest's short-option form) must be
 #     recognised as "the caller already supplied a -k filter" the same as
 #     a separate `-k EXPR` token -- otherwise a deliberate
@@ -20,6 +24,13 @@
 #     qwen_duration'` appended after it, silently re-blessing
 #     Kokoro/instruct instead of the Qwen duration baseline the caller
 #     asked for.
+#
+# Assertions check the FULL returned argv array (equality), not just
+# `-Contain` on individual tokens -- a `-Contain`-only suite stays green
+# even if `-m`/`golden`/`--tb=short`/`-rs`/$TestsDir get silently dropped
+# from the pytest invocation, since none of those tokens is what any single
+# `-Contain` check happens to look for. Confirmed by review: that shape
+# passed 7/7 while missing four of the function's nine base tokens.
 #
 # ASCII-only by design (see CLAUDE.md / feedback_powershell_ascii_only).
 
@@ -29,22 +40,20 @@ BeforeAll {
 }
 
 Describe 'Get-GoldenBlessPytestArgs' {
-    It 'does not append a -k filter for an ordinary (non-bless) run' {
+    It 'builds the exact base argv for an ordinary (non-bless) run with no caller args' {
         $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @() -GoldenBlessEnvValue $null
-        $result | Should -Not -Contain '-k'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs')) -join '|')
     }
 
-    It 'appends "not qwen_duration" for a bare bless with no caller -k' {
+    It 'appends "not qwen_duration" for a bare bless with no caller -k, base argv intact' {
         $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @() -GoldenBlessEnvValue '1'
-        $result[-2] | Should -Be '-k'
-        $result[-1] | Should -Be 'not qwen_duration'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs', '-k', 'not qwen_duration')) -join '|')
     }
 
     It 'accepts GOLDEN_BLESS=true and =TRUE the same as =1 (matches the Python predicate)' {
         foreach ($v in @('true', 'TRUE')) {
             $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @() -GoldenBlessEnvValue $v
-            $result[-2] | Should -Be '-k'
-            $result[-1] | Should -Be 'not qwen_duration'
+            ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs', '-k', 'not qwen_duration')) -join '|')
         }
     }
 
@@ -54,13 +63,21 @@ Describe 'Get-GoldenBlessPytestArgs' {
         # duration from what Python's own predicate treats as a normal,
         # non-bless assertion run.
         $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @() -GoldenBlessEnvValue '0'
-        $result | Should -Not -Contain '-k'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs')) -join '|')
+    }
+
+    It 'does NOT treat GOLDEN_BLESS=True (capital-T only) as blessing (case-sensitive match)' {
+        # Regression for the second version's bug: PowerShell's `-in` is
+        # case-INsensitive by default, so a naive `-in @('1','true','TRUE')`
+        # matches "True" -- a spelling Python's exact-membership predicate
+        # does not treat as set. Needs `-cin`.
+        $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @() -GoldenBlessEnvValue 'True'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs')) -join '|')
     }
 
     It 'does not double-apply when the caller already passed a separate -k token' {
         $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @('-k', 'qwen_duration') -GoldenBlessEnvValue '1'
-        ($result | Where-Object { $_ -eq '-k' }).Count | Should -Be 1
-        $result[-1] | Should -Be 'qwen_duration'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs', '-k', 'qwen_duration')) -join '|')
     }
 
     It 'does not double-apply when the caller passed pytest''s attached -kEXPR form' {
@@ -72,14 +89,11 @@ Describe 'Get-GoldenBlessPytestArgs' {
         # Kokoro/instruct instead of Qwen duration -- the opposite of what
         # was asked for.
         $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @('-kqwen_duration') -GoldenBlessEnvValue '1'
-        ($result | Where-Object { $_ -match '^-k' }).Count | Should -Be 1
-        $result | Should -Contain '-kqwen_duration'
-        $result | Should -Not -Contain 'not qwen_duration'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs', '-kqwen_duration')) -join '|')
     }
 
     It 'still runs an --engine=qwen-shaped -k EXPR bless without the exclusion filter' {
         $result = Get-GoldenBlessPytestArgs -TestsDir 'tests\golden' -CallerArgs @('-k', 'qwen') -GoldenBlessEnvValue '1'
-        $result | Should -Contain 'qwen'
-        $result | Should -Not -Contain 'not qwen_duration'
+        ($result -join '|') | Should -Be ((@('tests\golden', '-m', 'golden', '--tb=short', '-q', '-rs', '-k', 'qwen')) -join '|')
     }
 }

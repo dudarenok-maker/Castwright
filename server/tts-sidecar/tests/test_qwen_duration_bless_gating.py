@@ -38,8 +38,8 @@ def _write_baseline(tmp_path: Path) -> Path:
     """Create a fresh unblessed qwen-duration-baseline.json with placeholder tolerance."""
     path = tmp_path / "qwen-duration-baseline.json"
     data = {
-        "_comment": "Unblessed (#1994). Placeholder tolerance — replace after first bless.",
-        "tolerance": 0.05,  # placeholder
+        "_comment": "#1994. tolerance is a PLACEHOLDER until an operator hand-sets a real measured value.",
+        "tolerance": 0.10,  # placeholder, matches the real committed baseline's current value
         "entries": {},
     }
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -162,6 +162,20 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     # Check that all entries were recorded
     assert len(written["entries"]) == 3
     assert all(f"line{i}" in written["entries"] for i in range(1, 4))
+    # Each entry must record which voice it was synthesised against (#1994
+    # review pass-2 finding): the assertion loop's voice-mismatch check reads
+    # this field back, and treats an ABSENT key as "no check" (backward
+    # compatible with a pre-#1994-review baseline shape) -- so if _bless ever
+    # stopped writing it, that check would silently become a permanent no-op
+    # rather than failing loudly. Pin that it's actually written.
+    assert all(
+        written["entries"][f"line{i}"]["voice"] == "test_voice" for i in range(1, 4)
+    ), f"every entry must record the voice it was synthesised against, got {written['entries']}"
+    # #2004 precedent (kokoro-baseline.json): a bless stamps engine/package
+    # version metadata "so a model bump is legible" -- pin that Qwen's bless
+    # does too, and doesn't quietly stop.
+    assert "metadata" in written, "bless must stamp a metadata block (qwen_tts_version/torch_version/blessed_at)"
+    assert set(written["metadata"].keys()) >= {"qwen_tts_version", "torch_version", "blessed_at"}
 
 
 def test_assertion_loop_flags_voice_mismatch_against_baseline(monkeypatch) -> None:
