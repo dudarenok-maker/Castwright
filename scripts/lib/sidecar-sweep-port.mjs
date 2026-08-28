@@ -141,11 +141,24 @@ export function resolveConfiguredVitePort(envLocalPath) {
   return envLocalPath ? resolvePortFromEnvFile(envLocalPath, 'VITE_PORT') : null;
 }
 
+/** Check if a process identified by its PID is still alive using signal 0.
+    Returns true if the process exists, false otherwise. */
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process (dead); EPERM = process exists but owned by another user (alive)
+    return err.code === 'EPERM';
+  }
+}
+
 /** Resolve the sidecar port to sweep: the port this checkout's `.run/`
     directory recorded ownership of, or — when that note is absent,
-    unreadable, corrupt, out-of-range, or ambiguous (more than one note file
-    in the run dir) — the LOCAL_TTS_PORT this checkout's own `server/.env` is
-    configured for. Returns `null` (meaning: sweep nothing for TTS) only when
+    unreadable, corrupt, out-of-range, or ambiguous (more than one live note
+    file in the run dir) — the LOCAL_TTS_PORT this checkout's own `server/.env`
+    is configured for. Returns `null` (meaning: sweep nothing for TTS) only when
     neither source yields a usable port; it never falls back to the factory
     default 9000, which risks sweeping a different checkout's sidecar (#2632
     N29).
@@ -154,11 +167,12 @@ export function resolveConfiguredVitePort(envLocalPath) {
     server/src/tts/sidecar-owner.ts's sidecarOwnerPath) rather than under one
     fixed name, so this can no longer read a single known filename to
     *discover* an unknown port — it globs the run dir instead. Trusting the
-    note requires EXACTLY one match: zero means no sidecar has claimed
-    ownership here, and more than one means this run dir is shared across
-    ports (#2641) with no way to tell which note is current, so both degrade
-    to the same safe server/.env fallback the absent/corrupt cases already
-    use. */
+    note requires EXACTLY one match from a live process: zero means no sidecar
+    has claimed ownership here, and more than one LIVE note means ambiguity
+    (#2641), so both degrade to the same safe server/.env fallback the
+    absent/corrupt cases already use. Stale notes from dead processes (#2754)
+    are filtered out before the count check, so a single live owner note is
+    sufficient to resolve the port. */
 export function resolveSidecarSweepPort(runDir, serverEnvPath) {
   let entries;
   try {
@@ -167,18 +181,30 @@ export function resolveSidecarSweepPort(runDir, serverEnvPath) {
     entries = [];
   }
   const noteFiles = entries.filter((name) => /^tts\.owner\.\d+\.json$/.test(name));
-  if (noteFiles.length === 1) {
+
+  // Filter note files: read each one and keep only those with a live PID.
+  const liveNotes = [];
+  for (const fileName of noteFiles) {
     try {
-      const raw = readFileSync(resolve(runDir, noteFiles[0]), 'utf8');
+      const raw = readFileSync(resolve(runDir, fileName), 'utf8');
       const note = JSON.parse(raw);
-      const port = Number(note?.port);
-      if (Number.isInteger(port) && port > 0 && port < 65536) {
-        return port;
+      const pid = Number(note?.pid);
+      if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+        liveNotes.push(note);
       }
     } catch {
-      // Unreadable or corrupt — fall through to the server/.env fallback.
+      // Unreadable, corrupt, or dead PID — skip this note.
     }
   }
+
+  // Exactly one live note: use it.
+  if (liveNotes.length === 1) {
+    const port = Number(liveNotes[0]?.port);
+    if (Number.isInteger(port) && port > 0 && port < 65536) {
+      return port;
+    }
+  }
+  // Zero live notes or more than one: ambiguous or absent — fall back to server/.env.
   return serverEnvPath ? parseLocalTtsPortFromServerEnv(serverEnvPath) : null;
 }
 

@@ -59,7 +59,8 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'returns the per-checkout port recorded in tts.owner.<port>.json over server\.env (#2632 N27 fix)' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
@@ -224,11 +225,67 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'matches lowercase tts.owner.*.json (control for the case-sensitivity cell)' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
 
         # Lowercase tts.owner.9010.json should be matched and trusted
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
+    }
+
+    It '#2754 — excludes stale notes with dead PIDs; one live PID suffices' {
+        # Concrete scenario: first run on port 9010 (PID 99999, now dead), then stop
+        # via taskkill (no graceful shutdown). Next run on port 9000 (this process, PID
+        # is live) creates a new note. Now both notes exist; the stale 9010 note must
+        # not trigger ambiguity fallback — only the live PID (current process) should count.
+
+        $deadNotePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        $liveNotePath = Join-Path $script:tempDir "tts.owner.9000.json"
+
+        # Stale note: dead PID (99999 is virtually guaranteed never to be running)
+        Set-Content -Path $deadNotePath -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        # Live note: current process (definitely alive)
+        Set-Content -Path $liveNotePath -Value "{`"pid`":$PID,`"ppid`":$([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id),`"port`":9000,`"startedAt`":`"2026-08-25T10:00:00.000Z`"}" -Encoding utf8
+
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
+
+        # Despite two note files existing, only the one with a live PID should count.
+        # Resolution should succeed using the live note (9000), not fall back to server\.env (9020).
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9000
+    }
+
+    It '#2754 — falls back to server\.env when ALL note PIDs are dead' {
+        $notePathA = Join-Path $script:tempDir "tts.owner.9010.json"
+        $notePathB = Join-Path $script:tempDir "tts.owner.9011.json"
+
+        # Two stale notes, both with dead PIDs
+        Set-Content -Path $notePathA -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-Content -Path $notePathB -Value '{"pid":99998,"ppid":1,"port":9011,"startedAt":"2026-08-25T00:00:01.000Z"}' -Encoding utf8
+
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9030"
+
+        # Zero live notes — fall back to server\.env exactly as if the notes were absent.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
+    }
+
+    It '#2754 — falls back to server\.env when multiple PIDs are live' {
+        # Edge case: if by chance two PIDs are live (shouldn't happen in practice, but
+        # the code must handle it defensively), the resolver treats it as ambiguous.
+        # Synthesize a second "live" PID by using the current process again in both notes.
+
+        $notePath1 = Join-Path $script:tempDir "tts.owner.9010.json"
+        $notePath2 = Join-Path $script:tempDir "tts.owner.9011.json"
+        $pidStr = $PID
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+
+        # Two notes both claiming the current process (ambiguous, should not happen IRL)
+        Set-Content -Path $notePath1 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
+        Set-Content -Path $notePath2 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9011,`"startedAt`":`"2026-08-25T00:00:01.000Z`"}" -Encoding utf8
+
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9040"
+
+        # Multiple live notes = ambiguous; fall back to server\.env.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9040
     }
 }
 
@@ -335,7 +392,8 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     # site to independently mutate away from what's tested here.
     It 'includes the resolved sidecar port from tts.owner.<port>.json' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        Set-Content -Path $notePath -Value '{"pid":1,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
 
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
         $ports | Should -Be @(5173, 8080, 8443, 9010)

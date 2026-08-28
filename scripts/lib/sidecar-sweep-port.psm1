@@ -157,6 +157,18 @@ function Get-ConfiguredVitePort {
     return Get-ConfiguredPortFromEnv -Key 'VITE_PORT' -EnvPath $EnvLocalPath
 }
 
+# Check if a process identified by its PID is still alive (process exists).
+# Uses Get-Process with -ErrorAction SilentlyContinue to check for existence.
+function Test-ProcessAlive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int] $Pid
+    )
+    if ($Pid -le 0) { return $false }
+    return $null -ne (Get-Process -Id $Pid -ErrorAction SilentlyContinue)
+}
+
 function Get-SidecarSweepPort {
     [CmdletBinding()]
     param(
@@ -166,17 +178,31 @@ function Get-SidecarSweepPort {
     )
     $noteFiles = @(Get-ChildItem -Path $RunDir -Filter 'tts.owner.*.json' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -cmatch '^tts\.owner\.[0-9]+\.json$' })
-    if ($noteFiles.Count -eq 1) {
+
+    # Filter note files: read each one and keep only those with a live PID.
+    $liveNotes = @()
+    foreach ($noteFile in $noteFiles) {
         try {
-            $note = Get-Content $noteFiles[0].FullName -Raw -ErrorAction Stop | ConvertFrom-Json
-            if ($note.port -is [int] -or $note.port -is [long] -or $note.port -is [double]) {
-                $port = [int]$note.port
-                if ($port -gt 0 -and $port -lt 65536) { return $port }
+            $note = Get-Content $noteFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($note.pid -is [int] -or $note.pid -is [long]) {
+                $pid = [int]$note.pid
+                if ($pid -gt 0 -and (Test-ProcessAlive -Pid $pid)) {
+                    $liveNotes += $note
+                }
             }
         } catch {
-            # Corrupt/unreadable note — fall through to the server\.env fallback.
+            # Unreadable, corrupt, or dead PID — skip this note.
         }
     }
+
+    # Exactly one live note: use it.
+    if ($liveNotes.Count -eq 1) {
+        if ($liveNotes[0].port -is [int] -or $liveNotes[0].port -is [long] -or $liveNotes[0].port -is [double]) {
+            $port = [int]$liveNotes[0].port
+            if ($port -gt 0 -and $port -lt 65536) { return $port }
+        }
+    }
+    # Zero live notes or more than one: ambiguous or absent — fall back to server\.env.
     if ($ServerEnvPath) { return Get-LocalTtsPortFromServerEnv -ServerEnvPath $ServerEnvPath }
     return $null
 }
