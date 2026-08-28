@@ -11,7 +11,9 @@ owner: null
 > 2026-08-05** (design-first; four PRs, four issues closed, five items left
 > needing design), **Round 4 DRAINED INCREMENTALLY 2026-08-11 → 2026-08-28**
 > (17 of 53 tracked items closed since 08-25 alone; #898 phase 2 still not
-> dispatched after three rounds; zero on-box sittings in four rounds), and
+> dispatched after three rounds; none of this sweep's own Group 8 on-box items
+> were hit despite a parallel on-box acceptance campaign actively running
+> waves 6–9 in the same window), and
 > **Round 5 PLANNED 2026-08-28** (seven waves; 58 real open items after
 > excluding live agent-instruction children). See "Round 1 outcome" through
 > "Round 5 — the recut plan" below. Round 2's carries seven cases of a guard
@@ -958,12 +960,20 @@ highest expected value single item in the plan," fully briefed since Round 3,
 and it is still sitting untouched. That is a process failure, not a technical
 one, and Round 5 treats it as the first thing to dispatch, unconditionally.
 
-**On-box Group 8 saw zero GPU sittings across all four rounds.** #1084, #1527,
-#1685, #2583 are untouched; #2616 (a real on-box session, Group C /
-Ночной дозор) never ran even though it was flagged ready. One of its two
-paired code bugs (#2288) shipped without the session — the session's scope
-needs re-checking against what actually still needs measuring before it is
-re-briefed, not copied forward as-is.
+**None of this sweep's own Group 8 items got a sitting across all four
+rounds — but on-box work itself did not stand still.** #1084, #1527, #1685,
+#2583 are untouched; #2616 (a real on-box session, Group C / Ночной дозор)
+never ran even though it was flagged ready. One of its two paired code bugs
+(#2288) shipped without the session — the session's scope needs re-checking
+against what actually still needs measuring before it is re-briefed, not
+copied forward as-is. **Correction (found while auditing live worktrees for
+this update):** a separate, parallel on-box acceptance campaign (tracked by
+#2435, not this sweep's Group 8 list) ran waves 6 through 9 in this same
+window — PRs #2679 (wave 6, rows A19/A20/A24/A26/A31–A33), #2693 (wave 8,
+rows A34–A37), and #2658/#2664 (A46, for #2656) all merged 08-25 → 08-27.
+None of those waves' rows overlap this sweep's own tracked Group 8 items,
+which is why "zero sittings for these seven items" is accurate but "zero
+on-box sittings" is not — say the narrower claim, not the broader one.
 
 **8 new items were filed against work this round surfaced**, all from
 PR-review-gate passes: #2682, #2700, #2708, #2721, #2742, #2747, #2750, #2752.
@@ -1029,7 +1039,7 @@ re-briefed:
 | # | Live as | Note |
 |---|---|---|
 | #2367 | PR #2753 (open) | Analyzer GPU-split warning chain |
-| #2582 | PR #2719 (open) | CUDA→CPU fallback detection |
+| #2582 | PR #2719 — **shipped since this table was first written** | CUDA→CPU fallback detection. See the correction in Wave 2/7: a later child (#2765, under #2759) was independently filed against it and is likely a duplicate. |
 | #2641 | PR #2754 (open) | Sidecar owner-note port-keying |
 
 All three were originally going to land in Wave 2/3/6 respectively based on
@@ -1062,10 +1072,40 @@ session for it.
 
 ### Wave 2 — decision-owed singles (low/medium stakes)
 
-**Not diff-shaped, despite reading like small fixes on first pass.** Each is
-filed as a decision request with its options already enumerated by whoever
-found it — the design work is largely done; what is owed is a pick, then an
-implementation.
+**QUEUED — being decomposed and dispatched as this doc was written, 2026-08-28.**
+Parent tracking issue **#2759** bundles this wave (plus #2582, already shipped
+before the parent was filed — see the correction below — and #2700, a real
+on-box run, into one branch/PR) as a 9-child Open Engine chain:
+
+| Item | Child | Fix |
+|---|---|---|
+| #2608 | #2760 | Aligner right-boundary fix |
+| #2496 | #2762 | Quarantine-health exclusion |
+| #2516 | #2763 | SSE reconnect allowlist |
+| #2747 | #2764 | `blankCommentsAndStrings` fail-loud |
+| #2682 | #2766 | `asr.warm` allocator-peak fix |
+| #2596 | #2767 | `resolve-release.js` — flagged for **high**-depth PR review |
+| #2700 | #2768 | On-box acceptance run (not a diff — see Wave 5) |
+| — | #2769 | Final `[claude][verify]` child, opens the PR on pass |
+
+Decisions were made by the filer (documented on #2759) rather than deferred to
+a same-day owner pick, since the queue could move immediately: #2608 →
+search forward for a dash-prefixed occurrence and prefer it over a bare
+mid-word hit; #2596 → hardcode the re-normalize step to
+`server/tts-sidecar/requirements/*.txt`, not a generic `.gitattributes`-driven
+mechanism (kept at high-depth review given the issue's own stated blast
+radius); #2496 → exclude non-quarantined-but-gating rows from the report
+entirely, updating the existing regression test. All lanes route to `[claude]`.
+**Outcome not yet known** as of this writing — update this table when #2769
+lands.
+
+**Correction found while filing this table: #2765 (targeting #2582) is very
+likely a duplicate.** #2582 closed via PR #2719 (merged) *before* #2759 was
+filed — that PR already added CUDA-provider-fallback detection at
+`server/tts-sidecar/main.py`, `server/src/routes/sidecar-health.ts`/`info.ts`,
+and `src/components/device-panel.tsx`. #2765's brief describes building the
+same detection again. Premise-check it against current `main` before it
+executes, or pull it from the chain.
 
 - **#2608** — dash-invariant needle search's fuzzy path: extend the anchor,
   skip the mid-word-hit short-circuit for fuzzy hits, or something else.
@@ -1089,12 +1129,16 @@ slip to a later round without cost given its own "not urgent" tag.
 
 ### Wave 2b — #2596 (decision-owed, Premium tier)
 
-Named separately from Wave 2 because the issue itself invokes the
-model-routing table's Premium tier ("irreversible/high-blast-radius
-decisions") — it touches the Pinokio release/install path with real blast
-radius to a live user's box, and the CLI half it would change is
-acceptance-tested only, with no unit safety net. Do not fold this into a quick
-same-day pick; give it the adversarial-review weight the issue itself asks for.
+**QUEUED as child #2767 of #2759** (see Wave 2's table) — folded into the same
+branch/PR as the rest of the chain rather than run separately. Named
+separately here because the issue itself invokes the model-routing table's
+Premium tier ("irreversible/high-blast-radius decisions") — it touches the
+Pinokio release/install path with real blast radius to a live user's box, and
+the CLI half it would change is acceptance-tested only, with no unit safety
+net. **Kept at `high` PR-review depth within #2759's PR** rather than folded
+into a quick same-day pick, per #2759's own note — the adversarial-review
+weight the issue asks for should still apply even though it shares a branch
+with lower-stakes items.
 
 ### Wave 3 — diff-shaped lane, one file (ready)
 
@@ -1108,6 +1152,9 @@ Lane-4 rule (files that overlap share a lane regardless of how unrelated the
 defects look).
 
 ### Wave 4 — register mechanics (decide #2708 first, then lane)
+
+**IN PROGRESS on a concurrent thread as of 2026-08-28 — outcome not yet
+known.** Update this section once it lands rather than re-briefing into it.
 
 - **#2708** — decide whether the on-box register carries a changelog at all.
   **Take this first** — it plausibly shapes what #2599/#2603/#2721 should even
@@ -1132,9 +1179,11 @@ Group 8 — except this time it needs to actually be scheduled.
   #2288 (one of its two paired code bugs) shipped without the session running;
   confirm what is actually still unmeasured before re-briefing it as-is.
 - **#1998** — cloned-voice identity loss across languages (0.600 → 0.229).
-- **#2700** — voice-reassignment centroid: confirm a *successfully rebuilt*
-  centroid scores correctly, not just that reassignment discards the stale one
-  (the only prior on-box run hit `too-short` and never reached this case).
+- **#2700** — **QUEUED as child #2768 of #2759** (see Wave 2's table) — a real
+  on-box run folded into the same chain, not skipped despite riding alongside
+  diff-shaped work. Confirm a *successfully rebuilt* centroid scores
+  correctly, not just that reassignment discards the stale one (the only
+  prior on-box run hit `too-short` and never reached this case).
 
 ### Wave 6 — design-first: a real premise pass owed (19)
 
@@ -1154,11 +1203,14 @@ scope changes land — before any phase-1 thread starts. Then take the first
   #2303, #2331, #2347, #2352, #2362, #2366, #2369, #2433, #2434, #2449. Every
   one of these is phrased "decide whether/what" and none has ever been
   triaged by a round.
-- **Colon-rule / tag-clause chain (2):** #2346 (a real bug, likely resolvable
-  without a full design pass once triaged — the stale
-  `docs/docs-2346-instruments` branch, last touched 08-20 with no PR, suggests
-  someone already started and stalled; check it before re-drafting from
-  scratch), #2404 ("decision owed" per its own title).
+- **Colon-rule / tag-clause chain (2):** #2346 — **correction: this is not
+  untriaged.** Its design already shipped (PR #2426, merged 2026-08-18,
+  "design and plan the #2346 tag-clause colon rule" — a full worktree of
+  five design/plan commits). #2346 is waiting on an **implementation
+  thread**, not a premise pass, the same shape as #898. (A separate, stale
+  branch `docs/docs-2346-instruments`, last touched 08-20 with no PR, is
+  unrelated leftover — not live, safe to ignore.) #2404 ("decision owed" per
+  its own title) pairs with it and does still need triage.
 - **#2742 (1):** Qwen duration golden gate's statistical power — single-draw
   assertion, needs a decision on how many draws is enough.
 
@@ -1168,8 +1220,13 @@ scope changes land — before any phase-1 thread starts. Then take the first
 #1477, #1335, #822, #1001, #947. The Round 4 park-vs-collapse decision is now
 **two rounds** unanswered — force it this round.
 
-**Gated — live PR, do not re-brief (3):** #2367 (PR #2753), #2582 (PR #2719),
-#2641 (PR #2754).
+**Gated — live PR, do not re-brief (2):** #2367 (PR #2753), #2641 (PR #2754).
+
+**Shipped since this wave was written (1, was gated):** #2582 — PR #2719
+merged. Total open count in the summary table above (58) has not been
+re-decremented pending #2765's disposition (see Wave 2) — if #2765 is closed
+as duplicate rather than producing a second fix, #2582 drops out and the real
+total is 57.
 
 **Gated — paused wave, unchanged (2):** #2054, #1600 — fs-38 Wave 3 stays
 paused pending its own unpause decision.
