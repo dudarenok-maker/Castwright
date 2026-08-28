@@ -189,7 +189,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">61</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">62</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -198,7 +198,8 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-27 (PR #2704), 60 → 61</b>, adding row A101 (Qwen duration golden baseline bless, #1994) — minted from the <code>next-id</code> floor, not the old high-water-plus-one slot (A38), which <code>onbox-sitting-plan.md</code> already uses to mean something else.
+    <b>Last change: 2026-08-28 (Castwright#2734), 61 → 62</b>, adding row A102 (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked <code>execFile</code>/nvidia-smi covers every automated test, so the real two-GPU split, the once-per-signature server warning, the UI row, and the <code>expectedDevice</code> mismatch wording all still need a genuine 2-card boot. Minted from the <code>next-id</code> floor.
+    <br><b>Previous change: 2026-08-27 (PR #2704), 60 → 61</b>, adding row A101 (Qwen duration golden baseline bless, #1994) — minted from the <code>next-id</code> floor, not the old high-water-plus-one slot (A38), which <code>onbox-sitting-plan.md</code> already uses to mean something else.
     <br><b>Previous change: 2026-08-27, 60 → 60 (no count change).</b> The Blocked section's
     two ffmpeg rows no longer carry row IDs. They had borrowed E6 and E8 from the live
     Group E sequence, so each of those IDs named <i>two</i> rows — one live Group E row
@@ -299,7 +300,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>38</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>39</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -315,7 +316,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">39 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -870,6 +871,13 @@
       <div class="body">
         <p><code>server/tts-sidecar/tests/golden/qwen-duration-baseline.json</code> ships UNBLESSED — the test file (<code>test_qwen_duration_golden.py</code>) is real, but the baseline has empty <code>entries</code> and a placeholder <code>tolerance</code>, so the opt-in golden gate SKIPs until it is blessed. Qwen decoding is stochastic with no seed, so the true per-line <code>duration_sec</code> spread across repeated syntheses of each <code>qwen-duration-fixture.json</code> line is the missing number: <code>tolerance</code> must be <b>derived from that measured spread</b> (with headroom), not picked, then blessed. This closes the #1994 A-grade visibility gap the scaffold was written for.</p>
         <p class="src">single 8 GB card, a designed Qwen voice already present · <a href="https://github.com/dudarenok-maker/Castwright/issues/1994">#1994</a> · criteria: the bullet above · short — N repeated syntheses of the fixture on a real box, capture the per-line spread, derive tolerance, bless</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A102</span><span class="iname">Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output</span><span class="risk">two NVIDIA GPUs of different sizes</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>detectOllamaGpuSplit()</code> (<code>server/src/gpu/ollama-gpu-split.ts</code>) shells out to real <code>nvidia-smi --query-compute-apps</code>/<code>--query-gpu</code> and every automated test here mocks <code>execFile</code>, so none of it has run against a real two-GPU box. Same open shape as the rest of this register: the parse/threshold logic is pinned in isolation, but never against genuine multi-GPU <code>nvidia-smi</code> output. Load a model oversized for one card but not both, confirm <code>split: true</code> / correct <code>deviceIndices</code> / <code>wouldFitSingleDevice: true</code>, confirm the server log warns once per signature and the Advanced Configuration row shows it; repeat with a model genuinely too big for any single card and confirm no warning fires anywhere; with <code>analyzer.ollama.expectedDevice</code> set to a contradicted GPU index, confirm the UI sharpens into the named-mismatch wording.</p>
+        <p class="src">two NVIDIA GPUs of different sizes, a local Ollama daemon, and a model sized to force a genuine split · <a href="https://github.com/dudarenok-maker/Castwright/issues/2367">#2367</a> · criteria: Castwright#2734 (the verify child for this chain) checklist item 6; the four task briefs under #2367 for the exact behaviour each piece owns · short — one oversized load that splits, one genuinely-too-big load that doesn't, one expectedDevice mismatch check</p>
       </div>
     </details>
 
@@ -1512,7 +1520,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-27</b> against branch <code>test/sidecar-1994-qwen-duration-baseline</code> (PR #2704: added row A101 for #1994's Qwen duration golden baseline bless, minted from the stable-ID <code>next-id</code> floor per origin/main's #2629/#2717, not the row's original A38 slot). Full sync history is this file's git log, not this page.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-28</b> against branch <code>chore/server-2367-analyzer-gpu-split-warning</code> (Castwright#2734: added row A102 for #2367's analyzer GPU-split warning + expected-device mismatch, minted from the stable-ID <code>next-id</code> floor). Full sync history is this file's git log, not this page.</p>
   </footer>
 
 </div>

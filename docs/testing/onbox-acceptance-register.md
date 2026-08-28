@@ -367,7 +367,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -377,11 +377,19 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
+> **Last change: 2026-08-28 (Castwright#2734), 61 → 62**, adding row **A102**
+> (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked
+> `execFile`/nvidia-smi covers every automated test, so the real two-GPU
+> split, the once-per-signature server warning, the UI row, and the
+> `expectedDevice` mismatch wording all still need a genuine 2-card boot.
+> Minted from Group A's `next-id` floor; marker bumped `A102` → `A103` in
+> the same change.
+>
+> **Previous change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
 > golden baseline bless, #1994) — minted from the `next-id` floor per this
 > file's own allocate-once convention (above), NOT the old high-water+1 slot
 > (`A38`) this row was originally cut against before that convention shipped.
@@ -589,7 +597,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A102 -->
+<!-- next-id: A103 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -3006,6 +3014,37 @@ per-line `duration_sec` spread across repeated syntheses of each
 `qwen-duration-fixture.json` line is the missing number: `tolerance` must be
 **derived from that measured spread** (with headroom), not picked, then blessed.
 This closes the #1994 A-grade visibility gap the scaffold was written for.
+
+### A102 · Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output ([#2367](https://github.com/dudarenok-maker/Castwright/issues/2367)) · **two NVIDIA GPUs of different sizes**
+
+`detectOllamaGpuSplit()` (`server/src/gpu/ollama-gpu-split.ts`) shells out to
+real `nvidia-smi --query-compute-apps`/`--query-gpu` and every automated test
+here mocks `execFile`, so none of it has run against a real two-GPU box. Same
+open shape as the rest of this register: the parse/threshold logic is pinned
+in isolation, but never against genuine multi-GPU `nvidia-smi` output.
+
+- Load a model on Ollama that is oversized for one card but fits the combined
+  VRAM of both, so Ollama itself splits it across GPUs. Confirm
+  `detectOllamaGpuSplit()` reports `split: true` with the correct
+  `deviceIndices`, and `wouldFitSingleDevice: true`.
+- Confirm the server log warns exactly once for that split's device
+  signature (`server/src/analyzer/ollama.ts`), and does not repeat on
+  subsequent analyzer calls with the same signature.
+- Confirm the Advanced Configuration "Analyzer (Ollama) device" row
+  (`src/views/advanced.tsx`) shows the matching warning line.
+- Repeat with a model that is genuinely too big to fit on any single card
+  (`wouldFitSingleDevice: false`) and confirm NO warning fires anywhere —
+  server log or UI.
+- With `analyzer.ollama.expectedDevice` set to a GPU index the real split
+  contradicts, confirm the UI sharpens into the named-mismatch wording
+  (`... expected GPU N only`) instead of the generic split wording.
+
+*Needs:* two NVIDIA GPUs of different sizes, a local Ollama daemon, and a
+model sized to force a genuine split. *Criteria:* Castwright#2734 (the
+verify child for this chain) checklist item 6; the four task briefs under
+#2367 for the exact behaviour each piece owns. *Cost:* short — one oversized
+load that splits, one genuinely-too-big load that doesn't, one
+`expectedDevice` mismatch check.
 
 ## Group B — local Ollama analyzer only
 
