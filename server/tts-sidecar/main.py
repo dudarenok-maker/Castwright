@@ -3256,10 +3256,11 @@ class KokoroEngine(Engine):
         try:
             actual_providers = list(session.get_providers())
         except Exception as e:
+            log.exception("Failed to read the real session's providers")
             _cuda_verification_state = {
                 "checked": True,
                 "verified": None,
-                "detail": f"Could not read the real session's providers ({e}).",
+                "detail": "Could not read the real session's providers (API error or kokoro-onnx drift).",
             }
             return
         landed_on_cpu = (

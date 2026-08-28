@@ -721,6 +721,84 @@ def test_cuda_selftest_verified_true_when_cuda_actually_lands_no_warning(
         )
 
 
+def test_cuda_selftest_exception_reading_providers_does_not_leak_raw_exception(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """PR #2719 regression: when session.get_providers() raises an exception,
+    the detail field in _cuda_verification_state must NOT contain the raw
+    exception text, which could leak stack-trace fragments or file paths to
+    /health callers (CodeQL py/stack-trace-exposure). The raw exception must
+    be logged for diagnosability, but the detail field must be curated."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _BrokenKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _BrokenKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    # Make get_providers() raise an exception to simulate API drift
+    mock_session.get_providers.side_effect = RuntimeError(
+        "API drift: get_providers() removed from onnxruntime.InferenceSession"
+    )
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # Verify the state is recorded
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is None
+        detail = main._cuda_verification_state["detail"]
+        assert detail is not None
+
+        # SECURITY CHECK: detail must NOT contain the raw exception text
+        # or any trace of the specific error message
+        assert "API drift" not in detail, \
+            f"Detail leaks raw exception: {detail}"
+        assert "get_providers" not in detail, \
+            f"Detail leaks method name from exception: {detail}"
+        assert "onnxruntime" not in detail.lower(), \
+            f"Detail leaks module name from exception: {detail}"
+
+        # DIAGNOSABILITY CHECK: detail must still be informative
+        assert "Could not read" in detail, \
+            f"Detail is not informative enough: {detail}"
+        assert len(detail) > 0, "Detail must be non-empty"
+
+        # RAW EXCEPTION LOG CHECK: the raw exception must be logged
+        # for operators to diagnose, just not in the HTTP response
+        assert any(
+            "Failed to read the real session's providers" in rec.message
+            for rec in caplog.records
+        ), f"Expected exception log, got: {[r.message for r in caplog.records]}"
+
+
 def test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back(
     fake_weight_files, monkeypatch
 ) -> None:
