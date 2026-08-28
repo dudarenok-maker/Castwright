@@ -11,7 +11,7 @@
  * the sidecar is killed out from under an in-flight chapter).
  *
  * Fix (Option B, mirroring `listenWithAutoRebind`'s EADDRINUSE handling in
- * crash-logging.ts): the owning server drops a note (.run/tts.owner.json)
+ * crash-logging.ts): the owning server drops a note (.run/tts.owner.<port>.json)
  * recording its pid + parent pid. A second server that finds a LIVE, FOREIGN
  * owner refuses to boot with an actionable message + exit(1) instead of starting
  * a rival supervisor.

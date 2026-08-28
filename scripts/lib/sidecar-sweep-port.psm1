@@ -164,7 +164,8 @@ function Get-SidecarSweepPort {
         [string] $RunDir,
         [string] $ServerEnvPath
     )
-    $noteFiles = @(Get-ChildItem -Path $RunDir -Filter 'tts.owner.*.json' -File -ErrorAction SilentlyContinue)
+    $noteFiles = @(Get-ChildItem -Path $RunDir -Filter 'tts.owner.*.json' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^tts\.owner\.\d+\.json$' })
     if ($noteFiles.Count -eq 1) {
         try {
             $note = Get-Content $noteFiles[0].FullName -Raw -ErrorAction Stop | ConvertFrom-Json

@@ -103,6 +103,19 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9060
     }
 
+    It 'falls back to server\.env LOCAL_TTS_PORT when the only tts.owner.*.json file has a non-numeric port segment (#2641 digits-only fix)' {
+        $notePath = Join-Path $script:tempDir "tts.owner.stale.json"
+        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9075,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # -Filter's '*' wildcard would count this as the sole match and trust
+        # its (wrong) port 9075; the port segment must be digits-only,
+        # mirroring the .mjs resolver's /^tts\.owner\.\d+\.json$/ exactly, so
+        # this must fall back to server\.env's 9070 instead of trusting a
+        # malformed filename.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
     It 'returns $null when server\.env has no LOCAL_TTS_PORT line' {
         Set-EnvFixture -Path $script:envPath -Content "PORT=8080`nWORKSPACE_DIR=..\workspace"
 
