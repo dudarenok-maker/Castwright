@@ -10,6 +10,7 @@ import { api, ReviewScriptError, type LedgerEntryDTO } from '../lib/api';
 import { planApply, type ReviewOp } from '../lib/script-review-apply';
 import { scriptReviewActions, opKey, type ReviewOpWithChapter } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
+import { emitLanguageGuard } from '../lib/language-guard-bus';
 
 /** Minimal sentence shape required for planApply's index-map (matches Sentence from api-types). */
 export interface ReviewLiveSentence {
@@ -42,6 +43,10 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   const allOps: ReviewOpWithChapter[] = [];
   const failed: Array<{ chapterId: number; message: string }> = [];
   const versionByChapter: Record<number, number> = {};
+  /* Task 9d (#2407) — batch shape. Set when any chapter-failed event carries
+     `code: 'language_unset'` (server/src/routes/script-review.ts's per-chapter
+     failure loop keeps going, so the run still ends cleanly). */
+  let languageUnset = false;
   dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing script' }));
 
   /* fs-58 Task 11 — run planApply at seed time so ops that can't be
@@ -127,7 +132,10 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId: chId });
       },
-      onChapterFailed: (e: { chapterId: number; message: string }) => failed.push(e),
+      onChapterFailed: (e: { chapterId: number; message: string; code?: string }) => {
+        if (e.code === 'language_unset') languageUnset = true;
+        failed.push(e);
+      },
       onCheckpoint: ({ chapterId: chId, version }: { chapterId: number; version: number }) => {
         versionByChapter[chId] = version;
       },
@@ -144,6 +152,30 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
         }
       },
     });
+    /* Task 9d (#2407) — batch shape. The route fails each chapter on its own
+       `chapter-failed` event rather than a whole-request 409, so an unset
+       language surfaces as a clean run in which every chapter failed. Route it
+       to the language-guard host and re-run the review once a language is
+       saved; a refused guard (no host, or a book the library doesn't know)
+       falls through to the ordinary per-chapter failure surface. */
+    if (
+      languageUnset &&
+      emitLanguageGuard({
+        selector: { bookId },
+        shape: 'batch',
+        onRetry: () => {
+          dispatch(
+            retryReviewScript(bookId, {
+              wholeBook,
+              model,
+              ...(chapterId !== undefined ? { chapterId } : {}),
+            }),
+          );
+        },
+      })
+    ) {
+      return;
+    }
     dispatchAccumulatedOps(allOps);
   } catch (err) {
     if (err instanceof ReviewScriptError && err.code === 'cancelled') {

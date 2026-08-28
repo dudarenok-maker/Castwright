@@ -1013,7 +1013,7 @@ Title: `fix(side,server): derive XTTS cloned voices without torchcodec`. Body mu
 
 - [ ] **Step 6: Mandatory independent review**
 
-Dispatch the `code-review` gate at Premium tier — multi-scope PR, so `high` effort. Triage and fold findings before merge.
+Dispatch the `pr-review-gate` gate at Premium tier — multi-scope PR, so `high` effort. Triage and fold findings before merge.
 
 ---
 

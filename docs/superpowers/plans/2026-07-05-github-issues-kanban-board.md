@@ -1977,7 +1977,7 @@ npm run verify
 Expected: PASS. This is a mixed docs+code PR (new scripts, a modified
 `package.json`, `CONTRIBUTING.md`, `docs/BACKLOG.md`, two feature-plan
 docs) — **not** docs-only, so it does NOT qualify for the docs-only
-exemption from the mandatory `code-review` gate below, and pre-push `verify`
+exemption from the mandatory `pr-review-gate` gate below, and pre-push `verify`
 runs in full (no docs-only fast-path).
 
 - [ ] **Step 4: Mandatory independent PR review**
@@ -1986,7 +1986,7 @@ Per CLAUDE.md's model-routing table: this PR mixes `feat`/`chore`/`docs`
 commits across a single scope (`ops`) — multi-type-in-one-PR takes the
 highest tier any single commit would earn, but none of these commits are
 `refactor`/`perf` and it's single-scope, so effort level is **medium**
-(single-scope `feat`/`chore`). Run the `code-review` skill at `medium`
+(single-scope `feat`/`chore`). Run the mandatory gate via the `pr-review-gate` skill at `medium`
 effort, without `--fix`, once every task above is committed and pushed.
 Triage findings per the usual convention (clear-cut fixes applied directly
 and pushed — retriggers exactly one re-review round per the correctness-bug

@@ -35,7 +35,7 @@ import {
   type ThirdPartyGuardChapter,
 } from '../analyzer/third-party-front-matter-guard.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
-import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
+import { dedupeRosterByName, composeRewrites, stripEstablishedAsciiRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
 import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
 import {
   loadCastMerges,
@@ -146,9 +146,9 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
-import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
@@ -265,13 +265,25 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    `notLinkedTo` edge on `cast.json` — that edge is keyed by `(bookId,
    characterId)`, not `bookDir`. `null`/undefined is tolerated (mirrors
    `bookDir`): the retirement itself still records, just without the
-   notLinkedTo cleanup, since there is no book to look one up on. */
+   notLinkedTo cleanup, since there is no book to look one up on.
+
+   `castBase` (#2694) is the run's `CastMergeBase`, nullable exactly like the
+   two callers' own `const castBase: CastMergeBase | null` bindings — `null`
+   for a run with no book dir (mirrors `bookDir`/`bookId` above), and
+   `enabled: false` on a real instance is already a no-op inside
+   `noteExternalWrite` itself. When `clearNotLinkedEdgesForDroppedRejections`
+   actually writes cast.json (a write outside `writeChecked`, taken under its
+   OWN lock — see cast-merge-base.ts's file-header invariant for why that
+   can't route through `writeChecked`), this advances the baseline to match,
+   so the next `writeChecked` doesn't report this run's own write as a
+   foreign conflict. */
 export async function recordRetirements(
   bookDir: string | null | undefined,
   bookId: string | null | undefined,
   retirements: ReadonlyArray<Retirement>,
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
+  castBase: CastMergeBase | null,
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
   const { keep, refused } = liveIds
@@ -291,7 +303,12 @@ export async function recordRetirements(
   for (const { from, to } of keep) {
     const result = await retireCharacterId(bookDir, from, to);
     if (result.droppedSelfLoopRejections.length && bookId) {
-      await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
+      const written = await clearNotLinkedEdgesForDroppedRejections(
+        bookDir,
+        bookId,
+        result.droppedSelfLoopRejections,
+      );
+      if (written) castBase?.noteExternalWrite(written);
     }
   }
 }
@@ -324,6 +341,14 @@ export async function recordRetirements(
    rejected", which is exactly the evidence the removal pass acts on. It now
    reads the history through `loadCastIdHistoryWithStatus` and refuses to act
    at all on `degraded`. See the comment at that call below.
+
+   `castBase` (#2694, optional/nullable) is the run's `CastMergeBase`. This
+   function's write is textually locked in this file (see above) rather than
+   routed through `writeChecked` — for the same cast-lock-rule-1 reason
+   `clearNotLinkedEdgesForDroppedRejections` isn't — so it must advance the
+   baseline itself when it writes, or the next `writeChecked` reports this
+   run's own reconciliation as a foreign conflict. See cast-merge-base.ts's
+   file-header invariant.
 
    `statusBeforePersist` exists because that local read is NOT sufficient on
    its own at the two persist call sites (PR #2202 gate review, Critical). The
@@ -376,6 +401,7 @@ export async function reconcileRejectEdgesOnDisk(
   bookId: string | undefined,
   log: (phaseId: number, message: string) => void,
   statusBeforePersist?: CastIdHistoryStatus,
+  castBase?: CastMergeBase | null,
 ): Promise<void> {
   /* No bookId means no way to tell this book's edges from a cross-book one —
      see bookIdForRetirementCleanup, which already warns for this run. */
@@ -421,7 +447,12 @@ export async function reconcileRejectEdgesOnDisk(
       }
       const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
       if (!adds.length && !removes.length) return;
-      await writeJsonAtomic(castJsonPath(bookDir), { characters: next });
+      const payload = { characters: next };
+      await writeJsonAtomic(castJsonPath(bookDir), payload);
+      // #2694 — this write bypasses `writeChecked` (see this function's own
+      // doc comment); advance the baseline to match so it isn't reported as
+      // a foreign conflict at the next `writeChecked` call.
+      castBase?.noteExternalWrite(payload);
       if (removes.length) {
         log(
           1,
@@ -1006,6 +1037,12 @@ export function dedupAndPrepare(
   suggestions: MergeSuggestion[];
   preDedupSentences: { id: number; chapterId: number; characterId: string }[];
   preDedupRoster: { id: string; name: string }[];
+  /** #2584/#2570 (PR #2640 N6) — no longer consumed by
+      `stripEstablishedAsciiRewrites` (round-5 review switched that function
+      to a direct name-equivalence check; see its doc comment for why the
+      tier alone isn't a sound gate). Passed through for diagnostics/tests
+      that want to distinguish which tier produced a given rewrite entry. */
+  tier1RewriteKeys: Set<string>;
 } {
   // Capture pre-dedup lineage BEFORE any rewrite (journal needs the original ids/names).
   const preDedupSentences = sentences.map((s) => ({
@@ -1027,6 +1064,7 @@ export function dedupAndPrepare(
     suggestions: dd.suggestions,
     preDedupSentences,
     preDedupRoster,
+    tier1RewriteKeys: dd.tier1RewriteKeys,
   };
 }
 
@@ -2301,7 +2339,7 @@ export async function attributeChapterStage2(opts: {
     const paras = parseChapterStructure(opts.chapter.body, index);
     const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
     resolveWindows(paras, rosterGenderMap(stage1.characters), firstPersonId);
-    const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
+    const alignment = alignSentences(result.sentences, paras, opts.chapter.body, conventions.dialogueOpen !== null);
     const rosterIds = new Set(stage1.characters.map((c) => c.id));
     const examined = crossExamine(alignment, {
       rosterIds,
@@ -2382,7 +2420,7 @@ export async function attributeChapterStage2(opts: {
      applyNarratorDefault branches converge) so dividers populate on every
      chapter regardless of language or structure-engine state. Mutates only the
      sceneBreakBefore flag. */
-  annotateSceneBreaks(result.sentences, opts.chapter.body);
+  annotateSceneBreaks(result.sentences, opts.chapter.body, conventions?.dialogueOpen != null);
   if (opts.onStages && rawSnapshot) {
     opts.onStages({
       raw: rawSnapshot,
@@ -3047,6 +3085,25 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
 
+  /* Task 6c (#2246) pre-flight gate — resolve the book's language BEFORE the
+     SSE headers open, so a *located* book that never declared a language
+     answers a real HTTP `409 { error: 'language_unset' }` instead of a
+     streamed 200 that silently analyses in English. This is the one reader
+     site whose naive swap is a no-op: `resolveBookLanguageForManuscript` now
+     throws `BookLanguageUnsetError` for that case (previously it was caught
+     and collapsed to 'en' by the whole-body catch). The two genuinely
+     pre-confirm carve-outs still resolve 'en' and sail through here:
+     - `located === null` — no book on disk yet, nothing to have been set.
+     - a scan lookup failure — never block analysis on a disk read. */
+  try {
+    await resolveBookLanguageForManuscript(manuscriptId);
+  } catch (e) {
+    if (e instanceof BookLanguageUnsetError) {
+      return res.status(409).json({ error: 'language_unset' });
+    }
+    throw e;
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -3248,16 +3305,29 @@ export interface MainAnalyzerJobOpts {
    paths, not just unit tests of the watermark) needs end-to-end
    coverage that drives this body with spy analyzers + a stub record. */
 /* fs-2 — resolve a manuscript's book language for the analyzer preamble.
-   Returns the book's BCP-47 language ('en' default), or 'en' when no book is
-   found on disk yet (analysis can run pre-confirm in some paths). Best-effort:
-   a lookup failure must never block analysis, so it swallows errors to 'en'. */
+   Returns the book's BCP-47 language, or 'en' when no book is found on disk
+   yet (analysis can run pre-confirm in some paths). Task 6c call-site parity —
+   this is the ONE reader site the earlier children carved out because the
+   naive `bookStateLanguage`→`requireBookStateLanguage` swap is a no-op behind
+   a whole-body `catch { return 'en' }`. That swallow is now gone for the
+   located-with-no-language case: a *located* book that never declared a
+   language is a fact, not English, so it throws `BookLanguageUnsetError` and
+   the caller decides how to surface it (the POST handler answers a real HTTP
+   409; the detached loop emits an SSE `language_unset` error). The two
+   fail-open carve-outs that are genuinely pre-confirm still resolve 'en':
+   - `located === null` — no book on disk yet, so there is no language to have
+     been set (deliberate carve-out, must survive).
+   - a scan *lookup* failure — a disk read must never block analysis.
+   Everything else uses the honest strict reader. */
 export async function resolveBookLanguageForManuscript(manuscriptId: string): Promise<string> {
+  let located: Awaited<ReturnType<typeof findBookByManuscriptId>>;
   try {
-    const located = await findBookByManuscriptId(manuscriptId);
-    return located ? bookStateLanguage(located.state) : 'en';
+    located = await findBookByManuscriptId(manuscriptId);
   } catch {
     return 'en';
   }
+  if (!located) return 'en';
+  return requireBookStateLanguage(located.state);
 }
 
 /* #938 — the book's byline author (cover/byline name), for the Layer A front-matter
@@ -3289,8 +3359,26 @@ export async function runMainAnalyzerJob(
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
   /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
-     Resolved once per job; threaded into every runStage* call below. */
-  const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+     Resolved once per job; threaded into every runStage* call below.
+     Task 6c: `resolveBookLanguageForManuscript` now throws BookLanguageUnsetError
+     for a *located* book that never declared a language (instead of silently
+     reading 'en'), so the detached loop must surface it rather than analyse in
+     English. This job body runs with no `res` to answer with, so it emits an
+     SSE `error` with code `language_unset` through the same
+     `endJob`/broadcast mechanism `classifyAnalysisFailure` uses for
+     lock-contention. The subscribed `BookLanguageUnsetError` message is the
+     curated, client-facing sentence — it carries no filesystem path, so the
+     SSE `error` body leaks nothing over LAN HTTPS. */
+  let bookLanguage: string;
+  try {
+    bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  } catch (e) {
+    if (e instanceof BookLanguageUnsetError) {
+      endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
+      return;
+    }
+    throw e;
+  }
   /* #938 Layer A — resolve the byline author + strip title-page/e-library
      boilerplate from each chapter body BEFORE the model sees it. In-memory only
      (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
@@ -3519,6 +3607,7 @@ export async function runMainAnalyzerJob(
               reconciled.retirements,
               null,
               log,
+              castBase,
             );
           },
         );
@@ -5552,8 +5641,28 @@ export async function runMainAnalyzerJob(
        here (composeRewrites is pure and dd/folded are already in scope) —
        the later computation at the cast.json persist point (currently
        :4834, feeding applyRewriteToPriorCast at :4835) is left as written,
-       not hoisted, so this never touches its own retirement bookkeeping. */
-    const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
+       not hoisted, so this never touches its own retirement bookkeeping.
+
+       #2584/#2570 — stripEstablishedAsciiRewrites filters out the narrow
+       coincidence where THIS run's own fresh-side dedup (dd.rewrites) happens
+       to key on an established ASCII prior id while targeting a non-ASCII
+       survivor of its own choosing (analyzer non-determinism minting several
+       fresh duplicate rows for one character this run) — see the function's
+       own doc comment. Without it, the entry above falsely reads as
+       "already converged" and this remap skips, silently discarding the
+       established id.
+
+       `characters0` (declared above) is the fresh roster in the SAME
+       pre-remap fresh-id space `cumulativeForRemap`'s values live in — the
+       composed rewrite table's `to` ids resolve against `folded.characters`
+       (plus the narrator-identity/palette/lines fields characters0 layers
+       on, none of which touch `name`), never against a roster already
+       rewritten by remapFreshToPriorIds itself. */
+    const cumulativeForRemap = stripEstablishedAsciiRewrites(
+      composeRewrites(dd.rewrites, folded.rewrites),
+      priorCastForMerge,
+      characters0,
+    );
     const remappedToPrior = remapFreshToPriorIds(
       characters0,
       folded.sentences,
@@ -5733,8 +5842,23 @@ export async function runMainAnalyzerJob(
         } else {
           /* Remap the prior cast's ids through the cumulative dedup→fold rewrite
              so designed voices ride onto the surviving canonical ids instead of
-             stranding on a collapsed source id. */
-          const cumulative = composeRewrites(dd.rewrites, folded.rewrites);
+             stranding on a collapsed source id.
+
+             #2584/#2570 — stripEstablishedAsciiRewrites (same guard as the
+             remapFreshToPriorIds call above) so this Site-1 write never
+             retires an established ASCII id in favour of a non-ASCII
+             survivor a fresh-side dedup collision happened to pick.
+             `characters0` again — this rewrite table is composed from the
+             SAME dd/folded ids as `cumulativeForRemap` above, so the fresh
+             roster that resolves its `to` names must be the same one:
+             `characters0`, not `characters` (already remapped onto prior
+             ids by this point) or anything reconciled/CJK-remapped further
+             down, whose names may already have been overwritten by a merge. */
+          const cumulative = stripEstablishedAsciiRewrites(
+            composeRewrites(dd.rewrites, folded.rewrites),
+            priorCastForMerge,
+            characters0,
+          );
           const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
           if (remapped.droppedVoices.length) {
             log(
@@ -5812,8 +5936,8 @@ export async function runMainAnalyzerJob(
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
               writeDir,
             );
-            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log);
-            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log, castBase);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -5823,7 +5947,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log);
+            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -5878,7 +6002,7 @@ export async function runMainAnalyzerJob(
                pre-rewrite verdict captured at the top of this block — without
                it the helper's own read sees the file the steps above just
                rewrote, not the one the persist started with. */
-            await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist);
+            await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist, castBase);
           } catch (historyErr) {
             /* #2260 round 2 — see the dedup site near the top of this job for
                why a lock-acquisition timeout must NOT be swallowed here.
@@ -5963,7 +6087,7 @@ export async function runMainAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, stampStateSchema(next));
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
           }
         }
       } catch (persistErr) {
@@ -6335,8 +6459,21 @@ export async function runSubsetAnalyzerJob(
   allowStage1ShrinkSubset: boolean,
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
-  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate. */
-  const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
+     Task 6c: same contract as the main job — a *located* book that never
+     declared a language throws BookLanguageUnsetError here (not a silent 'en'),
+     which this detached subset body surfaces as an SSE `error` with code
+     `language_unset` (no filesystem path in the body). */
+  let bookLanguage: string;
+  try {
+    bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+  } catch (e) {
+    if (e instanceof BookLanguageUnsetError) {
+      endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
+      return;
+    }
+    throw e;
+  }
   /* #938 Layer A — resolve the byline author + strip title-page/e-library
      boilerplate from each chapter body BEFORE the model sees it. In-memory only
      (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
@@ -6482,6 +6619,7 @@ export async function runSubsetAnalyzerJob(
             dedupRetirements,
             null,
             log,
+            castBase,
           );
         },
       );
@@ -7197,8 +7335,17 @@ export async function runSubsetAnalyzerJob(
        Site 1 (applyRewriteToPriorCast, below at the cast.json persist point)
        later applies to the prior cast, so a prior row already headed
        elsewhere via THIS run's own dedup is recognised as already-converged
-       instead of being matched here first and rewritten backwards. */
-    const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
+       instead of being matched here first and rewritten backwards.
+
+       #2584/#2570 — stripEstablishedAsciiRewrites; see the main route's
+       matching block for the mechanism. `enriched0` (declared above,
+       mirroring the main route's `characters0`) is the fresh roster in the
+       SAME pre-remap fresh-id space this rewrite table's `to` ids live in. */
+    const cumulativeForRemap = stripEstablishedAsciiRewrites(
+      composeRewrites(dd.rewrites, folded.rewrites),
+      priorCastForMerge,
+      enriched0,
+    );
     const remappedToPrior = remapFreshToPriorIds(
       enriched0,
       folded.sentences,
@@ -7347,8 +7494,16 @@ export async function runSubsetAnalyzerJob(
           );
         } else {
           /* Remap the prior cast's ids through the cumulative dedup→fold rewrite
-             so designed voices ride onto the surviving canonical ids. */
-          const cumulative = composeRewrites(dd.rewrites, folded.rewrites);
+             so designed voices ride onto the surviving canonical ids.
+
+             #2584/#2570 — stripEstablishedAsciiRewrites; see the main route's
+             matching Site-1 block for the mechanism. `enriched0` again, for
+             the same reason as the `cumulativeForRemap` call above. */
+          const cumulative = stripEstablishedAsciiRewrites(
+            composeRewrites(dd.rewrites, folded.rewrites),
+            priorCastForMerge,
+            enriched0,
+          );
           const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
           if (remapped.droppedVoices.length) {
             log(
@@ -7394,8 +7549,8 @@ export async function runSubsetAnalyzerJob(
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
               writeDir,
             );
-            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log);
-            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log, castBase);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -7405,7 +7560,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log);
+            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
@@ -7443,7 +7598,7 @@ export async function runSubsetAnalyzerJob(
             }
             // #2166 — mirrors the main path's same-named call above, including
             // the pre-rewrite verdict captured at the top of this block.
-            await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist);
+            await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist, castBase);
           } catch (historyErr) {
             /* #2260 round 2 — see runMainAnalyzerJob's dedup site for why a
                lock-acquisition timeout must NOT be swallowed here.
@@ -7508,7 +7663,7 @@ export async function runSubsetAnalyzerJob(
               },
               updatedAt: new Date().toISOString(),
             };
-            await writeJsonAtomic(statePath, stampStateSchema(next));
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
           }
         }
       } catch (persistErr) {

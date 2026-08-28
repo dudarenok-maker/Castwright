@@ -1750,7 +1750,7 @@ git commit -m "test(frontend): e2e for bulk reassign + regression plan + release
 - [ ] **Step 5: Full fast branch verify**
 
 Run: `npm run verify:fast:branch`
-Expected: PASS. Then open the PR (`Closes #1676` — note part (b) is a separate follow-up, so use `Refs #1676` if the issue must remain open for part b; confirm with the issue's scope before choosing) and let cloud `verify.yml` + the mandatory `code-review` gate run.
+Expected: PASS. Then open the PR (`Closes #1676` — note part (b) is a separate follow-up, so use `Refs #1676` if the issue must remain open for part b; confirm with the issue's scope before choosing) and let cloud `verify.yml` + the mandatory `pr-review-gate` pass run.
 
 ---
 

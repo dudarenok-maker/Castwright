@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { librarySlice } from '../../store/library-slice';
 import { accountSlice } from '../../store/account-slice';
 import { LibraryGrid } from './library-grid';
 import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+import type { EditBookMetaPatch } from '../../modals/edit-book-meta';
 
 const makeBook = (bookId: string, title: string): LibraryBook => ({
   bookId, title, author: 'A. Kell', series: 'The Ninth House', seriesPosition: 1,
@@ -13,7 +14,10 @@ const makeBook = (bookId: string, title: string): LibraryBook => ({
   characterCount: 8, voiceCount: 8, lastWorkedOn: 'today', coverGradient: ['#000', '#fff'], tags: [],
 });
 
-function renderGrid(authors: LibraryAuthor[]) {
+function renderGrid(
+  authors: LibraryAuthor[],
+  over: { onEditBook?: (b: LibraryBook, p: EditBookMetaPatch) => Promise<void> } = {},
+) {
   const store = configureStore({
     reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
     preloadedState: {
@@ -37,7 +41,7 @@ function renderGrid(authors: LibraryAuthor[]) {
         onDeleteBook={vi.fn()}
         onReparseBook={vi.fn()}
         onReplaceManuscript={vi.fn()}
-        onEditBook={vi.fn()}
+        onEditBook={over.onEditBook ?? vi.fn()}
         onStartNew={vi.fn()}
         onOpenSeriesMemory={vi.fn()}
       />
@@ -70,6 +74,58 @@ describe('LibraryGrid series-memory', () => {
     renderGrid(authorsWith(undefined));
     expect(screen.queryByTestId('series-memory-chip')).toBeNull();
     expect(screen.queryByTestId('series-sparkline')).toBeNull();
+  });
+});
+
+describe('LibraryGrid — language affordance (Task 9, #2246)', () => {
+  const unsetBook = (extra: Partial<LibraryBook> = {}): LibraryBook => ({
+    ...makeBook('b1', 'One'),
+    /* languageSet false but `language` carries the resolved display value
+       'en' — exactly the case that must branch on languageSet. */
+    languageSet: false,
+    language: 'en',
+    ...extra,
+  });
+  const authorsFor = (b: LibraryBook): LibraryAuthor[] => [
+    { name: 'A. Kell', series: [{ name: 'The Ninth House', seriesMemory: undefined, books: [b] }] },
+  ];
+
+  it('shows the unset affordance when languageSet is false even though language resolves to en (acceptance 1)', () => {
+    renderGrid(authorsFor(unsetBook()));
+    expect(screen.getByTestId('library-language-unset-b1')).toHaveTextContent('Language unset');
+  });
+
+  it('shows the badge when the language is set (acceptance 1)', () => {
+    renderGrid(authorsFor(unsetBook({ languageSet: true, language: 'ru' })));
+    expect(screen.getByTestId('library-language-badge-b1')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-language-unset-b1')).toBeNull();
+  });
+
+  it('opens the edit modal in guard mode with the language field empty (acceptances 2 & 4)', () => {
+    const onEditBook = vi.fn().mockResolvedValue(undefined);
+    renderGrid(authorsFor(unsetBook()), { onEditBook });
+    fireEvent.click(screen.getByTestId('library-language-unset-b1'));
+    expect(screen.getByTestId('edit-book-language-guard')).toBeInTheDocument();
+    // even though the book's `language` resolves to 'en', guard mode starts empty
+    expect((screen.getByTestId('edit-book-language') as HTMLSelectElement).value).toBe('');
+    expect(onEditBook).not.toHaveBeenCalled();
+  });
+
+  it('saving a chosen language calls onEditBook with the language in the patch (acceptance 3)', () => {
+    const onEditBook = vi.fn().mockResolvedValue(undefined);
+    renderGrid(authorsFor(unsetBook()), { onEditBook });
+    fireEvent.click(screen.getByTestId('library-language-unset-b1'));
+    fireEvent.change(screen.getByTestId('edit-book-language'), { target: { value: 'ru' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    expect(onEditBook).toHaveBeenCalledTimes(1);
+    expect(onEditBook.mock.calls[0][1].language).toBe('ru');
+  });
+
+  it('the unset affordance carries the 44px min touch target (acceptance 5)', () => {
+    renderGrid(authorsFor(unsetBook()));
+    const btn = screen.getByTestId('library-language-unset-b1');
+    expect(btn.className).toContain('min-h-[44px]');
+    expect(btn.className).toContain('fine-pointer:min-h-0');
   });
 });
 

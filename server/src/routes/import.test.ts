@@ -332,14 +332,21 @@ describe('POST /api/books — fs-2 language persistence', () => {
     expect(stateJson.language).toBe('ru');
   });
 
-  /* Renamed from "defaults language to 'en' when the confirm body omits it".
-     The omitted-language path no longer DEFAULTS to English — it falls back to
-     what /import detected. This book IS English, so the answer is unchanged;
-     the case is kept because it must not regress, but it can no longer be read
-     as evidence that we default to 'en'. The Russian case below is the one
-     that distinguishes the two. */
+  /* #2246 Task 3 — a confident detection still fills an omitted language; a
+     surrender must NOT be stamped 'en'. This body is REAL English (the /import
+     candidate reports languageFallback:false through the exact parse→detect
+     pipeline), so omitting the language keeps the detected 'en'. It is the
+     control the #2246 null test below needs: it proves the confident path is
+     unchanged, so that test cannot pass by nulling everything. (The old
+     single-sentence fixture silently surrendered — passing pre-Task-3 only
+     because the fallback default masked it — so it proved nothing.) */
   it("keeps 'en' for an ENGLISH book whose confirm body omits the language", async () => {
-    const md = '# English Book\n\n## Chapter One\n\nThe story opens here with several sentences.';
+    const md = `# English Book
+
+## Chapter One
+
+The train arrived at the small station as the morning light broke across the hills. Alice stepped down onto the platform and looked around for her brother. He had promised to meet her here at dawn, but she saw no one in the crowd of tired travellers. A porter pointed at the wooden bench where a man sat reading a newspaper. She walked closer and realized that the man was not her brother at all. He looked up and smiled at her uncertainty. He folded his paper and rose to greet her. They had never met before, yet his face seemed strangely familiar. He told her his name was Martin, and he seemed to know her name already. He explained that he had been waiting for her for three whole days. This confused her far more than she wished to admit. She had no memory of ever writing to a man named Martin. Her brother had only ever mentioned a cousin who lived in the city. She wondered whether this stranger was connected to the letter she received last week. That letter had been unsigned and strangely urgent. It asked her to travel alone without telling anyone where she was going. She had packed a single bag and left her house long before dawn. Now she stood before a man who claimed to know her. The station clock struck six, and the silence between them grew. Martin reached into his coat and produced a yellowed photograph. The image showed a young couple standing in front of an old church. Alice recognized the woman in the picture as her own mother. A cold chill ran through her as the pieces began to fit together. The photograph was dated twenty years before she herself was born.`;
+
     const importRes = await request(app)
       .post('/api/import')
       .send({ text: md, fileName: 'english.md' });
@@ -385,6 +392,33 @@ describe('POST /api/books — fs-2 language persistence', () => {
       readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
     );
     expect(stateJson.language).toBe('ru');
+  });
+
+  /* #2246 Task 3 (R1) — a surrender is not a decision. When the confirm body
+     omits `language` and detection surrendered (languageFallback:true), the
+     write must NOT persist the confidence-floor 'en' guess: it writes `null`
+     (stated absence, key present) so the book stays unset for the ambiguity
+     prompt. This is the "still owed" behaviour #2337 deliberately did not
+     deliver. */
+  it('writes language: null when the confirm body omits it and detection surrendered (#2246)', async () => {
+    const md = '# Terse\n\n## Chapter One\n\nToo short to corroborate itself.';
+    const importRes = await request(app).post('/api/import').send({ text: md, fileName: 'terse.md' });
+    // Fixture sanity: this text must genuinely surrender, or the test proves nothing.
+    expect(importRes.body.candidate.languageFallback).toBe(true);
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Terse Author',
+      title: 'Terse Book',
+      seriesPosition: null,
+      isStandalone: true,
+      // language deliberately omitted — detection surrendered, so no guess
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect('language' in stateJson).toBe(true);
+    expect(stateJson.language).toBeNull();
   });
 
   /* #2337 review F1 — "no choice" is a CLASS, not one spelling. Testing only

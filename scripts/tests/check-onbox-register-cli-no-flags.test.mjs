@@ -93,6 +93,7 @@ function buildRegisterText() {
   const bodySections = LETTERS.map(
     (letter) =>
       `## Group ${letter} — setup ${letter.toLowerCase()}\n\n` +
+      `<!-- next-id: ${letter}101 -->\n\n` +
       `### ${letter}1 · thing 1\n\nBody text.\n\n` +
       `### ${letter}2 · thing 2\n\nBody text.\n\n---\n`,
   ).join('\n');

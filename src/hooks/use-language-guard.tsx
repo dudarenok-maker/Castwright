@@ -1,0 +1,225 @@
+/* useLanguageGuard — the global host for the language-guard modal (#2246
+   Task 9c). Mirrors the `useReverseLocalAnalyzerGuard` contract: a hook
+   returning `{ guard, modal }`, called once in layout.tsx, with `{modal}`
+   rendered near the end of the layout tree.
+
+   The four 409 sites in src/lib/api.ts mark an unset book language with a 409
+   body. Instead of surfacing the generic error toast for that case, the API
+   layer routes the failure through this hook (via the shared
+   language-guard-bus): `guard(selector, shape, onRetry, onDismiss, sseSource)` resolves
+   the book — analysis names it by `manuscriptId`, the other three by `bookId`
+   — opens EditBookMetaModal in guard mode, the user chooses a language, the
+   language patch is persisted, and `onRetry` re-runs the original call the
+   unset language had failed. When the selector matches no library book the
+   guard reports false so the API layer keeps its existing error path.
+   Dismissing without saving calls `onDismiss` so value-returning callers can
+   reject their awaiting promise instead of hanging on it.
+
+   Three guard shapes are active: pre-flight 409 (standard POST), sse
+   (streaming generation), and batch (multi-chapter/multi-book requests). All
+   ship in this PR (#2246). */
+
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useAppDispatch, useAppSelector } from '../store';
+import { libraryActions } from '../store/library-slice';
+import { notificationsActions } from '../store/notifications-slice';
+import { api } from '../lib/api';
+import {
+  EditBookMetaModal,
+  type EditBookMetaPatch,
+  type LanguageGuardShape,
+} from '../modals/edit-book-meta';
+import {
+  setLanguageGuardHandler,
+  type LanguageGuardSelector,
+  type SseSource,
+} from '../lib/language-guard-bus';
+import type { LibraryBook } from '../lib/types';
+
+interface PendingGuard {
+  selector: LanguageGuardSelector;
+  shape: LanguageGuardShape;
+  retries: Array<() => void>;
+  dismisses: Array<() => void>;
+  sseSource?: SseSource;
+}
+
+export interface LanguageGuardResult {
+  /** Open the guard modal for a book whose call just failed with a
+      language-unset 409. `selector` names the book by `bookId` (splice,
+      QA-repair, qwen voice-design) or `manuscriptId` (analysis), resolved
+      against the loaded library. `onRetry` is re-run after the language is
+      saved; `onDismiss`, when given, fires if the user closes the modal
+      without saving. Returns true only when the selector matched a known book
+      and the modal opened — false lets the caller keep its existing error
+      path. */
+  guard: (
+    selector: LanguageGuardSelector,
+    shape: LanguageGuardShape,
+    onRetry: () => void,
+    onDismiss?: () => void,
+    sseSource?: SseSource,
+  ) => boolean;
+  /** Render once, near the end of the layout tree. The modal mounts only
+      while a guard request is pending. */
+  modal: ReactNode;
+}
+
+function resolveIn(books: LibraryBook[], selector: LanguageGuardSelector): LibraryBook | null {
+  return 'bookId' in selector
+    ? (books.find((b) => b.bookId === selector.bookId) ?? null)
+    : (books.find((b) => b.manuscriptId === selector.manuscriptId) ?? null);
+}
+
+function selectorsEqual(a: LanguageGuardSelector, b: LanguageGuardSelector): boolean {
+  if ('bookId' in a && 'bookId' in b) return a.bookId === b.bookId;
+  if ('manuscriptId' in a && 'manuscriptId' in b) return a.manuscriptId === b.manuscriptId;
+  return false;
+}
+
+export function useLanguageGuard(): LanguageGuardResult {
+  const dispatch = useAppDispatch();
+  /* Defensive read — tests routinely build configureStore() without every
+     slice. Production always wires the library slice via src/store/index.ts. */
+  const libraryBooks = useAppSelector((s) => s.library?.books ?? []);
+
+  const [pending, setPending] = useState<PendingGuard | null>(null);
+  const pendingRef = useRef<PendingGuard | null>(null);
+
+  const resolve = useCallback(
+    (selector: LanguageGuardSelector) => resolveIn(libraryBooks, selector),
+    [libraryBooks],
+  );
+
+  /* Keep pendingRef in sync with the current pending state. This ref is used
+     in the guard() callback to determine which dismisses need to be invoked
+     when a guard is superseded. We extract dismisses BEFORE calling setPending
+     and invoke them AFTER, ensuring the side effects (Redux dispatches) happen
+     outside the setState updater, respecting React's purity requirement. */
+  useEffect(() => {
+    pendingRef.current = pending;
+  }, [pending]);
+
+  /* Registered as the live bus handler so the API layer can route a
+     409 language-unset straight here without a React import. When the
+     selector matches no library book the request is refused (false) so the
+     caller's ordinary error path fires. When a guard is already pending for
+     the same book (e.g., a multi-chapter splice batch), accumulate the retry
+     instead of replacing it — all retries fire once the language is set. */
+  const guard: LanguageGuardResult['guard'] = useCallback(
+    (selector, shape, onRetry, onDismiss, sseSource) => {
+      if (!resolve(selector)) return false;
+
+      // P1 fix: Extract dismisses from the current pending guard BEFORE calling
+      // setState. We'll invoke them after setState returns, not inside the
+      // updater. This ensures the side effects (Redux dispatches) happen
+      // outside the setState updater function, respecting React's purity
+      // requirement for updater functions.
+      const currentPending = pendingRef.current;
+      const isDifferentSelector =
+        currentPending && !selectorsEqual(currentPending.selector, selector);
+      const oldDismisses = isDifferentSelector ? currentPending.dismisses : [];
+
+      // R1 fix: Determine the new pending state that will be set
+      let newPending: PendingGuard;
+      if (currentPending && selectorsEqual(currentPending.selector, selector)) {
+        // Same book already pending, accumulate the retry and dismiss.
+        // G6 fix: when accumulated calls have different shapes/sseSource,
+        // update to the latest (most recent failure context), not the first.
+        newPending = {
+          ...currentPending,
+          shape,
+          retries: [...currentPending.retries, onRetry],
+          dismisses: onDismiss ? [...currentPending.dismisses, onDismiss] : currentPending.dismisses,
+          sseSource,
+        };
+      } else {
+        // Different book or no pending guard. Create new guard for the new selector.
+        newPending = {
+          selector,
+          shape,
+          retries: [onRetry],
+          dismisses: onDismiss ? [onDismiss] : [],
+          sseSource,
+        };
+      }
+
+      // R1 fix: Make pendingRef authoritative at assignment time by synchronously
+      // updating it BEFORE setState. This ensures that if two guard() calls happen
+      // synchronously (without intervening React commit), the second call reads the
+      // ref written by the first, not a stale value from before. The passive
+      // useEffect will still run and redundantly sync the ref, but it's harmless.
+      pendingRef.current = newPending;
+
+      setPending(newPending);
+
+      // Invoke the old guard's dismisses AFTER setState returns, so side effects
+      // happen outside the updater function. This allows any promises parked on
+      // the superseded guard to settle correctly (e.g., via rejection).
+      oldDismisses.forEach((d) => d());
+
+      return true;
+    },
+    [resolve],
+  );
+
+  useEffect(() => {
+    setLanguageGuardHandler((req) =>
+      guard(req.selector, req.shape, req.onRetry, req.onDismiss, req.sseSource),
+    );
+    return () => setLanguageGuardHandler(null);
+  }, [guard]);
+
+  const close = useCallback(() => {
+    // R1 fix: Make pendingRef authoritative at assignment time by synchronously
+    // updating it before setState. This ensures that if close() is called
+    // synchronously from within a guard() call (e.g., in onClose handler invoked
+    // immediately after guard), the ref is always current.
+    pendingRef.current = null;
+    setPending(null);
+  }, []);
+
+  const book = pending ? resolve(pending.selector) : null;
+
+  const modal =
+    book && pending ? (
+      <EditBookMetaModal
+        open
+        book={book}
+        guard={pending.shape}
+        sseSource={pending.sseSource}
+        onClose={() => {
+          const dismisses = pending.dismisses;
+          close();
+          dismisses.forEach((d) => d());
+        }}
+        onSave={async (patch: EditBookMetaPatch) => {
+          /* Guard-mode save IS the retry gate: persist the chosen language,
+           refresh the library so other surfaces see the set language, and
+           return the write promise — the modal calls onRetry once it settles.
+           `book` (not the selector) supplies the bookId, so the manuscriptId
+           pathway still persists to the book the selector resolved. */
+          await api.putBookState(book.bookId, { slice: 'state', patch });
+          const fresh = await api.getLibrary().catch(() => null);
+          if (fresh) dispatch(libraryActions.hydrate(fresh));
+        }}
+        onSaveError={(_error) => {
+          /* Task 9 — guard-mode save failed. Surface the error as a toast
+           instead of closing the modal, so the user can retry. */
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: "Couldn't save the book's language — try again.",
+            }),
+          );
+        }}
+        onRetry={() => {
+          const retries = pending.retries;
+          close();
+          retries.forEach((r) => r());
+        }}
+      />
+    ) : null;
+
+  return { guard, modal };
+}

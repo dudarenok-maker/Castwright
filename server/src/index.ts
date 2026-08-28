@@ -125,8 +125,8 @@ async function main(): Promise<void> {
      runtime back to the CPU build. Placed here, synchronously and early in
      main() — well before either listenWithAutoRebind() call below — so it can
      never land downstream of listenerCallback's enforceSingleSidecarOwner,
-     which can process.exit(). Pure fs (sitePackagesDir/dist-info reads only),
-     never throws — see install-ort.mjs's ensureOrtMarker for the guarantee. */
+     which can process.exit(). Pure fs (site-packages I/O: reads dist-info,
+     writes and deletes ORT marker), never throws — see install-ort.mjs's ensureOrtMarker for the guarantee. */
   ensureOrtMarker(resolveSidecarVenvDir(repoRoot), (m: string) => console.log(m));
 
   /* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
@@ -296,8 +296,9 @@ async function main(): Promise<void> {
        "is this engine unavailable this run" signal, Task 20). Also refreshed
        on every reachable /health poll (routes/sidecar-health.ts). */
     setLastKnownCoquiInstallState(detectCoquiInstallStateOnDisk(bootRepoRoot));
-    /* #1030 — refuse to boot if another LIVE server already owns the :9000
-       sidecar, so two stacks can't fight over it (the recycle storm). Only when
+    /* #1030 — refuse to boot if another LIVE server already owns the
+       sidecar (LOCAL_TTS_PORT, default :9000), so two stacks can't fight
+       over it (the recycle storm). Only when
        THIS server will actually manage the sidecar (autoStart on); a no-autostart
        server never supervises and so never conflicts. Drops/clears an owner note
        in .run/; keyed on ppid so a `tsx watch` reload takes over rather than
@@ -454,9 +455,10 @@ async function main(): Promise<void> {
   }
 }
 
-/* On Ctrl+C or kill, reap the sidecar tree before exit so port 9000 is
-   free for the next boot and stop-app.bat's port sweep has nothing left
-   to find. On Windows the child is powershell.exe → uvicorn → python,
+/* On Ctrl+C or kill, reap the sidecar tree before exit so the sidecar port
+   (LOCAL_TTS_PORT, default 9000) is free for the next boot and
+   stop-app.bat's port sweep has nothing left to find. On Windows the child
+   is powershell.exe → uvicorn → python,
    and the handle's kill() runs `taskkill /T /F /PID <pid>` to cascade
    through the tree. */
 
@@ -475,14 +477,15 @@ export interface ShutdownDeps {
 
 /* #1366 — pure teardown sequence, extracted out of shutdown() so it can be
    exercised by a test without binding a real port. Order matches the
-   original inline shutdown() body exactly: release the :9000 ownership note,
-   drop the sleep-prevention wake lock, then reap the sidecar / mDNS responder
-   / port forwarder in parallel (each a no-op Promise.resolve() when its
-   handle is null). */
+   original inline shutdown() body exactly: release the sidecar-port
+   ownership note, drop the sleep-prevention wake lock, then reap the
+   sidecar / mDNS responder / port forwarder in parallel (each a no-op
+   Promise.resolve() when its handle is null). */
 export async function runShutdownSequence(deps: ShutdownDeps): Promise<void> {
-  /* #1030 — release our :9000 ownership note so the next boot (or another
-     stack) sees the port as free. No-op if we never claimed it (autoStart off)
-     or a same-lineage reload already took it over. */
+  /* #1030 — release our sidecar-port ownership note (LOCAL_TTS_PORT,
+     default :9000) so the next boot (or another stack) sees the port as
+     free. No-op if we never claimed it (autoStart off) or a same-lineage
+     reload already took it over. */
   deps.releaseSidecarOwnership(deps.runDir);
   /* Release the sleep-prevention wake lock too — on Windows a child spawned
      without job-object semantics is NOT killed when its parent exits (the

@@ -415,11 +415,16 @@ test('stepName participates in the hash (different steps with same inputs differ
 
 const stepByName = Object.fromEntries(STEPS.map((s) => [s.name, s]));
 
-test('stepTouchedByDiff: a sidecar-only diff leaves the fast legs out of scope', () => {
+test("stepTouchedByDiff: server/tts-sidecar/main.py diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715), but not frontend/hooks", () => {
   const diff = ['server/tts-sidecar/main.py'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), false); // frontend
-  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), false);
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), false);
+});
+
+test("stepTouchedByDiff: docs/features/264-vram-aware-gpu-placement.md diff matches test:server via extraFiles (coqui-residency-policy.guard.test.ts reads it at runtime, #2715)", () => {
+  const diff = ['docs/features/264-vram-aware-gpu-placement.md'];
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
 });
 
 test('stepTouchedByDiff: a frontend diff is in scope for test, not test:server', () => {
@@ -826,6 +831,24 @@ test('stepTouchedByDiff: pinokio-scripts/lib/resolve-release.js is in scope for 
 
 test('stepTouchedByDiff: e2e/global-teardown.ts is in scope for test:server', () => {
   assert.equal(stepTouchedByDiff(stepByName['test:server'], ['e2e/global-teardown.ts']), true);
+});
+
+// --- #2588 pass-2 review: a .gitattributes-only or requirements/*.txt-only
+// diff must be in scope for test:server, since venv-migration.test.ts reads
+// both at runtime (the CRLF LF-pin guard and its reqHash oracles) with no
+// module-graph edge to either. Before this fix, `--files=".gitattributes"`
+// and `--files="server/tts-sidecar/requirements/base.txt"` both set every
+// step's ci-scope flag to false, so the guard the diff could most directly
+// break never re-ran in CI's required check.
+test('stepTouchedByDiff: .gitattributes is in scope for test:server (#2588 pass-2 review)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['.gitattributes']), true);
+});
+
+test('stepTouchedByDiff: a server/tts-sidecar/requirements/*.txt diff is in scope for test:server (#2588 pass-2 review)', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], ['server/tts-sidecar/requirements/speaker-qa.txt']),
+    true,
+  );
 });
 
 // --- test:hooks completeness guard (ops-18, #2115; transitive walk, ops-17c

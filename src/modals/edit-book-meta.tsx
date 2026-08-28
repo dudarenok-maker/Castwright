@@ -13,6 +13,7 @@ import { IconClose, IconPencil } from '../lib/icons';
 import { PrimaryButton, Checkbox } from '../components/primitives';
 import { useAppSelector } from '../store';
 import type { LibraryBook } from '../lib/types';
+import type { SseSource } from '../lib/language-guard-bus';
 
 export interface EditBookMetaPatch {
   title: string;
@@ -24,13 +25,104 @@ export interface EditBookMetaPatch {
      present (never undefined) so the server-side picker can distinguish
      "user cleared the list" from "user didn't touch tags". */
   tags: string[];
+  /* Task 9 (#2388) — the book's BCP-47 language as written through the
+     PATCH's `pickLanguage`. `null` is a deliberate "stated absence" — it
+     clears/un-sets the language; a code (e.g. 'ru') sets it. The server
+     treats an omitted key as "preserve", so the modal always sends this
+     key so an explicit "Unset" choice survives the round-trip. */
+  language: string | null;
 }
+
+/** Task 9 — one of the three server failure shapes that open this modal in
+    language-guard mode. `409` is the pre-flight HTTP 409 `language_unset`
+    (chapter-qa-repair / analysis / qwen voice-design); `sse` is the streaming
+    failure envelope — `{ type:'error', code:'language_unset' }` for
+    cast-design / single-design / analysis, and generation's own
+    `{ type:'chapter_failed', errorCode:'language-unset' }` (fs-19 taxonomy,
+    not the shared error envelope — see
+    docs/superpowers/specs/2026-08-20-generation-language-guard-design.md);
+    `batch` is the script-review 200/207 per-item `itemFailureReason`. The
+    modal only uses the kind for copy — the open/retry behaviour is the
+    same for all three. */
+export type LanguageGuardShape = '409' | 'sse' | 'batch';
 
 interface Props {
   open: boolean;
   book: LibraryBook;
   onClose: () => void;
-  onSave: (patch: EditBookMetaPatch) => void;
+  onSave: (patch: EditBookMetaPatch) => void | Promise<void>;
+  /** Task 9 — when set, the modal opens in language-guard mode: the Language
+      row is the focus, prefilled empty, and the user must choose a language
+      before Save re-runs `onRetry`. Used by every server failure shape whose
+      root cause is an unset book language. */
+  guard?: LanguageGuardShape | null;
+  /** Task 9 — the original action that failed because the language was unset.
+      Called after the language patch is saved in guard mode. */
+  onRetry?: () => void;
+  /** Task 9 — when set, called if the language save fails in guard mode,
+      allowing the caller to surface the error without closing the modal. */
+  onSaveError?: (error: Error) => void;
+  /** For sse guard shape only: identifies which action triggered the guard,
+      so the modal can show source-appropriate copy. */
+  sseSource?: SseSource;
+}
+
+/* fs-2 — human labels for the language selector options. Mirrors
+   `LANGUAGE_LABELS` from the library slice but keeps this modal free of a
+   store import beyond `useAppSelector`'s tag suggestions. */
+const LANGUAGE_OPTIONS: Array<{ code: string; label: string }> = [
+  { code: 'en', label: 'English' },
+  { code: 'ru', label: 'Русский' },
+  { code: 'es', label: 'Español' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'zh', label: '中文' },
+  { code: 'ja', label: '日本語' },
+];
+
+const GUARD_COPY: Record<LanguageGuardShape, { eyebrow: string; hint: string }> = {
+  '409': {
+    eyebrow: 'Set a language to continue',
+    hint: 'This book has no language set, so some operations need one. Choose a language below.',
+  },
+  sse: {
+    eyebrow: 'Set a language to continue',
+    hint: 'Generating voices needs a book language. Choose one below and we’ll pick up where we left off.',
+  },
+  batch: {
+    eyebrow: 'Set a language to continue',
+    hint: 'Script review needs a book language. Choose one below and we’ll re-run the review.',
+  },
+};
+
+const SSE_SOURCE_COPY: Record<string, { eyebrow: string; hint: string }> = {
+  analysis: {
+    eyebrow: 'Set a language to continue',
+    hint: 'Analysis needs a book language. Choose one below and we’ll pick up where we left off.',
+  },
+  'cast-design': {
+    eyebrow: 'Set a language to continue',
+    hint: 'Designing voices needs a book language. Choose one below and we’ll pick up where we left off.',
+  },
+  'single-design': {
+    eyebrow: 'Set a language to continue',
+    hint: 'Designing a voice needs a book language. Choose one below and we’ll pick up where we left off.',
+  },
+  generation: {
+    eyebrow: 'Set a language to continue',
+    hint: 'Generating voices needs a book language. Choose one below and we’ll pick up where we left off.',
+  },
+};
+
+/* Helper to get the correct copy based on guard shape and (for sse) source. */
+function getGuardCopy(
+  shape: LanguageGuardShape,
+  sseSource?: SseSource,
+): { eyebrow: string; hint: string } {
+  if (shape === 'sse' && sseSource && sseSource in SSE_SOURCE_COPY) {
+    return SSE_SOURCE_COPY[sseSource];
+  }
+  return GUARD_COPY[shape];
 }
 
 /* Parse a chip editor token — splits comma-separated input, trims
@@ -43,7 +135,16 @@ function parseTagInput(raw: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
+export function EditBookMetaModal({
+  open,
+  book,
+  onClose,
+  onSave,
+  guard,
+  onRetry,
+  onSaveError,
+  sseSource,
+}: Props) {
   /* Seed every field from the book the menu was opened against. State is
      keyed by `book.bookId` (via the `key` prop on the caller) so flipping
      between two cards re-mounts the form rather than carrying over stale
@@ -56,8 +157,14 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
       seriesPosition: book.seriesPosition,
       isStandalone: book.isStandalone,
       tags: [...(book.tags ?? [])],
+      /* Task 9 — the language row's seed. In guard mode the row is ALWAYS
+         prefilled with nothing (a failure shape just fired because this
+         book's language is unset). Otherwise mirror the book: an unset book
+         ('') shows Unset; a set book shows its code (falling back to the
+         resolved display value 'en' for un-typed fixtures). */
+      language: guard ? null : ((book.languageSet === true ? book.language : null) ?? null),
     }),
-    [book],
+    [book, guard],
   );
 
   const [title, setTitle] = useState(initial.title);
@@ -74,6 +181,9 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
   const [tagInput, setTagInput] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement | null>(null);
+  /* Task 9 — the language row, kept as the raw code or `null` (Unset). The
+     select's sentinel value '' maps to null on save. */
+  const [language, setLanguage] = useState<string | null>(initial.language);
 
   /* Suggest tags from every other book in the library. Reading via the
      selector keeps the modal in sync if the library hydrates while open
@@ -152,14 +262,19 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
   const requiredOk = titleClean !== '' && authorClean !== '';
 
   const tagsChanged =
-    tags.length !== initial.tags.length ||
-    tags.some((t, i) => t !== initial.tags[i]);
+    tags.length !== initial.tags.length || tags.some((t, i) => t !== initial.tags[i]);
   /* A pending-but-uncommitted tag in the input is also "dirty" — the
      Save handler commits it before invoking onSave, so the form is
      materially different from its seed state. Without this, Save sits
      disabled while the user has typed a tag but not hit Enter, then
      does nothing if they click it. */
   const tagInputHasPending = parseTagInput(tagInput).length > 0;
+
+  /* Task 9 — did the user change the language (as distinct from leaving
+     it at seed, which could be either null or a code)? Guard mode forces
+     the seed to null (empty), so picking any language counts as a change
+     and unlocks Save. */
+  const languageChanged = (language ?? null) !== (initial.language ?? null);
 
   /* Dirty check: at least one user-visible field has changed. When
      standalone is on, series + position changes are ignored (the server
@@ -172,9 +287,13 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
       (seriesClean !== initial.series.trim() ||
         (parsedPosition ?? null) !== (initial.seriesPosition ?? null))) ||
     tagsChanged ||
-    tagInputHasPending;
+    tagInputHasPending ||
+    languageChanged;
 
-  const canSave = isDirty && requiredOk && positionIsValid;
+  /* Guard mode unlocks Save only once a language is chosen (the failure
+     this modal exists to fix). Non-guard mode keeps today's rules. */
+  const canSave =
+    isDirty && requiredOk && positionIsValid && (guard ? (language ?? null) !== null : true);
 
   if (!open) return null;
   return (
@@ -188,7 +307,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
             </span>
             <div className="flex-1 min-w-0">
               <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
-                Edit details
+                {guard ? getGuardCopy(guard, sseSource).eyebrow : 'Edit details'}
               </p>
               <h3 className="text-base font-bold text-ink truncate">{initial.title}</h3>
             </div>
@@ -202,6 +321,14 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
           </div>
 
           <div className="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
+            {guard && (
+              <p
+                data-testid="edit-book-language-guard"
+                className="md:col-span-2 -mb-2 text-sm text-magenta bg-magenta/6 border border-magenta/15 rounded-xl px-3 py-2"
+              >
+                {getGuardCopy(guard, sseSource).hint}
+              </p>
+            )}
             <Field label="Title">
               <input
                 value={title}
@@ -256,6 +383,22 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
               </p>
             )}
 
+            <Field label="Language">
+              <select
+                value={language ?? ''}
+                onChange={(e) => setLanguage(e.target.value === '' ? null : e.target.value)}
+                aria-label="Language"
+                data-testid="edit-book-language"
+                className={inputClasses}
+              >
+                <option value="">Unset</option>
+                {LANGUAGE_OPTIONS.map((o) => (
+                  <option key={o.code} value={o.code}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <div className="md:col-span-2">
               <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
                 Tags
@@ -353,14 +496,35 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
                       finalTags.push(t);
                     }
                   }
-                  onSave({
+                  const patch: EditBookMetaPatch = {
                     title: titleClean,
                     author: authorClean,
                     series: isStandalone ? initial.series : seriesClean,
                     seriesPosition: isStandalone ? null : parsedPosition,
                     isStandalone,
                     tags: finalTags,
-                  });
+                    language: language ?? null,
+                  };
+                  /* Task 9 — in guard mode the save IS the retry gate: persist
+                     the chosen language, then re-run the action that the unset
+                     language had failed. onSave returns the caller's write
+                     promise, so the retry fires only once the PATCH has been
+                     handed off (and its promise settles when the write is
+                     flushed). If the save fails, call onSaveError (if provided)
+                     to surface the error without closing the modal, allowing
+                     the user to retry. */
+                  const write = onSave(patch);
+                  if (guard && onRetry) {
+                    Promise.resolve(write)
+                      .then(() => onRetry())
+                      .catch((err) => {
+                        if (onSaveError) {
+                          onSaveError(err instanceof Error ? err : new Error(String(err)));
+                        } else {
+                          onClose();
+                        }
+                      });
+                  }
                 }}
                 disabled={!canSave}
               >

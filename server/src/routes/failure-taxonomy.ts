@@ -47,6 +47,7 @@ export type FailureCode =
   | 'voice-not-designed'
   | 'cloned-voice-broken'
   | 'lock-contention'
+  | 'language-unset'
   | 'auth'
   | 'unknown';
 

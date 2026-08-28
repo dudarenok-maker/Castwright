@@ -563,6 +563,17 @@ paths:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
                   - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
+        '409':
+          description: |
+            The manuscript's book has no language set. Set the book language
+            before requesting analysis.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/manuscripts/{manuscriptId}/analysis/chapters:
     post:
@@ -1501,7 +1512,7 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
-                  code: { type: string, enum: [clone_protected] }
+                  code: { type: string, enum: [clone_protected, language_unset] }
 
   /api/books/{bookId}/cast/design-single/subscribe:
     post:
@@ -1829,6 +1840,17 @@ paths:
                       cleared because their baked manifest language differs from
                       the book's, mirroring the same advisory the generation and
                       QA-repair streams already send for that clear.
+        '409':
+          description: |
+            The book has no language set. Set the book language before
+            requesting a splice.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/audio-qa-repair:
     post:
@@ -1914,6 +1936,18 @@ paths:
                       cleared because their baked manifest language differs from
                       the book's, mirroring the same advisory the generation and
                       splice streams already send for that clear.
+
+        '409':
+          description: |
+            The book has no language set. Set the book language before
+            requesting audio QA repair.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/audio:
     get:
@@ -2230,18 +2264,20 @@ paths:
                     Plan 276 Decision 6 — corrects a cloned voice's reference
                     transcript after the fact (the "Add transcript" cast-time-gate
                     CTA). Accepted only when the entry's `provenance` is `cloned`
-                    AND it carries a `master` clip; 400 otherwise. Sets
-                    `master.transcript` (`transcriptSource: 'user'`) and the
-                    entry's own `sampleTranscript` — a second persisted copy of
-                    the same text — and CLEARS `master.languageCode` and the
-                    entry's own `languageCode`: both are Whisper stamps describing
-                    the ORIGINAL clip, and a user-edited transcript may be in a
-                    different language, so a stale stamp would contradict it. A
-                    non-empty transcript also clears a `failed` `qwen` engine
-                    slot (an empty string clears the text but supplies no fix, so
-                    it leaves the slot's `failed` status alone). The qwen `.pt`
-                    distilled against the old text is left untouched — this is a
-                    lexical correction, not a re-derive.
+                    AND it carries a `master` clip; 400 if the master is permanently
+                    absent (never cloned with a master, or revoked), 409 if the
+                    master was present at request time but was removed by a concurrent
+                    operation before the write. Sets `master.transcript`
+                    (`transcriptSource: 'user'`) and the entry's own
+                    `sampleTranscript` — a second persisted copy of the same text —
+                    and CLEARS `master.languageCode` and the entry's own
+                    `languageCode`: both are Whisper stamps describing the ORIGINAL
+                    clip, and a user-edited transcript may be in a different language,
+                    so a stale stamp would contradict it. A non-empty transcript also
+                    clears a `failed` `qwen` engine slot (an empty string clears the
+                    text but supplies no fix, so it leaves the slot's `failed` status
+                    alone). The qwen `.pt` distilled against the old text is left
+                    untouched — this is a lexical correction, not a re-derive.
       responses:
         '200':
           description: |
@@ -2258,9 +2294,24 @@ paths:
               schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
         '400':
           description: |
-            `transcript` was rejected — either the entry isn't a cloned voice
-            with a `master` clip, the value isn't a string, or it exceeds 2000
-            characters.
+            Request was invalid. For `transcript` updates specifically: the entry
+            isn't a cloned voice, the cloned entry's `master` clip is permanently
+            absent (never cloned with a master, or revoked), the value isn't a
+            string, or it exceeds 2000 characters. For other fields: validation
+            failed (e.g., `persona` on a non-designed voice, `name` not a string, etc.).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+        '409':
+          description: |
+            Conflict: the `master` clip was removed by a concurrent operation
+            between the request validation and the write (for `transcript` updates
+            only). No changes were made. The caller should retry or refresh the
+            entry state.
           content:
             application/json:
               schema:
@@ -3403,7 +3454,22 @@ paths:
                   type: string
                   enum: [cast, manuscript, revisions, state, changeLog]
                 patch:
-                  description: The whole slice payload; shape depends on `slice`.
+                  description: |
+                    The whole slice payload; shape depends on `slice`.
+                    For the `state` slice the patch carries ~16 fields
+                    (title, author, series, tags, notes, audioFormat,
+                    prosodyEnabled, castConfirmed, chapters, and more);
+                    the same endpoint also serves the `cast`,
+                    `manuscript`, `revisions`, and `changeLog` slices
+                    with entirely different payloads.
+                    #2246 Task 9 — BCP-47 `language` field on the `state`
+                    slice: string | null. `null` is "stated absence" (a
+                    book whose language the user has not set), distinct
+                    from both a value and an absent key. An absent key
+                    preserves whatever is already stored (including a
+                    stored `null`). A `state`-slice patch with a
+                    non-empty unsupported value is rejected with
+                    `400 unsupported_language` and nothing is written.
       responses:
         '204':
           description: Slice written
@@ -3485,7 +3551,7 @@ paths:
 
   /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
     post:
-      summary: Reject an orphaned-id reconciliation ("not the same character") — #2040 Task 17
+      summary: "Reject an orphaned-id reconciliation (\"not the same character\") — #2040 Task 17"
       operationId: rejectOrphanMatch
       description: |
         The orphaned-character-fallback banner shows an id that either
@@ -3575,7 +3641,7 @@ paths:
 
   /api/books/{bookId}/cast/{characterId}/link-orphan-match:
     post:
-      summary: Link an orphaned-id reconciliation ("this IS the same character") — #2238
+      summary: "Link an orphaned-id reconciliation (\"this IS the same character\") — #2238"
       operationId: linkOrphanMatch
       description: |
         The positive mirror of `reject-orphan-match`'s POST above: records
@@ -3679,7 +3745,7 @@ paths:
         `chapterId` is provided, only that chapter is reviewed. SSE event
         kinds: `phase`, `throttle`, `heartbeat`, `ops`
         (`{ chapterId, ops: [{ id, op, anchor?, newText?, rationale, ... }] }`),
-        `chapter-failed`,
+        `chapter-failed` (`{ chapterId, message, code?: 'language_unset' }`),
         `error` (`code: no_attribution | no_such_chapter | quota_exhausted`),
         and a terminal `result` (`{ done, reviewedChapters, totalOps }`).
       parameters:
@@ -4273,8 +4339,13 @@ components:
         errorReason: { type: string, description: character_failed only — the per-character failure message. }
         code:
           type: string
-          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, unknown]
-          description: error only — machine-readable whole-run abort reason.
+          enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+          description: |
+            error only — machine-readable whole-run abort reason.
+            `language_unset` (Task 6, #2246) fires when the book never
+            stated a language — the honest pre-work abort replacing a
+            silent English design; `unsupported_language` fires for a
+            stated language with no sidecar mapping.
         message: { type: string, description: error only — human-readable abort message. }
 
     CastDesignStatusResponse:
@@ -4347,8 +4418,16 @@ components:
         url: { type: string, description: designed only. }
         code:
           type: string
-          enum: [not_found, design_failed, unsupported_language, lock-contention, clone_protected]
-          description: error only.
+          enum: [not_found, design_failed, unsupported_language, lock-contention, clone_protected, language_unset]
+          description: |
+            error only. `language_unset` (Task 6, #2246) fires when the
+            book never stated a language — the honest pre-work abort
+            replacing a silent English design; `unsupported_language`
+            fires for a stated language with no sidecar mapping.
+            `clone_protected` fires when the write-time series-wide
+            clone-consent veto refused the persist — #2006; a distinct
+            occurrence from the plain-JSON 409 upfront refusal below,
+            which shares the same code string for the same reason.
         message: { type: string, description: error only. }
 
     SingleDesignStatusResponse:
@@ -4523,8 +4602,14 @@ components:
         sidecarUrl:
           type: string
           description: |
-            Overrides the LOCAL_TTS_URL env var. Re-read on every request
-            by the sidecar provider + health probe.
+            Overrides the LOCAL_TTS_URL env var ONLY when explicitly set by
+            the user to a value other than the factory default
+            (http://localhost:9000) — a factory-default value (whether typed
+            by the user or written incidentally by an unrelated settings
+            write) is treated as no choice at all, so it never shadows
+            LOCAL_TTS_URL or the per-checkout LOCAL_TTS_PORT derivation
+            (#2632). Re-read on every request by the sidecar provider +
+            health probe.
         analysisEngine:
           type: string
           enum: [local, gemini]
@@ -5147,11 +5232,29 @@ components:
         language:
           type: string
           description: |
-            fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). Defaults to
-            `en` for books written before the field landed. Drives
-            same-language narration (a non-`en` book routes every character,
-            incl. the narrator, to a designed Qwen voice and never falls back
-            to English Kokoro) and the library language badge + filter pill.
+            fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). This is the
+            **resolved display value**: a book whose language was never set is
+            still surfaced as `en` so the card badge / filter pill never see
+            undefined. Drives same-language narration (a non-`en` book routes
+            every character, incl. the narrator, to a designed Qwen voice and
+            never falls back to English Kokoro) and the library language badge
+            + filter pill. Pair with `languageSet` — reading `language` alone
+            cannot tell a book that declared English from one that never
+            declared anything.
+        languageSet:
+          type: boolean
+          description: |
+            Task 8 (#2246) — the honest "is the language actually set?"
+            signal. `language` (above) is the resolved display value, so it
+            alone cannot distinguish a book that really declared its language
+            from one that never did; `languageSet` is that distinction.
+            `true` when the book's state.json carries a usable language,
+            `false` when it is absent, `null`, empty or whitespace-only (or
+            there is no state.json at all). Always populated by `scan.ts`, but
+            kept optional (NOT added to `required`) — like `language` and
+            `eligibleTtsEngines` — so existing test fixtures that construct a
+            `LibraryBook` object literal without every field don't all need
+            updating; frontend consumers default it with `?? false`.
         eligibleTtsEngines:
           type: array
           items: { type: string, enum: [qwen, coqui, kokoro, gemini, piper] }
@@ -6927,6 +7030,7 @@ components:
         - voice-not-designed
         - cloned-voice-broken
         - lock-contention
+        - language-unset
 
     ChapterQaVerdict:
       type: object

@@ -1390,9 +1390,9 @@ PR body must contain `Closes #1894`, a `## Summary` and a `## Test plan` section
 - Four test files still construct the `'Coqui XTTS' / 'Use its Stop button…'` blocker literal by hand (Task 5 Step 5). They stay green because they never call `describeVramBlockers`, but they now encode a string the product can no longer emit.
 - Task 6 fixes the *same class* of bug in `WhisperEngine` and `SpeakerEngine`, which were already being auto-evicted — so that race was live in production, not introduced by this branch. Reviewers should read Task 6's diff as a bug fix on its own merits, independent of the Coqui feature.
 
-**No `docs/features/` regression plan is created for this work**, and that is deliberate rather than an omission of Before-shipping checklist step 1: the design of record is the spec, the invariants it touches live in plan 249 (updated in Step 1), and the acceptance debt is register row A20. Say so in the PR body so the gate reads as answered, not skipped.
+**No `docs/features/` regression plan is created for this work**, and that is deliberate rather than an omission of Before-shipping checklist step 1: the design of record is the spec, the invariants it touches live in plan 249 (updated in Step 1), and the acceptance debt is register row A5. Say so in the PR body so the gate reads as answered, not skipped.
 
 - [ ] **Step 7: Run the mandatory independent code review**
 
-Per CLAUDE.md's Before-shipping checklist step 10 and the model-routing skill: dispatch a `code-review` pass at the tier the PR's scope calls for. This PR is multi-scope (`sidecar,server`) → **high** effort, Premium tier. Triage and fold findings before merge. Do not merge on a Critical finding without re-review.
+Per CLAUDE.md's Before-shipping checklist step 10 and the model-routing skill: dispatch a `pr-review-gate` pass at the tier the PR's scope calls for. This PR is multi-scope (`sidecar,server`) → **high** effort, Premium tier. Triage and fold findings before merge. Do not merge on a Critical finding without re-review.
 

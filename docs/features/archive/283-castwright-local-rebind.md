@@ -6,7 +6,7 @@ owner: null
 
 # One-click `castwright.local` re-bind (srv-90)
 
-> Status: active — code shipped, on-box acceptance owed (register row E10)
+> Status: shipped — code shipped, on-box acceptance discharged (register row E10, discharged 2026-08-12, no longer exists — see Ship notes below)
 > Key files: `server/src/config/registry.ts`, `server/src/workspace/device-tokens.ts`,
 > `server/src/routes/pairing.ts`, `src/lib/api.ts`, `src/components/lan-access-card.tsx`,
 > `src/views/pair.tsx`, `src/lib/lan-recovery-hint.ts`, `src/store/library-slice.ts`,
@@ -190,9 +190,9 @@ never render a working "Authorize this browser" button. The local production rou
    browser) authorized via the existing "Authorize a device" + QR flow still works
    end to end, unchanged.
 
-On-box acceptance for this walkthrough is tracked as register row **E10** in
-[`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)
-until run.
+On-box acceptance for this walkthrough was tracked as register row **E10** in
+[`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md) —
+discharged 2026-08-12, no longer exists, see Ship notes below.
 
 ## Out of scope
 

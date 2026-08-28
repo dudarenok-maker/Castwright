@@ -2,14 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> ## ⛔ DO NOT START YET — two blockers
+> ## ✅ Blocker 1 RESOLVED — `feat/server-1984-wave1` has landed (PR #2328, `090168a5`)
 >
-> **1. Wait for `feat/server-1984-wave1` to land.** Tasks 1–2 touch every `state.json`
-> write site, **including `server/src/routes/analysis.ts:5661/5694` and `:7078/7106`**,
-> which that branch is editing right now. Starting before it merges guarantees a
-> conflict in the largest file in the change. Re-cut this branch off `main` after it
-> lands, then **re-run every enumeration grep in Tasks 1, 2 and 5** — the line numbers
-> in this plan will have moved, and the counts are what the tasks bind to.
+> The sequencing wait is over. This plan was refreshed against current `main` on
+> 2026-08-14: **every enumeration grep in Tasks 1, 2 and 6 was re-run with no output
+> limit**, and the stale `routes/analysis.ts` line numbers were updated to their current
+> values (`5773`/`5806` and `7255`/`7283` for the two persist sites; `3163` for the
+> reader site `resolveBookLanguageForManuscript`). The seam call-site total is unchanged
+> (**13**). Re-run these greps again in the working branch before any task binds to a
+> count — line numbers drift on every merge.
 >
 > **2. `scripts/repair-missing-book-language.mts` is OFF LIMITS.** Its residual is
 > [#2256](https://github.com/dudarenok-maker/Castwright/issues/2256), being implemented
@@ -29,9 +30,9 @@
 > job holding the 25,063-line case. Reading D-2 as "409 everywhere" reintroduces a
 > Critical the assumption-checker already caught.
 >
-> **Still blocked on `feat/server-1984-wave1`**, which is editing `state.json` write
-> sites including `server/src/routes/analysis.ts`. That is a sequencing constraint, not
-> a design one.
+> **Blocker 1 is resolved** (1984 merged, PR #2328; line numbers refreshed 2026-08-14).
+> The remaining blocker is **#2** — `repair-missing-book-language.mts` stays off-limits
+> until #2256 lands. That is a scope constraint, not a design one.
 
 **Goal:** Close [#2246](https://github.com/dudarenok-maker/Castwright/issues/2246) items **3** and **4** — make it impossible for a book to acquire or keep an unstated `language` silently, and give the user a way to set one when detection genuinely cannot decide.
 
@@ -99,7 +100,7 @@ Nine state.json writers bypass `writeStateJsonAtomic` via an extracted path:
 grep -rn "writeJsonAtomic(statePath\|writeJsonAtomic(path\|writeJsonAtomic(stateJsonPath" --include=*.ts server/src | grep -v "\.test\.ts"
 ```
 
-Expected: `finalize-chapter-write.ts:398`, `cover/store.ts:97,107`, `cover/upload.ts:111,129`, `analysis.ts:5694,7106`, `generation.ts:1453,2239` (nine), plus `auto-backup.ts:215` (Task 5). **`book-state.ts:1778` is `listenStatsJsonPath`, not state.json — leave it.**
+Expected (re-measured 2026-08-14): `finalize-chapter-write.ts:398`, `cover/store.ts:97,107`, `cover/upload.ts:111,129`, `analysis.ts:5806,7283`, `generation.ts:1453,2239` (nine), plus `auto-backup.ts:215` (Task 5). **`book-state.ts:1778` is `listenStatsJsonPath`, not state.json — leave it.** The same pattern also matches four NON-state.json writers that happen to use a `path`/`statePath` local — `render-integrity/embeddings-io.ts:36`, `render-integrity/verdicts-io.ts:27,82`, `cast-merge-base.ts:119`, `queue-migrate.ts:80` — they write other JSON and must NOT be routed through the seam.
 
 - [ ] Convert each of the nine to `writeStateJsonAtomic(statePath, next)`, dropping the now-redundant `stampStateSchema` call (the seam stamps internally).
 - [ ] **Verify:** `cd server && npm run test && npm run test:server-slow` green — these are hot paths (chapter finalise, cover write, analysis persist, generation persist) and this task changes nothing but the writer. Any behaviour change here is a bug in the conversion, not an intended effect.
@@ -248,7 +249,7 @@ it('the message carries no filesystem path — it is client-facing', () => {
 | Fail-closed value | `scan.ts:813` | emit `eligibleTtsEngines: []` when the language is null — **never throw**, or one unset book breaks the whole library scan |
 | Pure resolver | `series-cast-scan.ts:96` | return `null`; `voice-match.ts:307,310` and `series-reuse-link.ts:259,305` treat null as "cannot prove same language → veto" |
 
-- [ ] **`analysis.ts:3097` needs its own treatment — a naive swap is a no-op.** `resolveBookLanguageForManuscript` (`:3094-3102`) wraps the call in `try { … } catch { return 'en' }`, inside the *detached* analyzer loop where there is no `res`. Three moves: (a) put the gate in the **POST handler before the job detaches**, where a 409 is returnable; (b) **keep `'en'` for the `located === null` branch** — that is pre-confirm, no book on disk, and "Choose it in Book settings" is nonsense there; (c) if the in-loop path is kept, emit an SSE `error` with `code: 'language_unset'` via `classifyAnalysisFailure`. **A test that only asserts "the call site changed" passes on the no-op** — assert the observable outcome.
+- [ ] **`analysis.ts:3163` needs its own treatment — a naive swap is a no-op.** `resolveBookLanguageForManuscript` (`:3160-3167`) wraps the call in `try { … } catch { return 'en' }`, inside the *detached* analyzer loop where there is no `res`. Three moves: (a) put the gate in the **POST handler before the job detaches**, where a 409 is returnable; (b) **keep `'en'` for the `located === null` branch** — that is pre-confirm, no book on disk, and "Choose it in Book settings" is nonsense there; (c) if the in-loop path is kept, emit an SSE `error` with `code: 'language_unset'` via `classifyAnalysisFailure`. **A test that only asserts "the call site changed" passes on the no-op** — assert the observable outcome.
 - [ ] **`cast-merge.ts:155` is provisional.** Verify what the language actually drives; if it only localises a synthesised bucket's display name, it moves to STAY. Do not swap it blind.
 - [ ] **Do NOT change `voice-library.ts:1672`.** Its comment at `:1658-1670` records a deliberate decision against letting a language throw escape ("a NEW 500 on an existing, previously-working route", #1953/#1955); the value only computes a mismatch **warning**, and the site already catches. It is STAY.
 - [ ] **Verify:** a test per tier for an unset book, **plus the control that matters** — a book *with* a language is unaffected at every site. `cd server && npm run test && npm run test:server-slow`.
@@ -322,9 +323,9 @@ it('the message carries no filesystem path — it is client-facing', () => {
 
 ## Task 11 — Ship
 
-- [ ] `docs/release-notes-next.md` (technical, PR-refed) **and** the user-facing line in `RELEASE_NOTES.md`'s in-progress section.
-- [ ] Spec `status:` → `stable` with Ship notes (date + SHA). **Add both documents to `docs/features/INDEX.md`** — it indexes `docs/superpowers/specs` entries (25 references today), so an unlisted spec is drift.
-- [ ] **Re-confirm the inherited assumption**: that the seven backfilled values were verified by re-running the corpus measurement (#2246 acceptance item 1). This plan assumes it; nothing in it has re-checked it.
-- [ ] **On-box acceptance row.** End-to-end behaviour on a real book — an unset book hitting the gate, the prompt resolving it, analysis then selecting the right conventions table — needs a live analyzer and (for the three design sites) a live sidecar. Add the row to `docs/testing/onbox-acceptance-register.md`, the run-sheet criteria, **and update the live view** per the register's four-step procedure (edit `onbox-acceptance-register-live-view.html`, run `npm run check:onbox-register -- --against-published <saved copy>`, publish to the URL already in the register header). **Recording blocks the merge; running does not.**
-- [ ] `npm run verify:fast:branch`, then the PR with `Closes #2246`.
-- [ ] `pr-review-gate` — **not** docs-only, so the gate applies. Effort `high` (multi-scope).
+- [x] `docs/release-notes-next.md` (technical, PR-refed) **and** the user-facing line in `RELEASE_NOTES.md`'s in-progress section.
+- [x] Spec `status:` → `stable` with Ship notes (date + SHA). **Add both documents to `docs/features/INDEX.md`** — it indexes `docs/superpowers/specs` entries (25 references today), so an unlisted spec is drift.
+- [x] **Re-confirm the inherited assumption**: that the seven (now eight — `Bonus Keefe Story` wasn't in the original 20-book count) backfilled values were verified by re-running the corpus measurement (#2246 acceptance item 1). **Verified 2026-08-23**, once `C:\AudiobookWorkspace` was writable again — a read-only pass reusing the real `cacheChaptersFor`/`planBookLanguage` helpers confirmed all eight independently re-detect to `'en'` with no fallback, matching the on-disk value. Detail in the spec's Ship notes.
+- [x] **On-box acceptance row.** Recorded — register row A43 discharged 2026-08-26 and removed from the register (that was the voice-design gate half); B2 (analysis gate, still owed under its current number), run sheet `docs/testing/language-recurrence-onbox-acceptance.md`. Live view publish still owed (network step; PR #2492 body notes it has broken silently four times before) — running the acceptance itself, not recording it, is what remains.
+- [x] `npm run verify:fast:branch`, then the PR with `Closes #2246`.
+- [x] `pr-review-gate` — ran five passes (3-5 post-merge-with-main), every finding fixed. PR #2492 merged 2026-08-22, `fbdba1ca2046bb119674b787b342ea02aede3f5c`.

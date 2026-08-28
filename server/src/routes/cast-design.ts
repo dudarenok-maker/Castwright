@@ -32,7 +32,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -806,9 +806,18 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
   /* ── Start path: register the job + run the loop detached. */
   let language: string;
   try {
-    language = sidecarLanguageName(bookStateLanguage(located.state));
+    language = sidecarLanguageName(requireBookStateLanguage(located.state));
   } catch (e) {
-    send({ type: 'error', code: 'unsupported_language', message: (e as Error).message });
+    /* Task 6 (#2246) — two distinct literal `code:` sends so the
+       openapi-design-parity guard stays regex-visible: `language_unset`
+       for a book that never stated a language, `unsupported_language` for
+       a deprecated code the sidecar does not serve. */
+    const unset = e instanceof BookLanguageUnsetError;
+    if (unset) {
+      send({ type: 'error', code: 'language_unset', message: (e as Error).message });
+    } else {
+      send({ type: 'error', code: 'unsupported_language', message: (e as Error).message });
+    }
     clearInterval(keepAlive);
     return res.end();
   }

@@ -691,9 +691,9 @@ fiction.
 
 | # | Filed as | What is actually true |
 |---|---|---|
-| #2187 | Aligner under-aligns Russian dash dialogue | **The fix shipped** (`b2be5b7b`; book alignment 67.7% → 96.0%). Open only until on-box row C2 is discharged. Not code work. |
+| #2187 | Aligner under-aligns Russian dash dialogue | **The fix shipped** (`b2be5b7b`; book alignment 67.7% → 96.0%). **Superseded: the #2187 row ran 2026-08-12/13 and discharged.** Not code work. |
 | #1976 | A finished render strands ~3.9 GB | **A bookkeeping shell.** Four of its five criteria shipped; it closes when #1996 does. Not independent work. |
-| #2015 | analysis.ts's five writes replay a merge base | **Capture is solved** (PR #2185). Only the *rebuild* half is open — do not re-solve capture. |
+| #2015 | analysis.ts's five writes replay a merge base | **Capture is solved** (PR #2185). **Superseded: the rebuild half was withdrawn and #2015 closed 2026-08-27** — eight designs died against it, the frequency measurement it was gated on proved unmakeable, and #2185's logged advisory is kept as the tripwire. Not code work. |
 
 ### Group 1 — bookkeeping closures (4, no code)
 
@@ -813,9 +813,12 @@ threads is more design than one round should carry.
   must assert **ordering**, not that the hook was called; the idle watchdogs are
   the likely home. Closing this also closes #1976.
   *Benefit (user):* ~3.9 GB stranded after every render on an 8 GB card.
-- **#2015** — the cast.json **rebuild** half only.
-  *Benefit (technical):* four prior designs died on the capture problem, which
-  is now solved — this restart is much cheaper than it looks.
+- ~~**#2015** — the cast.json **rebuild** half only.~~ **Withdrawn and closed
+  2026-08-27.** The restart was not cheaper than it looked: attempts 5–8 died
+  too, the last on a structural obstacle (three run-scoped passes co-own the
+  fields any re-application would have to invert), and the frequency data the
+  work was gated on proved unmeasurable. #2185's logged advisory stays as the
+  tripwire. See the 2026-08-27 foreign-delta spec §14.
 - **#1932** — side-18: consolidate the two Coqui VRAM eviction mechanisms, or
   document the split as deliberate and scope each in code. Premise verified as
   holding in Round 3.
@@ -824,9 +827,10 @@ threads is more design than one round should carry.
 - **#2131** — decide whether an unresolvable `qa.asr.model` should fail early.
   *Benefit (user):* today a whole book renders before the QA gate discovers it
   cannot run.
-- **#2059** — attribution leading+interior dash produces a doubled comma.
-  Genuinely a question ("should it collapse?"), so it needs a decision, not a
-  fix. *Benefit (user):* a visible text artifact in Russian dialogue.
+- **#2059** — **SHIPPED PR #2688.** Doubled commas from dash-to-comma conversion
+  collapse to a single comma (51 unit tests). The design was decided and shipped
+  via PR #2688, closing #2059. *Benefit (user):* Russian dialogue text no longer
+  carries doubled-comma artifacts.
 - **#1309** — ops-24: the LAN port-443 forwarder collapses per-client identity,
   weakening rate limits. Verified byte-for-byte in Round 3.
   *Benefit (technical):* rate limits that cannot distinguish clients are not
@@ -850,6 +854,9 @@ these accomplishes nothing. **Nothing else in this plan has this ratio.**
 
 - **#2187** — discharge register row C2. Force `fresh: true`, and do **not**
   re-measure alignment — that is already done from cache. Then close.
+  **Superseded: the #2187 row ran 2026-08-12/13 and discharged.** Group C
+  renumbered afterwards, so today's `C2` is the unrelated #2253 dialogue-
+  convention row — do not discharge it against this instruction.
 - **#2026** — XTTS Russian quality on a stock catalogue voice (engine-level, not
   clone-related).
 - **#1998** — cloned-voice identity loss across languages (0.600 → 0.229).
@@ -897,7 +904,8 @@ actually be done.
 2. **Group 1** bookkeeping — one docs PR.
 3. **#898 phase 2** in its own thread, **in parallel with Lanes A–D** (four
    worktrees, file-disjoint; Lane A internally sequential).
-4. **Group 7** phase-1 threads for #1996 / #2015 / #1932 / #2131.
+4. **Group 7** phase-1 threads for #1996 / #1932 / #2131. (#2015's thread ran
+   and ended in withdrawal — see its Group 7 entry above.)
 5. **Group 8** at the next GPU sitting.
 6. **Group 9** on the owner's call.
 

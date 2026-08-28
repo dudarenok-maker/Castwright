@@ -3196,4 +3196,4 @@ git commit -m "docs(docs): add fs-52 regression plan, release notes, and backlog
 
 1. Run the full local battery: `npm run verify:fast:branch` (or `npm run verify` for the complete local suite, given this branch touches `server/tts-sidecar/**` — `test:sidecar` is scope-gated to fire).
 2. Push the branch, open the PR with `Closes #975` in the body.
-3. Run the mandatory `code-review` pass (per CLAUDE.md's model-routing table — this is a multi-scope `feat` PR spanning sidecar/server/frontend, so `high` effort) before merge.
+3. Run the mandatory `pr-review-gate` pass (per CLAUDE.md's model-routing table — this is a multi-scope `feat` PR spanning sidecar/server/frontend, so `high` effort) before merge.

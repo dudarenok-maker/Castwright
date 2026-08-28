@@ -977,7 +977,7 @@ git commit -m "docs(docs): fold alias-repoint (b) into regression plan + release
 Run: `npm run verify:fast:branch`
 Expected: lint + typecheck + config:check + test:hooks + test + test:server + build all green (each scope-gated).
 
-- [ ] **Open the PR.** Body: `Refs #1676` (this issue stays open only if further parts remain; part (b) completes the issue → use `Closes #1676`). Fill Summary + Test plan. Then run the mandatory `code-review` gate (medium effort — multi-scope `feat`), fold findings, merge.
+- [ ] **Open the PR.** Body: `Refs #1676` (this issue stays open only if further parts remain; part (b) completes the issue → use `Closes #1676`). Fill Summary + Test plan. Then run the mandatory `pr-review-gate` pass (medium effort — multi-scope `feat`), fold findings, merge.
 
 ---
 

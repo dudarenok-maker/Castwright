@@ -28,7 +28,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat } from 'node:fs/promises';
-import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
   castJsonPath,
@@ -600,8 +600,20 @@ qwenVoiceRouter.post(
        clone's manifest permanently says "English", so without it a clone reads
        every book in English. Designed voices are unaffected: no language is
        sent for them, so the baked manifest word still wins, exactly as before.
-       See tts/sidecar.ts `resolveWireLanguage`. */
-    const designLanguage = sidecarLanguageName(bookStateLanguage(located.state));
+       See tts/sidecar.ts `resolveWireLanguage`.
+
+       Task 6 (#2246) — an unset book language must not silently design in
+       English. `requireBookStateLanguage` throws for it; this route's own
+       (JSON) shape surfaces it as a 409 `language_unset`. */
+    let designLanguage: string;
+    try {
+      designLanguage = sidecarLanguageName(requireBookStateLanguage(located.state));
+    } catch (e) {
+      if (e instanceof BookLanguageUnsetError) {
+        return res.status(409).json({ error: (e as Error).message, code: 'language_unset' });
+      }
+      throw e;
+    }
 
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     if (!cast?.characters?.length) {

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, cpSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,6 +65,13 @@ describe('samples router', () => {
 
     const state = JSON.parse(readFileSync(join(dir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.manuscriptId).toMatch(/^mns_/);
+    /* The bundled sample carries `language: "en"` — it must round-trip
+       unchanged, and the key must always be present. */
+    const bundleState = JSON.parse(
+      readFileSync(join(SAMPLES_ROOT, SLUG, '.audiobook', 'state.json'), 'utf8'),
+    );
+    expect('language' in state).toBe(true);
+    expect(state.language).toBe(bundleState.language ?? null);
   });
 
   it('is idempotent — a second load is a no-op 200', async () => {
@@ -74,5 +81,59 @@ describe('samples router', () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(b.body.alreadyLoaded).toBe(true);
+  });
+});
+
+describe('samples router — no-language bundle normalisation', () => {
+  let ws: string;
+  let app2: Express;
+  let resetSamples: () => void;
+
+  beforeAll(async () => {
+    ws = mkdtempSync(join(tmpdir(), 'audiobook-samples-nolang-'));
+
+    /* A controlled sample: copy the bundled fixture but strip `language` from
+       its state.json so the no-language load path is really exercised. */
+    const sampleRoot = join(ws, 'samples');
+    const sampleDir = join(sampleRoot, SLUG);
+    mkdirSync(join(sampleDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(sampleDir, 'voices', 'qwen'), { recursive: true });
+    cpSync(join(SAMPLES_ROOT, SLUG, 'manuscript.epub'), join(sampleDir, 'manuscript.epub'));
+    if (existsSync(join(SAMPLES_ROOT, SLUG, '.audiobook', 'cast.json'))) {
+      cpSync(
+        join(SAMPLES_ROOT, SLUG, '.audiobook', 'cast.json'),
+        join(sampleDir, '.audiobook', 'cast.json'),
+      );
+    }
+    const bundle = JSON.parse(
+      readFileSync(join(SAMPLES_ROOT, SLUG, '.audiobook', 'state.json'), 'utf8'),
+    );
+    delete bundle.language;
+    writeFileSync(join(sampleDir, '.audiobook', 'state.json'), JSON.stringify(bundle, null, 2));
+
+    process.env.WORKSPACE_DIR = ws;
+    vi.resetModules();
+    const { samplesRouter, setSamplesRoot, _resetSamplesRoot } = await import('./samples.js');
+    setSamplesRoot(sampleRoot);
+    resetSamples = _resetSamplesRoot;
+    app2 = express();
+    app2.use(express.json());
+    app2.use('/api/samples', samplesRouter);
+  });
+
+  afterAll(() => {
+    if (ws) rmSync(ws, { recursive: true, force: true });
+    delete process.env.WORKSPACE_DIR;
+    if (resetSamples) resetSamples();
+  });
+
+  it('loads a sample whose bundle has no language as language:null (key present)', async () => {
+    if (!bundleReady()) return;
+    const res = await request(app2).post(`/api/samples/${SLUG}/load`);
+    expect(res.status).toBe(200);
+    const dir = join(ws, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
+    const state = JSON.parse(readFileSync(join(dir, '.audiobook', 'state.json'), 'utf8'));
+    expect('language' in state).toBe(true);
+    expect(state.language).toBeNull();
   });
 });

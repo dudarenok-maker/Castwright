@@ -239,8 +239,13 @@ export async function importPortableBundle(
 
   /* Re-serialise state.json from the (possibly renamed) in-memory shape
      instead of writing stateRaw verbatim — otherwise the bookId / title
-     in the rename branch wouldn't actually land on disk. */
-  const finalStateBuf = Buffer.from(JSON.stringify(state, null, 2), 'utf8');
+     in the rename branch wouldn't actually land on disk. A bundle
+     state.json with no `language` lands as an explicit `language: null`
+     (key present); a bundle that carries a language round-trips unchanged. */
+  const finalStateBuf = Buffer.from(
+    JSON.stringify({ ...state, language: state.language ?? null }, null, 2),
+    'utf8',
+  );
 
   type Staged = { dest: string; tmp: string; buf: Buffer | null; sourceEntry?: string };
   const staged: Staged[] = [];

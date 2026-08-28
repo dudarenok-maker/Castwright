@@ -1048,7 +1048,7 @@ Working practice:
 - Default loop for non-trivial work: finalize the change → run
   `npm run verify:fast:branch` (same branch-scoped check pre-push now runs)
   → open the PR → cloud `verify.yml` (required, opt-out) and the mandatory
-  code-review pass run independently → merge once both are green. Run the
+  `pr-review-gate` pass run independently → merge once both are green. Run the
   full `npm run verify` manually only when you specifically want the full
   local battery (e.g. before a release cut, or debugging something scope-
   filtering might be hiding).

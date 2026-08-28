@@ -4,7 +4,7 @@
 > the box, with a real sidecar and a real cloned voice. Do not pre-fill them.
 >
 > Plan of record: [`docs/features/276-cast-time-derivability-warning.md`](../features/archive/276-cast-time-derivability-warning.md)
-> Register row: [`onbox-acceptance-register.md` A31](onbox-acceptance-register.md)
+> Register row: [`onbox-acceptance-register.md` A21](onbox-acceptance-register.md)
 > Issue: [#1980](https://github.com/dudarenok-maker/Castwright/issues/1980)
 
 ---

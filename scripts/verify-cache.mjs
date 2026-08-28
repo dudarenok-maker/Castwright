@@ -375,7 +375,18 @@ export const STEPS = [
          test:scripts, this just adds a redundant, safe extra invalidation)
          without needing to track what's currently in EXTERNAL_FILES_FLOOR or
          what pipSpawners() currently selects. */
-      globs: ['server/src/**', 'scripts/**/*.{mjs,cjs,js}', 'server/tts-sidecar/scripts/**/*.mjs'],
+      globs: [
+        'server/src/**',
+        'scripts/**/*.{mjs,cjs,js}',
+        'server/tts-sidecar/scripts/**/*.mjs',
+        /* server/tts-sidecar/requirements/**: venv-migration.test.ts reads these files
+           (and .gitattributes, in extraFiles below) at RUNTIME to assert the CRLF pin
+           (#2586/#2588) and to hash reqHash oracles against — no module-graph edge, the
+           same runtime-read gap openapi.yaml/scripts/** document above. Without this, a
+           requirements/*.txt-only diff (e.g. a speaker-qa.txt version bump) reports
+           [cached] and the reqHash guard never re-runs against it (#2588 pass-2 review). */
+        'server/tts-sidecar/requirements/**',
+      ],
       /* openapi.yaml: voice-library.test.ts pins the clone-transcript cap
          against it (see the `test` step above for the same reasoning).
          ffmpeg-version-cases.json: diagnostics/ffmpeg.test.ts drives its
@@ -394,7 +405,12 @@ export const STEPS = [
          teardown.ts (#2567 review): the rest of spawn-windows-hide.test.ts's
          EXTERNAL_FILES_FLOOR that sit outside the two globs above — launch.mjs
          is a bare root file, the other two live in trees this step has no
-         other reason to watch. */
+         other reason to watch.
+         .gitattributes (#2588 pass-2 review): venv-migration.test.ts reads it at
+         RUNTIME to assert the requirements/*.txt LF pin is actually declared — a
+         .gitattributes-only diff (the file the pin itself lives in) touches no
+         glob above, so without this line it reported [cached] and the guard the
+         diff could most directly break never re-ran. */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
@@ -405,6 +421,15 @@ export const STEPS = [
         'launch.mjs',
         'pinokio-scripts/lib/resolve-release.js',
         'e2e/global-teardown.ts',
+        '.gitattributes',
+        /* #1932 (side-18): coqui-residency-policy.guard.test.ts (server suite) reads both
+           of these at RUNTIME to guard cross-reference rot across Coqui eviction mechanisms
+           and their policy doc — no module-graph edge, same #1847 runtime-read trap as
+           openapi.yaml/scripts/** above. Without these entries, a diff confined to either
+           (exactly the shape that could break the Coqui eviction contract) reports [cached]
+           and the guard never re-runs. */
+        'server/tts-sidecar/main.py',
+        'docs/features/264-vram-aware-gpu-placement.md',
       ],
       includeLockfiles: ['server'],
     },

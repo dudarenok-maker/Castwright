@@ -414,7 +414,7 @@ describe('snapshotsConsistent', () => {
 });
 
 describe('classifySnapshotEvidence (#2134)', () => {
-  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A32 the-torment/lightning-dave shape", () => {
+  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A29 the-torment/lightning-dave shape", () => {
     assert.equal(classifySnapshotEvidence({ segments: 67, snapshots: [] }), 'no-evidence');
   });
 
@@ -1121,7 +1121,7 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /disagree across chapters/);
   });
 
-  test("#2134 round 2: a Tier B (id-shape) match with real rendered segments but NO characterSnapshots evidence under its own key STILL auto-records, annotated 'no-evidence' — the register-row-A32 the-torment shape", () => {
+  test("#2134 round 2: a Tier B (id-shape) match with real rendered segments but NO characterSnapshots evidence under its own key STILL auto-records, annotated 'no-evidence' — the register-row-A29 the-torment shape", () => {
     // 'the-torment' normalises the same as live 'the_torment' and carries
     // NO name evidence anywhere (no cacheNameIndex/bakNameIndex entry) —
     // this is the real workspace's actual the-torment shape: Tier B only
@@ -1139,10 +1139,10 @@ describe('planBookRepairs', () => {
     // Round 2 (independent review, 2026-08-05): 'no-evidence' is no longer
     // a veto — characterSnapshots is written only for a LIVE id at render
     // time, so its ABSENCE here means the narrator was substituted at
-    // render time (the actual A32 damage this pass exists to fix), not a
+    // render time (the actual A29 damage this pass exists to fix), not a
     // reason to distrust the alias. This id — real workspace evidence —
     // is one of the two aliases (with coalfall) that a round-1 veto would
-    // have wrongly blocked, per the owner-accepted register row A33 write.
+    // have wrongly blocked, per the owner-accepted register row A30 write.
     const localLiveCast = [...liveCast, { id: 'the_torment', name: 'The Torment' }];
     const orphans = new Map([
       [
@@ -1162,7 +1162,7 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord[0].snapshotEvidence, 'no-evidence');
   });
 
-  test("#2134 round 2: a Tier A (name) match with real rendered segments but no characterSnapshots evidence ALSO auto-records, annotated 'no-evidence' — the register-row-A32 lightning-dave shape", () => {
+  test("#2134 round 2: a Tier A (name) match with real rendered segments but no characterSnapshots evidence ALSO auto-records, annotated 'no-evidence' — the register-row-A29 lightning-dave shape", () => {
     // 'lightning-dave' matches via an unambiguous CACHE name ("Lightning
     // Dave" == live "Lightning Dave") — the real workspace's actual
     // lightning-dave shape is Tier A (dry-run evidence string: `analysis
@@ -1185,13 +1185,13 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord[0].snapshotEvidence, 'no-evidence');
   });
 
-  test("#2134 round 2, CRITICAL (the real-data proof): the register-row-A32 mayrin shape — a Tier A match with NO snapshot evidence — auto-records; a round-1 veto would have wrongly blocked exactly this alias", () => {
+  test("#2134 round 2, CRITICAL (the real-data proof): the register-row-A30 mayrin shape — a Tier A match with NO snapshot evidence — auto-records; a round-1 veto would have wrongly blocked exactly this alias", () => {
     // The decisive real-data replay from independent review: 'mayrin' (8
     // segments, *Заказ Коалфолла* ch2) has no characterSnapshots entry
     // under its own key (the file's snapshot keys are narrator/oduvan/ren/
     // pell-hollis — 'mayrin' isn't among them), yet this alias is one of
     // the three the owner already applied and accepted on the real
-    // workspace (register row A33, 2026-08-05). A round-1 'no-evidence'
+    // workspace (register row A30, 2026-08-05). A round-1 'no-evidence'
     // veto would have blocked it.
     const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const orphans = new Map([
@@ -2777,12 +2777,12 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     assert.equal(orphans.size, 0);
   });
 
-  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A32's the-torment/lightning-dave real-workspace counter-example", () => {
+  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A29's the-torment/lightning-dave real-workspace counter-example", () => {
     // A narrower first version of this fix kept 'normalised-id' out of
     // orphans, reasoning it can't depend on the mutable supersededBy table
     // so it can't post-date the render. Independent review found that
     // proves only that no RENAME happened, not that the rendered bytes are
-    // correct — register row A32 records a real case where a
+    // correct — register row A29 records a real case where a
     // 'normalised-id' match was rendered BEFORE Wave 1's resolver existed
     // at all, substituting the narrator regardless of tier. The owner
     // decided: over-reporting is the safe failure direction for a one-shot
@@ -2851,7 +2851,7 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     // cross-run coupling (collectSegmentOrphans threading
     // history.supersededBy into the resolver on each call) remains
     // untested by this file; verified only by the on-box acceptance dry
-    // run. Numbers mirror A33's real `--apply` run: `mayrin` ch2, 8
+    // run. Numbers mirror A30's real `--apply` run: `mayrin` ch2, 8
     // rendered segments, still narrator-substituted on disk after the
     // alias was recorded.
     const mayrinSegs = [
@@ -3183,7 +3183,7 @@ describe('shouldRefuseApplyForEmptyScan (#2108)', () => {
     // stays 0 because there is nothing to be missing evidence when nothing
     // was scanned, so the round-2 fail-closed guard could never fire, and
     // the script exited 0 having written nothing — reporting an empty tree
-    // as a clean, healthy workspace on the exact line A33's precondition
+    // as a clean, healthy workspace on the exact line A30's precondition
     // tells an operator to trust.
     assert.equal(shouldRefuseApplyForEmptyScan(true, 0), true);
   });

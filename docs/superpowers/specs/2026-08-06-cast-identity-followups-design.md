@@ -163,7 +163,7 @@ removes a second hole — a long chapter render whose alias is recorded mid-rend
 because the render stamps *the state it actually resolved against*.
 
 `recordedAtIso` exists so an operator hand-inspecting the file during a repair run
-(an active workflow — A33) can tell *when*, not merely *in what order*. The names
+(an active workflow — A30) can tell *when*, not merely *in what order*. The names
 carry the rule: `…Seq` is authoritative, `…Iso` is display.
 
 #### The uniform stamp rule — no exceptions
@@ -253,7 +253,7 @@ a key missing from a **present** field reads `0` — an affirmative comparison
 against a real value.
 
 `--apply` covering every scanned book is what keeps #2128's acceptance intact: the
-books carrying pre-lane aliases are exactly the ones the A33 repair workflow
+books carrying pre-lane aliases are exactly the ones the A30 repair workflow
 already visits.
 
 #### `seq` repair on load
@@ -324,7 +324,7 @@ segment byte-identical.
 **It cannot speak to the `'normalised-id'` tier at all.** That tier has no history
 entry; its hazard is "the render predates the resolver existing at all" —
 pre-Wave-1, `resolveGroup` did a bare `castById.get()` and substituted the
-narrator. Per register row A32 that is `the-torment` (67 segments) and
+narrator. Per register row A22 that is `the-torment` (67 segments) and
 `lightning-dave` (1) — **68 of the 188 known damaged segments**.
 
 So the lane adds **one** field and leaves `synthesizedAt` untouched:
@@ -573,7 +573,7 @@ Properties of the chosen design, stated so they are known rather than discovered
    true of `supersededBy` itself, already gated by the live-server probe. A
    follow-up issue records genuine cross-process atomicity against the module.
 
-## Ordering against A33
+## Ordering against A30
 
 Either order works. If `--apply` runs first it performs the one-shot stamp on every
 book it scans (§1), which is strictly helpful. The two must not run
@@ -649,7 +649,7 @@ fail before it is trusted.
 box, so acceptance is owed and **its recording is a merge gate** (the running is
 not).
 
-- A row in `docs/testing/onbox-acceptance-register.md`, grouped with A33's
+- A row in `docs/testing/onbox-acceptance-register.md`, grouped with A30's
   hardware prerequisite.
 - Criteria in `docs/testing/cast-id-drift-onbox-acceptance.md`.
 - `docs/testing/onbox-acceptance-register-live-view.html` edited and republished to

@@ -37,7 +37,7 @@ owner: null
 > оператор/водитель), closing Wave D's stated `isDescriptorName` limitation. Byline-author
 > mis-roster (author ate Anton's lines) split out to **bug #938** for a dedicated brainstorm.
 > The Russian pipeline is functional end-to-end. Investigation reproduced cold; the
-> **prompt-guard fix is empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](162-fs2-multilanguage.md)
+> **prompt-guard fix is empirically validated**, model choice settled. Extends [162 (fs-2 multilanguage)](archive/162-fs2-multilanguage.md)
 > and [187 (large-chapter stage-2 + attribution coverage)](archive/187-large-chapter-stage2-and-attribution-coverage.md).
 > Trigger: full analysis of a Russian book (Ночной дозор / Night Watch, 9 ch,
 > 43-char cast, run on the **local** engine with `qwen3.5:9b`) never completes —
@@ -178,7 +178,7 @@ preamble guard, rather than guard-text-only:
    the model. Runs after coverage (which keys on text, not `characterId`), so the
    verdict is unchanged; English is a byte-identical no-op. Empirically (the
    model's narration correctness 0–1/6 → a deterministic 6/6 every run, dialogue
-   untouched). See [162](162-fs2-multilanguage.md) for the full write-up.
+   untouched). See [162](archive/162-fs2-multilanguage.md) for the full write-up.
 
 > **Update (2026-06-20, bug #954 / PR #955):** the narrator-default heuristic was generalized to ALL languages — `applyNonEnglishNarratorDefault` renamed `applyNarratorDefault`, the `isNonEnglish` gate dropped — to fix English close-third-person narration being voiced as the POV character. `isSpokenLine` recognized all common quote conventions (US double, UK/Irish single, guillemet, dash; a word-boundary-anchored straight-single matcher ignored apostrophes/possessives) via one language-blind regex bundle — **superseded 2026-08, #2245:** it is now driven per-language by the same `LanguageConventions` tables the structure engine uses, the straight-single matcher is gone (English's `quotePairs` carries no same-glyph `'`/`'` pair), and the unconditional leading-dash rule is gone (a leading dash only reads as spoken where a language's own `dialogueOpen` matches) — and the first sentence of each demoted block is flagged low-confidence (both language paths). English is therefore NO LONGER a no-op. Design: `docs/superpowers/specs/2026-06-20-english-narrator-default-attribution-design.md`.
 2. **Russian dash-dialogue tag guard** in `languagePreamble`

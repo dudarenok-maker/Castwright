@@ -182,23 +182,23 @@ test('renderServerEnv still carries PORT and WORKSPACE_DIR', () => {
   assert.ok(serverEnv.WORKSPACE_DIR, 'WORKSPACE_DIR must be set');
 });
 
-// #2348 review, finding 2: LOCAL_TTS_PORT must NOT appear in the generated
-// server/.env. The Node side never reads it — spawn-sidecar.ts hardcodes
-// DEFAULT_PORT=9000, sidecar-owner.ts hardcodes SIDECAR_PORT=9000, and every
-// request path resolves through LOCAL_TTS_URL (default localhost:9000) — but
-// start.ps1/start.sh DO read it to choose the sidecar's bind port. Setting it
-// here would make the sidecar bind the slot port while the server keeps
-// polling :9000, breaking TTS in every worktree created after this change.
-test('renderServerEnv does NOT set LOCAL_TTS_PORT (the sidecar bind port and the server poll port would diverge)', () => {
+// #2632 fix: LOCAL_TTS_PORT MUST appear in the generated server/.env so both
+// the server (spawn-sidecar.ts → resolveSidecarPort, getResolvedSidecarUrl)
+// and sidecar (start.ps1/start.sh) read the same variable and coordinate on
+// the same port. Before #2632, spawn-sidecar.ts and sidecar-owner.ts hardcoded
+// :9000, and every request path hardcoded localhost:9000 — setting LOCAL_TTS_PORT
+// here alone would have diverged them. Now both read it, so per-worktree isolation
+// works and two worktrees never fight over :9000.
+test('renderServerEnv sets LOCAL_TTS_PORT so server and sidecar coordinate on the per-worktree port (#2632)', () => {
   const ports = computePorts(1);
   const env = renderServerEnv({ slot: 1, branch: 'feat/server-x', ports });
   const parsed = parseEnvLocal(env);
   assert.equal(
     parsed.LOCAL_TTS_PORT,
-    undefined,
-    'server/.env must not carry LOCAL_TTS_PORT — the sidecar (start.ps1/start.sh) would bind it as its OWN port while the server keeps polling the hardcoded :9000, breaking TTS',
+    '9010',
+    'server/.env must carry LOCAL_TTS_PORT matching the slot so spawn-sidecar and getResolvedSidecarUrl both probe/talk on the same per-worktree port (#2632)',
   );
-  assert.doesNotMatch(env, /^LOCAL_TTS_PORT=/m);
+  assert.match(env, /^LOCAL_TTS_PORT=9010$/m);
 });
 
 test('renderServerEnv never carries secret-shaped keys copied from a primary .env', () => {

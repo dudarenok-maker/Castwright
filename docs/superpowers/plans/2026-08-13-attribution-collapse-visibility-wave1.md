@@ -975,7 +975,7 @@ developer-facing columns. Evidence and consequences: spec §D13 re-gated →
 The plan is not moved: `docs/superpowers/plans/` has no `archive/`
 subdirectory and no plan here has ever been archived.
 
-**Acceptance still owed** (register row E11, which stays open): the
+**Acceptance still owed** (register row E9, which stays open): the
 dash-stripped re-run invariance check, and re-analysing one book post-D18 to
 confirm `demotedNarrator`/`modelNarrator` populate outside a unit fixture.
-E11's item 1 — the full primary-checkout run — discharged 2026-08-14.
+E9's item 1 — the full primary-checkout run — discharged 2026-08-14.

@@ -214,6 +214,24 @@ export default defineConfig({
       '{**/pinokio-scripts/**,**/.*/**/pinokio-scripts/**}',
       '{**/e2e/global-teardown.ts,**/.*/**/e2e/global-teardown.ts}',
       '{**/launch.mjs,**/.*/**/launch.mjs}',
+      /* .gitattributes, server/tts-sidecar/requirements/** (#2588 pass-2 review):
+         venv-migration.test.ts (this suite) reads BOTH at RUNTIME — the requirements
+         files to hash reqHash oracles and assert the CRLF pin materialised (#2586),
+         .gitattributes to assert the pin RULE is actually declared. No module-graph
+         edge reaches either, so under `vitest run --changed` a diff confined to
+         either selected zero tests here before these triggers existed — the same
+         consequence spelled out above for openapi.yaml/scripts/**. */
+      '{**/.gitattributes,**/.*/**/.gitattributes}',
+      '{**/server/tts-sidecar/requirements/**,**/.*/**/server/tts-sidecar/requirements/**}',
+      /* coqui-residency-policy.guard.test.ts (#1932 side-18): reads three files at
+         RUNTIME to catch cross-reference rot across the two Coqui eviction mechanisms
+         and their policy doc. The sidecar main.py and docs file have no module-graph
+         edges (same #1847 runtime-read trap); synthesise-chapter.ts IS importable
+         but is included here for consistency with the guard's uniform readFileSync
+         approach rather than being split into two separate tracking mechanisms. */
+      '{**/server/src/tts/synthesise-chapter.ts,**/.*/**/server/src/tts/synthesise-chapter.ts}',
+      '{**/server/tts-sidecar/main.py,**/.*/**/server/tts-sidecar/main.py}',
+      '{**/docs/features/264-vram-aware-gpu-placement.md,**/.*/**/docs/features/264-vram-aware-gpu-placement.md}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the

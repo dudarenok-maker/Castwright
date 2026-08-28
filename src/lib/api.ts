@@ -90,6 +90,9 @@ import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import { parseDuration } from './time';
+/* Task 9 (#2246) — the language-guard seam: the four 409 sites route a
+   language-unset failure to the global guard modal through this bus. */
+import { emitLanguageGuard, isLanguageUnsetBody } from './language-guard-bus';
 import { makeSecureUuid, makeSecureRandom } from './secure-random';
 /* Bundled mock audio assets — two short tones so the a/b player + mini
    player + voice samples have something audible to render under
@@ -2103,8 +2106,9 @@ async function realSetVoiceOverrideLinked(
 async function realDesignQwenVoice(
   bookId: string,
   characterId: string,
-  { persona, sampleVoiceId, modelKey, preview, emotion }: DesignQwenVoiceArgs,
+  args: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
+  const { persona, sampleVoiceId, modelKey, preview, emotion } = args;
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/design-voice`,
     {
@@ -2120,13 +2124,42 @@ async function realDesignQwenVoice(
     },
   );
   if (!res.ok) {
-    let detail = '';
+    /* Read the body ONCE and reuse it for both the language-unset detector
+       and the human message — qwen puts the marker in `code` and the message
+       in `error`, so a single read must feed both. (#2246 Task 9c) */
+    let body: string;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      body = await res.text();
     } catch {
-      /* not json */
+      body = '';
     }
-    throw new Error(detail || `Voice design failed (${res.status}).`);
+    let detail = '';
+    if (body) {
+      try {
+        const parsed = JSON.parse(body) as { error?: unknown };
+        detail = typeof parsed.error === 'string' ? parsed.error : '';
+      } catch {
+        /* not json */
+      }
+    }
+    const err = new Error(detail || `Voice design failed (${res.status}).`);
+    if (isLanguageUnsetBody(res.status, body)) {
+      /* A 409 language_unset opens the language-guard modal instead of an error
+         toast. Park the caller's promise: on save the retry re-runs the design
+         call and hands its DesignQwenVoiceResponse to the awaiting caller; on
+         dismiss the caller rejects with the original error. If the guard cannot
+         resolve the book (emitLanguageGuard false), reject now — never hang. */
+      return new Promise<DesignQwenVoiceResponse>((resolve, reject) => {
+        const accepted = emitLanguageGuard({
+          selector: { bookId },
+          shape: '409',
+          onRetry: () => realDesignQwenVoice(bookId, characterId, args).then(resolve, reject),
+          onDismiss: () => reject(err),
+        });
+        if (!accepted) reject(err);
+      });
+    }
+    throw err;
   }
   /* Response is JSON { voiceId, url, voiceUuid } pointing at the cached
      audition MP3 — which is also the 12s sample the player will hit.
@@ -2814,7 +2847,9 @@ export class AnalysisError extends Error {
 
 async function realAnalyseManuscript(
   manuscriptId: string,
-  {
+  opts: AnalyseOpts = {},
+): Promise<AnalyseResponse> {
+  const {
     signal,
     onPhase,
     onLog,
@@ -2829,8 +2864,7 @@ async function realAnalyseManuscript(
     model,
     fresh,
     allowStage1Shrink,
-  }: AnalyseOpts = {},
-): Promise<AnalyseResponse> {
+  } = opts;
   const hasBody = model !== undefined || fresh !== undefined || allowStage1Shrink !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
@@ -2838,7 +2872,31 @@ async function realAnalyseManuscript(
     body: hasBody ? JSON.stringify({ model, fresh, allowStage1Shrink }) : undefined,
     signal,
   });
-  if (!res.ok || !res.body) throw new Error(`Analysis stream failed (${res.status}).`);
+  if (!res.ok) {
+    /* Task 9 (#2246) — analysis is manuscript-scoped, so a language-unset 409
+       is routed to the guard with a `{ manuscriptId }` selector (the guard
+       resolves the book via its manuscriptId) instead of the generic throw.
+       This function never used to read the body on failure, so there was
+       nothing to detect on until now. On save the retry re-runs this same
+       call and hands its AnalyseResponse to the awaiting caller; on dismiss the
+       caller rejects with the original error. If the guard cannot resolve the
+       manuscript (emitLanguageGuard false), reject now — never hang. */
+    const body = await res.text().catch(() => '');
+    const msg = `Analysis stream failed (${res.status}).`;
+    if (isLanguageUnsetBody(res.status, body)) {
+      return new Promise<AnalyseResponse>((resolve, reject) => {
+        const accepted = emitLanguageGuard({
+          selector: { manuscriptId },
+          shape: '409',
+          onRetry: () => realAnalyseManuscript(manuscriptId, opts).then(resolve, reject),
+          onDismiss: () => reject(new Error(msg)),
+        });
+        if (!accepted) reject(new Error(msg));
+      });
+    }
+    throw new Error(msg);
+  }
+  if (!res.body) throw new Error(`Analysis stream failed (${res.status}).`);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -3311,7 +3369,7 @@ export interface ReviewScriptOpts {
   onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
-  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
+  onChapterFailed?: (e: { chapterId: number; message: string; code?: string }) => void;
   onCheckpoint?: (ev: { chapterId: number; version: number }) => void;
   onHeartbeat?: (ev: { chapterId: number; streaming: boolean }) => void;
 }
@@ -3376,7 +3434,11 @@ async function realReviewScript(
         break;
       case 'chapter-failed':
         if (typeof p.chapterId === 'number') {
-          onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
+          onChapterFailed?.({
+            chapterId: p.chapterId,
+            message: typeof p.message === 'string' ? p.message : 'Chapter review failed.',
+            ...(typeof p.code === 'string' ? { code: p.code } : {}),
+          });
         }
         break;
       case 'checkpoint':
@@ -3795,7 +3857,11 @@ async function realAttachScriptReview(
         break;
       case 'chapter-failed':
         if (typeof p.chapterId === 'number') {
-          onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
+          onChapterFailed?.({
+            chapterId: p.chapterId,
+            message: typeof p.message === 'string' ? p.message : 'Chapter review failed.',
+            ...(typeof p.code === 'string' ? { code: p.code } : {}),
+          });
         }
         break;
       case 'checkpoint':
@@ -5894,11 +5960,36 @@ async function realStreamSplice({
       },
     );
     if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '');
+      const body = await res.text().catch(() => '');
+      /* Task 9 (#2246) — a 409 whose body marks an unset book language opens
+         the language-guard modal instead of a generic splice error. The retry
+         replays this same call once a language is chosen and saved. */
+      if (
+        !res.ok &&
+        isLanguageUnsetBody(res.status, body) &&
+        emitLanguageGuard({
+          selector: { bookId },
+          shape: '409',
+          onRetry: () =>
+            realStreamSplice({
+              bookId,
+              chapterId,
+              mode,
+              characterId,
+              gainDb,
+              segmentIndices,
+              modelKey,
+              onTick,
+              signal,
+            }),
+        })
+      ) {
+        return;
+      }
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Splice failed (${res.status}): ${detail || res.statusText}`,
+        errorReason: `Splice failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
@@ -5958,11 +6049,25 @@ async function realStreamQaRepair({
       },
     );
     if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '');
+      const body = await res.text().catch(() => '');
+      /* Task 9 (#2246) — a 409 whose body marks an unset book language opens
+         the language-guard modal instead of a generic repair error. The retry
+         replays this same call once a language is chosen and saved. */
+      if (
+        !res.ok &&
+        isLanguageUnsetBody(res.status, body) &&
+        emitLanguageGuard({
+          selector: { bookId },
+          shape: '409',
+          onRetry: () => realStreamQaRepair({ bookId, chapterId, onTick, signal }),
+        })
+      ) {
+        return;
+      }
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Audio repair failed (${res.status}): ${detail || res.statusText}`,
+        errorReason: `Audio repair failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }

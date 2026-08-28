@@ -256,10 +256,142 @@ def test_health_responsive_during_busy_synth(client: TestClient) -> None:
         f"/health took {elapsed:.3f}s during an in-flight synth — event loop "
         "is being blocked. Did /synthesize stop using asyncio.to_thread?"
     )
+    # #1996 — while the synth is genuinely in flight, the surfaced counter must
+    # read 1 so an idle probe gets a positive "currently generating" signal.
+    assert r.json()["inflight_synth"] == 1, (
+        f"/health should report inflight_synth == 1 during a busy synth, "
+        f"got {r.json()['inflight_synth']}"
+    )
 
     synth_thread.join(timeout=5.0)
     assert not synth_thread.is_alive(), "synth thread never finished"
     assert len(fake.calls) == 1, "synth fake should have been called exactly once"
+
+    # #1996 — once the synth has drained, the counter must read 0 again.
+    r_idle = client.get("/health")
+    assert r_idle.status_code == 200
+    assert r_idle.json()["inflight_synth"] == 0, (
+        f"/health should report inflight_synth == 0 after the synth finishes, "
+        f"got {r_idle.json()['inflight_synth']}"
+    )
+
+
+async def _noop_async(*a, **k):
+    """Async no-op for mocking async methods."""
+    return None
+
+
+def test_inflight_synth_tracks_transcribe_and_embed(client: TestClient, monkeypatch) -> None:
+    """Verify that /transcribe and /embed increment the busy signal (inflight_synth)
+    so the idle gate can detect ASR/embed activity. Regression check for #1996.
+
+    Before the fix, /transcribe and /embed did NOT increment _inflight_synth,
+    so the idle-gate measurement saw ASR running continuously and falsely
+    concluded the process was "confirmed idle" — the actual confound #1996's
+    run revealed."""
+    # Stub a slow transcriber by monkey-patching ASR.transcribe to sleep.
+    # We don't need a real Whisper model; just simulate work.
+    slow_sleep_sec = 0.5
+
+    original_transcribe = main.ASR.transcribe
+    original_spk_embed = main.SPK.embed
+    original_spk_ensure_loaded = main.SPK.ensure_loaded
+
+    def fake_slow_transcribe(pcm, sample_rate, language=None, word_timestamps=False, device=None):
+        time.sleep(slow_sleep_sec)
+        # Return minimal valid output (the test only checks inflight_synth, not transcribe results).
+        return {"text": "Hi", "language": "en", "avg_logprob": -0.5, "no_speech_prob": 0.01, "compression_ratio": 1.2}
+
+    def fake_slow_embed(pcm, sample_rate):
+        time.sleep(slow_sleep_sec)
+        # Return a fake embedding (192-d, unit-norm shape).
+        return [0.0] * 192
+
+    main.ASR.transcribe = fake_slow_transcribe
+    main.SPK.embed = fake_slow_embed
+    # Mock SPK.ensure_loaded to be an async no-op so we don't try to load the real speechbrain model.
+    main.SPK.ensure_loaded = _noop_async
+
+    try:
+        # Generate some fake PCM data (16-bit LE mono).
+        fake_pcm = b"\x00\x00" * 1000  # 1000 samples of silence.
+
+        # Test /transcribe
+        transcribe_thread = threading.Thread(
+            target=lambda: client.post(
+                "/transcribe",
+                content=fake_pcm,
+                headers={"X-Sample-Rate": "16000"},
+            ),
+            daemon=True,
+        )
+        transcribe_thread.start()
+        # Tiny grace so the transcribe is actually running when we probe.
+        time.sleep(0.05)
+
+        # Mid-call: inflight_synth should be non-zero (at least 1 for the transcribe).
+        health_mid = client.get("/health")
+        assert health_mid.status_code == 200, "health route failed while transcribe running"
+        inflight_mid = health_mid.json().get("inflight_synth")
+        assert inflight_mid is not None, "inflight_synth field missing from /health"
+        assert inflight_mid > 0, (
+            f"inflight_synth should be > 0 during transcribe, but got {inflight_mid}. "
+            "Did /transcribe stop incrementing _inflight_synth?"
+        )
+
+        transcribe_thread.join(timeout=5.0)
+        assert not transcribe_thread.is_alive(), "transcribe thread never finished"
+
+        # After completion: inflight_synth should be back to 0.
+        health_after = client.get("/health")
+        assert health_after.status_code == 200
+        inflight_after = health_after.json().get("inflight_synth")
+        assert inflight_after is not None
+        assert inflight_after == 0, (
+            f"inflight_synth should be 0 after transcribe completes, but got {inflight_after}. "
+            "Did the finally-block decrement fail?"
+        )
+
+        # Test /embed
+        embed_thread = threading.Thread(
+            target=lambda: client.post(
+                "/embed",
+                content=fake_pcm,
+                headers={"X-Sample-Rate": "16000"},
+            ),
+            daemon=True,
+        )
+        embed_thread.start()
+        # Tiny grace so the embed is actually running when we probe.
+        time.sleep(0.05)
+
+        # Mid-call: inflight_synth should be non-zero (at least 1 for the embed).
+        health_mid_embed = client.get("/health")
+        assert health_mid_embed.status_code == 200, "health route failed while embed running"
+        inflight_mid_embed = health_mid_embed.json().get("inflight_synth")
+        assert inflight_mid_embed is not None, "inflight_synth field missing from /health during embed"
+        assert inflight_mid_embed > 0, (
+            f"inflight_synth should be > 0 during embed, but got {inflight_mid_embed}. "
+            "Did /embed stop incrementing _inflight_synth?"
+        )
+
+        embed_thread.join(timeout=5.0)
+        assert not embed_thread.is_alive(), "embed thread never finished"
+
+        # After completion: inflight_synth should be back to 0.
+        health_after_embed = client.get("/health")
+        assert health_after_embed.status_code == 200
+        inflight_after_embed = health_after_embed.json().get("inflight_synth")
+        assert inflight_after_embed is not None
+        assert inflight_after_embed == 0, (
+            f"inflight_synth should be 0 after embed completes, but got {inflight_after_embed}. "
+            "Did the finally-block decrement fail?"
+        )
+    finally:
+        # Restore the originals.
+        main.ASR.transcribe = original_transcribe
+        main.SPK.embed = original_spk_embed
+        main.SPK.ensure_loaded = original_spk_ensure_loaded
 
 
 def test_synthesize_returns_substitution_header_when_voice_unknown(monkeypatch):

@@ -13,6 +13,28 @@ describe('remapFreshToPriorIds', () => {
     expect(r.rewrites).toEqual({ mayrin: 'mairin' });
   });
 
+  /* #2584/#2570 — the real reported case: a re-analysis mints a fresh
+     Cyrillic-kebab id (`одуван`) for a character whose established, already-
+     live id is the stable ASCII kebab `oduvan`. This module's exact-name
+     matcher already resolves it correctly and unconditionally: the prior id
+     survives and the sentences cascade with it, regardless of either id's
+     script. (An earlier fix landed a second, narrower survival rule directly
+     in `mergeAnalysisResultWithExistingCast` — reverted in this commit,
+     PR review found it broke the sentence/cast.json cascade (F1) and let a
+     reserved fold-bucket id survive (F2); this module already ran BEFORE
+     sentence persistence and already cascades both halves, so no change was
+     needed here.) */
+  it('keeps the established ASCII id over a freshly-minted non-ASCII id, cascading to sentences (#2584/#2570)', () => {
+    const r = remapFreshToPriorIds(
+      [{ id: 'одуван', name: 'Одуван' }],
+      [{ characterId: 'одуван', id: 1 }],
+      [{ id: 'oduvan', name: 'Одуван', voiceState: 'tuned' }],
+    );
+    expect(r.characters[0].id).toBe('oduvan');
+    expect(r.sentences[0].characterId).toBe('oduvan');
+    expect(r.rewrites).toEqual({ одуван: 'oduvan' });
+  });
+
   it('refuses an ambiguous name match', () => {
     const r = remapFreshToPriorIds(
       [{ id: 'a1', name: 'Alden' }],

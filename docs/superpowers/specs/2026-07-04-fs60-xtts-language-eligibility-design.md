@@ -5,7 +5,7 @@ date: 2026-07-04
 issue: '#1005'
 related:
   - 2026-06-22-fs41-fs50-language-aware-ingest-and-breadth-design.md (§11.2 — the deferral this spec picks up)
-  - 162-fs2-multilanguage.md (the never-cross-language invariant this spec relaxes, in one specific direction)
+  - ../../features/archive/162-fs2-multilanguage.md (the never-cross-language invariant this spec relaxes, in one specific direction)
   - 194-voice-cloning.md (fs-38, draft — the future consumer of the per-synth Coqui language plumbing this spec builds)
   - 108-qwen-coexistence.md (per-character `ttsEngine` + multi-engine-per-chapter routing this spec extends)
   - 113-qwen-true-batching.md (the scatter/gather index-order reassembly primitive this spec reuses for engine serialization)

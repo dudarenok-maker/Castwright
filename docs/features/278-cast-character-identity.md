@@ -6,7 +6,7 @@ owner: null
 
 # Cast-authoritative character identity (#2040)
 
-> Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A32, B3, A33)
+> Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A29, A30; the former B3 discharged 2026-08-21)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
 > `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
 > `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-link-orphan.ts`,
@@ -258,13 +258,13 @@ pair's own Undo), so the round trip is lossless even though it is not symmetric.
    prior, the analysis cache already holds the drifted id, so the fallback
    never re-fires for that pair and no retirement is ever recorded for it. Only
    the *file* becomes authoritative again; the mapping itself needs
-   `scripts/repair-cast-id-drift.mjs --apply` (A33 — run 2026-08-05, but only
+   `scripts/repair-cast-id-drift.mjs --apply` (A30 — run 2026-08-05, but only
    **partially** discharged: the write path is proven and recorded 3
    auto-recordable aliases across 2 books, but the workspace is not
    orphan-free — 91 ids / 93 segments remain report-only, needing a human
    decision (widened by the #2107 fix, independent review 2026-08-05; was
    93/161 before), and *Unlocked* alone still carries 34 orphaned segments
-   under `unknown-male`; see the on-box register's A33 row) or a re-render
+   under `unknown-male`; see the on-box register's A30 row) or a re-render
    to recover.
 10. **Invariant 10 — a reject's two writes are created together and destroyed
     together.** The `rejectedPairs` entry is written first and removed last;
@@ -579,25 +579,29 @@ redux → rendered DOM, not the server-side aggregation (which has its own
 
 ## On-box acceptance
 
-Three rows tracked (A33 partially discharged 2026-08-05 — see below) — see
+Three rows tracked (A30 partially discharged 2026-08-05 — see below) — see
 [`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)
 and the run sheet
 [`docs/testing/cast-id-drift-onbox-acceptance.md`](../testing/cast-id-drift-onbox-acceptance.md):
 
-- **A32** (Wave 1) — re-rendering an already-drifted real chapter puts the
+- **A29** (Wave 1) — re-rendering an already-drifted real chapter puts the
   character's own voice on their lines, confirmed by listening, not only by the
   JSON fields.
 - **B3** (Wave 2) — a real analyzer re-analysing an already-drifted real book
   keeps the cast's existing id (or correctly records a genuine change) instead of
-  drifting it further.
-- **A33** (Wave 3) — the repair pass's `--apply` run against the real workspace.
+  drifting it further. **DISCHARGED 2026-08-21 and removed from the register**;
+  §7 of the run sheet is its record. Do not follow `B3` to whatever now sits at
+  that position — Group B renumbered and today's `B2` is an unrelated #2246 row
+  (under the pre-#2599 positional-ID rule; IDs are stable and never reused from
+  2026-08-27).
+- **A30** (Wave 3) — the repair pass's `--apply` run against the real workspace.
   **PARTIALLY DISCHARGED 2026-08-05** — `--apply` was run for real (against
   `main` @ `f3d6ae0f`) and wrote exactly the 3 predicted aliases across 2
   books (*Заказ Коалфолла*, *Everblaze*), all 20 `cast.json` files
   byte-unchanged; the liveness rail caught a real `npm run dev` via its LAN
   HTTPS half before that. **Still owed:** confirming the fix reaches actual
   audio (re-render *Заказ Коалфолла* ch2 and listen) and the Cast-screen
-  banner cross-check — see the register row A33 and the run sheet's §8.6+
+  banner cross-check — see the register row A23 and the run sheet's §8.6+
   for the full account, including two defects the run surfaced
   ([#2107](https://github.com/dudarenok-maker/Castwright/issues/2107), the
   re-render list drops an aliased row's segments after `--apply` — **fixed,

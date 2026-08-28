@@ -8,8 +8,11 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), [A33](onbox-acceptance-register.md) (Wave 3, §8 below), and A45 (#2128 audio currency, §9 below) — **A45 is discharged (2026-08-11)
-and no longer in the register; §9 below is its record**
+> Register rows: [`onbox-acceptance-register.md` A22](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A23](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A34](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
+and A45 (2026-08-11); neither is in the register any more, and §7 and §9
+below are their records. Do not follow B3 or A45 to whatever now sits at
+those positions — both groups renumbered since (under the pre-#2599
+positional-ID rule; IDs are stable and never reused from 2026-08-27).**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -166,7 +169,12 @@ alone; Wave 2 and Wave 3 have their own sections (§7, §8) below.
 
 ## 7. Wave 2 — stopping new drift at re-analysis time
 
-> Register row: [`onbox-acceptance-register.md` B3](onbox-acceptance-register.md)
+> Register row: **B3 — discharged 2026-08-21, row removed from the register.**
+> There is no current ID for it: Group B renumbered and today's B2 is an
+> unrelated #2246 row that reused the position, so do not follow this to
+> whatever now sits at B3 (under the pre-#2599 positional-ID rule; IDs are
+> stable and never reused from 2026-08-27). The discharge evidence is the
+> run note in §7.2 below.
 
 ### 7.1 Purpose & scope
 
@@ -257,13 +265,30 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 > agent. **B4 stays STILL OWED.** Full evidence:
 > `docs/testing/onbox-wave4-results/step-7-b3-b4-rerun.md`.
 
-Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
+Record what was observed, by whom, and when — here only; register row B3 was
+discharged on 2026-08-21 and no longer exists. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
+
+> **Wave-5 step 4, 2026-08-23 — register row B2 (current numbering; "B4" above
+> in this section's own then-current numbering) DISCHARGED, but against a
+> DIFFERENT fixture, not this section's re-analysis.** Per that step's own
+> issue instruction, the check ran against the committed short-chapter
+> fixture `server/src/__fixtures__/the-coalfall-commission.ru.md` (a fresh
+> import with no prior `cast-id-history.json` to merge against) rather than
+> re-running *Заказ Коалфолла* here. All six characters' `cast.json` names
+> came back in Cyrillic with ASCII-kebab-case ids, no near-duplicate pair,
+> and no id-retirement-direction defect. **This does not re-confirm or close
+> [#2584](https://github.com/dudarenok-maker/Castwright/issues/2584)** — #2584
+> is specific to a re-analysis of *Заказ Коалфолла* against its existing
+> `cast-id-history.json` (a second/third pass merging into prior history),
+> which a fresh import has no code path to exercise. #2584 stays open,
+> tracked on its own issue, independent of register row B2's discharge. Full
+> evidence: `docs/testing/onbox-wave5-results/step-4-b2.md`.
 
 ---
 
 ## 8. Wave 3 — the repair pass's `--apply` run
 
-> Register row: [`onbox-acceptance-register.md` A33](onbox-acceptance-register.md)
+> Register row: [`onbox-acceptance-register.md` A23](onbox-acceptance-register.md)
 
 ### 8.1 Purpose & scope
 
@@ -490,7 +515,7 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
    report-only ids are unchanged from §8.1 — proving the write was durable,
    not merely printed once.
 
-Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A23 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
 **#2107 fix (`fix/scripts-2107-rerender-rows`), then WIDENED by an independent
 review + owner decision:** `collectSegmentOrphans`'s resolver reads
@@ -633,7 +658,7 @@ explicitly, so this fix protects a future/test caller, not today's run.
 Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
 now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
 
-Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A33 stays open for this and §8.8.
+Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A23 stays open for this and §8.8.
 
 12. **Listen.** Confirm both characters' lines are audibly distinct from the
     narrator, not merely a different id in the JSON.
@@ -649,12 +674,22 @@ Expected: the auto-reconciled section names `mayrin`/`coalfall` (Заказ
 still names the untouched ids — spot-check *Exile*'s `unknown-male` as the
 negative control (a reserved-bucket source must still refuse to auto-record).
 
-Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the post-`--apply` dry run still reports *Exile*'s `unknown-male` as report-only with the reserved-fold-bucket refusal reason intact, so the negative control holds at the script level. The Cast-screen rendering of both sections has not been checked.
+Result: **RUN 2026-08-21 (wave-4 step 5e, Castwright#2563).** PASS, live in
+a real browser. *Заказ Коалфолла* Cast screen: the auto-reconciled bucket
+("2 character ids auto-reconciled — audio is current") names `mayrin`
+(Мэйрин, 8 segments) and `coalfall` (Коалфолл, 13 segments) exactly as
+expected. Negative control: *Exile*'s `unknown-male` (21 segments) stayed
+in the needs-your-decision list, unmoved. Everblaze's `lady-alina` half is
+corroborated by the real `cast-id-history.json` file read directly, not by
+a live Everblaze Cast-screen render (Everblaze was not one of the books
+copied into this pass's throwaway workspace). Full evidence:
+`docs/testing/onbox-wave4-results/step-5e-cast-screen-browser-rows.md`.
 
 ### 8.9 Outcome
 
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
-- [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
+- [x] §8.8 run — **2026-08-21** (wave-4 step 5e), PASS — see above
+- [ ] §8.7 run — still owed (needs the GPU box + a listen)
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
 - [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
 - [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)
@@ -682,7 +717,7 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
   write decision. Also verified: books with unreadable bak evidence **0**,
   books withheld for missing bak evidence **0** (#2135's gap not live on
   this workspace today), books scanned **20** (no drops from #2097's new
-  `collectBooks` accounting either). See register row A33 for the full
+  `collectBooks` accounting either). See register row A23 for the full
   writeup, including round 2's five smaller fixes (`collectBooks`
   `Array.isArray` shape check, its `readdirSync` guard, the same shape
   guard in `collectBakNameEntries`, `planApplyRefusal`'s absent-field
@@ -699,11 +734,11 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
   today** — none of the 20 books are mid-import — a fresh dry run reports
   figures identical to step 9e: re-render **23 rows / 188 segments**,
   auto-recordable **2 aliases / 68 segments**, report-only **91 ids / 93
-  segments**, skipped **3**, books scanned **20**. See register row A33's
+  segments**, skipped **3**, books scanned **20**. See register row A23's
   round-3 correction for the full writeup.
 - [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace; #2097's own discriminator itself misclassified an ordinary mid-import book and needed a round-3 correction, see step 9f), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, then relocated at round 2 after review found the original fix couldn't fire in CI), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed at round 1, found BACKWARDS by round 2 review, corrected to an annotation** — see steps 9d/9e)
 
-Record what was observed, by whom, and when — here and in register row A33.
+Record what was observed, by whom, and when — here and in register row A23.
 This is the first time the repair pass has ever written to the real
 workspace; if anything here diverges from the dry-run numbers in §8.1, stop
 and investigate before treating the run as clean — do not paper over a
@@ -856,3 +891,65 @@ silently produce a confident wrong answer rather than an error:
    segments by `modelKey` therefore returns one silent empty bucket and
    proves nothing; read the file-level `modelKey`, or `state.json`'s
    `audioModelKey`/`audioEngines`, instead.
+
+---
+
+## 10. #2584 fix (PR #2640) — wrong-direction retirement, code-level fix
+
+> Register row: A34 (Group A) in
+> [`onbox-acceptance-register.md`](onbox-acceptance-register.md).
+
+### 10.1 Purpose & scope
+
+Wave 2 (§7, Wave-4 step 7 rerun) surfaced a defect that had not been caught at code review time: during a re-analysis of *Заказ Коалфолла*, the established ASCII character id `oduvan` was retired **in favor of** a freshly-minted Cyrillic id `одуван`, recorded as `"oduvan": "одуван"` in `cast-id-history.json` — backwards from the intended direction (fresh id retires onto the established one) and violating the invariant that character ids must remain ASCII kebab-case.
+
+This took five attempts inside PR #2640. Attempt 1 (commit `90032fd6`) added survivor logic directly to `mergeCore`'s name-fallback in `server/src/store/merge-analysis-cast.ts`; a review pass found it broke the sentence-attribution cascade and let a reserved fold-bucket id become a name-fallback survivor. Attempt 2 (commit `2bd7b6ef`) reverted attempt 1 entirely, on the premise that `remapFreshToPriorIds`'s existing exact-name matcher already resolved the case unaided; a second review pass reproduced the real corruption end-to-end **in-process**, byte-identical to the box's own `cast-merges.json`, and falsified that premise. Attempt 3 (commit `292f1cff`) introduced `stripEstablishedAsciiRewrites`, gated on bare id shape alone (an established ASCII prior id as the rewrite entry's key, a non-ASCII target as its value); a pass-3 review (N6) found this too BROAD — it also silently un-merged a genuine Tier-3 cross-script alias merge (`шеф` → `Борис Игнатьевич`) that happened to carry the same id shape for an unrelated, deliberate reason. Attempt 4 (commit `066de4c9`) narrowed the gate to `tier1RewriteKeys` membership — only strip an entry that `dedupeRosterByName`'s Tier-1 exact-name pass itself produced. A round-5 targeted review found THIS too NARROW: Tier-3 (cross-script/alias coreference) is alias-driven, not name-driven, and has no precondition that the merged rows share Tier-1's exact-name grouping, so a Tier-3-produced entry that happens to carry the #2584 id shape is invisible to a Tier-1-only gate whenever Tier-1 itself bails on the whole group (e.g. a mixed-gender group sharing one name). Attempt 5 (this fix) found and fixed the actual root cause described below.
+
+**Actual root cause:** the real analyzer run minted THREE near-duplicate fresh candidate rows for the same character in one pass — raw ids `oduvan`, `owdovan`, `одуван`, all named "Одуван" (the analyzer's own non-determinism, unrelated to the established cast). `dedupeRosterByName` (`server/src/analyzer/roster-dedup.ts`) collapsed those same-run duplicates onto `одуван` as its own internal survivor — an arbitrary choice among fresh duplicates, with no knowledge of which id the established cast already considers stable. The resulting composed rewrite table (`composeRewrites(dd.rewrites, folded.rewrites)`) therefore contained `oduvan -> одуван` purely as a byproduct of fresh-side dedup — but `oduvan` also happens to be the established prior cast row's raw id, purely by coincidence. That one entry reached two downstream sites and both mishandled the coincidence: `remapFreshToPriorIds` (`server/src/store/remap-fresh-to-prior.ts`) read it as "already converged" and skipped, and `applyRewriteToPriorCast` (`server/src/store/merge-analysis-cast.ts`) applied it as a retirement — recording exactly the wrong-direction entry above.
+
+The fix, `stripEstablishedAsciiRewrites` (`server/src/analyzer/roster-dedup.ts`), filters that coincidence out of the composed table before either site consumes it, gated on a DIRECT name-equivalence check — not id shape (attempt 3), not dedup-tier provenance (attempt 4) — between the established prior row at the rewrite entry's key and the fresh survivor its value currently resolves to, using `normaliseForMatch` (`server/src/util/text-match.ts`), the same "same character by name" comparator `remapFreshToPriorIds` and `mergeAnalysisResultWithExistingCast` already use to reconcile fresh rows against the prior cast. This is applied at all four call sites in `server/src/routes/analysis.ts` (full-analysis and subset/per-chapter paths, each feeding both `remapFreshToPriorIds` and `applyRewriteToPriorCast`). With the offending entry stripped, `remapFreshToPriorIds`'s pre-existing exact-name matcher — untouched by this fix — correctly claims the case and cascades the fresh row and its sentences onto the established id, before sentence attribution is finalized. A genuine Tier-3 identity merge (шеф → Борис Игнатьевич) keeps two names that are honestly different and is correctly left alone regardless of id shape or which tier produced it. `mergeCore` in `merge-analysis-cast.ts` is untouched by this fix; it was never the right place, per attempt 1's outcome.
+
+### 10.2 Fixture & owed hardware acceptance
+
+The real, live-corrupted book: *Заказ Коалфолла* at `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`.
+
+**Current state on the box (2026-08-25):**
+- `.audiobook/cast.json` carries `"id": "одуван", "name": "Одуван"` (Cyrillic id — the defect)
+- `.audiobook/cast-id-history.json` carries `"oduvan": "одуван"` (the wrong-direction retirement, recorded 2026-08-21T07:47:44.959Z, seq 12)
+
+**Owed acceptance:** re-analyse *Заказ Коалфолла* (a full manuscript re-analysis, not a subset/chapter re-analysis) against this existing history, and confirm:
+1. The character's `cast.json` id comes back as `oduvan` (ASCII), not `одуван` (Cyrillic).
+2. If the id changed at the raw-analyzer-output layer, it is recorded in `cast-id-history.json`'s `supersededBy` map with the **correct direction** (fresh → established).
+
+This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A34 stays open until it runs.
+
+**RUN 2026-08-27 (wave 8) — real run performed; criterion 1 NOT met, root cause
+understood.** A genuine full manuscript re-analysis (confirmed real via
+`.audiobook/*.json` mtimes, all rewritten together) still resolved the
+character's `cast.json` id to `одуван` (Cyrillic), not `oduvan` — criterion 1
+fails. This is not a regression of the fix: `stripEstablishedAsciiRewrites`
+only strips a same-run dedup coincidence that would retire an *established
+ASCII* id in favour of a fresh non-ASCII one — it has no path to repair a
+book whose established id was *already* Cyrillic before the fix shipped, and
+this book's corruption predates PR #2640 (recorded 2026-08-21, unchanged by
+this run — same `recordedAtIso`/`recordedAtSeq`). The fresh analyzer output
+also proposed `одуван` again this run (matching the already-established id),
+so no retirement event ever fired for criterion 2's guard to intercept
+either. **Still owed:** either re-run against a book whose established id is
+currently ASCII (to test the fix's actual forward-looking guarantee), or
+re-scope this criterion — as worded, it cannot be satisfied by an
+already-corrupted book. A hand-edit of the real `cast.json` to force the
+guarded precondition was considered and correctly declined by a permission
+gate; it was not worked around.
+
+### 10.3 Code-level proof (PR #2640, shipped)
+
+- A real-shape unit test (`server/src/analyzer/roster-dedup.test.ts`, "#2584/#2570 real-shape regression") reproduces the reviewer's exact composed rewrite-table chain — `{"oduvan":"одуван","owdovan":"одуван"}` against a prior cast holding the established `oduvan` row — byte-identical to what was recorded on the real box's `cast-merges.json`, and drives it through both consuming functions (`remapFreshToPriorIds`, `applyRewriteToPriorCast`) with and without the fix, confirming it fails without `stripEstablishedAsciiRewrites` and passes with it.
+- A round-5 regression test (`server/src/analyzer/roster-dedup.test.ts`, "round-5 regression — a Tier-3 merge inside a Tier-1-skipped mixed-gender group") reproduces attempt 4's counter-example directly: three same-run fresh rows sharing one name with genders male/male/female, where Tier-1 bails on the whole group but Tier-3's per-edge gender gate still merges the two male rows, producing the #2584 id shape with no Tier-1 provenance — confirming the current name-equivalence gate catches it where a `tier1RewriteKeys`-only gate (attempt 4) would not.
+- The N6 regression (`server/src/analyzer/roster-dedup.test.ts`, шеф → Борис Игнатьевич) still passes under the name-equivalence gate: the two names are honestly different, so direct comparison correctly leaves the Tier-3 merge alone — the same outcome attempt 4 achieved by tier provenance, now achieved by name comparison instead.
+- `remap-fresh-to-prior.test.ts` (in `server/src/store/`, not `merge-analysis-cast.test.ts`) still separately proves the exact-name matcher itself handles the simple case unaided — a baseline, not the whole proof, since it doesn't exercise the real collision that made the matcher's own "already converged" guard skip.
+- `merge-analysis-cast.test.ts`'s F2 regression (reserved fold-bucket id never a name-fallback survivor via `mergeCore`) is untouched and still passes, since `mergeCore` itself is untouched by this fix.
+- The narrowly-scoped bolt-on from attempt 1 (`mergeCore` in `server/src/store/merge-analysis-cast.ts`) was introduced and reverted within this same PR's history (commits `90032fd6` then `2bd7b6ef`) — not, as an earlier draft of this section claimed, part of PR #2633's merge commit.
+- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (see the register's A34 entry for the same finding).
+
+Defects NOT filed: none. The fix is narrowly scoped (one function's gating condition changed, four call sites re-plumbed to pass the fresh roster instead of a tier-membership set) and passes the full server test suite, including `analysis.test.ts`'s 222 tests.

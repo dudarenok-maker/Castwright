@@ -21,6 +21,8 @@ import { BOOKS_ROOT, bookBackupsDir, stateJsonPath } from './paths.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 import { findBookByBookId } from './scan.js';
 import { writeJsonAtomic } from './state-io.js';
+import { writeStateJsonAtomic } from './state-migrate.js';
+import type { BookStateJson } from './scan.js';
 import { getResolvedBackupConfig } from './user-settings.js';
 
 /* YYYYMMDD-HHMMSS in local time — zero-padded so a plain filename sort is
@@ -192,10 +194,11 @@ export async function runBackupSweep(
 
 export class BackupRestoreError extends Error {}
 
-/** Restore `file` (a snapshot filename) over the book's state.json. Rotates
-    the current state.json into its `.bak` chain first (writeJsonAtomic
-    `rotate`) so the restore is itself undoable. Throws BackupRestoreError for
-    a bad filename / missing book / missing or corrupt snapshot. */
+/** Restore `file` (a snapshot filename) over the book's state.json. Routes
+    through writeStateJsonAtomic, which rotates the current state.json into
+    its `.bak` chain (via STATE_BACKUP_KEEP = 3) so the restore is itself
+    undoable, and also stamps the schema. Throws BackupRestoreError for a bad
+    filename / missing book / missing or corrupt snapshot. */
 export async function restoreBackup(bookId: string, file: string): Promise<void> {
   if (!STAMP_RE.test(file)) throw new BackupRestoreError('invalid backup filename');
   const found = await findBookByBookId(bookId);
@@ -212,7 +215,24 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
   } catch {
     throw new BackupRestoreError('backup is corrupt');
   }
-  await writeJsonAtomic(stateJsonPath(bookDir), value, { rotate: { keep: 5 } });
+  if (typeof value !== 'object' || value === null) {
+    throw new BackupRestoreError('backup is corrupt');
+  }
+  /* #2246 Tasks 4+5 — a restore whose snapshot has no `language` must land on
+     disk as an explicit `language: null` (key present), and routing through
+     writeStateJsonAtomic also stamps the schema (restore previously wrote
+     unstamped state.json — a second defect fixed in the same change). A
+     snapshot that does carry a language round-trips unchanged.
+
+     Routing through writeStateJsonAtomic is intentional and adopts the house
+     STATE_BACKUP_KEEP depth of 3 for state.json backups (changed from the
+     prior local override of 5). Three slots cover the realistic recovery
+     window: the last completed write, the one before it, and one earlier. */
+  const parsed = value as BookStateJson;
+  await writeStateJsonAtomic(stateJsonPath(bookDir), {
+    ...parsed,
+    language: parsed.language ?? null,
+  });
 }
 
 /* ── Scheduler ──────────────────────────────────────────────────────────── */

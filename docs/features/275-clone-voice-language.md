@@ -402,7 +402,7 @@ that synthesise the same voice disagreeing with it.
 (To be filled when status flips to `stable`.)
 
 **Not yet `stable`** — the code shipped in **PR #1964** (merge `b5479e9c`,
-2026-07-30), but register row **A24** is only partly discharged.
+2026-07-30), but register row **A16** is only partly discharged.
 
 ### On-box acceptance, run 2026-07-31 (SHA `b5479e9c`, clean tree)
 

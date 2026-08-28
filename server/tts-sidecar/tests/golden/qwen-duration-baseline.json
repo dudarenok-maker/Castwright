@@ -1,0 +1,5 @@
+{
+  "_comment": "#1994. `entries` gets populated by a normal `--bless` run (see below), but `tolerance` does NOT -- `_bless` deliberately never touches it, so it stays whatever this file already has: still the PLACEHOLDER below until an operator hand-sets a real value. `entries` being non-empty does NOT mean `tolerance` has been validated -- check this field, not just whether `entries` looks populated. Qwen decoding is stochastic with no seed, so before trusting `tolerance`: measure the per-line duration spread across N repeated syntheses of each qwen-duration-fixture.json line on a real GPU box with a designed voice, record N and the observed spread in docs/testing/onbox-acceptance-register.md (Group A), then hand-edit `tolerance` from that measurement. Bless (refreshes `entries` only) via: npm run test:golden-audio -- --sidecar-only --engine=qwen --bless",
+  "tolerance": 0.10,
+  "entries": {}
+}

@@ -139,16 +139,31 @@ describe('buildStructureEvidence', () => {
     expect(out.get(2)).toBe('[structure: speech, speaker unproven]'); // downgraded, still flagged as speech
   });
 
-  it('(below floor) an alignedPct under 80 returns an empty map even though one sentence would otherwise flag', () => {
-    const body = '— Да, — сказал Антон.';
-    const sentences = [
-      mkSentence(1, 'marina', 'Да'), // would align + mismatch if alone
-      mkSentence(2, 'marina', 'zzz-unaligned-one'),
-      mkSentence(3, 'marina', 'zzz-unaligned-two'),
-      mkSentence(4, 'marina', 'zzz-unaligned-three'),
-      mkSentence(5, 'marina', 'zzz-unaligned-four'),
-    ];
-    const out = buildStructureEvidence(body, sentences, RU_ROSTER, 'ru');
-    expect(out.size).toBe(0);
+  it('(#2537/#2540 gate=ru) dash-invariant alignment: a dash-led sentence with or without the leading dash in model cache aligns to the same span (gate=true via ru conventions.dialogueOpen)', () => {
+    // ru conventions.dialogueOpen is a regex, so alignSentences receives true
+    const body = '— Да, — сказал Антон.\n— Хорошо, — ответила Марина.';
+    // Model cached text WITH dashboard: "Да" (dash stripped by model)
+    const withDash = [mkSentence(1, 'anton', '— Да'), mkSentence(2, 'marina', '— Хорошо')];
+    // Model cached text WITHOUT dashboard: "Да" (dash absent from cache)
+    const withoutDash = [mkSentence(3, 'anton', 'Да'), mkSentence(4, 'marina', 'Хорошо')];
+
+    const resultWith = buildStructureEvidence(body, withDash, RU_ROSTER, 'ru');
+    const resultWithout = buildStructureEvidence(body, withoutDash, RU_ROSTER, 'ru');
+
+    // Both forms must align to the same structure evidence — the gate ensures
+    // dash-invariant needle construction, so whether the model kept or dropped
+    // the leading dash does not change alignment behavior.
+    expect(resultWith.get(1)).toBe(resultWithout.get(3));
+    expect(resultWith.get(2)).toBe(resultWithout.get(4));
+  });
+
+  it('(#2537/#2540 gate=en) no dash-invariant behavior when conventions.dialogueOpen is null (gate=false)', () => {
+    // en conventions.dialogueOpen is null, so alignSentences receives false
+    const roster: EvidenceRosterChar[] = [{ id: 'marlow', name: 'Marlow' }];
+    const body = '"Ready," Marlow said.';
+    const sentences = [mkSentence(1, 'marlow', 'Ready')];
+    const out = buildStructureEvidence(body, sentences, roster, 'en');
+    // en dialogue uses quotes, not dashes — gate=false means default alignment
+    expect(out.size).toBe(0); // correct attribution → no annotation
   });
 });

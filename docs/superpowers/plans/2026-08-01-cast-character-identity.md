@@ -1068,7 +1068,7 @@ a stamp either: the "auto-reconciled" list would be empty by construction
 - [ ] **Step 1:** `npm run verify` (full local battery) → green.
 - [ ] **Step 2:** Push and open the PR with `Closes #2040`.
 - [ ] **Step 3:** Confirm cloud `verify.yml` and `pr-issue-link.yml` are green.
-- [ ] **Step 4:** Run the mandatory independent `code-review` pass, triage findings, fold before merge.
+- [ ] **Step 4:** Run the mandatory independent `pr-review-gate` pass, triage findings, fold before merge.
 
 ---
 

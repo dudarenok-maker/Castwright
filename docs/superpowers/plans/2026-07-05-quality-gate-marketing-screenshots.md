@@ -825,9 +825,9 @@ git commit -m "docs(docs): fill in PR number in release notes"
 git push
 ```
 
-- [ ] **Step 4: Request the mandatory code-review gate**
+- [ ] **Step 4: Request the mandatory `pr-review-gate` pass**
 
-Per `.claude/skills/model-routing/SKILL.md`, this PR is single-scope `docs`+`feat` touching `src/mocks/`, `src/lib/api.ts`, `e2e/marketing/`, `docs/wiki/` — run the `code-review` skill at `medium` effort before merge.
+Per `.claude/skills/model-routing/SKILL.md`, this PR is single-scope `docs`+`feat` touching `src/mocks/`, `src/lib/api.ts`, `e2e/marketing/`, `docs/wiki/` — run the mandatory gate via the `pr-review-gate` skill at `medium` effort before merge.
 
 - [ ] **Step 5: STOP and ask before syncing the wiki**
 

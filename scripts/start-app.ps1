@@ -15,7 +15,13 @@ Import-Module (Join-Path $PSScriptRoot "lib\log-utils.psm1") -Force
 # --- Layout ---------------------------------------------------------------
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
-$runDir  = Join-Path $repoRoot ".run"
+# Honour APP_RUN_DIR (fs-1's versioned-install layout) via the SAME lexical
+# resolve stop-app.ps1 uses (Resolve-RunDir, log-utils.psm1) — #2632 N35:
+# this used to be hardcoded to <repoRoot>\.run regardless of APP_RUN_DIR,
+# so a versioned install with APP_RUN_DIR set wrote PIDs here while
+# stop-app.ps1 looked in the shared APP_RUN_DIR, and `npm run stop` silently
+# stopped nothing.
+$runDir  = Resolve-RunDir -RepoRoot $repoRoot -AppRunDir $env:APP_RUN_DIR
 $logDir  = Join-Path $repoRoot "logs"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null

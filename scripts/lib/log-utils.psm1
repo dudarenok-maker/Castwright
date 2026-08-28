@@ -48,4 +48,30 @@ function Remove-OldRotatedLogs {
         }
 }
 
-Export-ModuleMember -Function New-FreshLog, Remove-OldRotatedLogs
+# Lexical run-dir resolution mirroring server/src/app-dirs.ts's
+# resolveRunDir(): honour APP_RUN_DIR (fs-1's versioned-install layout) with
+# a PURELY LEXICAL resolve — never touch the filesystem, never require the
+# path to exist. `Resolve-Path` is the wrong tool here (#2632 N35): it's a
+# filesystem lookup that returns $null (silently, under
+# $ErrorActionPreference = "Continue") for a path that doesn't exist yet —
+# e.g. a versioned install before its first launch, or autoStartSidecar off
+# so nothing has mkdir'd .run/ yet — which collapses every downstream
+# consumer to a binding error and makes stop-app.ps1 report "[OK] nothing to
+# stop" while everything is still running. GetUnresolvedProviderPathFromPSPath
+# resolves relative paths against the current location (set via
+# Set-Location $RepoRoot below) exactly like Node's path.resolve() resolves
+# against process.cwd() — same semantics, no filesystem round-trip.
+function Resolve-RunDir {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepoRoot,
+        [string] $AppRunDir
+    )
+    if ($AppRunDir) {
+        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($AppRunDir)
+    }
+    return Join-Path $RepoRoot ".run"
+}
+
+Export-ModuleMember -Function New-FreshLog, Remove-OldRotatedLogs, Resolve-RunDir

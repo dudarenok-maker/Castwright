@@ -39,7 +39,7 @@
  * `buildCastResolver`'s own `'normalised-id'` tier at collection time — but
  * that only proves no RENAME happened, not that the rendered bytes are
  * correct (`buildOrphansFromSegments`'s doc comment has the full argument
- * and the real counter-example, register row A32), so it lands in this
+ * and the real counter-example, register row A22), so it lands in this
  * script's orphan set anyway rather than being silently excluded. Tier B
  * re-runs the same id-shape match with an EMPTY history and re-confirms the
  * same target, so it is this script's live path for auto-recording that
@@ -96,7 +96,7 @@
  * pass repairs), that key is never the orphaned id itself, so the lookup
  * finds nothing, `orphan.snapshots` comes back `[]`, and this guard used to
  * pass VACUOUSLY (`snapshotsConsistent([])` is trivially `true`) for exactly
- * the ids it exists to protect (register row A32's `the-torment`/
+ * the ids it exists to protect (register row A22's `the-torment`/
  * `lightning-dave`).
  *
  * `classifySnapshotEvidence` correctly names that "never found any evidence"
@@ -107,12 +107,12 @@
  * damage signal. A snapshot exists only for an id that was live at render
  * time, so **presence means the audio already rendered correctly**
  * (drift happened after the render, metadata-only fix) and **absence means
- * the narrator was substituted** (the actual A32 damage class this pass
+ * the narrator was substituted** (the actual A22 damage class this pass
  * exists to fix). Vetoing on absence therefore blocks exactly the aliases
  * that repair real damage and passes exactly the aliases that needed no
  * repair at all — replayed against the real workspace, it would have
  * blocked two of the three aliases the owner already applied and accepted
- * (register row A33: `mayrin`, `coalfall`) while letting the one
+ * (register row A23: `mayrin`, `coalfall`) while letting the one
  * already-fine alias (`lady-alina`) through. A check that structurally
  * cannot pass for its own target population is not fail-closed protection;
  * it is the inverse of the vacuous `true` it replaced. So: 'no-evidence'
@@ -135,7 +135,7 @@
  * where there is no id-shape fallback and the alias is the only mechanism
  * that reconnects the id. NOT because the Tier B case is low-stakes or a
  * no-op, the way an earlier version of this comment argued — #2107
- * (register row A32, `the-torment` itself) proved the opposite: a
+ * (register row A22, `the-torment` itself) proved the opposite: a
  * `'normalised-id'` match resolves correctly today but says nothing about
  * whether the rendered bytes are correct, so recording the alias is real
  * work, not cosmetic promotion. The split stays rejected on its own
@@ -457,7 +457,7 @@ export function snapshotsConsistent(snapshots) {
  *  id's own segments never match under their own key at all" —
  *  `snapshotsConsistent([])` returns `true` for both, which lets guard 4
  *  pass VACUOUSLY for exactly the ids this pass exists to repair (register
- *  row A32's `the-torment`/`lightning-dave`: both have real rendered
+ *  row A22's `the-torment`/`lightning-dave`: both have real rendered
  *  segments and zero snapshot entries, because their `characterSnapshots`
  *  keys are the pre-drift live ids `the_torment`/`lightning_dave`, never
  *  their own orphaned spelling).
@@ -486,11 +486,11 @@ export function snapshotsConsistent(snapshots) {
  *  neutral, it is anti-correlated with the very risk a veto would be meant
  *  to catch: presence means the id was live at render (audio already
  *  correct, drift happened after), absence means the narrator was
- *  substituted (the actual A32 damage class). A round-1 version of this fix
+ *  substituted (the actual A22 damage class). A round-1 version of this fix
  *  turned 'no-evidence' into a veto and was wrong — replayed against the
  *  real workspace, it would have blocked *Заказ Коалфолла*'s `mayrin`/
  *  `coalfall` (two of the three aliases the owner already applied and
- *  accepted, register row A33) while letting the already-fine `lady-alina`
+ *  accepted, register row A23) while letting the already-fine `lady-alina`
  *  alias through. See `planBookRepairs`'s guard 4 call site for the full
  *  account and what 'no-evidence' actually does now: flows through to
  *  auto-record with an honest annotation, never a block.
@@ -1104,14 +1104,14 @@ export function planBookRepairs(input, deps) {
       //     already correct.
       //   - snapshot ABSENT   => the id was NEVER live at render =>
       //     `resolveGroup` substituted the narrator => the audio is
-      //     GENUINELY WRONG — precisely register row A32's damage class,
+      //     GENUINELY WRONG — precisely register row A22's damage class,
       //     and precisely the case this whole pass exists to repair.
       // So a veto on 'no-evidence' blocks exactly the aliases that fix
       // real damage and permits exactly the aliases that were already
       // fine. Replayed against the real workspace with `supersededBy`
       // emptied: *Заказ Коалфолла*'s `mayrin` (8 seg) and `coalfall` (13
       // seg) — two of the three aliases the owner already applied and
-      // accepted on 2026-08-05 (register row A33) — would have been
+      // accepted on 2026-08-05 (register row A23) — would have been
       // wrongly blocked by the round-1 veto, while `lady-alina` (already
       // fine, snapshot present) would have sailed through. A check that
       // structurally cannot pass for its target population is not
@@ -1137,7 +1137,7 @@ export function planBookRepairs(input, deps) {
       // id — exactly the case that matters most. This is NOT because
       // recording `the-torment`'s alias would be a low-stakes no-op — an
       // earlier version of this comment argued exactly that ("same
-      // character either way"), which #2107 overturned: register row A32
+      // character either way"), which #2107 overturned: register row A22
       // is `the-torment` itself, 67 segments narrator-rendered despite
       // resolving live via `'normalised-id'`. The Cast screen's banner
       // reflects the same correction (src/views/cast.tsx's auto-reconciled
@@ -1402,7 +1402,7 @@ export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldCount
  *       EmptyScan`'s own "Ie" test-file comment already documents for the
  *       sibling `--apply`-gated refusal.
  *  Both remain verified only by the on-box acceptance run (register row
- *  A33, `docs/testing/onbox-acceptance-register.md`), never by an automated
+ *  A23, `docs/testing/onbox-acceptance-register.md`), never by an automated
  *  test in this file. */
 export function planApplyRefusal(apply, bookWithholds) {
   let booksWithheldForMissingCache = 0;
@@ -1467,7 +1467,7 @@ export function formatReportRowSummary(r) {
  *  `0` (nothing to be missing evidence when nothing was scanned), so the
  *  round-2 fail-closed guard can never fire, and `--apply` would exit `0`
  *  having written nothing, reporting an empty tree as a healthy workspace
- *  on the exact summary line A33's precondition tells an operator to
+ *  on the exact summary line A23's precondition tells an operator to
  *  trust. There is no legitimate `--apply` against an empty workspace.
  *  Extracted as a pure decision, matching
  *  `shouldRefuseApplyForWithheldAutoRecord`'s own shape — same caveat: this
@@ -1507,7 +1507,7 @@ export function formatBooksScannedLine(booksScanned) {
  *  bucket's primary member post-fix) or a perfectly good `cast.json` (the
  *  symmetry case). An operator reading the old text, checking disk, and
  *  finding the file right there is exactly the kind of on-screen line
- *  A33's own precondition tells them to trust — so this is pinned directly,
+ *  A23's own precondition tells them to trust — so this is pinned directly,
  *  not left to eyeball review. */
 export function formatNotYetAnalysedLine(count) {
   return (
@@ -2151,7 +2151,7 @@ async function loadServerModules() {
  *  on the mutable `history.supersededBy` table, so it can't have started
  *  resolving after the render. True as far as it goes, but a non-sequitur
  *  — it proves only that no RENAME happened, not that the bytes are
- *  correct. Register row A32 (`docs/testing/onbox-acceptance-register.md`)
+ *  correct. Register row A22 (`docs/testing/onbox-acceptance-register.md`)
  *  records the counter-example: *Playing with Fire*'s `the-torment` (67
  *  segments, cast id `the_torment`) and `lightning-dave` (1 segment, cast
  *  id `lightning_dave`) both recover under the `'normalised-id'` tier
@@ -2330,7 +2330,7 @@ function backupCastIdHistory(historyPath) {
  *  scanned this run, not only ones with an alias to record: absence of the
  *  field reads `'unknown'` and lists the whole book forever (see
  *  `isAudioCurrent`'s own doc comment, source 2), and the books carrying
- *  pre-lane aliases are exactly the ones this A33 repair workflow already
+ *  pre-lane aliases are exactly the ones this A23 repair workflow already
  *  visits.
  *
  *  Exported and pulled out of `main()` (mirroring `buildRerenderRows`,
@@ -2495,7 +2495,7 @@ async function main() {
   // (there is nothing to be missing evidence when nothing was scanned), so
   // the round-2 fail-closed guard can never fire, and --apply would run to
   // completion, exit 0, and write nothing — reporting an empty tree as a
-  // healthy workspace on the exact summary line A33's precondition tells an
+  // healthy workspace on the exact summary line A23's precondition tells an
   // operator to trust. There is no legitimate --apply against an empty
   // workspace, so this refuses outright; a dry run still completes (so the
   // operator can see WHERE it looked), but the summary below calls the zero
@@ -2774,7 +2774,7 @@ async function main() {
   // absent-field case, above; latent today — main()'s one caller always
   // supplies both fields as real numbers). That produced two summary lines
   // both claiming "not blocked", immediately followed by a refusal message
-  // saying a book WAS withheld — the exact line A33's own precondition
+  // saying a book WAS withheld — the exact line A23's own precondition
   // tells the operator to trust, printing false. The reassuring claim is
   // now gated on the actual outcome (`refuseApply`), not on this field's
   // own count in isolation — the counts themselves are unchanged.
@@ -2862,7 +2862,7 @@ async function main() {
   /* #2128 — the one-shot back-fill stamp, for EVERY book scanned, not only
      ones with an alias to record. Absence of `recordedAtSeq` reads 'unknown'
      and lists the whole book forever; the books carrying pre-lane aliases
-     are exactly the ones this A33 workflow already visits, so this is where
+     are exactly the ones this A23 workflow already visits, so this is where
      they get their field. No-op on a book that already has one, on a book
      with no history file, and on a malformed file (which is left alone to
      be fixed, never overwritten) — see `stampRecordedAtSeqIfAbsent`'s own

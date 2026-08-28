@@ -123,6 +123,34 @@ const MAIN_COVERED = [
   },
   { rel: 'e2e/global-teardown.ts', file: 'the e2e Playwright teardown', base: REPO_ROOT },
   { rel: 'launch.mjs', file: 'the versioned-dir launcher', base: REPO_ROOT },
+  /* #2588 pass-2 review: venv-migration.test.ts (this suite) reads BOTH of these
+     at RUNTIME — .gitattributes to assert the requirements/*.txt LF pin rule is
+     declared, the requirements files themselves to assert the pin materialised
+     and to hash reqHash oracles against. No module-graph edge to either. */
+  { rel: '.gitattributes', file: 'the git line-ending/binary pin rules', base: REPO_ROOT },
+  {
+    rel: 'server/tts-sidecar/requirements/base.txt',
+    file: 'a server/tts-sidecar/requirements/** file',
+    base: REPO_ROOT,
+  },
+  /* #1932 (side-18) — coqui-residency-policy.guard.test.ts reads these three
+     files at RUNTIME to catch cross-reference rot across the two eviction
+     mechanisms and their policy doc. The sidecar main.py and docs file have no
+     module-graph edges (same #1847 runtime-read trap); synthesise-chapter.ts
+     IS importable but is included here for consistency with the guard's uniform
+     readFileSync approach rather than being split into two separate tracking
+     mechanisms. */
+  { rel: 'src/tts/synthesise-chapter.ts', file: 'the Node Coqui eviction mechanism', base: SERVER_ROOT },
+  {
+    rel: 'server/tts-sidecar/main.py',
+    file: 'the sidecar Coqui eviction mechanism (via the server/tts-sidecar/main.py trigger)',
+    base: REPO_ROOT,
+  },
+  {
+    rel: 'docs/features/264-vram-aware-gpu-placement.md',
+    file: 'the Coqui residency policy doc',
+    base: REPO_ROOT,
+  },
 ];
 
 const SLOW_COVERED = [

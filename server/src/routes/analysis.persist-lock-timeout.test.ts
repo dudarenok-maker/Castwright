@@ -130,6 +130,7 @@ vi.mock('../workspace/cast-merge-base.js', async (importOriginal) => {
           return base.enabled;
         },
         markDeleted: () => base.markDeleted(),
+        noteExternalWrite: (payload: unknown) => base.noteExternalWrite(payload),
         writeChecked: async (payload: unknown, onConflict: Parameters<typeof base.writeChecked>[1]) => {
           const p = payload as CastWritePayload;
           const index = castWrite.calls.length;

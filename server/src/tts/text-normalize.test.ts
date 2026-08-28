@@ -123,18 +123,99 @@ describe('softenDashes', () => {
       expect(softenDashes(once)).toBe(once);
     });
 
-    /* Pins the dominant Russian dialogue-attribution shape (dash-open line,
-       comma, dash-attribution, verb + name) as it stands today: a doubled
-       comma with no space between them. This is PRE-EXISTING behaviour, not
-       a regression introduced by the leading-dash fix above — the prior
-       code produced the same doubled comma, since it ran the identical ", "
-       substitution for every dash regardless of position. Not fixed here
-       (out of scope for #2026 defect 2); tracked on #2059 for whether `,,`
-       should collapse to `,`. This test exists so the shape is visible
-       rather than accidental. */
-    it('produces a doubled comma on a dash-open + dash-attribution line (pre-existing, tracked on #2059, not fixed here)', () => {
-      expect(softenDashes('— Привет, — сказал Антон.')).toBe('... Привет,, сказал Антон.');
+    /* The dominant Russian dialogue-attribution shape (dash-open line,
+       comma, dash-attribution, verb + name): "— Привет, — сказал Антон."
+       Before #2059's fix, the DASH_RUN substitution produced a doubled
+       comma (",,") because the sentence already carried a comma
+       immediately before the dash run. The chained collapse step now
+       folds the doubled comma into a single ", ", so the output reads
+       naturally for TTS. */
+    it('collapses the doubled comma on a dash-open + dash-attribution line (#2059)', () => {
+      expect(softenDashes('— Привет, — сказал Антон.')).toBe('... Привет, сказал Антон.');
     });
+
+    it('collapses the doubled comma when a single comma precedes a dash run', () => {
+      /* When a single comma sits immediately before a dash run, the DASH_RUN
+         substitution produces a doubled comma: "a, — b" → "a,, b". The collapse
+         step must fire to fold the doubled comma into a single ", ". This is a
+         positive test of the collapse mechanism, not a guard against over-collapse. */
+      expect(softenDashes('a, — b')).toBe('a, b');
+    });
+
+    it('collapses any doubled comma, even when no dash is involved', () => {
+      /* The comma-collapse regex has no dash-awareness — it simply replaces any
+         run of commas (with optional whitespace between them) with a single
+         comma-space. This documents the actual behavior: doubled commas from
+         ANY source (dash-produced or literal) are collapsed the same way. */
+      expect(softenDashes('a,, b')).toBe('a, b');
+      expect(softenDashes('a,,b')).toBe('a, b');
+      expect(softenDashes('a, ,b')).toBe('a, b');
+    });
+
+    it('leaves a single, un-doubled comma untouched', () => {
+      /* The collapse regex requires TWO OR MORE commas -- a lone comma must
+         not be touched. Distinguishes the shipped regex from a broader
+         one-or-more variant that would also normalize (and add a trailing
+         space to) a single trailing comma. */
+      expect(softenDashes('a,b')).toBe('a,b');
+      expect(softenDashes('He paused,')).toBe('He paused,');
+    });
+
+    it('collapses 3 consecutive commas to a single comma in one pass (#2688 regression)', () => {
+      /* The original collapse regex only matched pairs of commas, so 3+ commas
+         needed multiple passes to fully collapse. The fix uses a regex that
+         matches arbitrary runs of commas in a single pass. */
+      expect(softenDashes('a,,,b')).toBe('a, b');
+    });
+
+    it('collapses 4 consecutive commas to a single comma in one pass', () => {
+      expect(softenDashes('a,,,,b')).toBe('a, b');
+    });
+
+    it('collapses a multi-dash Russian-style line with 3+ commas from dash conversions', () => {
+      /* The multi-dash case like "— Привет, — — сказал." (with two em-dashes
+         in the attribution) would produce 3 commas after DASH_RUN replaces
+         each dash with a comma. This should collapse to a single comma in one pass. */
+      const russianMultiDash = '— Привет, — — сказал.';
+      const result = softenDashes(russianMultiDash);
+      expect(result).toBe('... Привет, сказал.');
+      /* Verify idempotency: running again should not change the result. */
+      expect(softenDashes(result)).toBe(result);
+    });
+
+    it('is idempotent for 3-comma input — running twice produces same output as once', () => {
+      const once = softenDashes('a,,,b');
+      expect(softenDashes(once)).toBe(once);
+      expect(once).toBe('a, b');
+    });
+
+    it('is idempotent for 4-comma input — running twice produces same output as once', () => {
+      const once = softenDashes('a,,,,b');
+      expect(softenDashes(once)).toBe(once);
+      expect(once).toBe('a, b');
+    });
+  });
+});
+
+describe('normaliseForTts with audio tags and dash-adjacent commas', () => {
+  it('collapses a doubled comma that results from a dash after a comma, even when an audio tag precedes the dash', () => {
+    /* Reproduces the bug from #2688: when softenDashes runs before stripAudioTags,
+       and a dash immediately follows a comma but an audio tag sits in between,
+       the doubled-comma-collapse regex fails to match because the tag breaks the sequence.
+       Example: "Привет, [shouting] — сказал" becomes "Привет, [shouting] , сказал"
+       after softenDashes, but the doubled comma is not collapsed because the
+       regex doesn't match across the tag. After stripAudioTags, the tag is removed
+       but the doubled comma remains. The fix reorders passes so stripAudioTags
+       runs before softenDashes, allowing the collapse to work. */
+    expect(normaliseForTts('Привет, [shouting] — сказал.')).toBe('Привет, сказал.');
+  });
+
+  it('collapses doubled comma with audio tag in English dialogue', () => {
+    expect(normaliseForTts('Stop, [whispers] — he said.')).toBe('Stop, he said.');
+  });
+
+  it('collapses doubled comma with multiple audio tags in a sequence', () => {
+    expect(normaliseForTts('Wait, [emphatic] [shouting] — she exclaimed.')).toBe('Wait, she exclaimed.');
   });
 });
 
@@ -217,6 +298,16 @@ describe('normaliseForTts (composed)', () => {
 
   it('is idempotent across the composed pipeline', () => {
     const once = normaliseForTts('THE HAZE—then.');
+    expect(normaliseForTts(once)).toBe(once);
+  });
+
+  it('is idempotent for a TRAILING dash, which leaves no word after the converted comma to trim (#2688 regression)', () => {
+    /* softenDashes runs last in normaliseForTts (moved there so audio tags
+       strip before dash-softening, #2688). A trailing dash converts to a
+       trailing ", " with nothing after it, and stripAudioTags' own
+       whitespace-collapse-and-trim no longer runs after it to clean that up. */
+    const once = normaliseForTts('He paused—');
+    expect(once).toBe('He paused,');
     expect(normaliseForTts(once)).toBe(once);
   });
 

@@ -216,6 +216,8 @@ function seedStateJson(bookId: string, manuscriptId: string): void {
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
+      language: 'en',
+
       chapters: [
         { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
         { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },

@@ -25,6 +25,7 @@ import asyncio
 import functools
 import gc
 import hashlib
+import io
 import json
 import logging
 import math
@@ -37,7 +38,7 @@ import threading
 import time
 import wave
 from collections import deque
-from contextlib import asynccontextmanager, contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext, redirect_stdout
 from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
@@ -110,6 +111,214 @@ logging.basicConfig(
     datefmt=LOG_DATEFMT,
 )
 log = logging.getLogger("sidecar")
+
+
+def _measure_nvidia_dll_provenance(onnxruntime) -> Optional[tuple]:
+    """Best-effort: of the DLLs `preload_dlls()` was asked to find, how many
+    actually exist under `<site-packages>/nvidia/<pkg>/bin` -- the directory
+    `extraRuntimeSteps` (install-ort.mjs) installs into. `preload_dlls()`
+    itself only reports on-load *failure*, never *where* a DLL that loaded
+    came from, so a clean capture alone cannot distinguish "loaded from
+    nvidia/" from "resolved off PATH via a system CUDA toolkit or torch"
+    (pass-4 review finding P2, PR #2617). Uses onnxruntime's own (private)
+    `_get_nvidia_dll_paths` to build the expected path list -- the same
+    helper `preload_dlls()` itself calls -- so this stays in lockstep with
+    whatever DLL set the installed onnxruntime build actually wants.
+
+    Returns `(found, total)`, or `None` when the running onnxruntime build
+    doesn't expose what this needs (an older build, or a test double) --
+    callers must not assume nvidia/ provenance in that case either.
+    """
+    get_paths = getattr(onnxruntime, "_get_nvidia_dll_paths", None)
+    ort_file = getattr(onnxruntime, "__file__", None)
+    if get_paths is None or not ort_file:
+        return None
+    try:
+        site_packages = os.path.dirname(os.path.dirname(os.path.abspath(ort_file)))
+        dll_paths = get_paths(sys.platform == "win32")
+        found = sum(
+            1 for p in dll_paths if os.path.isfile(os.path.join(site_packages, *p))
+        )
+        return found, len(dll_paths)
+    except Exception:
+        return None
+
+
+def _preload_ort_cuda_dlls() -> str:
+    """#2600 (review finding 1, PR #2617): installing `nvidia-cudnn-cu12` (see
+    install-ort.mjs's `extraRuntimeSteps`) lands the cuDNN DLLs on disk but does
+    NOT make them findable — on Windows, `<venv>/Lib/site-packages/nvidia/cudnn/bin`
+    is never added to the process DLL search path by anything in the
+    onnxruntime-gpu wheel (`_ld_preload.py` is empty/manylinux-only,
+    `_pybind_state.py`'s Windows branch only checks `vcruntime140_1.dll`, and the
+    installed package has zero `add_dll_directory` calls). The one mechanism
+    onnxruntime ships that reaches those directories is its own opt-in
+    `onnxruntime.preload_dlls()` — its docstring names the only alternative
+    (`import torch` before `import onnxruntime`), which this file deliberately
+    does NOT do (every `import torch` here is lazy, inside an engine method).
+
+    Called once, from the `_lifespan` startup sequence, before anything in this
+    process constructs an onnxruntime `InferenceSession` (Kokoro's CUDA session
+    included, preloaded further down the same sequence) — calling it only after
+    a failed CUDA-EP load would be too late (Windows caches the failed
+    LoadLibrary for the process lifetime). NOT at raw module-import time (pass 2
+    review finding N5, PR #2617): ~45 sidecar test modules `import main` at
+    module scope, and this call is neither free nor relevant to most of them.
+
+    `directory=""` (pass 2 review finding N1, PR #2617): the default
+    (`directory=None`) makes `preload_dlls()` prefer `<torch>/lib` whenever the
+    installed torch's CUDA major matches onnxruntime's — read from onnxruntime's
+    own `preload_dlls()` source (`onnxruntime/__init__.py`) in the live sidecar
+    venv: when `directory` is truthy it joins ONLY THE BASENAME of each DLL's
+    relative path under that directory, discarding the `nvidia/<pkg>/bin/`
+    components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
+    `site-packages/nvidia/...` is never even looked at; on this box that path
+    resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
+    same "torch/lib, not the installed cuDNN" shape register row A28 already
+    recorded as not fixing the bug. Passing `directory=""` (falsy, but not
+    `None`) skips the `torch/lib` branch and, per the same source, joins the
+    FULL relative path under site-packages instead — i.e. it looks under
+    `nvidia/<pkg>/bin/` exactly where `extraRuntimeSteps` installs.
+
+    Guarded end to end: an onnxruntime build without the `preload_dlls` symbol
+    (older release, or a non-GPU wheel that never needed it) degrades to a
+    logged no-op rather than crashing the sidecar, and `preload_dlls()` itself
+    raising (e.g. the `[cuda]`-extra packages absent) is caught rather than
+    propagated — the CUDA execution provider silently falling back to CPU is
+    the pre-existing failure mode either way, and this function's whole job is
+    to make that outcome LOUD instead of silent, never to guarantee GPU use.
+
+    `preload_dlls()` itself never raises on a missing/failed DLL load — it only
+    `print()`s a "Failed to load ..." line per DLL and returns `None` either way
+    (pass 2 review finding N2, PR #2617: importing `main` against the live venv
+    showed zero of twelve DLLs loading, eleven printed failures, and this
+    function nonetheless logging success at INFO). So a raised exception is NOT
+    the failure signal here — stdout is captured and inspected instead: any
+    "Failed to load" line means the CUDA execution provider may still silently
+    fall back to CPU, which is logged as a WARNING, not an INFO line, and
+    reflected in the returned status.
+
+    Pass-4 review finding P4 (PR #2617), residue of N9(c): the "Failed to
+    load" / "Skip loading" substrings this guard matches on are onnxruntime's
+    OWN prose, not pinned anywhere to `ONNXRUNTIME_GPU_CONSTRAINT` -- a future
+    onnxruntime release that rewords its per-DLL failure message would fall
+    through every branch below and report `preloaded` again with nothing
+    having loaded, the exact #2600 symptom reopened inside the guard written
+    to close it. Unreachable at the pinned version; re-check this coupling by
+    hand whenever that constant (`install-ort.mjs`) is bumped.
+
+    Returns a status string for tests; not part of any external contract.
+    """
+    try:
+        import onnxruntime  # type: ignore
+    except Exception as e:
+        log.info("[ort-preload] onnxruntime not importable yet (%s); skipping DLL preload.", e)
+        return "not-importable"
+    preload = getattr(onnxruntime, "preload_dlls", None)
+    if preload is None:
+        log.info(
+            "[ort-preload] onnxruntime %s has no preload_dlls() (older build). CUDA "
+            "cuDNN/cublas DLLs will only be found if something else in this process "
+            "(e.g. an earlier `import torch`) already added them to the DLL search "
+            "path -- the CUDA execution provider may silently fall back to CPU.",
+            getattr(onnxruntime, "__version__", "?"),
+        )
+        return "unavailable"
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            preload(directory="")
+    except Exception as e:
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() raised (%s) -- the CUDA "
+            "execution provider may silently fall back to CPU.",
+            e,
+        )
+        return "failed"
+    output = buf.getvalue()
+    for line in output.splitlines():
+        if line.strip():
+            log.info("[ort-preload] %s", line)
+    if "Failed to load" in output:
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() ran but at least one CUDA/cuDNN "
+            "DLL failed to load (see lines above) -- the CUDA execution provider may "
+            "silently fall back to CPU."
+        )
+        return "failed"
+    if "Skip loading" in output:
+        # Pass 3 review finding N9(b): `directory=""` does not defeat this
+        # branch -- it is gated on `"torch" in sys.modules`, never on
+        # `directory`. If it ever fires here, preload_dlls() looked at
+        # nothing at all and torch's own bundled DLLs are what the CUDA
+        # execution provider will find -- the exact "torch/lib, not the
+        # installed cuDNN" shape register row A28 recorded as NOT fixing the
+        # bug. That is a distinct, worse outcome than a genuine preload and
+        # must not be folded into "preloaded".
+        log.warning(
+            "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
+            "torch was already imported (see lines above) -- it fell back to torch's "
+            "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
+            "nvidia/<pkg>/bin, which register row A28 already recorded as not fixing the "
+            "CUDA-fallback bug."
+        )
+        return "torch-skip"
+    if not output and not getattr(onnxruntime, "cuda_version", ""):
+        # Pass 3 review finding N9(a): a CPU/AMD/Apple-profile `onnxruntime`
+        # build has no `cuda_version` and preload_dlls() returns immediately
+        # having done nothing and printed nothing -- indistinguishable from a
+        # genuine no-op success unless this is checked explicitly. This is
+        # the live-today case: every non-NVIDIA install hits it on every
+        # start.
+        log.info(
+            "[ort-preload] onnxruntime.preload_dlls() ran but this onnxruntime build has "
+            "no CUDA support (cuda_version is empty) -- there was nothing to preload; the "
+            "CUDA execution provider is not available on this install regardless."
+        )
+        return "no-cuda-build"
+    # Pass 4 review finding P2 (PR #2617): an empty `output` here means every
+    # DLL `preload_dlls()` tried is loadable *from somewhere* -- it does NOT
+    # mean it came from `nvidia/<pkg>/bin` (where `extraRuntimeSteps` in
+    # install-ort.mjs installs). `preload_dlls()` has a second loop that
+    # retries, by bare filename, any DLL it didn't find at its full
+    # `nvidia/<pkg>/bin` path -- the Windows loader then resolves that name
+    # off the default search path (PATH), which can hand back a system CUDA
+    # toolkit's or torch's own bundled copy instead, and prints nothing
+    # either way. So provenance has to be measured, not assumed from a clean
+    # capture.
+    provenance = _measure_nvidia_dll_provenance(onnxruntime)
+    if provenance is None:
+        log.info(
+            "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+            "DLLs from somewhere loadable -- this onnxruntime build does not expose enough "
+            "to confirm whether they came from nvidia/<pkg>/bin or resolved off PATH instead."
+        )
+    else:
+        found, total = provenance
+        if found == total:
+            log.info(
+                "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+                "DLLs; all %d expected files were found under nvidia/<pkg>/bin.",
+                total,
+            )
+        else:
+            log.warning(
+                "[ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft "
+                "DLLs, but only %d of %d expected files were found under nvidia/<pkg>/bin -- "
+                "the rest resolved via preload_dlls()'s bare-name PATH fallback (e.g. a "
+                "system CUDA toolkit or torch's own bundled DLLs), not the installer's own "
+                "runtime -- see register row A28's Named assumption.",
+                found,
+                total,
+            )
+    return "preloaded"
+
+
+async def _startup_ort_cuda_preload() -> None:
+    """Lifespan wrapper around `_preload_ort_cuda_dlls` — same async-wrapper
+    shape `_startup_cuda_env_shadow_check` uses around its own sync helper,
+    further down this module."""
+    _preload_ort_cuda_dlls()
 
 
 def error_response(e: Exception, log, status: int = 500):
@@ -661,6 +870,7 @@ async def _lifespan(_app: FastAPI):
     `tests/test_lifespan_order.py` drives this very context manager and pins
     both sequences by name, so a later edit cannot quietly drop or reshuffle a
     handler."""
+    await _startup_ort_cuda_preload()
     await _configure_vd_kokoro_coupling()
     await _start_design_idle_watchdog()
     await _start_asr_idle_watchdog()
@@ -2078,6 +2288,15 @@ class CoquiEngine(Engine):
         The reclaim runs AFTER the lock is released, and this method is called
         synchronously on the event loop by `_idle_evict_steps` — see
         `_reclaim_after_drop`.
+
+        COQUI-RESIDENCY-POLICY — this is mechanism B (sidecar, demand-driven,
+        reactive): one step in the generic `_idle_evict_steps` admission
+        ladder. Node also evicts Coqui proactively at generation-plan phase
+        boundaries via `evictCoquiForQwenPhase` / `evictQwenForCoquiPhase`
+        in `server/src/tts/synthesise-chapter.ts` — this method is therefore
+        not the only path that drops the model. The keep-both ruling and the
+        full cross-reference are in
+        `docs/features/264-vram-aware-gpu-placement.md`.
         """
         # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
         # used recently. Skipping the lock here matters — a forward can run
@@ -2896,15 +3115,44 @@ class KokoroEngine(Engine):
         self._dml_status: Optional[str] = None
         # KOKORO_DEVICE=cuda:N — captured here so the sess-replacement in
         # _ensure_loaded can pin the ORT InferenceSession to the indexed GPU.
-        self._requested_device: str = _read_device_env("KOKORO_DEVICE") or "auto"
+        # Mirrors CoquiEngine's `_device`/`_requested_device` split (#2631
+        # review S4): `_device` is the MUTABLE per-load decision (env pin,
+        # then overwritten by an admitted `device=` argument for that cold
+        # load); `_requested_device` is the PRISTINE env-derived value,
+        # never mutated after __init__, so `unload()` has something to
+        # restore `_device` from. Before this split, an admitted "cpu"
+        # overwrote `_requested_device` itself, with no teardown restore —
+        # a CPU admission then stuck for the rest of the process lifetime.
+        self._device: str = _read_device_env("KOKORO_DEVICE") or "auto"
+        self._requested_device: str = self._device  # preserved before any per-load admission
+        # Ground truth for `_engine_actual_card` (#2631 review B3), mirroring
+        # CoquiEngine's `_resolved_device`: `_device` is the PREF (env pin /
+        # admitted placement), only ever meaningful once a load has actually
+        # published it; `_resolved_device` is what the ORT session actually
+        # landed on, read via `_kokoro_session_device` at publish time. Unlike
+        # Coqui, Kokoro's ORT introspection can itself fail (kokoro-onnx API
+        # drift, or any other exception) — and "cpu" is also a genuine
+        # resolved placement, so it CANNOT double as "unknown" the way Coqui's
+        # unloaded-state default does (#2647): a "cpu" init/reset value is
+        # indistinguishable from an honest cpu resolution, which made the
+        # honest-"unknown" reconcile in `_engine_actual_card` unreachable for
+        # Kokoro and let API drift assert a confident but false "cpu" claim.
+        # `None` is the distinct "not known yet" sentinel — `_parse_device`
+        # already maps a falsy value to "auto", which is exactly what routes
+        # `_engine_actual_card` into its reconcile-or-"unknown" path.
+        self._resolved_device: Optional[str] = None
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
         """The ONNX Runtime provider list to pass to Kokoro, parsed from the
         KOKORO_ORT_PROVIDERS env var (a JSON string list the server injects from
         the accelerator profile, e.g. ["DmlExecutionProvider","CPUExecutionProvider"]).
-        Returns [] when the env is unset/blank/malformed → kokoro-onnx
-        auto-detects (today's behaviour)."""
+        Returns [] when the env is unset/blank/malformed. In production the
+        server (spawn-sidecar.ts) injects this unconditionally for every
+        accelerator profile, nvidia included, so [] here means a sidecar
+        launched standalone (start.ps1/start.sh set nothing), not the
+        NVIDIA default -- see `_default_ort_providers` for what fills that
+        gap."""
         raw = os.environ.get("KOKORO_ORT_PROVIDERS")
         if not raw:
             return []
@@ -2915,6 +3163,43 @@ class KokoroEngine(Engine):
         if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
             return parsed
         return []
+
+    def _default_ort_providers(self, device: Optional[str] = None) -> list[str]:
+        """Providers to use when KOKORO_ORT_PROVIDERS is unset (#2631) --
+        the standalone-launch case: the server (spawn-sidecar.ts) injects
+        KOKORO_ORT_PROVIDERS unconditionally for every accelerator profile,
+        nvidia included, so this only fires for a sidecar launched directly
+        via start.ps1/start.sh, which set nothing. Even there we must NOT
+        let kokoro-onnx's own auto-detect decide: its `find_spec(
+        'onnxruntime-gpu')` check is not a valid module identifier, so it
+        always resolves to None and silently forces CPU regardless of what
+        hardware is actually present. Instead resolve a candidate list from
+        ORT's own reported runtime state -- `get_available_providers()` plus
+        the `cuda_version` build signal `_preload_ort_cuda_dlls` already uses
+        -- with a CPU tail so ORT itself falls back if CUDA turns out
+        unusable. An explicit KOKORO_DEVICE=cpu is honoured: no CUDA is
+        offered even if the box has it.
+
+        `device` (#2631 review B2): the device THIS cold load resolved to.
+        Defaults to `self._device` for any other caller, but `_ensure_loaded`
+        passes its own local so this reads the load-in-progress decision
+        without `self._device` having been written yet -- see that method's
+        publish-on-success comment."""
+        family, _ = _parse_device(device if device is not None else self._device)
+        if family == "cpu":
+            return ["CPUExecutionProvider"]
+        try:
+            import onnxruntime as rt  # type: ignore
+        except ImportError:
+            return []
+        try:
+            available = set(rt.get_available_providers())
+        except Exception:
+            available = set()
+        has_cuda_build = bool(getattr(rt, "cuda_version", ""))
+        if "CUDAExecutionProvider" in available and has_cuda_build:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        return ["CPUExecutionProvider"]
 
     def _dml_marker_path(self) -> str:
         """Sidecar-side marker recording that the DirectML self-test passed, so
@@ -2934,12 +3219,17 @@ class KokoroEngine(Engine):
         except Exception as e:
             log.warning("Kokoro DirectML self-test failed (%s); falling back to CPU EP.", e)
             self._dml_status = "fallback-cpu"
-            try:
-                return kokoro_cls(
-                    self._model_path, self._voices_path, providers=["CPUExecutionProvider"]
+            # Same session-building path as the main load: kokoro_cls (0.5.0)
+            # doesn't accept providers= in its constructor either (#2631), so
+            # build the CPU-EP session ourselves and hand it to from_session
+            # rather than relying on kokoro-onnx's own broken auto-detect.
+            if hasattr(kokoro_cls, "from_session"):
+                import onnxruntime as rt  # type: ignore
+                session = rt.InferenceSession(
+                    self._model_path, providers=["CPUExecutionProvider"]
                 )
-            except TypeError:
-                return kokoro_cls(self._model_path, self._voices_path)
+                return kokoro_cls.from_session(session, self._voices_path)
+            return kokoro_cls(self._model_path, self._voices_path)
         self._dml_status = "directml"
         try:
             with open(self._dml_marker_path(), "w", encoding="utf-8") as f:
@@ -2953,11 +3243,27 @@ class KokoroEngine(Engine):
             return
         # Capacity-aware placement (task 2, vram-aware-placement plan): a
         # concrete `device` from an admitted reservation overrides the
-        # env-derived pin for THIS cold load; `None` leaves
-        # `_requested_device` (already set from KOKORO_DEVICE at __init__)
-        # untouched, so env resolution stays byte-for-byte unchanged.
-        if device is not None:
-            self._requested_device = device
+        # env-derived pin for THIS cold load; `None` resolves to `_device`
+        # (already set from KOKORO_DEVICE at __init__, or restored from
+        # `_requested_device` by the last `unload()`), so env resolution
+        # stays byte-for-byte unchanged. `_requested_device` itself is never
+        # written here — see #2631 review S4.
+        #
+        # Resolved into a LOCAL, not written to `self._device` here (#2631
+        # review B2, mirrors CoquiEngine's `_resolve_runtime_options` +
+        # `_publish_loaded_locked` split): everything below that can raise —
+        # the kokoro-onnx import, the weights-missing checks, InferenceSession
+        # construction, Kokoro.from_session — sits between here and the
+        # publish at the end of this method. Writing `self._device` up front
+        # (the pre-fix shape) meant a failed load left the admitted device
+        # permanently stuck in the mutable field with `self._kokoro` still
+        # `None`, which makes `unload()`'s `self._kokoro is None: return`
+        # idempotence guard skip the restore forever — a CPU admission then
+        # outlives its own failed load for the rest of the process lifetime,
+        # exactly the outcome S4 was raised to prevent. Publishing only on
+        # success means a failed load never touches `self._device` at all, so
+        # there is nothing for `unload()` to restore.
+        resolved_device = device if device is not None else self._device
         try:
             from kokoro_onnx import Kokoro  # type: ignore
             _record_kokoro_import_result(True)
@@ -3011,23 +3317,99 @@ class KokoroEngine(Engine):
             )
 
         log.info("Loading Kokoro model=%s voices=%s ...", self._model_path, self._voices_path)
-        # ORT providers: honour the injected KOKORO_ORT_PROVIDERS (the server
-        # resolves them from the accelerator profile — e.g. DirectML on
-        # AMD-Windows) when present, else let kokoro-onnx auto-detect (CUDA when
-        # onnxruntime-gpu is installed, CPU otherwise). The constructor's
-        # providers= kwarg has come and gone across kokoro-onnx releases, so a
-        # TypeError falls back to the proven no-arg construction.
-        providers = self._resolve_ort_providers()
-        if providers:
-            try:
-                kokoro = Kokoro(self._model_path, self._voices_path, providers=providers)
-            except TypeError:
-                log.warning(
-                    "kokoro-onnx ignored providers=%s (older release); using auto-detection.",
-                    providers,
-                )
-                kokoro = Kokoro(self._model_path, self._voices_path)
+        # ORT providers: honour the injected KOKORO_ORT_PROVIDERS -- the server
+        # (spawn-sidecar.ts) resolves and injects this for every accelerator
+        # profile, nvidia included, so it is set in the normal server-spawned
+        # case (CUDA+CPU on nvidia, CPU-only on amd/cpu -- see
+        # accelerator-profile.mjs's ortProviders()). When it's unset -- a
+        # sidecar launched standalone via start.ps1/start.sh, which set
+        # nothing -- resolve our own default rather than falling through to
+        # kokoro-onnx's own construction, whose auto-detect is broken
+        # upstream and always forces CPU (#2631). Either way we build the ORT session ourselves
+        # and hand it to Kokoro.from_session() -- Kokoro.__init__ doesn't
+        # accept a providers= kwarg in version 0.5.0 (upstream limitation),
+        # and letting kokoro-onnx pick providers on its own is exactly the
+        # bug we're avoiding.
+        # CPU intent must win over the provider list regardless of where that
+        # list came from (#2631 review B1). The server injects
+        # KOKORO_ORT_PROVIDERS unconditionally on every spawn -- CUDA on the
+        # nvidia profile -- and `_default_ort_providers` only fires when that
+        # env is unset; neither is a device decision. `resolved_device`
+        # already folds in both the admitted `device=` argument (the VRAM
+        # ledger's placement) and KOKORO_DEVICE, so resolving it FIRST and
+        # short-circuiting to CPU-only here is the single point that makes a
+        # CPU decision authoritative over an injected/derived provider list.
+        family, _ = _parse_device(resolved_device)
+        if family == "cpu":
+            providers = ["CPUExecutionProvider"]
         else:
+            providers = self._resolve_ort_providers() or self._default_ort_providers(resolved_device)
+        # #2643: resolve THIS LOAD's real intent before the load runs, for
+        # `_engine_actual_card` to publish below. `family` above still reads
+        # "auto" whenever nothing pinned/admitted a concrete device -- which
+        # is every real generation path (KOKORO_DEVICE unset, and neither
+        # `synthesize`, the PRELOAD_KOKORO warm path, nor the admission-off
+        # `/load` branch ever pass `device=`). `_engine_actual_card` compares
+        # this published intent against "cuda" literally, so a comparison
+        # left at the literal string "auto" can never equal "cuda" and
+        # `fell_back` was structurally dead on that path.
+        #
+        # Derive the concrete intent from `providers` -- the EXACT list this
+        # load is about to build its ORT session with -- rather than
+        # re-running the CUDA probe separately. Reusing the already-computed
+        # decision (not making a second one) is what guarantees this can only
+        # ever describe the placement decided above, never diverge from it:
+        # actual placement is unchanged by this line. The probe itself
+        # (`_default_ort_providers` -> `rt.get_available_providers()` /
+        # `rt.cuda_version`) reads ORT's own build/runtime metadata -- no
+        # session or CUDA context is created by it.
+        #
+        # No CUDA execution provider (`providers` has no CUDA entry) resolves
+        # the intent to "cpu": nothing asked for cuda on this load, so landing
+        # on cpu is not a fallback -- see `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`.
+        # Note: this test does not cover DirectML or ROCm providers, which are
+        # also GPUs but not CUDA. They are currently unreachable in shipping
+        # because `accelerator-profile.mjs` gates CUDA-only to the nvidia profile.
+        intent_device = resolved_device
+        if family == "auto":
+            intent_device = "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+        # Indexed CUDA pin (KOKORO_DEVICE=cuda:1): resolved BEFORE the
+        # initial build so it can be folded into that single build, rather
+        # than building once unpinned (implicitly landing on CUDA device_id
+        # 0) and rebuilding afterward. The old build-then-rebuild sequence
+        # briefly put a real CUDA context on GPU 0 -- a card the VRAM
+        # placement ledger never admitted -- before moving it to the
+        # requested index (#2631 review S3). Only fires for an indexed pin;
+        # cpu / auto / plain cuda leave provider_options unset, so those
+        # paths build exactly as before.
+        po = _kokoro_provider_options(resolved_device, providers)
+        if po is not None:
+            build_providers, provider_options = po if isinstance(po, tuple) else (providers, po)
+        else:
+            build_providers, provider_options = providers, None
+
+        if build_providers and hasattr(Kokoro, "from_session"):
+            log.debug("Creating ONNX session with providers=%s", build_providers)
+            import onnxruntime as rt  # type: ignore
+            session_kwargs: dict[str, Any] = {"providers": build_providers}
+            if provider_options is not None:
+                session_kwargs["provider_options"] = provider_options
+            session = rt.InferenceSession(self._model_path, **session_kwargs)
+            kokoro = Kokoro.from_session(session, self._voices_path)
+            if provider_options is not None:
+                log.info(
+                    "Kokoro pinned to %s via provider device_id (session built once).",
+                    resolved_device,
+                )
+        else:
+            if build_providers:
+                log.warning(
+                    "kokoro-onnx has no Kokoro.from_session (API drift) -- "
+                    "falling back to Kokoro(...), whose own auto-detect is "
+                    "broken upstream and will force CPU regardless of the "
+                    "resolved providers=%s.",
+                    build_providers,
+                )
             kokoro = Kokoro(self._model_path, self._voices_path)
 
         # Enumerate the voice manifest. The API has drifted across kokoro-
@@ -3073,28 +3455,33 @@ class KokoroEngine(Engine):
             kokoro = self._directml_selftest_or_fallback(Kokoro, kokoro)
 
         self._kokoro = kokoro
-
-        # Indexed CUDA pin (KOKORO_DEVICE=cuda:1). The installed kokoro-onnx
-        # version's Kokoro.__init__ has no provider_options= kwarg; we reach
-        # device_id by rebuilding the InferenceSession on the final kept
-        # instance (post-DML-selftest). Only fires for an indexed pin — cpu /
-        # auto / plain cuda leave the session unchanged (helper returns None).
-        po = _kokoro_provider_options(self._requested_device, providers)
-        if po is not None:
-            try:
-                import onnxruntime as rt  # type: ignore
-                provs, opts = po if isinstance(po, tuple) else (providers, po)
-                self._kokoro.sess = rt.InferenceSession(
-                    self._model_path, providers=provs, provider_options=opts
-                )
-                log.info(
-                    "Kokoro pinned to %s via provider device_id (sess rebuilt).",
-                    self._requested_device,
-                )
-            except Exception as e:
-                log.warning(
-                    "Kokoro device_id pin failed (%s) — ORT session unchanged.", e
-                )
+        # Publish the admitted device ONLY on success (#2631 review B2) --
+        # everything above this line can raise, and a raise must leave
+        # `self._device` untouched so `unload()`'s `self._kokoro is None`
+        # guard (which is correct: nothing was ever loaded) doesn't also
+        # have to restore a field this failed attempt never should have
+        # written. `_resolved_device` (#2631 review B3, mirrors Coqui's
+        # own `_resolved_device`/`_device` split) is the GROUND TRUTH the
+        # ORT session actually landed on, read via `_kokoro_session_device`
+        # now that `self._kokoro` is set -- not `resolved_device`, which is
+        # only the intent and can diverge from it (a silent CPU fallback).
+        # #2647: do NOT fall back to `resolved_device` (the intent) when the
+        # session read comes back None (kokoro-onnx API drift, or any other
+        # exception) -- that would manufacture a confident but false claim.
+        # Leave `_resolved_device` at its "unknown" value (None, from
+        # __init__ or the last `unload()`) so `_engine_actual_card` takes
+        # its honest reconcile-or-"unknown" path instead.
+        #
+        # Publish `intent_device` (#2643), not `resolved_device`: on the
+        # "auto" branch it is the CONCRETE card this load actually attempted
+        # ("cuda" or "cpu"), computed above from the same `providers` list
+        # that built the session -- resolved_device would otherwise publish
+        # the literal string "auto" forever on every unset-env load, which
+        # `_engine_actual_card` can never compare equal to "cuda". Off the
+        # "auto" branch `intent_device == resolved_device` unchanged (an env
+        # pin or an admitted `device=` argument keeps winning).
+        self._device = intent_device
+        self._resolved_device = _kokoro_session_device(self)
 
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
@@ -3102,13 +3489,39 @@ class KokoroEngine(Engine):
         )
 
     def unload(self) -> None:
-        """Drop the Kokoro model. Idempotent. Kokoro is eagerly preloaded
-        at startup so this is rarely called in production — kept for
-        symmetry with CoquiEngine and to let tests reset state."""
+        """Drop the Kokoro model. Idempotent. NOT rarely called in
+        production (#2631 review N7, correcting the prior docstring here):
+        Kokoro is eagerly preloaded only when PRELOAD_KOKORO=1, which is
+        OFF by default (fs-60) — the ordinary case is lazy, on-demand
+        loading, and this fires on every `/unload` request PLUS two
+        automatic VRAM-eviction call sites (the VoiceDesign-load eviction
+        above, and the Qwen 1.7B-Base-mint eviction) whenever Kokoro happens
+        to be resident; both evict-then-reload on the next synth. Restore the
+        env/admission pin here (mirrors CoquiEngine's `_drop_model_locked`
+        restoring `self._device = self._requested_device`, the #1730 gap-3
+        fix) — otherwise a CPU admission from the load this is dropping
+        would stick as the device for every future load until process
+        restart (#2631 review S4). This restore is now reachable ONLY for a
+        load that actually published (#2631 review B2) — `self._device` is
+        no longer written until `_ensure_loaded` succeeds, so a failed load
+        never reaches this guard in the first place and has nothing here to
+        restore; see that method's publish-on-success comment."""
         if self._kokoro is None:
             return
         self._kokoro = None
         self._voices = []
+        self._device = self._requested_device
+        # Ground truth follows the pref back to "nothing loaded" (#2631
+        # review B3, mirrors CoquiEngine's `_drop_model_locked`) — otherwise
+        # `_engine_actual_card` would keep reporting the last-loaded card's
+        # ORT providers for an engine that is no longer resident. `None`
+        # (#2647), not "cpu" — this engine has no model, so it has no
+        # resolved device at all, and `_engine_actual_card`'s top-level
+        # `self._kokoro is None` gate means this value is never read while
+        # unloaded regardless; keeping it at the same "unknown" sentinel as
+        # __init__ avoids reintroducing a value that reads as a real
+        # placement if that gate is ever loosened.
+        self._resolved_device = None
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
@@ -3764,9 +4177,10 @@ class ReservationLedger:
 _reclaim_failure_traced = False
 
 
-def _reclaim_device_cache(device_key: str) -> None:
+def _reclaim_device_cache(device_key: str) -> bool:
     """Bare `gc.collect()` + `torch.cuda.empty_cache()`, with no target model
-    to unload first (#1976).
+    to unload first (#1976). Returns True if the reclaim ran (CUDA available +
+    no exception), False if CUDA is unavailable or an exception occurred.
 
     Every reclaim ELSEWHERE in this file — `unload()`, `unload_design()`,
     `maybe_free_idle*` (Qwen/Coqui), the `_idle_evict_steps` ladder — is a
@@ -3818,15 +4232,17 @@ def _reclaim_device_cache(device_key: str) -> None:
 
     Best-effort: any torch/CUDA failure (no CUDA build, a poisoned context) is
     swallowed here, matching every other reclaim path in this file — this is
-    a last-resort cushion, not a step whose failure should propagate."""
+    a last-resort cushion, not a step whose failure should propagate. Returns
+    False so callers can distinguish "ran" from "did not run"."""
     global _reclaim_failure_traced
     try:
         import torch  # type: ignore
 
         if not torch.cuda.is_available():
-            return
+            return False
         gc.collect()
         torch.cuda.empty_cache()
+        return True
     except Exception:
         log.warning(
             "stranded-cache reclaim failed for %s",
@@ -3834,6 +4250,7 @@ def _reclaim_device_cache(device_key: str) -> None:
             exc_info=not _reclaim_failure_traced,
         )
         _reclaim_failure_traced = True
+        return False
 
 
 # #1993 review (C1) — the per-device reclaim cooldown. A module constant, not
@@ -3875,7 +4292,7 @@ class PlacementController:
         reserve_mb: Optional[Callable[[], int]] = None,
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
-        reclaim: Optional[Callable[[str], None]] = None,
+        reclaim: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.probe = probe
         self.footprints = footprints if footprints is not None else FootprintTable()
@@ -4502,7 +4919,23 @@ def _is_resident(engine_id: str) -> Optional[str]:
     `engine_id` is currently loaded on, or None when unloaded / on cpu / not
     cheaply knowable. Reuses `_engine_actual_card` (the same loaded-model
     probe /health's `gpus` payload already relies on) rather than duplicating
-    the per-engine attribute digging here."""
+    the per-engine attribute digging here.
+
+    An honest "unknown" `family` (kokoro-onnx API drift defeating the ORT
+    session read, #2647) must not cost residency TRACKING the way it rightly
+    costs the /health `fell_back` claim: a model genuinely loaded onto a GPU
+    still occupies that GPU's VRAM even when we can no longer read back
+    confirmation of it. When the actual-card probe comes back "unknown" for
+    a LOADED engine (`card` is not None), fall back to this load's own
+    intent (`_device`) -- this load's resolved intent (the device family
+    the load actually requested, from either a pin, an admission, or on
+    an unpinned auto load, from provider availability). For an auto load,
+    that intent was "cuda" even when no admission/pin was involved, so a
+    phantom ~1GB conservative VRAM booking may linger until the load
+    unwinds. This is the best remaining evidence of where the weights
+    actually live. This keeps `PlacementController` booking VRAM against the right card instead
+    of silently dropping the constraint and admitting a second heavy engine
+    onto a card that is already full."""
     named: dict[str, Any] = dict(ENGINES)
     named["asr"] = ASR
     named["spk"] = SPK
@@ -4510,7 +4943,13 @@ def _is_resident(engine_id: str) -> Optional[str]:
     if engine is None:
         return None
     card = _engine_actual_card(engine)
-    if card is None or card["family"] not in ("cuda", "rocm"):
+    if card is None:
+        return None
+    if card["family"] not in ("cuda", "rocm"):
+        if card["family"] == "unknown":
+            intent_fam, intent_idx = _parse_device(getattr(engine, "_device", None))
+            if intent_fam in ("cuda", "rocm"):
+                return f"{intent_fam}:{intent_idx if intent_idx is not None else 0}"
         return None
     index = card["index"] if card["index"] is not None else 0
     return f"{card['family']}:{index}"
@@ -4614,6 +5053,13 @@ def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
     if engine != "coqui":
         coqui = ENGINES.get("coqui")
         if isinstance(coqui, CoquiEngine) and _same_card(getattr(coqui, "_device", None), device_key):
+            # COQUI-RESIDENCY-POLICY — this step is one entry in the generic
+            # cross-engine admission ladder above; it is not a Coqui-specific
+            # idle evict. Node also evicts Coqui proactively at generation-plan
+            # phase boundaries (`evictCoquiForQwenPhase` in
+            # `server/src/tts/synthesise-chapter.ts`). The keep-both ruling
+            # and the full cross-reference are in
+            # `docs/features/264-vram-aware-gpu-placement.md`.
             steps.append(EvictStep("coqui", "coqui", lambda: coqui.maybe_free_idle(_coqui_idle_ttl())))
     return steps
 
@@ -4636,12 +5082,14 @@ def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
     Returns None when there is no index to pin (cpu / auto / plain cuda) so the
-    existing no-pin path stays exactly as-is. When ``providers`` is empty (the
-    NVIDIA default — KOKORO_ORT_PROVIDERS unset so kokoro-onnx auto-selects),
-    SYNTHESIZE a ``["CUDAExecutionProvider","CPUExecutionProvider"]`` list and
-    return ``(providers, options)`` as a tuple so the device_id has somewhere to
-    attach. When ``providers`` is already populated, return a ``list[dict]``
-    aligned to it so the caller can pass it directly as ``provider_options``."""
+    existing no-pin path stays exactly as-is. When ``providers`` is empty --
+    the server always injects KOKORO_ORT_PROVIDERS, so in practice this only
+    happens for a standalone-launched sidecar whose own resolution also came
+    back empty -- SYNTHESIZE a ``["CUDAExecutionProvider","CPUExecutionProvider"]``
+    list and return ``(providers, options)`` as a tuple so the device_id has
+    somewhere to attach. When ``providers`` is already populated (the normal
+    case), return a ``list[dict]`` aligned to it so the caller can pass it
+    directly as ``provider_options``."""
     family, index = _parse_device(device)
     if family != "cuda" or index is None:
         return None
@@ -7925,11 +8373,11 @@ _restart_scheduled = False
 # recycle is scheduled; while it's set, /synthesize + /synthesize-batch fast-fail
 # with a (non-poisoned) 503 so no NEW chapter enters the dying process and the
 # server's in-worker recovery rides out the respawn. `_inflight_synth` counts
-# live synth calls (incremented on the event loop around each to_thread offload);
-# the recycle drains it to 0 (bounded by SIDECAR_DRAIN_GRACE_MS) before exiting so
-# the in-flight chapter finishes here instead of failing. Both are read by the
-# drain thread — a plain int read is atomic under the GIL, eventual consistency
-# is all the drain needs.
+# live synth, transcribe, and embed calls (incremented on the event loop around
+# each to_thread offload); the recycle drains it to 0 (bounded by
+# SIDECAR_DRAIN_GRACE_MS) before exiting so the in-flight chapter finishes here
+# instead of failing. Both are read by the drain thread — a plain int read is
+# atomic under the GIL, eventual consistency is all the drain needs.
 _restart_pending = False
 _inflight_synth = 0
 # side-11 item 2 — SOFT recycle signal. Set True by the watchdog once committed
@@ -8038,6 +8486,51 @@ def _cuda_vram_mb_per_device() -> dict[str, dict[str, float]]:
             out[f"cuda:{i}"] = {
                 "reserved_mb": torch.cuda.memory_reserved(i) / 1_000_000.0,
                 "total_mb": torch.cuda.get_device_properties(i).total_memory / 1_000_000.0,
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def _cuda_memory_stats_per_device() -> dict[str, dict[str, int]]:
+    """{"cuda:N"|"rocm:N": {"reserved", "allocated", "inactive_split",
+    "num_alloc_retries"}} for every CUDA-API-visible device, sourced from
+    `torch.cuda.memory_stats(i)` (#2423 — instrument for #1996's design
+    question).
+
+    Neither `_cuda_vram_mb_per_device` above (only `reserved_mb`/`total_mb`)
+    nor `debug_memory`'s `cuda` block (current-device-only, no
+    `inactive_split`) can discriminate #1996's two candidate causes:
+    uncollected cache (a scheduled reclaim fixes it) vs allocator
+    fragmentation (`empty_cache()` can never return it) — `inactive_split`
+    is the field that tells them apart. Values are raw units straight from
+    `memory_stats` (bytes for the byte-valued keys, a count for
+    `num_alloc_retries`) — deliberately NOT converted to MB like the
+    neighboring `_mb` fields, since these are new keys with their own
+    semantics, not a replacement for them.
+
+    Device keys use `probe_capacity`'s `{kind}:{i}` format (`kind = "rocm"
+    if _cuda_is_rocm() else "cuda"`), NOT a hardcoded `cuda:` prefix like
+    `_cuda_vram_mb_per_device` — copying that pattern would mislabel an
+    AMD/ROCm box's devices. `torch.cuda.memory_stats` is a CUDA/ROCm-only
+    API, so non-GPU kinds (`cpu`, `mps`) are simply never emitted here.
+
+    Never raises; {} when CUDA is unavailable — same fail-open contract as
+    `_cuda_vram_mb_per_device`."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return {}
+        kind = "rocm" if _cuda_is_rocm() else "cuda"
+        out: dict[str, dict[str, int]] = {}
+        for i in range(torch.cuda.device_count()):
+            stats = torch.cuda.memory_stats(i)
+            out[f"{kind}:{i}"] = {
+                "reserved": stats.get("reserved_bytes.all.current", 0),
+                "allocated": stats.get("allocated_bytes.all.current", 0),
+                "inactive_split": stats.get("inactive_split_bytes.all.current", 0),
+                "num_alloc_retries": stats.get("num_alloc_retries", 0),
             }
         return out
     except Exception:
@@ -9135,9 +9628,23 @@ def _normalize_device_family(raw: Optional[str], torch_module: Any = None) -> Op
 
 
 def _predict_kokoro_device(ort_module: Any) -> Optional[str]:
-    """Mirror kokoro-onnx's auto-selection from the available EPs: DirectML →
-    directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a broken/absent
-    onnxruntime (→ cpu)."""
+    """Predict which device family Kokoro would land on IF neither deciding
+    input were set -- this reads ONLY ORT's own reported available
+    providers, and ignores BOTH `KokoroEngine._device` (the KOKORO_DEVICE
+    env pin / an admitted placement, which forces CPU-only regardless of
+    what's available -- see `_ensure_loaded`'s CPU-forcing check) and
+    KOKORO_ORT_PROVIDERS (the server's per-accelerator-profile injection,
+    which can hand down a CPU-only list on a box where CUDA is otherwise
+    available). On an nvidia box with either of those set to something
+    other than CUDA, this prediction diverges from the real decision
+    (#2631 review N5 -- corrects the prior docstring's claim, which
+    described a real prediction rather than this best-effort ORT-only
+    guess). NOT kokoro-onnx's own auto-selection, which is broken upstream
+    (its `find_spec("onnxruntime-gpu")` check is not a valid module
+    identifier, always resolves to None, and so always forces CPU
+    regardless of what hardware is present; see `_default_ort_providers`).
+    DirectML → directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a
+    broken/absent onnxruntime (→ cpu)."""
     try:
         providers = list(ort_module.get_available_providers())
     except Exception:
@@ -9225,7 +9732,61 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     )
     if model is None:
         return None
-    requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    # #2647: compare THIS LOAD's actual intent, not the pristine env pin.
+    # `_requested_device` (Coqui/Kokoro/Whisper) is written ONCE at __init__
+    # from the env var and never touched again — so on the shipped default
+    # (no KOKORO_DEVICE/COQUI_DEVICE/ASR_DEVICE pin), it reads "auto" forever,
+    # even on a load the VRAM-ledger admission ITSELF steered onto "cuda:N"
+    # for capacity reasons. `_parse_device("auto")` never equals "cuda", so
+    # `fell_back` below could never fire on that (the shipped) default —
+    # dead code, not a working detector, and exactly the regression #2636
+    # introduced. `_device` is the field that actually carries this load's
+    # intent: it starts from the same env pin, but an admitted `device=`
+    # argument (VRAM-ledger placement) overwrites it BEFORE the load runs,
+    # and a successful load leaves it holding that same concrete decision
+    # (Coqui `_publish_loaded_locked`, Kokoro `_ensure_loaded`, Qwen
+    # `_ensure_device_resolved`/`_ensure_base_loaded` all converge here) — so
+    # comparing THAT against the actual outcome is a real, load-scoped
+    # comparison instead of a config-scoped one. Engines with no such split
+    # (SPK: only `.device`, which itself doubles as the actual outcome after
+    # a self-demotion — there is no separate pre-outcome intent value left to
+    # read) fall back to `_requested_device` unchanged; SPK's and Whisper's
+    # own admission call sites (`/embed`, `/transcribe`) only ever admit a
+    # GPU placement when the env pin ALREADY says cuda/rocm, so
+    # `_requested_device` already reflects this load's real intent for them
+    # regardless. Qwen has `_device` too, so it takes the `_device` branch
+    # below, but it's a genuine no-op there rather than a bug: `Qwen3TTSModel`
+    # (the qwen_tts wrapper `_base`/`_base17`/`_design` all hold) exposes no
+    # `.parameters()`, so the top-of-function torch introspection above never
+    # actually reaches it for Qwen (verified against the installed qwen_tts
+    # package — `getattr(wrapper, "parameters", None)` is None) and `family`
+    # below falls through to this SAME `_device` string, making
+    # `requested_fam == family` structurally, by construction, on every Qwen
+    # load — `fell_back` cannot fire, correctly, since a real torch `.to()`
+    # failure raises rather than silently landing elsewhere.
+    #
+    # Whisper ALSO has a `_device` attribute (unlike SPK), so it would
+    # wrongly take the branch below if dispatched purely on `hasattr` — but
+    # unlike Coqui/Kokoro/Qwen, Whisper's `_device` is NOT a stable per-load
+    # intent: `WhisperEngine._ensure_loaded` overwrites it with the load's
+    # own actual placement at the end (`self._device = dev`), with no
+    # separate `_resolved_device` ground truth the way Coqui/Kokoro have. So
+    # reading `_device` for both `requested_fam` and `family` (the latter via
+    # the same string fallback below) would compare that field to itself —
+    # tautologically equal, never able to flag a fallback — which is exactly
+    # the regression this `isinstance` carve-out closes (#2647 follow-up).
+    # Whisper is routed to the SAME `_requested_device` branch SPK already
+    # uses, restoring the pre-#2647 comparison the paragraph above describes.
+    # This isinstance carve-out is defensive against a future regression where
+    # Whisper's requested and actual devices diverge, but no production path
+    # currently reaches it: /transcribe always passes cpu_capable=False, so
+    # admission returns either a GPU key or noCapacity, never a divergence.
+    if isinstance(engine, WhisperEngine):
+        requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
+    elif hasattr(engine, "_device"):
+        requested_fam, _ = _parse_device(getattr(engine, "_device"))
+    else:
+        requested_fam, _ = _parse_device(getattr(engine, "_requested_device", None))
     # actual device: prefer the loaded torch module's real device; fall back to the string attr
     family = index = None
     try:
@@ -9236,20 +9797,44 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
     except Exception:
         pass
     if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
-        # Prefer the RESOLVED device (Coqui keeps the actual in _resolved_device and
-        # the pref in _device) so a cpu fallback isn't masked by the cuda pref; then
-        # `device` (SPK, demoted to cpu on failure) and `_device` (Whisper).
-        family, _ = _parse_device(
-            getattr(engine, "_resolved_device", None)
-            or getattr(engine, "device", None)
-            or getattr(engine, "_device", None)
-        )
+        # Prefer the RESOLVED device (Coqui AND Kokoro, since #2631 review B3,
+        # keep the actual in _resolved_device and the pref in _device) so a
+        # cpu fallback isn't masked by the cuda pref; then `device` (SPK,
+        # demoted to cpu on failure) and `_device` (Whisper, which has no
+        # `_resolved_device` split — see #2631 review N10).
+        #
+        # `_resolved_device` must be checked via `hasattr`, not folded into the
+        # same `or` chain as the fallbacks (#2647): Coqui/Kokoro engines ALWAYS
+        # carry this attribute, but Kokoro's can genuinely be `None` — "not
+        # known yet" (init, or the ORT session read failed under kokoro-onnx
+        # API drift) — which is a real answer, not an absent one. Folding it
+        # into `or` treated "unknown" the same as "attribute doesn't exist"
+        # and fell through to `_device` (the pref/intent), manufacturing a
+        # false confident claim from what was only ever requested. An engine
+        # that has no `_resolved_device` split at all (SPK, Whisper) still
+        # falls through to the pref, unchanged.
+        if hasattr(engine, "_resolved_device"):
+            family, _ = _parse_device(getattr(engine, "_resolved_device"))
+        else:
+            family, _ = _parse_device(
+                getattr(engine, "device", None) or getattr(engine, "_device", None)
+            )
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
             family = ks
     if family in (None, "auto"):
         family = "unknown"
+    # #2647 (behaviour decision): when this load's intent was "auto" — no env
+    # pin AND no VRAM-ledger admission ever overrode it — `requested_fam` is
+    # "auto", never "cuda", so `fell_back` stays False however the load
+    # actually landed. That is deliberate, not a gap this comparison misses:
+    # nothing ever asked for cuda on that load, so a cpu outcome is simply
+    # "unconfigured, ran wherever it ran," not a silent fallback from
+    # anything. The badge exists to catch "this load intended cuda (an env
+    # pin or an admitted placement) and silently got cpu anyway" — pinned by
+    # `test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back`
+    # in test_kokoro.py.
     fell_back = (requested_fam == "cuda" and family == "cpu")
     return {"family": family, "index": index, "fell_back": fell_back}
 
@@ -9362,10 +9947,16 @@ def health() -> dict[str, Any]:
     qwen_weights_present = _qwen_weights_present()
     qwen_install_state = _qwen_install_state(qwen_loaded)
     # side-14 — per-engine device map: loaded engines report their ACTUAL
-    # device; unloaded ones the startup probe's prediction. Same resolvers on
-    # both paths, so they only disagree if availability was misread — in which
-    # case loaded truth wins. Composed at read time so engine load/unload and
-    # probe completion are order-independent.
+    # device; unloaded ones the startup probe's prediction. For Qwen/Coqui the
+    # two paths share the same resolver, so they only disagree if availability
+    # was misread — in which case loaded truth wins. Kokoro is the exception
+    # (#2631 review N8, corrects this comment to match `_predict_kokoro_device`'s
+    # own docstring): its prediction deliberately ignores `_device`
+    # (KOKORO_DEVICE / an admitted placement) and KOKORO_ORT_PROVIDERS, both of
+    # which the real load honours — so an admitted `cpu` or an env pin diverges
+    # the two paths on an otherwise-unremarkable box, not just on a misread.
+    # Composed at read time so engine load/unload and probe completion are
+    # order-independent.
     devices = dict(_device_probe)
     if isinstance(coqui, CoquiEngine) and model_loaded:
         devices["coqui"] = _normalize_device_family(coqui._resolved_device) or devices["coqui"]
@@ -9441,6 +10032,7 @@ def health() -> dict[str, Any]:
         # `committed_mb` / `vram_reserved_mb` / `vram_total_mb` (may be None) give
         # the boundary decision observability without a separate /debug/memory hit.
         "recycle_pending": _recycle_pending,
+        "inflight_synth": _inflight_synth,
         "committed_mb": _process_commit_mb(),
         # CURRENT-DEVICE-ONLY (#1976) — `_cuda_vram_mb()` reads
         # `torch.cuda.current_device()`, not necessarily the render/recycle
@@ -9496,6 +10088,11 @@ def debug_memory() -> dict[str, Any]:
         "garbage": len(gc.garbage),
         "tracked_objects": len(gc.get_objects()),
     }
+    # #1996 — surface the pending-synth counter (process-wide, not engine-
+    # specific) so an idle probe can read a positive "nothing generating" signal
+    # instead of inferring it from a fixed wall-clock wait. Same plain GIL-safe
+    # int read the drain-before-recycle path already does.
+    out["inflight_synth"] = _inflight_synth
     engines: dict[str, Any] = {}
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
@@ -9504,6 +10101,7 @@ def debug_memory() -> dict[str, Any]:
         engines["qwen"] = {
             "base_loaded": qwen._base is not None,
             "design_loaded": qwen._design is not None,
+            "base17_loaded": qwen._base17 is not None,
             "prompt_cache_entries": prompt_cache_entries,
         }
     coqui = ENGINES.get("coqui")
@@ -9556,6 +10154,10 @@ def debug_memory() -> dict[str, Any]:
     except Exception:
         pass
     out["cuda"] = cuda
+    # #2423 — per-device memory_stats() block (reserved/allocated/
+    # inactive_split/num_alloc_retries), the instrument #1996's design
+    # decision needs. Additive: the `cuda` block above is untouched.
+    out["memory_stats"] = _cuda_memory_stats_per_device()
     return out
 
 
@@ -9568,6 +10170,29 @@ async def debug_codec_timing() -> dict:
 async def debug_codec_timing_reset() -> dict:
     _codec_timing_reset()
     return {"ok": True}
+
+
+@app.post("/debug/reclaim")
+def debug_reclaim() -> dict[str, Any]:
+    """One bare `_reclaim_device_cache()` bracketed by before/after per-device
+    `memory_stats` snapshots, in a single response (#2423). #1996's design
+    decision (scheduled reclaim vs a boundary-recycle redesign) hinges on
+    whether a bare reclaim recovers the stranded pool — this is the only
+    surface that brackets `empty_cache()` with nothing else in between (a
+    load/unload cycle would conflate the reclaim with an allocation pass).
+
+    Not inert: it frees real memory when it runs. The memory watchdog checks
+    an RSS threshold (see main.py:8662, `if warn_threshold > 0 and rss >= ...`)
+    before calling `_reclaim_host_and_vram()`; this route calls `_reclaim_device_cache`
+    directly without that check, so it can trigger the identical `gc.collect()` +
+    `empty_cache()` operation regardless of RSS — even below the watchdog's
+    threshold. No auth wrapper, matching every other `/debug` route in this family
+    (`debug_codec_timing`/`debug_codec_timing_reset` above) — loopback-bound by
+    default via LOCAL_TTS_HOST configuration."""
+    before = _cuda_memory_stats_per_device()
+    reclaimed = _reclaim_device_cache("debug-reclaim")
+    after = _cuda_memory_stats_per_device()
+    return {"before": before, "reclaimed": reclaimed, "after": after}
 
 
 @app.post("/load")
@@ -9756,9 +10381,15 @@ async def unload_model(req: Request) -> JSONResponse:
 
     Body: `{ engine?: 'coqui' | 'kokoro' }`, default `'coqui'`. Coqui unload
     is what the Analysing screen fires automatically to evict TTS before
-    warming the analyzer LLM. Kokoro unload is user-triggered via the
-    in-app Stop pill (sidecar restart re-loads it via the eager preload
-    hook)."""
+    warming the analyzer LLM. Kokoro unload is reachable the same way this
+    route's own body suggests — the in-app Stop pill — but that is not the
+    only, or even the ordinary, path (#2631 review N9, correcting this
+    docstring to match `KokoroEngine.unload()`'s own): `PRELOAD_KOKORO` is
+    OFF by default (fs-60), so Kokoro loads lazily on demand rather than
+    eagerly at sidecar start, and this route is also called automatically by
+    two VRAM-eviction sites (the VoiceDesign-load eviction, and the Qwen
+    1.7B-Base-mint eviction) whenever Kokoro happens to be resident — both
+    evict-then-reload on the next synth, with no Stop pill involved."""
     try:
         body = await _read_json_body(req)
     except Exception:
@@ -10704,6 +11335,8 @@ async def transcribe(req: Request) -> Response:
     language = req.headers.get("X-Language") or None
     word_timestamps = req.headers.get("X-Word-Timestamps") is not None
 
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Capacity-aware placement (task 4, vram-aware-placement plan): only
         # when ASR is GPU-configured (ASR_DEVICE=cuda/rocm) — the cpu-default
@@ -10739,6 +11372,8 @@ async def transcribe(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-31: clears the recycle drain regardless of outcome
     return JSONResponse(result)
 
 
@@ -10778,6 +11413,8 @@ async def embed(req: Request) -> Response:
     if sample_rate <= 0:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
 
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Capacity-aware placement (task 4, vram-aware-placement plan): only
         # when SPK is GPU-configured (SPK_DEVICE=cuda/rocm) — the cpu-default
@@ -10807,6 +11444,8 @@ async def embed(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": "Internal error.", "poisoned": True}, status_code=503)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-36: clears the recycle drain regardless of outcome
     return JSONResponse({"embedding": embedding, "dim": len(embedding), "sample_rate": SPK.TARGET_SR})
 
 

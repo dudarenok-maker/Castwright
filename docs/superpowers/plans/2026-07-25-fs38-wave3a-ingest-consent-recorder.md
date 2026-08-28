@@ -1483,7 +1483,7 @@ git commit -m "docs(docs): fs-38 3a regression plan + release notes + doc-194 up
 - [ ] **Typecheck:** `npm run typecheck` — green (proves the api registration + generated types line up).
 - [ ] **Branch-scoped gate:** `npm run verify:fast:branch`.
 - [ ] **E2E (add one spec):** an upload-path phase-1 golden path is deferred with the wizard to 3b1 (3a ships no wired wizard entry point). If time allows, add a component-level RTL test that a cloned fixture appears in My voices with a working Revoke — already covered by Task 13. No new Playwright spec is required for 3a; note this explicitly in the PR ("e2e lands with the wizard in 3b1").
-- [ ] **PR:** body links `Refs #624` (partial delivery — 3a of four sub-waves), links the regression plan and the spec, and states the disclosed behind-flag scope (consent guard / revoke / cloned UI have no reachable caller until 3b1). Run the mandatory `code-review` pass (medium effort — multi-scope `feat`).
+- [ ] **PR:** body links `Refs #624` (partial delivery — 3a of four sub-waves), links the regression plan and the spec, and states the disclosed behind-flag scope (consent guard / revoke / cloned UI have no reachable caller until 3b1). Run the mandatory `pr-review-gate` pass (medium effort — multi-scope `feat`).
 
 ## Self-review notes (author)
 

@@ -125,3 +125,45 @@ describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
     });
   });
 });
+
+describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+  });
+
+  it('never instructs the user to leave the field blank — sidecarUrl is required by the schema and blank 400s the whole save', async () => {
+    renderForm();
+    const input = await screen.findByTestId('account-sidecar-url');
+    const fieldText = input.closest('label')?.textContent ?? '';
+    expect(fieldText.toLowerCase()).not.toMatch(/leave blank/);
+  });
+
+  // #2632 N43 — the test above (and the one below) are negative-only and pass
+  // vacuously if the sublabel prop is deleted outright, which would ship the
+  // field with NO guidance at all, including the "don't leave it blank" line
+  // RELEASE_NOTES.md:186 advertises. Anchor the copy that must actually be
+  // present, not just the jargon that must be absent.
+  it('does instruct the user not to leave the field blank', async () => {
+    renderForm();
+    const input = await screen.findByTestId('account-sidecar-url');
+    const fieldText = input.closest('label')?.textContent ?? '';
+    expect(fieldText).toMatch(/do not leave it blank/i);
+  });
+
+  // #2632 N37 — the sublabel used to claim the value shown below (the
+  // input's placeholder) is "derived from LOCAL_TTS_PORT". The placeholder
+  // is a hardcoded literal, never updated from LOCAL_TTS_PORT, and hidden
+  // once the field is populated — the sentence was false, and falsest in
+  // exactly the per-worktree scenario #2632 exists for. It's also shipped
+  // copy: "LOCAL_TTS_PORT" / "this checkout" are repo jargon a packaged-app
+  // end user has never seen.
+  it('does not claim the value below is derived from LOCAL_TTS_PORT, and avoids repo jargon', async () => {
+    renderForm();
+    const input = await screen.findByTestId('account-sidecar-url');
+    const fieldText = input.closest('label')?.textContent ?? '';
+    expect(fieldText).not.toMatch(/shown below/i);
+    expect(fieldText).not.toMatch(/LOCAL_TTS_PORT/);
+    expect(fieldText).not.toMatch(/this checkout/i);
+  });
+});

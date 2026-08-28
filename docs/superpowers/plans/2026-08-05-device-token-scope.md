@@ -591,6 +591,14 @@ git commit -m "test(app): pin the nine companion endpoints the server allowlist 
 
 ### Task A-T5: Register row, release notes, and PR A
 
+> **Stale premise (found by `check:register-citations`, 2026-08-23): Group F
+> no longer exists.** The repo owner discharged the whole "a real Android
+> device" group (`F1` and the plan to add `F2`/`F3` below) — see
+> `docs/testing/onbox-sitting-plan.md`'s wave-4 correction note. Before acting
+> on the steps below, re-derive whether this on-box acceptance debt still
+> needs a home, and if so which group/ID it belongs under now — do not add a
+> row literally named `F2`.
+
 - [ ] **Step 1: Add on-box row F2**
 
 `docs/testing/onbox-acceptance-register.md`, **Group F — a real Android
@@ -691,7 +699,7 @@ PR body must also state: *"On-box acceptance: F2 added. PR B (server
 enforcement) follows and must not merge until an APK built from this branch is
 installed on the acceptance phone."*
 
-- [ ] **Step 7: The mandatory `code-review` gate**
+- [ ] **Step 7: The mandatory `pr-review-gate` gate**
 
 Not a docs-only PR, single-scope `fix` ⇒ **medium** effort, Premium tier. Fold
 findings before merge.
@@ -1343,6 +1351,11 @@ git commit -m "feat(server): each mint site declares its scope, pinned by a stat
 
 ### Task B-T5: Follow-up issues, register row, release notes, and PR B
 
+> **Stale premise (found by `check:register-citations`, 2026-08-23): Group F
+> no longer exists.** Same note as Task A-T5 above — the "Add on-box row F3"
+> step below assumed Group F was still live; it is not. Re-derive before
+> acting on it.
+
 - [ ] **Step 1: File the two follow-up issues, in this round**
 
 Neither clears the fix-now bar (each needs a judgement or an interface
@@ -1442,7 +1455,7 @@ Before pushing, run
 the only issue trailers are the ones you intend — a `Closes` in a commit fires
 regardless of the PR body.
 
-- [ ] **Step 7: The mandatory `code-review` gate**
+- [ ] **Step 7: The mandatory `pr-review-gate` gate**
 
 Not docs-only, single-scope `feat` ⇒ **medium** effort, Premium tier. Triage and
 fold findings before merge.

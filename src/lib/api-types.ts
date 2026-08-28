@@ -2402,7 +2402,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reject an orphaned-id reconciliation ("not the same character") —
+         * Reject an orphaned-id reconciliation ("not the same character") — #2040 Task 17
          * @description The orphaned-character-fallback banner shows an id that either
          *     auto-reconciled onto a live character (through the id-history
          *     side-table or a normalised-key match) or didn't resolve at all. This
@@ -2460,7 +2460,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Link an orphaned-id reconciliation ("this IS the same character") —
+         * Link an orphaned-id reconciliation ("this IS the same character") — #2238
          * @description The positive mirror of `reject-orphan-match`'s POST above: records
          *     "orphanedId IS the same character as characterId" by durably
          *     aliasing `orphanedId -> characterId` in `cast-id-history.json`'s
@@ -2537,7 +2537,7 @@ export interface paths {
          *     `chapterId` is provided, only that chapter is reviewed. SSE event
          *     kinds: `phase`, `throttle`, `heartbeat`, `ops`
          *     (`{ chapterId, ops: [{ id, op, anchor?, newText?, rationale, ... }] }`),
-         *     `chapter-failed`,
+         *     `chapter-failed` (`{ chapterId, message, code?: 'language_unset' }`),
          *     `error` (`code: no_attribution | no_such_chapter | quota_exhausted`),
          *     and a terminal `result` (`{ done, reviewedChapters, totalOps }`).
          */
@@ -3016,9 +3016,13 @@ export interface components {
             errorReason?: string;
             /**
              * @description error only — machine-readable whole-run abort reason.
+             *     `language_unset` (Task 6, #2246) fires when the book never
+             *     stated a language — the honest pre-work abort replacing a
+             *     silent English design; `unsupported_language` fires for a
+             *     stated language with no sidecar mapping.
              * @enum {string}
              */
-            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "unknown";
+            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "lock-contention" | "language_unset" | "unknown";
             /** @description error only — human-readable abort message. */
             message?: string;
         };
@@ -3095,10 +3099,17 @@ export interface components {
             /** @description designed only. */
             url?: string;
             /**
-             * @description error only.
+             * @description error only. `language_unset` (Task 6, #2246) fires when the
+             *     book never stated a language — the honest pre-work abort
+             *     replacing a silent English design; `unsupported_language`
+             *     fires for a stated language with no sidecar mapping.
+             *     `clone_protected` fires when the write-time series-wide
+             *     clone-consent veto refused the persist — #2006; a distinct
+             *     occurrence from the plain-JSON 409 upfront refusal below,
+             *     which shares the same code string for the same reason.
              * @enum {string}
              */
-            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention" | "clone_protected";
+            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention" | "clone_protected" | "language_unset";
             /** @description error only. */
             message?: string;
         };
@@ -3241,8 +3252,14 @@ export interface components {
              */
             resolvedTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
-             * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
-             *     by the sidecar provider + health probe.
+             * @description Overrides the LOCAL_TTS_URL env var ONLY when explicitly set by
+             *     the user to a value other than the factory default
+             *     (http://localhost:9000) — a factory-default value (whether typed
+             *     by the user or written incidentally by an unrelated settings
+             *     write) is treated as no choice at all, so it never shadows
+             *     LOCAL_TTS_URL or the per-checkout LOCAL_TTS_PORT derivation
+             *     (#2632). Re-read on every request by the sidecar provider +
+             *     health probe.
              */
             sidecarUrl: string;
             /**
@@ -3725,13 +3742,31 @@ export interface components {
              */
             tags?: string[];
             /**
-             * @description fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). Defaults to
-             *     `en` for books written before the field landed. Drives
-             *     same-language narration (a non-`en` book routes every character,
-             *     incl. the narrator, to a designed Qwen voice and never falls back
-             *     to English Kokoro) and the library language badge + filter pill.
+             * @description fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). This is the
+             *     **resolved display value**: a book whose language was never set is
+             *     still surfaced as `en` so the card badge / filter pill never see
+             *     undefined. Drives same-language narration (a non-`en` book routes
+             *     every character, incl. the narrator, to a designed Qwen voice and
+             *     never falls back to English Kokoro) and the library language badge
+             *     + filter pill. Pair with `languageSet` — reading `language` alone
+             *     cannot tell a book that declared English from one that never
+             *     declared anything.
              */
             language?: string;
+            /**
+             * @description Task 8 (#2246) — the honest "is the language actually set?"
+             *     signal. `language` (above) is the resolved display value, so it
+             *     alone cannot distinguish a book that really declared its language
+             *     from one that never did; `languageSet` is that distinction.
+             *     `true` when the book's state.json carries a usable language,
+             *     `false` when it is absent, `null`, empty or whitespace-only (or
+             *     there is no state.json at all). Always populated by `scan.ts`, but
+             *     kept optional (NOT added to `required`) — like `language` and
+             *     `eligibleTtsEngines` — so existing test fixtures that construct a
+             *     `LibraryBook` object literal without every field don't all need
+             *     updating; frontend consumers default it with `?? false`.
+             */
+            languageSet?: boolean;
             /**
              * @description fs-60 — which TTS engines are eligible for this book's language
              *     (independent of which engines are actually installed on this
@@ -5070,7 +5105,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -6763,6 +6798,20 @@ export interface operations {
                     "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
+            /**
+             * @description The manuscript's book has no language set. Set the book language
+             *     before requesting analysis.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     analyseChapterSubset: {
@@ -7906,7 +7955,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /** @enum {string} */
-                        code?: "clone_protected";
+                        code?: "clone_protected" | "language_unset";
                     };
                 };
             };
@@ -8266,6 +8315,20 @@ export interface operations {
                     };
                 };
             };
+            /**
+             * @description The book has no language set. Set the book language before
+             *     requesting a splice.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     audioQaRepairChapter: {
@@ -8341,6 +8404,20 @@ export interface operations {
                          *     splice streams already send for that clear.
                          */
                         message?: string;
+                    };
+                };
+            };
+            /**
+             * @description The book has no language set. Set the book language before
+             *     requesting audio QA repair.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
                     };
                 };
             };
@@ -8761,18 +8838,20 @@ export interface operations {
                      * @description Plan 276 Decision 6 — corrects a cloned voice's reference
                      *     transcript after the fact (the "Add transcript" cast-time-gate
                      *     CTA). Accepted only when the entry's `provenance` is `cloned`
-                     *     AND it carries a `master` clip; 400 otherwise. Sets
-                     *     `master.transcript` (`transcriptSource: 'user'`) and the
-                     *     entry's own `sampleTranscript` — a second persisted copy of
-                     *     the same text — and CLEARS `master.languageCode` and the
-                     *     entry's own `languageCode`: both are Whisper stamps describing
-                     *     the ORIGINAL clip, and a user-edited transcript may be in a
-                     *     different language, so a stale stamp would contradict it. A
-                     *     non-empty transcript also clears a `failed` `qwen` engine
-                     *     slot (an empty string clears the text but supplies no fix, so
-                     *     it leaves the slot's `failed` status alone). The qwen `.pt`
-                     *     distilled against the old text is left untouched — this is a
-                     *     lexical correction, not a re-derive.
+                     *     AND it carries a `master` clip; 400 if the master is permanently
+                     *     absent (never cloned with a master, or revoked), 409 if the
+                     *     master was present at request time but was removed by a concurrent
+                     *     operation before the write. Sets `master.transcript`
+                     *     (`transcriptSource: 'user'`) and the entry's own
+                     *     `sampleTranscript` — a second persisted copy of the same text —
+                     *     and CLEARS `master.languageCode` and the entry's own
+                     *     `languageCode`: both are Whisper stamps describing the ORIGINAL
+                     *     clip, and a user-edited transcript may be in a different language,
+                     *     so a stale stamp would contradict it. A non-empty transcript also
+                     *     clears a `failed` `qwen` engine slot (an empty string clears the
+                     *     text but supplies no fix, so it leaves the slot's `failed` status
+                     *     alone). The qwen `.pt` distilled against the old text is left
+                     *     untouched — this is a lexical correction, not a re-derive.
                      */
                     transcript?: string;
                 };
@@ -8798,9 +8877,11 @@ export interface operations {
                 };
             };
             /**
-             * @description `transcript` was rejected — either the entry isn't a cloned voice
-             *     with a `master` clip, the value isn't a string, or it exceeds 2000
-             *     characters.
+             * @description Request was invalid. For `transcript` updates specifically: the entry
+             *     isn't a cloned voice, the cloned entry's `master` clip is permanently
+             *     absent (never cloned with a master, or revoked), the value isn't a
+             *     string, or it exceeds 2000 characters. For other fields: validation
+             *     failed (e.g., `persona` on a non-designed voice, `name` not a string, etc.).
              */
             400: {
                 headers: {
@@ -8818,6 +8899,22 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /**
+             * @description Conflict: the `master` clip was removed by a concurrent operation
+             *     between the request validation and the write (for `transcript` updates
+             *     only). No changes were made. The caller should retry or refresh the
+             *     entry state.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };
@@ -10020,7 +10117,23 @@ export interface operations {
                 "application/json": {
                     /** @enum {string} */
                     slice: "cast" | "manuscript" | "revisions" | "state" | "changeLog";
-                    /** @description The whole slice payload; shape depends on `slice`. */
+                    /**
+                     * @description The whole slice payload; shape depends on `slice`.
+                     *     For the `state` slice the patch carries ~16 fields
+                     *     (title, author, series, tags, notes, audioFormat,
+                     *     prosodyEnabled, castConfirmed, chapters, and more);
+                     *     the same endpoint also serves the `cast`,
+                     *     `manuscript`, `revisions`, and `changeLog` slices
+                     *     with entirely different payloads.
+                     *     #2246 Task 9 — BCP-47 `language` field on the `state`
+                     *     slice: string | null. `null` is "stated absence" (a
+                     *     book whose language the user has not set), distinct
+                     *     from both a value and an absent key. An absent key
+                     *     preserves whatever is already stored (including a
+                     *     stored `null`). A `state`-slice patch with a
+                     *     non-empty unsupported value is rejected with
+                     *     `400 unsupported_language` and nothing is written.
+                     */
                     patch: unknown;
                 };
             };

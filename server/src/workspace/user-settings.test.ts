@@ -2,7 +2,7 @@
    coverPickerDefaultTab field across schema parse, write+read round-trip,
    and legacy-file back-compat. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
@@ -13,10 +13,12 @@ import {
   getResolvedGenerationWorkers,
   getResolvedAnalysisEngine,
   getResolvedAllowCloudFallback,
+  getResolvedSidecarUrl,
   resolveUserSettingsPath,
   migrateLegacyUserSettings,
   _resetUserSettingsCache,
   _setUserSettingsCacheForTest,
+  _setExplicitlySetKeysForTest,
 } from './user-settings.js';
 
 let workspaceRoot: string;
@@ -29,6 +31,8 @@ beforeEach(() => {
 afterEach(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
+  delete process.env.LOCAL_TTS_PORT;
+  delete process.env.LOCAL_TTS_URL;
 });
 
 describe('userSettingsSchema — defaultThemePreference (plan 41)', () => {
@@ -837,6 +841,266 @@ describe('analyzerKeepAliveByModel', () => {
     } finally {
       await mod.writeUserSettings({ analyzerKeepAliveByModel: {}, analyzerPhase0Model: null });
       mod._resetUserSettingsCache();
+    }
+  });
+});
+
+describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
+  beforeEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.LOCAL_TTS_URL;
+    delete process.env.LOCAL_TTS_PORT;
+  });
+
+  afterEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.LOCAL_TTS_URL;
+    delete process.env.LOCAL_TTS_PORT;
+  });
+
+  it('returns the default localhost:9000 when nothing is set', () => {
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9000');
+  });
+
+  it('resolves sidecar port from LOCAL_TTS_PORT when no explicit URL is configured (#2632)', () => {
+    // Simulates a worktree with LOCAL_TTS_PORT=9110 but no explicit sidecarUrl user setting
+    process.env.LOCAL_TTS_PORT = '9110';
+    // Cache has default sidecarUrl because user never customized it
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('prioritizes LOCAL_TTS_URL env var over LOCAL_TTS_PORT', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://localhost:9999';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9999');
+  });
+
+  it('prioritizes explicit user sidecarUrl over LOCAL_TTS_PORT', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://localhost:9888' });
+    // Mark sidecarUrl as explicitly set (was in the file)
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9888');
+  });
+
+  it('still enforces srv-21 SSRF guard but derives from LOCAL_TTS_PORT on reject', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    // Invalid: non-loopback URL in LOCAL_TTS_URL is rejected by srv-21
+    process.env.LOCAL_TTS_URL = 'http://evil.example.com:9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    // Rejects the evil URL, then derives from LOCAL_TTS_PORT (#2632)
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('prioritizes customised sidecarUrl over LOCAL_TTS_URL (per openapi.yaml:4539)', () => {
+    process.env.LOCAL_TTS_URL = 'http://localhost:9999';
+    // User explicitly set a different URL via the UI
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://192.168.1.20:9000' });
+    // Mark sidecarUrl as explicitly set (was in the file)
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    // User's explicit URL wins over the env var (documented API contract)
+    expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
+  });
+
+  // N1: DEFAULT-valued LOCAL_TTS_URL should not shadow port derivation
+  it('N1: treats DEFAULT-valued LOCAL_TTS_URL as non-choice, lets port derivation win', () => {
+    // Pre-existing server/.env has DEFAULT value, which should not shadow port derivation
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://localhost:9000'; // Factory default value
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    // The DEFAULT-valued env var does not beat the port derivation
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N1: non-default LOCAL_TTS_URL still beats port derivation', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    // Non-default value — an explicit choice in .env
+    process.env.LOCAL_TTS_URL = 'http://192.168.1.20:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    // Non-default URL is a real choice and wins
+    expect(getResolvedSidecarUrl()).toBe('http://192.168.1.20:9000');
+  });
+
+  // N21: a trailing slash or a case change on the factory-default LOCAL_TTS_URL
+  // must still be treated as a non-choice — otherwise it beats port derivation
+  // and the server spawns its own sidecar on LOCAL_TTS_PORT while talking to
+  // whatever else holds :9000 (the exact split #2632/N1 exists to prevent).
+  it('N21: trailing-slash factory-default LOCAL_TTS_URL is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://localhost:9000/';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N21: case-varied factory-default LOCAL_TTS_URL is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://LOCALHOST:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N21: trailing-slash factory-default sidecarUrl setting is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://localhost:9000/' });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N21: case-varied factory-default sidecarUrl setting is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://LOCALHOST:9000' });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  // N2/B3: sidecarUrl requires BOTH key-present AND value-different (not just key-present)
+  it('B3 regression: sidecarUrl at factory default (written by unrelated writer) loses to port derivation', () => {
+    // Reproduces B3: an unrelated writer (e.g., writeSetupCompletedAt) writes the complete merged
+    // object, including sidecarUrl at factory default. Key-presence alone would wrongly claim "user chose this".
+    // Requires BOTH key-present AND value-different to correctly read as unset.
+    process.env.LOCAL_TTS_PORT = '9110';
+
+    // Simulate file that has sidecarUrl at factory default (as written by unrelated writer)
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl'])); // Key IS in the file
+
+    // Key present at default value should lose to port derivation (B3 fix requires both conditions)
+    expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+  });
+
+  it('N2: uses sidecarUrl when value differs from factory default and key is present', () => {
+    // User explicitly set sidecarUrl to a custom value in their settings file.
+    // Key-present AND value-different → use it.
+    process.env.LOCAL_TTS_PORT = '9110';
+
+    // Simulate file that has sidecarUrl at custom value
+    const customUrl = 'http://192.168.1.20:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: customUrl });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl'])); // Key IS in the file
+
+    // Key present with non-default value should win
+    expect(getResolvedSidecarUrl()).toBe(customUrl);
+  });
+
+  // N8: the four tests above hand-set explicitlySetKeys directly — they never
+  // call readUserSettings(), so they exercise the FLAG, not the mechanism that
+  // populates it from a real file. These two go through the real read path:
+  // write a settings file to disk, call readUserSettings(), then resolve.
+  it('B3 regression (live path): sidecarUrl written by an UNRELATED writer at factory default loses to LOCAL_TTS_PORT', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    // This is the real shape of ~/.castwright/user-settings.json on a box
+    // that has completed onboarding: setupCompletedAt/tourCompletedAt were
+    // written by writeSetupCompletedAt/writeTourCompletedAt, which persist
+    // the FULL merged object — including sidecarUrl at its factory default,
+    // even though no one ever chose that value. #2632 B3.
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        setupCompletedAt: '2026-01-01T00:00:00.000Z',
+        tourCompletedAt: '2026-01-01T00:00:00.000Z',
+        sidecarUrl: DEFAULT_USER_SETTINGS.sidecarUrl,
+      }),
+    );
+    try {
+      process.env.LOCAL_TTS_PORT = '9110';
+      await mod.readUserSettings(); // real path: populates explicitlySetKeys from disk
+      expect(mod.getResolvedSidecarUrl()).toBe('http://localhost:9110');
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+
+  it('live path: a genuinely user-chosen non-default sidecarUrl still wins over LOCAL_TTS_PORT', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    const customUrl = 'http://192.168.1.20:9000';
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        setupCompletedAt: '2026-01-01T00:00:00.000Z',
+        tourCompletedAt: '2026-01-01T00:00:00.000Z',
+        sidecarUrl: customUrl,
+      }),
+    );
+    try {
+      process.env.LOCAL_TTS_PORT = '9110';
+      await mod.readUserSettings();
+      expect(mod.getResolvedSidecarUrl()).toBe(customUrl);
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+
+  // N19: the two srv-21 rejection sites (user-settings sidecarUrl, LOCAL_TTS_URL)
+  // used to share one dedupe variable, so an identical rejected value on both
+  // sources latched the first site's warning and silently suppressed the second's.
+  it('N19: an identical rejected non-private value on BOTH sidecarUrl and LOCAL_TTS_URL warns for both sources, not just the first', () => {
+    const evilUrl = 'http://evil.example.com:9000';
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = evilUrl;
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: evilUrl });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('from user settings'))).toBe(true);
+      expect(messages.some((m) => m.includes('from LOCAL_TTS_URL'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // N26: _resetUserSettingsCache() must clear BOTH srv-21 warn-dedup latches,
+  // or a rejected value that was already warned about in an earlier test (or
+  // an earlier call in the same test) silently gets zero warnings after a
+  // reset — a suppressed-warning bug that would read as a passing dedupe test.
+  it('N26: _resetUserSettingsCache() clears both warn-dedup latches so a repeated rejected value warns again', () => {
+    const evilUrl = 'http://evil.example.com:9000';
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = evilUrl;
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: evilUrl });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // First resolution latches both dedupe variables and warns for both sources.
+      expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      warnSpy.mockClear();
+
+      // Without a reset, the identical rejected value would warn zero more
+      // times here (that's the dedupe working as intended, not this bug).
+      // A reset should behave as if nothing was ever latched.
+      _resetUserSettingsCache();
+      _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: evilUrl });
+      _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+      expect(getResolvedSidecarUrl()).toBe('http://localhost:9110');
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('from user settings'))).toBe(true);
+      expect(messages.some((m) => m.includes('from LOCAL_TTS_URL'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

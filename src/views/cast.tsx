@@ -119,7 +119,7 @@ const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedCharacterFallback> = {
 
 /* F5 (fix round 2, #2163) — an ALLOWLIST of the resolution tiers that mean
    "the rendered bytes may be stale," per #2107's ruling (same register,
-   the A32 row) that only the `'exact'` tier means the audio is fine. The
+   the A29 row) that only the `'exact'` tier means the audio is fine. The
    render-time gate below used to be the denylist `resolution !==
    'unresolved'` — a tautology against THIS map's own 3-value union (only
    `'alias' | 'normalised' | 'unresolved'` ever reach it, so "not

@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-01
 owner: null
 ---
 
@@ -102,7 +102,13 @@ Two deferred backlog items shipped together (one PR) because they share the
 
 ## Ship notes
 
-Shipped 2026-06-01 on branch `feat/frontend-fe-15-16` (PR pending). fe-15 BACKLOG
+Shipped 2026-06-01 on branch `feat/frontend-fe-15-16` (merged `d5db66f9e929486fe12a52ae89a7432c2467cc90`, PR #391). fe-15 BACKLOG
 premise was stale (chapters already hydrate); the substantive work was the `cc`
 cast+chapters fixture for the preview flow. fe-16 Qwen auto-load is wired and
 unit-covered; live GPU acceptance is the only owed item.
+
+**Updated 2026-08-22 on branch `feat/server-2246-language-recurrence`** (HEAD `e02d63ec`):
+- Library language filter pill (English / Русский) integrated with the `filterBooks` composable filter.
+- Cast-view Qwen-language banner and auto-load (one-shot, ref-guarded, gated on `/api/qwen/detect` probe).
+- `cc` mock fixture verified with real `CC_CHAPTERS` + `chapterCharacters` map for preview flow.
+- `fe-16` Qwen auto-load unit coverage; live GPU acceptance remains the sole owed item.

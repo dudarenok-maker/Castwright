@@ -189,8 +189,10 @@ export interface LinkSeriesReuseOptions {
   /** A book's normalised language — defaults to `resolveBookLanguageForBookId`.
       A Qwen voice bakes its design language into the .pt, so a cross-language
       reuse produces garbled audio; every link/prune check vetoes a language
-      mismatch regardless of what the author/series/standalone checks say. */
-  resolveBookLanguage?: (bookId: string) => Promise<string>;
+      mismatch regardless of what the author/series/standalone checks say.
+      `null` (Task 6, #2246) means "cannot prove same language" and MUST
+      veto — two unset books must not match each other. */
+  resolveBookLanguage?: (bookId: string) => Promise<string | null>;
 }
 
 /* Revert a stale-linked character. A pure reuse row's voice was denormalised
@@ -269,12 +271,17 @@ export async function pruneStaleReuseLinks(
   for (const c of linked) {
     const targetBookId = c.matchedFrom!.bookId!;
     const targetMeta = await resolveAuthorSeries(targetBookId);
+    /* Task 6 (#2246) — `null` is "cannot prove same language", so a null on
+       either side means NOT same language (veto), never equality. */
+    const targetLanguage = await resolveBookLanguage(targetBookId);
     const sameSeries =
       !!targetMeta &&
       targetMeta.author === meta.author &&
       targetMeta.series === meta.series &&
       !(await isStandalone(targetBookId)) &&
-      (await resolveBookLanguage(targetBookId)) === myLanguage;
+      myLanguage !== null &&
+      targetLanguage !== null &&
+      targetLanguage === myLanguage;
     /* Earlier-only guard mirrors the linker: a same-series link is valid only
        when the target is a strictly-lower position. Unknown positions can't
        prove "earlier", so they're treated as acceptable (conservative keep). */
@@ -335,8 +342,11 @@ export async function linkSeriesReuseAtAnalysis(
     if (await isStandalone(record.bookId)) continue;
     /* fs-61 defense-in-depth: never carry a Qwen voice across a language
        boundary, even between two "real" series-mates — the .pt is baked
-       to its design language. */
-    if ((await resolveBookLanguage(record.bookId)) !== myLanguage) continue;
+       to its design language. Task 6 (#2246) — a null language on either
+       side is "cannot prove same language" and vetoes (an unset book must
+       not silently match as English, nor two unset books match each other). */
+    const priorLanguage = await resolveBookLanguage(record.bookId);
+    if (myLanguage === null || priorLanguage === null || priorLanguage !== myLanguage) continue;
     const pos = positions.get(record.bookId) ?? null;
     /* Earlier-book guard: link only against a strictly-lower seriesPosition.
        Unknown positions (null) on either side can't establish "earlier", so

@@ -7,8 +7,8 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { stampStateSchema } from '../workspace/state-migrate.js';
+import { readJson } from '../workspace/state-io.js';
+import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { coverImagePath, stateJsonPath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -94,7 +94,7 @@ export async function patchStateCover(
     fetchedAt: new Date().toISOString(),
   };
   state.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path, stampStateSchema(state));
+  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
 }
 
 /** Inverse of patchStateCover — DELETE reverts to the procedural gradient. */
@@ -104,7 +104,7 @@ export async function clearStateCover(bookDir: string): Promise<void> {
   if (!state) return;
   delete state.coverImage;
   state.updatedAt = new Date().toISOString();
-  await writeJsonAtomic(path, stampStateSchema(state));
+  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
 }
 
 /** Fire-and-forget import hook. Priority-order first hit across all

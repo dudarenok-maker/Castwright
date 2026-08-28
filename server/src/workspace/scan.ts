@@ -228,7 +228,7 @@ export interface BookStateJson {
      directly. Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
      (plan 27 rename-vs-add policy). Set at confirm time by
      `server/src/routes/import.ts`. */
-  language?: string;
+  language?: string | null;
   /* fs-65 Phase 3 — prosody annotation intent flag. Absent (undefined) ⇒ ON
      (eager default); only an explicit `false` opts out. The Task-13 client
      trigger gate is `prosodyEnabled !== false`. Renamed from `liveInstruct`
@@ -336,6 +336,49 @@ export function bookStateLanguage(state: BookStateJson): string {
   return normaliseBookLanguage(state.language);
 }
 
+/** True when `state` carries no usable language — the field is absent,
+ *  `null` ("stated absence"), empty, or whitespace-only. Absence is a fact,
+ *  not English: a stored `null` (set on a surrendered detection) means unset
+ *  just like a missing key, so the honest readers treat both identically. */
+function bookLanguageIsUnset(state: BookStateJson): boolean {
+  const raw = state.language;
+  return raw === undefined || raw === null || raw.trim() === '';
+}
+
+/** Client-facing error thrown when a book's language is unset — absent key,
+ *  `null`, empty, or whitespace-only. Distinct from `bookStateLanguage`'s
+ *  `'en'` default: an unset field is a fact about the book, not English, and
+ *  the paths that change behaviour on absence (Task 6) must not be told a
+ *  confident lie. The message is deliberately client-facing — this text can
+ *  reach a user over the LAN HTTPS UI — so it points at where they fix it
+ *  ("Book settings") and never at a filesystem path. */
+export class BookLanguageUnsetError extends Error {
+  constructor() {
+    super(
+      'No language is set for this book. Open Book settings and choose a language before proceeding.',
+    );
+    this.name = 'BookLanguageUnsetError';
+  }
+}
+
+/** Honest language reader — `state.language` when the book actually has one,
+ *  else `null`. Never defaults. Absent key, `null`, empty and whitespace-only
+ *  all mean unset. The paths that change behaviour on absence use this; the
+ *  display paths keep `bookStateLanguage` (which must never see `undefined`). */
+export function bookStateLanguageOrNull(state: BookStateJson): string | null {
+  return bookLanguageIsUnset(state) ? null : state.language!;
+}
+
+/** Honest strict reader — returns a book's language or throws
+ *  `BookLanguageUnsetError`. Use where absence must fail loudly rather than
+ *  silently read as English. */
+export function requireBookStateLanguage(state: BookStateJson): string {
+  if (bookLanguageIsUnset(state)) {
+    throw new BookLanguageUnsetError();
+  }
+  return state.language!;
+}
+
 export interface LibraryBook {
   bookId: string;
   title: string;
@@ -379,6 +422,14 @@ export interface LibraryBook {
       `'en'` for books whose state.json predates the field) so the library
       card's language badge + filter pill have a non-optional source. */
   language: string;
+  /** Task 8 (#2246) — the honest "is the language actually set?" signal.
+      `language` above is the resolved display value (an unset book is still
+      surfaced as 'en' so the card badge / filter pill never see undefined);
+      `languageSet` is what tells a consumer a book really declared English
+      from one that never declared anything. False when state.json carries no
+      usable language (absent key, `null`, empty or whitespace-only) or there
+      is no state.json at all. */
+  languageSet: boolean;
   /** fs-60 — which TTS engines are eligible for this book's language,
       independent of install state (frontend intersects with its own
       installed-engines list). Computed via resolveEligibleEngines against
@@ -708,7 +759,7 @@ async function scanBook(
        even if the segments pass finds nothing to write. */
     if (ensureChapterUuids(state)) {
       try {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
       } catch {
         /* best-effort — the next scan retries; in-memory state already
            carries the uuids for this caller. */
@@ -810,10 +861,26 @@ async function scanBook(
     /* fs-2 — surface the book language onto the wire, defaulting to 'en'
        at the seam so the card badge / filter pill never see undefined. */
     language: state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
-    eligibleTtsEngines: resolveEligibleEngines(
-      state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
-      ALL_TTS_ENGINES,
-    ),
+    /* Task 8 (#2246) — the honest "is the language actually set?" signal.
+       `language` above stays the resolved display value (an unset book still
+       reads 'en' for the badge); `languageSet` is what the frontend uses to
+       tell a book that really declared a language from one that never did.
+       False for a null `state` (no state.json = nothing declared), mirroring
+       `eligibleTtsEngines`'s fail-closed `[]`. */
+    languageSet: state ? bookStateLanguageOrNull(state) !== null : false,
+    /* Task 6 (#2246) — `eligibleTtsEngines` is client-authoritative (it gates
+       "Proceed anyway", lockedToQwen, and the engine picker), so an unset
+       book must NOT resolve to the most-permissive English set. Fail closed:
+       `[]` when the language is null. Never throw — one unset book must not
+       break the whole library scan (a null `state` — no state.json at all —
+       keeps the historical default). */
+    eligibleTtsEngines:
+      state && bookStateLanguageOrNull(state) === null
+        ? []
+        : resolveEligibleEngines(
+            state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
+            ALL_TTS_ENGINES,
+          ),
   };
 }
 
@@ -1053,7 +1120,7 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), upgraded);
+      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...upgraded, language: upgraded.language ?? null });
       return { state: upgraded, totalSec };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call

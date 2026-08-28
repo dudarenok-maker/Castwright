@@ -17,6 +17,7 @@ import { accountSlice } from './account-slice';
 import { notificationsSlice } from './notifications-slice';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
+import { setLanguageGuardHandler } from '../lib/language-guard-bus';
 import type { GenerationTick } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
@@ -96,6 +97,10 @@ function seed(store: ReturnType<typeof makeStore>, entries: QueueEntry[]): void 
 }
 
 afterEach(() => {
+  /* The dispatcher suite drives a real createStreamRunner; a language-guard
+     test registers a handler on the shared bus so emitLanguageGuard accepts.
+     Always clear it so it can't leak into the next test. */
+  setLanguageGuardHandler(null);
   vi.unstubAllGlobals();
 });
 
@@ -542,6 +547,42 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('failed');
     });
 
+    it('#2515: language-unset failures never trip the breaker', async () => {
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+
+      failStream(
+        'book-A',
+        3,
+        "This book's language has not been set. Choose it in Book settings before continuing.",
+        'language-unset',
+      );
+      await flushMicro();
+      expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('failed');
+
+      /* N2 fix: the FIRST language-unset failure arms book-A's pending-guard
+         suppression even here, where no bus handler is mounted (emitLanguageGuard
+         returns false). So — unlike #1263's voice-not-designed sibling above,
+         which has no such suppression — a requeue of the SAME book cannot be
+         reclaimed again until the TTL lapses; the loop that used to drive 3
+         identical failures through can no longer get past the first one. That is
+         the intended fix for the unbounded-drain bug N2 reported, and it only
+         strengthens this test's actual claim (the breaker never trips on
+         language-unset) since there is now no way to accumulate a streak at all. */
+      requeue(store, 'a3');
+      await flushMicro();
+      expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('queued');
+      requeue(store, 'a3');
+      await flushMicro();
+      expect(store.getState().queue.entries.find((e) => e.id === 'a3')?.status).toBe('queued');
+
+      expect(store.getState().queue.paused).toBe(false);
+      expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
+        false,
+      );
+    });
+
     it('resets the streak on a successful chapter so prior failures do not accumulate', async () => {
       const store = makeStore(1);
       seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
@@ -572,6 +613,57 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
         false,
       );
+    });
+
+    it('does not claim a second queued entry of a book with a pending language guard', async () => {
+      /* Register a live bus handler so the runner's language-unset failure
+         actually opens the pending guard (emitLanguageGuard returns false and
+         the guard never opens when no handler is mounted — the runner's own
+         suite mocks the return to true; here we drive the real runner, so we
+         register the real seam's handler). */
+      setLanguageGuardHandler(() => true);
+      const store = makeStore(2);
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1 }),
+        entry({ id: 'a2', bookId: 'book-A', chapterId: 2 }),
+      ]);
+      await flushMicro();
+      /* Both claimed initially (2 workers, 2 entries, same book — sibling
+         chapters stream concurrently per this file's own header comment). */
+      failStream('book-A', 1, "This book's language has not been set.", 'language-unset');
+      await flushMicro();
+      requeue(store, 'a1');
+      await flushMicro();
+      /* a1 is queued again, but book-A now has a pending guard (chapter 1's
+         failure opened it) — STEP 2 must not re-claim a1. */
+      expect(store.getState().queue.entries.find((e) => e.id === 'a1')?.status).toBe('queued');
+    });
+
+    it('does not claim a second queued entry of a book when the guard has no handler mounted (N2)', async () => {
+      /* Deliberately no setLanguageGuardHandler call here — the default (and
+         afterEach-restored) state is `null`, so emitLanguageGuard returns
+         false: the exact gap the runner's own suite comment names
+         ("emitLanguageGuard returns false and the guard never opens when no
+         handler is mounted"). A selector matching no library book (e.g. a
+         library fetch that failed at mount) hits the same false-return path.
+         The suppression entry must still be armed on this branch — its job is
+         to bound repeated attempts against the SAME book, not to gate on
+         whether a modal happened to open this particular time — otherwise
+         every chapter of book-A fails language-unset in turn with the streak
+         breaker exempted (#2246) and nothing else bounds the drain. */
+      const store = makeStore(2);
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1 }),
+        entry({ id: 'a2', bookId: 'book-A', chapterId: 2 }),
+      ]);
+      await flushMicro();
+      failStream('book-A', 1, "This book's language has not been set.", 'language-unset');
+      await flushMicro();
+      requeue(store, 'a1');
+      await flushMicro();
+      /* a1 is queued again, but book-A now has a pending guard (armed even
+         though emitLanguageGuard rejected) — STEP 2 must not re-claim a1. */
+      expect(store.getState().queue.entries.find((e) => e.id === 'a1')?.status).toBe('queued');
     });
   });
 

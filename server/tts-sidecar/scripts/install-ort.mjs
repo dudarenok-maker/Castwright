@@ -16,7 +16,8 @@
 // Pure planner (planOrtSwap) + guarded CLI, mirroring install-torch.mjs.
 //
 // Usage (the bootstrap wires this; manual form for testing):
-//   CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
+//   PowerShell: $env:CASTWRIGHT_ACCELERATOR_PROFILE='nvidia'; node install-ort.mjs <venv-python>
+//   POSIX:      CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node install-ort.mjs <venv-python>
 //
 // NOTE: the minimum working onnxruntime-directml version (the release carrying
 // the Kokoro ConvTranspose fix) is OWED on real AMD hardware (Wave H1). Until
@@ -198,10 +199,17 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
 // install date. Re-pinned 2026-08-21 (#2534 side-chain) to the newest
-// CUDA-12-built line. Validated on this dev box: 1.26.0 constructs a working
-// CUDAExecutionProvider InferenceSession against CUDA 12.4 + cuDNN 9 (cuDNN
-// ships in the runtime venv via torch) and computes correctly. onnxruntime-gpu
-// 1.27+ moved its default build to CUDA 13.x (cublasLt64_13.dll), incompatible
+// CUDA-12-built line. NOTE (#2600, corrected 2026-08-23): the version itself was
+// desk-validated (1.26.0/1.27.0 constructs a CUDAExecutionProvider
+// InferenceSession against CUDA 12.4 without erroring), but "computes
+// correctly" was never true end to end — cuDNN does NOT ship in the runtime
+// venv via torch; #2600's wave-4 on-box run found no cuDNN 9 DLL anywhere
+// onnxruntime's CUDA provider searches, so the session silently falls back to
+// CPU. See the NVIDIA_CUDNN_CONSTRAINT comment below for the fix this
+// motivated, and main.py's `_preload_ort_cuda_dlls` for the still-unproven
+// (no on-box confirmation as of this note) attempt to make the installed
+// cuDNN findable. onnxruntime-gpu 1.27+ moved its default build to CUDA 13.x
+// (cublasLt64_13.dll), incompatible
 // with the shipped torch/torchaudio cu128 pin. The pin deliberately holds the
 // runtime on the last CUDA-12 line to keep the stack CUDA-12-compatible.
 // Floor-plus-cap on the MINOR line rather than an exact `==` so a same-line
@@ -220,6 +228,17 @@ export function readInstalledOrtVersion(sitePackages, ortPackage) {
 // `onnxruntime-gpu` line never lands there and aborts `pip install` on that
 // platform. The swap in this file is reached only for the nvidia profile
 // (win/linux), so pinning it here never touches the mac path.
+//
+// ALSO check main.py's `_preload_ort_cuda_dlls` when bumping this (pass-4
+// review finding P4, PR #2617): its output guard string-matches two of
+// onnxruntime's OWN prose lines — "Failed to load" and "Skip loading" — to
+// decide whether preload_dlls() actually did anything. Those strings are not
+// pinned to this constant anywhere and a onnxruntime release that rewords its
+// per-DLL failure message would make the guard fall through to a false
+// "preloaded" again (the exact #2600 symptom, reopened inside the guard
+// written to close it) with nothing here to catch it. Not fixed now because
+// it's unreachable at the pinned version -- but re-check it by hand on any
+// bump of this constant.
 const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.26,<1.27';
 
 /**
@@ -234,6 +253,102 @@ function constrainForInstall(ortPackage) {
   return ortPackage === 'onnxruntime-gpu'
     ? `onnxruntime-gpu${ONNXRUNTIME_GPU_CONSTRAINT}`
     : ortPackage;
+}
+
+// cuDNN 12 runtime onnxruntime-gpu needs to actually RUN on the GPU EP, not
+// merely report it (#2600). onnxruntime-gpu 1.26.x declares nvidia-cudnn-cu12
+// only in its OPTIONAL `[cudnn]` extra — and the swap's install step above is
+// `--no-deps` (kept, see the comment on `steps` below), which suppresses
+// extras entirely. So nothing in the swap ever landed cuDNN: onnxruntime
+// still reports CUDAExecutionProvider as available (the python binding
+// doesn't probe cuDNN at import time), but constructing an InferenceSession
+// with it silently falls back to CPU — no error, no warning. Kokoro then
+// "works" and runs on CPU. Pinned to the major line the runtime's own [cudnn]
+// extra declares (`nvidia-cudnn-cu12~=9.0`), not the exact patch a dry run
+// happens to resolve — this MUST move together with ONNXRUNTIME_GPU_CONSTRAINT
+// if the onnxruntime-gpu line above it is ever bumped to one that needs a
+// different cuDNN major version.
+const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
+
+// cuDNN's own dependency tree pulls in nvidia-cublas-cu12 (for nvidia-cudnn-cu12,
+// unpinned). Left alone, that is exactly the exposure ONNXRUNTIME_GPU_CONSTRAINT's
+// own comment above says is unacceptable: whatever happens to be latest on PyPI
+// on install date, decided by a THIRD PARTY's unpinned transitive dep rather
+// than by us. It is also a real collision, not a theoretical one: torch/
+// torchaudio (cu128) ship their OWN bundled `cublas64_12.dll` in torch/lib — the
+// live sidecar venv's copy reports (Windows file version info) "NVIDIA CUDA BLAS
+// Library, Version 12.8.4" — so an unpinned nvidia-cublas-cu12 install lands a
+// second, differently-versioned build of the same DLL base name in one process,
+// and load order decides which one a given import gets.
+//
+// PASS 2 REVIEW FIX (N4, PR #2617): the prior `~=12.9` pin was wrong in BOTH
+// directions. `~=V.N` (two segments) means `>=V.N, ==V.*` — since the package
+// name already encodes the cu12 major line, that cap is vacuous (a bare floor
+// admitting 12.10, 12.99, …), and worse, a floor of 12.9 EXCLUDES the very
+// 12.8.4.x line torch bundles, mandating the exact cublas64_12.dll build
+// mismatch this comment warns about. `~=12.8.0` (three segments) is
+// `>=12.8.0, ==12.8.*` — a real floor-plus-cap on the resolved MINOR line,
+// mirroring NVIDIA_CUDNN_CONSTRAINT's own `~=9.0` shape, and it does not
+// exclude 12.8.4.1 (>=12.8.0 is satisfied by any 12.8.x patch). Only a genuine
+// minor bump (torch moving off cu128) needs bumping this alongside
+// NVIDIA_CUDNN_CONSTRAINT and ONNXRUNTIME_GPU_CONSTRAINT.
+//
+// PASS 3 REVIEW FIX (N14, PR #2617): admitting 12.8.4.1 is NOT the same as
+// resolving to it. pip picks the HIGHEST version this constraint admits
+// (12.8.5.5 as of this writing), not torch's own bundled 12.8.4 — so the
+// cross-minor collision this comment set out to prevent narrows to an
+// intra-minor one (12.8.5.5 vs. 12.8.4.x), not zero. Almost certainly
+// ABI-safe within one minor line, but it is a narrowing, not a resolution.
+const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
+
+// PASS 2 REVIEW FIX (N6, PR #2617): nvrtc DROPPED from this step entirely.
+// onnxruntime's own `preload_dlls()` (`_get_nvidia_dll_paths`, read against the
+// live sidecar venv) never looks for an nvrtc DLL on the Windows branch at all —
+// only cublas/cublasLt/cufft/cudart + the cudnn_* set — nvrtc only appears in
+// its Linux branch (alongside curand, which this step has never pinned either).
+// So a `nvidia-cuda-nvrtc-cu12` top-level pin bought nothing on Windows: onnxruntime
+// never reads it, and cuDNN's own dependency tree already pulls SOME nvrtc build
+// in transitively regardless of whether we pin it here, at whatever version pip's
+// resolver picks — harmless dead weight on Windows since nothing in this process
+// ever loads it. Re-introduce a pin here only alongside real Linux nvidia-profile
+// support (curand would need one too, and this step would need to become
+// platform-aware — a design question, not this fix's).
+//
+// NOT fixed here, deliberately deferred to on-box acceptance (register rows
+// A36–A38): onnxruntime's Windows DLL list ALSO wants
+// `nvidia/cufft/bin/cufft64_11.dll` and `nvidia/cuda_runtime/bin/cudart64_12.dll`,
+// neither of which any pip step here installs. The working assumption is that
+// the box's own system CUDA 12.4 toolkit install supplies both via the default
+// DLL search path (PATH) once cuDNN/cublas are no longer the missing piece —
+// unconfirmed without a GPU box, and NOT to be "fixed" by adding more pip pins
+// without that on-box confirmation first (a `[cuda]`-extras pip install is the
+// named alternative hypothesis, not something to reach for pre-emptively).
+//
+// If they turn out to be genuinely missing on-box, note this ALSO needs the
+// same floor-plus-cap fix N4 applies here: torch/lib's bundled cufft64_11.dll
+// reports the same 12.8.x build line as cublas above (per the live venv's file
+// version info), so a would-be `nvidia-cufft-cu12`/`nvidia-cuda-runtime-cu12`
+// pin should float on that line too, not an arbitrary unpinned/latest one.
+
+/**
+ * Extra pip step(s), if any, needed alongside an ortPackage swap so the
+ * installed runtime can actually USE its accelerator, not just report it as
+ * available. Gated on ortPackage itself — same gating shape as
+ * constrainForInstall — so a future onnxruntime-directml re-enable can never
+ * inherit a CUDA-only package. Deliberately NOT `--no-deps`: cuDNN's own
+ * dependency tree (cublas) doesn't intersect the overlay's
+ * numpy/protobuf/flatbuffers pins, so installing it in full here is safe in a
+ * way dropping `--no-deps` on the onnxruntime-gpu step itself is not. Both
+ * packages are named in ONE pip step (not `--no-deps`, so this is belt-and-
+ * suspenders rather than load-bearing) so pip's resolver treats the pin on
+ * the transitive package as a top-level constraint instead of letting an
+ * unpinned transitive requirement from cuDNN win the resolution. Pure — no I/O.
+ * @returns {string[][]}
+ */
+export function extraRuntimeSteps(ortPackage) {
+  return ortPackage === 'onnxruntime-gpu'
+    ? [['install', NVIDIA_CUDNN_CONSTRAINT, NVIDIA_CUBLAS_CONSTRAINT]]
+    : [];
 }
 
 /**
@@ -274,6 +389,10 @@ export function planOrtSwap(profile, platform) {
       // `--no-deps` keeps the overlay's numpy/protobuf/etc. pins untouched.
       ['uninstall', '-y', 'onnxruntime', ortPackage],
       ['install', '--force-reinstall', '--no-deps', constrainForInstall(ortPackage)],
+      // #2600: land the GPU runtime's own cuDNN dependency, which --no-deps
+      // above deliberately never installs (see extraRuntimeSteps). A no-op for
+      // any ortPackage other than onnxruntime-gpu.
+      ...extraRuntimeSteps(ortPackage),
     ],
   };
 }
@@ -325,9 +444,12 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
 
     if (owner === 'swap' && realPlain.length > 0) {
       safeLog(
-        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
-          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
-          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        '[ort-marker] A stray real plain onnxruntime dist-info coexists with the GPU build\'s files. ' +
+          'This corrupts pip\'s dependency resolution — a landmine for the next ' +
+          'pip operation. The GPU build\'s files currently own the namespace, but the inconsistency must be repaired. ' +
+          'Refusing to write a marker that would certify this bad state. Repair with:\n' +
+          '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+          '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
       );
       return 'clobbered';
     }
@@ -342,7 +464,25 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       return 'wrote';
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
-    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
+    if (deleteOrtMarkerIfOurs(sp)) {
+      if (owner === 'none') {
+        safeLog(
+          '[ort-marker] No onnxruntime runtime is installed. ' +
+            'The recorded swap marker has been removed. Kokoro cannot load at all in this state. ' +
+            'Repair with:\n' +
+            '  (PowerShell) $env:CASTWRIGHT_ACCELERATOR_PROFILE=\'<profile>\'; node server/tts-sidecar/scripts/install-ort.mjs <venv-python>\n' +
+            '  (POSIX) CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+        );
+      } else {
+        // owner === 'plain'
+        safeLog(
+          '[ort-marker] This venv now uses only plain onnxruntime (CPU build). The recorded swap marker ' +
+            'has been removed. Kokoro will run without GPU acceleration.',
+        );
+      }
+      return 'deleted';
+    }
+    return 'noop';
   } catch (err) {
     safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';
